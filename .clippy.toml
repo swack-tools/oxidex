@@ -1,0 +1,15 @@
+# Clippy configuration for strict linting
+# Enforce best practices for production-quality code
+
+# Cognitive complexity threshold
+cognitive-complexity-threshold = 30
+
+# Documentation requirements
+missing-docs-in-crate-items = true
+
+# Performance
+too-many-arguments-threshold = 7
+type-complexity-threshold = 250
+
+# Style preferences
+single-char-binding-names-threshold = 4
