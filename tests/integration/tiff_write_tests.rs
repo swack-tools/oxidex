@@ -123,7 +123,11 @@ fn test_write_tiff_file_basic() {
 
     // Write the file
     let result = write_tiff_file(&output_path, &reader, &metadata);
-    assert!(result.is_ok(), "Failed to write TIFF file: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to write TIFF file: {:?}",
+        result.err()
+    );
 
     // Verify the file was created
     assert!(output_path.exists(), "Output file was not created");
@@ -166,7 +170,11 @@ fn test_round_trip_tiff_modification() {
 
     // 3. Write modified TIFF
     let result = write_tiff_file(&output_path, &reader, &metadata);
-    assert!(result.is_ok(), "Failed to write TIFF file: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to write TIFF file: {:?}",
+        result.err()
+    );
 
     // 4. Re-read and verify
     let reader2 = BufferedReader::new(&output_path).expect("Failed to open output file");
@@ -268,7 +276,11 @@ fn test_write_tiff_with_multiple_tag_types() {
     assert!(fnumber.is_some(), "FNumber tag should be present");
 
     if let Some((_, fnumber_value)) = fnumber {
-        assert_eq!(fnumber_value.len(), 8, "FNumber should be 8 bytes (RATIONAL)");
+        assert_eq!(
+            fnumber_value.len(),
+            8,
+            "FNumber should be 8 bytes (RATIONAL)"
+        );
     }
 }
 
@@ -319,7 +331,10 @@ fn test_write_empty_metadata() {
     let result = write_tiff_file(&output_path, &reader, &metadata);
 
     // Should succeed even with empty metadata
-    assert!(result.is_ok(), "Should be able to write file with empty metadata");
+    assert!(
+        result.is_ok(),
+        "Should be able to write file with empty metadata"
+    );
 
     // Verify file has valid header
     let reader2 = BufferedReader::new(&output_path).expect("Failed to open output file");
