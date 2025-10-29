@@ -51,6 +51,9 @@ rayon = "1.10"
 # Lazy Static Initialization
 once_cell = "1.19"
 
+# Atomic File Operations
+tempfile = "3.10"
+
 [dev-dependencies]
 # Testing
 proptest = "1.4"
