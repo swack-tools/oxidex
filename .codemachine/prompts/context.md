@@ -10,17 +10,26 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I2.T10",
+  "task_id": "I2.T11",
   "iteration_id": "I2",
   "iteration_goal": "Implement tag registry with subset of ExifTool tags, core metadata read/write operations, basic CLI with argument parsing, and extend format support to include XMP parsing and PNG format.",
-  "description": "Implement validation in src/core/validation.rs. Create fn validate_tag_value(descriptor: &TagDescriptor, value: &TagValue) -> Result<(), ExifToolError> that checks: (1) value type matches descriptor type (e.g., String tag can't have Integer value), (2) range validation for numeric types if descriptor specifies constraints, (3) format validation for DateTime strings. Integrate into write operations (I3 will use this). Add unit tests with valid and invalid tag values.",
+  "description": "Set up benchmarking infrastructure in benches/parse_benchmarks.rs using criterion crate. Create benchmarks for: (1) Format detection, (2) JPEG segment parsing, (3) TIFF IFD parsing, (4) Full read_metadata() on sample JPEG. Use Criterion::default() configuration. Run benchmarks to establish baseline performance. Add [[bench]] section to Cargo.toml. Document how to run benchmarks in README.",
   "agent_type_hint": "BackendAgent",
-  "inputs": "I1.T6 TagDescriptor and TagValue, I2.T2 tag registry",
-  "target_files": ["src/core/validation.rs", "src/core/mod.rs"],
-  "input_files": ["src/core/tag_descriptor.rs", "src/core/tag_value.rs", "src/tag_db/tag_registry.rs"],
-  "deliverables": "Tag value validation function, unit tests for validation",
-  "acceptance_criteria": "Validation succeeds for correct type matches, returns InvalidTagValue error for type mismatches, validates DateTime format (e.g., EXIF DateTime: YYYY:MM:DD HH:MM:SS), unit tests cover at least 5 validation scenarios (valid, wrong type, invalid date, etc.), cargo test validation passes",
-  "dependencies": ["I1.T6", "I2.T2"],
+  "inputs": "Criterion crate documentation, I2.T3 read_metadata function",
+  "target_files": [
+    "benches/parse_benchmarks.rs",
+    "Cargo.toml",
+    "README.md"
+  ],
+  "input_files": [
+    "src/core/operations.rs",
+    "tests/fixtures/jpeg/sample_with_exif.jpg"
+  ],
+  "deliverables": "Criterion benchmarks for parsing operations, baseline performance measurements",
+  "acceptance_criteria": "cargo bench runs successfully, at least 4 benchmarks defined (detection, JPEG parse, TIFF parse, full read), benchmarks use black_box() to prevent compiler optimization, Criterion generates HTML report in target/criterion/, README documents benchmark commands",
+  "dependencies": [
+    "I2.T3"
+  ],
   "parallelizable": true,
   "done": false
 }
@@ -32,114 +41,131 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: Validation Engine (from 03_System_Structure_and_Data.md)
+### Context: technology-stack-summary (from 02_Architecture_Overview.md)
 
 ```markdown
-Component(validation, "Validation Engine", "Rust", "Tag value type checking, range validation")
+### 3.2. Technology Stack Summary
 
-Rel(operations, validation, "Validates values via")
+| **Category** | **Technology Choice** | **Justification** |
+|--------------|----------------------|-------------------|
+| **Core Language** | Rust 1.75+ (2021 Edition) | Memory safety, zero-cost abstractions, excellent concurrency primitives, cross-platform support |
+| **CLI Framework** | `clap` v4 (derive API) | Industry standard, excellent help generation, argument validation, backward compatibility via value parsers |
+| **Binary Parsing** | `nom` v7 + `binrw` | `nom` for complex formats (TIFF, QuickTime), `binrw` for simple struct-based formats (BMP, WAV) |
+| **XML Parsing (XMP)** | `quick-xml` | Streaming parser, low memory footprint, namespace support for XMP |
+| **JSON Output** | `serde_json` | De facto standard, excellent performance, integration with domain models via derives |
+| **Date/Time** | `chrono` | Comprehensive timezone support, EXIF date format parsing |
+| **String Encoding** | `encoding_rs` (WHATWG standard) | Handles legacy encodings in IPTC/EXIF (Latin1, UTF-8, UTF-16) |
+| **Image I/O** | `memmap2` (memory-mapped files) | Efficient large file access without loading entire file into memory |
+| **Concurrency** | `rayon` (data parallelism) | Transparent batch processing parallelization, work-stealing scheduler |
+| **Testing** | `cargo test` + `proptest` (property-based) | Unit tests for parsers, property-based testing for round-trip serialization |
+| **Fuzzing** | `cargo-fuzz` (libFuzzer) | Continuous fuzzing of format parsers to discover crash/hang bugs |
+| **C FFI** | `cbindgen` (header generation) | Automated C header generation from Rust API |
+| **Documentation** | `rustdoc` + `mdBook` (user guide) | API docs from source comments, separate user guide for CLI |
+| **Build System** | `cargo` + `cross` (cross-compilation) | Standard Rust tooling, `cross` for ARM/Windows builds from Linux |
+| **CI/CD** | GitHub Actions | Free for open source, matrix builds across OS/architecture |
+| **Code Quality** | `clippy`, `rustfmt`, `cargo-audit` | Linting, formatting, dependency vulnerability scanning |
+| **Benchmarking** | `criterion` | Statistical benchmarking framework, regression detection |
+| **Frontend** | None (CLI only) | Out of scope for v1.0 |
+| **Database** | None (file-based operation) | Stateless tool, no persistent storage beyond processed files |
+| **Messaging/Queues** | None | Synchronous processing model |
+| **Cloud Platform** | None (local tooling) | Library/CLI distribution, not cloud service |
+| **Containerization** | Optional Docker image | Convenience for CI/CD pipelines, not core requirement |
 ```
 
-The Validation Engine is a core component in the Domain Layer of the hexagonal architecture. It is called by the Metadata Operations component to validate tag values before write operations.
-
-### Context: Key Entities - TagDescriptor (from 03_System_Structure_and_Data.md)
+### Context: scalability-performance (from 05_Operational_Architecture.md)
 
 ```markdown
-#### Key Entities
+#### Scalability & Performance
 
-1. **File**: Represents a media file being processed (JPEG, PNG, etc.)
-2. **MetadataMap**: Collection of all metadata tags extracted from a file
-3. **TagValue**: A single metadata tag with its name, value, and type information
-4. **TagDescriptor**: Definition of a tag (from tag database) including ID, name, type constraints, format family
-5. **FormatFamily**: Grouping of related metadata standards (EXIF, XMP, IPTC, MakerNotes)
-6. **IFD (Image File Directory)**: TIFF-specific structural element containing tags
-```
+**Scalability Strategy**:
 
-TagDescriptor contains the schema definition that validation must check against. TagValue contains the actual value that needs validation.
+1. **Vertical Scaling**: Parallel processing via `rayon`
+   - Batch operations automatically distribute across CPU cores
+   - Scales linearly up to core count for CPU-bound workloads (parsing)
+   - I/O-bound workloads (large files on HDD) benefit less but still see 2-3x improvement
 
-### Context: TagValue Variant Types (from 03_System_Structure_and_Data.md)
+2. **Memory Efficiency**:
+   - Streaming parsers for large files (process chunks, not entire file in RAM)
+   - Memory-mapped I/O (`memmap2`) for random access without full load
+   - Bounded buffers: Max 256MB per file in memory, larger files use mmap
 
-```markdown
-- **Variant Value Type**: `TagValue.value` uses a Rust `enum` to represent heterogeneous tag types:
-  ```rust
-  enum TagValueData {
-      String(String),
-      Number(f64),
-      Integer(i64),
-      Binary(Vec<u8>),
-      Rational { numerator: i32, denominator: i32 },
-      Struct(HashMap<String, TagValueData>), // For complex XMP structures
-  }
-  ```
-```
+3. **Horizontal Scaling** (for service deployments):
+   - Stateless design enables trivial horizontal scaling
+   - Process isolation: Each worker process handles subset of files
+   - Example: GNU Parallel integration: `ls *.jpg | parallel -j 16 exiftool-rs`
 
-This shows the complete set of value types that validation must handle.
+**Performance Targets & Techniques**:
 
-### Context: Security - Input Validation (from 05_Operational_Architecture.md)
+| **Metric** | **Target** | **Technique** |
+|------------|-----------|---------------|
+| JPEG EXIF extraction | < 5ms per file (average) | Zero-copy parsing, mmap for large files |
+| Batch processing (1000 files) | < 10 seconds (excluding I/O) | Rayon parallel iterators, thread pool = CPU cores |
+| Memory usage | < 512MB for 10,000 file batch | Streaming, bounded buffers, minimal cloning |
+| Binary size | < 10MB statically linked | Strip symbols, LTO, codegen-units=1 |
+| Startup time | < 50ms cold start | Lazy statics for tag database, no runtime initialization |
 
-```markdown
-**Input Validation**:
+**Optimization Techniques**:
 
-All parsers follow defensive pattern:
-```rust
-fn read_u32_at(data: &[u8], offset: usize) -> Result<u32> {
-    let bytes = data.get(offset..offset+4)
-        .ok_or(ParseError::UnexpectedEof)?;  // Bounds check
-    Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
-}
-```
-```
+1. **Zero-Copy Parsing**: Use `&[u8]` slices instead of copying bytes
+   ```rust
+   // Good: Borrows slice
+   fn parse_string(data: &[u8], offset: usize, len: usize) -> &str {
+       std::str::from_utf8(&data[offset..offset+len])?
+   }
 
-This defensive programming pattern should be applied to validation logic as well - always validate before processing.
-
-### Context: Error Handling Strategy (from 05_Operational_Architecture.md)
-
-```markdown
-**Threat Model**:
-
-ExifTool-RS processes potentially malicious files from untrusted sources (e.g., user uploads, scraped images). Primary threats:
-
-1. **Memory Corruption**: Buffer overflows, use-after-free in parsers
-2. **Resource Exhaustion**: Zip bombs, billion laughs (XML), decompression bombs
-3. **Path Traversal**: Malicious filenames in archive processing
-4. **Code Injection**: Via scripting features (if added)
-
-**Mitigations**:
-
-| **Threat** | **Mitigation** | **Implementation** |
-|------------|---------------|-------------------|
-| Buffer overflows | Rust ownership system | Compile-time prevention via borrow checker |
-| Integer overflows | Checked arithmetic | `#![deny(overflowing_literals)]`, `checked_add()` in parsers |
-| Resource exhaustion | Size limits | Max allocation: 1GB per file, max parse depth: 64 levels (nested IFDs) |
-```
-
-Validation is part of the security strategy - reject invalid inputs early.
-
-### Context: Reliability - Testing Strategy (from 05_Operational_Architecture.md)
-
-```markdown
-**Reliability Strategy**:
-
-1. **Fault Tolerance**:
-   - **Graceful Degradation**: On parser error, return partial metadata rather than failing entirely
-   - **Error Recovery**: Malformed EXIF segment logs warning but continues parsing other segments (IPTC, XMP)
-   - **Atomic Writes**: Temporary file + rename prevents corruption on crash mid-write
-
-2. **Testing Pyramid**:
-   ```
-          /\
-         /E2E\        <- Integration tests (10%): Full workflows
-        /------\
-       /  Unit  \      <- Unit tests (70%): Parser functions, tag validation
-      /----------\
-     / Property   \    <- Property-based (20%): Round-trip serialization, invariants
-    /--------------\
+   // Bad: Copies bytes
+   fn parse_string_copy(data: &[u8], offset: usize, len: usize) -> String {
+       String::from_utf8(data[offset..offset+len].to_vec())?
+   }
    ```
 
-   - **Unit Tests**: Every parser function has success/failure test cases
+2. **SIMD (Future)**: Use `std::simd` for bulk operations (e.g., UTF-8 validation, checksum computation)
+
+3. **Compile-Time Tag Database**: Embed tag definitions as `const` data, avoiding runtime HashMap construction
 ```
 
-Tag validation requires comprehensive unit tests covering both success and failure cases.
+### Context: benchmarking (from 03_Verification_and_Glossary.md)
+
+```markdown
+#### Benchmarking (Regression Detection)
+*   **Scope:** Performance validation and regression detection
+*   **Location:** `benches/`
+*   **Tools:** `criterion` (statistical benchmarking), `hyperfine` (CLI benchmarking)
+*   **Benchmarks:**
+    *   Format detection (1000 iterations)
+    *   JPEG EXIF extraction (single file, 1000x)
+    *   Batch processing (1000 files)
+    *   Write operation (modify + rewrite)
+    *   Comparison vs. Perl ExifTool (wall-clock time, memory usage)
+*   **Regression Detection:** CI fails if performance degrades >10% vs. baseline
+*   **Reporting:** `criterion` generates HTML reports in `target/criterion/`
+```
+
+### Context: task-i2-t11 (from 02_Iteration_I2.md)
+
+```markdown
+*   **Task 2.11: Create Benchmark Suite with Criterion**
+    *   **Task ID:** `I2.T11`
+    *   **Description:** Set up benchmarking infrastructure in `benches/parse_benchmarks.rs` using `criterion` crate. Create benchmarks for: (1) Format detection, (2) JPEG segment parsing, (3) TIFF IFD parsing, (4) Full read_metadata() on sample JPEG. Use `Criterion::default()` configuration. Run benchmarks to establish baseline performance. Add `[[bench]]` section to Cargo.toml. Document how to run benchmarks in README.
+    *   **Agent Type Hint:** `BackendAgent`
+    *   **Inputs:** Criterion crate documentation, I2.T3 read_metadata function
+    *   **Input Files:** [`src/core/operations.rs`, `tests/fixtures/jpeg/sample_with_exif.jpg`]
+    *   **Target Files:**
+        *   `benches/parse_benchmarks.rs`
+        *   `Cargo.toml` (add benchmark section)
+        *   `README.md` (add benchmarking instructions)
+    *   **Deliverables:**
+        *   Criterion benchmarks for parsing operations
+        *   Baseline performance measurements
+    *   **Acceptance Criteria:**
+        *   `cargo bench` runs successfully
+        *   At least 4 benchmarks defined (detection, JPEG parse, TIFF parse, full read)
+        *   Benchmarks use `black_box()` to prevent compiler optimization
+        *   Criterion generates HTML report in target/criterion/
+        *   README documents benchmark commands
+    *   **Dependencies:** `I2.T3` (needs read_metadata)
+    *   **Parallelizable:** Yes (can be set up anytime after core operations are implemented)
+```
 
 ---
 
@@ -149,187 +175,93 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `src/core/tag_descriptor.rs`
-    *   **Summary:** This file defines the complete TagDescriptor struct with all fields needed for validation: `tag_id`, `tag_name`, `format_family`, `writable`, `value_type` (enum with String, Integer, Float, Rational, Binary, DateTime, Struct variants), `description`, and `example_values`. It also defines the ValueType enum that validation must check against.
-    *   **Recommendation:** You MUST import `TagDescriptor` and `ValueType` from this module. The `value_type` field on TagDescriptor is the schema that validation checks against. Use `descriptor.value_type()` accessor method to get the expected type.
+*   **File:** `Cargo.toml`
+    *   **Summary:** The project's main manifest file. The `criterion` crate is already included in `[dev-dependencies]` with version `0.5`.
+    *   **Recommendation:** You MUST add a `[[bench]]` section to this file to define the benchmark target. The section should specify `name = "parse_benchmarks"` and `harness = false` (required for Criterion benchmarks).
+    *   **Note:** The file currently has no `[[bench]]` section, so you will be adding one for the first time.
 
-*   **File:** `src/core/tag_value.rs`
-    *   **Summary:** This file defines the TagValue enum with 7 variants: String(String), Integer(i64), Float(f64), Rational{numerator: i32, denominator: i32}, Binary(Vec<u8>), DateTime(DateTime<Utc>), and Struct(Box<HashMap<String, TagValue>>). It provides type-checking methods like `is_string()`, `is_integer()`, etc., and accessor methods like `as_string()`, `as_integer()`, etc.
-    *   **Recommendation:** You MUST import `TagValue` from this module. Use the `is_*()` methods to check the variant type. The validation function must match TagValue variants against TagDescriptor's value_type field.
+*   **File:** `src/core/operations.rs`
+    *   **Summary:** This is the core operations module containing the `read_metadata()` function and related parsing logic. It orchestrates format detection, parser selection, and metadata extraction.
+    *   **Key Functions to Benchmark:**
+        *   `read_metadata(path: &Path) -> Result<MetadataMap>` - This is the main end-to-end function you should benchmark (line 59)
+        *   `parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap>` - Internal JPEG parsing function (line 95)
+        *   `parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap>` - Internal TIFF parsing function (line 180)
+    *   **Recommendation:** You MUST import `read_metadata` from this module in your benchmark file. Use fully-qualified paths like `use exiftool_rs::core::operations::read_metadata;`
 
-*   **File:** `src/error/mod.rs`
-    *   **Summary:** This file defines the ExifToolError enum with 5 variants: IoError, ParseError, TagNotFound, InvalidTagValue, and UnsupportedFormat. The InvalidTagValue variant has fields `tag_name: String` and `reason: String`. There are convenience constructors like `ExifToolError::invalid_tag_value(tag_name, reason)`.
-    *   **Recommendation:** You MUST use `ExifToolError::InvalidTagValue` for validation failures. Use the constructor `ExifToolError::invalid_tag_value(tag_name, reason)` to create validation errors. The `reason` field should clearly explain why validation failed (e.g., "Expected String but got Integer", "Invalid DateTime format: expected YYYY:MM:DD HH:MM:SS").
+*   **File:** `src/parsers/format_detector.rs`
+    *   **Summary:** Contains the `detect_format(reader: &dyn FileReader) -> io::Result<FileFormat>` function (line 96) that identifies file types via magic bytes.
+    *   **Recommendation:** You SHOULD benchmark this function separately as it's a critical performance path. Import it as `use exiftool_rs::parsers::format_detector::detect_format;`
+    *   **Implementation Detail:** The function reads the first 16 bytes and performs sequential pattern matching. This is lightweight but still worth benchmarking.
 
-*   **File:** `src/tag_db/tag_registry.rs`
-    *   **Summary:** This file contains the static TAG_REGISTRY with 100 pre-defined tags (60 EXIF, 20 GPS, 20 XMP). Each tag has a complete TagDescriptor with value_type specified. The registry uses `once_cell::sync::Lazy` for lazy initialization. It exports `get_tag_descriptor(name: &str) -> Option<&TagDescriptor>` for tag lookup.
-    *   **Recommendation:** You SHOULD reference this file for understanding how TagDescriptor objects are structured in practice. The validate_tag_value function receives a TagDescriptor parameter, so you don't need to look up tags yourself - the caller will pass in the descriptor. However, reviewing the registry helps understand typical tag schemas.
+*   **File:** `src/parsers/jpeg/segment_parser.rs`
+    *   **Summary:** Provides `parse_segments(reader: &dyn FileReader)` function for JPEG segment parsing using nom combinators.
+    *   **Recommendation:** You SHOULD benchmark the JPEG segment parsing. Import as `use exiftool_rs::parsers::jpeg::segment_parser::parse_segments;`
+    *   **Note:** This function performs zero-copy parsing with nom, which is key to performance.
 
-*   **File:** `src/core/validation.rs`
-    *   **Summary:** This file currently exists but contains only module documentation and `#![allow(dead_code)]`. It's a stub waiting for implementation.
-    *   **Recommendation:** This is your PRIMARY target file. You MUST implement the `validate_tag_value` function here and add comprehensive unit tests.
+*   **File:** `src/parsers/tiff/ifd_parser.rs`
+    *   **Summary:** Contains `parse_ifd(reader: &dyn FileReader, ifd_offset: u64, byte_order: ByteOrder) -> Result<Vec<(u16, Vec<u8>)>>` for TIFF IFD structure parsing.
+    *   **Recommendation:** You MUST benchmark the TIFF IFD parsing function. Import both the function and `ByteOrder` enum: `use exiftool_rs::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};`
+    *   **Note:** IFD parsing involves reading tag entries and following offsets, which makes it more complex than format detection.
+
+*   **File:** `tests/fixtures/jpeg/sample_with_exif.jpg`
+    *   **Summary:** A small (112 bytes) test JPEG file with EXIF metadata. This file exists and is available for benchmarking.
+    *   **Recommendation:** You SHOULD use this file for the full `read_metadata()` benchmark. The path is `"tests/fixtures/jpeg/sample_with_exif.jpg"`.
+    *   **Note:** There's also `sample_with_exif_xmp.jpg` (624 bytes) available if you want to test with XMP data.
+
+*   **File:** `README.md`
+    *   **Summary:** The project's main README file. Currently contains sections on Development, Building, and Testing (lines 109-139).
+    *   **Recommendation:** You SHOULD add a new "Benchmarking" subsection under the "Development" section (after line 125). Include commands for running benchmarks and viewing the HTML report.
 
 ### Implementation Tips & Notes
 
-*   **Tip - Type Matching Logic:** The core validation logic is straightforward type matching. Create a match expression on the TagValue to extract its variant, then compare against descriptor.value_type(). For example:
+*   **Tip 1 - Criterion Usage:** The Criterion crate is already in dev-dependencies (version 0.5). You MUST use `Criterion::default()` configuration as specified in the task. Use `criterion::black_box()` to wrap inputs and prevent compiler optimizations from eliminating the benchmarked code.
+
+*   **Tip 2 - FileReader Creation:** For benchmarking parsers directly (format detection, JPEG parsing, TIFF parsing), you'll need to create file readers. Use `MMapReader::new(Path::new("tests/fixtures/jpeg/sample_with_exif.jpg"))` for the test file. Import as `use exiftool_rs::io::MMapReader;`
+
+*   **Tip 3 - Benchmark Structure:** Each benchmark should follow this pattern:
     ```rust
-    match value {
-        TagValue::String(_) => {
-            if descriptor.value_type() != ValueType::String {
-                return Err(ExifToolError::invalid_tag_value(
-                    descriptor.name(),
-                    format!("Expected {:?} but got String", descriptor.value_type())
-                ));
-            }
-        }
-        // ... handle other variants
+    fn benchmark_name(c: &mut Criterion) {
+        c.bench_function("benchmark_display_name", |b| {
+            // Setup code (outside measurement)
+            let reader = MMapReader::new(Path::new("test_file")).unwrap();
+
+            b.iter(|| {
+                // Code to benchmark (wrapped in black_box)
+                criterion::black_box(function_to_benchmark(&reader))
+            });
+        });
     }
     ```
 
-*   **Tip - DateTime Validation:** For DateTime values, you need to validate EXIF DateTime format which is `YYYY:MM:DD HH:MM:SS` (colons not hyphens for date, 24-hour time). The task acceptance criteria specifically mentions this format. TagValue::DateTime stores a `chrono::DateTime<Utc>`, so if the TagValue is already a DateTime variant, it's structurally valid. However, you may want to add format validation if constructing from strings in the future. For now, accept any valid DateTime<Utc> value.
-
-*   **Note - Range Validation:** The task mentions "range validation for numeric types if descriptor specifies constraints". However, reviewing the current TagDescriptor structure (line 96-118 in tag_descriptor.rs), there are no constraint fields defined. The acceptance criteria doesn't test range validation. You SHOULD implement basic type checking first, and you MAY skip range validation for now since the schema doesn't support it yet. If you choose to implement range validation, document that it's a future enhancement placeholder.
-
-*   **Note - Rational Type:** The Rational variant has special structure: `Rational { numerator: i32, denominator: i32 }`. You MUST check that the denominator is not zero as part of validation. A rational number with zero denominator is mathematically invalid and should return an InvalidTagValue error.
-
-*   **Note - Struct Type:** The Struct variant is for complex XMP structures. For this iteration, basic type matching is sufficient - if descriptor expects Struct and value is Struct, validation passes. Recursive validation of nested structure contents is out of scope for this task.
-
-*   **Warning - Test Coverage:** The acceptance criteria requires "at least 5 validation scenarios (valid, wrong type, invalid date, etc.)". Based on the 7 TagValue variants, you MUST write tests covering: (1) Valid type match for each variant (7 tests), (2) Type mismatch scenarios (at least 3 tests), (3) Rational with zero denominator (1 test), (4) DateTime format validation if implemented. Aim for 15-20 unit tests total to meet the "comprehensive" requirement.
-
-*   **Tip - Module Integration:** After implementing validation.rs, you MUST add `pub mod validation;` to `src/core/mod.rs` to expose the validation module. Also add `pub use validation::validate_tag_value;` if you want to re-export the function at the core module level for easier importing.
-
-*   **Tip - Function Signature:** The task specifies the exact signature: `fn validate_tag_value(descriptor: &TagDescriptor, value: &TagValue) -> Result<(), ExifToolError>`. This returns `Result<(), ExifToolError>` where `Ok(())` means validation passed (no data returned, just success), and `Err(ExifToolError)` means validation failed. This signature is idiomatic for validation functions in Rust.
-
-*   **Tip - Documentation:** Add comprehensive doc comments to the validate_tag_value function explaining: (1) What it validates, (2) When it returns Ok vs Err, (3) Example usage. Follow the documentation style seen in other core modules (see tag_descriptor.rs lines 92-117 for good examples).
-
-*   **Tip - Error Messages:** Provide clear, actionable error messages. Good examples:
-    - "Type mismatch for tag 'EXIF:Make': expected String but got Integer"
-    - "Invalid Rational value for tag 'EXIF:ExposureTime': denominator cannot be zero"
-    - "Type mismatch for tag 'GPS:GPSLatitude': expected Rational but got String"
-
-*   **Code Pattern from Existing Tests:** The existing test modules follow this pattern (see tag_descriptor.rs lines 179-317):
-    ```rust
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn test_validate_string_type_correct() {
-            let descriptor = TagDescriptor::new(/* ... */);
-            let value = TagValue::new_string("Canon");
-            assert!(validate_tag_value(&descriptor, &value).is_ok());
-        }
-
-        #[test]
-        fn test_validate_type_mismatch() {
-            // String descriptor, Integer value
-            let descriptor = TagDescriptor::new(/* String type */);
-            let value = TagValue::new_integer(42);
-            let result = validate_tag_value(&descriptor, &value);
-            assert!(result.is_err());
-            // Check error message contains expected text
-        }
-    }
+*   **Tip 4 - Cargo.toml Benchmark Section:** Add this exact section to `Cargo.toml`:
+    ```toml
+    [[bench]]
+    name = "parse_benchmarks"
+    harness = false
     ```
+    The `harness = false` is CRITICAL - Criterion provides its own benchmark harness.
 
-*   **Critical Dependency Check:** You MUST verify that `src/core/mod.rs` currently exports the required types. Check that it has:
-    - `pub mod tag_descriptor;` (exports TagDescriptor, ValueType)
-    - `pub mod tag_value;` (exports TagValue)
-    - After your implementation: `pub mod validation;`
+*   **Tip 5 - Main Function Signature:** Your benchmark file MUST have this exact signature:
+    ```rust
+    criterion_group!(benches, bench_format_detection, bench_jpeg_parse, bench_tiff_parse, bench_read_metadata);
+    criterion_main!(benches);
+    ```
+    This macro setup is required by Criterion.
 
-### Summary of Required Changes
+*   **Tip 6 - Performance Expectations:** Based on the architecture docs, JPEG EXIF extraction should target <5ms per file. Use this as a baseline expectation. If benchmarks show significantly slower performance, something may be wrong with the implementation.
 
-1. **src/core/validation.rs**: Implement `validate_tag_value()` function with comprehensive logic (~50-80 lines)
-2. **src/core/validation.rs**: Add unit test module with 15-20 tests (~150-200 lines)
-3. **src/core/mod.rs**: Add `pub mod validation;` (1 line change)
+*   **Note 1 - TIFF Parsing Benchmark:** For the TIFF IFD parsing benchmark, you'll need to provide an appropriate offset and byte order. You can use the TIFF file in `tests/fixtures/tiff/` if available, or create synthetic TIFF data for testing. The most important thing is to benchmark the parsing logic itself.
 
-### Example Implementation Structure
+*   **Note 2 - Zero-Copy Parsing:** The codebase uses zero-copy parsing patterns (borrowing `&[u8]` slices) which is key to performance. Your benchmarks should demonstrate this efficiency - avoid allocations in hot paths.
 
-```rust
-//! Tag value validation engine
-//!
-//! This module provides validation logic for metadata tag values.
+*   **Warning:** The project uses strict linting (`clippy -- -D warnings`). Ensure your benchmark code passes clippy checks. Common issues: unused imports, missing documentation for public items (though benchmarks are typically not public).
 
-use crate::core::tag_descriptor::{TagDescriptor, ValueType};
-use crate::core::tag_value::TagValue;
-use crate::error::ExifToolError;
+*   **Note 3 - README Documentation:** When updating the README, place the benchmarking section logically within the "Development" section. Include both how to run benchmarks (`cargo bench`) and how to view the HTML reports (`open target/criterion/report/index.html` on macOS, similar for other OSes).
 
-/// Validates that a TagValue matches the expected type defined in its TagDescriptor.
-///
-/// This function performs type checking to ensure tag values conform to their
-/// schema definitions before write operations.
-///
-/// # Arguments
-///
-/// * `descriptor` - The tag descriptor containing the expected value type
-/// * `value` - The tag value to validate
-///
-/// # Returns
-///
-/// * `Ok(())` if validation succeeds
-/// * `Err(ExifToolError::InvalidTagValue)` if validation fails
-///
-/// # Examples
-///
-/// ```
-/// use exiftool_rs::core::tag_descriptor::{TagDescriptor, TagId, FormatFamily, ValueType};
-/// use exiftool_rs::core::tag_value::TagValue;
-/// use exiftool_rs::core::validation::validate_tag_value;
-///
-/// let descriptor = TagDescriptor::new(
-///     TagId::new_numeric(0x010F),
-///     "EXIF:Make".to_string(),
-///     FormatFamily::EXIF,
-///     true,
-///     ValueType::String,
-///     "Camera manufacturer".to_string(),
-///     vec!["Canon".to_string()],
-/// );
-///
-/// let value = TagValue::new_string("Nikon");
-/// assert!(validate_tag_value(&descriptor, &value).is_ok());
-/// ```
-pub fn validate_tag_value(
-    descriptor: &TagDescriptor,
-    value: &TagValue,
-) -> Result<(), ExifToolError> {
-    // Implementation here
-    // Match on value variant, compare against descriptor.value_type()
-    // Return Ok(()) for matches, Err for mismatches
-    todo!()
-}
+*   **Note 4 - Baseline Establishment:** This is the FIRST time benchmarks are being run for this project. The baseline performance measurements you establish will be used for future regression detection (10% threshold). Document the results you observe.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    // Import test utilities
+*   **Tip 7 - Test Data Setup:** Since you're benchmarking against an existing test file, consider adding setup that verifies the file exists before running benchmarks. This prevents confusing errors if the fixture is missing.
 
-    #[test]
-    fn test_validate_string_matches() { /* ... */ }
+*   **Tip 8 - Benchmark Naming:** Follow Criterion's naming conventions. Use descriptive names like "format_detection", "jpeg_segment_parsing", "tiff_ifd_parsing", "full_read_metadata" for the benchmark function names. These will appear in the HTML report.
 
-    #[test]
-    fn test_validate_integer_matches() { /* ... */ }
-
-    // ... 15+ more tests
-}
-```
-
-### Acceptance Criteria Checklist
-
-After implementation, verify:
-
-- [ ] `validate_tag_value()` function implemented with correct signature
-- [ ] Function checks String/Integer/Float/Rational/Binary/DateTime/Struct types
-- [ ] Rational validation checks denominator != 0
-- [ ] Function returns `Ok(())` for correct type matches
-- [ ] Function returns `Err(InvalidTagValue)` for type mismatches
-- [ ] Error messages are clear and actionable
-- [ ] Unit tests cover all 7 TagValue variants (7 success tests)
-- [ ] Unit tests cover type mismatches (3+ failure tests)
-- [ ] Unit tests cover Rational zero denominator (1 test)
-- [ ] Unit tests cover edge cases (empty string, max values, etc.)
-- [ ] Total of 15+ unit tests implemented
-- [ ] `cargo test validation` passes all tests
-- [ ] `cargo clippy` shows no warnings
-- [ ] Code has comprehensive documentation comments
-- [ ] `src/core/mod.rs` exports validation module
+*   **Note 5 - Module Structure:** Your `benches/parse_benchmarks.rs` should start with necessary imports, define 4 benchmark functions (one per requirement), then use the criterion_group! and criterion_main! macros at the end to wire everything together.

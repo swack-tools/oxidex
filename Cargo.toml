@@ -18,6 +18,10 @@ path = "src/lib.rs"
 name = "exiftool-rs"
 path = "src/main.rs"
 
+[[bench]]
+name = "parse_benchmarks"
+harness = false
+
 [dependencies]
 # CLI Framework
 clap = { version = "4.5", features = ["derive", "cargo"] }
