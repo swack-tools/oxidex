@@ -26,6 +26,25 @@ pub struct CliArgs {
     #[arg(short = 'r')]
     pub recursive: bool,
 
+    /// Preserve original file modification time after writing metadata.
+    /// When this flag is set, the file's modification timestamp (mtime) will be
+    /// restored to its original value after metadata changes are written.
+    #[arg(long)]
+    pub preserve_file_times: bool,
+
+    /// Create a backup copy of the file before modifying it.
+    /// The backup file will have the same name with a .bak extension appended.
+    /// For example: photo.jpg -> photo.jpg.bak
+    #[arg(long)]
+    pub backup: bool,
+
+    /// Enable read-only mode to prevent any file modifications.
+    /// When this flag is set, the tool will refuse to write any changes and
+    /// return an error if write operations are attempted. Use this as a safety
+    /// measure to prevent accidental modifications.
+    #[arg(long)]
+    pub readonly: bool,
+
     /// Tag modifications and file path. Use -TAG=VALUE to modify tags.
     /// Example: -EXIF:Artist="John Doe" -EXIF:Copyright=2025 photo.jpg
     /// The last argument must be the file path.
