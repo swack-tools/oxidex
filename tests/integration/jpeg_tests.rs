@@ -243,7 +243,8 @@ fn test_jpeg_exif_extraction_end_to_end() {
     println!("  ✓ Found APP1 segment at offset {}", app1_segment.offset);
     println!(
         "    EXIF identifier: {:?}",
-        &app1_segment.data[0..6].iter()
+        &app1_segment.data[0..6]
+            .iter()
             .map(|b| format!("{:02X}", b))
             .collect::<Vec<_>>()
             .join(" ")
@@ -296,8 +297,7 @@ fn test_jpeg_exif_extraction_end_to_end() {
     // Create a SliceReader for the TIFF data
     let tiff_reader = SliceReader::new(tiff_data);
 
-    let tags =
-        parse_ifd(&tiff_reader, ifd_offset as u64, byte_order).expect("Failed to parse IFD");
+    let tags = parse_ifd(&tiff_reader, ifd_offset as u64, byte_order).expect("Failed to parse IFD");
 
     println!("  ✓ Parsed {} tags from IFD", tags.len());
 
@@ -334,11 +334,7 @@ fn test_jpeg_exif_extraction_end_to_end() {
                 println!("  ✓ DateTime (0x{:04X}): '{}'", tag_id, datetime_value);
             }
             _ => {
-                println!(
-                    "    Tag 0x{:04X}: {} bytes",
-                    tag_id,
-                    value_bytes.len()
-                );
+                println!("    Tag 0x{:04X}: {} bytes", tag_id, value_bytes.len());
             }
         }
     }
@@ -346,10 +342,7 @@ fn test_jpeg_exif_extraction_end_to_end() {
     // === Step 9: Verify extracted values ===
     println!("\nStep 9: Verifying extracted tag values...");
 
-    assert!(
-        !make_value.is_empty(),
-        "Make tag value should be non-empty"
-    );
+    assert!(!make_value.is_empty(), "Make tag value should be non-empty");
     assert!(
         !model_value.is_empty(),
         "Model tag value should be non-empty"
