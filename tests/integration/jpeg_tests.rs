@@ -179,25 +179,141 @@ fn create_jpeg_with_exif() -> Vec<u8> {
     jpeg
 }
 
-/// Creates the test fixture file if it doesn't exist or is outdated.
-fn ensure_test_fixture() -> std::io::Result<()> {
+/// Creates a JPEG file with both EXIF and XMP metadata.
+///
+/// Structure:
+/// - SOI marker (0xFFD8)
+/// - APP1 segment with EXIF data
+/// - APP1 segment with XMP data
+/// - Minimal SOS segment
+/// - EOI marker (0xFFD9)
+fn create_jpeg_with_exif_and_xmp() -> Vec<u8> {
+    let mut jpeg = Vec::new();
+
+    // === JPEG SOI marker ===
+    jpeg.extend_from_slice(&[0xFF, 0xD8]);
+
+    // === APP1 segment with EXIF ===
+    let mut exif_payload = Vec::new();
+
+    // EXIF identifier: "Exif\0\0"
+    exif_payload.extend_from_slice(b"Exif\0\0");
+
+    // === TIFF header (little-endian) ===
+    // Byte order: "II" (little-endian)
+    exif_payload.extend_from_slice(b"II");
+    // Magic number: 0x002A
+    exif_payload.extend_from_slice(&[0x2A, 0x00]);
+    // IFD offset: 8 bytes from TIFF header start
+    exif_payload.extend_from_slice(&[0x08, 0x00, 0x00, 0x00]);
+
+    // === IFD with 2 tags (Make, Model) ===
+    // Number of entries: 2
+    exif_payload.extend_from_slice(&[0x02, 0x00]);
+
+    let make_value = b"TestCamera\0"; // 11 bytes
+    let data_section_offset = 8 + 2 + (2 * 12) + 4; // tiff header + count + entries + next IFD
+    let make_offset = data_section_offset;
+
+    // Tag Entry 1: Make (0x010F)
+    exif_payload.extend_from_slice(&[0x0F, 0x01]); // Tag ID
+    exif_payload.extend_from_slice(&[0x02, 0x00]); // Type: ASCII
+    exif_payload.extend_from_slice(&[0x0B, 0x00, 0x00, 0x00]); // Count: 11
+    let make_offset_bytes = (make_offset as u32).to_le_bytes();
+    exif_payload.extend_from_slice(&make_offset_bytes); // Offset
+
+    // Tag Entry 2: Model (0x0110) - inline value
+    exif_payload.extend_from_slice(&[0x10, 0x01]); // Tag ID
+    exif_payload.extend_from_slice(&[0x02, 0x00]); // Type: ASCII
+    exif_payload.extend_from_slice(&[0x03, 0x00, 0x00, 0x00]); // Count: 3
+    exif_payload.extend_from_slice(b"TM\0\0"); // Inline value
+
+    // Next IFD offset (0 = no next IFD)
+    exif_payload.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+
+    // Out-of-line tag value data
+    exif_payload.extend_from_slice(make_value);
+
+    // Build complete EXIF APP1 segment
+    jpeg.push(0xFF);
+    jpeg.push(0xE1); // APP1 marker
+    let exif_length = 2 + exif_payload.len();
+    jpeg.extend_from_slice(&(exif_length as u16).to_be_bytes());
+    jpeg.extend_from_slice(&exif_payload);
+
+    // === APP1 segment with XMP ===
+    let mut xmp_payload = Vec::new();
+
+    // XMP identifier: "http://ns.adobe.com/xap/1.0/\0"
+    xmp_payload.extend_from_slice(b"http://ns.adobe.com/xap/1.0/\0");
+
+    // XMP XML data
+    let xmp_xml = br#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+                     xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <xmp:Creator>John Doe</xmp:Creator>
+      <xmp:Rating>5</xmp:Rating>
+      <dc:title>Sample Photo</dc:title>
+      <dc:rights>Copyright 2024</dc:rights>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>"#;
+
+    xmp_payload.extend_from_slice(xmp_xml);
+
+    // Build complete XMP APP1 segment
+    jpeg.push(0xFF);
+    jpeg.push(0xE1); // APP1 marker
+    let xmp_length = 2 + xmp_payload.len();
+    jpeg.extend_from_slice(&(xmp_length as u16).to_be_bytes());
+    jpeg.extend_from_slice(&xmp_payload);
+
+    // === Minimal Start of Scan segment ===
+    jpeg.extend_from_slice(&[0xFF, 0xDA]); // SOS marker
+    jpeg.extend_from_slice(&[0x00, 0x0C]); // Length: 12 bytes
+    jpeg.push(0x03); // Number of components: 3
+    jpeg.extend_from_slice(&[0x01, 0x00]); // Component 1: Y
+    jpeg.extend_from_slice(&[0x02, 0x11]); // Component 2: Cb
+    jpeg.extend_from_slice(&[0x03, 0x11]); // Component 3: Cr
+    jpeg.extend_from_slice(&[0x00, 0x3F]); // Spectral selection
+    jpeg.push(0x00); // Successive approximation
+
+    // Minimal compressed image data
+    jpeg.extend_from_slice(&[0xFF, 0x00, 0xD9]);
+
+    // === JPEG EOI marker ===
+    jpeg.extend_from_slice(&[0xFF, 0xD9]);
+
+    jpeg
+}
+
+/// Creates the test fixture files if they don't exist or are outdated.
+fn ensure_test_fixtures() -> std::io::Result<()> {
     let fixture_dir = Path::new("tests/fixtures/jpeg");
     std::fs::create_dir_all(fixture_dir)?;
 
-    let fixture_path = fixture_dir.join("sample_with_exif.jpg");
-
-    // Always recreate the fixture to ensure it's up-to-date
+    // Create EXIF-only fixture
+    let exif_fixture_path = fixture_dir.join("sample_with_exif.jpg");
     let jpeg_data = create_jpeg_with_exif();
-    let mut file = std::fs::File::create(&fixture_path)?;
+    let mut file = std::fs::File::create(&exif_fixture_path)?;
     file.write_all(&jpeg_data)?;
+
+    // Create EXIF+XMP fixture
+    let exif_xmp_fixture_path = fixture_dir.join("sample_with_exif_xmp.jpg");
+    let jpeg_data_xmp = create_jpeg_with_exif_and_xmp();
+    let mut file = std::fs::File::create(&exif_xmp_fixture_path)?;
+    file.write_all(&jpeg_data_xmp)?;
 
     Ok(())
 }
 
 #[test]
 fn test_jpeg_exif_extraction_end_to_end() {
-    // === Step 0: Setup test fixture ===
-    ensure_test_fixture().expect("Failed to create test fixture");
+    // === Step 0: Setup test fixtures ===
+    ensure_test_fixtures().expect("Failed to create test fixtures");
 
     let fixture_path = Path::new("tests/fixtures/jpeg/sample_with_exif.jpg");
 
@@ -363,5 +479,184 @@ fn test_jpeg_exif_extraction_end_to_end() {
     println!("Make:     {}", make_value);
     println!("Model:    {}", model_value);
     println!("DateTime: {}", datetime_value);
+    println!("\n✓ All integration test assertions passed!\n");
+}
+
+#[test]
+fn test_jpeg_xmp_extraction_end_to_end() {
+    use exiftool_rs::parsers::jpeg::xmp_parser::extract_xmp_from_segments;
+
+    // === Step 0: Setup test fixtures ===
+    ensure_test_fixtures().expect("Failed to create test fixtures");
+
+    let fixture_path = Path::new("tests/fixtures/jpeg/sample_with_exif_xmp.jpg");
+
+    println!("\n=== JPEG XMP Extraction Integration Test ===\n");
+
+    // === Step 1: Open file with MMapReader ===
+    println!("Step 1: Opening JPEG file with MMapReader...");
+    let reader = MMapReader::new(fixture_path).expect("Failed to open JPEG file");
+    println!("  ✓ File opened successfully ({} bytes)", reader.size());
+
+    // === Step 2: Detect format ===
+    println!("\nStep 2: Detecting file format...");
+    let format = detect_format(&reader).expect("Failed to detect format");
+    println!("  ✓ Detected format: {:?}", format);
+    assert_eq!(
+        format,
+        FileFormat::JPEG,
+        "Format should be detected as JPEG"
+    );
+
+    // === Step 3: Parse JPEG segments ===
+    println!("\nStep 3: Parsing JPEG segments...");
+    let segments = parse_segments(&reader).expect("Failed to parse JPEG segments");
+    println!("  ✓ Found {} segments", segments.len());
+
+    // Print segment information
+    for segment in &segments {
+        println!(
+            "    - Marker: 0x{:04X}, Offset: {}, Data size: {} bytes",
+            segment.marker,
+            segment.offset,
+            segment.data.len()
+        );
+    }
+
+    // === Step 4: Find APP1 segments (both EXIF and XMP) ===
+    println!("\nStep 4: Locating APP1 segments...");
+    let app1_segments: Vec<_> = segments.iter().filter(|s| s.is_app1()).collect();
+    println!("  ✓ Found {} APP1 segments", app1_segments.len());
+
+    // Verify we have both EXIF and XMP
+    let has_exif = app1_segments
+        .iter()
+        .any(|s| s.data.starts_with(b"Exif\0\0"));
+    let has_xmp = app1_segments
+        .iter()
+        .any(|s| s.data.starts_with(b"http://ns.adobe.com/xap/1.0/\0"));
+
+    assert!(has_exif, "Should have EXIF APP1 segment");
+    assert!(has_xmp, "Should have XMP APP1 segment");
+    println!("    - Found EXIF APP1 segment");
+    println!("    - Found XMP APP1 segment");
+
+    // === Step 5: Extract XMP metadata ===
+    println!("\nStep 5: Extracting XMP metadata...");
+    let xmp_tags = extract_xmp_from_segments(&segments).expect("Failed to extract XMP");
+    println!("  ✓ Extracted {} XMP tags", xmp_tags.len());
+
+    // Print all XMP tags
+    for (tag_name, value) in &xmp_tags {
+        println!("    - {}: {}", tag_name, value);
+    }
+
+    // === Step 6: Verify at least 3 XMP tags extracted ===
+    println!("\nStep 6: Verifying XMP tag extraction...");
+    assert!(
+        xmp_tags.len() >= 3,
+        "Should extract at least 3 XMP tags, got {}",
+        xmp_tags.len()
+    );
+    println!("  ✓ Extracted {} XMP tags (>= 3 required)", xmp_tags.len());
+
+    // === Step 7: Verify specific XMP tags ===
+    println!("\nStep 7: Verifying specific XMP tag values...");
+
+    // Check for Creator
+    let creator_tags: Vec<_> = xmp_tags
+        .iter()
+        .filter(|(name, _)| name == "XMP:Creator")
+        .collect();
+    assert_eq!(creator_tags.len(), 1, "Should have exactly one XMP:Creator tag");
+    assert_eq!(
+        creator_tags[0].1, "John Doe",
+        "XMP:Creator should be 'John Doe'"
+    );
+    println!("  ✓ XMP:Creator: {}", creator_tags[0].1);
+
+    // Check for Rating
+    let rating_tags: Vec<_> = xmp_tags
+        .iter()
+        .filter(|(name, _)| name == "XMP:Rating")
+        .collect();
+    assert_eq!(rating_tags.len(), 1, "Should have exactly one XMP:Rating tag");
+    assert_eq!(rating_tags[0].1, "5", "XMP:Rating should be '5'");
+    println!("  ✓ XMP:Rating: {}", rating_tags[0].1);
+
+    // Check for title (dc:title)
+    let title_tags: Vec<_> = xmp_tags
+        .iter()
+        .filter(|(name, _)| name == "XMP:title")
+        .collect();
+    assert_eq!(title_tags.len(), 1, "Should have exactly one XMP:title tag");
+    assert_eq!(
+        title_tags[0].1, "Sample Photo",
+        "XMP:title should be 'Sample Photo'"
+    );
+    println!("  ✓ XMP:title: {}", title_tags[0].1);
+
+    // Check for rights (dc:rights)
+    let rights_tags: Vec<_> = xmp_tags
+        .iter()
+        .filter(|(name, _)| name == "XMP:rights")
+        .collect();
+    assert_eq!(rights_tags.len(), 1, "Should have exactly one XMP:rights tag");
+    assert_eq!(
+        rights_tags[0].1, "Copyright 2024",
+        "XMP:rights should be 'Copyright 2024'"
+    );
+    println!("  ✓ XMP:rights: {}", rights_tags[0].1);
+
+    // === Step 8: Verify both EXIF and XMP can coexist ===
+    println!("\nStep 8: Verifying EXIF and XMP coexistence...");
+
+    // Extract EXIF data as well
+    let exif_segment = segments
+        .iter()
+        .find(|s| s.is_app1() && s.data.starts_with(b"Exif\0\0"))
+        .expect("No APP1 segment with EXIF found");
+
+    let tiff_data = &exif_segment.data[6..]; // Skip "Exif\0\0"
+
+    // Detect byte order
+    let byte_order = if tiff_data.starts_with(b"II") {
+        ByteOrder::LittleEndian
+    } else if tiff_data.starts_with(b"MM") {
+        ByteOrder::BigEndian
+    } else {
+        panic!("Invalid TIFF byte order marker");
+    };
+
+    // Read IFD offset
+    let ifd_offset = match byte_order {
+        ByteOrder::LittleEndian => {
+            u32::from_le_bytes([tiff_data[4], tiff_data[5], tiff_data[6], tiff_data[7]])
+        }
+        ByteOrder::BigEndian => {
+            u32::from_be_bytes([tiff_data[4], tiff_data[5], tiff_data[6], tiff_data[7]])
+        }
+    };
+
+    // Create a SliceReader for TIFF data
+    let tiff_reader = SliceReader::new(tiff_data);
+
+    // Parse EXIF IFD
+    let exif_tags = parse_ifd(&tiff_reader, ifd_offset as u64, byte_order)
+        .expect("Failed to parse EXIF IFD");
+
+    println!("  ✓ Successfully extracted {} EXIF tags", exif_tags.len());
+    println!("  ✓ Successfully extracted {} XMP tags", xmp_tags.len());
+    println!("  ✓ Both EXIF and XMP metadata coexist in the same JPEG");
+
+    // === Test Summary ===
+    println!("\n=== Test Summary ===");
+    println!("EXIF tags extracted: {}", exif_tags.len());
+    println!("XMP tags extracted:  {}", xmp_tags.len());
+    println!("\nXMP Tag Values:");
+    println!("  Creator: {}", creator_tags[0].1);
+    println!("  Rating:  {}", rating_tags[0].1);
+    println!("  Title:   {}", title_tags[0].1);
+    println!("  Rights:  {}", rights_tags[0].1);
     println!("\n✓ All integration test assertions passed!\n");
 }
