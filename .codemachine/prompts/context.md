@@ -39,50 +39,71 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: architectural-style (from 02_Architecture_Overview.md)
+### Context: data-model-overview (from 03_System_Structure_and_Data.md)
 
-The project follows **Layered Hexagonal Architecture** (Ports and Adapters):
+```markdown
+### 3.6. Data Model Overview & ERD
 
-**Rationale**:
-1. **Format Independence**: The core domain (metadata extraction/manipulation logic) must remain isolated from the specifics of 300+ file formats through ports (interfaces) and adapters (format-specific implementations).
-2. **Testability**: Hexagonal architecture enables testing the core metadata logic independently of file I/O by mocking the file system port. Critical for achieving 80%+ test coverage.
-3. **Extensibility**: New file format support becomes a matter of implementing the format adapter interface without touching core logic.
+**Description**: ExifTool-RS operates on files without persistent database storage. The "data model" represents in-memory structures for metadata representation. The Entity-Relationship Diagram below models the logical relationships between metadata concepts.
 
-**Layered Structure**:
-- **Domain Layer**: Format-agnostic metadata models, tag definitions, operations
-- **Application Layer**: User-facing interfaces translating commands to domain operations
-- **Infrastructure Layer**: Format-specific parsers/serializers, file system abstraction
+#### Key Entities
 
-### Context: technology-stack (from 02_Architecture_Overview.md)
-
-**Binary Parsing**: `nom` v7 for complex formats (TIFF, QuickTime)
-- Parser combinator library for binary formats
-- Example: TIFF IFD parsing uses `nom::number::complete::le_u16` for little-endian u16, chained with `nom::multi::count` for tag array parsing
-
-**Image I/O**: `memmap2` for memory-mapped files
-- Efficient large file access without loading entire file into memory
-- Enables zero-copy parsing for formats with known offsets
-
-### Context: data-model (from 03_System_Structure_and_Data.md)
-
-**Key Entities**:
-1. **File**: Represents a media file being processed
+1. **File**: Represents a media file being processed (JPEG, PNG, etc.)
 2. **MetadataMap**: Collection of all metadata tags extracted from a file
 3. **TagValue**: A single metadata tag with its name, value, and type information
-4. **IFD (Image File Directory)**: TIFF-specific structural element containing tags
+4. **TagDescriptor**: Definition of a tag (from tag database) including ID, name, type constraints, format family
+5. **FormatFamily**: Grouping of related metadata standards (EXIF, XMP, IPTC, MakerNotes)
+6. **IFD (Image File Directory)**: TIFF-specific structural element containing tags
 
-### Context: iteration-3-goal (from 02_Iteration_I3.md)
+**Rationale**:
 
-**Iteration 3 Goal**: Implement metadata write operations with atomic file handling, extend TIFF parser for standalone TIFF files (not just EXIF in JPEG), implement metadata serialization, and add tag modification capabilities to CLI.
+- **No Persistent Database**: The system is stateless. `MetadataMap` exists only in-memory during processing and is serialized to JSON/text output or written back to file metadata.
 
-**Task I3.T6 Specification**:
-- Extend TIFF parser from I1.T11 to handle standalone TIFF files
-- Parse 8-byte header (byte order, magic number 42, first IFD offset)
-- Parse IFD chain (IFD0, IFD1 for thumbnails, sub-IFDs for EXIF/GPS)
-- Support multi-page TIFF (follow next IFD offset)
-- Extract all tags from all IFDs
-- Ignore image pixel data (metadata only)
-- Add integration test with sample TIFF file
+- **Variant Value Type**: `TagValue.value` uses a Rust `enum` to represent heterogeneous tag types:
+  ```rust
+  enum TagValueData {
+      String(String),
+      Number(f64),
+      Integer(i64),
+      Binary(Vec<u8>),
+      Rational { numerator: i32, denominator: i32 },
+      Struct(HashMap<String, TagValueData>), // For complex XMP structures
+  }
+  ```
+
+- **IFD Hierarchy**: TIFF/EXIF formats use nested IFD structures. The self-referential `parent_ifd_id` models this (e.g., GPS sub-IFD under IFD0).
+
+- **Tag Descriptor**: Compile-time generated from ExifTool tag database. In practice, this is a large static `HashMap<&'static str, TagDescriptor>` embedded in the binary, not a runtime database.
+```
+
+### Context: task-i3-t6 (from 02_Iteration_I3.md)
+
+```markdown
+*   **Task 3.6: Implement Full TIFF File Parser**
+    *   **Task ID:** `I3.T6`
+    *   **Description:** Extend TIFF parser from I1.T11 to handle standalone TIFF files (not just EXIF segments). Parse TIFF file structure: 8-byte header (byte order, magic number 42, first IFD offset), then IFD chain (IFD0, IFD1 for thumbnails, sub-IFDs for EXIF/GPS). Support multi-page TIFF (follow next IFD offset). Extract all tags from all IFDs. Handle both stripped and tiled image data (ignore pixel data, metadata only). Add integration test with sample TIFF file.
+    *   **Agent Type Hint:** `BackendAgent`
+    *   **Inputs:** TIFF specification, I1.T11 IFD parser
+    *   **Input Files:** [`src/parsers/tiff/ifd_parser.rs`]
+    *   **Target Files:**
+        *   `src/parsers/tiff/mod.rs` (extend with full TIFF parsing)
+        *   `src/parsers/tiff/file_parser.rs` (new: handle TIFF file structure)
+        *   `tests/integration/tiff_tests.rs`
+        *   `tests/fixtures/tiff/sample.tif`
+    *   **Deliverables:**
+        *   Full TIFF file parser
+        *   Support for multi-page TIFF
+        *   Integration test
+    *   **Acceptance Criteria:**
+        *   Parser reads TIFF header and identifies byte order
+        *   Parses IFD chain (IFD0 → IFD1 → ... via next IFD offset)
+        *   Extracts tags from all IFDs (main image + thumbnail + sub-IFDs)
+        *   Ignores image pixel data (metadata only)
+        *   Integration test extracts metadata from multi-page TIFF
+        *   `cargo test tiff_tests` passes
+    *   **Dependencies:** `I1.T11`
+    *   **Parallelizable:** Yes (can be developed in parallel with I3.T1-T4)
+```
 
 ---
 
@@ -93,322 +114,178 @@ The following analysis is based on my direct review of the current codebase. Use
 ### Relevant Existing Code
 
 *   **File:** `src/parsers/tiff/ifd_parser.rs`
-    *   **Summary:** This file contains a complete and well-tested implementation for parsing individual TIFF Image File Directories (IFDs). It includes:
-        - `ByteOrder` enum (LittleEndian/BigEndian)
-        - `IfdEntry` struct representing a single tag entry
-        - `parse_ifd()` function that reads IFD at a given offset and returns `Vec<(u16, Vec<u8>)>` tag data
-        - Support for both byte orders
-        - Inline value extraction (≤4 bytes) vs offset-based values (>4 bytes)
-        - Comprehensive unit tests with synthetic IFD data (699 lines total, ~200 lines of tests)
-    *   **Recommendation:** You MUST import and reuse the `parse_ifd()` function from this file. DO NOT rewrite IFD parsing logic. Your task is to add the TIFF file-level parser that orchestrates calling `parse_ifd()` for each IFD in the chain.
-    *   **Key Functions to Reuse:**
-        ```rust
-        pub fn parse_ifd(reader: &dyn FileReader, ifd_offset: u64, byte_order: ByteOrder) -> Result<Vec<(u16, Vec<u8>)>>
-        pub enum ByteOrder { LittleEndian, BigEndian }
-        ```
+    *   **Summary:** This is the foundation for your work. It contains a fully-functional IFD (Image File Directory) parser that handles individual IFD structures. The key function is `parse_ifd(reader, ifd_offset, byte_order)` which returns `Vec<(u16, Vec<u8>)>` - a vector of (tag_id, raw_value_bytes) pairs.
+    *   **Key Types:**
+        - `ByteOrder` enum: Handles both `LittleEndian` (0x4949 "II") and `BigEndian` (0x4D4D "MM")
+        - `IfdEntry` struct: Represents a single 12-byte IFD entry with tag_id, field_type, value_count, value_offset
+    *   **What it DOES:**
+        - Reads entry count (2 bytes)
+        - Parses N × 12-byte entries using nom combinators
+        - Handles inline values (≤4 bytes) vs. offset values (>4 bytes)
+        - Validates offsets and handles errors gracefully
+        - Has comprehensive unit tests
+    *   **What it DOESN'T do (your task):**
+        - Parse TIFF file header (8 bytes: byte order marker + magic number 42 + first IFD offset)
+        - Follow IFD chain (read "next IFD offset" at end of each IFD)
+        - Handle sub-IFDs (EXIF IFD, GPS IFD linked via special tags)
+        - Coordinate reading from standalone .tif/.tiff files
+    *   **Recommendation:** You MUST import and heavily use the existing `parse_ifd()` function. Your `file_parser.rs` should be a higher-level orchestrator that reads the TIFF header, determines byte order, and calls `parse_ifd()` repeatedly to walk the IFD chain.
 
-*   **File:** `src/parsers/tiff/mod.rs`
-    *   **Summary:** TIFF parser module file. Currently very minimal with just module declarations for `ifd_parser`, `makernote_parser`, and `tag_parser`.
-    *   **Recommendation:** Add `pub mod file_parser;` to this file.
+*   **File:** `src/parsers/common/exif_types.rs`
+    *   **Summary:** Defines the `ExifType` enum representing all 12 TIFF/EXIF data types (Byte, ASCII, Short, Long, Rational, etc.) with methods for type size calculation and u16 conversion.
+    *   **Recommendation:** You will likely NOT need to directly use this in your file_parser.rs since `parse_ifd()` already handles type interpretation. However, be aware it exists for any future type-specific value parsing.
+
+*   **File:** `src/core/file_reader_trait.rs`
+    *   **Summary:** Defines the `FileReader` trait with `read(offset, length)` and `size()` methods. This is your I/O interface.
+    *   **Recommendation:** Your parser MUST accept `&dyn FileReader` as input (exactly like `parse_ifd` does). This maintains architecture compliance and enables testing with in-memory test readers.
 
 *   **File:** `src/parsers/format_detector.rs`
-    *   **Summary:** Contains `detect_format()` function that identifies TIFF files by magic bytes:
-        - Little-Endian: `0x49 0x49 0x2A 0x00` ("II" + 42)
-        - Big-Endian: `0x4D 0x4D 0x00 0x2A` ("MM" + 42)
-    *   **Recommendation:** You DO NOT need to modify this file. Format detection for TIFF is already complete.
+    *   **Summary:** Already detects TIFF files via magic bytes (0x4949 for LE, 0x4D4D for BE). Returns `FileFormat::TIFF`.
+    *   **Recommendation:** No changes needed here. Your parser will be called AFTER format detection identifies a TIFF file.
 
-*   **File:** `src/core/operations.rs`
-    *   **Summary:** Orchestrates metadata extraction workflow. Contains `read_metadata()` which routes to format-specific parsers. Has `parse_tiff_metadata()` function that needs your full TIFF file parser.
-    *   **Recommendation:** Once you implement the TIFF file parser, update `parse_tiff_metadata()` to call your new parser. This function exists at line ~100.
-
-*   **File:** `src/io/mmap_reader.rs` and `src/io/buffered_reader.rs`
-    *   **Summary:** Implementations of the `FileReader` trait providing `read(offset, length)` and `size()` methods.
-    *   **Recommendation:** Your TIFF file parser MUST accept a `&dyn FileReader` parameter (following hexagonal architecture). Use the reader's `read()` method to access file data.
+*   **File:** `src/parsers/tiff/mod.rs`
+    *   **Summary:** Currently just declares submodules (ifd_parser, makernote_parser, tag_parser). Very minimal.
+    *   **Recommendation:** You MUST add `pub mod file_parser;` here and expose your new parser functions via `pub use file_parser::*;` or similar.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** The TIFF file structure you need to parse is:
-    ```
-    Bytes 0-1:   Byte order marker (0x4949="II" or 0x4D4D="MM")
-    Bytes 2-3:   Magic number 42 (0x002A in the detected byte order)
-    Bytes 4-7:   Offset to first IFD (4-byte offset from start of file)
-    At IFD offset: IFD0 data (parsed by existing parse_ifd())
-    After IFD entries: 4-byte "next IFD offset" (0 = no more IFDs)
-    ```
+*   **Tip - TIFF Header Structure:** According to TIFF 6.0 spec, every TIFF file starts with an 8-byte header:
+    1. Bytes 0-1: Byte order marker (0x4949 = "II" little-endian, or 0x4D4D = "MM" big-endian)
+    2. Bytes 2-3: Magic number 42 (0x002A in little-endian, 0x2A00 in big-endian)
+    3. Bytes 4-7: Offset to first IFD (u32, respecting byte order)
 
-*   **Tip:** For multi-page TIFF support, you MUST follow the IFD chain:
-    1. Parse the 8-byte TIFF header to get first IFD offset and byte order
-    2. Call `parse_ifd()` at that offset
-    3. After the IFD entries, at position `ifd_offset + 2 + (entry_count * 12)`, read the 4-byte "next IFD offset"
-    4. If next offset is non-zero, repeat from step 2
-    5. Collect all tags from all IFDs into a single `Vec<(u16, Vec<u8>)>`
+    You MUST parse this header first to determine:
+    - Byte order for all subsequent reads
+    - Where the first IFD is located in the file
 
-*   **Tip:** To read the "next IFD offset" after parsing an IFD:
-    - The existing `parse_ifd()` function returns tag data but doesn't return the entry count
-    - You'll need to read the entry count yourself from `ifd_offset` (2 bytes)
-    - Then calculate: `next_offset_position = ifd_offset + 2 + (entry_count * 12)`
-    - Read 4 bytes at this position using the detected byte order
+*   **Tip - IFD Chain Following:** Each IFD ends with a 4-byte "next IFD offset" field AFTER the entry array. The `parse_ifd()` function currently reads entries but doesn't return this offset. You have two options:
+    1. Read the next IFD offset separately (easier): After calling `parse_ifd(reader, offset, byte_order)`, read 4 more bytes at `offset + 2 + (entry_count * 12)` to get the next offset
+    2. Modify `parse_ifd()` to also return next_ifd_offset (more invasive, avoid if possible)
 
-*   **Note:** According to acceptance criteria, you should IGNORE image pixel data:
-    - DO NOT parse or extract actual image bytes (stored in strips or tiles)
-    - Only extract metadata tags from IFDs
-    - Tags pointing to image data (StripOffsets, TileOffsets) can be extracted as metadata but don't follow those offsets
+    Option 1 is STRONGLY recommended to minimize changes to the existing, tested code.
 
-*   **Note:** For sub-IFDs (EXIF IFD, GPS IFD), these are referenced by specific tags in IFD0:
-    - Tag 0x8769 (ExifIFDPointer) contains offset to EXIF sub-IFD
-    - Tag 0x8825 (GPSInfoIFDPointer) contains offset to GPS sub-IFD
-    - You SHOULD parse these sub-IFDs by checking for these tags and recursively calling `parse_ifd()` at those offsets
+*   **Tip - Sub-IFDs (EXIF, GPS):** TIFF files often have "sub-IFDs" - child IFDs linked via special tag values:
+    - Tag 0x8769 (ExifIFDPointer): Points to EXIF-specific tags
+    - Tag 0x8825 (GPSInfoIFDPointer): Points to GPS tags
+    - Tag 0x014A (SubIFDs): Points to thumbnail or other sub-IFDs
 
-*   **Warning:** Be careful with byte order consistency. The byte order marker is read once at file start, and ALL subsequent multi-byte values use that same byte order. Pass `ByteOrder` through all parsing functions.
+    When you extract tags from an IFD, check for these tag IDs. If found, the tag's value is an offset to another IFD. You MUST recursively call your parser to extract those IFDs as well. This is how you "extract all tags from all IFDs" as required.
 
-*   **Tip:** Suggested function structure for `file_parser.rs`:
-    ```rust
-    pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<Vec<(u16, Vec<u8>)>>
-    fn parse_tiff_header(reader: &dyn FileReader) -> Result<(ByteOrder, u32)>
-    fn read_entry_count(reader: &dyn FileReader, ifd_offset: u64, byte_order: ByteOrder) -> Result<u16>
-    fn read_next_ifd_offset(reader: &dyn FileReader, offset: u64, byte_order: ByteOrder) -> Result<u32>
-    fn parse_ifd_chain(reader: &dyn FileReader, first_ifd_offset: u64, byte_order: ByteOrder) -> Result<Vec<(u16, Vec<u8>)>>
-    ```
+*   **Tip - Multi-Page TIFF:** Multi-page TIFFs have an IFD chain: IFD0 → IFD1 → IFD2 → ... Each IFD represents one page/image. The chain ends when next_ifd_offset = 0. Loop until you hit 0.
 
-*   **Tip:** For integration tests, create a sample TIFF file:
-    1. Use an existing TIFF from a public test corpus
-    2. Generate one using ImageMagick: `convert -size 100x100 xc:white sample.tif`
-    3. Create a minimal synthetic TIFF using the same approach as unit tests in `ifd_parser.rs`
+*   **Tip - Image Data Handling:** The acceptance criteria says "ignore image pixel data (metadata only)". TIFF stores image data via:
+    - **Strips**: Tag 0x0111 (StripOffsets) + Tag 0x0117 (StripByteCounts)
+    - **Tiles**: Tag 0x0144 (TileOffsets) + Tag 0x0145 (TileByteCounts)
 
-*   **Note:** Return type should be `Vec<(u16, Vec<u8>)>` where u16 is tag ID and Vec<u8> is raw tag value. The orchestration in `operations.rs` will convert these to TagValues and populate MetadataMap.
+    You do NOT need to read or process these data areas. Just extract the tag values themselves (the offsets/counts) as metadata, but don't follow the offsets to read image pixels.
 
-### Testing Strategy
+*   **Warning - Circular IFD References:** Malformed TIFF files could have circular IFD chains (e.g., IFD0 → IFD1 → IFD0). You MUST track visited IFD offsets in a `HashSet<u64>` and return an error if you encounter the same offset twice.
 
-*   **Unit Tests:** Add unit tests in `file_parser.rs` for:
-    - TIFF header parsing (both byte orders)
-    - Next IFD offset reading
-    - Single-IFD file parsing
-    - Multi-page TIFF parsing (2-3 IFDs)
+*   **Warning - Test Fixture Generation:** The task requires `tests/fixtures/tiff/sample.tif`. Since the fixtures directory is currently empty, you have two options:
+    1. Use ImageMagick to generate a multi-page TIFF: `convert -size 100x100 xc:red xc:blue multi.tif`
+    2. Use Rust code to generate a minimal TIFF programmatically in your test setup
 
-*   **Integration Test:** Create `tests/integration/tiff_tests.rs` that:
-    - Reads a real TIFF file from `tests/fixtures/tiff/sample.tif`
-    - Calls your parser via the public API
-    - Verifies expected tags are extracted
-    - Tests both single-page and multi-page TIFF files if possible
-    - Follow the pattern from existing integration tests (see `tests/integration/` directory)
+    Option 1 is simpler if ImageMagick is available. Option 2 gives you more control but is more work. Choose based on environment constraints.
 
-### File Structure Guidance
+*   **Note - Integration with Existing System:** Your parser will eventually be called from `src/core/operations.rs::read_metadata()` after format detection. For now, focus on the parser itself and the integration test. The operations.rs integration will come later (likely in a subsequent task).
 
-**Create these new files:**
-1. `src/parsers/tiff/file_parser.rs` - Your main implementation
-2. `tests/integration/tiff_tests.rs` - Integration tests
-3. `tests/fixtures/tiff/sample.tif` - Sample TIFF file for testing
+*   **Note - Error Handling Pattern:** The existing `parse_ifd()` function uses `ExifToolError::parse_error_at(message, offset)` for errors. You SHOULD follow the same pattern for consistency. Import from `crate::error::{ExifToolError, Result}`.
 
-**Update these existing files:**
-1. `src/parsers/tiff/mod.rs` - Add `pub mod file_parser;`
-2. `src/core/operations.rs` - Update `parse_tiff_metadata()` to use your new parser
+*   **Note - Testing Strategy:** The existing IFD parser has excellent test coverage with synthetic test data. You SHOULD follow this pattern:
+    - Unit tests with `TestReader` (in-memory data)
+    - Integration tests with real TIFF files in fixtures/
+    - Test both little-endian and big-endian files
+    - Test multi-page TIFFs
+    - Test TIFFs with sub-IFDs (EXIF, GPS)
+    - Test error cases (truncated files, circular references)
 
-### Critical Integration Points
+### Architectural Compliance Checklist
 
-*   **Hexagonal Architecture Compliance**: Your parser MUST use the `FileReader` trait, NOT direct file I/O. This allows the parser to work with both memory-mapped files and buffered readers.
+- [ ] Use `&dyn FileReader` as input (not `&Path` or raw files)
+- [ ] Return `Result<Vec<(u16, Vec<u8>)>, ExifToolError>` or similar structured result
+- [ ] Call existing `parse_ifd()` function - do NOT reimplement IFD parsing
+- [ ] Handle both little-endian and big-endian byte orders
+- [ ] Follow IFD chain via next_ifd_offset until reaching 0
+- [ ] Recursively parse sub-IFDs (EXIF, GPS) found via special tags
+- [ ] Track visited offsets to prevent infinite loops
+- [ ] Add comprehensive unit tests following existing patterns
+- [ ] Create integration test file `tests/integration/tiff_tests.rs`
+- [ ] Register new test module in `tests/integration.rs`
+- [ ] Add `pub mod file_parser;` to `src/parsers/tiff/mod.rs`
 
-*   **Error Handling**: Use the existing `ExifToolError` type from `src/error/mod.rs`. The `parse_ifd()` function already returns `Result<Vec<(u16, Vec<u8>)>>`, so follow this pattern.
+### Suggested File Structure for `file_parser.rs`
 
-*   **Nom Usage**: You may use `nom` parser combinators for byte order and header parsing, following the patterns in `ifd_parser.rs`. Alternatively, manual parsing with byte array slicing is acceptable for the simple TIFF header.
+```rust
+//! Full TIFF file parsing
+//!
+//! Handles complete TIFF file structure including header, IFD chains, and sub-IFDs.
 
-*   **Integration with Operations**: The `parse_tiff_metadata()` function in `operations.rs` currently has a stub implementation. Update it to:
-    ```rust
-    fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-        use crate::parsers::tiff::file_parser::parse_tiff_file;
-        let tags = parse_tiff_file(reader)?;
-        // Convert tags to MetadataMap (may need additional implementation)
-        // ...
-    }
-    ```
+use crate::core::FileReader;
+use crate::error::{ExifToolError, Result};
+use crate::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};
+use std::collections::HashSet;
 
----
+/// TIFF file header structure
+struct TiffHeader {
+    byte_order: ByteOrder,
+    first_ifd_offset: u32,
+}
 
-## 1. Current Task Details
+/// Parses TIFF file header (8 bytes)
+fn parse_tiff_header(reader: &dyn FileReader) -> Result<TiffHeader> {
+    // 1. Read 8-byte header
+    // 2. Check byte order marker (0x4949 or 0x4D4D)
+    // 3. Verify magic number 42
+    // 4. Extract first IFD offset
+    // 5. Return TiffHeader
+    todo!()
+}
 
-This is the full specification of the task you must complete.
+/// Extracts all metadata from a TIFF file
+pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<Vec<(u16, Vec<u8>)>> {
+    // 1. Parse header
+    // 2. Initialize visited_offsets HashSet
+    // 3. Walk IFD chain starting from first_ifd_offset
+    // 4. For each IFD:
+    //    a. Check if offset already visited (prevent loops)
+    //    b. Call parse_ifd()
+    //    c. Look for sub-IFD tags (0x8769, 0x8825)
+    //    d. Recursively parse sub-IFDs
+    //    e. Read next_ifd_offset and continue or break if 0
+    // 5. Return all collected tags
+    todo!()
+}
 
-```json
-{
-  "task_id": "I3.T5",
-  "iteration_id": "I3",
-  "iteration_goal": "Implement metadata write operations with atomic file handling, extend TIFF parser for standalone TIFF files (not just EXIF in JPEG), implement metadata serialization, and add tag modification capabilities to CLI.",
-  "description": "Extend CLI args in src/cli/args.rs to support tag modification: -TAG_NAME=VALUE syntax (e.g., -EXIF:Artist=John Doe). Parse modification arguments, call modify_tag() from I3.T4. Support multiple modifications in one command (e.g., exiftool-rs -EXIF:Artist=John -EXIF:Copyright=2025 photo.jpg). Update main.rs to handle write operations. Add validation that file is writable. Print success/failure message.",
-  "agent_type_hint": "BackendAgent",
-  "inputs": "I2.T8 CLI args, I3.T4 write operations",
-  "target_files": [
-    "src/cli/args.rs",
-    "src/main.rs"
-  ],
-  "input_files": [
-    "src/cli/args.rs",
-    "src/core/operations.rs"
-  ],
-  "deliverables": "CLI support for -TAG=VALUE syntax, multiple modifications in one command",
-  "acceptance_criteria": "exiftool-rs -EXIF:Artist=John Doe photo.jpg modifies tag, multiple modifications work: -Tag1=Val1 -Tag2=Val2, prints success message: 1 image file updated, prints error on validation failure: Invalid value for TAG, verifies file exists and is writable before modification, manual test: modify tag, re-run with read, verify change",
-  "dependencies": [
-    "I3.T4"
-  ],
-  "parallelizable": false,
-  "done": false
+/// Helper: reads next IFD offset after an IFD entry array
+fn read_next_ifd_offset(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    entry_count: u16,
+    byte_order: ByteOrder,
+) -> Result<u32> {
+    // offset = ifd_offset + 2 + (entry_count * 12)
+    todo!()
+}
+
+#[cfg(test)]
+mod tests {
+    // Unit tests with TestReader
+    // Integration tests are in tests/integration/tiff_tests.rs
 }
 ```
 
----
+### Summary of Your Task
 
-## 2. Architectural & Planning Context
+You are implementing a **TIFF file-level parser** that sits one layer ABOVE the existing IFD parser. Think of it as:
 
-The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
+- **Existing (I1.T11):** `parse_ifd(offset)` → parses ONE IFD structure at a specific offset
+- **Your Task (I3.T6):** `parse_tiff_file()` → parses ENTIRE .tif file by reading header, walking IFD chains, and orchestrating multiple `parse_ifd()` calls
 
-### Context: CLI Interface Specification (from 04_Behavior_and_Communication.md)
+This is a classic facade/orchestrator pattern. Your code should be mostly glue logic that coordinates the existing, well-tested components. Focus on:
+1. Header parsing (8 bytes)
+2. IFD chain walking (loop until next_offset = 0)
+3. Sub-IFD recursion (check for special tags)
+4. Circular reference prevention (HashSet)
+5. Comprehensive testing
 
-```markdown
-**Secondary APIs**:
-
-1. **CLI Interface**: POSIX-style arguments mimicking ExifTool
-   ```bash
-   exiftool-rs -EXIF:DateTime photo.jpg
-   exiftool-rs -json -r /photos/  # Recursive JSON output
-   exiftool-rs -TagsFromFile src.jpg -all:all dest.jpg  # Copy metadata
-   ```
-
-**Justification**:
-
-- **Rust-First**: Leverages Rust's type system for compile-time safety (no invalid tag names at compile time via const tag identifiers)
-- **No Network API**: ExifTool-RS is a library/tool, not a service. REST/GraphQL APIs would be implemented by consuming applications
-- **FFI for Interop**: Enables Python (`pyo3`), Node.js (`neon`), Go (`cgo`) bindings without compromising Rust API ergonomics
-```
-
-### Context: Metadata Write Operation Flow (from 04_Behavior_and_Communication.md)
-
-```markdown
-#### Alternative Flow: Metadata Write Operation
-
-**Description**: Sequence for **modifying metadata and writing back to file**.
-
-**Key Design Decisions**:
-
-1. **Read-Modify-Write**: Always read existing metadata first to preserve unmodified tags
-2. **In-Place vs. Rewrite**: Attempt in-place modification if new metadata fits in existing segment; otherwise rewrite entire file
-3. **Atomic Write**: Use temporary file + atomic rename to prevent corruption on crash
-4. **Validation Before Write**: Validate tag values against type constraints before any file modification
-```
-
-### Context: Task I3.T5 Specification (from 02_Iteration_I3.md)
-
-```markdown
-*   **Task 3.5: Extend CLI to Support Tag Modification**
-    *   **Task ID:** `I3.T5`
-    *   **Description:** Extend CLI args in `src/cli/args.rs` to support tag modification: `-TAG_NAME=VALUE` syntax (e.g., `-EXIF:Artist="John Doe"`). Parse modification arguments, call modify_tag() from I3.T4. Support multiple modifications in one command (e.g., `exiftool-rs -EXIF:Artist="John" -EXIF:Copyright="2025" photo.jpg`). Update main.rs to handle write operations. Add validation that file is writable. Print success/failure message.
-    *   **Acceptance Criteria:**
-        *   `exiftool-rs -EXIF:Artist="John Doe" photo.jpg` modifies tag
-        *   Multiple modifications work: `-Tag1=Val1 -Tag2=Val2`
-        *   Prints success message: "1 image file updated"
-        *   Prints error on validation failure: "Invalid value for TAG"
-        *   Verifies file exists and is writable before modification
-        *   Manual test: modify tag, re-run with read, verify change
-```
-
-### Context: CLI Framework and Technology Stack (from 01_Plan_Overview_and_Setup.md)
-
-```markdown
-*   **Core Libraries:**
-    *   CLI Framework: `clap` v4 (derive API)
-    *   Binary Parsing: `nom` v7 (complex formats) + `binrw` (simple struct-based formats)
-    *   JSON Output: `serde_json`
-```
-
----
-
-## 3. Codebase Analysis & Strategic Guidance
-
-The following analysis is based on my direct review of the current codebase. Use these notes and tips to guide your implementation.
-
-### Relevant Existing Code
-
-*   **File:** `src/cli/args.rs`
-    *   **Summary:** This file defines the current CLI argument structure using `clap` v4 derive API. It currently supports: positional `FILE` argument, `-json` flag, `-s` (short format, not implemented), `-a` (all tags, no effect), and `-r` (recursive, not implemented).
-    *   **Current Structure:** Uses `#[derive(Parser, Debug)]` with simple flags. All arguments are boolean flags or a single PathBuf.
-    *   **Recommendation:** You MUST extend this struct to capture tag modification arguments. Clap's derive API does NOT natively support the `-TAG=VALUE` syntax directly. You have two implementation options:
-        1. **Option A (Recommended):** Use `#[arg(allow_hyphen_values = true, number_of_values = 0..)]` with `Vec<String>` to capture all remaining arguments, then parse `-TAG=VALUE` manually in main.rs
-        2. **Option B:** Use clap's `value_parser` with a custom parser function, but this is more complex
-    *   **Important Note:** The existing code shows warnings for unimplemented features (recursive, short_format). You should follow this pattern for your success/error messages.
-
-*   **File:** `src/main.rs`
-    *   **Summary:** This is the current CLI entry point. It handles: parsing args with `clap::Parser`, reading metadata via `read_metadata()`, formatting output with `HumanReadableFormatter` or `JsonFormatter`, and error handling with `process::exit(1)`.
-    *   **Current Workflow:** Parse args → Read metadata → Format output → Print. It only supports READ operations currently.
-    *   **Recommendation:** You MUST extend the workflow to:
-        1. Detect if tag modifications are requested (check if any `-TAG=VALUE` args present)
-        2. If modifications present: Parse tag assignments, call `modify_tag()` for each, handle errors, print success message
-        3. If no modifications: Use existing read-only workflow
-    *   **File Writability Check:** Use `std::fs::metadata(path)?.permissions().readonly()` to check if file is writable before attempting modification.
-    *   **Error Handling Pattern:** The existing code uses `match` with `Err(e)` and `eprintln!()` for errors. You SHOULD follow this pattern for consistency.
-
-*   **File:** `src/core/operations.rs`
-    *   **Summary:** This file contains the core metadata operations including `read_metadata()`, `write_metadata()`, and `modify_tag()`. The `modify_tag()` function (lines 491-502) is your primary integration point.
-    *   **Function Signature:** `pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()>`
-    *   **Recommendation:** You MUST import and call this function from main.rs. The function already handles: reading existing metadata, modifying the single tag, and writing back atomically.
-    *   **Key Design:** `modify_tag()` is a convenience wrapper that preserves all other tags unchanged. It's the perfect API for CLI tag modification.
-    *   **Error Types:** Returns `Result<(), ExifToolError>` which includes: `IoError`, `ParseError`, `InvalidTagValue`, `UnsupportedFormat`. You need to handle these in main.rs.
-
-*   **File:** `src/core/tag_value.rs`
-    *   **Summary:** Defines the `TagValue` enum with variants: String, Integer, Float, Rational, Binary, DateTime, Struct. Includes constructor methods like `TagValue::new_string()`, `TagValue::new_integer()`.
-    *   **Recommendation:** You MUST parse the VALUE part of `-TAG=VALUE` and convert it to the appropriate `TagValue` variant. For this iteration, **only String values are required** (per acceptance criteria example `-EXIF:Artist="John Doe"`). Future iterations can add type detection.
-    *   **String Parsing:** Use `TagValue::new_string()` constructor. Handle quoted strings correctly (strip surrounding quotes if present).
-
-*   **File:** `src/core/validation.rs`
-    *   **Summary:** Contains `validate_tag_value()` function that checks TagValue against TagDescriptor type constraints. This is called automatically by `write_metadata()` (see operations.rs:402-409).
-    *   **Recommendation:** You do NOT need to call this directly. The validation happens inside `write_metadata()` which is called by `modify_tag()`. Your CLI code will receive validation errors via the `Result` type.
-
-### Implementation Tips & Notes
-
-*   **Tip:** The Perl ExifTool uses `-TAG=VALUE` syntax (with single hyphen). For Rust clap, you need to carefully handle this because clap normally expects `--tag=value` (double hyphen) or `-t value` (short flag + value). The `allow_hyphen_values = true` option is critical.
-
-*   **Tip:** To parse `-TAG=VALUE` from command line args:
-    1. Capture remaining args as `Vec<String>`
-    2. Iterate through each arg
-    3. Check if it starts with `-` and contains `=`
-    4. Split on first `=` to get tag_name and value
-    5. Strip leading `-` from tag_name
-    6. Strip surrounding quotes from value if present
-
-*   **Note:** Multiple modifications example: `exiftool-rs -EXIF:Artist=John -EXIF:Copyright=2025 photo.jpg`. The FILE argument must come LAST. This is standard Unix convention. Make sure your parsing preserves this.
-
-*   **Note:** For the success message, Perl ExifTool outputs "1 image files updated" (note: plural "files" even for 1 file). You should match this for backward compatibility.
-
-*   **Warning:** The task requires checking if file is writable BEFORE attempting modification. Use `std::fs::metadata()` to check permissions. If file is read-only, print a clear error message and exit before calling `modify_tag()`. This prevents cryptic errors from atomic writer.
-
-*   **Warning:** When printing error messages, the task specifies format "Invalid value for TAG". Make sure your error handling extracts the tag name from `ExifToolError::InvalidTagValue` and formats it correctly.
-
-*   **Tip:** For manual testing (acceptance criteria), you can use the existing test fixtures in `tests/fixtures/jpeg/` directory. The `sample_with_exif.jpg` file is a good candidate for testing tag modification.
-
-### Suggested Implementation Steps
-
-1. **Extend src/cli/args.rs:**
-   - Add a new field to `CliArgs` struct: `pub tag_modifications: Vec<String>` with appropriate clap attributes
-   - Use `#[arg(allow_hyphen_values = true)]` to capture `-TAG=VALUE` args
-   - OR use clap's `trailing_var_arg` if needed
-
-2. **Update src/main.rs:**
-   - After parsing args, check if `args.tag_modifications` is non-empty
-   - If empty: Use existing read-only workflow
-   - If non-empty:
-     a. Check file exists and is writable
-     b. Parse each modification string into (tag_name, value) pairs
-     c. For each pair, call `modify_tag(path, tag_name, TagValue::new_string(value))`
-     d. Collect any errors
-     e. If all succeed: print "1 image files updated"
-     f. If any fail: print error with tag name and exit with code 1
-
-3. **Test your implementation:**
-   - Compile and run basic modification: `./target/debug/exiftool-rs -EXIF:Artist="Test Artist" tests/fixtures/jpeg/sample_with_exif.jpg`
-   - Verify with read: `./target/debug/exiftool-rs tests/fixtures/jpeg/sample_with_exif.jpg | grep Artist`
-   - Test multiple modifications: `-EXIF:Artist="John" -EXIF:Copyright="2025"`
-   - Test error cases: invalid file, read-only file, invalid tag value type
-
-### Code Quality Reminders
-
-*   Ensure `cargo fmt` compliance (project uses rustfmt.toml)
-*   Run `cargo clippy` and fix all warnings
-*   Add appropriate `// TODO:` comments for features not yet implemented (e.g., type detection for non-string values)
-*   Follow existing error message formatting style (see main.rs:51-55 for reference)
-*   Use descriptive variable names following Rust conventions (snake_case)
+Good luck! This is a foundational component that will enable TIFF file write support in the next task (I3.T7).
