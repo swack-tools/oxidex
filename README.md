@@ -125,6 +125,40 @@ cargo build
 cargo test
 ```
 
+### Running Benchmarks
+
+The project includes performance benchmarks for core parsing operations:
+
+```bash
+# Run all benchmarks
+cargo bench
+
+# Run specific benchmark
+cargo bench format_detection
+cargo bench jpeg_segment_parsing
+cargo bench tiff_ifd_parsing
+cargo bench full_read_metadata
+```
+
+After running benchmarks, Criterion generates detailed HTML reports with performance graphs and statistics:
+
+```bash
+# macOS
+open target/criterion/report/index.html
+
+# Linux
+xdg-open target/criterion/report/index.html
+
+# Windows
+start target/criterion/report/index.html
+```
+
+**Current Baseline Performance** (established with Iteration 2):
+- Format detection: ~2.2 ns per operation
+- JPEG segment parsing: ~24 ns per operation
+- TIFF IFD parsing: ~94 ns per operation
+- Full read_metadata: ~9.3 μs per file (well below 5ms target)
+
 ### Code Quality
 
 ```bash
