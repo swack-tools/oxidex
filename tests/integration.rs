@@ -4,6 +4,9 @@
 #[path = "integration/jpeg_tests.rs"]
 mod jpeg_tests;
 
+#[path = "integration/jpeg_write_tests.rs"]
+mod jpeg_write_tests;
+
 #[path = "integration/operations_tests.rs"]
 mod operations_tests;
 

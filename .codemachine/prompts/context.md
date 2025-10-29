@@ -10,27 +10,28 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I3.T2",
+  "task_id": "I3.T3",
   "iteration_id": "I3",
   "iteration_goal": "Implement metadata write operations with atomic file handling, extend TIFF parser for standalone TIFF files (not just EXIF in JPEG), implement metadata serialization, and add tag modification capabilities to CLI.",
-  "description": "Implement TIFF IFD serializer in src/writers/tiff_writer.rs. Create function to serialize MetadataMap EXIF tags back to TIFF IFD structure: (1) Filter tags for EXIF family, (2) Convert TagValue to TIFF data types (Byte, ASCII, Short, Long, Rational), (3) Build IFD entries (tag ID, type, count, value/offset), (4) Handle values >4 bytes (write to separate value area), (5) Calculate offsets, (6) Write IFD header + entries + values. Support both little-endian and big-endian output. Add unit tests verifying round-trip (parse then serialize equals original).",
+  "description": "Implement JPEG EXIF writer in src/writers/jpeg_writer.rs. Create function to write modified EXIF back to JPEG: (1) Read original JPEG using segment parser, (2) Serialize modified EXIF tags using TIFF writer (I3.T2) with EXIF header (Exif\\0\\0 + TIFF IFD), (3) Create new APP1 segment with EXIF marker (0xFFE1), length, and data, (4) Replace old EXIF APP1 segment with new one in JPEG structure, (5) Write modified JPEG to buffer. Handle segment size changes (if new EXIF larger/smaller than original). Add integration test modifying EXIF tag in JPEG and verifying change.",
   "agent_type_hint": "BackendAgent",
-  "inputs": "TIFF specification, I1.T11 TIFF parser (for understanding structure)",
+  "inputs": "I1.T10 JPEG parser, I3.T2 TIFF writer",
   "target_files": [
-    "src/writers/tiff_writer.rs",
-    "src/writers/mod.rs"
+    "src/writers/jpeg_writer.rs",
+    "src/writers/mod.rs",
+    "tests/integration/jpeg_write_tests.rs"
   ],
   "input_files": [
-    "src/parsers/tiff/ifd_parser.rs",
-    "src/core/metadata_map.rs"
+    "src/parsers/jpeg/segment_parser.rs",
+    "src/writers/tiff_writer.rs"
   ],
-  "deliverables": "TIFF IFD serialization function, support for both endianness, unit and round-trip tests",
-  "acceptance_criteria": "Serializer produces valid TIFF IFD structure, handles both little-endian and big-endian, correctly writes tag entries with type, count, value, values >4 bytes written to separate area with offset, round-trip test: parse(serialize(metadata)) == metadata for EXIF tags, cargo test tiff_writer passes",
+  "deliverables": "JPEG EXIF segment writer, integration test for EXIF modification",
+  "acceptance_criteria": "Writer replaces EXIF APP1 segment with modified data, handles EXIF header (Exif\\0\\0) correctly, handles segment size changes (larger/smaller new EXIF), preserves other JPEG segments (XMP, IPTC, image data), integration test: modify EXIF:Artist, re-read, verify new value, cargo test jpeg_write_tests passes",
   "dependencies": [
-    "I1.T11",
-    "I2.T2"
+    "I1.T10",
+    "I3.T2"
   ],
-  "parallelizable": true,
+  "parallelizable": false,
   "done": false
 }
 ```
@@ -41,94 +42,44 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: data-model-overview (from 03_System_Structure_and_Data.md)
+### Context: JPEG EXIF Writing Workflow
 
-```markdown
-### 3.6. Data Model Overview & ERD
+**JPEG File Structure Requirements:**
 
-**Description**: ExifTool-RS operates on files without persistent database storage. The "data model" represents in-memory structures for metadata representation. The Entity-Relationship Diagram below models the logical relationships between metadata concepts.
+JPEG files consist of a sequence of segments with the following structure:
+- **SOI marker**: 0xFFD8 (Start of Image) - 2 bytes, no length field
+- **Segment sequence**: Each segment has:
+  - **Marker**: 2 bytes (0xFFXX)
+  - **Length**: 2 bytes (big-endian), includes length field but NOT marker
+  - **Data**: Variable-length payload (length - 2 bytes)
+- **EOI marker**: 0xFFD9 (End of Image) - 2 bytes, no length field
 
-#### Key Entities
+**EXIF in JPEG:**
+- EXIF metadata is stored in an APP1 segment (marker 0xFFE1)
+- EXIF APP1 segment structure:
+  1. Marker: 0xFFE1 (2 bytes)
+  2. Length: 2 bytes (big-endian, includes itself + header + TIFF data, but NOT marker)
+  3. EXIF identifier: "Exif\0\0" (6 bytes)
+  4. TIFF IFD data: Complete TIFF structure with header and IFD
 
-1. **File**: Represents a media file being processed (JPEG, PNG, etc.)
-2. **MetadataMap**: Collection of all metadata tags extracted from a file
-3. **TagValue**: A single metadata tag with its name, value, and type information
-4. **TagDescriptor**: Definition of a tag (from tag database) including ID, name, type constraints, format family
-5. **FormatFamily**: Grouping of related metadata standards (EXIF, XMP, IPTC, MakerNotes)
-6. **IFD (Image File Directory)**: TIFF-specific structural element containing tags
+**Critical Implementation Requirements:**
 
-**Rationale**:
+1. **EXIF Header**: The EXIF APP1 segment MUST begin with the 6-byte identifier "Exif\0\0" (0x45 0x78 0x69 0x66 0x00 0x00)
 
-- **No Persistent Database**: The system is stateless. `MetadataMap` exists only in-memory during processing and is serialized to JSON/text output or written back to file metadata.
+2. **Segment Length Calculation**:
+   - Length field = 2 (length bytes) + 6 (EXIF identifier) + TIFF data size
+   - Total segment size = 2 (marker) + 2 (length) + 6 (EXIF identifier) + TIFF data size
 
-- **Variant Value Type**: `TagValue.value` uses a Rust `enum` to represent heterogeneous tag types:
-  ```rust
-  enum TagValueData {
-      String(String),
-      Number(f64),
-      Integer(i64),
-      Binary(Vec<u8>),
-      Rational { numerator: i32, denominator: i32 },
-      Struct(HashMap<String, TagValueData>), // For complex XMP structures
-  }
-  ```
+3. **Segment Preservation**: When replacing EXIF:
+   - MUST preserve all non-EXIF segments (XMP, IPTC, other APPx, image data)
+   - MUST preserve segment order (typically: SOI → APP0/JFIF → APP1/EXIF → APP1/XMP → SOS → image data → EOI)
+   - Handle cases where EXIF segment doesn't exist (create new APP1 segment)
+   - Handle cases where multiple APP1 segments exist (only replace EXIF, preserve XMP)
 
-- **IFD Hierarchy**: TIFF/EXIF formats use nested IFD structures. The self-referential `parent_ifd_id` models this (e.g., GPS sub-IFD under IFD0).
-
-- **Tag Descriptor**: Compile-time generated from ExifTool tag database. In practice, this is a large static `HashMap<&'static str, TagDescriptor>` embedded in the binary, not a runtime database.
-```
-
-### Context: technology-stack-summary (from 02_Architecture_Overview.md)
-
-```markdown
-### 3.2. Technology Stack Summary
-
-| **Category** | **Technology Choice** | **Justification** |
-|--------------|----------------------|-------------------|
-| **Core Language** | Rust 1.75+ (2021 Edition) | Memory safety, zero-cost abstractions, excellent concurrency primitives, cross-platform support |
-| **CLI Framework** | `clap` v4 (derive API) | Industry standard, excellent help generation, argument validation, backward compatibility via value parsers |
-| **Binary Parsing** | `nom` v7 + `binrw` | `nom` for complex formats (TIFF, QuickTime), `binrw` for simple struct-based formats (BMP, WAV) |
-| **XML Parsing (XMP)** | `quick-xml` | Streaming parser, low memory footprint, namespace support for XMP |
-| **JSON Output** | `serde_json` | De facto standard, excellent performance, integration with domain models via derives |
-| **Date/Time** | `chrono` | Comprehensive timezone support, EXIF date format parsing |
-| **String Encoding** | `encoding_rs` (WHATWG standard) | Handles legacy encodings in IPTC/EXIF (Latin1, UTF-8, UTF-16) |
-| **Image I/O** | `memmap2` (memory-mapped files) | Efficient large file access without loading entire file into memory |
-| **Concurrency** | `rayon` (data parallelism) | Transparent batch processing parallelization, work-stealing scheduler |
-| **Testing** | `cargo test` + `proptest` (property-based) | Unit tests for parsers, property-based testing for round-trip serialization |
-
-**Key Libraries Detail**:
-
-- **`nom` v7**: Parser combinator library for binary formats. Example: TIFF IFD parsing uses `nom::number::complete::le_u16` for little-endian u16, chained with `nom::multi::count` for tag array parsing.
-
-- **`serde`**: Serialization framework. Domain metadata models derive `Serialize`/`Deserialize` for JSON/CSV output.
-```
-
-### Context: task-i3-t2 (from 02_Iteration_I3.md)
-
-```markdown
-*   **Task 3.2: Implement EXIF IFD Serializer (TIFF Writer)**
-    *   **Task ID:** `I3.T2`
-    *   **Description:** Implement TIFF IFD serializer in `src/writers/tiff_writer.rs`. Create function to serialize MetadataMap EXIF tags back to TIFF IFD structure: (1) Filter tags for EXIF family, (2) Convert TagValue to TIFF data types (Byte, ASCII, Short, Long, Rational), (3) Build IFD entries (tag ID, type, count, value/offset), (4) Handle values >4 bytes (write to separate value area), (5) Calculate offsets, (6) Write IFD header + entries + values. Support both little-endian and big-endian output. Add unit tests verifying round-trip (parse then serialize equals original).
-    *   **Agent Type Hint:** `BackendAgent`
-    *   **Inputs:** TIFF specification, I1.T11 TIFF parser (for understanding structure)
-    *   **Input Files:** [`src/parsers/tiff/ifd_parser.rs`, `src/core/metadata_map.rs`]
-    *   **Target Files:**
-        *   `src/writers/tiff_writer.rs`
-        *   `src/writers/mod.rs`
-    *   **Deliverables:**
-        *   TIFF IFD serialization function
-        *   Support for both endianness
-        *   Unit and round-trip tests
-    *   **Acceptance Criteria:**
-        *   Serializer produces valid TIFF IFD structure
-        *   Handles both little-endian and big-endian
-        *   Correctly writes tag entries with type, count, value
-        *   Values >4 bytes written to separate area with offset
-        *   Round-trip test: parse(serialize(metadata)) == metadata for EXIF tags
-        *   `cargo test tiff_writer` passes
-    *   **Dependencies:** `I1.T11` (TIFF parser structure), `I2.T2` (tag registry)
-    *   **Parallelizable:** Yes (can develop in parallel with I3.T1)
-```
+4. **Size Changes**: The new EXIF segment may be larger or smaller than the original:
+   - Larger: Insert expanded segment, shift remaining segments
+   - Smaller: Insert smaller segment, shift remaining segments
+   - The JPEG structure must remain valid after modification
 
 ---
 
@@ -138,127 +89,146 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `src/parsers/tiff/ifd_parser.rs`
-    *   **Summary:** This file contains the complete TIFF IFD **parsing** implementation. It uses nom parser combinators to parse both little-endian and big-endian IFD structures. The parser extracts tag entries from IFDs and returns `Vec<(u16, Vec<u8>)>` pairs (tag_id, raw_value).
-    *   **Recommendation:** You MUST study this file carefully as it shows the **exact inverse operation** you need to implement. Key insights:
-        - IFD structure: 2-byte entry count + (12-byte entries × count) + 4-byte next IFD offset
-        - Each 12-byte entry: tag_id (u16) + field_type (u16) + value_count (u32) + value_offset (u32)
-        - Inline value rule: if `type_size × count ≤ 4 bytes`, value stored directly in value_offset field
-        - Otherwise: value_offset contains absolute file offset to value data
-        - The functions `parse_ifd_entry_le()` and `parse_ifd_entry_be()` show the exact byte layout you need to write
-    *   **Key Structures:**
-        - `ByteOrder` enum (LittleEndian, BigEndian) - YOU MUST reuse this from the parser module
-        - `IfdEntry` struct with fields: tag_id, field_type, value_count, value_offset - useful reference
-        - `extract_inline_value()` function shows how inline values are packed (lines 239-253)
-
-*   **File:** `src/parsers/common/exif_types.rs`
-    *   **Summary:** This file defines the `ExifType` enum with all 12 TIFF data types (Byte=1, Ascii=2, Short=3, Long=4, Rational=5, etc.) and provides methods for type size calculations and conversions.
-    *   **Recommendation:** You MUST import and use `ExifType` from this module. The `size_in_bytes()` method is critical for calculating value sizes to determine inline vs. offset storage. Use `as_u16()` when writing type codes to IFD entries.
-    *   **Critical Methods:**
-        - `ExifType::size_in_bytes()` - returns 1 for Byte/ASCII, 2 for Short, 4 for Long, 8 for Rational, etc.
-        - `ExifType::as_u16()` - converts enum to type code for IFD entry (e.g., Ascii becomes 2)
-        - `ExifType::from_u16()` - useful for validation in tests
-
-*   **File:** `src/core/metadata_map.rs`
-    *   **Summary:** This file defines the `MetadataMap` struct that stores `HashMap<String, TagValue>`. It provides typed getters like `get_string()`, `get_integer()`, `get_float()`, and an `iter()` method that returns `Iterator<Item = (&String, &TagValue)>`.
-    *   **Recommendation:** You MUST iterate over the MetadataMap using `.iter()` to extract EXIF tags for serialization. Filter for tags starting with "EXIF:" prefix (e.g., "EXIF:Make", "EXIF:Model", "EXIF:DateTime"). The `.iter()` method provides access to both tag names and their TagValue enums.
-
-*   **File:** `src/core/tag_value.rs`
-    *   **Summary:** This file defines the `TagValue` enum with variants: String, Integer, Float, Rational{numerator, denominator}, Binary, DateTime, Struct. Each variant has constructors (`new_string()`, etc.) and type-checking methods (`is_string()`, `as_string()`, etc.).
-    *   **Recommendation:** You MUST match on TagValue variants to convert to appropriate TIFF types:
-        - `TagValue::String(s)` → `ExifType::Ascii` (null-terminated bytes)
-        - `TagValue::Integer(i)` → `ExifType::Long` or `ExifType::Short` (depending on range)
-        - `TagValue::Rational{numerator, denominator}` → `ExifType::Rational` (8 bytes: two u32s)
-        - `TagValue::Binary(bytes)` → `ExifType::Undefined`
-        - For now, SKIP `TagValue::Float`, `DateTime` and `Struct` variants in your implementation (add TODO comments for future work)
-
-*   **File:** `src/tag_db/tag_registry.rs`
-    *   **Summary:** This file contains the static tag registry with 100+ tags including EXIF tags like "EXIF:Make" (0x010F), "EXIF:Model" (0x0110), etc. Each TagDescriptor has a numeric tag ID accessible via the registry lookup. The module uses lazy_static initialization.
-    *   **Recommendation:** You SHOULD attempt to look up the numeric tag ID from the tag name string. The registry has a function `get_tag_descriptor(name: &str)` that returns `Option<&TagDescriptor>`. For example, "EXIF:Make" maps to tag_id 0x010F. If a tag is not in the registry, you could either skip it or assign a placeholder tag ID (document this behavior).
+*   **File:** `src/parsers/jpeg/segment_parser.rs`
+    *   **Summary:** Provides comprehensive JPEG segment parsing using nom combinators. The `parse_segments()` function reads an entire JPEG file and returns a `Vec<Segment>` where each segment contains marker, offset, and data as a borrowed slice. The module handles SOI marker validation, segment iteration, and EOI detection.
+    *   **Recommendation:** You MUST use the `parse_segments()` function to read the original JPEG structure. The `Segment` struct provides `is_app1()`, `is_soi()`, and `is_eoi()` helper methods. Each segment's `data` field contains the payload (excludes marker and length).
+    *   **Critical Detail:** For APP1 segments, the `data` field includes the identifier (e.g., "Exif\0\0" or "http://ns.adobe.com/xap/1.0/\0"). You MUST check for the "Exif\0\0" identifier to distinguish EXIF APP1 segments from XMP APP1 segments.
 
 *   **File:** `src/writers/tiff_writer.rs`
-    *   **Summary:** This file currently exists but is nearly empty (only has a comment header and `#![allow(dead_code)]` directive at line 5).
-    *   **Recommendation:** You MUST implement the complete serialization logic in this file. Start by defining helper functions for byte serialization, then build up to the main IFD serialization function. Follow the same module structure pattern as ifd_parser.rs with comprehensive documentation and tests.
+    *   **Summary:** Implements TIFF IFD serialization via the `serialize_ifd()` function. Takes a `MetadataMap`, `ByteOrder`, and `ifd_start_offset` and returns a complete IFD structure as `Vec<u8>`. Handles both little-endian and big-endian output, inline values vs. offset values, and tag sorting by ID.
+    *   **Recommendation:** You MUST use `serialize_ifd()` to convert EXIF tags to binary TIFF IFD format. The function filters for "EXIF:" prefixed tags automatically. Note that it returns ONLY the IFD structure (entry count + entries + next IFD offset + value area), NOT the TIFF header.
+    *   **Critical Detail:** For JPEG EXIF, you need to prepend a TIFF header BEFORE the IFD data. The TIFF header is 8 bytes:
+        - Little-endian: [0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00]
+        - Big-endian: [0x4D, 0x4D, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08]
+        - The last 4 bytes are the IFD offset (always 8, pointing right after the header)
+
+*   **File:** `src/writers/atomic_writer.rs`
+    *   **Summary:** Provides the `write_atomic()` function for safe file writes using temp-file-and-rename pattern with fsync. Creates temp file in same directory, writes data, syncs to disk, and atomically renames.
+    *   **Recommendation:** You SHOULD use `write_atomic()` when writing the final modified JPEG to disk in I3.T4 (write operations), but for THIS task (I3.T3), you're only implementing the segment replacement logic. The integration test will likely use `write_atomic()` indirectly through the write operations API.
+
+*   **File:** `src/parsers/jpeg/mod.rs`
+    *   **Summary:** Module entry point that re-exports `parse_segments` and `Segment` from `segment_parser`, plus other parsers (exif_parser, xmp_parser, iptc_parser).
+    *   **Recommendation:** You can import directly from `crate::parsers::jpeg::{parse_segments, Segment}` for convenience.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** The TIFF IFD structure has a specific binary layout that MUST be followed exactly:
-    1. Entry count (2 bytes) - number of tag entries
-    2. All IFD entries (12 bytes each, sorted by tag ID in ascending order - THIS IS IMPORTANT)
-    3. Next IFD offset (4 bytes, use 0 for single IFD / last IFD in chain)
-    4. Value data area (for values >4 bytes, written sequentially)
-
-*   **Note:** The offset calculation is CRITICAL. The value_offset field in IFD entries must contain the **absolute offset** from the start of the TIFF data (not from IFD start). Calculate offsets like this:
-    - If serializing standalone IFD at offset 0: IFD starts at 0
-    - Value data area starts at: `ifd_start + 2 + (entry_count × 12) + 4`
-    - Each large value gets sequential offsets in this area: first at value_area_start, second at value_area_start + first_value_size, etc.
-
-*   **Warning:** Be VERY careful with byte order! You MUST write multi-byte values (u16, u32) in the specified endianness:
-    - Little-endian: use `.to_le_bytes()` on all u16 and u32 values
-    - Big-endian: use `.to_be_bytes()` on all u16 and u32 values
-    - The byte order applies to ALL multi-byte values: entry count, tag IDs, type codes, counts, offsets, AND the values themselves
-
-*   **Tip:** For inline values (total size ≤4 bytes), pack them **left-justified** in the 4-byte value_offset field:
-    - For BOTH endianness: bytes go in positions [0..size], remaining bytes are 0x00
-    - Example: 3-byte ASCII "EOS\0" in little-endian becomes [0x45, 0x4F, 0x53, 0x00] in value_offset field
-    - See `extract_inline_value()` in ifd_parser.rs (lines 239-253) for the reverse operation - your packing should be the exact inverse
-
-*   **Note:** ASCII strings in TIFF MUST be null-terminated. When converting `TagValue::String(s)` to bytes, append a null byte: `format!("{}\0", s).into_bytes()` or `s.as_bytes()` followed by pushing 0x00. The count field should include the null terminator.
-
-*   **Tip:** For Rational types, the value is 8 bytes: first u32 is numerator, second u32 is denominator. Both must be written in the specified byte order. For example, in little-endian: numerator.to_le_bytes() followed by denominator.to_le_bytes().
-
-*   **Critical:** The IFD entries MUST be sorted by tag ID in ascending order. This is required by the TIFF specification. After collecting all entries, sort them by tag_id before writing.
-
-*   **Critical:** The type and count fields MUST match the data. Examples:
-    - ASCII string "Canon\0" (6 bytes) → type=Ascii(2), count=6, value/offset contains the bytes
-    - Single u32 value 12345 → type=Long(4), count=1, inline in value_offset
-    - Rational 1/100 → type=Rational(5), count=1, 8 bytes in value area
-
-*   **Testing Strategy:** For round-trip tests (this is CRITICAL for acceptance criteria):
-    1. Create a MetadataMap with known EXIF tags (e.g., "EXIF:Make", "EXIF:Model", "EXIF:ISO")
-    2. Serialize it to `Vec<u8>` using your new writer
-    3. Parse those bytes back using `parse_ifd()` from ifd_parser.rs
-    4. Compare the parsed (tag_id, raw_bytes) pairs with expected values
-    5. Test with BOTH little-endian and big-endian
-    6. Include tests for inline values (≤4 bytes) and offset values (>4 bytes)
-
-*   **Note:** You'll need to handle the mapping from tag names to tag IDs. You can either:
-    - Use the tag registry to look up IDs (preferred)
-    - Parse the tag ID from the tag name if it's in numeric format
-    - Skip tags that can't be mapped to IDs (document this limitation)
-
-*   **Project Convention:** All public functions should have comprehensive doc comments with `///` including:
-    - Brief summary line
-    - Detailed description of behavior
-    - Parameters section
-    - Returns section
-    - Errors section (if returning Result)
-    - Examples section with runnable code
-    - See ifd_parser.rs lines 89-135 for excellent documentation examples to match
-
-*   **Note:** Use `#[cfg(test)]` module at the bottom of the file for unit tests, similar to the extensive test suite in ifd_parser.rs (lines 303-698). Aim for similar test coverage with tests for: successful serialization, both endianness, inline vs. offset values, empty IFD, round-trip verification, etc.
-
-*   **Implementation Hint:** Consider this function signature as a starting point:
+*   **Tip #1 - EXIF Identifier Detection:** When parsing segments to find the EXIF APP1 segment, you MUST check that `segment.data` starts with `b"Exif\0\0"` (6 bytes). Multiple APP1 segments can exist (EXIF, XMP), so don't assume the first APP1 is EXIF.
     ```rust
-    /// Serializes EXIF tags from MetadataMap to TIFF IFD bytes
-    pub fn serialize_ifd(
-        metadata: &MetadataMap,
-        byte_order: ByteOrder,
-        ifd_start_offset: u64,
-    ) -> Result<Vec<u8>>
+    const EXIF_IDENTIFIER: &[u8] = b"Exif\0\0";
+
+    fn is_exif_segment(segment: &Segment) -> bool {
+        segment.is_app1() && segment.data.starts_with(EXIF_IDENTIFIER)
+    }
     ```
 
-*   **Type Conversion Strategy:** For TagValue to TIFF type mapping:
-    - `String` → `Ascii` (type 2)
-    - `Integer` → Check value range: if fits in u16 use `Short` (type 3), else `Long` (type 4)
-    - `Rational{num, denom}` → `Rational` (type 5) - 8 bytes: u32 numerator + u32 denominator
-    - `Binary` → `Undefined` (type 7)
-    - `Float` - skip for now (add TODO comment)
-    - `DateTime` - skip for now (could be converted to ASCII datetime string in future)
-    - `Struct` - skip for now (not applicable to simple EXIF tags)
+*   **Tip #2 - Segment Reconstruction:** To rebuild the JPEG, you need to write segments in order. For each segment:
+    ```rust
+    // Write marker (2 bytes, big-endian)
+    output.extend_from_slice(&segment.marker.to_be_bytes());
 
-*   **Error Handling:** Import and use `crate::error::{ExifToolError, Result}`. Return errors for:
-    - Tag name that can't be mapped to tag ID
-    - Unsupported TagValue variant
-    - Value that can't be represented in TIFF format
-    - Serialization failures (though most are infallible)
+    // For standalone markers (SOI, EOI, RST0-RST7), no length or data
+    if is_standalone_marker(segment.marker) {
+        continue;
+    }
+
+    // Calculate length: 2 (length field itself) + data.len()
+    let length = 2 + segment.data.len();
+    output.extend_from_slice(&(length as u16).to_be_bytes());
+
+    // Write data
+    output.extend_from_slice(segment.data);
+    ```
+
+*   **Tip #3 - EXIF APP1 Segment Construction:** When creating a new EXIF APP1 segment:
+    ```rust
+    // 1. Serialize EXIF tags to TIFF IFD
+    let ifd_bytes = serialize_ifd(&metadata, ByteOrder::LittleEndian, 8)?;
+
+    // 2. Build TIFF header (little-endian example)
+    let tiff_header = vec![0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00];
+
+    // 3. Combine: EXIF identifier + TIFF header + IFD
+    let mut segment_data = Vec::new();
+    segment_data.extend_from_slice(b"Exif\0\0");
+    segment_data.extend_from_slice(&tiff_header);
+    segment_data.extend_from_slice(&ifd_bytes);
+
+    // 4. Calculate segment length
+    let segment_length = 2 + segment_data.len(); // 2 for length field itself
+
+    // 5. Write APP1 marker, length, and data
+    output.extend_from_slice(&0xFFE1u16.to_be_bytes()); // APP1 marker
+    output.extend_from_slice(&(segment_length as u16).to_be_bytes());
+    output.extend_from_slice(&segment_data);
+    ```
+
+*   **Tip #4 - Byte Order Consistency:** The TIFF writer supports both byte orders. For maximum compatibility, use **little-endian** (Intel byte order) as it's more common in modern systems. This matches the example in the TIFF parser tests.
+
+*   **Tip #5 - Segment Order:** When reconstructing the JPEG:
+    - Always keep SOI (0xFFD8) first
+    - Preserve the order of all segments
+    - If replacing EXIF, substitute the new APP1 segment in place of the old one
+    - Keep EOI (0xFFD9) last
+    - If no EXIF segment exists, insert the new APP1 segment early (typically after APP0/JFIF if present, or immediately after SOI)
+
+*   **Warning:** The `segment_parser.rs` uses lifetime-based borrows (`Segment<'a>` with `data: &'a [u8]`). When building a new segment for writing, you'll need to create owned `Vec<u8>` data. Don't try to reuse the borrowed slices directly.
+
+*   **Note:** The integration test should:
+    1. Create a test JPEG with EXIF metadata
+    2. Parse it using `parse_segments()`
+    3. Modify a tag value (e.g., change "EXIF:Artist" from "Original" to "Modified")
+    4. Use your writer function to create modified JPEG bytes
+    5. Parse the modified JPEG again
+    6. Verify the tag value changed and other segments are preserved
+
+### Function Signature Recommendation
+
+Based on the existing codebase patterns, I recommend this public API for your writer:
+
+```rust
+/// Writes modified EXIF metadata to a JPEG file structure.
+///
+/// This function:
+/// 1. Parses the original JPEG using segment_parser
+/// 2. Serializes modified EXIF tags using tiff_writer
+/// 3. Replaces the EXIF APP1 segment (or inserts if not present)
+/// 4. Returns the complete modified JPEG as Vec<u8>
+///
+/// # Parameters
+/// - `reader`: FileReader for reading the original JPEG file
+/// - `metadata`: MetadataMap containing EXIF tags to write (only "EXIF:" tags are processed)
+///
+/// # Returns
+/// - `Ok(Vec<u8>)`: Complete modified JPEG file as bytes
+/// - `Err(ExifToolError)`: If parsing fails or JPEG structure is invalid
+pub fn write_exif_to_jpeg(
+    reader: &dyn FileReader,
+    metadata: &MetadataMap,
+) -> Result<Vec<u8>>
+```
+
+### Testing Strategy
+
+1. **Unit Tests** (in `jpeg_writer.rs`):
+   - Test EXIF segment creation from metadata
+   - Test segment replacement logic
+   - Test handling of missing EXIF segment (insertion)
+   - Test preservation of non-EXIF segments
+
+2. **Integration Tests** (in `tests/integration/jpeg_write_tests.rs`):
+   - Create test JPEG with known EXIF (e.g., Make="Canon", Model="EOS")
+   - Modify one tag (e.g., Artist="TestArtist")
+   - Write and re-parse
+   - Verify: modified tag changed, other tags preserved, non-EXIF segments preserved
+   - Use existing test fixtures or create minimal valid JPEGs programmatically
+
+### Key Imports You'll Need
+
+```rust
+use crate::core::metadata_map::MetadataMap;
+use crate::core::FileReader;
+use crate::error::{ExifToolError, Result};
+use crate::parsers::jpeg::{parse_segments, Segment};
+use crate::parsers::tiff::ifd_parser::ByteOrder;
+use crate::writers::tiff_writer::serialize_ifd;
+```
