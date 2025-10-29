@@ -1,5 +1,6 @@
-# CodeMachine directories (only exclude memory, keep prompts and templates)
+# CodeMachine directories (only exclude memory and artifacts, keep prompts and templates)
 .codemachine/memory/
+.codemachine/artifacts/
 
 # Node modules
 node_modules
