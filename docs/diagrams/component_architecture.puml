@@ -1,0 +1,48 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+
+title Component Diagram - Core Library (exiftool-rs)
+
+Container_Boundary(core_lib, "Core Library") {
+
+  ' Application Layer
+  Component(api_facade, "Public API Facade", "Rust modules", "User-facing API: extract(), write(), copy_metadata()")
+
+  ' Domain Layer
+  Component(metadata_model, "Metadata Model", "Rust structs/enums", "TagValue, MetadataMap, TagDescriptor - core domain entities")
+  Component(operations, "Metadata Operations", "Rust traits/impls", "Read, Write, Copy, Transform operations")
+  Component(tag_registry, "Tag Registry", "Generated const maps", "28K+ tag definitions indexed by ID/name")
+  Component(validation, "Validation Engine", "Rust", "Tag value type checking, range validation")
+
+  ' Ports (interfaces)
+  Component(format_port, "Format Parser Port", "Rust trait", "trait FormatParser { fn parse(&self, ...) -> Result<MetadataMap> }")
+  Component(io_port, "I/O Port", "Rust trait", "trait FileReader { fn read(&self, offset, len) -> Result<&[u8]> }")
+
+  ' Infrastructure adapters (external components)
+  Component_Ext(jpeg_adapter, "JPEG Parser", "nom-based", "EXIF/JFIF segment parser")
+  Component_Ext(tiff_adapter, "TIFF Parser", "nom-based", "IFD structure parser")
+  Component_Ext(xmp_adapter, "XMP Parser", "quick-xml", "RDF/XML parser for XMP")
+  Component_Ext(mmap_adapter, "MMap Reader", "memmap2", "Memory-mapped file access")
+}
+
+' Relationships - Domain Layer
+Rel(api_facade, operations, "Orchestrates")
+Rel(operations, metadata_model, "Manipulates")
+Rel(operations, tag_registry, "Looks up tag definitions")
+Rel(operations, validation, "Validates values via")
+
+' Relationships - Ports (Dependency Inversion)
+Rel(operations, format_port, "Calls")
+Rel(format_port, jpeg_adapter, "Implemented by")
+Rel(format_port, tiff_adapter, "Implemented by")
+Rel(format_port, xmp_adapter, "Implemented by")
+
+' Relationships - I/O Port
+Rel(jpeg_adapter, io_port, "Reads via")
+Rel(tiff_adapter, io_port, "Reads via")
+Rel(xmp_adapter, io_port, "Reads via")
+Rel(io_port, mmap_adapter, "Implemented by")
+
+@enduml
