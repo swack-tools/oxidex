@@ -10,17 +10,23 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I1.T3",
+  "task_id": "I1.T4",
   "iteration_id": "I1",
   "iteration_goal": "Establish project foundation with directory structure, build system, core domain models, architectural diagrams, and basic JPEG EXIF parsing capability to validate end-to-end workflow.",
-  "description": "Create Mermaid ERD showing in-memory metadata data model: File, MetadataMap, TagValue, TagDescriptor, FormatFamily, IFD entities with relationships and key attributes. Save to docs/diagrams/metadata_erd.mmd. Include cardinalities (one-to-many, many-to-one).",
+  "description": "Create PlantUML sequence diagram documenting the workflow for extracting metadata from a JPEG file. Show interactions: User → CLI → Core Library → Format Detector → JPEG Parser → EXIF Parser → XMP Parser → Tag Registry → Output. Include alternative flows for EXIF and XMP segments. Save to docs/diagrams/sequence_metadata_extraction.puml.",
   "agent_type_hint": "DocumentationAgent",
-  "inputs": "Section 2 (Data Model Overview), Section 2.1 (Key Architectural Artifacts), ERD specification from architecture blueprint",
-  "target_files": ["docs/diagrams/metadata_erd.mmd"],
-  "input_files": [".codemachine/artifacts/architecture/03_System_Structure_and_Data.md"],
-  "deliverables": "Mermaid ERD file with all entities and relationships",
-  "acceptance_criteria": "Mermaid file renders correctly (validate with Mermaid CLI or online editor), all entities from Section 2 Data Model Overview are present, relationships accurately reflect described cardinalities (File 1:N MetadataMap, etc.), primary keys and foreign keys are indicated",
-  "dependencies": ["I1.T1"],
+  "inputs": "Section 2 (Communication Patterns), Section 2.1 (Key Architectural Artifacts), Sequence diagram from architecture blueprint",
+  "target_files": [
+    "docs/diagrams/sequence_metadata_extraction.puml"
+  ],
+  "input_files": [
+    ".codemachine/artifacts/architecture/04_Behavior_and_Communication.md"
+  ],
+  "deliverables": "PlantUML sequence diagram file",
+  "acceptance_criteria": "PlantUML file compiles without syntax errors, sequence accurately reflects workflow described in architecture blueprint Section 3.7, alternative flows (alt blocks) for EXIF and XMP segments are present, all actors and components from the workflow are included",
+  "dependencies": [
+    "I1.T1"
+  ],
   "parallelizable": true,
   "done": false
 }
@@ -32,171 +38,198 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: data-model-overview (from 03_System_Structure_and_Data.md)
+### Context: key-interaction-flow (from 04_Behavior_and_Communication.md)
 
 ```markdown
-<!-- anchor: data-model-overview -->
-### 3.6. Data Model Overview & ERD
+#### Key Interaction Flow (Sequence Diagram)
 
-**Description**: ExifTool-RS operates on files without persistent database storage. The "data model" represents in-memory structures for metadata representation. The Entity-Relationship Diagram below models the logical relationships between metadata concepts.
-```
+**Description**: This diagram illustrates the core workflow for **extracting metadata from a JPEG file**. It shows how the CLI delegates to the core library, which orchestrates format detection, parser selection, and metadata extraction through the hexagonal architecture layers.
 
-### Context: key-entities (from 03_System_Structure_and_Data.md)
-
-```markdown
-<!-- anchor: key-entities -->
-#### Key Entities
-
-1. **File**: Represents a media file being processed (JPEG, PNG, etc.)
-2. **MetadataMap**: Collection of all metadata tags extracted from a file
-3. **TagValue**: A single metadata tag with its name, value, and type information
-4. **TagDescriptor**: Definition of a tag (from tag database) including ID, name, type constraints, format family
-5. **FormatFamily**: Grouping of related metadata standards (EXIF, XMP, IPTC, MakerNotes)
-6. **IFD (Image File Directory)**: TIFF-specific structural element containing tags
-
-**Diagram (PlantUML - Metadata ERD)**:
+**Diagram (PlantUML)**:
 
 ```plantuml
 @startuml
 
-!define primary_key(x) <b>x</b>
-!define foreign_key(x) <i>x</i>
+actor User
+participant "CLI" as CLI
+participant "Core Library\n(API Facade)" as Core
+participant "Format\nDetector" as Detector
+participant "JPEG Parser" as JPEG
+participant "EXIF Parser\n(TIFF IFD)" as EXIF
+participant "XMP Parser" as XMP
+participant "I/O Layer\n(memmap2)" as IO
+participant "Tag Registry" as Registry
+participant "File System" as FS
 
-title ExifTool-RS Metadata Domain Model
+User -> CLI : exiftool-rs photo.jpg
+CLI -> Core : Metadata::from_path("photo.jpg")
 
-entity File {
-  primary_key(file_path) : String
-  --
-  format_type : String
-  file_size : u64
-  last_modified : DateTime
-}
+Core -> Detector : detect_format("photo.jpg")
+Detector -> IO : read_magic_bytes("photo.jpg", 16)
+IO -> FS : open() + read()
+FS --> IO : bytes [0xFF, 0xD8, 0xFF, ...]
+IO --> Detector : magic bytes
+Detector --> Core : FileFormat::JPEG
 
-entity MetadataMap {
-  primary_key(map_id) : UUID
-  --
-  foreign_key(file_path) : String
-  extraction_timestamp : DateTime
-}
+Core -> JPEG : parse(io_handle)
+JPEG -> IO : read_segment_markers()
+IO -> FS : read() at offsets
+FS --> IO : JPEG segments
 
-entity TagValue {
-  primary_key(tag_instance_id) : UUID
-  --
-  foreign_key(map_id) : UUID
-  foreign_key(tag_name) : String
-  value : Variant (String | Number | Binary | Struct)
-  value_type : TagType
-  byte_offset : Option<u64>
-}
+alt EXIF Segment Found (0xFFE1)
+  JPEG -> EXIF : parse_exif_segment(segment_data)
+  EXIF -> EXIF : parse TIFF IFD structure
+  EXIF -> Registry : lookup_tag(0x010F) // Manufacturer tag
+  Registry --> EXIF : TagDescriptor { name: "EXIF:Make", type: String, ... }
+  EXIF --> JPEG : Vec<TagValue> (EXIF tags)
+end
 
-entity TagDescriptor {
-  primary_key(tag_name) : String
-  --
-  tag_id : u16 | String
-  foreign_key(family_id) : String
-  writable : bool
-  value_type : TagType
-  description : String
-  example_values : Vec<String>
-}
+alt XMP Segment Found (0xFFE1 with XMP marker)
+  JPEG -> XMP : parse_xmp_segment(segment_data)
+  XMP -> XMP : parse RDF/XML
+  XMP -> Registry : lookup_tag("xmp:CreateDate")
+  Registry --> XMP : TagDescriptor
+  XMP --> JPEG : Vec<TagValue> (XMP tags)
+end
 
-entity FormatFamily {
-  primary_key(family_id) : String
-  --
-  family_name : String
-  specification_url : String
-}
+JPEG --> Core : MetadataMap { tags: [...] }
+Core -> Core : validate_tags(metadata_map)
+Core --> CLI : Result::Ok(Metadata)
 
-entity IFD <<TIFF Specific>> {
-  primary_key(ifd_id) : UUID
-  --
-  foreign_key(map_id) : UUID
-  ifd_type : IFDType (IFD0, EXIF, GPS, MakerNote)
-  parent_ifd_id : Option<UUID>
-  byte_offset : u64
-}
-
-File ||--o{ MetadataMap : "contains"
-MetadataMap ||--o{ TagValue : "holds"
-TagValue }o--|| TagDescriptor : "defined by"
-TagDescriptor }o--|| FormatFamily : "belongs to"
-MetadataMap ||--o{ IFD : "may contain (TIFF/JPEG)"
-IFD ||--o{ TagValue : "groups (TIFF/EXIF)"
+CLI -> CLI : format_output(metadata, OutputFormat::Human)
+CLI --> User : Output to stdout:\n  EXIF:Make: Canon\n  EXIF:Model: EOS 5D\n  ...
 
 @enduml
 ```
 
+**Workflow Breakdown**:
+
+1. **Format Detection**: Read file magic bytes (first 16 bytes) to identify format (JPEG: `0xFF 0xD8`)
+2. **Parser Selection**: Based on format, select appropriate parser implementation (JPEG parser in this case)
+3. **Segment Parsing**: JPEG parser reads segment markers (0xFFE0-0xFFEF) to locate metadata containers
+4. **Metadata Extraction**:
+   - EXIF segment contains TIFF-encoded metadata, parsed via EXIF/TIFF parser
+   - XMP segment contains RDF/XML, parsed via XMP parser
+5. **Tag Resolution**: Each raw tag ID (e.g., TIFF tag 0x010F) is looked up in Tag Registry to get semantic name ("EXIF:Make")
+6. **Validation**: Tag values validated against expected types (e.g., "EXIF:Make" must be string, "EXIF:ISOSpeedRatings" must be integer)
+7. **Output**: Metadata returned to CLI, formatted per user request (human-readable, JSON, CSV, etc.)
+```
+
+### Context: communication-patterns (from 04_Behavior_and_Communication.md)
+
+```markdown
+#### Communication Patterns
+
+**Primary Pattern**: **Synchronous Request/Response**
+
+All operations are synchronous:
+1. User/application calls API function
+2. Function parses file, extracts/modifies metadata
+3. Function returns result or error
+4. Transaction completes
+
 **Rationale**:
+- File I/O is the bottleneck, not computation. Async overhead provides no benefit.
+- Synchronous code is simpler to reason about for library consumers.
+- Batch parallelism is achieved via `rayon` at the application level (parallel iterator over file list), not async/await.
 
-- **No Persistent Database**: The system is stateless. `MetadataMap` exists only in-memory during processing and is serialized to JSON/text output or written back to file metadata.
+**Batch Processing**: Uses data parallelism (not message passing)
 
-- **Variant Value Type**: `TagValue.value` uses a Rust `enum` to represent heterogeneous tag types:
-  ```rust
-  enum TagValueData {
-      String(String),
-      Number(f64),
-      Integer(i64),
-      Binary(Vec<u8>),
-      Rational { numerator: i32, denominator: i32 },
-      Struct(HashMap<String, TagValueData>), // For complex XMP structures
-  }
-  ```
+```rust
+use rayon::prelude::*;
 
-- **IFD Hierarchy**: TIFF/EXIF formats use nested IFD structures. The self-referential `parent_ifd_id` models this (e.g., GPS sub-IFD under IFD0).
-
-- **Tag Descriptor**: Compile-time generated from ExifTool tag database. In practice, this is a large static `HashMap<&'static str, TagDescriptor>` embedded in the binary, not a runtime database.
+let results: Vec<Result<Metadata>> = file_paths
+    .par_iter()  // Rayon parallel iterator
+    .map(|path| Metadata::from_path(path))
+    .collect();
 ```
 
-### Context: artifact-erd (from 01_Plan_Overview_and_Setup.md)
+Rayon's work-stealing scheduler distributes file processing across CPU cores automatically.
 
-```markdown
-<!-- anchor: artifact-erd -->
-*   **Entity Relationship Diagram (Mermaid)**
-    *   **Purpose:** Define in-memory data structures and relationships between metadata entities
-    *   **Format:** Mermaid ERD
-    *   **Location:** `docs/diagrams/metadata_erd.mmd`
-    *   **Created In:** Iteration 1, Task 3
-    *   **Content:** File, MetadataMap, TagValue, TagDescriptor, FormatFamily, IFD entities with relationships
+**Error Handling**: `Result<T, ExifToolError>` throughout
+
+```rust
+pub enum ExifToolError {
+    IoError(std::io::Error),
+    ParseError { format: String, details: String },
+    TagNotFound { tag_name: String },
+    InvalidTagValue { tag_name: String, expected_type: String },
+    UnsupportedFormat { format: String },
+}
 ```
 
-### Context: data-model-overview (from 01_Plan_Overview_and_Setup.md)
-
-```markdown
-<!-- anchor: data-model-overview -->
-*   **Data Model Overview:**
-    *   **File:** Represents media file being processed (path, format, size)
-    *   **MetadataMap:** Collection of all tags extracted from a file
-    *   **TagValue:** Single metadata tag with name, value, type information, and optional byte offset
-    *   **TagDescriptor:** Tag definition from database (ID, name, type constraints, format family)
-    *   **FormatFamily:** Grouping of metadata standards (EXIF, XMP, IPTC, MakerNotes)
-    *   **IFD (Image File Directory):** TIFF-specific structural element for tag organization
-
-    *See ERD (Section 2.1, Iteration 1, Task 3)*
-
-    **Note:** No persistent database storage. All data structures are in-memory during processing, serialized to JSON/text output or written back to file metadata.
+Errors propagate via `?` operator, no exceptions.
 ```
 
-### Context: task-i1-t3 (from 02_Iteration_I1.md)
+### Context: task-i1-t4 (from 02_Iteration_I1.md)
 
 ```markdown
-<!-- anchor: task-i1-t3 -->
-*   **Task 1.3: Generate Entity Relationship Diagram (ERD)**
-    *   **Task ID:** `I1.T3`
-    *   **Description:** Create Mermaid ERD showing in-memory metadata data model: File, MetadataMap, TagValue, TagDescriptor, FormatFamily, IFD entities with relationships and key attributes. Save to `docs/diagrams/metadata_erd.mmd`. Include cardinalities (one-to-many, many-to-one).
+*   **Task 1.4: Generate Sequence Diagram for Metadata Extraction**
+    *   **Task ID:** `I1.T4`
+    *   **Description:** Create PlantUML sequence diagram documenting the workflow for extracting metadata from a JPEG file. Show interactions: User → CLI → Core Library → Format Detector → JPEG Parser → EXIF Parser → XMP Parser → Tag Registry → Output. Include alternative flows for EXIF and XMP segments. Save to `docs/diagrams/sequence_metadata_extraction.puml`.
     *   **Agent Type Hint:** `DocumentationAgent` or `DiagrammingAgent`
-    *   **Inputs:** Section 2 (Data Model Overview), Section 2.1 (Key Architectural Artifacts), ERD specification from architecture blueprint
-    *   **Input Files:** [`.codemachine/artifacts/architecture/03_System_Structure_and_Data.md`]
+    *   **Inputs:** Section 2 (Communication Patterns), Section 2.1 (Key Architectural Artifacts), Sequence diagram from architecture blueprint
+    *   **Input Files:** [`.codemachine/artifacts/04_Behavior_and_Communication.md`]
     *   **Target Files:**
-        *   `docs/diagrams/metadata_erd.mmd`
+        *   `docs/diagrams/sequence_metadata_extraction.puml`
     *   **Deliverables:**
-        *   Mermaid ERD file with all entities and relationships
+        *   PlantUML sequence diagram file
     *   **Acceptance Criteria:**
-        *   Mermaid file renders correctly (validate with Mermaid CLI or online editor)
-        *   All entities from Section 2 Data Model Overview are present
-        *   Relationships accurately reflect described cardinalities (File 1:N MetadataMap, etc.)
-        *   Primary keys and foreign keys are indicated
+        *   PlantUML file compiles without syntax errors
+        *   Sequence accurately reflects workflow described in architecture blueprint Section 3.7
+        *   Alternative flows (alt blocks) for EXIF and XMP segments are present
+        *   All actors and components from the workflow are included
     *   **Dependencies:** `I1.T1`
-    *   **Parallelizable:** Yes (can run concurrently with T2, T5, T6 after T1 completes)
+    *   **Parallelizable:** Yes (can run concurrently with T2, T3, T5, T6 after T1 completes)
+```
+
+### Context: api-design-communication (from 04_Behavior_and_Communication.md)
+
+```markdown
+### 3.7. API Design & Communication
+
+**Primary API**: **Rust Library API** (procedural + builder pattern)
+
+The core API is designed for Rust consumers and follows idiomatic patterns:
+
+```rust
+use exiftool_rs::{Metadata, FileFormat};
+
+// Simple extraction
+let metadata = Metadata::from_path("photo.jpg")?;
+let camera_model = metadata.get_string("EXIF:Model")?;
+
+// Builder pattern for complex operations
+let result = Metadata::from_path("input.jpg")?
+    .copy_tags_to("output.jpg")?
+    .with_tags(&["EXIF:DateTime", "EXIF:Make", "EXIF:Model"])
+    .preserve_file_times(true)
+    .execute()?;
+```
+
+**Secondary APIs**:
+
+1. **CLI Interface**: POSIX-style arguments mimicking ExifTool
+   ```bash
+   exiftool-rs -EXIF:DateTime photo.jpg
+   exiftool-rs -json -r /photos/  # Recursive JSON output
+   exiftool-rs -TagsFromFile src.jpg -all:all dest.jpg  # Copy metadata
+   ```
+
+2. **C FFI**: Minimal C-compatible surface for foreign language bindings
+   ```c
+   // C API example
+   ExifToolHandle* handle = exiftool_create();
+   ExifToolError err = exiftool_read_file(handle, "photo.jpg");
+   const char* model = exiftool_get_string(handle, "EXIF:Model");
+   exiftool_destroy(handle);
+   ```
+
+**Justification**:
+
+- **Rust-First**: Leverages Rust's type system for compile-time safety (no invalid tag names at compile time via const tag identifiers)
+- **No Network API**: ExifTool-RS is a library/tool, not a service. REST/GraphQL APIs would be implemented by consuming applications
+- **FFI for Interop**: Enables Python (`pyo3`), Node.js (`neon`), Go (`cgo`) bindings without compromising Rust API ergonomics
 ```
 
 ---
@@ -208,142 +241,59 @@ The following analysis is based on my direct review of the current codebase. Use
 ### Relevant Existing Code
 
 *   **File:** `docs/diagrams/component_architecture.puml`
-    *   **Summary:** This is the PlantUML component diagram created in I1.T2. It demonstrates the project's diagram formatting conventions and shows the hexagonal architecture structure.
-    *   **Recommendation:** You SHOULD follow a similar documentation style for the ERD. The existing diagram uses PlantUML's C4 conventions with clear component boundaries, proper layout directives (`LAYOUT_WITH_LEGEND()`), and well-structured relationship declarations. Your Mermaid ERD should maintain similar clarity and professional formatting.
+    *   **Summary:** This file contains a C4 Component diagram showing the hexagonal architecture with Core Library, Ports (FormatParser trait, FileReader trait), and Infrastructure adapters (JPEG Parser, TIFF Parser, XMP Parser, MMap Reader). This diagram uses the C4-PlantUML standard library.
+    *   **Recommendation:** You SHOULD use the same PlantUML style and formatting as this existing diagram. Note how it uses `@startuml`/`@enduml` blocks, includes the C4 library (`!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml`), and uses the `LAYOUT_WITH_LEGEND()` directive. Your sequence diagram should follow similar conventions.
 
-*   **File:** `src/core/metadata_map.rs`
-    *   **Summary:** This file is currently a stub with only module documentation. It will contain the MetadataMap struct implementation.
-    *   **Note:** The file currently only has a doc comment and `#![allow(dead_code)]`. The ERD you create will serve as the design blueprint for implementing this struct in future tasks.
+*   **File:** `docs/diagrams/metadata_erd.mmd`
+    *   **Summary:** This file contains a Mermaid Entity Relationship Diagram showing the in-memory metadata data model with entities like File, MetadataMap, TagValue, TagDescriptor, FormatFamily, and IFD.
+    *   **Recommendation:** This shows that the project uses both PlantUML (for C4 diagrams) and Mermaid (for ERDs). For sequence diagrams, you MUST use PlantUML as specified in the task and as shown in the architecture blueprint example.
 
-*   **File:** `src/core/tag_value.rs`
-    *   **Summary:** This file is currently a stub for the TagValue enum that will represent different metadata value types.
-    *   **Note:** Similar to metadata_map.rs, this is a placeholder. Your ERD should accurately represent the TagValue entity's attributes and relationships to guide future implementation.
+*   **File:** `.codemachine/artifacts/architecture/04_Behavior_and_Communication.md`
+    *   **Summary:** This is the authoritative source for the sequence diagram specification. It contains the EXACT PlantUML code that should be used as your reference/template, showing the complete workflow with all participants, interactions, and alt blocks.
+    *   **Recommendation:** You MUST copy/adapt the PlantUML sequence diagram code from this file (lines 107-160). This is the canonical specification that matches the acceptance criteria perfectly.
 
-*   **File:** `src/core/tag_descriptor.rs`
-    *   **Summary:** This file is currently a stub for the TagDescriptor struct that will hold tag definitions.
-    *   **Note:** Another placeholder file. The ERD will define the structure and relationships for this entity.
+*   **File:** `src/lib.rs`
+    *   **Summary:** This is the library root that defines the overall module structure. It shows the three-layer architecture: Application Layer (cli, ffi), Domain Layer (core), and Infrastructure Layer (io, parsers, writers).
+    *   **Recommendation:** Understanding this structure helps you see how the participants in your sequence diagram map to the actual codebase modules. For example, "Core Library (API Facade)" maps to `src/core/operations.rs`, "JPEG Parser" maps to `src/parsers/jpeg/`, etc.
 
-*   **File:** `.codemachine/artifacts/architecture/03_System_Structure_and_Data.md`
-    *   **Summary:** This is the authoritative source for the data model specification. It contains the complete PlantUML ERD that defines all entities, attributes, and relationships.
-    *   **Recommendation:** You MUST convert the PlantUML ERD found in this file to Mermaid syntax while preserving all entities, attributes, relationships, and cardinalities exactly as specified.
+*   **File:** `src/parsers/mod.rs`
+    *   **Summary:** This shows that format-specific parsers are organized as submodules: `jpeg`, `png`, `tiff`, `xmp`, plus a `common` module and `format_detector`.
+    *   **Recommendation:** This confirms that the architecture is being implemented as designed. Your sequence diagram should show these components interacting according to the hexagonal architecture pattern.
+
+*   **File:** `src/core/mod.rs`
+    *   **Summary:** This defines the domain layer modules including `file_reader_trait`, `format_parser_trait`, `metadata_map`, `operations`, `tag_descriptor`, `tag_value`, and `validation`.
+    *   **Recommendation:** The "Core Library" participant in your sequence diagram orchestrates these domain layer components. The diagram should show how operations.rs would delegate to the parser traits and validation logic.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** The architecture document contains a **complete PlantUML ERD specification** starting at line 160. Your task is to translate this PlantUML diagram into Mermaid ERD syntax. This is primarily a syntax conversion task, not a design task.
+*   **Tip:** The architecture blueprint document (`.codemachine/artifacts/architecture/04_Behavior_and_Communication.md`) contains a complete, reference-quality PlantUML sequence diagram starting at line 107. This is NOT just an example - it is the EXACT specification you should use. You can copy this code directly to `docs/diagrams/sequence_metadata_extraction.puml` as it already meets all acceptance criteria.
 
-*   **Tip:** Mermaid ERD syntax differs from PlantUML:
-    - **Entities:** Use `ENTITY_NAME { type attribute "label" }` format
-    - **Relationships:** Use notation like `ENTITY1 ||--o{ ENTITY2 : "relationship label"`
-    - **Cardinalities:** Mermaid uses `||` (exactly one), `o|` (zero or one), `}o` (zero or many), `|{` (one or many)
-    - **Primary Keys:** Can be indicated with `PK` attribute type or in comments
-    - **Foreign Keys:** Can be indicated with `FK` attribute type or in comments
+*   **Note:** The PlantUML code in the architecture blueprint already includes:
+    - All required participants (User, CLI, Core, Detector, JPEG, EXIF, XMP, IO, Registry, FS)
+    - The complete interaction flow from user command to output
+    - TWO `alt` blocks for EXIF and XMP segment parsing
+    - Proper formatting and syntax
+    - Clear comments explaining the workflow steps
 
-*   **Tip:** Key Mermaid relationship cardinality symbols:
-    - `||--||` : One to exactly one
-    - `||--o{` : One to zero or many
-    - `}o--||` : Zero or many to exactly one
-    - `||--o|` : One to zero or one
+*   **Warning:** Do NOT invent your own sequence diagram structure. The acceptance criteria explicitly states "sequence accurately reflects workflow described in architecture blueprint Section 3.7" - this means you MUST use the diagram from that section as your source.
 
-*   **Note:** The architecture document specifies these exact relationships that MUST be preserved in your Mermaid diagram:
-    1. File ||--o{ MetadataMap : "contains"
-    2. MetadataMap ||--o{ TagValue : "holds"
-    3. TagValue }o--|| TagDescriptor : "defined by"
-    4. TagDescriptor }o--|| FormatFamily : "belongs to"
-    5. MetadataMap ||--o{ IFD : "may contain (TIFF/JPEG)"
-    6. IFD ||--o{ TagValue : "groups (TIFF/EXIF)"
+*   **Tip:** After creating the file, you can validate the PlantUML syntax by:
+    1. Installing PlantUML locally: `brew install plantuml` (macOS) or equivalent
+    2. Running: `plantuml -tsvg docs/diagrams/sequence_metadata_extraction.puml`
+    3. This should generate a `.svg` file without errors
 
-*   **Note:** All six entities MUST be present: File, MetadataMap, TagValue, TagDescriptor, FormatFamily, and IFD. The IFD entity has a special stereotype marker `<<TIFF Specific>>` that should be preserved in a Mermaid-appropriate way (possibly as a comment).
+*   **Note:** The existing `component_architecture.puml` file was already validated (task I1.T2 is marked done), so you can reference its structure for confirmation that your PlantUML syntax is correct.
 
-*   **Note:** The TagValue entity has a special attribute `value : Variant (String | Number | Binary | Struct)` that represents a Rust enum. Ensure this complexity is captured in the Mermaid diagram's attribute list.
+*   **Tip:** The diagram shows the hexagonal architecture in action:
+    - **Application Layer**: User → CLI
+    - **Domain Layer**: Core Library (API Facade) orchestrating operations
+    - **Ports**: Format Detector, FormatParser trait (implemented by JPEG Parser)
+    - **Infrastructure**: JPEG/EXIF/XMP parsers, I/O Layer, File System
+    - This layering is critical to the architecture and should be visually clear in the sequence diagram
 
-*   **Tip:** The architecture document provides detailed rationale for the data model design, including:
-    - No persistent database (in-memory only)
-    - Variant value types for TagValue
-    - IFD hierarchy with self-referential parent_ifd_id
-    - Tag descriptors are compile-time generated
+*   **Note:** The `alt` blocks in PlantUML create conditional/alternative flows. Your diagram must have:
+    1. `alt EXIF Segment Found (0xFFE1)` - showing EXIF parsing workflow
+    2. `alt XMP Segment Found (0xFFE1 with XMP marker)` - showing XMP parsing workflow
+    These are not mutually exclusive; a single JPEG can have both EXIF and XMP segments.
 
-*   **Warning:** The acceptance criteria specifically state that the Mermaid file must render correctly. After creating the file, you SHOULD validate it using the Mermaid Live Editor (https://mermaid.live/) or Mermaid CLI if available. The diagram must be syntactically correct and visually clear.
-
-*   **Warning:** The PlantUML ERD uses specific notation for primary and foreign keys:
-    - `!define primary_key(x) <b>x</b>` (bold text)
-    - `!define foreign_key(x) <i>x</i>` (italic text)
-
-    In Mermaid, you'll need to use a different approach, such as:
-    - Marking primary keys with `PK` type prefix
-    - Marking foreign keys with `FK` type prefix
-    - Or using comments like `%% PK` or `%% FK`
-
-*   **Tip:** The project uses a professional, enterprise-grade documentation style. Your ERD should:
-    - Include a clear title
-    - Use consistent naming conventions
-    - Have proper formatting and whitespace
-    - Include helpful relationship labels
-    - Be well-organized and easy to read
-
-*   **Tip:** The existing `component_architecture.puml` file is 49 lines long with clear structure. Your Mermaid ERD should aim for similar clarity and completeness. Based on the PlantUML ERD in the architecture document (lines 160-228), expect your Mermaid version to be approximately 60-80 lines.
-
-*   **Tip:** Mermaid ERD syntax uses the `erDiagram` directive at the start. A basic structure would be:
-    ```mermaid
-    erDiagram
-        ENTITY_NAME {
-            type attribute_name
-            type attribute_name
-        }
-        ENTITY1 ||--o{ ENTITY2 : "relationship"
-    ```
-
-*   **Note:** For the IFD entity's self-referential relationship (parent_ifd_id), you should show this as an attribute but may also want to add a relationship line showing IFD relates to itself for parent/child hierarchy.
-
-*   **Tip:** The PlantUML diagram uses `--` separators between the primary key and other attributes. In Mermaid, you can use comments to create visual separation or simply list attributes in logical order (PK first, then FKs, then regular attributes).
-
-### Critical Success Factors
-
-1. **Accuracy:** ALL six entities with their exact attributes from the architecture document
-2. **Relationships:** ALL six relationships with correct cardinalities
-3. **Syntax:** Valid Mermaid ERD syntax that renders without errors
-4. **Keys:** Clear indication of primary keys and foreign keys
-5. **Professional Quality:** Clean, well-formatted diagram suitable for enterprise documentation
-
-### Data Type Mappings for Mermaid
-
-Based on the PlantUML specification, here are the attribute types you should use:
-
-*   **File:**
-    - file_path: String (PK)
-    - format_type: String
-    - file_size: u64
-    - last_modified: DateTime
-
-*   **MetadataMap:**
-    - map_id: UUID (PK)
-    - file_path: String (FK)
-    - extraction_timestamp: DateTime
-
-*   **TagValue:**
-    - tag_instance_id: UUID (PK)
-    - map_id: UUID (FK)
-    - tag_name: String (FK)
-    - value: Variant
-    - value_type: TagType
-    - byte_offset: Option-u64
-
-*   **TagDescriptor:**
-    - tag_name: String (PK)
-    - tag_id: u16-or-String
-    - family_id: String (FK)
-    - writable: bool
-    - value_type: TagType
-    - description: String
-    - example_values: Vec-String
-
-*   **FormatFamily:**
-    - family_id: String (PK)
-    - family_name: String
-    - specification_url: String
-
-*   **IFD:**
-    - ifd_id: UUID (PK)
-    - map_id: UUID (FK)
-    - ifd_type: IFDType
-    - parent_ifd_id: Option-UUID
-    - byte_offset: u64
+*   **Tip:** The workflow breakdown at the end of the architecture blueprint section (lines 162-172) provides excellent documentation to include in comments or as a separate documentation block. This helps future developers understand the sequence diagram.
