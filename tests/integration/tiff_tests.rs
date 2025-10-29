@@ -270,7 +270,10 @@ fn test_rational_tag_from_exif_sub_ifd() {
     assert_eq!(denominator, 100, "ExposureTime denominator should be 100");
 
     let exposure_value = numerator as f64 / denominator as f64;
-    println!("ExposureTime: {}/{} = {} seconds", numerator, denominator, exposure_value);
+    println!(
+        "ExposureTime: {}/{} = {} seconds",
+        numerator, denominator, exposure_value
+    );
 }
 
 #[test]

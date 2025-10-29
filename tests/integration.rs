@@ -13,6 +13,9 @@ mod operations_tests;
 #[path = "integration/png_tests.rs"]
 mod png_tests;
 
+#[path = "integration/png_write_tests.rs"]
+mod png_write_tests;
+
 #[path = "integration/tiff_tests.rs"]
 mod tiff_tests;
 

@@ -10,23 +10,27 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I3.T7",
+  "task_id": "I3.T8",
   "iteration_id": "I3",
   "iteration_goal": "Implement metadata write operations with atomic file handling, extend TIFF parser for standalone TIFF files (not just EXIF in JPEG), implement metadata serialization, and add tag modification capabilities to CLI.",
-  "description": "Implement full TIFF file writer in src/writers/tiff_writer.rs (extend I3.T2). Write complete TIFF file structure: header, IFD chain, tag values. Support writing modified metadata back to TIFF file. Preserve image pixel data (copy image data strips/tiles unchanged). Add integration test: read TIFF, modify tag, write, re-read, verify.",
+  "description": "Implement PNG writer in src/writers/png_writer.rs. Write modified metadata back to PNG file: (1) Parse PNG chunks, (2) Update tEXt/iTXt chunks with modified text tags, (3) Update eXIf chunk with modified EXIF (serialize using TIFF writer I3.T2), (4) Recalculate CRC for modified chunks, (5) Write PNG structure with updated chunks. Preserve image data (IDAT chunks) unchanged. Add integration test.",
   "agent_type_hint": "BackendAgent",
-  "inputs": "I3.T2 TIFF IFD writer, I3.T6 TIFF file parser",
+  "inputs": "I2.T7 PNG parser, I3.T2 TIFF writer (for eXIf)",
   "target_files": [
-    "src/writers/tiff_writer.rs",
-    "tests/integration/tiff_write_tests.rs"
+    "src/writers/png_writer.rs",
+    "src/writers/mod.rs",
+    "tests/integration/png_write_tests.rs"
   ],
   "input_files": [
-    "src/writers/tiff_writer.rs",
-    "src/parsers/tiff/file_parser.rs"
+    "src/parsers/png/chunk_parser.rs",
+    "src/writers/tiff_writer.rs"
   ],
-  "deliverables": "Full TIFF file writer, integration test for TIFF modification",
-  "acceptance_criteria": "Writer produces valid TIFF file (readable by other tools), preserves image pixel data unchanged, modifies metadata tags correctly, round-trip test: read → modify → write → read → verify, cargo test tiff_write_tests passes",
-  "dependencies": ["I3.T2", "I3.T6"],
+  "deliverables": "PNG metadata writer, CRC recalculation, integration test",
+  "acceptance_criteria": "Writer updates tEXt/iTXt chunks correctly, updates eXIf chunk with serialized EXIF, recalculates CRC for modified chunks, preserves IDAT (image data) chunks unchanged, integration test: modify PNG text tag, verify change, cargo test png_write_tests passes",
+  "dependencies": [
+    "I2.T7",
+    "I3.T2"
+  ],
   "parallelizable": false,
   "done": false
 }
@@ -38,22 +42,84 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: iteration-3-plan (from 02_Iteration_I3.md)
+### Context: task-i3-t8 (from 02_Iteration_I3.md)
 
 ```markdown
-### Iteration 3: Metadata Writing, TIFF Format & Atomic File Operations
+<!-- anchor: task-i3-t8 -->
+*   **Task 3.8: Implement PNG Metadata Writer**
+    *   **Task ID:** `I3.T8`
+    *   **Description:** Implement PNG writer in `src/writers/png_writer.rs`. Write modified metadata back to PNG file: (1) Parse PNG chunks, (2) Update tEXt/iTXt chunks with modified text tags, (3) Update eXIf chunk with modified EXIF (serialize using TIFF writer I3.T2), (4) Recalculate CRC for modified chunks, (5) Write PNG structure with updated chunks. Preserve image data (IDAT chunks) unchanged. Add integration test.
+    *   **Agent Type Hint:** `BackendAgent`
+    *   **Inputs:** I2.T7 PNG parser, I3.T2 TIFF writer (for eXIf)
+    *   **Input Files:** [`src/parsers/png/chunk_parser.rs`, `src/writers/tiff_writer.rs`]
+    *   **Target Files:**
+        *   `src/writers/png_writer.rs`
+        *   `src/writers/mod.rs`
+        *   `tests/integration/png_write_tests.rs`
+    *   **Deliverables:**
+        *   PNG metadata writer
+        *   CRC recalculation
+        *   Integration test
+    *   **Acceptance Criteria:**
+        *   Writer updates tEXt/iTXt chunks correctly
+        *   Updates eXIf chunk with serialized EXIF
+        *   Recalculates CRC for modified chunks
+        *   Preserves IDAT (image data) chunks unchanged
+        *   Integration test: modify PNG text tag, verify change
+        *   `cargo test png_write_tests` passes
+    *   **Dependencies:** `I2.T7`, `I3.T2`
+    *   **Parallelizable:** Partially (can start after I2.T7, wait for I3.T2 for eXIf)
+```
 
-*   **Iteration ID:** `I3`
-*   **Goal:** Implement metadata write operations with atomic file handling, extend TIFF parser for standalone TIFF files (not just EXIF in JPEG), implement metadata serialization, and add tag modification capabilities to CLI.
-*   **Prerequisites:** `I2` (tag registry, read operations, CLI foundation, validation engine)
+### Context: task-i2-t7 (from 02_Iteration_I2.md)
+
+```markdown
+<!-- anchor: task-i2-t7 -->
+*   **Task 2.7: Implement PNG Format Parser**
+    *   **Task ID:** `I2.T7`
+    *   **Description:** Implement PNG parser in `src/parsers/png/` using nom or binrw. Parse PNG chunk structure: 8-byte signature, then sequence of chunks (length, type, data, CRC). Focus on metadata chunks: tEXt (uncompressed text), iTXt (international text, UTF-8), zTXt (compressed text). Extract text key-value pairs. For EXIF in PNG, check for eXIf chunk (contains raw EXIF data), parse using existing TIFF IFD parser. Return MetadataMap with PNG text tags and EXIF tags if present. Add unit tests and integration test with sample PNG.
+    *   **Agent Type Hint:** `BackendAgent`
+    *   **Inputs:** PNG specification, I1.T11 TIFF parser (for eXIf chunk)
+    *   **Input Files:** [`src/parsers/tiff/ifd_parser.rs`]
+    *   **Target Files:**
+        *   `src/parsers/png/chunk_parser.rs`
+        *   `src/parsers/png/mod.rs`
+        *   `src/parsers/mod.rs` (export png module)
+        *   `tests/integration/png_tests.rs`
+        *   `tests/fixtures/png/sample_with_text.png`
+        *   `tests/fixtures/png/sample_with_exif.png`
+    *   **Deliverables:**
+        *   PNG parser for tEXt, iTXt, zTXt, eXIf chunks
+        *   Integration tests
+        *   Sample PNG files
+    *   **Acceptance Criteria:**
+        *   Parser correctly identifies PNG signature
+        *   Parses chunk structure (length, type, data, CRC validation)
+        *   Extracts text from tEXt and iTXt chunks
+        *   Parses EXIF from eXIf chunk using TIFF parser
+        *   Integration tests verify extraction of text and EXIF tags
+        *   `cargo test png_tests` passes
+    *   **Dependencies:** `I1.T11` (TIFF parser for eXIf)
+    *   **Parallelizable:** Yes (can be developed in parallel with I2.T2-T6)
 ```
 
 ### Context: task-i3-t2 (from 02_Iteration_I3.md)
 
 ```markdown
+<!-- anchor: task-i3-t2 -->
 *   **Task 3.2: Implement EXIF IFD Serializer (TIFF Writer)**
     *   **Task ID:** `I3.T2`
     *   **Description:** Implement TIFF IFD serializer in `src/writers/tiff_writer.rs`. Create function to serialize MetadataMap EXIF tags back to TIFF IFD structure: (1) Filter tags for EXIF family, (2) Convert TagValue to TIFF data types (Byte, ASCII, Short, Long, Rational), (3) Build IFD entries (tag ID, type, count, value/offset), (4) Handle values >4 bytes (write to separate value area), (5) Calculate offsets, (6) Write IFD header + entries + values. Support both little-endian and big-endian output. Add unit tests verifying round-trip (parse then serialize equals original).
+    *   **Agent Type Hint:** `BackendAgent`
+    *   **Inputs:** TIFF specification, I1.T11 TIFF parser (for understanding structure)
+    *   **Input Files:** [`src/parsers/tiff/ifd_parser.rs`, `src/core/metadata_map.rs`]
+    *   **Target Files:**
+        *   `src/writers/tiff_writer.rs`
+        *   `src/writers/mod.rs`
+    *   **Deliverables:**
+        *   TIFF IFD serialization function
+        *   Support for both endianness
+        *   Unit and round-trip tests
     *   **Acceptance Criteria:**
         *   Serializer produces valid TIFF IFD structure
         *   Handles both little-endian and big-endian
@@ -61,70 +127,69 @@ The following are the relevant sections from the architecture and plan documents
         *   Values >4 bytes written to separate area with offset
         *   Round-trip test: parse(serialize(metadata)) == metadata for EXIF tags
         *   `cargo test tiff_writer` passes
+    *   **Dependencies:** `I1.T11` (TIFF parser structure), `I2.T2` (tag registry)
+    *   **Parallelizable:** Yes (can develop in parallel with I3.T1)
 ```
 
-### Context: task-i3-t6 (from 02_Iteration_I3.md)
+### Context: technology-stack-summary (from 02_Architecture_Overview.md)
 
 ```markdown
-*   **Task 3.6: Implement Full TIFF File Parser**
-    *   **Task ID:** `I3.T6`
-    *   **Description:** Extend TIFF parser from I1.T11 to handle standalone TIFF files (not just EXIF segments). Parse TIFF file structure: 8-byte header (byte order, magic number 42, first IFD offset), then IFD chain (IFD0, IFD1 for thumbnails, sub-IFDs for EXIF/GPS). Support multi-page TIFF (follow next IFD offset). Extract all tags from all IFDs. Handle both stripped and tiled image data (ignore pixel data, metadata only). Add integration test with sample TIFF file.
-    *   **Acceptance Criteria:**
-        *   Parser reads TIFF header and identifies byte order
-        *   Parses IFD chain (IFD0 → IFD1 → ... via next IFD offset)
-        *   Extracts tags from all IFDs (main image + thumbnail + sub-IFDs)
-        *   Ignores image pixel data (metadata only)
-        *   Integration test extracts metadata from multi-page TIFF
-        *   `cargo test tiff_tests` passes
+<!-- anchor: technology-stack-summary -->
+### 3.2. Technology Stack Summary
+
+| **Category** | **Technology Choice** | **Justification** |
+|--------------|----------------------|-------------------|
+| **Core Language** | Rust 1.75+ (2021 Edition) | Memory safety, zero-cost abstractions, excellent concurrency primitives, cross-platform support |
+| **CLI Framework** | `clap` v4 (derive API) | Industry standard, excellent help generation, argument validation, backward compatibility via value parsers |
+| **Binary Parsing** | `nom` v7 + `binrw` | `nom` for complex formats (TIFF, QuickTime), `binrw` for simple struct-based formats (BMP, WAV) |
+| **XML Parsing (XMP)** | `quick-xml` | Streaming parser, low memory footprint, namespace support for XMP |
+| **JSON Output** | `serde_json` | De facto standard, excellent performance, integration with domain models via derives |
+| **Date/Time** | `chrono` | Comprehensive timezone support, EXIF date format parsing |
+| **String Encoding** | `encoding_rs` (WHATWG standard) | Handles legacy encodings in IPTC/EXIF (Latin1, UTF-8, UTF-16) |
+| **Image I/O** | `memmap2` (memory-mapped files) | Efficient large file access without loading entire file into memory |
+| **Concurrency** | `rayon` (data parallelism) | Transparent batch processing parallelization, work-stealing scheduler |
+| **Testing** | `cargo test` + `proptest` (property-based) | Unit tests for parsers, property-based testing for round-trip serialization |
+| **Fuzzing** | `cargo-fuzz` (libFuzzer) | Continuous fuzzing of format parsers to discover crash/hang bugs |
+| **C FFI** | `cbindgen` (header generation) | Automated C header generation from Rust API |
+| **Documentation** | `rustdoc` + `mdBook` (user guide) | API docs from source comments, separate user guide for CLI |
+| **Build System** | `cargo` + `cross` (cross-compilation) | Standard Rust tooling, `cross` for ARM/Windows builds from Linux |
+| **CI/CD** | GitHub Actions | Free for open source, matrix builds across OS/architecture |
+| **Code Quality** | `clippy`, `rustfmt`, `cargo-audit` | Linting, formatting, dependency vulnerability scanning |
+| **Benchmarking** | `criterion` | Statistical benchmarking framework, regression detection |
+
+**Dependency Philosophy**:
+- **Minimize Count**: Target < 50 direct dependencies to reduce supply chain risk
+- **Prefer `no_std` Compatible**: Where possible (e.g., `nom`, `binrw`) to enable future embedded/WASM use
+- **Audit Regularly**: `cargo-audit` in CI pipeline to catch vulnerabilities in transitive dependencies
 ```
 
-### Context: task-i3-t7 (from 02_Iteration_I3.md)
+### Context: task-i3-t1 (from 02_Iteration_I3.md)
 
 ```markdown
-*   **Task 3.7: Implement TIFF File Writer**
-    *   **Task ID:** `I3.T7`
-    *   **Description:** Implement full TIFF file writer in `src/writers/tiff_writer.rs` (extend I3.T2). Write complete TIFF file structure: header, IFD chain, tag values. Support writing modified metadata back to TIFF file. Preserve image pixel data (copy image data strips/tiles unchanged). Add integration test: read TIFF, modify tag, write, re-read, verify.
+<!-- anchor: task-i3-t1 -->
+*   **Task 3.1: Implement Atomic File Writer**
+    *   **Task ID:** `I3.T1`
+    *   **Description:** Implement atomic file writing in `src/writers/atomic_writer.rs`. Create `fn write_atomic(path: &Path, data: &[u8]) -> Result<()>` that: (1) Creates temporary file in same directory with unique name (e.g., ".exiftool-rs.tmp.RANDOM"), (2) Writes data to temp file, (3) Calls `fsync()` to ensure data is on disk, (4) Atomically renames temp file to target path (overwrites original), (5) Handles errors at each step (cleanup temp file on failure). Use `tempfile` crate for temp file creation. Add unit tests verifying atomic behavior and error handling.
+    *   **Agent Type Hint:** `BackendAgent`
+    *   **Inputs:** Atomic file operation best practices, filesystem semantics
+    *   **Input Files:** []
+    *   **Target Files:**
+        *   `src/writers/atomic_writer.rs`
+        *   `src/writers/mod.rs`
+        *   `Cargo.toml` (add `tempfile` dependency if not present)
     *   **Deliverables:**
-        *   Full TIFF file writer
-        *   Integration test for TIFF modification
+        *   Atomic file write function
+        *   Error handling and cleanup
+        *   Unit tests
     *   **Acceptance Criteria:**
-        *   Writer produces valid TIFF file (readable by other tools)
-        *   Preserves image pixel data unchanged
-        *   Modifies metadata tags correctly
-        *   Round-trip test: read → modify → write → read → verify
-        *   `cargo test tiff_write_tests` passes
-```
-
-### Context: data-model-overview (from 03_System_Structure_and_Data.md)
-
-```markdown
-### 3.6. Data Model Overview & ERD
-
-**Description**: ExifTool-RS operates on files without persistent database storage. The "data model" represents in-memory structures for metadata representation.
-
-#### Key Entities
-
-1. **File**: Represents a media file being processed (JPEG, PNG, etc.)
-2. **MetadataMap**: Collection of all metadata tags extracted from a file
-3. **TagValue**: A single metadata tag with its name, value, and type information
-4. **TagDescriptor**: Definition of a tag (from tag database) including ID, name, type constraints, format family
-5. **FormatFamily**: Grouping of related metadata standards (EXIF, XMP, IPTC, MakerNotes)
-6. **IFD (Image File Directory)**: TIFF-specific structural element containing tags
-```
-
-### Context: alternative-flow-metadata-write (from 04_Behavior_and_Communication.md)
-
-```markdown
-#### Alternative Flow: Metadata Write Operation
-
-**Description**: Sequence for **modifying metadata and writing back to file**.
-
-**Key Design Decisions**:
-
-1. **Read-Modify-Write**: Always read existing metadata first to preserve unmodified tags
-2. **In-Place vs. Rewrite**: Attempt in-place modification if new metadata fits in existing segment; otherwise rewrite entire file
-3. **Atomic Write**: Use temporary file + atomic rename to prevent corruption on crash
-4. **Validation Before Write**: Validate tag values against type constraints before any file modification
+        *   write_atomic() creates temp file, writes data, renames atomically
+        *   Temp file is in same directory as target (required for atomic rename)
+        *   fsync() called before rename
+        *   On error, temp file is cleaned up
+        *   Unit tests verify successful write and error scenarios
+        *   `cargo test atomic_writer` passes
+    *   **Dependencies:** `I1` (project setup)
+    *   **Parallelizable:** Yes (foundational utility, can be developed early in I3)
 ```
 
 ---
@@ -135,135 +200,318 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `src/writers/tiff_writer.rs`
-    *   **Summary:** This file implements the TIFF IFD serialization (Task I3.T2). It contains the `serialize_ifd()` function that converts a MetadataMap to binary TIFF IFD bytes, supporting both little-endian and big-endian byte orders. The module handles inline values (≤4 bytes) and offset-based values (>4 bytes) correctly. It has comprehensive unit tests and round-trip tests that verify parse→serialize→parse cycles work correctly.
-    *   **Recommendation:** You MUST extend this file by adding new functions for full TIFF file writing. The existing `serialize_ifd()` function is a building block you will use. DO NOT modify the existing function - add new functions that call it.
-    *   **Key Functions to Reuse:**
-        - `serialize_ifd(metadata: &MetadataMap, byte_order: ByteOrder, ifd_start_offset: u64)` - Serializes a single IFD (line 117)
-        - `write_u16()`, `write_u32()` - Helper functions for writing multi-byte values in correct endianness (lines 359, 368)
-    *   **Critical Detail:** The `serialize_ifd()` function takes an `ifd_start_offset` parameter that tells it where in the file the IFD will be written. This is essential for calculating correct offsets for value data that doesn't fit inline.
+*   **File:** `src/parsers/png/chunk_parser.rs` (658 lines)
+    *   **Summary:** This file contains complete PNG chunk parsing logic, including:
+        - PNG signature verification (`PNG_SIGNATURE` constant at line 35)
+        - Chunk header parsing (length + type, 8 bytes total) - function at line 107
+        - Complete chunk parsing with CRC reading (but NOT validation) - function at line 135
+        - tEXt chunk parsing (Latin-1 keyword\0text format) - function at line 205
+        - iTXt chunk parsing (UTF-8 with compression flag, language tag, translated keyword) - function at line 256
+        - eXIf chunk parsing (TIFF format EXIF data) - function at line 337
+        - `PngChunk` struct with `chunk_type: [u8; 4]`, `data: Vec<u8>`, `crc: u32` at line 38
+    *   **Recommendation:** You MUST reuse the `PngChunk` struct and understand the chunk format. The parser shows the exact binary layout you need to write. Note that CRC is stored but NOT validated during reading - you will need to CALCULATE CRC during writing.
+    *   **Key Constants:** `PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]` at line 35
+    *   **Key Methods:** `parse_chunk()` at line 135, `parse_text_chunk()` at line 205, `parse_itxt_chunk()` at line 256, `parse_exif_chunk()` at line 337
+    *   **Chunk Format (as shown in parser):**
+        ```
+        Length: 4 bytes (big-endian u32) - length of data field only
+        Type: 4 bytes (ASCII, e.g., "IHDR", "tEXt", "IEND")
+        Data: N bytes (depends on chunk type)
+        CRC: 4 bytes (u32 big-endian) - CRC-32 of type + data
+        ```
 
-*   **File:** `src/parsers/tiff/file_parser.rs`
-    *   **Summary:** This file implements the full TIFF file parser (Task I3.T6). It parses the 8-byte TIFF header, walks the IFD chain (IFD0 → IFD1 → ...), recursively parses sub-IFDs (EXIF, GPS), and handles multi-page TIFF files. The parser returns a flat `Vec<(u16, Vec<u8>)>` of all tags from all IFDs.
-    *   **Recommendation:** You MUST study this file carefully to understand the TIFF file structure. Your writer must create files with the exact same structure that this parser expects. Key constants like `EXIF_IFD_POINTER` (0x8769), `GPS_INFO_IFD_POINTER` (0x8825) are defined here (lines 80-83).
-    *   **Key Structure Details:**
-        - TIFF Header: 8 bytes (byte order marker, magic number 42, first IFD offset) - see `parse_tiff_header()` at line 116
-        - IFD Chain: Each IFD has an entry count, tag entries (12 bytes each), and a "next IFD offset" field - see `parse_tiff_file()` at line 290
-        - Sub-IFDs: Referenced by special tags (0x8769 for EXIF, 0x8825 for GPS, 0xA005 for Interoperability) - handled in loop at line 334
-        - Circular Reference Detection: The parser tracks visited offsets to prevent infinite loops (line 297)
-    *   **Critical Detail:** The parser extracts ALL tags from ALL IFDs and returns them as a flat list. Your writer will need to intelligently group tags back into the appropriate IFDs.
+*   **File:** `src/parsers/png/mod.rs` (387 lines)
+    *   **Summary:** This file contains the high-level PNG metadata extraction logic:
+        - `parse_png_metadata()` function that iterates through all chunks (line 91)
+        - Shows how to iterate: start after signature (8 bytes), call `parse_chunk()`, advance to `next_offset`, stop at IEND
+        - Tag naming convention: `PNG:tEXt:<keyword>` (line 124), `PNG:iTXt:<keyword>` (line 133), `EXIF:0x<hex_id>` (line 147)
+        - Preserves image data by simply skipping IDAT chunks (no special handling needed)
+    *   **Recommendation:** You SHOULD follow the exact same iteration pattern but in reverse for writing. Your writer needs to:
+        1. Read all existing chunks using `parse_chunk()` in a loop
+        2. Identify which chunks need updating (tEXt, iTXt, eXIf) by checking `chunk_type`
+        3. Replace those chunks with modified versions (new data + recalculated CRC)
+        4. Write all chunks (including IDAT unchanged) to output buffer
+        5. Use `write_atomic()` to write final buffer to disk
 
-*   **File:** `src/writers/atomic_writer.rs`
-    *   **Summary:** This file implements atomic file writing using the temp-file-and-rename pattern. The `write_atomic(path: &Path, data: &[u8])` function creates a temporary file in the same directory, writes data, calls fsync(), and atomically renames to the target path (line 93).
-    *   **Recommendation:** You MUST use `write_atomic()` for all file write operations. This ensures that files are never left in a corrupted state if the program crashes during writing. The atomic writer handles all error cases and cleanup automatically.
-    *   **Critical Detail:** The temp file MUST be in the same directory as the target file for atomic rename to work (cannot cross filesystem boundaries) - see comment at line 95.
+*   **File:** `src/writers/tiff_writer.rs` (200+ lines)
+    *   **Summary:** This file implements TIFF IFD serialization and is CRITICAL for your eXIf chunk writing:
+        - `serialize_ifd()` function at line 265: converts MetadataMap EXIF tags to binary TIFF IFD structure
+        - Handles both little-endian and big-endian byte orders
+        - Writes TIFF header (8 bytes): byte order marker + magic 42 + IFD offset (line 174)
+        - `IfdEntryData` struct for representing IFD entries (tag_id, field_type, value_count, value_bytes) at line 197
+        - Inline values (≤4 bytes) vs offset values (>4 bytes) logic at line 210
+        - `write_u16()`, `write_u32()` helper functions for writing multi-byte values at lines 318, 336
+    *   **Recommendation:** You MUST use `serialize_ifd()` to create the EXIF data for eXIf chunks. The eXIf chunk format is: raw TIFF structure (starting with "II" or "MM" byte order marker). Call `serialize_ifd()` and wrap the result in an eXIf chunk with proper length and CRC.
+    *   **Import Path:** `use crate::writers::tiff_writer::serialize_ifd;`
+    *   **Function Signature:** `pub fn serialize_ifd(metadata: &MetadataMap, byte_order: ByteOrder, ifd_start_offset: u64) -> Result<Vec<u8>>`
+    *   **Usage for eXIf:** Call with `ByteOrder::LittleEndian` and `ifd_start_offset: 0` to get complete TIFF structure
 
-*   **File:** `tests/integration/tiff_tests.rs`
-    *   **Summary:** This file contains comprehensive integration tests for the TIFF parser. It tests parsing of the test fixture `tests/fixtures/tiff/sample.tif`, which is a multi-page TIFF with IFD0, IFD1, and an EXIF sub-IFD. The tests verify tag extraction, byte order handling, IFD chain traversal, and sub-IFD recursion.
-    *   **Recommendation:** You SHOULD create a parallel file `tests/integration/tiff_write_tests.rs` with similar test structure. Use the same test fixture for round-trip testing.
-    *   **Test Pattern:** The existing tests use this pattern: open file → parse → verify tags. Your tests should follow: open file → parse → modify metadata → write → re-parse → verify modifications.
+*   **File:** `src/writers/atomic_writer.rs` (100+ lines)
+    *   **Summary:** This file provides atomic file writing using temp-file-and-rename pattern:
+        - `write_atomic(path: &Path, data: &[u8]) -> Result<()>` function at line 93
+        - Uses `tempfile::NamedTempFile` to create temp file in same directory at line 101
+        - Calls `fsync()` before rename to ensure durability at line 111
+        - Automatic cleanup on failure via `tempfile` RAII pattern
+    *   **Recommendation:** You MUST use `write_atomic()` for the final file write to ensure no corruption on crash. Do NOT implement your own file writing logic. Build the complete PNG file in memory as `Vec<u8>`, then call `write_atomic()` once at the end.
+    *   **Import Path:** `use crate::writers::atomic_writer::write_atomic;`
+
+*   **File:** `src/writers/png_writer.rs` (6 lines - EMPTY)
+    *   **Summary:** This is the file you need to implement. Currently only has module comments and `#![allow(dead_code)]`.
+    *   **Recommendation:** This is your main implementation file. Start fresh but follow the patterns from the parser and TIFF writer.
+
+*   **File:** `src/core/metadata_map.rs` (referenced but not read in detail)
+    *   **Summary:** Provides `MetadataMap` type for storing tag-value pairs with `HashMap<String, TagValue>` internally.
+    *   **Recommendation:** Use `metadata.iter()` to iterate through all tags. Filter by prefix (e.g., `tag_name.starts_with("PNG:tEXt:")`) to find text chunks. Extract keyword from tag name (e.g., "PNG:tEXt:Author" → "Author").
+
+*   **File:** `src/error/mod.rs` (80+ lines)
+    *   **Summary:** Defines `ExifToolError` enum with helper methods:
+        - `parse_error()` at line 50, `parse_error_at()` at line 58, `tag_not_found()` at line 66, `invalid_tag_value()` at line 73, `unsupported_format()` at line 80
+    *   **Recommendation:** Use these helper methods for error creation. For example: `ExifToolError::unsupported_format("zTXt compressed chunks not supported for writing")`
+
+*   **File:** `src/core/file_reader_trait.rs` (referenced)
+    *   **Summary:** Defines `FileReader` trait with `read()` and `size()` methods.
+    *   **Recommendation:** Your `write_png_metadata()` function should accept `original_reader: &dyn FileReader` to read existing PNG structure.
 
 ### Implementation Tips & Notes
 
-*   **Tip #1: Image Data Preservation Strategy** - The task requires preserving image pixel data unchanged. TIFF images store pixel data in "strips" or "tiles" referenced by tags like `StripOffsets` (0x0111), `StripByteCounts` (0x0117), `TileOffsets` (0x0144), and `TileByteCounts` (0x0145). You MUST copy these data areas byte-for-byte from the original file. The strategy is:
-    1. Parse the original TIFF file completely (using `parse_tiff_file()`)
-    2. Read the file into memory or track the locations of image data areas
-    3. When writing the new file, copy the image data blocks unchanged
-    4. Update only the metadata IFDs and their offsets
+*   **Tip #1: CRC32 Calculation (CRITICAL)** - You MUST add a CRC32 calculation library to `Cargo.toml`. The `crc` crate (version 3.0) is the standard choice. PNG uses CRC-32/ISO-HDLC polynomial (also called CRC-32-IEEE or CRC-32).
+    - Add to `Cargo.toml` dependencies section: `crc = "3.0"`
+    - Use in your code:
+      ```rust
+      use crc::{Crc, CRC_32_ISO_HDLC};
 
-*   **Tip #2: Tag Grouping Strategy** - The parser returns a flat list of all tags from all IFDs. When writing, you need to reconstruct the IFD structure. Here's a recommended strategy:
-    1. Group tags by their IFD type (main image tags go in IFD0, thumbnail tags in IFD1, EXIF tags in EXIF sub-IFD)
-    2. Use tag IDs to determine which IFD they belong to (e.g., 0x010F, 0x0110 are main IFD tags; 0x829A, 0x829D are EXIF tags)
-    3. Create special pointer tags (0x8769 for EXIF sub-IFD) that reference the sub-IFD locations
-    4. Write IFDs in order: header → IFD0 → image data → EXIF sub-IFD → IFD1 (if present)
+      fn calculate_crc(chunk_type: &[u8; 4], data: &[u8]) -> u32 {
+          let crc = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+          let mut digest = crc.digest();
+          digest.update(chunk_type);
+          digest.update(data);
+          digest.finalize()
+      }
+      ```
+    - **CRITICAL:** CRC is calculated over chunk type (4 bytes) + chunk data (N bytes), NOT including the length field.
 
-*   **Tip #3: Offset Calculation** - TIFF files use absolute byte offsets throughout. You must carefully calculate and update all offsets:
-    - Header is always 8 bytes
-    - First IFD typically starts at offset 8
-    - Each IFD's size = 2 (count) + 12×entries + 4 (next IFD offset) + size of value data area
-    - Image data offsets must be updated if metadata size changes
-    - All offsets must be written in the correct byte order (little-endian or big-endian)
+*   **Tip #2: PNG Chunk Writing Format** - All PNG chunks use BIG-ENDIAN byte order (unlike TIFF which can be either):
+    ```
+    Length: 4 bytes (u32 big-endian) - length of DATA field only (not including type or CRC)
+    Type: 4 bytes (ASCII, e.g., b"tEXt", b"iTXt", b"eXIf", b"IDAT")
+    Data: N bytes (depends on chunk type, can be empty for IEND)
+    CRC: 4 bytes (u32 big-endian) - CRC-32 of Type + Data
+    ```
 
-*   **Tip #4: Round-Trip Testing** - The acceptance criteria require a round-trip test. Here's the exact test pattern you MUST implement:
-    1. Read original TIFF file using `parse_tiff_file()`
-    2. Create a MetadataMap from parsed tags (you'll need to convert raw bytes to TagValue objects)
-    3. Modify one or more tags (e.g., change Make from "TestCamera" to "ModifiedCamera")
-    4. Write the modified metadata using your new TIFF writer function
-    5. Re-parse the written file using `parse_tiff_file()`
-    6. Verify the modified tags have the new values
-    7. Verify unmodified tags are unchanged
-    8. CRITICALLY: Verify image data (if any) is unchanged by comparing StripOffsets/TileByteCounts
+*   **Tip #3: tEXt Chunk Writing** - Format is `keyword\0text` (null-separated, Latin-1 encoding):
+    - Extract keyword from tag name: `"PNG:tEXt:Author"` → keyword = `"Author"`
+    - Extract text from TagValue (convert to string)
+    - Build data: `keyword.as_bytes() + b"\0" + text.as_bytes()`
+    - Calculate CRC over `b"tEXt" + data`
+    - Write chunk: length (data.len() as u32 BE) + b"tEXt" + data + CRC
 
-*   **Warning:** The existing `serialize_ifd()` function only handles EXIF tags (filters for "EXIF:" prefix at line 127). For a full TIFF file writer, you may need to serialize tags from multiple families (EXIF, GPS, TIFF base tags). Consider creating a variant function or adding a parameter to control tag filtering.
+*   **Tip #4: iTXt Chunk Writing** - Format is `keyword\0compression_flag\0compression_method\0language\0translated_keyword\0text`:
+    - For uncompressed (MVP requirement): compression_flag = 0, compression_method = 0
+    - Extract keyword from tag name: `"PNG:iTXt:Title"` → keyword = `"Title"`
+    - Use empty strings for language ("") and translated keyword ("") if not present
+    - Text is UTF-8 encoded
+    - Build data:
+      ```rust
+      let mut data = Vec::new();
+      data.extend_from_slice(keyword.as_bytes());
+      data.push(0); // null separator
+      data.push(0); // compression flag = 0
+      data.push(0); // compression method = 0
+      data.extend_from_slice(b""); // language (empty)
+      data.push(0); // null separator
+      data.extend_from_slice(b""); // translated keyword (empty)
+      data.push(0); // null separator
+      data.extend_from_slice(text.as_bytes()); // UTF-8 text
+      ```
 
-*   **Warning:** TIFF files can be extremely complex with multiple image pages, thumbnails, strips vs. tiles, etc. For your initial implementation (to pass acceptance criteria), focus on single-page TIFF files with simple strip-based image data. The test fixture `tests/fixtures/tiff/sample.tif` is multi-page but metadata-focused. Ensure your implementation handles at minimum: header writing, IFD chain (IFD0 → IFD1), and EXIF sub-IFD.
+*   **Tip #5: eXIf Chunk Writing** - This is where you use the TIFF writer:
+    ```rust
+    use crate::parsers::tiff::ifd_parser::ByteOrder;
+    use crate::writers::tiff_writer::serialize_ifd;
 
-*   **Note:** The `ByteOrder` enum from `src/parsers/tiff/ifd_parser.rs` is used throughout the codebase. Make sure your write functions accept and honor the byte order parameter. The byte order should match the original file's byte order to maintain compatibility.
+    // Filter EXIF tags from metadata
+    let exif_metadata = /* ... filter for EXIF: prefix ... */;
 
-*   **Note:** Error handling is critical for file writing operations. Use the `Result<()>` pattern consistently and provide descriptive error messages. The `ExifToolError` type has helper constructors like `parse_error()`, `io_error()`, etc. Use these for consistency with the rest of the codebase.
+    // Serialize to TIFF format (complete with header)
+    let tiff_data = serialize_ifd(&exif_metadata, ByteOrder::LittleEndian, 0)?;
 
-### Function Signature Recommendations
+    // tiff_data now contains: "II" + 0x002A + offset + IFD + values
+    // This becomes the eXIf chunk data directly
+    let crc = calculate_crc(b"eXIf", &tiff_data);
+    // Write chunk: length + b"eXIf" + tiff_data + CRC
+    ```
 
-Based on my analysis, here are the key function signatures you should implement in `src/writers/tiff_writer.rs`:
+*   **Tip #6: Chunk Order** - PNG specification requires specific chunk ordering:
+    - **IHDR**: MUST be first chunk (critical)
+    - **Metadata chunks** (tEXt, iTXt, eXIf): Can appear anywhere, but SHOULD appear before IDAT for best compatibility
+    - **IDAT**: Image data chunks, can be multiple sequential chunks
+    - **Other chunks**: Chunks like PLTE, tRNS, etc.
+    - **IEND**: MUST be last chunk (critical)
+    - A safe strategy: IHDR → metadata → IDAT → other → IEND
+
+*   **Tip #7: Writing Strategy** - Follow this high-level algorithm:
+    1. Parse all existing chunks from original file into `Vec<PngChunk>`
+    2. Categorize chunks: IHDR (first), metadata (tEXt/iTXt/eXIf), IDAT, other, IEND (last)
+    3. Build new metadata chunks from `modified_metadata` (filter by tag name prefix)
+    4. Replace old metadata chunks with new ones (or insert if new tags added)
+    5. Preserve non-metadata chunks (IHDR, IDAT, other, IEND) unchanged
+    6. Reassemble PNG: signature + chunks in correct order
+    7. Call `write_atomic()` with complete PNG data
+
+*   **Note #1: Handling Missing Metadata** - If a metadata tag exists in the original PNG but is NOT in `modified_metadata`, you should REMOVE that chunk (don't preserve it). This allows users to delete metadata tags. However, non-metadata chunks (IHDR, IDAT, etc.) must always be preserved.
+
+*   **Note #2: Multiple IDAT Chunks** - PNG images often have multiple consecutive IDAT chunks. You MUST preserve ALL of them in their original order. Do NOT merge or split IDAT chunks.
+
+*   **Note #3: Critical vs. Ancillary Chunks** - PNG chunks are categorized by the first letter of their type:
+    - Uppercase first letter = critical chunk (e.g., IHDR, IDAT, IEND)
+    - Lowercase first letter = ancillary chunk (e.g., tEXt, iTXt, eXIf)
+    - Your implementation must preserve all critical chunks and only modify ancillary metadata chunks.
+
+*   **Warning #1: zTXt Compression** - DO NOT implement zTXt (compressed text) writing in this iteration. The task description mentions zTXt parsing exists, but writing compressed chunks is complex and not required for MVP. If you encounter zTXt chunks in the original file, you SHOULD preserve them unchanged (copy bytes as-is) OR remove them if they appear in `modified_metadata`.
+
+*   **Warning #2: CRC Validation** - The parser reads CRC but does NOT validate it (line 175 in chunk_parser.rs just reads the bytes). Your writer MUST calculate correct CRC values. Incorrect CRC will cause the PNG to be rejected by other tools even if the structure is correct. Use the `crc` crate as described in Tip #1.
+
+*   **Warning #3: Big-Endian Byte Order** - Unlike TIFF (which can be either endian), PNG always uses BIG-ENDIAN byte order for multi-byte integers (length and CRC fields). Use `u32::to_be_bytes()` for conversions.
+
+### Suggested Implementation Approach
+
+1. **Add CRC dependency to Cargo.toml:**
+   ```toml
+   [dependencies]
+   crc = "3.0"
+   ```
+
+2. **Create the main write function signature:**
+   ```rust
+   pub fn write_png_metadata(
+       path: &Path,
+       original_reader: &dyn FileReader,
+       modified_metadata: &MetadataMap,
+   ) -> Result<()>
+   ```
+
+3. **Implement helper functions:**
+   ```rust
+   fn calculate_crc(chunk_type: &[u8; 4], data: &[u8]) -> u32;
+   fn write_chunk(output: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]);
+   fn serialize_text_chunk(keyword: &str, text: &str) -> Vec<u8>;
+   fn serialize_itxt_chunk(keyword: &str, text: &str) -> Vec<u8>;
+   fn serialize_exif_chunk(metadata: &MetadataMap) -> Result<Vec<u8>>;
+   ```
+
+4. **Main algorithm in write_png_metadata:**
+   ```rust
+   // 1. Parse existing PNG structure
+   let mut chunks = Vec::new();
+   let mut offset = 8; // After signature
+   while offset < original_reader.size() {
+       let (next_offset, chunk) = parse_chunk(original_reader, offset)?;
+       chunks.push(chunk);
+       if &chunk.chunk_type == b"IEND" { break; }
+       offset = next_offset;
+   }
+
+   // 2. Build new metadata chunks from modified_metadata
+   let new_metadata_chunks = /* ... build tEXt, iTXt, eXIf chunks ... */;
+
+   // 3. Categorize and filter chunks
+   let mut ihdr = /* find IHDR */;
+   let mut idats = /* collect all IDATs in order */;
+   let mut iend = /* find IEND */;
+   let other_chunks = /* non-metadata, non-critical chunks */;
+
+   // 4. Reassemble PNG
+   let mut output = Vec::new();
+   output.extend_from_slice(&PNG_SIGNATURE);
+   write_chunk(&mut output, &ihdr.chunk_type, &ihdr.data);
+   for chunk in new_metadata_chunks {
+       write_chunk(&mut output, &chunk.chunk_type, &chunk.data);
+   }
+   for idat in idats {
+       write_chunk(&mut output, &idat.chunk_type, &idat.data);
+   }
+   for chunk in other_chunks {
+       write_chunk(&mut output, &chunk.chunk_type, &chunk.data);
+   }
+   write_chunk(&mut output, &iend.chunk_type, &iend.data);
+
+   // 5. Write atomically
+   write_atomic(path, &output)?;
+   Ok(())
+   ```
+
+5. **Write integration test in tests/integration/png_write_tests.rs:**
+   ```rust
+   #[test]
+   fn test_modify_text_chunk() {
+       // Create test PNG with tEXt chunk
+       let mut metadata = MetadataMap::new();
+       metadata.insert("PNG:tEXt:Author", TagValue::new_string("Original Author"));
+
+       // Write initial PNG
+       let temp_path = /* create temp file */;
+       write_png_metadata(&temp_path, &reader, &metadata).unwrap();
+
+       // Modify metadata
+       metadata.insert("PNG:tEXt:Author", TagValue::new_string("Modified Author"));
+       write_png_metadata(&temp_path, &reader, &metadata).unwrap();
+
+       // Re-read and verify
+       let reader2 = BufferedReader::new(&temp_path).unwrap();
+       let parsed = parse_png_metadata(&reader2).unwrap();
+       assert_eq!(parsed.get_string("PNG:tEXt:Author"), Some("Modified Author"));
+   }
+   ```
+
+### Function Signatures to Implement
+
+Based on the analysis, here are the key functions you should implement:
 
 ```rust
-/// Writes a complete TIFF file with modified metadata
-///
-/// This is the main entry point for TIFF file writing.
-/// It reads the original file, extracts image data, and writes
-/// a new TIFF file with updated metadata while preserving pixel data.
-pub fn write_tiff_file(
+// Main public API
+pub fn write_png_metadata(
     path: &Path,
     original_reader: &dyn FileReader,
     modified_metadata: &MetadataMap,
-) -> Result<()>
+) -> Result<()>;
 
-/// Reconstructs the complete TIFF file bytes from components
-///
-/// Helper function that assembles: header + IFDs + image data
-fn reconstruct_tiff_structure(
-    original_reader: &dyn FileReader,
-    header: &TiffHeader,
-    modified_metadata: &MetadataMap,
-) -> Result<Vec<u8>>
-
-/// Copies image data (strips/tiles) from original file unchanged
-///
-/// Preserves pixel data by copying the strips/tiles referenced
-/// by StripOffsets/StripByteCounts or TileOffsets/TileByteCounts tags
-fn copy_image_data(
-    original_reader: &dyn FileReader,
-    strip_offsets: &[u32],
-    strip_byte_counts: &[u32],
-) -> Result<Vec<u8>>
+// Helper functions
+fn calculate_crc(chunk_type: &[u8; 4], data: &[u8]) -> u32;
+fn write_chunk(output: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]);
+fn serialize_text_chunk(keyword: &str, text: &str) -> Vec<u8>;
+fn serialize_itxt_chunk(keyword: &str, text: &str) -> Vec<u8>;
+fn serialize_exif_chunk(metadata: &MetadataMap) -> Result<Vec<u8>>;
 ```
 
-These are suggestions - you may design the internal functions differently, but the public API should follow this pattern.
+### Integration Test Requirements
 
-### Integration Test Structure
+Your `tests/integration/png_write_tests.rs` must include at minimum:
 
-Your `tests/integration/tiff_write_tests.rs` file should include at minimum:
+1. **Test: Modify tEXt chunk** - Change text metadata, verify change persists
+2. **Test: Modify iTXt chunk** - Change UTF-8 text metadata, verify change
+3. **Test: Modify eXIf chunk** - Change EXIF tag, verify TIFF serialization works
+4. **Test: Preserve IDAT** - Verify image data unchanged (compare bytes or re-parse)
+5. **Test: Round-trip** - Read → modify → write → read → verify
 
-```rust
-#[test]
-fn test_round_trip_tiff_modification() {
-    // 1. Read original TIFF
-    let path = Path::new("tests/fixtures/tiff/sample.tif");
-    let reader = BufferedReader::new(path).unwrap();
-    let tags = parse_tiff_file(&reader).unwrap();
+All tests must use `parse_png_metadata()` to verify the written file is correct.
 
-    // 2. Convert to MetadataMap and modify
-    let mut metadata = MetadataMap::new();
-    // ... conversion and modification logic ...
+### Summary Checklist
 
-    // 3. Write modified TIFF
-    write_tiff_file(path_out, &reader, &metadata).unwrap();
+Before you consider the task complete, verify:
 
-    // 4. Re-read and verify
-    let reader2 = BufferedReader::new(path_out).unwrap();
-    let tags2 = parse_tiff_file(&reader2).unwrap();
-    // ... verification logic ...
-}
-```
+- [ ] Added `crc = "3.0"` to Cargo.toml
+- [ ] Implemented `write_png_metadata()` function
+- [ ] Implemented CRC-32 calculation using `crc` crate
+- [ ] Implemented tEXt chunk serialization
+- [ ] Implemented iTXt chunk serialization
+- [ ] Implemented eXIf chunk serialization (using TIFF writer)
+- [ ] Preserved IDAT chunks unchanged
+- [ ] Preserved non-metadata chunks unchanged
+- [ ] Maintained correct chunk order (IHDR → metadata → IDAT → other → IEND)
+- [ ] Used `write_atomic()` for file writing
+- [ ] Created integration tests in `tests/integration/png_write_tests.rs`
+- [ ] All tests pass: `cargo test png_write_tests`
+- [ ] No clippy warnings: `cargo clippy -- -D warnings`
+- [ ] Code formatted: `cargo fmt --check`
 
-Make sure this test passes to meet the acceptance criteria.
+This comprehensive briefing should give you everything needed to implement the PNG metadata writer successfully!
