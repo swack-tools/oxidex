@@ -10,6 +10,225 @@ This is the full specification of the task you must complete.
 
 ```json
 {
+  "task_id": "I3.T6",
+  "iteration_id": "I3",
+  "iteration_goal": "Implement metadata write operations with atomic file handling, extend TIFF parser for standalone TIFF files (not just EXIF in JPEG), implement metadata serialization, and add tag modification capabilities to CLI.",
+  "description": "Extend TIFF parser from I1.T11 to handle standalone TIFF files (not just EXIF segments). Parse TIFF file structure: 8-byte header (byte order, magic number 42, first IFD offset), then IFD chain (IFD0, IFD1 for thumbnails, sub-IFDs for EXIF/GPS). Support multi-page TIFF (follow next IFD offset). Extract all tags from all IFDs. Handle both stripped and tiled image data (ignore pixel data, metadata only). Add integration test with sample TIFF file.",
+  "agent_type_hint": "BackendAgent",
+  "inputs": "TIFF specification, I1.T11 IFD parser",
+  "target_files": [
+    "src/parsers/tiff/mod.rs",
+    "src/parsers/tiff/file_parser.rs",
+    "tests/integration/tiff_tests.rs",
+    "tests/fixtures/tiff/sample.tif"
+  ],
+  "input_files": [
+    "src/parsers/tiff/ifd_parser.rs"
+  ],
+  "deliverables": "Full TIFF file parser, support for multi-page TIFF, integration test",
+  "acceptance_criteria": "Parser reads TIFF header and identifies byte order, parses IFD chain (IFD0 → IFD1 → ... via next IFD offset), extracts tags from all IFDs (main image + thumbnail + sub-IFDs), ignores image pixel data (metadata only), integration test extracts metadata from multi-page TIFF, cargo test tiff_tests passes",
+  "dependencies": ["I1.T11"],
+  "parallelizable": true,
+  "done": false
+}
+```
+
+---
+
+## 2. Architectural & Planning Context
+
+The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
+
+### Context: architectural-style (from 02_Architecture_Overview.md)
+
+The project follows **Layered Hexagonal Architecture** (Ports and Adapters):
+
+**Rationale**:
+1. **Format Independence**: The core domain (metadata extraction/manipulation logic) must remain isolated from the specifics of 300+ file formats through ports (interfaces) and adapters (format-specific implementations).
+2. **Testability**: Hexagonal architecture enables testing the core metadata logic independently of file I/O by mocking the file system port. Critical for achieving 80%+ test coverage.
+3. **Extensibility**: New file format support becomes a matter of implementing the format adapter interface without touching core logic.
+
+**Layered Structure**:
+- **Domain Layer**: Format-agnostic metadata models, tag definitions, operations
+- **Application Layer**: User-facing interfaces translating commands to domain operations
+- **Infrastructure Layer**: Format-specific parsers/serializers, file system abstraction
+
+### Context: technology-stack (from 02_Architecture_Overview.md)
+
+**Binary Parsing**: `nom` v7 for complex formats (TIFF, QuickTime)
+- Parser combinator library for binary formats
+- Example: TIFF IFD parsing uses `nom::number::complete::le_u16` for little-endian u16, chained with `nom::multi::count` for tag array parsing
+
+**Image I/O**: `memmap2` for memory-mapped files
+- Efficient large file access without loading entire file into memory
+- Enables zero-copy parsing for formats with known offsets
+
+### Context: data-model (from 03_System_Structure_and_Data.md)
+
+**Key Entities**:
+1. **File**: Represents a media file being processed
+2. **MetadataMap**: Collection of all metadata tags extracted from a file
+3. **TagValue**: A single metadata tag with its name, value, and type information
+4. **IFD (Image File Directory)**: TIFF-specific structural element containing tags
+
+### Context: iteration-3-goal (from 02_Iteration_I3.md)
+
+**Iteration 3 Goal**: Implement metadata write operations with atomic file handling, extend TIFF parser for standalone TIFF files (not just EXIF in JPEG), implement metadata serialization, and add tag modification capabilities to CLI.
+
+**Task I3.T6 Specification**:
+- Extend TIFF parser from I1.T11 to handle standalone TIFF files
+- Parse 8-byte header (byte order, magic number 42, first IFD offset)
+- Parse IFD chain (IFD0, IFD1 for thumbnails, sub-IFDs for EXIF/GPS)
+- Support multi-page TIFF (follow next IFD offset)
+- Extract all tags from all IFDs
+- Ignore image pixel data (metadata only)
+- Add integration test with sample TIFF file
+
+---
+
+## 3. Codebase Analysis & Strategic Guidance
+
+The following analysis is based on my direct review of the current codebase. Use these notes and tips to guide your implementation.
+
+### Relevant Existing Code
+
+*   **File:** `src/parsers/tiff/ifd_parser.rs`
+    *   **Summary:** This file contains a complete and well-tested implementation for parsing individual TIFF Image File Directories (IFDs). It includes:
+        - `ByteOrder` enum (LittleEndian/BigEndian)
+        - `IfdEntry` struct representing a single tag entry
+        - `parse_ifd()` function that reads IFD at a given offset and returns `Vec<(u16, Vec<u8>)>` tag data
+        - Support for both byte orders
+        - Inline value extraction (≤4 bytes) vs offset-based values (>4 bytes)
+        - Comprehensive unit tests with synthetic IFD data (699 lines total, ~200 lines of tests)
+    *   **Recommendation:** You MUST import and reuse the `parse_ifd()` function from this file. DO NOT rewrite IFD parsing logic. Your task is to add the TIFF file-level parser that orchestrates calling `parse_ifd()` for each IFD in the chain.
+    *   **Key Functions to Reuse:**
+        ```rust
+        pub fn parse_ifd(reader: &dyn FileReader, ifd_offset: u64, byte_order: ByteOrder) -> Result<Vec<(u16, Vec<u8>)>>
+        pub enum ByteOrder { LittleEndian, BigEndian }
+        ```
+
+*   **File:** `src/parsers/tiff/mod.rs`
+    *   **Summary:** TIFF parser module file. Currently very minimal with just module declarations for `ifd_parser`, `makernote_parser`, and `tag_parser`.
+    *   **Recommendation:** Add `pub mod file_parser;` to this file.
+
+*   **File:** `src/parsers/format_detector.rs`
+    *   **Summary:** Contains `detect_format()` function that identifies TIFF files by magic bytes:
+        - Little-Endian: `0x49 0x49 0x2A 0x00` ("II" + 42)
+        - Big-Endian: `0x4D 0x4D 0x00 0x2A` ("MM" + 42)
+    *   **Recommendation:** You DO NOT need to modify this file. Format detection for TIFF is already complete.
+
+*   **File:** `src/core/operations.rs`
+    *   **Summary:** Orchestrates metadata extraction workflow. Contains `read_metadata()` which routes to format-specific parsers. Has `parse_tiff_metadata()` function that needs your full TIFF file parser.
+    *   **Recommendation:** Once you implement the TIFF file parser, update `parse_tiff_metadata()` to call your new parser. This function exists at line ~100.
+
+*   **File:** `src/io/mmap_reader.rs` and `src/io/buffered_reader.rs`
+    *   **Summary:** Implementations of the `FileReader` trait providing `read(offset, length)` and `size()` methods.
+    *   **Recommendation:** Your TIFF file parser MUST accept a `&dyn FileReader` parameter (following hexagonal architecture). Use the reader's `read()` method to access file data.
+
+### Implementation Tips & Notes
+
+*   **Tip:** The TIFF file structure you need to parse is:
+    ```
+    Bytes 0-1:   Byte order marker (0x4949="II" or 0x4D4D="MM")
+    Bytes 2-3:   Magic number 42 (0x002A in the detected byte order)
+    Bytes 4-7:   Offset to first IFD (4-byte offset from start of file)
+    At IFD offset: IFD0 data (parsed by existing parse_ifd())
+    After IFD entries: 4-byte "next IFD offset" (0 = no more IFDs)
+    ```
+
+*   **Tip:** For multi-page TIFF support, you MUST follow the IFD chain:
+    1. Parse the 8-byte TIFF header to get first IFD offset and byte order
+    2. Call `parse_ifd()` at that offset
+    3. After the IFD entries, at position `ifd_offset + 2 + (entry_count * 12)`, read the 4-byte "next IFD offset"
+    4. If next offset is non-zero, repeat from step 2
+    5. Collect all tags from all IFDs into a single `Vec<(u16, Vec<u8>)>`
+
+*   **Tip:** To read the "next IFD offset" after parsing an IFD:
+    - The existing `parse_ifd()` function returns tag data but doesn't return the entry count
+    - You'll need to read the entry count yourself from `ifd_offset` (2 bytes)
+    - Then calculate: `next_offset_position = ifd_offset + 2 + (entry_count * 12)`
+    - Read 4 bytes at this position using the detected byte order
+
+*   **Note:** According to acceptance criteria, you should IGNORE image pixel data:
+    - DO NOT parse or extract actual image bytes (stored in strips or tiles)
+    - Only extract metadata tags from IFDs
+    - Tags pointing to image data (StripOffsets, TileOffsets) can be extracted as metadata but don't follow those offsets
+
+*   **Note:** For sub-IFDs (EXIF IFD, GPS IFD), these are referenced by specific tags in IFD0:
+    - Tag 0x8769 (ExifIFDPointer) contains offset to EXIF sub-IFD
+    - Tag 0x8825 (GPSInfoIFDPointer) contains offset to GPS sub-IFD
+    - You SHOULD parse these sub-IFDs by checking for these tags and recursively calling `parse_ifd()` at those offsets
+
+*   **Warning:** Be careful with byte order consistency. The byte order marker is read once at file start, and ALL subsequent multi-byte values use that same byte order. Pass `ByteOrder` through all parsing functions.
+
+*   **Tip:** Suggested function structure for `file_parser.rs`:
+    ```rust
+    pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<Vec<(u16, Vec<u8>)>>
+    fn parse_tiff_header(reader: &dyn FileReader) -> Result<(ByteOrder, u32)>
+    fn read_entry_count(reader: &dyn FileReader, ifd_offset: u64, byte_order: ByteOrder) -> Result<u16>
+    fn read_next_ifd_offset(reader: &dyn FileReader, offset: u64, byte_order: ByteOrder) -> Result<u32>
+    fn parse_ifd_chain(reader: &dyn FileReader, first_ifd_offset: u64, byte_order: ByteOrder) -> Result<Vec<(u16, Vec<u8>)>>
+    ```
+
+*   **Tip:** For integration tests, create a sample TIFF file:
+    1. Use an existing TIFF from a public test corpus
+    2. Generate one using ImageMagick: `convert -size 100x100 xc:white sample.tif`
+    3. Create a minimal synthetic TIFF using the same approach as unit tests in `ifd_parser.rs`
+
+*   **Note:** Return type should be `Vec<(u16, Vec<u8>)>` where u16 is tag ID and Vec<u8> is raw tag value. The orchestration in `operations.rs` will convert these to TagValues and populate MetadataMap.
+
+### Testing Strategy
+
+*   **Unit Tests:** Add unit tests in `file_parser.rs` for:
+    - TIFF header parsing (both byte orders)
+    - Next IFD offset reading
+    - Single-IFD file parsing
+    - Multi-page TIFF parsing (2-3 IFDs)
+
+*   **Integration Test:** Create `tests/integration/tiff_tests.rs` that:
+    - Reads a real TIFF file from `tests/fixtures/tiff/sample.tif`
+    - Calls your parser via the public API
+    - Verifies expected tags are extracted
+    - Tests both single-page and multi-page TIFF files if possible
+    - Follow the pattern from existing integration tests (see `tests/integration/` directory)
+
+### File Structure Guidance
+
+**Create these new files:**
+1. `src/parsers/tiff/file_parser.rs` - Your main implementation
+2. `tests/integration/tiff_tests.rs` - Integration tests
+3. `tests/fixtures/tiff/sample.tif` - Sample TIFF file for testing
+
+**Update these existing files:**
+1. `src/parsers/tiff/mod.rs` - Add `pub mod file_parser;`
+2. `src/core/operations.rs` - Update `parse_tiff_metadata()` to use your new parser
+
+### Critical Integration Points
+
+*   **Hexagonal Architecture Compliance**: Your parser MUST use the `FileReader` trait, NOT direct file I/O. This allows the parser to work with both memory-mapped files and buffered readers.
+
+*   **Error Handling**: Use the existing `ExifToolError` type from `src/error/mod.rs`. The `parse_ifd()` function already returns `Result<Vec<(u16, Vec<u8>)>>`, so follow this pattern.
+
+*   **Nom Usage**: You may use `nom` parser combinators for byte order and header parsing, following the patterns in `ifd_parser.rs`. Alternatively, manual parsing with byte array slicing is acceptable for the simple TIFF header.
+
+*   **Integration with Operations**: The `parse_tiff_metadata()` function in `operations.rs` currently has a stub implementation. Update it to:
+    ```rust
+    fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
+        use crate::parsers::tiff::file_parser::parse_tiff_file;
+        let tags = parse_tiff_file(reader)?;
+        // Convert tags to MetadataMap (may need additional implementation)
+        // ...
+    }
+    ```
+
+---
+
+## 1. Current Task Details
+
+This is the full specification of the task you must complete.
+
+```json
+{
   "task_id": "I3.T5",
   "iteration_id": "I3",
   "iteration_goal": "Implement metadata write operations with atomic file handling, extend TIFF parser for standalone TIFF files (not just EXIF in JPEG), implement metadata serialization, and add tag modification capabilities to CLI.",

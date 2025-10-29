@@ -319,7 +319,11 @@ fn test_png_empty_metadata() {
     let reader = TestReader::new(png_data);
 
     let result = parse_png_metadata(&reader);
-    assert!(result.is_ok(), "Failed to parse minimal PNG: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse minimal PNG: {:?}",
+        result.err()
+    );
 
     let metadata = result.unwrap();
     assert_eq!(metadata.len(), 0, "Minimal PNG should have no metadata");

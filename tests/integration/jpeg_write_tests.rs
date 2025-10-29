@@ -98,9 +98,9 @@ fn create_test_jpeg_with_metadata() -> Vec<u8> {
 
 /// Helper: Finds EXIF APP1 segment in segment list
 fn find_exif_segment<'a>(segments: &'a [Segment]) -> Option<&'a Segment<'a>> {
-    segments.iter().find(|seg| {
-        seg.marker == 0xFFE1 && seg.data.starts_with(b"Exif\0\0")
-    })
+    segments
+        .iter()
+        .find(|seg| seg.marker == 0xFFE1 && seg.data.starts_with(b"Exif\0\0"))
 }
 
 /// Helper: Extracts TIFF data from EXIF APP1 segment
@@ -156,7 +156,11 @@ fn test_modify_exif_tag_in_jpeg() {
 
     // Verify modified JPEG is valid
     assert_eq!(&modified_jpeg[0..2], &[0xFF, 0xD8], "Should start with SOI");
-    assert_eq!(&modified_jpeg[modified_jpeg.len()-2..], &[0xFF, 0xD9], "Should end with EOI");
+    assert_eq!(
+        &modified_jpeg[modified_jpeg.len() - 2..],
+        &[0xFF, 0xD9],
+        "Should end with EOI"
+    );
 
     // Parse modified JPEG
     let modified_reader = TestReader::new(modified_jpeg);
@@ -275,15 +279,27 @@ fn test_handle_size_changes() {
 
     // Add large metadata (longer than original)
     let mut metadata = MetadataMap::new();
-    metadata.insert("EXIF:Make", TagValue::new_string("VeryLongCameraManufacturerName"));
-    metadata.insert("EXIF:Model", TagValue::new_string("VeryLongCameraModelNameHere"));
+    metadata.insert(
+        "EXIF:Make",
+        TagValue::new_string("VeryLongCameraManufacturerName"),
+    );
+    metadata.insert(
+        "EXIF:Model",
+        TagValue::new_string("VeryLongCameraModelNameHere"),
+    );
     metadata.insert("EXIF:Artist", TagValue::new_string("VeryLongArtistName"));
-    metadata.insert("EXIF:Copyright", TagValue::new_string("VeryLongCopyrightNotice"));
+    metadata.insert(
+        "EXIF:Copyright",
+        TagValue::new_string("VeryLongCopyrightNotice"),
+    );
 
     let larger_jpeg = write_exif_to_jpeg(&reader, &metadata).expect("Write should succeed");
 
     // Should be larger than original
-    assert!(larger_jpeg.len() > original_size, "JPEG should be larger with more metadata");
+    assert!(
+        larger_jpeg.len() > original_size,
+        "JPEG should be larger with more metadata"
+    );
 
     // Should still be valid
     let larger_reader = TestReader::new(larger_jpeg);
@@ -297,7 +313,10 @@ fn test_handle_size_changes() {
     let smaller_jpeg = write_exif_to_jpeg(&reader, &small_metadata).expect("Write should succeed");
 
     // Should be smaller than original
-    assert!(smaller_jpeg.len() < original_size, "JPEG should be smaller with less metadata");
+    assert!(
+        smaller_jpeg.len() < original_size,
+        "JPEG should be smaller with less metadata"
+    );
 
     // Should still be valid
     let smaller_reader = TestReader::new(smaller_jpeg);
@@ -394,18 +413,27 @@ fn test_preserve_xmp_alongside_exif() {
     assert_eq!(exif_segments.len(), 2, "Should have 2 APP1 segments");
 
     // One should be EXIF
-    let has_exif = exif_segments.iter().any(|s| s.data.starts_with(b"Exif\0\0"));
+    let has_exif = exif_segments
+        .iter()
+        .any(|s| s.data.starts_with(b"Exif\0\0"));
     assert!(has_exif, "Should have EXIF segment");
 
     // One should be XMP
-    let has_xmp = exif_segments.iter().any(|s| s.data.starts_with(b"http://ns.adobe.com/xap/1.0/\0"));
+    let has_xmp = exif_segments
+        .iter()
+        .any(|s| s.data.starts_with(b"http://ns.adobe.com/xap/1.0/\0"));
     assert!(has_xmp, "Should have XMP segment");
 
     // Verify XMP content preserved
-    let xmp_seg = exif_segments.iter().find(|s| s.data.starts_with(b"http://ns.adobe.com/xap/1.0/\0"));
+    let xmp_seg = exif_segments
+        .iter()
+        .find(|s| s.data.starts_with(b"http://ns.adobe.com/xap/1.0/\0"));
     assert!(xmp_seg.is_some());
     let xmp_content = xmp_seg.unwrap().data;
     // XMP identifier is 29 bytes, then comes the XMP content
     let xmp_payload = &xmp_content[29..];
-    assert_eq!(xmp_payload, b"<xmp>test</xmp>", "XMP content should be preserved");
+    assert_eq!(
+        xmp_payload, b"<xmp>test</xmp>",
+        "XMP content should be preserved"
+    );
 }

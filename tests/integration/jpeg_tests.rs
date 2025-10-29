@@ -568,7 +568,11 @@ fn test_jpeg_xmp_extraction_end_to_end() {
         .iter()
         .filter(|(name, _)| name == "XMP:Creator")
         .collect();
-    assert_eq!(creator_tags.len(), 1, "Should have exactly one XMP:Creator tag");
+    assert_eq!(
+        creator_tags.len(),
+        1,
+        "Should have exactly one XMP:Creator tag"
+    );
     assert_eq!(
         creator_tags[0].1, "John Doe",
         "XMP:Creator should be 'John Doe'"
@@ -580,7 +584,11 @@ fn test_jpeg_xmp_extraction_end_to_end() {
         .iter()
         .filter(|(name, _)| name == "XMP:Rating")
         .collect();
-    assert_eq!(rating_tags.len(), 1, "Should have exactly one XMP:Rating tag");
+    assert_eq!(
+        rating_tags.len(),
+        1,
+        "Should have exactly one XMP:Rating tag"
+    );
     assert_eq!(rating_tags[0].1, "5", "XMP:Rating should be '5'");
     println!("  ✓ XMP:Rating: {}", rating_tags[0].1);
 
@@ -601,7 +609,11 @@ fn test_jpeg_xmp_extraction_end_to_end() {
         .iter()
         .filter(|(name, _)| name == "XMP:rights")
         .collect();
-    assert_eq!(rights_tags.len(), 1, "Should have exactly one XMP:rights tag");
+    assert_eq!(
+        rights_tags.len(),
+        1,
+        "Should have exactly one XMP:rights tag"
+    );
     assert_eq!(
         rights_tags[0].1, "Copyright 2024",
         "XMP:rights should be 'Copyright 2024'"
@@ -642,8 +654,8 @@ fn test_jpeg_xmp_extraction_end_to_end() {
     let tiff_reader = SliceReader::new(tiff_data);
 
     // Parse EXIF IFD
-    let exif_tags = parse_ifd(&tiff_reader, ifd_offset as u64, byte_order)
-        .expect("Failed to parse EXIF IFD");
+    let exif_tags =
+        parse_ifd(&tiff_reader, ifd_offset as u64, byte_order).expect("Failed to parse EXIF IFD");
 
     println!("  ✓ Successfully extracted {} EXIF tags", exif_tags.len());
     println!("  ✓ Successfully extracted {} XMP tags", xmp_tags.len());
