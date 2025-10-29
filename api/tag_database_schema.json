@@ -1,0 +1,116 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://exiftool-rs.dev/schemas/tag-descriptor.json",
+  "title": "TagDescriptor",
+  "description": "Schema defining the structure of metadata tag descriptors for ExifTool-RS. Each TagDescriptor represents a single metadata tag definition that will be code-generated into the Rust tag registry.",
+  "type": "object",
+  "required": [
+    "tag_id",
+    "tag_name",
+    "format_family",
+    "writable",
+    "value_type",
+    "description",
+    "example_values"
+  ],
+  "properties": {
+    "tag_id": {
+      "description": "Unique identifier for the tag. Can be a numeric ID (e.g., 0x010F for EXIF tags) or a string ID (e.g., 'XMP-dc:Creator' for XMP tags).",
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        {
+          "type": "string",
+          "minLength": 1
+        }
+      ]
+    },
+    "tag_name": {
+      "type": "string",
+      "description": "Full canonical name of the tag (e.g., 'EXIF:Make', 'XMP-dc:Creator'). This serves as the primary key for tag lookups.",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_:-]+$"
+    },
+    "format_family": {
+      "type": "string",
+      "description": "Metadata format family to which this tag belongs.",
+      "enum": [
+        "EXIF",
+        "XMP",
+        "IPTC",
+        "GPS",
+        "ICC_Profile",
+        "Photoshop",
+        "MakerNotes",
+        "JFIF",
+        "PNG",
+        "PDF",
+        "QuickTime"
+      ]
+    },
+    "writable": {
+      "type": "boolean",
+      "description": "Indicates whether this tag can be written back to the file metadata."
+    },
+    "value_type": {
+      "type": "string",
+      "description": "Data type of the tag's value, corresponding to TagValue enum variants in Rust.",
+      "enum": [
+        "String",
+        "Integer",
+        "Float",
+        "Rational",
+        "Binary",
+        "DateTime",
+        "Struct"
+      ]
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of the tag's purpose and meaning.",
+      "minLength": 1
+    },
+    "example_values": {
+      "type": "array",
+      "description": "Array of example values demonstrating typical content for this tag.",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "tag_id": 271,
+      "tag_name": "EXIF:Make",
+      "format_family": "EXIF",
+      "writable": true,
+      "value_type": "String",
+      "description": "Manufacturer of the recording equipment",
+      "example_values": ["Canon", "Nikon", "Sony"]
+    },
+    {
+      "tag_id": "XMP-dc:Creator",
+      "tag_name": "XMP-dc:Creator",
+      "format_family": "XMP",
+      "writable": true,
+      "value_type": "String",
+      "description": "Creator or author of the document",
+      "example_values": ["John Doe", "Jane Smith"]
+    },
+    {
+      "tag_id": 1,
+      "tag_name": "GPS:GPSLatitudeRef",
+      "format_family": "GPS",
+      "writable": true,
+      "value_type": "String",
+      "description": "Indicates whether the latitude is north or south latitude",
+      "example_values": ["N", "S"]
+    }
+  ]
+}
