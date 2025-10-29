@@ -142,6 +142,13 @@ impl MetadataMap {
     pub fn get_float(&self, key: &str) -> Option<f64> {
         self.get(key).and_then(|v| v.as_float())
     }
+
+    /// Typed getter for datetime values
+    ///
+    /// Returns `None` if the tag doesn't exist or isn't a DateTime variant.
+    pub fn get_datetime(&self, key: &str) -> Option<&chrono::DateTime<chrono::Utc>> {
+        self.get(key).and_then(|v| v.as_datetime())
+    }
 }
 
 impl Default for MetadataMap {
