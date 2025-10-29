@@ -4,6 +4,7 @@
 
 use clap::Parser;
 use exiftool_rs::cli::args::CliArgs;
+use exiftool_rs::cli::batch_processor;
 use exiftool_rs::cli::output_formatter::{HumanReadableFormatter, JsonFormatter, OutputFormatter};
 use exiftool_rs::core::operations::{modify_tag, read_metadata};
 use exiftool_rs::core::tag_value::TagValue;
@@ -14,9 +15,6 @@ fn main() {
     let args = CliArgs::parse();
 
     // Display warning for unimplemented features
-    if args.recursive {
-        eprintln!("Warning: Recursive directory processing (-r) is not yet implemented");
-    }
     if args.short_format {
         eprintln!("Warning: Short format output (-s) is not yet fully implemented");
     }
@@ -25,21 +23,27 @@ fn main() {
     let file = match args.file() {
         Some(path) => path,
         None => {
-            eprintln!("Error: No file specified");
-            eprintln!("Usage: exiftool-rs [OPTIONS] [-TAG=VALUE ...] FILE");
+            eprintln!("Error: No file or directory specified");
+            eprintln!("Usage: exiftool-rs [OPTIONS] [-TAG=VALUE ...] FILE|DIRECTORY");
             process::exit(1);
         }
     };
 
-    // Check if this is a write operation (tag modifications present)
-    let modifications = args.tag_modifications();
-
-    if !modifications.is_empty() {
-        // Write mode: modify tags
-        handle_write_operation(&file, &args);
+    // Check if this is batch processing (directory or recursive flag)
+    if file.is_dir() || args.recursive {
+        // Batch processing mode
+        handle_batch_processing(&file, &args);
     } else {
-        // Read mode: display metadata
-        handle_read_operation(&file, args.json);
+        // Single file processing mode
+        let modifications = args.tag_modifications();
+
+        if !modifications.is_empty() {
+            // Write mode: modify tags
+            handle_write_operation(&file, &args);
+        } else {
+            // Read mode: display metadata
+            handle_read_operation(&file, args.json);
+        }
     }
 }
 
@@ -174,6 +178,25 @@ fn handle_read_operation(file: &std::path::Path, json_output: bool) {
                 file.display(),
                 e
             );
+            process::exit(1);
+        }
+    }
+}
+
+/// Handles batch processing (multiple files or directories)
+fn handle_batch_processing(path: &std::path::Path, args: &CliArgs) {
+    match batch_processor::batch_process(path, args) {
+        Ok(stats) => {
+            // Print statistics
+            stats.print();
+
+            // Exit with error code if there were any errors
+            if stats.errors > 0 {
+                process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: Batch processing failed: {}", e);
             process::exit(1);
         }
     }
