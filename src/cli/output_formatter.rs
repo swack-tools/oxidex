@@ -212,7 +212,10 @@ mod tests {
         metadata.insert("EXIF:ISO", TagValue::new_integer(800));
         metadata.insert("EXIF:FNumber", TagValue::new_float(2.8));
         metadata.insert("EXIF:ExposureTime", TagValue::new_rational(1, 100));
-        metadata.insert("EXIF:ThumbnailData", TagValue::new_binary(vec![0xFF, 0xD8, 0xFF, 0xE0]));
+        metadata.insert(
+            "EXIF:ThumbnailData",
+            TagValue::new_binary(vec![0xFF, 0xD8, 0xFF, 0xE0]),
+        );
 
         let dt = Utc.with_ymd_and_hms(2023, 6, 15, 12, 30, 0).unwrap();
         metadata.insert("EXIF:DateTime", TagValue::new_datetime(dt));

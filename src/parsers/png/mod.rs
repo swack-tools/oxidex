@@ -40,7 +40,10 @@ pub mod chunk_parser;
 
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use chunk_parser::{parse_chunk, parse_exif_chunk, parse_itxt_chunk, parse_png_signature, parse_text_chunk, PNG_SIGNATURE};
+use chunk_parser::{
+    parse_chunk, parse_exif_chunk, parse_itxt_chunk, parse_png_signature, parse_text_chunk,
+    PNG_SIGNATURE,
+};
 
 /// Parses PNG file and extracts all metadata.
 ///
@@ -170,7 +173,9 @@ pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 
         // Safety check to prevent infinite loops
         if next_offset <= offset {
-            return Err(ExifToolError::parse_error("Invalid chunk offset (no progress)"));
+            return Err(ExifToolError::parse_error(
+                "Invalid chunk offset (no progress)",
+            ));
         }
 
         // Move to next chunk
@@ -316,10 +321,7 @@ mod tests {
 
         let metadata = result.unwrap();
         assert_eq!(metadata.len(), 1);
-        assert_eq!(
-            metadata.get_string("PNG:iTXt:Title"),
-            Some("My PNG Image")
-        );
+        assert_eq!(metadata.get_string("PNG:iTXt:Title"), Some("My PNG Image"));
     }
 
     #[test]

@@ -209,9 +209,7 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 
     // Read IFD offset from bytes 4-7
     let ifd_offset = match byte_order {
-        ByteOrder::LittleEndian => {
-            u32::from_le_bytes([header[4], header[5], header[6], header[7]])
-        }
+        ByteOrder::LittleEndian => u32::from_le_bytes([header[4], header[5], header[6], header[7]]),
         ByteOrder::BigEndian => u32::from_be_bytes([header[4], header[5], header[6], header[7]]),
     } as u64;
 
@@ -294,7 +292,10 @@ fn raw_bytes_to_tag_value(bytes: &[u8]) -> TagValue {
     }
 
     // Try to interpret as ASCII string (null-terminated)
-    if bytes.iter().all(|&b| (32..=126).contains(&b) || b == 0 || b == b'\n' || b == b'\r' || b == b'\t') {
+    if bytes
+        .iter()
+        .all(|&b| (32..=126).contains(&b) || b == 0 || b == b'\n' || b == b'\r' || b == b'\t')
+    {
         // Convert to string, removing null terminator
         let s = String::from_utf8_lossy(bytes);
         let s = s.trim_end_matches('\0');

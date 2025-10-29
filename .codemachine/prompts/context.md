@@ -10,27 +10,24 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I3.T4",
+  "task_id": "I3.T5",
   "iteration_id": "I3",
   "iteration_goal": "Implement metadata write operations with atomic file handling, extend TIFF parser for standalone TIFF files (not just EXIF in JPEG), implement metadata serialization, and add tag modification capabilities to CLI.",
-  "description": "Implement write operation in src/core/operations.rs: write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> that: (1) Validates all tag values using validation engine (I2.T10), (2) Reads original file, (3) Detects format, (4) Serializes metadata using appropriate writer (JPEG writer for JPEG, TIFF writer for TIFF), (5) Writes result using atomic_writer (I3.T1). Add modify_tag(path, tag_name, new_value) convenience function. Add integration tests for JPEG and error handling (invalid tag value).",
+  "description": "Extend CLI args in src/cli/args.rs to support tag modification: -TAG_NAME=VALUE syntax (e.g., -EXIF:Artist=John Doe). Parse modification arguments, call modify_tag() from I3.T4. Support multiple modifications in one command (e.g., exiftool-rs -EXIF:Artist=John -EXIF:Copyright=2025 photo.jpg). Update main.rs to handle write operations. Add validation that file is writable. Print success/failure message.",
   "agent_type_hint": "BackendAgent",
-  "inputs": "I2.T10 validation, I3.T1 atomic writer, I3.T3 JPEG writer",
+  "inputs": "I2.T8 CLI args, I3.T4 write operations",
   "target_files": [
-    "src/core/operations.rs",
-    "tests/integration/write_operations_tests.rs"
+    "src/cli/args.rs",
+    "src/main.rs"
   ],
   "input_files": [
-    "src/core/validation.rs",
-    "src/writers/atomic_writer.rs",
-    "src/writers/jpeg_writer.rs"
+    "src/cli/args.rs",
+    "src/core/operations.rs"
   ],
-  "deliverables": "write_metadata() and modify_tag() functions, validation integration, integration tests",
-  "acceptance_criteria": "write_metadata() validates tags before writing, returns InvalidTagValue error for validation failures, successfully writes modified JPEG with EXIF changes, uses atomic file operations (no corruption on crash), modify_tag() is a convenience wrapper around write_metadata(), integration tests verify successful write and validation errors, cargo test write_operations passes",
+  "deliverables": "CLI support for -TAG=VALUE syntax, multiple modifications in one command",
+  "acceptance_criteria": "exiftool-rs -EXIF:Artist=John Doe photo.jpg modifies tag, multiple modifications work: -Tag1=Val1 -Tag2=Val2, prints success message: 1 image file updated, prints error on validation failure: Invalid value for TAG, verifies file exists and is writable before modification, manual test: modify tag, re-run with read, verify change",
   "dependencies": [
-    "I2.T10",
-    "I3.T1",
-    "I3.T3"
+    "I3.T4"
   ],
   "parallelizable": false,
   "done": false
@@ -43,66 +40,31 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: alternative-flow-metadata-write (from 04_Behavior_and_Communication.md)
+### Context: CLI Interface Specification (from 04_Behavior_and_Communication.md)
+
+```markdown
+**Secondary APIs**:
+
+1. **CLI Interface**: POSIX-style arguments mimicking ExifTool
+   ```bash
+   exiftool-rs -EXIF:DateTime photo.jpg
+   exiftool-rs -json -r /photos/  # Recursive JSON output
+   exiftool-rs -TagsFromFile src.jpg -all:all dest.jpg  # Copy metadata
+   ```
+
+**Justification**:
+
+- **Rust-First**: Leverages Rust's type system for compile-time safety (no invalid tag names at compile time via const tag identifiers)
+- **No Network API**: ExifTool-RS is a library/tool, not a service. REST/GraphQL APIs would be implemented by consuming applications
+- **FFI for Interop**: Enables Python (`pyo3`), Node.js (`neon`), Go (`cgo`) bindings without compromising Rust API ergonomics
+```
+
+### Context: Metadata Write Operation Flow (from 04_Behavior_and_Communication.md)
 
 ```markdown
 #### Alternative Flow: Metadata Write Operation
 
 **Description**: Sequence for **modifying metadata and writing back to file**.
-
-**Diagram (PlantUML)**:
-
-```plantuml
-@startuml
-
-actor User
-participant "CLI" as CLI
-participant "Core Library" as Core
-participant "JPEG Parser" as JPEG
-participant "Metadata Writer" as Writer
-participant "I/O Layer" as IO
-participant "File System" as FS
-
-User -> CLI : exiftool-rs -EXIF:Artist="John Doe" photo.jpg
-CLI -> Core : Metadata::from_path("photo.jpg")
-Core -> JPEG : parse(file)
-JPEG --> Core : existing_metadata
-
-Core -> Core : modify_tag(existing_metadata, "EXIF:Artist", "John Doe")
-Core -> Core : validate_tag_value("EXIF:Artist", "John Doe")
-
-alt Validation Passes
-  Core -> Writer : write_metadata(file, modified_metadata, WriteStrategy::InPlace)
-
-  Writer -> Writer : check_format_write_capability(JPEG)
-
-  alt JPEG supports in-place EXIF write
-    Writer -> IO : read_file_to_buffer("photo.jpg")
-    IO -> FS : read()
-    FS --> IO : file_bytes
-    Writer -> Writer : locate_exif_segment(file_bytes)
-    Writer -> Writer : serialize_exif_ifd(modified_metadata)
-    Writer -> Writer : replace_segment_in_buffer(old_exif, new_exif)
-
-    Writer -> IO : write_buffer_to_file("photo.jpg", modified_bytes)
-    IO -> FS : write() with atomic rename
-    FS --> IO : success
-    Writer --> Core : WriteResult::Success
-  else EXIF segment doesn't fit (new data larger)
-    Writer -> Writer : rewrite_entire_file_with_new_exif()
-    Writer --> Core : WriteResult::Success
-  end
-
-  Core --> CLI : Result::Ok(WriteResult)
-  CLI --> User : 1 image files updated
-
-else Validation Fails
-  Core --> CLI : Result::Err(InvalidTagValue)
-  CLI --> User : Error: Invalid value for EXIF:Artist
-end
-
-@enduml
-```
 
 **Key Design Decisions**:
 
@@ -112,77 +74,28 @@ end
 4. **Validation Before Write**: Validate tag values against type constraints before any file modification
 ```
 
-### Context: task-i3-t4 (from 02_Iteration_I3.md)
+### Context: Task I3.T5 Specification (from 02_Iteration_I3.md)
 
 ```markdown
-*   **Task 3.4: Implement Metadata Write Operation**
-    *   **Task ID:** `I3.T4`
-    *   **Description:** Implement write operation in `src/core/operations.rs`: `write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()>` that: (1) Validates all tag values using validation engine (I2.T10), (2) Reads original file, (3) Detects format, (4) Serializes metadata using appropriate writer (JPEG writer for JPEG, TIFF writer for TIFF), (5) Writes result using atomic_writer (I3.T1). Add `modify_tag(path, tag_name, new_value)` convenience function. Add integration tests for JPEG and error handling (invalid tag value).
-    *   **Agent Type Hint:** `BackendAgent`
-    *   **Inputs:** I2.T10 validation, I3.T1 atomic writer, I3.T3 JPEG writer
-    *   **Input Files:** [`src/core/validation.rs`, `src/writers/atomic_writer.rs`, `src/writers/jpeg_writer.rs`]
-    *   **Target Files:**
-        *   `src/core/operations.rs` (add write functions)
-        *   `tests/integration/write_operations_tests.rs`
-    *   **Deliverables:**
-        *   write_metadata() and modify_tag() functions
-        *   Validation integration
-        *   Integration tests
+*   **Task 3.5: Extend CLI to Support Tag Modification**
+    *   **Task ID:** `I3.T5`
+    *   **Description:** Extend CLI args in `src/cli/args.rs` to support tag modification: `-TAG_NAME=VALUE` syntax (e.g., `-EXIF:Artist="John Doe"`). Parse modification arguments, call modify_tag() from I3.T4. Support multiple modifications in one command (e.g., `exiftool-rs -EXIF:Artist="John" -EXIF:Copyright="2025" photo.jpg`). Update main.rs to handle write operations. Add validation that file is writable. Print success/failure message.
     *   **Acceptance Criteria:**
-        *   write_metadata() validates tags before writing
-        *   Returns InvalidTagValue error for validation failures
-        *   Successfully writes modified JPEG with EXIF changes
-        *   Uses atomic file operations (no corruption on crash)
-        *   modify_tag() is a convenience wrapper around write_metadata()
-        *   Integration tests verify successful write and validation errors
-        *   `cargo test write_operations` passes
-    *   **Dependencies:** `I2.T10`, `I3.T1`, `I3.T3`
-    *   **Parallelizable:** No (depends on multiple I3 tasks)
+        *   `exiftool-rs -EXIF:Artist="John Doe" photo.jpg` modifies tag
+        *   Multiple modifications work: `-Tag1=Val1 -Tag2=Val2`
+        *   Prints success message: "1 image file updated"
+        *   Prints error on validation failure: "Invalid value for TAG"
+        *   Verifies file exists and is writable before modification
+        *   Manual test: modify tag, re-run with read, verify change
 ```
 
-### Context: security-considerations (from 05_Operational_Architecture.md)
+### Context: CLI Framework and Technology Stack (from 01_Plan_Overview_and_Setup.md)
 
 ```markdown
-#### Security Considerations
-
-**Threat Model**:
-
-ExifTool-RS processes potentially malicious files from untrusted sources (e.g., user uploads, scraped images). Primary threats:
-
-1. **Memory Corruption**: Buffer overflows, use-after-free in parsers
-2. **Resource Exhaustion**: Zip bombs, billion laughs (XML), decompression bombs
-3. **Path Traversal**: Malicious filenames in archive processing
-4. **Code Injection**: Via scripting features (if added)
-
-**Mitigations**:
-
-| **Threat** | **Mitigation** | **Implementation** |
-|------------|---------------|-------------------|
-| Buffer overflows | Rust ownership system | Compile-time prevention via borrow checker |
-| Integer overflows | Checked arithmetic | `#![deny(overflowing_literals)]`, `checked_add()` in parsers |
-| Resource exhaustion | Size limits | Max allocation: 1GB per file, max parse depth: 64 levels (nested IFDs) |
-| Zip bombs | Decompression ratio check | Reject if uncompressed > 100x compressed size |
-| XXE attacks (XML) | Disable external entities | `quick-xml` configured to reject DOCTYPE, external entities |
-| Path traversal | Path sanitization | `canonicalize()` + jail to working directory for batch operations |
-| Dependency vulnerabilities | Automated scanning | `cargo-audit` in CI, Dependabot alerts, minimal dependency tree |
-| Malicious input | Fuzzing | Continuous fuzzing with `cargo-fuzz`, OSS-Fuzz integration target |
-
-**Input Validation**:
-
-All parsers follow defensive pattern:
-```rust
-fn read_u32_at(data: &[u8], offset: usize) -> Result<u32> {
-    let bytes = data.get(offset..offset+4)
-        .ok_or(ParseError::UnexpectedEof)?;  // Bounds check
-    Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
-}
-```
-
-**Secure Defaults**:
-
-- No script execution (unlike Perl ExifTool's `-execute` feature)
-- No network access by default (geolocation requires opt-in `--geolocation` flag)
-- Read-only mode available via `--readonly` flag (prevents accidental writes)
+*   **Core Libraries:**
+    *   CLI Framework: `clap` v4 (derive API)
+    *   Binary Parsing: `nom` v7 (complex formats) + `binrw` (simple struct-based formats)
+    *   JSON Output: `serde_json`
 ```
 
 ---
@@ -193,75 +106,90 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
+*   **File:** `src/cli/args.rs`
+    *   **Summary:** This file defines the current CLI argument structure using `clap` v4 derive API. It currently supports: positional `FILE` argument, `-json` flag, `-s` (short format, not implemented), `-a` (all tags, no effect), and `-r` (recursive, not implemented).
+    *   **Current Structure:** Uses `#[derive(Parser, Debug)]` with simple flags. All arguments are boolean flags or a single PathBuf.
+    *   **Recommendation:** You MUST extend this struct to capture tag modification arguments. Clap's derive API does NOT natively support the `-TAG=VALUE` syntax directly. You have two implementation options:
+        1. **Option A (Recommended):** Use `#[arg(allow_hyphen_values = true, number_of_values = 0..)]` with `Vec<String>` to capture all remaining arguments, then parse `-TAG=VALUE` manually in main.rs
+        2. **Option B:** Use clap's `value_parser` with a custom parser function, but this is more complex
+    *   **Important Note:** The existing code shows warnings for unimplemented features (recursive, short_format). You should follow this pattern for your success/error messages.
+
+*   **File:** `src/main.rs`
+    *   **Summary:** This is the current CLI entry point. It handles: parsing args with `clap::Parser`, reading metadata via `read_metadata()`, formatting output with `HumanReadableFormatter` or `JsonFormatter`, and error handling with `process::exit(1)`.
+    *   **Current Workflow:** Parse args → Read metadata → Format output → Print. It only supports READ operations currently.
+    *   **Recommendation:** You MUST extend the workflow to:
+        1. Detect if tag modifications are requested (check if any `-TAG=VALUE` args present)
+        2. If modifications present: Parse tag assignments, call `modify_tag()` for each, handle errors, print success message
+        3. If no modifications: Use existing read-only workflow
+    *   **File Writability Check:** Use `std::fs::metadata(path)?.permissions().readonly()` to check if file is writable before attempting modification.
+    *   **Error Handling Pattern:** The existing code uses `match` with `Err(e)` and `eprintln!()` for errors. You SHOULD follow this pattern for consistency.
+
 *   **File:** `src/core/operations.rs`
-    *   **Summary:** This file contains the core `read_metadata()` orchestration function and parsing logic for JPEG and TIFF formats. It demonstrates the pattern of: (1) opening with MMapReader, (2) format detection, (3) routing to appropriate parser. Currently has only READ operations - you will ADD write operations here.
-    *   **Recommendation:** You MUST follow the same orchestration pattern for `write_metadata()`. The function already imports `MMapReader`, `detect_format`, and parsers. You MUST add imports for validation, atomic writer, and JPEG writer. Look at the existing `parse_jpeg_metadata()` pattern as a reference for handling different formats.
-    *   **Critical Detail:** The file uses helper functions `tag_id_to_name()` and `raw_bytes_to_tag_value()`. Note the current implementation of `read_metadata()` does NOT use the tag registry for validation - it just extracts raw data. Your write operation MUST integrate validation from `src/core/validation.rs`.
+    *   **Summary:** This file contains the core metadata operations including `read_metadata()`, `write_metadata()`, and `modify_tag()`. The `modify_tag()` function (lines 491-502) is your primary integration point.
+    *   **Function Signature:** `pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()>`
+    *   **Recommendation:** You MUST import and call this function from main.rs. The function already handles: reading existing metadata, modifying the single tag, and writing back atomically.
+    *   **Key Design:** `modify_tag()` is a convenience wrapper that preserves all other tags unchanged. It's the perfect API for CLI tag modification.
+    *   **Error Types:** Returns `Result<(), ExifToolError>` which includes: `IoError`, `ParseError`, `InvalidTagValue`, `UnsupportedFormat`. You need to handle these in main.rs.
+
+*   **File:** `src/core/tag_value.rs`
+    *   **Summary:** Defines the `TagValue` enum with variants: String, Integer, Float, Rational, Binary, DateTime, Struct. Includes constructor methods like `TagValue::new_string()`, `TagValue::new_integer()`.
+    *   **Recommendation:** You MUST parse the VALUE part of `-TAG=VALUE` and convert it to the appropriate `TagValue` variant. For this iteration, **only String values are required** (per acceptance criteria example `-EXIF:Artist="John Doe"`). Future iterations can add type detection.
+    *   **String Parsing:** Use `TagValue::new_string()` constructor. Handle quoted strings correctly (strip surrounding quotes if present).
 
 *   **File:** `src/core/validation.rs`
-    *   **Summary:** This file provides the `validate_tag_value(descriptor: &TagDescriptor, value: &TagValue) -> Result<()>` function that performs comprehensive type checking.
-    *   **Recommendation:** You MUST call this validation function for EVERY tag in the MetadataMap before writing. The function is already fully implemented with 20+ test cases. Import it and use it in a loop over all metadata tags.
-    *   **Critical Detail:** Validation requires a `TagDescriptor` object. You will need to look up each tag in the tag registry (see `src/tag_db/tag_registry.rs`) to get its descriptor. The registry uses a static `TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>>` with a `get_tag_descriptor(name: &str)` function.
-
-*   **File:** `src/writers/atomic_writer.rs`
-    *   **Summary:** Provides `write_atomic(path: &Path, data: &[u8]) -> Result<()>` which implements the temp-file-and-rename pattern with fsync guarantees.
-    *   **Recommendation:** You MUST use this function as the FINAL step of your write operation. After you serialize the metadata into bytes, call `write_atomic(path, &bytes)` to safely write to disk. This ensures atomicity - no partial writes even on crash.
-    *   **Critical Detail:** This function is already fully implemented and tested with 10+ test cases. You do NOT need to modify it - just import and use it.
-
-*   **File:** `src/writers/jpeg_writer.rs`
-    *   **Summary:** Provides `write_exif_to_jpeg(reader: &dyn FileReader, metadata: &MetadataMap) -> Result<Vec<u8>>` which returns the complete modified JPEG as bytes.
-    *   **Recommendation:** You MUST use this function for JPEG files. It handles all the complexity of parsing segments, serializing EXIF, and reconstructing the JPEG structure. Call it with a FileReader and MetadataMap, then pass the returned bytes to `atomic_writer`.
-    *   **Critical Detail:** This function only processes tags with "EXIF:" prefix. It's already fully implemented with 15+ test cases. You do NOT need to modify it - just call it.
-
-*   **File:** `src/tag_db/tag_registry.rs`
-    *   **Summary:** Contains a static registry with 100 TagDescriptor entries using lazy initialization. The main entry point is `get_tag_descriptor(name: &str) -> Option<&TagDescriptor>`.
-    *   **Recommendation:** You SHOULD import and use `get_tag_descriptor()` to look up tag descriptors for validation. If a tag is not in the registry, you SHOULD skip validation for that tag (or log a warning) and proceed with the write.
-    *   **Implementation Note:** The current registry only has 100 tags. User-defined or rare tags may not be present. Your validation loop should handle `None` results gracefully.
-
-*   **File:** `src/core/metadata_map.rs`
-    *   **Summary:** Core data structure storing metadata as `HashMap<String, TagValue>`. Has methods like `get()`, `get_mut()`, `insert()`, `iter()`.
-    *   **Recommendation:** You MUST iterate over all tags in the MetadataMap to validate them. Use `metadata.iter()` which returns an iterator of `(&String, &TagValue)` pairs. Each tag name and value should be validated before proceeding with write.
+    *   **Summary:** Contains `validate_tag_value()` function that checks TagValue against TagDescriptor type constraints. This is called automatically by `write_metadata()` (see operations.rs:402-409).
+    *   **Recommendation:** You do NOT need to call this directly. The validation happens inside `write_metadata()` which is called by `modify_tag()`. Your CLI code will receive validation errors via the `Result` type.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** The validation step MUST happen BEFORE any file I/O operations. If validation fails for ANY tag, return the error immediately and do NOT proceed with reading or writing the file. This prevents corrupting files with invalid data.
+*   **Tip:** The Perl ExifTool uses `-TAG=VALUE` syntax (with single hyphen). For Rust clap, you need to carefully handle this because clap normally expects `--tag=value` (double hyphen) or `-t value` (short flag + value). The `allow_hyphen_values = true` option is critical.
 
-*   **Tip:** For `modify_tag()`, you MUST first call `read_metadata()` to get the existing metadata, then modify the single tag, then call `write_metadata()` with the modified map. This ensures all other tags are preserved. The architecture diagram shows this "Read-Modify-Write" pattern explicitly.
+*   **Tip:** To parse `-TAG=VALUE` from command line args:
+    1. Capture remaining args as `Vec<String>`
+    2. Iterate through each arg
+    3. Check if it starts with `-` and contains `=`
+    4. Split on first `=` to get tag_name and value
+    5. Strip leading `-` from tag_name
+    6. Strip surrounding quotes from value if present
 
-*   **Note:** The current code in `operations.rs` only supports JPEG and TIFF formats. Your `write_metadata()` function MUST check the detected format and route to the appropriate writer. For now, only JPEG write is implemented (I3.T3 completed), so you SHOULD return `UnsupportedFormat` error for TIFF or other formats (TIFF writer comes in I3.T7).
+*   **Note:** Multiple modifications example: `exiftool-rs -EXIF:Artist=John -EXIF:Copyright=2025 photo.jpg`. The FILE argument must come LAST. This is standard Unix convention. Make sure your parsing preserves this.
 
-*   **Note:** Error handling is critical. The architecture specifies that ALL errors should propagate via `Result<T, ExifToolError>`. The `?` operator should be used throughout. The validation function already returns `ExifToolError::InvalidTagValue`, and the atomic writer converts `io::Error` to `ExifToolError` automatically.
+*   **Note:** For the success message, Perl ExifTool outputs "1 image files updated" (note: plural "files" even for 1 file). You should match this for backward compatibility.
 
-*   **Warning:** The task description says to add integration tests in `tests/integration/write_operations_tests.rs`, which is a NEW file. You MUST create this file. The tests should use the same pattern as `tests/integration/jpeg_tests.rs` (which already exists from I1.T14). Test both successful write scenarios AND validation failure scenarios.
+*   **Warning:** The task requires checking if file is writable BEFORE attempting modification. Use `std::fs::metadata()` to check permissions. If file is read-only, print a clear error message and exit before calling `modify_tag()`. This prevents cryptic errors from atomic writer.
 
-*   **Critical:** When calling `write_exif_to_jpeg()`, you need to pass a `FileReader`. You MUST open the file with `MMapReader` or `BufferedReader` first. The JPEG writer reads the original file to preserve non-EXIF segments, then returns complete modified bytes.
+*   **Warning:** When printing error messages, the task specifies format "Invalid value for TAG". Make sure your error handling extracts the tag name from `ExifToolError::InvalidTagValue` and formats it correctly.
 
-*   **Best Practice:** The architecture emphasizes defensive programming and bounds checking. Even though all input files are validated, always use `.ok_or()` or `.ok_or_else()` when dealing with `Option` types to convert to proper error types rather than `.unwrap()`.
+*   **Tip:** For manual testing (acceptance criteria), you can use the existing test fixtures in `tests/fixtures/jpeg/` directory. The `sample_with_exif.jpg` file is a good candidate for testing tag modification.
 
-*   **Integration Test Structure:** Your test file MUST follow this pattern:
-    1. Create a sample JPEG file (or use one from `tests/fixtures/jpeg/`)
-    2. Call `modify_tag()` to change a tag value
-    3. Re-read the file using `read_metadata()`
-    4. Assert the tag value changed
-    5. Test validation failure by trying to write an invalid tag value (e.g., String where Integer is expected)
+### Suggested Implementation Steps
 
-### Workflow Summary
+1. **Extend src/cli/args.rs:**
+   - Add a new field to `CliArgs` struct: `pub tag_modifications: Vec<String>` with appropriate clap attributes
+   - Use `#[arg(allow_hyphen_values = true)]` to capture `-TAG=VALUE` args
+   - OR use clap's `trailing_var_arg` if needed
 
-Your implementation workflow should be:
+2. **Update src/main.rs:**
+   - After parsing args, check if `args.tag_modifications` is non-empty
+   - If empty: Use existing read-only workflow
+   - If non-empty:
+     a. Check file exists and is writable
+     b. Parse each modification string into (tag_name, value) pairs
+     c. For each pair, call `modify_tag(path, tag_name, TagValue::new_string(value))`
+     d. Collect any errors
+     e. If all succeed: print "1 image files updated"
+     f. If any fail: print error with tag name and exit with code 1
 
-1. **Add imports** to `src/core/operations.rs`: validation, atomic_writer, jpeg_writer, tag_registry
-2. **Implement `write_metadata()`**:
-   - Step 1: Validate ALL tags by looking them up in registry and calling `validate_tag_value()`
-   - Step 2: Open file with `MMapReader` (reuse existing code pattern)
-   - Step 3: Detect format using `detect_format()` (already in file)
-   - Step 4: Match on format and call appropriate writer (only JPEG for now)
-   - Step 5: Get serialized bytes from writer
-   - Step 6: Write atomically using `write_atomic(path, &bytes)`
-3. **Implement `modify_tag()`**:
-   - Call `read_metadata(path)` to get existing metadata
-   - Modify the single tag using `metadata.insert(tag_name, new_value)`
-   - Call `write_metadata(path, &metadata)`
-4. **Create integration test file** `tests/integration/write_operations_tests.rs`
-5. **Write tests**: successful write, validation failure, round-trip verification
+3. **Test your implementation:**
+   - Compile and run basic modification: `./target/debug/exiftool-rs -EXIF:Artist="Test Artist" tests/fixtures/jpeg/sample_with_exif.jpg`
+   - Verify with read: `./target/debug/exiftool-rs tests/fixtures/jpeg/sample_with_exif.jpg | grep Artist`
+   - Test multiple modifications: `-EXIF:Artist="John" -EXIF:Copyright="2025"`
+   - Test error cases: invalid file, read-only file, invalid tag value type
 
-All the heavy lifting (validation logic, atomic writing, JPEG serialization) is ALREADY DONE. You are orchestrating these components together.
+### Code Quality Reminders
+
+*   Ensure `cargo fmt` compliance (project uses rustfmt.toml)
+*   Run `cargo clippy` and fix all warnings
+*   Add appropriate `// TODO:` comments for features not yet implemented (e.g., type detection for non-string values)
+*   Follow existing error message formatting style (see main.rs:51-55 for reference)
+*   Use descriptive variable names following Rust conventions (snake_case)

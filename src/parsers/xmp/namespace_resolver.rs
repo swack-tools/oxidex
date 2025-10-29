@@ -93,8 +93,10 @@ impl NamespaceResolver {
     /// resolver.register_namespace("custom", "http://example.com/ns/custom/");
     /// ```
     pub fn register_namespace(&mut self, prefix: &str, uri: &str) {
-        self.prefix_to_uri.insert(prefix.to_string(), uri.to_string());
-        self.uri_to_prefix.insert(uri.to_string(), prefix.to_string());
+        self.prefix_to_uri
+            .insert(prefix.to_string(), uri.to_string());
+        self.uri_to_prefix
+            .insert(uri.to_string(), prefix.to_string());
     }
 
     /// Resolves a namespace prefix to its full URI.
@@ -208,9 +210,18 @@ mod tests {
         let resolver = NamespaceResolver::new();
 
         // Verify standard namespaces are registered
-        assert_eq!(resolver.resolve_prefix("xmp"), Some("http://ns.adobe.com/xap/1.0/"));
-        assert_eq!(resolver.resolve_prefix("dc"), Some("http://purl.org/dc/elements/1.1/"));
-        assert_eq!(resolver.resolve_prefix("exif"), Some("http://ns.adobe.com/exif/1.0/"));
+        assert_eq!(
+            resolver.resolve_prefix("xmp"),
+            Some("http://ns.adobe.com/xap/1.0/")
+        );
+        assert_eq!(
+            resolver.resolve_prefix("dc"),
+            Some("http://purl.org/dc/elements/1.1/")
+        );
+        assert_eq!(
+            resolver.resolve_prefix("exif"),
+            Some("http://ns.adobe.com/exif/1.0/")
+        );
     }
 
     #[test]
@@ -219,15 +230,24 @@ mod tests {
 
         resolver.register_namespace("custom", "http://example.com/custom/");
 
-        assert_eq!(resolver.resolve_prefix("custom"), Some("http://example.com/custom/"));
-        assert_eq!(resolver.resolve_uri("http://example.com/custom/"), Some("custom"));
+        assert_eq!(
+            resolver.resolve_prefix("custom"),
+            Some("http://example.com/custom/")
+        );
+        assert_eq!(
+            resolver.resolve_uri("http://example.com/custom/"),
+            Some("custom")
+        );
     }
 
     #[test]
     fn test_resolve_prefix() {
         let resolver = NamespaceResolver::new();
 
-        assert_eq!(resolver.resolve_prefix("xmp"), Some("http://ns.adobe.com/xap/1.0/"));
+        assert_eq!(
+            resolver.resolve_prefix("xmp"),
+            Some("http://ns.adobe.com/xap/1.0/")
+        );
         assert_eq!(resolver.resolve_prefix("unknown"), None);
     }
 
@@ -235,13 +255,19 @@ mod tests {
     fn test_resolve_uri() {
         let resolver = NamespaceResolver::new();
 
-        assert_eq!(resolver.resolve_uri("http://ns.adobe.com/xap/1.0/"), Some("xmp"));
+        assert_eq!(
+            resolver.resolve_uri("http://ns.adobe.com/xap/1.0/"),
+            Some("xmp")
+        );
         assert_eq!(resolver.resolve_uri("http://unknown.com/"), None);
     }
 
     #[test]
     fn test_extract_prefix() {
-        assert_eq!(NamespaceResolver::extract_prefix("xmp:Creator"), Some("xmp"));
+        assert_eq!(
+            NamespaceResolver::extract_prefix("xmp:Creator"),
+            Some("xmp")
+        );
         assert_eq!(NamespaceResolver::extract_prefix("dc:title"), Some("dc"));
         assert_eq!(NamespaceResolver::extract_prefix("Creator"), None);
         assert_eq!(NamespaceResolver::extract_prefix(""), None);
@@ -249,7 +275,10 @@ mod tests {
 
     #[test]
     fn test_extract_local_name() {
-        assert_eq!(NamespaceResolver::extract_local_name("xmp:Creator"), "Creator");
+        assert_eq!(
+            NamespaceResolver::extract_local_name("xmp:Creator"),
+            "Creator"
+        );
         assert_eq!(NamespaceResolver::extract_local_name("dc:title"), "title");
         assert_eq!(NamespaceResolver::extract_local_name("Creator"), "Creator");
         assert_eq!(NamespaceResolver::extract_local_name(""), "");

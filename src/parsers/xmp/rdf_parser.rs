@@ -241,19 +241,22 @@ fn register_namespaces_from_element(
     resolver: &mut NamespaceResolver,
 ) -> Result<()> {
     for attr in element.attributes().flatten() {
-        let key = std::str::from_utf8(attr.key.as_ref())
-            .map_err(|e| ExifToolError::parse_error(format!("Invalid UTF-8 in attribute key: {}", e)))?;
+        let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
+            ExifToolError::parse_error(format!("Invalid UTF-8 in attribute key: {}", e))
+        })?;
 
         // Check for xmlns:prefix="uri" declarations
         if let Some(prefix) = key.strip_prefix("xmlns:") {
-            let uri = std::str::from_utf8(&attr.value)
-                .map_err(|e| ExifToolError::parse_error(format!("Invalid UTF-8 in namespace URI: {}", e)))?;
+            let uri = std::str::from_utf8(&attr.value).map_err(|e| {
+                ExifToolError::parse_error(format!("Invalid UTF-8 in namespace URI: {}", e))
+            })?;
 
             resolver.register_namespace(prefix, uri);
         } else if key == "xmlns" {
             // Default namespace
-            let uri = std::str::from_utf8(&attr.value)
-                .map_err(|e| ExifToolError::parse_error(format!("Invalid UTF-8 in default namespace URI: {}", e)))?;
+            let uri = std::str::from_utf8(&attr.value).map_err(|e| {
+                ExifToolError::parse_error(format!("Invalid UTF-8 in default namespace URI: {}", e))
+            })?;
             resolver.register_namespace("", uri);
         }
     }
@@ -290,16 +293,22 @@ mod tests {
         "#;
 
         let result = parse_xmp(xml).unwrap();
-        assert!(result.len() >= 2, "Expected at least 2 properties, got {}", result.len());
+        assert!(
+            result.len() >= 2,
+            "Expected at least 2 properties, got {}",
+            result.len()
+        );
 
         // Check that Creator and Rating are present
-        let creators: Vec<_> = result.iter()
+        let creators: Vec<_> = result
+            .iter()
             .filter(|(name, _)| name == "XMP:Creator")
             .collect();
         assert_eq!(creators.len(), 1);
         assert_eq!(creators[0].1, "John Doe");
 
-        let ratings: Vec<_> = result.iter()
+        let ratings: Vec<_> = result
+            .iter()
             .filter(|(name, _)| name == "XMP:Rating")
             .collect();
         assert_eq!(ratings.len(), 1);
@@ -325,22 +334,44 @@ mod tests {
         "#;
 
         let result = parse_xmp(xml).unwrap();
-        assert!(result.len() >= 5, "Expected at least 5 properties, got {}", result.len());
+        assert!(
+            result.len() >= 5,
+            "Expected at least 5 properties, got {}",
+            result.len()
+        );
 
         // Verify properties from all 3 namespaces (xmp, dc, exif)
         let prop_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
 
         // Check for xmp properties
-        assert!(prop_names.iter().any(|n| n == "XMP:Creator"), "Missing XMP:Creator");
-        assert!(prop_names.iter().any(|n| n == "XMP:ModifyDate"), "Missing XMP:ModifyDate");
+        assert!(
+            prop_names.iter().any(|n| n == "XMP:Creator"),
+            "Missing XMP:Creator"
+        );
+        assert!(
+            prop_names.iter().any(|n| n == "XMP:ModifyDate"),
+            "Missing XMP:ModifyDate"
+        );
 
         // Check for dc properties
-        assert!(prop_names.iter().any(|n| n == "XMP:title"), "Missing XMP:title (dc:title)");
-        assert!(prop_names.iter().any(|n| n == "XMP:rights"), "Missing XMP:rights (dc:rights)");
+        assert!(
+            prop_names.iter().any(|n| n == "XMP:title"),
+            "Missing XMP:title (dc:title)"
+        );
+        assert!(
+            prop_names.iter().any(|n| n == "XMP:rights"),
+            "Missing XMP:rights (dc:rights)"
+        );
 
         // Check for exif properties
-        assert!(prop_names.iter().any(|n| n == "XMP:Make"), "Missing XMP:Make (exif:Make)");
-        assert!(prop_names.iter().any(|n| n == "XMP:Model"), "Missing XMP:Model (exif:Model)");
+        assert!(
+            prop_names.iter().any(|n| n == "XMP:Make"),
+            "Missing XMP:Make (exif:Make)"
+        );
+        assert!(
+            prop_names.iter().any(|n| n == "XMP:Model"),
+            "Missing XMP:Model (exif:Model)"
+        );
     }
 
     #[test]
@@ -356,7 +387,10 @@ mod tests {
         let result = parse_xmp(&xml);
 
         // Should error due to invalid UTF-8 in tag name
-        assert!(result.is_err(), "Expected error for malformed XML with invalid UTF-8");
+        assert!(
+            result.is_err(),
+            "Expected error for malformed XML with invalid UTF-8"
+        );
 
         // Verify we got a ParseError
         match result {
@@ -424,7 +458,10 @@ mod tests {
 
         let result = parse_xmp(xml).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], ("XMP:Creator".to_string(), "John Doe".to_string()));
+        assert_eq!(
+            result[0],
+            ("XMP:Creator".to_string(), "John Doe".to_string())
+        );
     }
 
     #[test]
@@ -469,12 +506,14 @@ mod tests {
         assert_eq!(result.len(), 2);
 
         // Should handle properties from both Description blocks
-        let creators: Vec<_> = result.iter()
+        let creators: Vec<_> = result
+            .iter()
             .filter(|(name, _)| name == "XMP:Creator")
             .collect();
         assert_eq!(creators.len(), 1);
 
-        let titles: Vec<_> = result.iter()
+        let titles: Vec<_> = result
+            .iter()
             .filter(|(name, _)| name == "XMP:title")
             .collect();
         assert_eq!(titles.len(), 1);
