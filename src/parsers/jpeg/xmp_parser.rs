@@ -215,24 +215,28 @@ mod tests {
         ";
 
         let segments = vec![
-            Segment::new(0xFFD8, 0, b""), // SOI
+            Segment::new(0xFFD8, 0, b""),              // SOI
             Segment::new(0xFFE1, 2, XMP_SEGMENT_DATA), // XMP APP1
-            Segment::new(0xFFD9, 0, b""), // EOI
+            Segment::new(0xFFD9, 0, b""),              // EOI
         ];
 
         let result = extract_xmp_from_segments(&segments).expect("Failed to extract XMP");
 
-        assert!(result.len() >= 2, "Expected at least 2 XMP tags, got {}", result.len());
+        assert!(
+            result.len() >= 2,
+            "Expected at least 2 XMP tags, got {}",
+            result.len()
+        );
 
         // Check for specific tags
-        let has_creator = result.iter().any(|(name, value)| {
-            name == "XMP:Creator" && value == "John Doe"
-        });
+        let has_creator = result
+            .iter()
+            .any(|(name, value)| name == "XMP:Creator" && value == "John Doe");
         assert!(has_creator, "Missing XMP:Creator tag");
 
-        let has_rating = result.iter().any(|(name, value)| {
-            name == "XMP:Rating" && value == "5"
-        });
+        let has_rating = result
+            .iter()
+            .any(|(name, value)| name == "XMP:Rating" && value == "5");
         assert!(has_rating, "Missing XMP:Rating tag");
     }
 
@@ -240,9 +244,9 @@ mod tests {
     fn test_extract_xmp_from_segments_no_xmp() {
         // Create segments without XMP
         let segments = vec![
-            Segment::new(0xFFD8, 0, b""), // SOI
+            Segment::new(0xFFD8, 0, b""),             // SOI
             Segment::new(0xFFE1, 2, b"Exif\0\0test"), // EXIF APP1
-            Segment::new(0xFFD9, 0, b""), // EOI
+            Segment::new(0xFFD9, 0, b""),             // EOI
         ];
 
         let result = extract_xmp_from_segments(&segments).expect("Failed to extract XMP");
@@ -261,11 +265,10 @@ mod tests {
     #[test]
     fn test_extract_xmp_from_segments_malformed_xml() {
         // Create XMP segment with malformed XML (invalid UTF-8)
-        const MALFORMED_XML: &[u8] = b"http://ns.adobe.com/xap/1.0/\0<rdf:RDF><\xFF\xFE:test>value</test></rdf:RDF>";
+        const MALFORMED_XML: &[u8] =
+            b"http://ns.adobe.com/xap/1.0/\0<rdf:RDF><\xFF\xFE:test>value</test></rdf:RDF>";
 
-        let segments = vec![
-            Segment::new(0xFFE1, 0, MALFORMED_XML),
-        ];
+        let segments = vec![Segment::new(0xFFE1, 0, MALFORMED_XML)];
 
         let result = extract_xmp_from_segments(&segments);
 
@@ -295,9 +298,7 @@ mod tests {
             </rdf:RDF>\
         ";
 
-        let segments = vec![
-            Segment::new(0xFFE1, 0, XMP_XML),
-        ];
+        let segments = vec![Segment::new(0xFFE1, 0, XMP_XML)];
 
         let result = extract_xmp_from_segments(&segments).expect("Failed to extract XMP");
 
@@ -306,10 +307,22 @@ mod tests {
         // Check that we have properties from all namespaces
         let tag_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
 
-        assert!(tag_names.iter().any(|n| n == "XMP:Creator"), "Missing XMP:Creator");
-        assert!(tag_names.iter().any(|n| n == "XMP:title"), "Missing XMP:title");
-        assert!(tag_names.iter().any(|n| n == "XMP:rights"), "Missing XMP:rights");
-        assert!(tag_names.iter().any(|n| n == "XMP:Make"), "Missing XMP:Make");
+        assert!(
+            tag_names.iter().any(|n| n == "XMP:Creator"),
+            "Missing XMP:Creator"
+        );
+        assert!(
+            tag_names.iter().any(|n| n == "XMP:title"),
+            "Missing XMP:title"
+        );
+        assert!(
+            tag_names.iter().any(|n| n == "XMP:rights"),
+            "Missing XMP:rights"
+        );
+        assert!(
+            tag_names.iter().any(|n| n == "XMP:Make"),
+            "Missing XMP:Make"
+        );
     }
 
     #[test]
@@ -334,10 +347,10 @@ mod tests {
         ";
 
         let segments = vec![
-            Segment::new(0xFFD8, 0, b""), // SOI
-            Segment::new(0xFFE1, 2, XMP_XML1), // First XMP
+            Segment::new(0xFFD8, 0, b""),        // SOI
+            Segment::new(0xFFE1, 2, XMP_XML1),   // First XMP
             Segment::new(0xFFE1, 100, XMP_XML2), // Second XMP
-            Segment::new(0xFFD9, 0, b""), // EOI
+            Segment::new(0xFFD9, 0, b""),        // EOI
         ];
 
         let result = extract_xmp_from_segments(&segments).expect("Failed to extract XMP");

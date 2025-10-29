@@ -126,10 +126,7 @@ const RST7_MARKER: u16 = 0xFFD7;
 /// # Ok(())
 /// # }
 /// ```
-pub fn write_exif_to_jpeg(
-    reader: &dyn FileReader,
-    metadata: &MetadataMap,
-) -> Result<Vec<u8>> {
+pub fn write_exif_to_jpeg(reader: &dyn FileReader, metadata: &MetadataMap) -> Result<Vec<u8>> {
     // Step 1: Parse original JPEG segments
     let segments = parse_segments(reader)?;
 
@@ -137,9 +134,7 @@ pub fn write_exif_to_jpeg(
     let new_exif_segment = build_exif_segment(metadata)?;
 
     // Step 3: Find existing EXIF segment position
-    let exif_position = segments
-        .iter()
-        .position(|seg| is_exif_segment(seg));
+    let exif_position = segments.iter().position(|seg| is_exif_segment(seg));
 
     // Step 4: Reconstruct JPEG with modified EXIF
     reconstruct_jpeg(&segments, new_exif_segment, exif_position)
@@ -194,9 +189,8 @@ fn build_exif_segment(metadata: &MetadataMap) -> Result<Vec<u8>> {
     ];
 
     // Combine: EXIF identifier + TIFF header + IFD data
-    let mut segment_data = Vec::with_capacity(
-        EXIF_IDENTIFIER.len() + tiff_header.len() + ifd_bytes.len()
-    );
+    let mut segment_data =
+        Vec::with_capacity(EXIF_IDENTIFIER.len() + tiff_header.len() + ifd_bytes.len());
     segment_data.extend_from_slice(EXIF_IDENTIFIER);
     segment_data.extend_from_slice(&tiff_header);
     segment_data.extend_from_slice(&ifd_bytes);
@@ -231,7 +225,7 @@ fn reconstruct_jpeg(
 ) -> Result<Vec<u8>> {
     // Pre-allocate buffer (rough estimate)
     let mut output = Vec::with_capacity(
-        segments.iter().map(|s| s.data.len() + 4).sum::<usize>() + new_exif_data.len()
+        segments.iter().map(|s| s.data.len() + 4).sum::<usize>() + new_exif_data.len(),
     );
 
     // Determine insertion position if EXIF doesn't exist
@@ -270,7 +264,7 @@ fn reconstruct_jpeg(
     // If we still haven't written EXIF (shouldn't happen), add at end before EOI
     if !exif_written {
         // Remove EOI if present
-        if output.len() >= 2 && output[output.len()-2..] == [0xFF, 0xD9] {
+        if output.len() >= 2 && output[output.len() - 2..] == [0xFF, 0xD9] {
             output.truncate(output.len() - 2);
         }
         write_segment(&mut output, APP1_MARKER, &new_exif_data)?;
@@ -508,7 +502,7 @@ mod tests {
 
         // Should still be valid JPEG
         assert_eq!(&modified_jpeg[0..2], &[0xFF, 0xD8]); // SOI
-        assert_eq!(&modified_jpeg[modified_jpeg.len()-2..], &[0xFF, 0xD9]); // EOI
+        assert_eq!(&modified_jpeg[modified_jpeg.len() - 2..], &[0xFF, 0xD9]); // EOI
 
         // Should have APP1 segment
         assert!(modified_jpeg.windows(2).any(|w| w == [0xFF, 0xE1]));
@@ -535,7 +529,7 @@ mod tests {
 
         // Should have SOI and EOI
         assert_eq!(&modified_jpeg[0..2], &[0xFF, 0xD8]);
-        assert_eq!(&modified_jpeg[modified_jpeg.len()-2..], &[0xFF, 0xD9]);
+        assert_eq!(&modified_jpeg[modified_jpeg.len() - 2..], &[0xFF, 0xD9]);
 
         // Should have new APP1 segment
         let modified_reader = TestReader::new(modified_jpeg);

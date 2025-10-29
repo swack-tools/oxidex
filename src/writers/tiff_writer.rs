@@ -175,7 +175,13 @@ pub fn serialize_ifd(
 
     // Write IFD entries
     for entry in &entries {
-        write_ifd_entry(&mut result, entry, &mut current_value_offset, &mut value_area_data, byte_order)?;
+        write_ifd_entry(
+            &mut result,
+            entry,
+            &mut current_value_offset,
+            &mut value_area_data,
+            byte_order,
+        )?;
     }
 
     // Write next IFD offset (0 = no next IFD)
@@ -264,7 +270,10 @@ fn convert_tag_value_to_entry(
             }
         }
 
-        TagValue::Rational { numerator, denominator } => {
+        TagValue::Rational {
+            numerator,
+            denominator,
+        } => {
             // Rational type - two u32 values
             let mut bytes = Vec::with_capacity(8);
 
@@ -367,8 +376,8 @@ fn write_u32(output: &mut Vec<u8>, value: u32, byte_order: ByteOrder) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parsers::tiff::ifd_parser::parse_ifd;
     use crate::core::FileReader;
+    use crate::parsers::tiff::ifd_parser::parse_ifd;
     use std::io;
 
     /// Simple in-memory FileReader for testing
@@ -440,7 +449,10 @@ mod tests {
         assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 2);
 
         // Count should be 4 (including null)
-        assert_eq!(u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]), 4);
+        assert_eq!(
+            u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]),
+            4
+        );
 
         // Value should be inline: "EOS\0"
         assert_eq!(&bytes[10..14], b"EOS\0");
@@ -470,7 +482,10 @@ mod tests {
         assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 2);
 
         // Count should be 6
-        assert_eq!(u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]), 6);
+        assert_eq!(
+            u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]),
+            6
+        );
 
         // Offset should point to value area (after IFD header)
         let offset = u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]);
@@ -497,7 +512,10 @@ mod tests {
         assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 3);
 
         // Count should be 1
-        assert_eq!(u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]), 1);
+        assert_eq!(
+            u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]),
+            1
+        );
 
         // Value should be 400 (inline, as u16)
         assert_eq!(u16::from_le_bytes([bytes[10], bytes[11]]), 400);
@@ -517,7 +535,10 @@ mod tests {
         assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 5);
 
         // Count should be 1
-        assert_eq!(u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]), 1);
+        assert_eq!(
+            u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]),
+            1
+        );
 
         // Offset should point to value area
         let offset = u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]);
@@ -574,7 +595,10 @@ mod tests {
         assert_eq!(u16::from_be_bytes([bytes[4], bytes[5]]), 2);
 
         // Count should be 4 (big-endian)
-        assert_eq!(u32::from_be_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]), 4);
+        assert_eq!(
+            u32::from_be_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]),
+            4
+        );
 
         // Value should still be "EOS\0" (ASCII is byte-oriented)
         assert_eq!(&bytes[10..14], b"EOS\0");
@@ -705,7 +729,10 @@ mod tests {
     #[test]
     fn test_binary_data_serialization() {
         let mut metadata = MetadataMap::new();
-        metadata.insert("EXIF:UserComment", TagValue::new_binary(vec![0x41, 0x42, 0x43, 0x44]));
+        metadata.insert(
+            "EXIF:UserComment",
+            TagValue::new_binary(vec![0x41, 0x42, 0x43, 0x44]),
+        );
 
         let result = serialize_ifd(&metadata, ByteOrder::LittleEndian, 0);
         assert!(result.is_ok());
@@ -716,7 +743,10 @@ mod tests {
         assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 7);
 
         // Count should be 4
-        assert_eq!(u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]), 4);
+        assert_eq!(
+            u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]),
+            4
+        );
 
         // Value should be inline
         assert_eq!(&bytes[10..14], &[0x41, 0x42, 0x43, 0x44]);

@@ -97,7 +97,10 @@ pub fn validate_tag_value(
             if expected_type != ValueType::Integer {
                 return Err(ExifToolError::invalid_tag_value(
                     tag_name,
-                    format!("Type mismatch: expected {:?} but got Integer", expected_type),
+                    format!(
+                        "Type mismatch: expected {:?} but got Integer",
+                        expected_type
+                    ),
                 ));
             }
         }
@@ -116,7 +119,10 @@ pub fn validate_tag_value(
             if expected_type != ValueType::Rational {
                 return Err(ExifToolError::invalid_tag_value(
                     tag_name,
-                    format!("Type mismatch: expected {:?} but got Rational", expected_type),
+                    format!(
+                        "Type mismatch: expected {:?} but got Rational",
+                        expected_type
+                    ),
                 ));
             }
             // Validate that denominator is not zero (undefined mathematical value)
@@ -139,7 +145,10 @@ pub fn validate_tag_value(
             if expected_type != ValueType::DateTime {
                 return Err(ExifToolError::invalid_tag_value(
                     tag_name,
-                    format!("Type mismatch: expected {:?} but got DateTime", expected_type),
+                    format!(
+                        "Type mismatch: expected {:?} but got DateTime",
+                        expected_type
+                    ),
                 ));
             }
             // DateTime is already validated by chrono::DateTime<Utc> type system

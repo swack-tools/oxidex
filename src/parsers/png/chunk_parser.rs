@@ -144,21 +144,19 @@ pub fn parse_chunk(reader: &dyn FileReader, offset: u64) -> Result<(u64, PngChun
     }
 
     let header_data = reader.read(offset, 8)?;
-    let (_, (length, chunk_type)) = parse_chunk_header(header_data)
-        .map_err(|e| ExifToolError::parse_error_at(
+    let (_, (length, chunk_type)) = parse_chunk_header(header_data).map_err(|e| {
+        ExifToolError::parse_error_at(
             format!("Failed to parse chunk header: {}", e),
             offset as usize,
-        ))?;
+        )
+    })?;
 
     // Calculate total chunk size: length + type (4) + data (length) + CRC (4)
     let total_size = 4 + 4 + length as u64 + 4;
 
     if offset + total_size > file_size {
         return Err(ExifToolError::parse_error_at(
-            format!(
-                "Chunk (length={}) extends beyond file size",
-                length
-            ),
+            format!("Chunk (length={}) extends beyond file size", length),
             offset as usize,
         ));
     }
@@ -270,7 +268,9 @@ pub fn parse_itxt_chunk(data: &[u8]) -> Result<(String, String)> {
 
     // Check we have at least compression flag and method
     if keyword_end + 3 > data.len() {
-        return Err(ExifToolError::parse_error("iTXt chunk truncated after keyword"));
+        return Err(ExifToolError::parse_error(
+            "iTXt chunk truncated after keyword",
+        ));
     }
 
     let compression_flag = data[keyword_end + 1];
@@ -289,7 +289,9 @@ pub fn parse_itxt_chunk(data: &[u8]) -> Result<(String, String)> {
         .iter()
         .position(|&b| b == 0)
         .map(|pos| lang_start + pos)
-        .ok_or_else(|| ExifToolError::parse_error("iTXt chunk missing language tag null separator"))?;
+        .ok_or_else(|| {
+            ExifToolError::parse_error("iTXt chunk missing language tag null separator")
+        })?;
 
     // Find translated keyword null separator
     let trans_start = lang_end + 1;
@@ -335,7 +337,9 @@ pub fn parse_itxt_chunk(data: &[u8]) -> Result<(String, String)> {
 pub fn parse_exif_chunk(data: &[u8]) -> Result<Vec<(u16, Vec<u8>)>> {
     // Minimum TIFF header size: 2 (byte order) + 2 (magic) + 4 (offset) = 8 bytes
     if data.len() < 8 {
-        return Err(ExifToolError::parse_error("eXIf chunk too small for TIFF header"));
+        return Err(ExifToolError::parse_error(
+            "eXIf chunk too small for TIFF header",
+        ));
     }
 
     // Detect byte order from first 2 bytes
@@ -463,7 +467,7 @@ mod tests {
     fn test_parse_chunk_header() {
         let data = vec![
             0x00, 0x00, 0x00, 0x0D, // Length: 13
-            b'I', b'H', b'D', b'R',  // Type: IHDR
+            b'I', b'H', b'D', b'R', // Type: IHDR
         ];
 
         let result = parse_chunk_header(&data);

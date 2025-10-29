@@ -32,5 +32,5 @@ pub mod namespace_resolver;
 pub mod rdf_parser;
 
 // Re-export main parsing function for convenience
-pub use rdf_parser::parse_xmp;
 pub use namespace_resolver::NamespaceResolver;
+pub use rdf_parser::parse_xmp;

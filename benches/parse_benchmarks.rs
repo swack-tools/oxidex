@@ -117,8 +117,7 @@ fn bench_tiff_ifd_parsing(c: &mut Criterion) {
 
             // Benchmark the IFD parser
             black_box(
-                parse_ifd(&tiff_reader, ifd_offset, byte_order)
-                    .expect("TIFF IFD parsing failed"),
+                parse_ifd(&tiff_reader, ifd_offset, byte_order).expect("TIFF IFD parsing failed"),
             )
         });
     });
