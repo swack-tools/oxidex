@@ -1,6 +1,5 @@
 # CodeMachine directories
-.codemachine/memory
-.codemachine/artifacts
+.codemachine/
 
 # Node modules
 node_modules
