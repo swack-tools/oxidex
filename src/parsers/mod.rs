@@ -10,6 +10,7 @@ pub mod format_detector;
 pub mod jpeg;
 pub mod pdf;
 pub mod png;
+pub mod quicktime;
 pub mod tiff;
 pub mod xmp;
 
