@@ -36,7 +36,7 @@ fn main() {
 
     if !modifications.is_empty() {
         // Write mode: modify tags
-        handle_write_operation(&file, &modifications);
+        handle_write_operation(&file, &args);
     } else {
         // Read mode: display metadata
         handle_read_operation(&file, args.json);
@@ -44,7 +44,16 @@ fn main() {
 }
 
 /// Handles write operations (tag modifications)
-fn handle_write_operation(file: &std::path::Path, modifications: &[(String, String)]) {
+fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
+    // Extract tag modifications
+    let modifications = args.tag_modifications();
+
+    // Check readonly flag FIRST - if set, prevent any writes
+    if args.readonly {
+        eprintln!("Error: Cannot modify file in read-only mode (--readonly flag set)");
+        process::exit(1);
+    }
+
     // Verify file exists
     if !file.exists() {
         eprintln!("Error: File not found: {}", file.display());
@@ -52,21 +61,53 @@ fn handle_write_operation(file: &std::path::Path, modifications: &[(String, Stri
     }
 
     // Check if file is writable
-    match std::fs::metadata(file) {
+    let file_metadata = match std::fs::metadata(file) {
         Ok(metadata) => {
             if metadata.permissions().readonly() {
                 eprintln!("Error: File is read-only: {}", file.display());
                 process::exit(1);
             }
+            metadata
         }
         Err(e) => {
             eprintln!("Error: Cannot access file '{}': {}", file.display(), e);
             process::exit(1);
         }
+    };
+
+    // Save original modification time if preserve_file_times is enabled
+    let original_mtime = if args.preserve_file_times {
+        match file_metadata.modified() {
+            Ok(mtime) => Some(mtime),
+            Err(e) => {
+                eprintln!("Warning: Could not read file modification time: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Create backup if requested
+    if args.backup {
+        // Create backup by appending .bak to the original filename
+        // Example: photo.jpg -> photo.jpg.bak
+        let mut backup_path = file.as_os_str().to_owned();
+        backup_path.push(".bak");
+        let backup_path = std::path::PathBuf::from(backup_path);
+
+        if let Err(e) = std::fs::copy(file, &backup_path) {
+            eprintln!(
+                "Error: Failed to create backup file '{}': {}",
+                backup_path.display(),
+                e
+            );
+            process::exit(1);
+        }
     }
 
     // Apply each modification
-    for (tag_name, value) in modifications {
+    for (tag_name, value) in &modifications {
         // Convert value to TagValue (currently only supporting strings)
         let tag_value = TagValue::new_string(value.clone());
 
@@ -80,6 +121,18 @@ fn handle_write_operation(file: &std::path::Path, modifications: &[(String, Stri
                 eprintln!("Error: Failed to modify tag '{}': {}", tag_name, e);
             }
             process::exit(1);
+        }
+    }
+
+    // Restore original modification time if requested
+    if let Some(mtime) = original_mtime {
+        use std::fs::File;
+        match File::open(file).and_then(|f| f.set_modified(mtime)) {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Warning: Could not restore file modification time: {}", e);
+                // Don't exit - the write succeeded, only mtime restoration failed
+            }
         }
     }
 

@@ -10,6 +10,192 @@ This is the full specification of the task you must complete.
 
 ```json
 {
+  "task_id": "I3.T9",
+  "iteration_id": "I3",
+  "iteration_goal": "Implement metadata write operations with atomic file handling, extend TIFF parser for standalone TIFF files (not just EXIF in JPEG), implement metadata serialization, and add tag modification capabilities to CLI.",
+  "description": "Add CLI flags in src/cli/args.rs for file preservation: --preserve-file-times (restore original modification time after write), --backup (create .bak backup before modifying), --readonly (prevent writes, read-only mode). Implement preservation logic: save original mtime before write, restore after. Implement backup: copy file to .bak before modification. Update main.rs to honor flags.",
+  "agent_type_hint": "BackendAgent",
+  "inputs": "I2.T8 CLI args, I3.T4 write operations",
+  "target_files": [
+    "src/cli/args.rs",
+    "src/writers/atomic_writer.rs",
+    "src/main.rs"
+  ],
+  "input_files": [
+    "src/cli/args.rs",
+    "src/core/operations.rs"
+  ],
+  "deliverables": "File preservation flags, mtime preservation, Backup creation, Read-only mode",
+  "acceptance_criteria": "--preserve-file-times restores original mtime after write, --backup creates .bak file before modification, --readonly prevents any writes (returns error), Flags work in combination, Manual test: verify mtime preserved, backup created",
+  "dependencies": ["I3.T4"],
+  "parallelizable": true,
+  "done": false
+}
+```
+
+---
+
+## 2. Architectural & Planning Context
+
+The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
+
+### Context: task-i3-t9 (from 02_Iteration_I3.md)
+
+```markdown
+<!-- anchor: task-i3-t9 -->
+*   **Task 3.9: Add File Preservation Options (CLI Flags)**
+    *   **Task ID:** `I3.T9`
+    *   **Description:** Add CLI flags in `src/cli/args.rs` for file preservation: `--preserve-file-times` (restore original modification time after write), `--backup` (create .bak backup before modifying), `--readonly` (prevent writes, read-only mode). Implement preservation logic: save original mtime before write, restore after. Implement backup: copy file to .bak before modification. Update main.rs to honor flags.
+    *   **Agent Type Hint:** `BackendAgent`
+    *   **Inputs:** I2.T8 CLI args, I3.T4 write operations
+    *   **Input Files:** [`src/cli/args.rs`, `src/core/operations.rs`]
+    *   **Target Files:**
+        *   `src/cli/args.rs` (add flags)
+        *   `src/writers/atomic_writer.rs` (add preserve_mtime parameter)
+        *   `src/main.rs` (implement backup and readonly checks)
+    *   **Deliverables:**
+        *   File preservation flags
+        *   mtime preservation
+        *   Backup creation
+        *   Read-only mode
+    *   **Acceptance Criteria:**
+        *   `--preserve-file-times` restores original mtime after write
+        *   `--backup` creates .bak file before modification
+        *   `--readonly` prevents any writes (returns error)
+        *   Flags work in combination
+        *   Manual test: verify mtime preserved, backup created
+    *   **Dependencies:** `I3.T4`
+    *   **Parallelizable:** Yes (can be developed in parallel with other I3 tasks)
+```
+
+### Context: API Design Example (from 04_Behavior_and_Communication.md)
+
+```markdown
+// Builder pattern for complex operations
+let result = Metadata::from_path("input.jpg")?
+    .copy_tags_to("output.jpg")?
+    .with_tags(&["EXIF:DateTime", "EXIF:Make", "EXIF:Model"])
+    .preserve_file_times(true)
+    .execute()?;
+```
+
+This shows the architecture envisioned a `preserve_file_times()` method for the builder pattern API. For CLI implementation, this translates to a `--preserve-file-times` flag.
+
+### Context: Security Features (from 05_Operational_Architecture.md)
+
+```markdown
+**Secure Defaults**:
+
+- No script execution (unlike Perl ExifTool's `-execute` feature)
+- No network access by default (geolocation requires opt-in `--geolocation` flag)
+- Read-only mode available via `--readonly` flag (prevents accidental writes)
+```
+
+This confirms that `--readonly` is an architectural feature for preventing accidental writes, which aligns with security best practices.
+
+---
+
+## 3. Codebase Analysis & Strategic Guidance
+
+The following analysis is based on my direct review of the current codebase. Use these notes and tips to guide your implementation.
+
+### Relevant Existing Code
+
+*   **File:** `src/cli/args.rs`
+    *   **Summary:** Defines the CLI argument structure using `clap` with derive macros. Currently supports `-json`, `-s` (short format), `-a` (all tags), `-r` (recursive), and variable arguments for tag modifications (`-TAG=VALUE`) and file path. The struct uses `#[derive(Parser, Debug)]` and has helper methods `file()` and `tag_modifications()`.
+    *   **Recommendation:** You MUST add three new boolean flags to the `CliArgs` struct: `preserve_file_times`, `backup`, and `readonly`. Use clap's `#[arg(long)]` attribute for each. The flags should be optional (default to false) and clearly documented with doc comments.
+    *   **Current Implementation Pattern:**
+        ```rust
+        #[derive(Parser, Debug)]
+        #[command(name = "exiftool-rs")]
+        pub struct CliArgs {
+            #[arg(short, long)]
+            pub json: bool,
+            // ... add new flags here following this pattern
+        }
+        ```
+
+*   **File:** `src/main.rs`
+    *   **Summary:** Entry point for the CLI application. Parses arguments with `CliArgs::parse()`, distinguishes between read and write operations based on presence of tag modifications, and calls either `handle_read_operation()` or `handle_write_operation()`. The write handler already verifies file exists and checks if it's writable (lines 49-66).
+    *   **Recommendation:** You MUST modify `handle_write_operation()` to:
+        1. Check `args.readonly` flag FIRST and return error with appropriate message if set
+        2. Save original file metadata (modification time) BEFORE any operations if `args.preserve_file_times` is true
+        3. Create a backup copy (`.bak` extension) BEFORE calling `modify_tag()` if `args.backup` is true
+        4. Restore modification time AFTER successful write if `args.preserve_file_times` is true
+    *   **Implementation Order:** The order is critical: readonly check → backup → modify → restore mtime
+    *   **Current Write Flow:** Currently at line 38-43, the code checks for modifications and routes to `handle_write_operation()`. You need to pass the full `args` struct (not just modifications) to access the new flags.
+
+*   **File:** `src/writers/atomic_writer.rs`
+    *   **Summary:** Implements atomic file writing using `tempfile` crate with the temp-file-and-rename pattern. The `write_atomic()` function creates temp file in same directory, writes data, calls `fsync()`, and atomically renames. Well-tested with 11 comprehensive unit tests.
+    *   **Recommendation:** You HAVE TWO OPTIONS for mtime preservation:
+        - **Option A (Simpler):** Handle mtime preservation in `main.rs` by saving/restoring around the `modify_tag()` call. This keeps `write_atomic()` focused on atomicity.
+        - **Option B (More Modular):** Add an optional `preserve_mtime: Option<SystemTime>` parameter to `write_atomic()`, and if provided, restore it after the rename operation using `std::fs::File::set_modified()`.
+    *   **Strategic Note:** Option A is recommended for this task because it keeps the concerns separated - `atomic_writer` handles atomicity, `main.rs` handles CLI preservation logic. This follows the single responsibility principle.
+
+*   **File:** `src/core/operations.rs`
+    *   **Summary:** Defines core metadata operations. Contains `read_metadata()` (line 64), `write_metadata()` (line 443), and `modify_tag()` (line 535). The `modify_tag()` function is the convenience wrapper used by CLI - it reads existing metadata, modifies one tag, and writes all metadata back.
+    *   **Recommendation:** You SHOULD NOT modify this file. The operations are already complete and the preservation logic should be handled at the CLI layer (in `main.rs`), not in the core library operations. This maintains proper architectural layering.
+
+### Implementation Tips & Notes
+
+*   **Tip - File Time Handling:** Use `std::fs::metadata()` to get the current file metadata, then call `.modified()` to get the `SystemTime` of the last modification. After writing, use `filetime` crate or `std::fs::File::set_modified()` (requires opening file handle) to restore it. The `filetime` crate is cleaner but requires adding a dependency. For this task, you can use the standard library approach.
+
+*   **Tip - Backup Creation:** The backup should be a simple file copy using `std::fs::copy()`. The backup filename should be the original path with `.bak` appended (e.g., `photo.jpg` → `photo.jpg.bak`). Create the backup BEFORE calling any write operations so that if the write fails, the original is preserved.
+
+*   **Tip - Readonly Flag:** The readonly check should be the VERY FIRST thing in `handle_write_operation()`, even before checking if the file exists. If `args.readonly` is true, immediately return an error like: `"Error: Cannot modify file in read-only mode (--readonly flag set)"`. Use `process::exit(1)` to exit with error code.
+
+*   **Note - Flag Combinations:** The flags should work independently and in combination:
+    - `--readonly` alone: prevents all writes
+    - `--backup` alone: creates .bak before writing
+    - `--preserve-file-times` alone: restores mtime after writing
+    - `--backup --preserve-file-times`: creates backup AND preserves mtime
+    - `--readonly` with any other flag: readonly takes precedence, other flags have no effect
+
+*   **Note - Error Handling:** If backup creation fails, you MUST return an error and NOT proceed with the write operation. If mtime restoration fails, you SHOULD log a warning but NOT fail the entire operation (the write succeeded, only the mtime restoration failed).
+
+*   **Warning - Passing Args:** Currently, `handle_write_operation()` only receives `&[(String, String)]` modifications. You will need to change its signature to accept `&CliArgs` (or the individual flags) so it can check `readonly`, `backup`, and `preserve_file_times`. Update the call site in `main()` accordingly.
+
+*   **Testing Strategy:** Write manual tests as specified in acceptance criteria:
+    1. Test `--preserve-file-times`: Modify file, check mtime before/after
+    2. Test `--backup`: Verify `.bak` file is created with original content
+    3. Test `--readonly`: Verify write is prevented with error message
+    4. Test combinations: e.g., `--backup --preserve-file-times` together
+
+### Dependencies and Build Notes
+
+*   **Current Dependencies:** The project already has all necessary dependencies in `Cargo.toml`. You do NOT need to add any new dependencies for this task:
+    - `clap` for CLI argument parsing (already present)
+    - `std::fs` for file operations (standard library)
+    - `std::time::SystemTime` for timestamps (standard library)
+
+*   **No Changes Needed:** `Cargo.toml` does not need modification for this task.
+
+### Code Quality Requirements
+
+*   **Documentation:** Add doc comments (`///`) for all new CLI flags explaining their purpose and behavior
+*   **Error Messages:** User-facing error messages should be clear and actionable
+*   **Testing:** While full integration tests will come later, ensure the code is testable and consider adding unit tests for backup creation logic if you extract it to a helper function
+*   **Formatting:** Run `cargo fmt` before committing
+*   **Linting:** Run `cargo clippy` and address all warnings
+
+---
+
+## Summary Checklist
+
+Before you begin coding, ensure you understand:
+
+- [x] The three new flags to add: `--preserve-file-times`, `--backup`, `--readonly`
+- [x] The execution order: readonly check → backup → modify → restore mtime
+- [x] The recommended approach: handle all preservation logic in `main.rs`, not in `atomic_writer.rs` or `operations.rs`
+- [x] The need to modify `handle_write_operation()` signature to accept the full args or flags
+- [x] The backup naming convention: original filename + `.bak` extension
+- [x] The error handling strategy: fail on backup failure, warn on mtime restoration failure
+- [x] The testing approach: manual testing as specified in acceptance criteria
+
+You are now ready to implement Task I3.T9. Good luck!
+
+```json
+{
   "task_id": "I3.T8",
   "iteration_id": "I3",
   "iteration_goal": "Implement metadata write operations with atomic file handling, extend TIFF parser for standalone TIFF files (not just EXIF in JPEG), implement metadata serialization, and add tag modification capabilities to CLI.",
