@@ -10,20 +10,18 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I1.T4",
+  "task_id": "I1.T5",
   "iteration_id": "I1",
   "iteration_goal": "Establish project foundation with directory structure, build system, core domain models, architectural diagrams, and basic JPEG EXIF parsing capability to validate end-to-end workflow.",
-  "description": "Create PlantUML sequence diagram documenting the workflow for extracting metadata from a JPEG file. Show interactions: User → CLI → Core Library → Format Detector → JPEG Parser → EXIF Parser → XMP Parser → Tag Registry → Output. Include alternative flows for EXIF and XMP segments. Save to docs/diagrams/sequence_metadata_extraction.puml.",
-  "agent_type_hint": "DocumentationAgent",
-  "inputs": "Section 2 (Communication Patterns), Section 2.1 (Key Architectural Artifacts), Sequence diagram from architecture blueprint",
+  "description": "Create JSON Schema defining the structure for TagDescriptor objects that will be code-generated from ExifTool documentation. Schema should define: tag_id (string or number), tag_name (string), format_family (enum: EXIF, XMP, IPTC, GPS, etc.), writable (boolean), value_type (enum: String, Integer, Rational, Binary, etc.), description (string), example_values (array of strings). Save to api/tag_database_schema.json. Validate against JSON Schema Draft 7 specification.",
+  "agent_type_hint": "BackendAgent",
+  "inputs": "Section 2 (Data Model Overview), Section 2.1 (Key Architectural Artifacts)",
   "target_files": [
-    "docs/diagrams/sequence_metadata_extraction.puml"
+    "api/tag_database_schema.json"
   ],
-  "input_files": [
-    ".codemachine/artifacts/architecture/04_Behavior_and_Communication.md"
-  ],
-  "deliverables": "PlantUML sequence diagram file",
-  "acceptance_criteria": "PlantUML file compiles without syntax errors, sequence accurately reflects workflow described in architecture blueprint Section 3.7, alternative flows (alt blocks) for EXIF and XMP segments are present, all actors and components from the workflow are included",
+  "input_files": [],
+  "deliverables": "Valid JSON Schema file",
+  "acceptance_criteria": "JSON Schema validates against Draft 7 spec (use online validator or ajv CLI), schema includes all fields mentioned in task description, schema has appropriate constraints (e.g., tag_name is required, writable is boolean), example valid TagDescriptor object passes schema validation",
   "dependencies": [
     "I1.T1"
   ],
@@ -38,198 +36,104 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: key-interaction-flow (from 04_Behavior_and_Communication.md)
+### Context: Data Model Overview (from 03_System_Structure_and_Data.md)
 
 ```markdown
-#### Key Interaction Flow (Sequence Diagram)
+### 3.6. Data Model Overview & ERD
 
-**Description**: This diagram illustrates the core workflow for **extracting metadata from a JPEG file**. It shows how the CLI delegates to the core library, which orchestrates format detection, parser selection, and metadata extraction through the hexagonal architecture layers.
+**Description**: ExifTool-RS operates on files without persistent database storage. The "data model" represents in-memory structures for metadata representation. The Entity-Relationship Diagram below models the logical relationships between metadata concepts.
 
-**Diagram (PlantUML)**:
+#### Key Entities
 
-```plantuml
-@startuml
-
-actor User
-participant "CLI" as CLI
-participant "Core Library\n(API Facade)" as Core
-participant "Format\nDetector" as Detector
-participant "JPEG Parser" as JPEG
-participant "EXIF Parser\n(TIFF IFD)" as EXIF
-participant "XMP Parser" as XMP
-participant "I/O Layer\n(memmap2)" as IO
-participant "Tag Registry" as Registry
-participant "File System" as FS
-
-User -> CLI : exiftool-rs photo.jpg
-CLI -> Core : Metadata::from_path("photo.jpg")
-
-Core -> Detector : detect_format("photo.jpg")
-Detector -> IO : read_magic_bytes("photo.jpg", 16)
-IO -> FS : open() + read()
-FS --> IO : bytes [0xFF, 0xD8, 0xFF, ...]
-IO --> Detector : magic bytes
-Detector --> Core : FileFormat::JPEG
-
-Core -> JPEG : parse(io_handle)
-JPEG -> IO : read_segment_markers()
-IO -> FS : read() at offsets
-FS --> IO : JPEG segments
-
-alt EXIF Segment Found (0xFFE1)
-  JPEG -> EXIF : parse_exif_segment(segment_data)
-  EXIF -> EXIF : parse TIFF IFD structure
-  EXIF -> Registry : lookup_tag(0x010F) // Manufacturer tag
-  Registry --> EXIF : TagDescriptor { name: "EXIF:Make", type: String, ... }
-  EXIF --> JPEG : Vec<TagValue> (EXIF tags)
-end
-
-alt XMP Segment Found (0xFFE1 with XMP marker)
-  JPEG -> XMP : parse_xmp_segment(segment_data)
-  XMP -> XMP : parse RDF/XML
-  XMP -> Registry : lookup_tag("xmp:CreateDate")
-  Registry --> XMP : TagDescriptor
-  XMP --> JPEG : Vec<TagValue> (XMP tags)
-end
-
-JPEG --> Core : MetadataMap { tags: [...] }
-Core -> Core : validate_tags(metadata_map)
-Core --> CLI : Result::Ok(Metadata)
-
-CLI -> CLI : format_output(metadata, OutputFormat::Human)
-CLI --> User : Output to stdout:\n  EXIF:Make: Canon\n  EXIF:Model: EOS 5D\n  ...
-
-@enduml
+1. **File**: Represents a media file being processed (JPEG, PNG, etc.)
+2. **MetadataMap**: Collection of all metadata tags extracted from a file
+3. **TagValue**: A single metadata tag with its name, value, and type information
+4. **TagDescriptor**: Definition of a tag (from tag database) including ID, name, type constraints, format family
+5. **FormatFamily**: Grouping of related metadata standards (EXIF, XMP, IPTC, MakerNotes)
+6. **IFD (Image File Directory)**: TIFF-specific structural element containing tags
 ```
 
-**Workflow Breakdown**:
-
-1. **Format Detection**: Read file magic bytes (first 16 bytes) to identify format (JPEG: `0xFF 0xD8`)
-2. **Parser Selection**: Based on format, select appropriate parser implementation (JPEG parser in this case)
-3. **Segment Parsing**: JPEG parser reads segment markers (0xFFE0-0xFFEF) to locate metadata containers
-4. **Metadata Extraction**:
-   - EXIF segment contains TIFF-encoded metadata, parsed via EXIF/TIFF parser
-   - XMP segment contains RDF/XML, parsed via XMP parser
-5. **Tag Resolution**: Each raw tag ID (e.g., TIFF tag 0x010F) is looked up in Tag Registry to get semantic name ("EXIF:Make")
-6. **Validation**: Tag values validated against expected types (e.g., "EXIF:Make" must be string, "EXIF:ISOSpeedRatings" must be integer)
-7. **Output**: Metadata returned to CLI, formatted per user request (human-readable, JSON, CSV, etc.)
-```
-
-### Context: communication-patterns (from 04_Behavior_and_Communication.md)
+### Context: TagDescriptor Entity Details (from 03_System_Structure_and_Data.md)
 
 ```markdown
-#### Communication Patterns
+entity TagDescriptor {
+  primary_key(tag_name) : String
+  --
+  tag_id : u16 | String
+  foreign_key(family_id) : String
+  writable : bool
+  value_type : TagType
+  description : String
+  example_values : Vec<String>
+}
 
-**Primary Pattern**: **Synchronous Request/Response**
-
-All operations are synchronous:
-1. User/application calls API function
-2. Function parses file, extracts/modifies metadata
-3. Function returns result or error
-4. Transaction completes
-
-**Rationale**:
-- File I/O is the bottleneck, not computation. Async overhead provides no benefit.
-- Synchronous code is simpler to reason about for library consumers.
-- Batch parallelism is achieved via `rayon` at the application level (parallel iterator over file list), not async/await.
-
-**Batch Processing**: Uses data parallelism (not message passing)
-
-```rust
-use rayon::prelude::*;
-
-let results: Vec<Result<Metadata>> = file_paths
-    .par_iter()  // Rayon parallel iterator
-    .map(|path| Metadata::from_path(path))
-    .collect();
-```
-
-Rayon's work-stealing scheduler distributes file processing across CPU cores automatically.
-
-**Error Handling**: `Result<T, ExifToolError>` throughout
-
-```rust
-pub enum ExifToolError {
-    IoError(std::io::Error),
-    ParseError { format: String, details: String },
-    TagNotFound { tag_name: String },
-    InvalidTagValue { tag_name: String, expected_type: String },
-    UnsupportedFormat { format: String },
+entity FormatFamily {
+  primary_key(family_id) : String
+  --
+  family_name : String
+  specification_url : String
 }
 ```
 
-Errors propagate via `?` operator, no exceptions.
-```
+**Rationale**:
 
-### Context: task-i1-t4 (from 02_Iteration_I1.md)
+- **No Persistent Database**: The system is stateless. `MetadataMap` exists only in-memory during processing and is serialized to JSON/text output or written back to file metadata.
+
+- **Variant Value Type**: `TagValue.value` uses a Rust `enum` to represent heterogeneous tag types:
+  ```rust
+  enum TagValueData {
+      String(String),
+      Number(f64),
+      Integer(i64),
+      Binary(Vec<u8>),
+      Rational { numerator: i32, denominator: i32 },
+      Struct(HashMap<String, TagValueData>), // For complex XMP structures
+  }
+  ```
+
+- **Tag Descriptor**: Compile-time generated from ExifTool tag database. In practice, this is a large static `HashMap<&'static str, TagDescriptor>` embedded in the binary, not a runtime database.
+
+### Context: Data Model Overview (from 01_Plan_Overview_and_Setup.md)
 
 ```markdown
-*   **Task 1.4: Generate Sequence Diagram for Metadata Extraction**
-    *   **Task ID:** `I1.T4`
-    *   **Description:** Create PlantUML sequence diagram documenting the workflow for extracting metadata from a JPEG file. Show interactions: User → CLI → Core Library → Format Detector → JPEG Parser → EXIF Parser → XMP Parser → Tag Registry → Output. Include alternative flows for EXIF and XMP segments. Save to `docs/diagrams/sequence_metadata_extraction.puml`.
-    *   **Agent Type Hint:** `DocumentationAgent` or `DiagrammingAgent`
-    *   **Inputs:** Section 2 (Communication Patterns), Section 2.1 (Key Architectural Artifacts), Sequence diagram from architecture blueprint
-    *   **Input Files:** [`.codemachine/artifacts/04_Behavior_and_Communication.md`]
+*   **Data Model Overview:**
+    *   **File:** Represents media file being processed (path, format, size)
+    *   **MetadataMap:** Collection of all tags extracted from a file
+    *   **TagValue:** Single metadata tag with name, value, type information, and optional byte offset
+    *   **TagDescriptor:** Tag definition from database (ID, name, type constraints, format family)
+    *   **FormatFamily:** Grouping of metadata standards (EXIF, XMP, IPTC, MakerNotes)
+    *   **IFD (Image File Directory):** TIFF-specific structural element for tag organization
+
+    **Note:** No persistent database storage. All data structures are in-memory during processing, serialized to JSON/text output or written back to file metadata.
+```
+
+### Context: Task I1.T5 Specification (from 02_Iteration_I1.md)
+
+```markdown
+*   **Task 1.5: Define Tag Database Schema**
+    *   **Task ID:** `I1.T5`
+    *   **Description:** Create JSON Schema defining the structure for TagDescriptor objects that will be code-generated from ExifTool documentation. Schema should define: tag_id (string or number), tag_name (string), format_family (enum: EXIF, XMP, IPTC, GPS, etc.), writable (boolean), value_type (enum: String, Integer, Rational, Binary, etc.), description (string), example_values (array of strings). Save to `api/tag_database_schema.json`. Validate against JSON Schema Draft 7 specification.
+    *   **Agent Type Hint:** `BackendAgent` or `DocumentationAgent`
+    *   **Inputs:** Section 2 (Data Model Overview), Section 2.1 (Key Architectural Artifacts)
+    *   **Input Files:** []
     *   **Target Files:**
-        *   `docs/diagrams/sequence_metadata_extraction.puml`
+        *   `api/tag_database_schema.json`
     *   **Deliverables:**
-        *   PlantUML sequence diagram file
+        *   Valid JSON Schema file
     *   **Acceptance Criteria:**
-        *   PlantUML file compiles without syntax errors
-        *   Sequence accurately reflects workflow described in architecture blueprint Section 3.7
-        *   Alternative flows (alt blocks) for EXIF and XMP segments are present
-        *   All actors and components from the workflow are included
+        *   JSON Schema validates against Draft 7 spec (use online validator or `ajv` CLI)
+        *   Schema includes all fields mentioned in task description
+        *   Schema has appropriate constraints (e.g., tag_name is required, writable is boolean)
+        *   Example valid TagDescriptor object passes schema validation
     *   **Dependencies:** `I1.T1`
-    *   **Parallelizable:** Yes (can run concurrently with T2, T3, T5, T6 after T1 completes)
+    *   **Parallelizable:** Yes (can run concurrently with T2, T3, T4, T6 after T1 completes)
 ```
 
-### Context: api-design-communication (from 04_Behavior_and_Communication.md)
+### Context: Tag Registry Component (from 03_System_Structure_and_Data.md)
 
 ```markdown
-### 3.7. API Design & Communication
-
-**Primary API**: **Rust Library API** (procedural + builder pattern)
-
-The core API is designed for Rust consumers and follows idiomatic patterns:
-
-```rust
-use exiftool_rs::{Metadata, FileFormat};
-
-// Simple extraction
-let metadata = Metadata::from_path("photo.jpg")?;
-let camera_model = metadata.get_string("EXIF:Model")?;
-
-// Builder pattern for complex operations
-let result = Metadata::from_path("input.jpg")?
-    .copy_tags_to("output.jpg")?
-    .with_tags(&["EXIF:DateTime", "EXIF:Make", "EXIF:Model"])
-    .preserve_file_times(true)
-    .execute()?;
-```
-
-**Secondary APIs**:
-
-1. **CLI Interface**: POSIX-style arguments mimicking ExifTool
-   ```bash
-   exiftool-rs -EXIF:DateTime photo.jpg
-   exiftool-rs -json -r /photos/  # Recursive JSON output
-   exiftool-rs -TagsFromFile src.jpg -all:all dest.jpg  # Copy metadata
-   ```
-
-2. **C FFI**: Minimal C-compatible surface for foreign language bindings
-   ```c
-   // C API example
-   ExifToolHandle* handle = exiftool_create();
-   ExifToolError err = exiftool_read_file(handle, "photo.jpg");
-   const char* model = exiftool_get_string(handle, "EXIF:Model");
-   exiftool_destroy(handle);
-   ```
-
-**Justification**:
-
-- **Rust-First**: Leverages Rust's type system for compile-time safety (no invalid tag names at compile time via const tag identifiers)
-- **No Network API**: ExifTool-RS is a library/tool, not a service. REST/GraphQL APIs would be implemented by consuming applications
-- **FFI for Interop**: Enables Python (`pyo3`), Node.js (`neon`), Go (`cgo`) bindings without compromising Rust API ergonomics
+Component(tag_registry, "Tag Registry", "Generated const maps", "28K+ tag definitions indexed by ID/name")
+Component(validation, "Validation Engine", "Rust", "Tag value type checking, range validation")
 ```
 
 ---
@@ -240,60 +144,89 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `docs/diagrams/component_architecture.puml`
-    *   **Summary:** This file contains a C4 Component diagram showing the hexagonal architecture with Core Library, Ports (FormatParser trait, FileReader trait), and Infrastructure adapters (JPEG Parser, TIFF Parser, XMP Parser, MMap Reader). This diagram uses the C4-PlantUML standard library.
-    *   **Recommendation:** You SHOULD use the same PlantUML style and formatting as this existing diagram. Note how it uses `@startuml`/`@enduml` blocks, includes the C4 library (`!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml`), and uses the `LAYOUT_WITH_LEGEND()` directive. Your sequence diagram should follow similar conventions.
+*   **File:** `Cargo.toml`
+    *   **Summary:** This is the project manifest for the Rust workspace. It defines the package metadata, dependencies, and build profiles.
+    *   **Current State:** The project is properly initialized with all required dependencies (serde, serde_json, clap, nom, quick-xml, chrono, encoding_rs, memmap2, rayon) already specified. The build system is configured for both library and binary targets.
+    *   **Recommendation:** You DO NOT need to modify this file. The dependencies required for JSON schema work (serde, serde_json) are already present.
 
-*   **File:** `docs/diagrams/metadata_erd.mmd`
-    *   **Summary:** This file contains a Mermaid Entity Relationship Diagram showing the in-memory metadata data model with entities like File, MetadataMap, TagValue, TagDescriptor, FormatFamily, and IFD.
-    *   **Recommendation:** This shows that the project uses both PlantUML (for C4 diagrams) and Mermaid (for ERDs). For sequence diagrams, you MUST use PlantUML as specified in the task and as shown in the architecture blueprint example.
+*   **File:** `src/core/tag_descriptor.rs`
+    *   **Summary:** This file is a placeholder stub with only comments and an allow(dead_code) directive. It currently contains NO actual implementation.
+    *   **Current State:** Empty stub file with module documentation only.
+    *   **Recommendation:** This file will be implemented in task I1.T6 (next task after I1.T5). The JSON schema you create in this task MUST accurately reflect the Rust structure that will be implemented in tag_descriptor.rs during I1.T6.
 
-*   **File:** `.codemachine/artifacts/architecture/04_Behavior_and_Communication.md`
-    *   **Summary:** This is the authoritative source for the sequence diagram specification. It contains the EXACT PlantUML code that should be used as your reference/template, showing the complete workflow with all participants, interactions, and alt blocks.
-    *   **Recommendation:** You MUST copy/adapt the PlantUML sequence diagram code from this file (lines 107-160). This is the canonical specification that matches the acceptance criteria perfectly.
+*   **File:** `src/core/metadata_map.rs`
+    *   **Summary:** This file is a placeholder stub with only comments and an allow(dead_code) directive. It currently contains NO actual implementation.
+    *   **Current State:** Empty stub file with module documentation only.
+    *   **Recommendation:** This file will be implemented in I1.T6. Your schema focuses on TagDescriptor, not MetadataMap, so this file is NOT directly relevant to your current task.
 
-*   **File:** `src/lib.rs`
-    *   **Summary:** This is the library root that defines the overall module structure. It shows the three-layer architecture: Application Layer (cli, ffi), Domain Layer (core), and Infrastructure Layer (io, parsers, writers).
-    *   **Recommendation:** Understanding this structure helps you see how the participants in your sequence diagram map to the actual codebase modules. For example, "Core Library (API Facade)" maps to `src/core/operations.rs`, "JPEG Parser" maps to `src/parsers/jpeg/`, etc.
+*   **File:** `src/core/tag_value.rs`
+    *   **Summary:** This file is a placeholder stub with only comments. It currently contains NO actual TagValue enum implementation.
+    *   **Current State:** Empty stub file with module documentation only.
+    *   **Recommendation:** This file will be implemented in I1.T6. The value_type field in your JSON schema MUST match the TagValue enum variants that will be defined in this file (String, Integer, Float, Rational, Binary, DateTime, Struct).
 
-*   **File:** `src/parsers/mod.rs`
-    *   **Summary:** This shows that format-specific parsers are organized as submodules: `jpeg`, `png`, `tiff`, `xmp`, plus a `common` module and `format_detector`.
-    *   **Recommendation:** This confirms that the architecture is being implemented as designed. Your sequence diagram should show these components interacting according to the hexagonal architecture pattern.
+*   **File:** `src/error/mod.rs`
+    *   **Summary:** This file is a placeholder stub with only comments. It currently contains NO actual ExifToolError enum implementation.
+    *   **Current State:** Empty stub file with module documentation only.
+    *   **Recommendation:** This file is NOT relevant to your current task. You are defining the TagDescriptor schema, which does not involve error types.
 
-*   **File:** `src/core/mod.rs`
-    *   **Summary:** This defines the domain layer modules including `file_reader_trait`, `format_parser_trait`, `metadata_map`, `operations`, `tag_descriptor`, `tag_value`, and `validation`.
-    *   **Recommendation:** The "Core Library" participant in your sequence diagram orchestrates these domain layer components. The diagram should show how operations.rs would delegate to the parser traits and validation logic.
+*   **Directory:** `api/`
+    *   **Summary:** This directory exists but is currently empty.
+    *   **Current State:** The directory was created during project initialization (I1.T1) but contains no files yet.
+    *   **Recommendation:** You MUST create `api/tag_database_schema.json` in this directory. This is the primary deliverable for your task.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** The architecture blueprint document (`.codemachine/artifacts/architecture/04_Behavior_and_Communication.md`) contains a complete, reference-quality PlantUML sequence diagram starting at line 107. This is NOT just an example - it is the EXACT specification you should use. You can copy this code directly to `docs/diagrams/sequence_metadata_extraction.puml` as it already meets all acceptance criteria.
+*   **Tip:** According to the architecture, the `tag_id` field can be EITHER a `u16` (numeric ID like 0x010F for EXIF Make) OR a `String` (named ID like "XMP-dc:Creator"). Your JSON schema MUST support BOTH types. Use a `oneOf` constraint with two sub-schemas (one for integer, one for string).
 
-*   **Note:** The PlantUML code in the architecture blueprint already includes:
-    - All required participants (User, CLI, Core, Detector, JPEG, EXIF, XMP, IO, Registry, FS)
-    - The complete interaction flow from user command to output
-    - TWO `alt` blocks for EXIF and XMP segment parsing
-    - Proper formatting and syntax
-    - Clear comments explaining the workflow steps
+*   **Tip:** The `format_family` field should be constrained to a specific set of values. Based on the architecture, the valid enum values are: `"EXIF"`, `"XMP"`, `"IPTC"`, `"GPS"`, `"ICC_Profile"`, `"Photoshop"`, `"MakerNotes"`, `"JFIF"`, `"PNG"`, `"PDF"`, `"QuickTime"`. You SHOULD define this as an enum constraint in the schema.
 
-*   **Warning:** Do NOT invent your own sequence diagram structure. The acceptance criteria explicitly states "sequence accurately reflects workflow described in architecture blueprint Section 3.7" - this means you MUST use the diagram from that section as your source.
+*   **Tip:** The `value_type` field represents the TagValue enum variants from the architecture. The valid values based on the ERD and architecture are: `"String"`, `"Integer"`, `"Float"`, `"Rational"`, `"Binary"`, `"DateTime"`, `"Struct"`. You MUST constrain this field to these exact values using an enum.
 
-*   **Tip:** After creating the file, you can validate the PlantUML syntax by:
-    1. Installing PlantUML locally: `brew install plantuml` (macOS) or equivalent
-    2. Running: `plantuml -tsvg docs/diagrams/sequence_metadata_extraction.puml`
-    3. This should generate a `.svg` file without errors
+*   **Note:** The schema you create will be used in TWO ways:
+    1. **Immediate (I1.T6):** As documentation for implementing the Rust TagDescriptor struct in the next task
+    2. **Future (I5.T5):** As a validation schema for the build.rs script that will auto-generate tag definitions from ExifTool source
 
-*   **Note:** The existing `component_architecture.puml` file was already validated (task I1.T2 is marked done), so you can reference its structure for confirmation that your PlantUML syntax is correct.
+*   **Warning:** The acceptance criteria explicitly require validation against JSON Schema Draft 7 specification. You MUST include `"$schema": "http://json-schema.org/draft-07/schema#"` as the first field in your schema. This ensures compatibility with standard validators.
 
-*   **Tip:** The diagram shows the hexagonal architecture in action:
-    - **Application Layer**: User → CLI
-    - **Domain Layer**: Core Library (API Facade) orchestrating operations
-    - **Ports**: Format Detector, FormatParser trait (implemented by JPEG Parser)
-    - **Infrastructure**: JPEG/EXIF/XMP parsers, I/O Layer, File System
-    - This layering is critical to the architecture and should be visually clear in the sequence diagram
+*   **Tip:** Per the acceptance criteria, you SHOULD include an example valid TagDescriptor object that passes schema validation. Consider adding this as documentation in a comment or in a separate `examples` section within the schema itself (though not strictly required by JSON Schema spec).
 
-*   **Note:** The `alt` blocks in PlantUML create conditional/alternative flows. Your diagram must have:
-    1. `alt EXIF Segment Found (0xFFE1)` - showing EXIF parsing workflow
-    2. `alt XMP Segment Found (0xFFE1 with XMP marker)` - showing XMP parsing workflow
-    These are not mutually exclusive; a single JPEG can have both EXIF and XMP segments.
+*   **Note:** Based on the ERD diagram from the architecture, the TagDescriptor entity has the following field characteristics:
+    - `tag_name`: PRIMARY KEY (required, string, unique identifier)
+    - `tag_id`: Can be u16 or String (required)
+    - `format_family`: Foreign key to FormatFamily (required, string from enum)
+    - `writable`: Boolean (required, indicates if tag can be written)
+    - `value_type`: Enum of TagType (required)
+    - `description`: String (required, human-readable description)
+    - `example_values`: Array of strings (required)
 
-*   **Tip:** The workflow breakdown at the end of the architecture blueprint section (lines 162-172) provides excellent documentation to include in comments or as a separate documentation block. This helps future developers understand the sequence diagram.
+*   **Tip:** All fields mentioned in the task description are REQUIRED fields. None are optional. Your schema constraints should reflect this with appropriate `required` array specification.
+
+*   **Warning:** The schema will be consumed by Rust code generation tools in iteration I5. Ensure field names use snake_case (Rust convention) NOT camelCase (JavaScript convention). Use: `tag_id`, `tag_name`, `format_family`, `value_type`, `example_values` (NOT `tagId`, `tagName`, etc.).
+
+### Validation Strategy
+
+*   **Strategy:** After creating the schema file, you MUST validate it. The acceptance criteria mention two validation approaches:
+    1. **Online validator:** Use a service like https://www.jsonschemavalidator.net/ with Draft 7 selected
+    2. **CLI validator:** Use `ajv-cli` if available (`npm install -g ajv-cli`, then `ajv validate -s schema.json -d data.json`)
+
+*   **Testing:** Create at least one example TagDescriptor JSON object that conforms to your schema. Example based on architecture:
+    ```json
+    {
+      "tag_id": 271,
+      "tag_name": "EXIF:Make",
+      "format_family": "EXIF",
+      "writable": true,
+      "value_type": "String",
+      "description": "Manufacturer of the recording equipment",
+      "example_values": ["Canon", "Nikon", "Sony"]
+    }
+    ```
+    This example should successfully validate against your schema.
+
+### Project Context
+
+*   **Completed Tasks:** Tasks I1.T1 (project initialization), I1.T2 (component diagram), I1.T3 (ERD), and I1.T4 (sequence diagram) are complete. The project structure, dependencies, and architectural documentation are all in place.
+
+*   **Next Task:** After you complete I1.T5, the next task will be I1.T6 (Implement Core Domain Models), which will create the actual Rust structs based on the schema you define. Your schema MUST be accurate and complete to enable smooth implementation in I1.T6.
+
+*   **Directory Structure:** The `api/` directory is the correct location for API specifications and schemas. The `docs/` directory contains diagrams and documentation. The `src/` directory contains Rust source code. Keep these concerns separated.
