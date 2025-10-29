@@ -10,6 +10,9 @@ mod jpeg_write_tests;
 #[path = "integration/operations_tests.rs"]
 mod operations_tests;
 
+#[path = "integration/pdf_tests.rs"]
+mod pdf_tests;
+
 #[path = "integration/png_tests.rs"]
 mod png_tests;
 
