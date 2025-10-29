@@ -6,3 +6,6 @@ mod jpeg_tests;
 
 #[path = "integration/operations_tests.rs"]
 mod operations_tests;
+
+#[path = "integration/png_tests.rs"]
+mod png_tests;
