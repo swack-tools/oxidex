@@ -198,7 +198,10 @@ mod tests {
         map.insert("EXIF:Make", TagValue::new_string("Canon"));
         let old = map.insert("EXIF:Make", TagValue::new_string("Sony"));
 
-        assert_eq!(old.and_then(|v| v.as_string().map(String::from)), Some("Canon".to_string()));
+        assert_eq!(
+            old.and_then(|v| v.as_string().map(String::from)),
+            Some("Canon".to_string())
+        );
         assert_eq!(map.get_string("EXIF:Make"), Some("Sony"));
     }
 

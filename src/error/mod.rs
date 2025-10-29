@@ -140,7 +140,7 @@ mod tests {
         let err = ExifToolError::from(io_err);
 
         match err {
-            ExifToolError::IoError(_) => {},
+            ExifToolError::IoError(_) => {}
             _ => panic!("Expected IoError variant"),
         }
 
@@ -156,7 +156,7 @@ mod tests {
             ExifToolError::ParseError { message, offset } => {
                 assert_eq!(message, "Invalid JPEG marker");
                 assert_eq!(*offset, None);
-            },
+            }
             _ => panic!("Expected ParseError variant"),
         }
 
@@ -173,7 +173,7 @@ mod tests {
             ExifToolError::ParseError { message, offset } => {
                 assert_eq!(message, "Unexpected byte");
                 assert_eq!(*offset, Some(1024));
-            },
+            }
             _ => panic!("Expected ParseError variant"),
         }
 
@@ -188,7 +188,7 @@ mod tests {
         match &err {
             ExifToolError::TagNotFound { tag_name } => {
                 assert_eq!(tag_name, "EXIF:Make");
-            },
+            }
             _ => panic!("Expected TagNotFound variant"),
         }
 
@@ -205,7 +205,7 @@ mod tests {
             ExifToolError::InvalidTagValue { tag_name, reason } => {
                 assert_eq!(tag_name, "EXIF:ISO");
                 assert_eq!(reason, "value out of range");
-            },
+            }
             _ => panic!("Expected InvalidTagValue variant"),
         }
 
@@ -222,7 +222,7 @@ mod tests {
         match &err {
             ExifToolError::UnsupportedFormat { message } => {
                 assert_eq!(message, "BMP files are not supported");
-            },
+            }
             _ => panic!("Expected UnsupportedFormat variant"),
         }
 

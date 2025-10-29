@@ -61,7 +61,10 @@ impl TagValue {
 
     /// Creates a new Rational variant
     pub fn new_rational(numerator: i32, denominator: i32) -> Self {
-        TagValue::Rational { numerator, denominator }
+        TagValue::Rational {
+            numerator,
+            denominator,
+        }
     }
 
     /// Creates a new Binary variant
@@ -173,10 +176,13 @@ mod tests {
         let value = TagValue::new_rational(1, 100);
         assert!(value.is_rational());
         match value {
-            TagValue::Rational { numerator, denominator } => {
+            TagValue::Rational {
+                numerator,
+                denominator,
+            } => {
                 assert_eq!(numerator, 1);
                 assert_eq!(denominator, 100);
-            },
+            }
             _ => panic!("Expected Rational variant"),
         }
     }
@@ -214,8 +220,11 @@ mod tests {
         match value {
             TagValue::Struct(s) => {
                 assert_eq!(s.len(), 2);
-                assert_eq!(s.get("author").and_then(|v| v.as_string()), Some("John Doe"));
-            },
+                assert_eq!(
+                    s.get("author").and_then(|v| v.as_string()),
+                    Some("John Doe")
+                );
+            }
             _ => panic!("Expected Struct variant"),
         }
     }
