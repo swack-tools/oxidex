@@ -10,31 +10,18 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I1.T14",
-  "iteration_id": "I1",
-  "iteration_goal": "Establish project foundation with directory structure, build system, core domain models, architectural diagrams, and basic JPEG EXIF parsing capability to validate end-to-end workflow.",
-  "description": "Create integration test in tests/integration/jpeg_tests.rs that demonstrates end-to-end workflow: (1) Use MMapReader to open sample JPEG file (create sample with EXIF in tests/fixtures/jpeg/), (2) Detect format using format_detector, (3) Parse JPEG segments, (4) Parse EXIF IFD from APP1 segment, (5) Extract at least 3 tag values (Make, Model, DateTime), (6) Print extracted values. This test validates the entire parsing pipeline from I1.T8-T11. Test should pass.",
-  "agent_type_hint": "BackendAgent",
-  "inputs": "All code from I1.T8-T11",
-  "target_files": [
-    "tests/integration/jpeg_tests.rs",
-    "tests/fixtures/jpeg/sample_with_exif.jpg"
-  ],
-  "input_files": [
-    "src/parsers/format_detector.rs",
-    "src/parsers/jpeg/segment_parser.rs",
-    "src/parsers/tiff/ifd_parser.rs",
-    "src/io/mmap_reader.rs"
-  ],
-  "deliverables": "Integration test demonstrating end-to-end JPEG EXIF extraction, sample JPEG file with EXIF metadata",
-  "acceptance_criteria": "Test successfully opens JPEG file, format detector identifies file as JPEG, segment parser finds APP1 segment, IFD parser extracts Make, Model, DateTime tags, test assertions verify tag values are non-empty strings, cargo test jpeg_tests passes",
-  "dependencies": [
-    "I1.T8",
-    "I1.T9",
-    "I1.T10",
-    "I1.T11"
-  ],
-  "parallelizable": false,
+  "task_id": "I2.T1",
+  "iteration_id": "I2",
+  "iteration_goal": "Implement tag registry with subset of ExifTool tags, core metadata read/write operations, basic CLI with argument parsing, and extend format support to include XMP parsing and PNG format.",
+  "description": "Create comprehensive Markdown documentation for the Rust library API in docs/api/library_api.md. Document public API surface: Metadata::from_path(), Metadata::from_bytes(), MetadataMap accessors (get_string(), get_i64(), get_f64(), get_datetime(), iter_tags()), builder pattern for write operations, error types and handling. Include Rust code examples for common use cases: extract all tags, get specific tag, modify tag value, copy metadata between files. Reference tag naming convention (e.g., EXIF:Make, XMP:Creator).",
+  "agent_type_hint": "DocumentationAgent",
+  "inputs": "Section 2 (API Contract Style), Section 2.1 (Key Architectural Artifacts), I1.T6 core models",
+  "target_files": ["docs/api/library_api.md"],
+  "input_files": ["src/core/metadata_map.rs", "src/core/tag_value.rs", "src/error.rs"],
+  "deliverables": "Comprehensive API documentation in Markdown, at least 5 code examples",
+  "acceptance_criteria": "Document covers all major API functions, code examples compile (can be tested with cargo test --doc later), tag naming convention clearly explained, error handling patterns documented, well-formatted Markdown with table of contents",
+  "dependencies": ["I1.T6"],
+  "parallelizable": true,
   "done": false
 }
 ```
@@ -45,76 +32,165 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: Integration Test Plan - Success Criteria
+### Context: api-style (from 04_Behavior_and_Communication.md)
 
-**From:** docs/testing/integration_test_plan.md (Section 1.3)
+```markdown
+#### API Style
 
-The integration test plan defines:
+**Primary API**: **Rust Library API** (procedural + builder pattern)
 
-1. **Functional Correctness**: 99%+ tag value match rate vs. Perl ExifTool for well-formed files
-2. **Graceful Degradation**: Appropriate error handling for malformed files (no crashes/hangs)
-3. **Performance**: Within 2x performance of Perl ExifTool for batch operations
-4. **Cross-Platform**: Pass on Linux, macOS, and Windows
-5. **Regression Prevention**: No degradation in match rate or performance across commits
-
-### Context: Integration Test Plan - Test Image Corpus
-
-**From:** docs/testing/integration_test_plan.md (Section 2)
-
-- Target: 100+ images across all supported formats
-- JPEG category includes: Simple (basic EXIF), Complex (GPS + maker notes + thumbnails), Edge Cases, Malformed
-- Test fixture location: `tests/fixtures/jpeg/`
-- Sample already exists: `tests/fixtures/jpeg/sample_with_exif.jpg`
-
-### Context: Integration Test Plan - Test Implementation Pattern
-
-**From:** docs/testing/integration_test_plan.md (Section 6.1)
-
-Example test pattern from the integration test plan:
+The core API is designed for Rust consumers and follows idiomatic patterns:
 
 ```rust
-#[test]
-fn test_format_jpeg_simple() {
-    let metadata = extract_metadata("tests/fixtures/jpeg/simple/canon_eos_5d.jpg").unwrap();
-    assert_eq!(metadata.get("EXIF:Make").unwrap().as_string(), "Canon");
-    assert_eq!(metadata.get("EXIF:Model").unwrap().as_string(), "Canon EOS 5D");
-    assert!(metadata.contains_key("EXIF:DateTimeOriginal"));
+use exiftool_rs::{Metadata, FileFormat};
+
+// Simple extraction
+let metadata = Metadata::from_path("photo.jpg")?;
+let camera_model = metadata.get_string("EXIF:Model")?;
+
+// Builder pattern for complex operations
+let result = Metadata::from_path("input.jpg")?
+    .copy_tags_to("output.jpg")?
+    .with_tags(&["EXIF:DateTime", "EXIF:Make", "EXIF:Model"])
+    .preserve_file_times(true)
+    .execute()?;
+```
+
+**Secondary APIs**:
+
+1. **CLI Interface**: POSIX-style arguments mimicking ExifTool
+   ```bash
+   exiftool-rs -EXIF:DateTime photo.jpg
+   exiftool-rs -json -r /photos/  # Recursive JSON output
+   exiftool-rs -TagsFromFile src.jpg -all:all dest.jpg  # Copy metadata
+   ```
+
+2. **C FFI**: Minimal C-compatible surface for foreign language bindings
+   ```c
+   // C API example
+   ExifToolHandle* handle = exiftool_create();
+   ExifToolError err = exiftool_read_file(handle, "photo.jpg");
+   const char* model = exiftool_get_string(handle, "EXIF:Model");
+   exiftool_destroy(handle);
+   ```
+
+**Justification**:
+
+- **Rust-First**: Leverages Rust's type system for compile-time safety (no invalid tag names at compile time via const tag identifiers)
+- **No Network API**: ExifTool-RS is a library/tool, not a service. REST/GraphQL APIs would be implemented by consuming applications
+- **FFI for Interop**: Enables Python (`pyo3`), Node.js (`neon`), Go (`cgo`) bindings without compromising Rust API ergonomics
+```
+
+### Context: communication-patterns (from 04_Behavior_and_Communication.md)
+
+```markdown
+#### Communication Patterns
+
+**Primary Pattern**: **Synchronous Request/Response**
+
+All operations are synchronous:
+1. User/application calls API function
+2. Function parses file, extracts/modifies metadata
+3. Function returns result or error
+4. Transaction completes
+
+**Rationale**:
+- File I/O is the bottleneck, not computation. Async overhead provides no benefit.
+- Synchronous code is simpler to reason about for library consumers.
+- Batch parallelism is achieved via `rayon` at the application level (parallel iterator over file list), not async/await.
+
+**Batch Processing**: Uses data parallelism (not message passing)
+
+```rust
+use rayon::prelude::*;
+
+let results: Vec<Result<Metadata>> = file_paths
+    .par_iter()  // Rayon parallel iterator
+    .map(|path| Metadata::from_path(path))
+    .collect();
+```
+
+Rayon's work-stealing scheduler distributes file processing across CPU cores automatically.
+
+**Error Handling**: `Result<T, ExifToolError>` throughout
+
+```rust
+pub enum ExifToolError {
+    IoError(std::io::Error),
+    ParseError { format: String, details: String },
+    TagNotFound { tag_name: String },
+    InvalidTagValue { tag_name: String, expected_type: String },
+    UnsupportedFormat { format: String },
 }
 ```
 
-### Context: Integration Test Plan - Tag Extraction Validation
+Errors propagate via `?` operator, no exceptions.
+```
 
-**From:** docs/testing/integration_test_plan.md (Section 6.2)
+### Context: api-contract-style (from 01_Plan_Overview_and_Setup.md)
 
-- Tags to extract: Make (0x010F), Model (0x0110), DateTime (0x0132)
-- Values should be non-empty strings
-- EXIF tags are stored in APP1 segments with "Exif\0\0" header followed by TIFF IFD structure
+```markdown
+*   **API Contract Style:**
+    *   **Primary:** Rust Library API (procedural + builder pattern)
+        ```rust
+        let metadata = Metadata::from_path("photo.jpg")?;
+        let camera = metadata.get_string("EXIF:Model")?;
+        ```
+    *   **Secondary:** CLI (POSIX-style arguments, ExifTool-compatible)
+        ```bash
+        exiftool-rs -EXIF:DateTime photo.jpg
+        exiftool-rs -json -r /photos/
+        ```
+    *   **Tertiary:** C FFI (minimal C-compatible surface)
+        ```c
+        ExifToolHandle* h = exiftool_create();
+        exiftool_read_file(h, "photo.jpg");
+        ```
 
-### Context: Task I1.T14 Specification
+    *See API Specification (Section 2.1, Iteration 2, Task 1)*
+```
 
-**From:** .codemachine/artifacts/plan/02_Iteration_I1.md
+### Context: technology-stack-summary (from 02_Architecture_Overview.md)
 
-**Task Requirements**:
-1. Create integration test demonstrating end-to-end workflow
-2. Use MMapReader to open JPEG file with EXIF
-3. Detect format using format_detector
-4. Parse JPEG segments to find APP1
-5. Parse EXIF IFD from APP1 segment
-6. Extract at least 3 tag values: Make, Model, DateTime
-7. Test should PASS with cargo test
+```markdown
+### 3.2. Technology Stack Summary
 
-**File Structure**:
-- Test file: `tests/integration/jpeg_tests.rs`
-- Sample JPEG: `tests/fixtures/jpeg/sample_with_exif.jpg` (already exists!)
-- Integration tests directory: `tests/integration/` (already exists!)
+| **Category** | **Technology Choice** | **Justification** |
+|--------------|----------------------|-------------------|
+| **Core Language** | Rust 1.75+ (2021 Edition) | Memory safety, zero-cost abstractions, excellent concurrency primitives, cross-platform support |
+| **CLI Framework** | `clap` v4 (derive API) | Industry standard, excellent help generation, argument validation, backward compatibility via value parsers |
+| **Binary Parsing** | `nom` v7 + `binrw` | `nom` for complex formats (TIFF, QuickTime), `binrw` for simple struct-based formats (BMP, WAV) |
+| **XML Parsing (XMP)** | `quick-xml` | Streaming parser, low memory footprint, namespace support for XMP |
+| **JSON Output** | `serde_json` | De facto standard, excellent performance, integration with domain models via derives |
+| **Date/Time** | `chrono` | Comprehensive timezone support, EXIF date format parsing |
+| **String Encoding** | `encoding_rs` (WHATWG standard) | Handles legacy encodings in IPTC/EXIF (Latin1, UTF-8, UTF-16) |
+| **Image I/O** | `memmap2` (memory-mapped files) | Efficient large file access without loading entire file into memory |
+| **Concurrency** | `rayon` (data parallelism) | Transparent batch processing parallelization, work-stealing scheduler |
+| **Testing** | `cargo test` + `proptest` (property-based) | Unit tests for parsers, property-based testing for round-trip serialization |
+| **Fuzzing** | `cargo-fuzz` (libFuzzer) | Continuous fuzzing of format parsers to discover crash/hang bugs |
+| **C FFI** | `cbindgen` (header generation) | Automated C header generation from Rust API |
+| **Documentation** | `rustdoc` + `mdBook` (user guide) | API docs from source comments, separate user guide for CLI |
+| **Build System** | `cargo` + `cross` (cross-compilation) | Standard Rust tooling, `cross` for ARM/Windows builds from Linux |
+| **CI/CD** | GitHub Actions | Free for open source, matrix builds across OS/architecture |
+| **Code Quality** | `clippy`, `rustfmt`, `cargo-audit` | Linting, formatting, dependency vulnerability scanning |
+| **Benchmarking** | `criterion` | Statistical benchmarking framework, regression detection |
+```
 
-**Acceptance Criteria**:
-- Test successfully opens JPEG file
-- Format detector identifies file as JPEG
-- Segment parser finds APP1 segment
-- IFD parser extracts Make, Model, DateTime tags
-- Test assertions verify tag values are non-empty strings
-- `cargo test jpeg_tests` passes
+### Context: data-model-overview (from 01_Plan_Overview_and_Setup.md)
+
+```markdown
+*   **Data Model Overview:**
+    *   **File:** Represents media file being processed (path, format, size)
+    *   **MetadataMap:** Collection of all tags extracted from a file
+    *   **TagValue:** Single metadata tag with name, value, type information, and optional byte offset
+    *   **TagDescriptor:** Tag definition from database (ID, name, type constraints, format family)
+    *   **FormatFamily:** Grouping of metadata standards (EXIF, XMP, IPTC, MakerNotes)
+    *   **IFD (Image File Directory):** TIFF-specific structural element for tag organization
+
+    *See ERD (Section 2.1, Iteration 1, Task 3)*
+
+    **Note:** No persistent database storage. All data structures are in-memory during processing, serialized to JSON/text output or written back to file metadata.
+```
 
 ---
 
@@ -124,79 +200,72 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `src/parsers/format_detector.rs`
-    *   **Summary:** Implements format detection by examining magic bytes. JPEG detection looks for `0xFF 0xD8 0xFF` signature.
-    *   **Key Function:** `pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat>`
-    *   **Returns:** `FileFormat::JPEG` for JPEG files, `FileFormat::Unknown` for unrecognized formats
-    *   **Recommendation:** Import and use `detect_format()` function. It takes any `&dyn FileReader` and returns `FileFormat` enum.
+*   **File:** `src/core/metadata_map.rs`
+    *   **Summary:** This file implements the `MetadataMap` struct, which is the core data structure for storing metadata. It wraps a `HashMap<String, TagValue>` and provides typed accessor methods like `get_string()`, `get_integer()`, `get_float()`. It has full serde support for JSON serialization. The file has comprehensive unit tests covering all functionality.
+    *   **Recommendation:** Your API documentation MUST reference the existing methods on `MetadataMap`: `new()`, `insert()`, `get()`, `get_string()`, `get_integer()`, `get_float()`, `iter()`, `keys()`, `values()`, `len()`, `is_empty()`. These are already implemented and tested. Note that the task description mentions methods like `get_i64()`, `get_f64()`, and `get_datetime()` - these DO NOT yet exist. The current methods are `get_integer()` (returns `Option<i64>`), `get_float()` (returns `Option<f64>`), but there is no `get_datetime()` method yet.
 
-*   **File:** `src/parsers/jpeg/segment_parser.rs`
-    *   **Summary:** Parses JPEG segment structure using nom combinators. Identifies APP1 segments (0xFFE1) containing EXIF/XMP data.
-    *   **Key Function:** `pub fn parse_segments<'a>(reader: &'a dyn FileReader) -> Result<Vec<Segment<'a>>, ExifToolError>`
-    *   **Key Struct:** `Segment<'a>` with fields: `marker: u16`, `offset: u64`, `data: &'a [u8]`
-    *   **Helper Methods:** `segment.is_app1()` returns true for APP1 segments (marker == 0xFFE1)
-    *   **EXIF Identification:** APP1 data starts with "Exif\0\0" (6 bytes), followed by TIFF header
-    *   **Recommendation:** Call `parse_segments()`, iterate through results, filter for `segment.is_app1()`, check if data starts with `b"Exif\0\0"`, then extract TIFF data starting at byte offset 6.
+*   **File:** `src/core/tag_value.rs`
+    *   **Summary:** This file defines the `TagValue` enum with variants: `String`, `Integer`, `Float`, `Rational`, `Binary`, `DateTime`, and `Struct`. Each variant has constructors (e.g., `new_string()`, `new_integer()`) and type checkers (e.g., `is_string()`, `is_integer()`) plus type accessors (e.g., `as_string()`, `as_integer()`). It uses serde with `#[serde(tag = "type", content = "value")]` for JSON serialization.
+    *   **Recommendation:** Your API documentation MUST explain how `TagValue` works and how users can work with the different value types. Document the enum variants and the accessor methods. Note that `DateTime` uses `chrono::DateTime<Utc>` internally.
 
-*   **File:** `src/parsers/tiff/ifd_parser.rs`
-    *   **Summary:** Parses TIFF Image File Directory structure with support for both little-endian and big-endian byte order.
-    *   **Key Function:** `pub fn parse_ifd(reader: &dyn FileReader, ifd_offset: u64, byte_order: ByteOrder) -> Result<Vec<(u16, Vec<u8>)>>`
-    *   **Returns:** Vector of `(tag_id: u16, raw_value: Vec<u8>)` tuples
-    *   **Byte Order Enum:** `pub enum ByteOrder { LittleEndian, BigEndian }`
-    *   **Tag IDs:** Make = 0x010F, Model = 0x0110, DateTime = 0x0132
-    *   **TIFF Structure:** First 2 bytes = byte order marker, bytes 2-3 = magic number 42, bytes 4-7 = IFD offset (usually 8)
-    *   **Recommendation:** For EXIF in JPEG APP1 segments, TIFF data starts after "Exif\0\0" header. Read byte order from first 2 bytes, then call `parse_ifd()` with appropriate `ByteOrder` enum and IFD offset from TIFF header.
+*   **File:** `src/error/mod.rs`
+    *   **Summary:** This file implements the `ExifToolError` enum with variants: `IoError`, `ParseError`, `TagNotFound`, `InvalidTagValue`, and `UnsupportedFormat`. It implements `std::error::Error` and `Display` traits. There are helper constructors like `parse_error()`, `tag_not_found()`, etc. There's also a type alias `Result<T> = std::result::Result<T, ExifToolError>`.
+    *   **Recommendation:** Your API documentation MUST include a section on error handling. Explain all the error variants and when they occur. Document the `Result<T>` type alias pattern used throughout the library. Show examples of error handling with the `?` operator.
 
-*   **File:** `src/io/mmap_reader.rs`
-    *   **Summary:** Memory-mapped file reader implementing `FileReader` trait. Provides zero-copy access to file contents.
-    *   **Key Function:** `pub fn new(path: &Path) -> io::Result<Self>`
-    *   **Implements:** `FileReader` trait with `read(&self, offset: u64, length: usize) -> io::Result<&[u8]>` and `size(&self) -> u64`
-    *   **Recommendation:** Create reader with `MMapReader::new(Path::new("tests/fixtures/jpeg/sample_with_exif.jpg"))?`
+*   **File:** `src/core/tag_descriptor.rs`
+    *   **Summary:** This file defines `TagDescriptor` (containing tag metadata like ID, name, format family, type, description), `TagId` (enum for numeric or named IDs), `FormatFamily` (enum for EXIF, XMP, IPTC, GPS, etc.), and `ValueType` (enum for String, Integer, Float, etc.). These are used to describe tags in the tag registry.
+    *   **Recommendation:** While users won't typically create `TagDescriptor` objects directly, your API documentation should mention the tag naming convention that uses the format family prefix (e.g., "EXIF:Make", "XMP:Creator", "GPS:Latitude"). This is central to how tags are identified in the API.
+
+*   **File:** `src/core/operations.rs`
+    *   **Summary:** This file currently has only a module comment and an `#![allow(dead_code)]` directive. It's essentially empty - the actual read/write operations have not been implemented yet.
+    *   **Recommendation:** Your API documentation will describe functions that DON'T YET EXIST, such as `Metadata::from_path()`, `Metadata::from_bytes()`, and builder patterns for write operations. This is intentional - you are documenting the PLANNED API before implementation. Make sure your code examples follow Rust idioms and are consistent with the architecture's design (synchronous, Result-based error handling, builder pattern for complex operations).
+
+*   **File:** `src/lib.rs`
+    *   **Summary:** The library root file that defines the module structure and exports the public API. It currently exports `cli`, `ffi`, `core`, `io`, `parsers`, `writers`, `error`, and `tag_db` modules. The core types are re-exported from `src/core/mod.rs`.
+    *   **Recommendation:** When you document the API, consider that users will typically import types from the root crate (`use exiftool_rs::core::MetadataMap;`) or they might use the `Metadata` struct (not yet implemented) directly from the root.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** The test fixture `tests/fixtures/jpeg/sample_with_exif.jpg` ALREADY EXISTS! I verified this with `find` command. You do NOT need to create it.
+*   **Tip:** The architecture blueprint shows example code with a `Metadata` struct that provides methods like `from_path()` and a builder pattern. However, I found NO such struct in the current codebase. You are documenting a FUTURE API. The current code only has `MetadataMap`, `TagValue`, and related types. Your documentation should describe the planned `Metadata` API that will wrap these lower-level types.
 
-*   **Tip:** The `tests/integration/` directory already exists with a `jpeg_tests.rs` file (13KB). You should READ this file first to see if there's already partial implementation or if it needs to be completely rewritten.
+*   **Note:** The tag naming convention follows the pattern `<FormatFamily>:<TagName>`, e.g., "EXIF:Make", "XMP-dc:Creator", "GPS:Latitude". This convention MUST be clearly explained in your documentation, as it's how users will identify tags.
 
-*   **Tip:** EXIF data in JPEG APP1 segments has a specific structure:
-    1. APP1 marker: 0xFFE1 (2 bytes)
-    2. Segment length: big-endian u16 (2 bytes)
-    3. EXIF identifier: "Exif\0\0" (6 bytes)
-    4. TIFF header: byte order marker (2 bytes) + magic 42 (2 bytes) + IFD offset (4 bytes)
-    5. IFD data starting at the offset specified in TIFF header
+*   **Note:** The architecture emphasizes a **builder pattern** for write operations. Your documentation should show examples of this pattern, even though the implementation doesn't exist yet. For example:
+    ```rust
+    Metadata::from_path("input.jpg")?
+        .set_tag("EXIF:Artist", "John Doe")?
+        .set_tag("EXIF:Copyright", "2025")?
+        .write_to("output.jpg")?;
+    ```
 
-*   **Note:** When extracting tag values from `parse_ifd()`, the function returns `Vec<(u16, Vec<u8>)>`. The raw bytes need to be interpreted based on tag type. For ASCII strings (Make, Model, DateTime), the bytes are null-terminated strings. You should convert them with `String::from_utf8_lossy(&bytes).trim_end_matches('\0')`.
+*   **Note:** The current `MetadataMap` methods are:
+    - `get_string()` → returns `Option<&str>`
+    - `get_integer()` → returns `Option<i64>`
+    - `get_float()` → returns `Option<f64>`
 
-*   **Note:** The byte order detection is critical. EXIF data can be either little-endian (Intel, "II") or big-endian (Motorola, "MM"). The first 2 bytes of the TIFF header indicate which to use:
-    - `[0x49, 0x49]` = little-endian (`ByteOrder::LittleEndian`)
-    - `[0x4D, 0x4D]` = big-endian (`ByteOrder::BigEndian`)
+    But the task description asks you to document:
+    - `get_i64()` (same as `get_integer()`?)
+    - `get_f64()` (same as `get_float()`?)
+    - `get_datetime()` (NOT implemented)
+    - `iter_tags()` (currently just `iter()`)
 
-*   **Warning:** The TIFF IFD offset in the header is relative to the START of the TIFF data (after "Exif\0\0"), NOT the start of the file. When creating a reader for the IFD parser, you need to create a temporary in-memory reader around the TIFF data slice (starting after "Exif\0\0").
+    You should either (a) document the existing method names, or (b) document the planned method names that will be added. I recommend documenting both: show the existing methods AND note that convenience aliases or additional methods are planned.
 
-    The cleanest approach is to create a `TestReader` struct (similar to those in existing test files) that implements `FileReader` trait and wraps the TIFF data slice.
+*   **Tip:** The acceptance criteria says "Code examples compile (can be tested with cargo test --doc later)". This means you should write your examples in a way that COULD be tested with rustdoc tests, even if they won't compile yet because the `Metadata` API isn't implemented. Use the `rust,ignore` tag in your code blocks for examples that reference unimplemented APIs, or use `rust,no_run` for examples that compile but shouldn't be executed.
 
-*   **Tip:** Look at the existing test implementations in `src/parsers/jpeg/segment_parser.rs` (lines 280-566) and `src/parsers/tiff/ifd_parser.rs` (lines 303-698) for patterns on how to create test readers and structure assertions.
+*   **Warning:** The task says to include "at least 5 code examples". Make sure you cover diverse use cases:
+    1. Simple extraction (read metadata from file)
+    2. Get specific tag value
+    3. Modify tag value (write operation)
+    4. Copy metadata between files
+    5. Batch processing with error handling
 
-*   **Note:** The test should be structured as an integration test, not a unit test. This means:
-    - It should test the FULL workflow from file opening to tag extraction
-    - It should use the actual file reader implementations (MMapReader)
-    - It should demonstrate that all components work together correctly
-    - Print statements (using `println!`) are acceptable for debugging but should show actual extracted values
+    Show both the high-level `Metadata` API and the lower-level `MetadataMap` API where appropriate.
 
-*   **Critical:** Make sure to handle the Result types properly. The functions return `Result<T, E>` types:
-    - `MMapReader::new()` returns `io::Result<MMapReader>`
-    - `detect_format()` returns `io::Result<FileFormat>`
-    - `parse_segments()` returns `Result<Vec<Segment>, ExifToolError>`
-    - `parse_ifd()` returns `Result<Vec<(u16, Vec<u8>)>, ExifToolError>`
-
-    Use `.expect()` or `.unwrap()` with descriptive messages in tests, or use the `?` operator with a test function that returns `Result<(), Box<dyn std::error::Error>>`.
-
-*   **Critical Architecture Note:** After reading the JPEG segments and finding the APP1 segment with EXIF data, you need to:
-    1. Extract the TIFF data starting at offset 6 within the APP1 segment data (skipping "Exif\0\0")
-    2. Read the first 2 bytes to determine byte order
-    3. Read bytes 4-7 (as u32 in the detected byte order) to get the IFD offset
-    4. Create a new `TestReader` wrapping the TIFF data slice
-    5. Call `parse_ifd()` with this reader, the IFD offset, and the detected byte order
-
-*   **Example TestReader Pattern:** See `src/parsers/tiff/ifd_parser.rs:309-337` for the exact `TestReader` implementation pattern you should use.
+*   **Tip:** The acceptance criteria requires "Well-formatted Markdown with table of contents". Make sure you structure your documentation with clear sections, headers, and a TOC at the top. Consider sections like:
+    - Introduction
+    - Core Concepts
+    - API Reference
+    - Code Examples
+    - Error Handling
+    - Tag Naming Convention
