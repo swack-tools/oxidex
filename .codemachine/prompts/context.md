@@ -10,25 +10,25 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I2.T11",
-  "iteration_id": "I2",
-  "iteration_goal": "Implement tag registry with subset of ExifTool tags, core metadata read/write operations, basic CLI with argument parsing, and extend format support to include XMP parsing and PNG format.",
-  "description": "Set up benchmarking infrastructure in benches/parse_benchmarks.rs using criterion crate. Create benchmarks for: (1) Format detection, (2) JPEG segment parsing, (3) TIFF IFD parsing, (4) Full read_metadata() on sample JPEG. Use Criterion::default() configuration. Run benchmarks to establish baseline performance. Add [[bench]] section to Cargo.toml. Document how to run benchmarks in README.",
+  "task_id": "I3.T2",
+  "iteration_id": "I3",
+  "iteration_goal": "Implement metadata write operations with atomic file handling, extend TIFF parser for standalone TIFF files (not just EXIF in JPEG), implement metadata serialization, and add tag modification capabilities to CLI.",
+  "description": "Implement TIFF IFD serializer in src/writers/tiff_writer.rs. Create function to serialize MetadataMap EXIF tags back to TIFF IFD structure: (1) Filter tags for EXIF family, (2) Convert TagValue to TIFF data types (Byte, ASCII, Short, Long, Rational), (3) Build IFD entries (tag ID, type, count, value/offset), (4) Handle values >4 bytes (write to separate value area), (5) Calculate offsets, (6) Write IFD header + entries + values. Support both little-endian and big-endian output. Add unit tests verifying round-trip (parse then serialize equals original).",
   "agent_type_hint": "BackendAgent",
-  "inputs": "Criterion crate documentation, I2.T3 read_metadata function",
+  "inputs": "TIFF specification, I1.T11 TIFF parser (for understanding structure)",
   "target_files": [
-    "benches/parse_benchmarks.rs",
-    "Cargo.toml",
-    "README.md"
+    "src/writers/tiff_writer.rs",
+    "src/writers/mod.rs"
   ],
   "input_files": [
-    "src/core/operations.rs",
-    "tests/fixtures/jpeg/sample_with_exif.jpg"
+    "src/parsers/tiff/ifd_parser.rs",
+    "src/core/metadata_map.rs"
   ],
-  "deliverables": "Criterion benchmarks for parsing operations, baseline performance measurements",
-  "acceptance_criteria": "cargo bench runs successfully, at least 4 benchmarks defined (detection, JPEG parse, TIFF parse, full read), benchmarks use black_box() to prevent compiler optimization, Criterion generates HTML report in target/criterion/, README documents benchmark commands",
+  "deliverables": "TIFF IFD serialization function, support for both endianness, unit and round-trip tests",
+  "acceptance_criteria": "Serializer produces valid TIFF IFD structure, handles both little-endian and big-endian, correctly writes tag entries with type, count, value, values >4 bytes written to separate area with offset, round-trip test: parse(serialize(metadata)) == metadata for EXIF tags, cargo test tiff_writer passes",
   "dependencies": [
-    "I2.T3"
+    "I1.T11",
+    "I2.T2"
   ],
   "parallelizable": true,
   "done": false
@@ -40,6 +40,43 @@ This is the full specification of the task you must complete.
 ## 2. Architectural & Planning Context
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
+
+### Context: data-model-overview (from 03_System_Structure_and_Data.md)
+
+```markdown
+### 3.6. Data Model Overview & ERD
+
+**Description**: ExifTool-RS operates on files without persistent database storage. The "data model" represents in-memory structures for metadata representation. The Entity-Relationship Diagram below models the logical relationships between metadata concepts.
+
+#### Key Entities
+
+1. **File**: Represents a media file being processed (JPEG, PNG, etc.)
+2. **MetadataMap**: Collection of all metadata tags extracted from a file
+3. **TagValue**: A single metadata tag with its name, value, and type information
+4. **TagDescriptor**: Definition of a tag (from tag database) including ID, name, type constraints, format family
+5. **FormatFamily**: Grouping of related metadata standards (EXIF, XMP, IPTC, MakerNotes)
+6. **IFD (Image File Directory)**: TIFF-specific structural element containing tags
+
+**Rationale**:
+
+- **No Persistent Database**: The system is stateless. `MetadataMap` exists only in-memory during processing and is serialized to JSON/text output or written back to file metadata.
+
+- **Variant Value Type**: `TagValue.value` uses a Rust `enum` to represent heterogeneous tag types:
+  ```rust
+  enum TagValueData {
+      String(String),
+      Number(f64),
+      Integer(i64),
+      Binary(Vec<u8>),
+      Rational { numerator: i32, denominator: i32 },
+      Struct(HashMap<String, TagValueData>), // For complex XMP structures
+  }
+  ```
+
+- **IFD Hierarchy**: TIFF/EXIF formats use nested IFD structures. The self-referential `parent_ifd_id` models this (e.g., GPS sub-IFD under IFD0).
+
+- **Tag Descriptor**: Compile-time generated from ExifTool tag database. In practice, this is a large static `HashMap<&'static str, TagDescriptor>` embedded in the binary, not a runtime database.
+```
 
 ### Context: technology-stack-summary (from 02_Architecture_Overview.md)
 
@@ -58,113 +95,39 @@ The following are the relevant sections from the architecture and plan documents
 | **Image I/O** | `memmap2` (memory-mapped files) | Efficient large file access without loading entire file into memory |
 | **Concurrency** | `rayon` (data parallelism) | Transparent batch processing parallelization, work-stealing scheduler |
 | **Testing** | `cargo test` + `proptest` (property-based) | Unit tests for parsers, property-based testing for round-trip serialization |
-| **Fuzzing** | `cargo-fuzz` (libFuzzer) | Continuous fuzzing of format parsers to discover crash/hang bugs |
-| **C FFI** | `cbindgen` (header generation) | Automated C header generation from Rust API |
-| **Documentation** | `rustdoc` + `mdBook` (user guide) | API docs from source comments, separate user guide for CLI |
-| **Build System** | `cargo` + `cross` (cross-compilation) | Standard Rust tooling, `cross` for ARM/Windows builds from Linux |
-| **CI/CD** | GitHub Actions | Free for open source, matrix builds across OS/architecture |
-| **Code Quality** | `clippy`, `rustfmt`, `cargo-audit` | Linting, formatting, dependency vulnerability scanning |
-| **Benchmarking** | `criterion` | Statistical benchmarking framework, regression detection |
-| **Frontend** | None (CLI only) | Out of scope for v1.0 |
-| **Database** | None (file-based operation) | Stateless tool, no persistent storage beyond processed files |
-| **Messaging/Queues** | None | Synchronous processing model |
-| **Cloud Platform** | None (local tooling) | Library/CLI distribution, not cloud service |
-| **Containerization** | Optional Docker image | Convenience for CI/CD pipelines, not core requirement |
+
+**Key Libraries Detail**:
+
+- **`nom` v7**: Parser combinator library for binary formats. Example: TIFF IFD parsing uses `nom::number::complete::le_u16` for little-endian u16, chained with `nom::multi::count` for tag array parsing.
+
+- **`serde`**: Serialization framework. Domain metadata models derive `Serialize`/`Deserialize` for JSON/CSV output.
 ```
 
-### Context: scalability-performance (from 05_Operational_Architecture.md)
+### Context: task-i3-t2 (from 02_Iteration_I3.md)
 
 ```markdown
-#### Scalability & Performance
-
-**Scalability Strategy**:
-
-1. **Vertical Scaling**: Parallel processing via `rayon`
-   - Batch operations automatically distribute across CPU cores
-   - Scales linearly up to core count for CPU-bound workloads (parsing)
-   - I/O-bound workloads (large files on HDD) benefit less but still see 2-3x improvement
-
-2. **Memory Efficiency**:
-   - Streaming parsers for large files (process chunks, not entire file in RAM)
-   - Memory-mapped I/O (`memmap2`) for random access without full load
-   - Bounded buffers: Max 256MB per file in memory, larger files use mmap
-
-3. **Horizontal Scaling** (for service deployments):
-   - Stateless design enables trivial horizontal scaling
-   - Process isolation: Each worker process handles subset of files
-   - Example: GNU Parallel integration: `ls *.jpg | parallel -j 16 exiftool-rs`
-
-**Performance Targets & Techniques**:
-
-| **Metric** | **Target** | **Technique** |
-|------------|-----------|---------------|
-| JPEG EXIF extraction | < 5ms per file (average) | Zero-copy parsing, mmap for large files |
-| Batch processing (1000 files) | < 10 seconds (excluding I/O) | Rayon parallel iterators, thread pool = CPU cores |
-| Memory usage | < 512MB for 10,000 file batch | Streaming, bounded buffers, minimal cloning |
-| Binary size | < 10MB statically linked | Strip symbols, LTO, codegen-units=1 |
-| Startup time | < 50ms cold start | Lazy statics for tag database, no runtime initialization |
-
-**Optimization Techniques**:
-
-1. **Zero-Copy Parsing**: Use `&[u8]` slices instead of copying bytes
-   ```rust
-   // Good: Borrows slice
-   fn parse_string(data: &[u8], offset: usize, len: usize) -> &str {
-       std::str::from_utf8(&data[offset..offset+len])?
-   }
-
-   // Bad: Copies bytes
-   fn parse_string_copy(data: &[u8], offset: usize, len: usize) -> String {
-       String::from_utf8(data[offset..offset+len].to_vec())?
-   }
-   ```
-
-2. **SIMD (Future)**: Use `std::simd` for bulk operations (e.g., UTF-8 validation, checksum computation)
-
-3. **Compile-Time Tag Database**: Embed tag definitions as `const` data, avoiding runtime HashMap construction
-```
-
-### Context: benchmarking (from 03_Verification_and_Glossary.md)
-
-```markdown
-#### Benchmarking (Regression Detection)
-*   **Scope:** Performance validation and regression detection
-*   **Location:** `benches/`
-*   **Tools:** `criterion` (statistical benchmarking), `hyperfine` (CLI benchmarking)
-*   **Benchmarks:**
-    *   Format detection (1000 iterations)
-    *   JPEG EXIF extraction (single file, 1000x)
-    *   Batch processing (1000 files)
-    *   Write operation (modify + rewrite)
-    *   Comparison vs. Perl ExifTool (wall-clock time, memory usage)
-*   **Regression Detection:** CI fails if performance degrades >10% vs. baseline
-*   **Reporting:** `criterion` generates HTML reports in `target/criterion/`
-```
-
-### Context: task-i2-t11 (from 02_Iteration_I2.md)
-
-```markdown
-*   **Task 2.11: Create Benchmark Suite with Criterion**
-    *   **Task ID:** `I2.T11`
-    *   **Description:** Set up benchmarking infrastructure in `benches/parse_benchmarks.rs` using `criterion` crate. Create benchmarks for: (1) Format detection, (2) JPEG segment parsing, (3) TIFF IFD parsing, (4) Full read_metadata() on sample JPEG. Use `Criterion::default()` configuration. Run benchmarks to establish baseline performance. Add `[[bench]]` section to Cargo.toml. Document how to run benchmarks in README.
+*   **Task 3.2: Implement EXIF IFD Serializer (TIFF Writer)**
+    *   **Task ID:** `I3.T2`
+    *   **Description:** Implement TIFF IFD serializer in `src/writers/tiff_writer.rs`. Create function to serialize MetadataMap EXIF tags back to TIFF IFD structure: (1) Filter tags for EXIF family, (2) Convert TagValue to TIFF data types (Byte, ASCII, Short, Long, Rational), (3) Build IFD entries (tag ID, type, count, value/offset), (4) Handle values >4 bytes (write to separate value area), (5) Calculate offsets, (6) Write IFD header + entries + values. Support both little-endian and big-endian output. Add unit tests verifying round-trip (parse then serialize equals original).
     *   **Agent Type Hint:** `BackendAgent`
-    *   **Inputs:** Criterion crate documentation, I2.T3 read_metadata function
-    *   **Input Files:** [`src/core/operations.rs`, `tests/fixtures/jpeg/sample_with_exif.jpg`]
+    *   **Inputs:** TIFF specification, I1.T11 TIFF parser (for understanding structure)
+    *   **Input Files:** [`src/parsers/tiff/ifd_parser.rs`, `src/core/metadata_map.rs`]
     *   **Target Files:**
-        *   `benches/parse_benchmarks.rs`
-        *   `Cargo.toml` (add benchmark section)
-        *   `README.md` (add benchmarking instructions)
+        *   `src/writers/tiff_writer.rs`
+        *   `src/writers/mod.rs`
     *   **Deliverables:**
-        *   Criterion benchmarks for parsing operations
-        *   Baseline performance measurements
+        *   TIFF IFD serialization function
+        *   Support for both endianness
+        *   Unit and round-trip tests
     *   **Acceptance Criteria:**
-        *   `cargo bench` runs successfully
-        *   At least 4 benchmarks defined (detection, JPEG parse, TIFF parse, full read)
-        *   Benchmarks use `black_box()` to prevent compiler optimization
-        *   Criterion generates HTML report in target/criterion/
-        *   README documents benchmark commands
-    *   **Dependencies:** `I2.T3` (needs read_metadata)
-    *   **Parallelizable:** Yes (can be set up anytime after core operations are implemented)
+        *   Serializer produces valid TIFF IFD structure
+        *   Handles both little-endian and big-endian
+        *   Correctly writes tag entries with type, count, value
+        *   Values >4 bytes written to separate area with offset
+        *   Round-trip test: parse(serialize(metadata)) == metadata for EXIF tags
+        *   `cargo test tiff_writer` passes
+    *   **Dependencies:** `I1.T11` (TIFF parser structure), `I2.T2` (tag registry)
+    *   **Parallelizable:** Yes (can develop in parallel with I3.T1)
 ```
 
 ---
@@ -175,93 +138,127 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `Cargo.toml`
-    *   **Summary:** The project's main manifest file. The `criterion` crate is already included in `[dev-dependencies]` with version `0.5`.
-    *   **Recommendation:** You MUST add a `[[bench]]` section to this file to define the benchmark target. The section should specify `name = "parse_benchmarks"` and `harness = false` (required for Criterion benchmarks).
-    *   **Note:** The file currently has no `[[bench]]` section, so you will be adding one for the first time.
-
-*   **File:** `src/core/operations.rs`
-    *   **Summary:** This is the core operations module containing the `read_metadata()` function and related parsing logic. It orchestrates format detection, parser selection, and metadata extraction.
-    *   **Key Functions to Benchmark:**
-        *   `read_metadata(path: &Path) -> Result<MetadataMap>` - This is the main end-to-end function you should benchmark (line 59)
-        *   `parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap>` - Internal JPEG parsing function (line 95)
-        *   `parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap>` - Internal TIFF parsing function (line 180)
-    *   **Recommendation:** You MUST import `read_metadata` from this module in your benchmark file. Use fully-qualified paths like `use exiftool_rs::core::operations::read_metadata;`
-
-*   **File:** `src/parsers/format_detector.rs`
-    *   **Summary:** Contains the `detect_format(reader: &dyn FileReader) -> io::Result<FileFormat>` function (line 96) that identifies file types via magic bytes.
-    *   **Recommendation:** You SHOULD benchmark this function separately as it's a critical performance path. Import it as `use exiftool_rs::parsers::format_detector::detect_format;`
-    *   **Implementation Detail:** The function reads the first 16 bytes and performs sequential pattern matching. This is lightweight but still worth benchmarking.
-
-*   **File:** `src/parsers/jpeg/segment_parser.rs`
-    *   **Summary:** Provides `parse_segments(reader: &dyn FileReader)` function for JPEG segment parsing using nom combinators.
-    *   **Recommendation:** You SHOULD benchmark the JPEG segment parsing. Import as `use exiftool_rs::parsers::jpeg::segment_parser::parse_segments;`
-    *   **Note:** This function performs zero-copy parsing with nom, which is key to performance.
-
 *   **File:** `src/parsers/tiff/ifd_parser.rs`
-    *   **Summary:** Contains `parse_ifd(reader: &dyn FileReader, ifd_offset: u64, byte_order: ByteOrder) -> Result<Vec<(u16, Vec<u8>)>>` for TIFF IFD structure parsing.
-    *   **Recommendation:** You MUST benchmark the TIFF IFD parsing function. Import both the function and `ByteOrder` enum: `use exiftool_rs::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};`
-    *   **Note:** IFD parsing involves reading tag entries and following offsets, which makes it more complex than format detection.
+    *   **Summary:** This file contains the complete TIFF IFD **parsing** implementation. It uses nom parser combinators to parse both little-endian and big-endian IFD structures. The parser extracts tag entries from IFDs and returns `Vec<(u16, Vec<u8>)>` pairs (tag_id, raw_value).
+    *   **Recommendation:** You MUST study this file carefully as it shows the **exact inverse operation** you need to implement. Key insights:
+        - IFD structure: 2-byte entry count + (12-byte entries × count) + 4-byte next IFD offset
+        - Each 12-byte entry: tag_id (u16) + field_type (u16) + value_count (u32) + value_offset (u32)
+        - Inline value rule: if `type_size × count ≤ 4 bytes`, value stored directly in value_offset field
+        - Otherwise: value_offset contains absolute file offset to value data
+        - The functions `parse_ifd_entry_le()` and `parse_ifd_entry_be()` show the exact byte layout you need to write
+    *   **Key Structures:**
+        - `ByteOrder` enum (LittleEndian, BigEndian) - YOU MUST reuse this from the parser module
+        - `IfdEntry` struct with fields: tag_id, field_type, value_count, value_offset - useful reference
+        - `extract_inline_value()` function shows how inline values are packed (lines 239-253)
 
-*   **File:** `tests/fixtures/jpeg/sample_with_exif.jpg`
-    *   **Summary:** A small (112 bytes) test JPEG file with EXIF metadata. This file exists and is available for benchmarking.
-    *   **Recommendation:** You SHOULD use this file for the full `read_metadata()` benchmark. The path is `"tests/fixtures/jpeg/sample_with_exif.jpg"`.
-    *   **Note:** There's also `sample_with_exif_xmp.jpg` (624 bytes) available if you want to test with XMP data.
+*   **File:** `src/parsers/common/exif_types.rs`
+    *   **Summary:** This file defines the `ExifType` enum with all 12 TIFF data types (Byte=1, Ascii=2, Short=3, Long=4, Rational=5, etc.) and provides methods for type size calculations and conversions.
+    *   **Recommendation:** You MUST import and use `ExifType` from this module. The `size_in_bytes()` method is critical for calculating value sizes to determine inline vs. offset storage. Use `as_u16()` when writing type codes to IFD entries.
+    *   **Critical Methods:**
+        - `ExifType::size_in_bytes()` - returns 1 for Byte/ASCII, 2 for Short, 4 for Long, 8 for Rational, etc.
+        - `ExifType::as_u16()` - converts enum to type code for IFD entry (e.g., Ascii becomes 2)
+        - `ExifType::from_u16()` - useful for validation in tests
 
-*   **File:** `README.md`
-    *   **Summary:** The project's main README file. Currently contains sections on Development, Building, and Testing (lines 109-139).
-    *   **Recommendation:** You SHOULD add a new "Benchmarking" subsection under the "Development" section (after line 125). Include commands for running benchmarks and viewing the HTML report.
+*   **File:** `src/core/metadata_map.rs`
+    *   **Summary:** This file defines the `MetadataMap` struct that stores `HashMap<String, TagValue>`. It provides typed getters like `get_string()`, `get_integer()`, `get_float()`, and an `iter()` method that returns `Iterator<Item = (&String, &TagValue)>`.
+    *   **Recommendation:** You MUST iterate over the MetadataMap using `.iter()` to extract EXIF tags for serialization. Filter for tags starting with "EXIF:" prefix (e.g., "EXIF:Make", "EXIF:Model", "EXIF:DateTime"). The `.iter()` method provides access to both tag names and their TagValue enums.
+
+*   **File:** `src/core/tag_value.rs`
+    *   **Summary:** This file defines the `TagValue` enum with variants: String, Integer, Float, Rational{numerator, denominator}, Binary, DateTime, Struct. Each variant has constructors (`new_string()`, etc.) and type-checking methods (`is_string()`, `as_string()`, etc.).
+    *   **Recommendation:** You MUST match on TagValue variants to convert to appropriate TIFF types:
+        - `TagValue::String(s)` → `ExifType::Ascii` (null-terminated bytes)
+        - `TagValue::Integer(i)` → `ExifType::Long` or `ExifType::Short` (depending on range)
+        - `TagValue::Rational{numerator, denominator}` → `ExifType::Rational` (8 bytes: two u32s)
+        - `TagValue::Binary(bytes)` → `ExifType::Undefined`
+        - For now, SKIP `TagValue::Float`, `DateTime` and `Struct` variants in your implementation (add TODO comments for future work)
+
+*   **File:** `src/tag_db/tag_registry.rs`
+    *   **Summary:** This file contains the static tag registry with 100+ tags including EXIF tags like "EXIF:Make" (0x010F), "EXIF:Model" (0x0110), etc. Each TagDescriptor has a numeric tag ID accessible via the registry lookup. The module uses lazy_static initialization.
+    *   **Recommendation:** You SHOULD attempt to look up the numeric tag ID from the tag name string. The registry has a function `get_tag_descriptor(name: &str)` that returns `Option<&TagDescriptor>`. For example, "EXIF:Make" maps to tag_id 0x010F. If a tag is not in the registry, you could either skip it or assign a placeholder tag ID (document this behavior).
+
+*   **File:** `src/writers/tiff_writer.rs`
+    *   **Summary:** This file currently exists but is nearly empty (only has a comment header and `#![allow(dead_code)]` directive at line 5).
+    *   **Recommendation:** You MUST implement the complete serialization logic in this file. Start by defining helper functions for byte serialization, then build up to the main IFD serialization function. Follow the same module structure pattern as ifd_parser.rs with comprehensive documentation and tests.
 
 ### Implementation Tips & Notes
 
-*   **Tip 1 - Criterion Usage:** The Criterion crate is already in dev-dependencies (version 0.5). You MUST use `Criterion::default()` configuration as specified in the task. Use `criterion::black_box()` to wrap inputs and prevent compiler optimizations from eliminating the benchmarked code.
+*   **Tip:** The TIFF IFD structure has a specific binary layout that MUST be followed exactly:
+    1. Entry count (2 bytes) - number of tag entries
+    2. All IFD entries (12 bytes each, sorted by tag ID in ascending order - THIS IS IMPORTANT)
+    3. Next IFD offset (4 bytes, use 0 for single IFD / last IFD in chain)
+    4. Value data area (for values >4 bytes, written sequentially)
 
-*   **Tip 2 - FileReader Creation:** For benchmarking parsers directly (format detection, JPEG parsing, TIFF parsing), you'll need to create file readers. Use `MMapReader::new(Path::new("tests/fixtures/jpeg/sample_with_exif.jpg"))` for the test file. Import as `use exiftool_rs::io::MMapReader;`
+*   **Note:** The offset calculation is CRITICAL. The value_offset field in IFD entries must contain the **absolute offset** from the start of the TIFF data (not from IFD start). Calculate offsets like this:
+    - If serializing standalone IFD at offset 0: IFD starts at 0
+    - Value data area starts at: `ifd_start + 2 + (entry_count × 12) + 4`
+    - Each large value gets sequential offsets in this area: first at value_area_start, second at value_area_start + first_value_size, etc.
 
-*   **Tip 3 - Benchmark Structure:** Each benchmark should follow this pattern:
+*   **Warning:** Be VERY careful with byte order! You MUST write multi-byte values (u16, u32) in the specified endianness:
+    - Little-endian: use `.to_le_bytes()` on all u16 and u32 values
+    - Big-endian: use `.to_be_bytes()` on all u16 and u32 values
+    - The byte order applies to ALL multi-byte values: entry count, tag IDs, type codes, counts, offsets, AND the values themselves
+
+*   **Tip:** For inline values (total size ≤4 bytes), pack them **left-justified** in the 4-byte value_offset field:
+    - For BOTH endianness: bytes go in positions [0..size], remaining bytes are 0x00
+    - Example: 3-byte ASCII "EOS\0" in little-endian becomes [0x45, 0x4F, 0x53, 0x00] in value_offset field
+    - See `extract_inline_value()` in ifd_parser.rs (lines 239-253) for the reverse operation - your packing should be the exact inverse
+
+*   **Note:** ASCII strings in TIFF MUST be null-terminated. When converting `TagValue::String(s)` to bytes, append a null byte: `format!("{}\0", s).into_bytes()` or `s.as_bytes()` followed by pushing 0x00. The count field should include the null terminator.
+
+*   **Tip:** For Rational types, the value is 8 bytes: first u32 is numerator, second u32 is denominator. Both must be written in the specified byte order. For example, in little-endian: numerator.to_le_bytes() followed by denominator.to_le_bytes().
+
+*   **Critical:** The IFD entries MUST be sorted by tag ID in ascending order. This is required by the TIFF specification. After collecting all entries, sort them by tag_id before writing.
+
+*   **Critical:** The type and count fields MUST match the data. Examples:
+    - ASCII string "Canon\0" (6 bytes) → type=Ascii(2), count=6, value/offset contains the bytes
+    - Single u32 value 12345 → type=Long(4), count=1, inline in value_offset
+    - Rational 1/100 → type=Rational(5), count=1, 8 bytes in value area
+
+*   **Testing Strategy:** For round-trip tests (this is CRITICAL for acceptance criteria):
+    1. Create a MetadataMap with known EXIF tags (e.g., "EXIF:Make", "EXIF:Model", "EXIF:ISO")
+    2. Serialize it to `Vec<u8>` using your new writer
+    3. Parse those bytes back using `parse_ifd()` from ifd_parser.rs
+    4. Compare the parsed (tag_id, raw_bytes) pairs with expected values
+    5. Test with BOTH little-endian and big-endian
+    6. Include tests for inline values (≤4 bytes) and offset values (>4 bytes)
+
+*   **Note:** You'll need to handle the mapping from tag names to tag IDs. You can either:
+    - Use the tag registry to look up IDs (preferred)
+    - Parse the tag ID from the tag name if it's in numeric format
+    - Skip tags that can't be mapped to IDs (document this limitation)
+
+*   **Project Convention:** All public functions should have comprehensive doc comments with `///` including:
+    - Brief summary line
+    - Detailed description of behavior
+    - Parameters section
+    - Returns section
+    - Errors section (if returning Result)
+    - Examples section with runnable code
+    - See ifd_parser.rs lines 89-135 for excellent documentation examples to match
+
+*   **Note:** Use `#[cfg(test)]` module at the bottom of the file for unit tests, similar to the extensive test suite in ifd_parser.rs (lines 303-698). Aim for similar test coverage with tests for: successful serialization, both endianness, inline vs. offset values, empty IFD, round-trip verification, etc.
+
+*   **Implementation Hint:** Consider this function signature as a starting point:
     ```rust
-    fn benchmark_name(c: &mut Criterion) {
-        c.bench_function("benchmark_display_name", |b| {
-            // Setup code (outside measurement)
-            let reader = MMapReader::new(Path::new("test_file")).unwrap();
-
-            b.iter(|| {
-                // Code to benchmark (wrapped in black_box)
-                criterion::black_box(function_to_benchmark(&reader))
-            });
-        });
-    }
+    /// Serializes EXIF tags from MetadataMap to TIFF IFD bytes
+    pub fn serialize_ifd(
+        metadata: &MetadataMap,
+        byte_order: ByteOrder,
+        ifd_start_offset: u64,
+    ) -> Result<Vec<u8>>
     ```
 
-*   **Tip 4 - Cargo.toml Benchmark Section:** Add this exact section to `Cargo.toml`:
-    ```toml
-    [[bench]]
-    name = "parse_benchmarks"
-    harness = false
-    ```
-    The `harness = false` is CRITICAL - Criterion provides its own benchmark harness.
+*   **Type Conversion Strategy:** For TagValue to TIFF type mapping:
+    - `String` → `Ascii` (type 2)
+    - `Integer` → Check value range: if fits in u16 use `Short` (type 3), else `Long` (type 4)
+    - `Rational{num, denom}` → `Rational` (type 5) - 8 bytes: u32 numerator + u32 denominator
+    - `Binary` → `Undefined` (type 7)
+    - `Float` - skip for now (add TODO comment)
+    - `DateTime` - skip for now (could be converted to ASCII datetime string in future)
+    - `Struct` - skip for now (not applicable to simple EXIF tags)
 
-*   **Tip 5 - Main Function Signature:** Your benchmark file MUST have this exact signature:
-    ```rust
-    criterion_group!(benches, bench_format_detection, bench_jpeg_parse, bench_tiff_parse, bench_read_metadata);
-    criterion_main!(benches);
-    ```
-    This macro setup is required by Criterion.
-
-*   **Tip 6 - Performance Expectations:** Based on the architecture docs, JPEG EXIF extraction should target <5ms per file. Use this as a baseline expectation. If benchmarks show significantly slower performance, something may be wrong with the implementation.
-
-*   **Note 1 - TIFF Parsing Benchmark:** For the TIFF IFD parsing benchmark, you'll need to provide an appropriate offset and byte order. You can use the TIFF file in `tests/fixtures/tiff/` if available, or create synthetic TIFF data for testing. The most important thing is to benchmark the parsing logic itself.
-
-*   **Note 2 - Zero-Copy Parsing:** The codebase uses zero-copy parsing patterns (borrowing `&[u8]` slices) which is key to performance. Your benchmarks should demonstrate this efficiency - avoid allocations in hot paths.
-
-*   **Warning:** The project uses strict linting (`clippy -- -D warnings`). Ensure your benchmark code passes clippy checks. Common issues: unused imports, missing documentation for public items (though benchmarks are typically not public).
-
-*   **Note 3 - README Documentation:** When updating the README, place the benchmarking section logically within the "Development" section. Include both how to run benchmarks (`cargo bench`) and how to view the HTML reports (`open target/criterion/report/index.html` on macOS, similar for other OSes).
-
-*   **Note 4 - Baseline Establishment:** This is the FIRST time benchmarks are being run for this project. The baseline performance measurements you establish will be used for future regression detection (10% threshold). Document the results you observe.
-
-*   **Tip 7 - Test Data Setup:** Since you're benchmarking against an existing test file, consider adding setup that verifies the file exists before running benchmarks. This prevents confusing errors if the fixture is missing.
-
-*   **Tip 8 - Benchmark Naming:** Follow Criterion's naming conventions. Use descriptive names like "format_detection", "jpeg_segment_parsing", "tiff_ifd_parsing", "full_read_metadata" for the benchmark function names. These will appear in the HTML report.
-
-*   **Note 5 - Module Structure:** Your `benches/parse_benchmarks.rs` should start with necessary imports, define 4 benchmark functions (one per requirement), then use the criterion_group! and criterion_main! macros at the end to wire everything together.
+*   **Error Handling:** Import and use `crate::error::{ExifToolError, Result}`. Return errors for:
+    - Tag name that can't be mapped to tag ID
+    - Unsupported TagValue variant
+    - Value that can't be represented in TIFF format
+    - Serialization failures (though most are infallible)
