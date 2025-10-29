@@ -1,0 +1,71 @@
+---
+title: ExifTool-RS Metadata Domain Model
+---
+erDiagram
+    %% Entity Definitions
+    %% In-memory data structures for metadata representation (no persistent database)
+
+    File {
+        string file_path PK "Unique file path identifier"
+        string format_type "File format (JPEG, PNG, TIFF, etc.)"
+        u64 file_size "File size in bytes"
+        DateTime last_modified "Last modification timestamp"
+    }
+
+    MetadataMap {
+        UUID map_id PK "Unique metadata map identifier"
+        string file_path FK "Reference to source file"
+        DateTime extraction_timestamp "When metadata was extracted"
+    }
+
+    TagValue {
+        UUID tag_instance_id PK "Unique tag instance identifier"
+        UUID map_id FK "Reference to parent metadata map"
+        string tag_name FK "Reference to tag descriptor"
+        Variant value "Tag value: String, Number, Binary, or Struct"
+        TagType value_type "Type indicator for the value"
+        Option-u64 byte_offset "Optional byte offset in file"
+    }
+
+    TagDescriptor {
+        string tag_name PK "Unique tag name identifier"
+        u16-or-String tag_id "Numeric or string tag identifier"
+        string family_id FK "Reference to format family"
+        bool writable "Whether tag can be written"
+        TagType value_type "Expected value type"
+        string description "Human-readable description"
+        Vec-String example_values "Example values for reference"
+    }
+
+    FormatFamily {
+        string family_id PK "Unique format family identifier"
+        string family_name "Family name (EXIF, XMP, IPTC, MakerNotes)"
+        string specification_url "URL to format specification"
+    }
+
+    IFD {
+        UUID ifd_id PK "Unique IFD identifier (TIFF Specific)"
+        UUID map_id FK "Reference to parent metadata map"
+        IFDType ifd_type "IFD type: IFD0, EXIF, GPS, MakerNote"
+        Option-UUID parent_ifd_id "Self-referential parent IFD (for nested IFDs)"
+        u64 byte_offset "Byte offset of IFD in file"
+    }
+
+    %% Relationships with Cardinalities
+    %% File to MetadataMap: One file contains zero or many metadata maps
+    File ||--o{ MetadataMap : "contains"
+
+    %% MetadataMap to TagValue: One metadata map holds zero or many tag values
+    MetadataMap ||--o{ TagValue : "holds"
+
+    %% TagValue to TagDescriptor: Zero or many tag values are defined by exactly one tag descriptor
+    TagValue }o--|| TagDescriptor : "defined by"
+
+    %% TagDescriptor to FormatFamily: Zero or many tag descriptors belong to exactly one format family
+    TagDescriptor }o--|| FormatFamily : "belongs to"
+
+    %% MetadataMap to IFD: One metadata map may contain zero or many IFDs (TIFF/JPEG specific)
+    MetadataMap ||--o{ IFD : "may contain (TIFF/JPEG)"
+
+    %% IFD to TagValue: One IFD groups zero or many tag values (TIFF/EXIF specific)
+    IFD ||--o{ TagValue : "groups (TIFF/EXIF)"
