@@ -8,3 +8,6 @@ pub mod exif_parser;
 pub mod iptc_parser;
 pub mod segment_parser;
 pub mod xmp_parser;
+
+// Re-export segment parser types for convenient access
+pub use segment_parser::{parse_segments, Segment};
