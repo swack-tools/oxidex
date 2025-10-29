@@ -24,3 +24,6 @@ mod tiff_write_tests;
 
 #[path = "integration/write_operations_tests.rs"]
 mod write_operations_tests;
+
+#[path = "integration/exiftool_comparison_tests.rs"]
+mod exiftool_comparison_tests;
