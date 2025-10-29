@@ -13,3 +13,8 @@ pub mod operations;
 pub mod tag_descriptor;
 pub mod tag_value;
 pub mod validation;
+
+// Re-export commonly used types for convenience
+pub use metadata_map::MetadataMap;
+pub use tag_descriptor::{FormatFamily, TagDescriptor, TagId, ValueType};
+pub use tag_value::TagValue;
