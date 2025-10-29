@@ -14,6 +14,7 @@ use crate::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};
 use crate::tag_db::tag_registry::get_tag_descriptor;
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::jpeg_writer::write_exif_to_jpeg;
+use chrono;
 use std::path::Path;
 
 /// Reads metadata from a file at the specified path.
@@ -253,6 +254,41 @@ fn tag_id_to_name(tag_id: u16, family: &str) -> String {
     }
 }
 
+/// Checks if a string matches the EXIF DateTime format (YYYY:MM:DD HH:MM:SS).
+///
+/// EXIF DateTime format: "2025:01:15 10:30:00" (19 characters)
+/// - 4 digits for year
+/// - 2 colons separating year:month:day
+/// - 1 space between date and time
+/// - 2 colons separating hour:minute:second
+fn is_datetime_string(s: &str) -> bool {
+    // EXIF DateTime format: YYYY:MM:DD HH:MM:SS (19 characters)
+    s.len() == 19
+        && s.chars().filter(|&c| c == ':').count() == 4
+        && s.chars().filter(|&c| c == ' ').count() == 1
+        && s.chars().nth(4) == Some(':')
+        && s.chars().nth(7) == Some(':')
+        && s.chars().nth(10) == Some(' ')
+        && s.chars().nth(13) == Some(':')
+        && s.chars().nth(16) == Some(':')
+}
+
+/// Parses an EXIF DateTime string into a chrono::DateTime<Utc>.
+///
+/// EXIF format: "2025:01:15 10:30:00" (YYYY:MM:DD HH:MM:SS)
+fn parse_exif_datetime(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    use chrono::NaiveDateTime;
+
+    // EXIF format: "2025:01:15 10:30:00"
+    let naive = NaiveDateTime::parse_from_str(s, "%Y:%m:%d %H:%M:%S")
+        .map_err(|e| ExifToolError::parse_error(format!("Invalid DateTime: {}", e)))?;
+
+    Ok(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+        naive,
+        chrono::Utc,
+    ))
+}
+
 /// Converts raw bytes from IFD to a TagValue.
 ///
 /// This is a simplified conversion that attempts to interpret the data
@@ -300,6 +336,13 @@ fn raw_bytes_to_tag_value(bytes: &[u8]) -> TagValue {
         let s = String::from_utf8_lossy(bytes);
         let s = s.trim_end_matches('\0');
         if !s.is_empty() {
+            // Check if this is a DateTime string (YYYY:MM:DD HH:MM:SS format)
+            if is_datetime_string(s) {
+                // Parse and return as DateTime type
+                if let Ok(dt) = parse_exif_datetime(s) {
+                    return TagValue::DateTime(dt);
+                }
+            }
             return TagValue::new_string(s.to_string());
         }
     }
