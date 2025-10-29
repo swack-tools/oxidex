@@ -23,3 +23,4 @@ pub use metadata_map::MetadataMap;
 pub use operations::read_metadata;
 pub use tag_descriptor::{FormatFamily, TagDescriptor, TagId, ValueType};
 pub use tag_value::TagValue;
+pub use validation::validate_tag_value;

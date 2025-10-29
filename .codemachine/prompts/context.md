@@ -10,27 +10,18 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I2.T9",
+  "task_id": "I2.T10",
   "iteration_id": "I2",
   "iteration_goal": "Implement tag registry with subset of ExifTool tags, core metadata read/write operations, basic CLI with argument parsing, and extend format support to include XMP parsing and PNG format.",
-  "description": "Implement output formatters in src/cli/output_formatter.rs. Create trait OutputFormatter with fn format(&self, metadata: &MetadataMap) -> String. Implement two formatters: HumanReadableFormatter (key-value pairs, one per line, e.g., EXIF:Make: Canon\\n), JsonFormatter (serialize MetadataMap using serde_json). Support filtering for specific tags. Update main.rs to select formatter based on CLI args (-json flag). Add unit tests for both formatters.",
+  "description": "Implement validation in src/core/validation.rs. Create fn validate_tag_value(descriptor: &TagDescriptor, value: &TagValue) -> Result<(), ExifToolError> that checks: (1) value type matches descriptor type (e.g., String tag can't have Integer value), (2) range validation for numeric types if descriptor specifies constraints, (3) format validation for DateTime strings. Integrate into write operations (I3 will use this). Add unit tests with valid and invalid tag values.",
   "agent_type_hint": "BackendAgent",
-  "inputs": "I2.T8 CLI args, I1.T6 MetadataMap with serde",
-  "target_files": [
-    "src/cli/output_formatter.rs",
-    "src/cli/mod.rs",
-    "src/main.rs"
-  ],
-  "input_files": [
-    "src/cli/args.rs",
-    "src/core/metadata_map.rs"
-  ],
-  "deliverables": "OutputFormatter trait, HumanReadableFormatter and JsonFormatter implementations, unit tests",
-  "acceptance_criteria": "HumanReadableFormatter outputs Tag: Value\\n format, JsonFormatter produces valid JSON (parseable by jq), formatters handle empty MetadataMap gracefully, tag filtering works (only specified tags in output), unit tests verify both formatters with sample data, cargo test output_formatter passes",
-  "dependencies": [
-    "I2.T8"
-  ],
-  "parallelizable": false,
+  "inputs": "I1.T6 TagDescriptor and TagValue, I2.T2 tag registry",
+  "target_files": ["src/core/validation.rs", "src/core/mod.rs"],
+  "input_files": ["src/core/tag_descriptor.rs", "src/core/tag_value.rs", "src/tag_db/tag_registry.rs"],
+  "deliverables": "Tag value validation function, unit tests for validation",
+  "acceptance_criteria": "Validation succeeds for correct type matches, returns InvalidTagValue error for type mismatches, validates DateTime format (e.g., EXIF DateTime: YYYY:MM:DD HH:MM:SS), unit tests cover at least 5 validation scenarios (valid, wrong type, invalid date, etc.), cargo test validation passes",
+  "dependencies": ["I1.T6", "I2.T2"],
+  "parallelizable": true,
   "done": false
 }
 ```
@@ -41,156 +32,114 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: API Design & Communication - API Style (from 04_Behavior_and_Communication.md)
+### Context: Validation Engine (from 03_System_Structure_and_Data.md)
 
 ```markdown
-#### API Style
+Component(validation, "Validation Engine", "Rust", "Tag value type checking, range validation")
 
-**Primary API**: **Rust Library API** (procedural + builder pattern)
-
-The core API is designed for Rust consumers and follows idiomatic patterns:
-
-```rust
-use exiftool_rs::{Metadata, FileFormat};
-
-// Simple extraction
-let metadata = Metadata::from_path("photo.jpg")?;
-let camera_model = metadata.get_string("EXIF:Model")?;
-
-// Builder pattern for complex operations
-let result = Metadata::from_path("input.jpg")?
-    .copy_tags_to("output.jpg")?
-    .with_tags(&["EXIF:DateTime", "EXIF:Make", "EXIF:Model"])
-    .preserve_file_times(true)
-    .execute()?;
+Rel(operations, validation, "Validates values via")
 ```
 
-**Secondary APIs**:
+The Validation Engine is a core component in the Domain Layer of the hexagonal architecture. It is called by the Metadata Operations component to validate tag values before write operations.
 
-1. **CLI Interface**: POSIX-style arguments mimicking ExifTool
-   ```bash
-   exiftool-rs -EXIF:DateTime photo.jpg
-   exiftool-rs -json -r /photos/  # Recursive JSON output
-   exiftool-rs -TagsFromFile src.jpg -all:all dest.jpg  # Copy metadata
-   ```
-
-2. **C FFI**: Minimal C-compatible surface for foreign language bindings
-   ```c
-   // C API example
-   ExifToolHandle* handle = exiftool_create();
-   ExifToolError err = exiftool_read_file(handle, "photo.jpg");
-   const char* model = exiftool_get_string(handle, "EXIF:Model");
-   exiftool_destroy(handle);
-   ```
-
-**Justification**:
-
-- **Rust-First**: Leverages Rust's type system for compile-time safety (no invalid tag names at compile time via const tag identifiers)
-- **No Network API**: ExifTool-RS is a library/tool, not a service. REST/GraphQL APIs would be implemented by consuming applications
-- **FFI for Interop**: Enables Python (`pyo3`), Node.js (`neon`), Go (`cgo`) bindings without compromising Rust API ergonomics
-```
-
-### Context: Communication Patterns (from 04_Behavior_and_Communication.md)
+### Context: Key Entities - TagDescriptor (from 03_System_Structure_and_Data.md)
 
 ```markdown
-#### Communication Patterns
+#### Key Entities
 
-**Primary Pattern**: **Synchronous Request/Response**
-
-All operations are synchronous:
-1. User/application calls API function
-2. Function parses file, extracts/modifies metadata
-3. Function returns result or error
-4. Transaction completes
-
-**Rationale**:
-- File I/O is the bottleneck, not computation. Async overhead provides no benefit.
-- Synchronous code is simpler to reason about for library consumers.
-- Batch parallelism is achieved via `rayon` at the application level (parallel iterator over file list), not async/await.
-
-**Batch Processing**: Uses data parallelism (not message passing)
-
-```rust
-use rayon::prelude::*;
-
-let results: Vec<Result<Metadata>> = file_paths
-    .par_iter()  // Rayon parallel iterator
-    .map(|path| Metadata::from_path(path))
-    .collect();
+1. **File**: Represents a media file being processed (JPEG, PNG, etc.)
+2. **MetadataMap**: Collection of all metadata tags extracted from a file
+3. **TagValue**: A single metadata tag with its name, value, and type information
+4. **TagDescriptor**: Definition of a tag (from tag database) including ID, name, type constraints, format family
+5. **FormatFamily**: Grouping of related metadata standards (EXIF, XMP, IPTC, MakerNotes)
+6. **IFD (Image File Directory)**: TIFF-specific structural element containing tags
 ```
 
-Rayon's work-stealing scheduler distributes file processing across CPU cores automatically.
+TagDescriptor contains the schema definition that validation must check against. TagValue contains the actual value that needs validation.
 
-**Error Handling**: `Result<T, ExifToolError>` throughout
+### Context: TagValue Variant Types (from 03_System_Structure_and_Data.md)
 
+```markdown
+- **Variant Value Type**: `TagValue.value` uses a Rust `enum` to represent heterogeneous tag types:
+  ```rust
+  enum TagValueData {
+      String(String),
+      Number(f64),
+      Integer(i64),
+      Binary(Vec<u8>),
+      Rational { numerator: i32, denominator: i32 },
+      Struct(HashMap<String, TagValueData>), // For complex XMP structures
+  }
+  ```
+```
+
+This shows the complete set of value types that validation must handle.
+
+### Context: Security - Input Validation (from 05_Operational_Architecture.md)
+
+```markdown
+**Input Validation**:
+
+All parsers follow defensive pattern:
 ```rust
-pub enum ExifToolError {
-    IoError(std::io::Error),
-    ParseError { format: String, details: String },
-    TagNotFound { tag_name: String },
-    InvalidTagValue { tag_name: String, expected_type: String },
-    UnsupportedFormat { format: String },
+fn read_u32_at(data: &[u8], offset: usize) -> Result<u32> {
+    let bytes = data.get(offset..offset+4)
+        .ok_or(ParseError::UnexpectedEof)?;  // Bounds check
+    Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
 }
 ```
-
-Errors propagate via `?` operator, no exceptions.
 ```
 
-### Context: Task 2.9 Full Specification (from 02_Iteration_I2.md)
+This defensive programming pattern should be applied to validation logic as well - always validate before processing.
+
+### Context: Error Handling Strategy (from 05_Operational_Architecture.md)
 
 ```markdown
-<!-- anchor: task-i2-t9 -->
-*   **Task 2.9: Implement Output Formatters (Human-Readable and JSON)**
-    *   **Task ID:** `I2.T9`
-    *   **Description:** Implement output formatters in `src/cli/output_formatter.rs`. Create `trait OutputFormatter` with `fn format(&self, metadata: &MetadataMap) -> String`. Implement two formatters: `HumanReadableFormatter` (key-value pairs, one per line, e.g., "EXIF:Make: Canon\n"), `JsonFormatter` (serialize MetadataMap using serde_json). Support filtering for specific tags. Update main.rs to select formatter based on CLI args (-json flag). Add unit tests for both formatters.
-    *   **Agent Type Hint:** `BackendAgent`
-    *   **Inputs:** I2.T8 CLI args, I1.T6 MetadataMap with serde
-    *   **Input Files:** [`src/cli/args.rs`, `src/core/metadata_map.rs`]
-    *   **Target Files:**
-        *   `src/cli/output_formatter.rs`
-        *   `src/cli/mod.rs`
-        *   `src/main.rs` (update to use formatter)
-    *   **Deliverables:**
-        *   OutputFormatter trait
-        *   HumanReadableFormatter and JsonFormatter implementations
-        *   Unit tests
-    *   **Acceptance Criteria:**
-        *   HumanReadableFormatter outputs "Tag: Value\n" format
-        *   JsonFormatter produces valid JSON (parseable by `jq`)
-        *   Formatters handle empty MetadataMap gracefully
-        *   Tag filtering works (only specified tags in output)
-        *   Unit tests verify both formatters with sample data
-        *   `cargo test output_formatter` passes
-    *   **Dependencies:** `I2.T8`
-    *   **Parallelizable:** No (depends on CLI args)
+**Threat Model**:
+
+ExifTool-RS processes potentially malicious files from untrusted sources (e.g., user uploads, scraped images). Primary threats:
+
+1. **Memory Corruption**: Buffer overflows, use-after-free in parsers
+2. **Resource Exhaustion**: Zip bombs, billion laughs (XML), decompression bombs
+3. **Path Traversal**: Malicious filenames in archive processing
+4. **Code Injection**: Via scripting features (if added)
+
+**Mitigations**:
+
+| **Threat** | **Mitigation** | **Implementation** |
+|------------|---------------|-------------------|
+| Buffer overflows | Rust ownership system | Compile-time prevention via borrow checker |
+| Integer overflows | Checked arithmetic | `#![deny(overflowing_literals)]`, `checked_add()` in parsers |
+| Resource exhaustion | Size limits | Max allocation: 1GB per file, max parse depth: 64 levels (nested IFDs) |
 ```
 
-### Context: Technology Stack (from 01_Plan_Overview_and_Setup.md)
+Validation is part of the security strategy - reject invalid inputs early.
+
+### Context: Reliability - Testing Strategy (from 05_Operational_Architecture.md)
 
 ```markdown
-*   **Technology Stack:**
-    *   **Frontend:** None (CLI only for v1.0)
-    *   **Backend Language:** Rust 1.75+ (2021 Edition)
-    *   **Core Libraries:**
-        *   CLI Framework: `clap` v4 (derive API)
-        *   Binary Parsing: `nom` v7 (complex formats) + `binrw` (simple struct-based formats)
-        *   XML Parsing: `quick-xml` (XMP metadata)
-        *   JSON Output: `serde_json`
-        *   Date/Time: `chrono`
-        *   String Encoding: `encoding_rs`
-        *   Concurrency: `rayon` (data parallelism)
-        *   Memory-mapped I/O: `memmap2`
-    *   **Testing:** `cargo test`, `proptest` (property-based), `cargo-fuzz` (fuzzing)
-    *   **C FFI:** `cbindgen` (header generation)
-    *   **Documentation:** `rustdoc`, `mdBook`
-    *   **Build System:** `cargo` + `cross` (cross-compilation)
-    *   **CI/CD:** GitHub Actions
-    *   **Code Quality:** `clippy`, `rustfmt`, `cargo-audit`
-    *   **Benchmarking:** `criterion`
-    *   **Database:** None (file-based, stateless operation)
-    *   **Messaging/Queues:** None (synchronous processing)
-    *   **Deployment:** Static binaries, Rust crate (crates.io), optional Docker image
+**Reliability Strategy**:
+
+1. **Fault Tolerance**:
+   - **Graceful Degradation**: On parser error, return partial metadata rather than failing entirely
+   - **Error Recovery**: Malformed EXIF segment logs warning but continues parsing other segments (IPTC, XMP)
+   - **Atomic Writes**: Temporary file + rename prevents corruption on crash mid-write
+
+2. **Testing Pyramid**:
+   ```
+          /\
+         /E2E\        <- Integration tests (10%): Full workflows
+        /------\
+       /  Unit  \      <- Unit tests (70%): Parser functions, tag validation
+      /----------\
+     / Property   \    <- Property-based (20%): Round-trip serialization, invariants
+    /--------------\
+   ```
+
+   - **Unit Tests**: Every parser function has success/failure test cases
 ```
+
+Tag validation requires comprehensive unit tests covering both success and failure cases.
 
 ---
 
@@ -200,208 +149,187 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `src/core/metadata_map.rs`
-    *   **Summary:** This file contains the `MetadataMap` struct which is the core data structure for storing extracted metadata as a `HashMap<String, TagValue>`. It has comprehensive methods including typed getters (`get_string()`, `get_integer()`, `get_float()`, `get_datetime()`), iterators (`iter()`, `keys()`, `values()`), and is fully annotated with `#[derive(Serialize, Deserialize)]` from serde.
-    *   **Recommendation:** You MUST import and use `MetadataMap` from this module. The struct is already fully set up with serde support, so JSON serialization will work out-of-the-box via `serde_json::to_string()` or `serde_json::to_string_pretty()`.
-    *   **Critical Detail:** Notice that the serde annotation uses `#[serde(flatten)]` on the internal `tags` field (line 21-22), which means when serialized to JSON, tags appear at the root level (e.g., `{"EXIF:Make": {...}}`) rather than nested under a `tags` key.
+*   **File:** `src/core/tag_descriptor.rs`
+    *   **Summary:** This file defines the complete TagDescriptor struct with all fields needed for validation: `tag_id`, `tag_name`, `format_family`, `writable`, `value_type` (enum with String, Integer, Float, Rational, Binary, DateTime, Struct variants), `description`, and `example_values`. It also defines the ValueType enum that validation must check against.
+    *   **Recommendation:** You MUST import `TagDescriptor` and `ValueType` from this module. The `value_type` field on TagDescriptor is the schema that validation checks against. Use `descriptor.value_type()` accessor method to get the expected type.
 
 *   **File:** `src/core/tag_value.rs`
-    *   **Summary:** This file defines the `TagValue` enum with variants for String, Integer, Float, Rational, Binary, DateTime, and Struct. It has serde annotations: `#[serde(tag = "type", content = "value")]` (line 16), meaning JSON output will be formatted as `{"type": "String", "value": "Canon"}`.
-    *   **Recommendation:** You MUST understand this enum structure when implementing the HumanReadableFormatter. For human-readable output, you'll want to display just the value, not the full JSON structure. Use the helper methods like `as_string()`, `as_integer()`, etc., or match on the enum variants to extract the display value.
-    *   **Important Pattern:** The existing tests show how to format TagValue for display. For example, in test_debug_derive at line 249, they use `format!("{:?}", value)`. However, for production human-readable output, you'll want to implement custom formatting logic that extracts clean values.
+    *   **Summary:** This file defines the TagValue enum with 7 variants: String(String), Integer(i64), Float(f64), Rational{numerator: i32, denominator: i32}, Binary(Vec<u8>), DateTime(DateTime<Utc>), and Struct(Box<HashMap<String, TagValue>>). It provides type-checking methods like `is_string()`, `is_integer()`, etc., and accessor methods like `as_string()`, `as_integer()`, etc.
+    *   **Recommendation:** You MUST import `TagValue` from this module. Use the `is_*()` methods to check the variant type. The validation function must match TagValue variants against TagDescriptor's value_type field.
 
-*   **File:** `src/cli/args.rs`
-    *   **Summary:** This file defines the `CliArgs` struct using clap's derive API. Current fields include: `file: PathBuf`, `json: bool`, `short_format: bool`, `all_tags: bool`, and `recursive: bool`.
-    *   **Recommendation:** You MUST access the `json` flag from `CliArgs` to determine which formatter to use in `main.rs`. The flag is already implemented and parsed (line 18-19).
-    *   **Note:** The `short_format` and `recursive` flags are marked as "not yet implemented" in comments, so ignore these for now. Focus on the `json` flag only.
+*   **File:** `src/error/mod.rs`
+    *   **Summary:** This file defines the ExifToolError enum with 5 variants: IoError, ParseError, TagNotFound, InvalidTagValue, and UnsupportedFormat. The InvalidTagValue variant has fields `tag_name: String` and `reason: String`. There are convenience constructors like `ExifToolError::invalid_tag_value(tag_name, reason)`.
+    *   **Recommendation:** You MUST use `ExifToolError::InvalidTagValue` for validation failures. Use the constructor `ExifToolError::invalid_tag_value(tag_name, reason)` to create validation errors. The `reason` field should clearly explain why validation failed (e.g., "Expected String but got Integer", "Invalid DateTime format: expected YYYY:MM:DD HH:MM:SS").
 
-*   **File:** `src/main.rs`
-    *   **Summary:** The current main.rs has basic inline formatting logic. Lines 32-40 handle JSON output using `serde_json::to_string_pretty(&metadata)`. Lines 42-54 handle human-readable output with custom formatting logic (displays file name, count, and sorted tag list with `{:?}` formatting).
-    *   **Recommendation:** You MUST refactor this code to use your new OutputFormatter trait. The existing logic provides a good template for what each formatter should do. Replace the inline formatting with calls to your formatter implementations.
-    *   **Critical Pattern:** Notice that the current human-readable format sorts tags by name (line 48-49: `tags.sort_by_key(|(name, _)| *name)`). You SHOULD preserve this sorting behavior in your HumanReadableFormatter for consistent output.
+*   **File:** `src/tag_db/tag_registry.rs`
+    *   **Summary:** This file contains the static TAG_REGISTRY with 100 pre-defined tags (60 EXIF, 20 GPS, 20 XMP). Each tag has a complete TagDescriptor with value_type specified. The registry uses `once_cell::sync::Lazy` for lazy initialization. It exports `get_tag_descriptor(name: &str) -> Option<&TagDescriptor>` for tag lookup.
+    *   **Recommendation:** You SHOULD reference this file for understanding how TagDescriptor objects are structured in practice. The validate_tag_value function receives a TagDescriptor parameter, so you don't need to look up tags yourself - the caller will pass in the descriptor. However, reviewing the registry helps understand typical tag schemas.
 
-*   **File:** `src/cli/output_formatter.rs`
-    *   **Summary:** This file exists but is essentially empty—it only contains a module docstring (line 1-3) and `#![allow(dead_code)]` (line 5).
-    *   **Recommendation:** You MUST implement the complete OutputFormatter trait and both formatter structs in this file from scratch.
-
-*   **File:** `src/cli/mod.rs`
-    *   **Summary:** This module file currently only declares `pub mod args;` (line 8). It has `#![allow(dead_code)]` at the top.
-    *   **Recommendation:** You MUST add `pub mod output_formatter;` to this file to make your new module accessible to the rest of the crate.
+*   **File:** `src/core/validation.rs`
+    *   **Summary:** This file currently exists but contains only module documentation and `#![allow(dead_code)]`. It's a stub waiting for implementation.
+    *   **Recommendation:** This is your PRIMARY target file. You MUST implement the `validate_tag_value` function here and add comprehensive unit tests.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** The task description specifies `fn format(&self, metadata: &MetadataMap) -> String` for the trait, but also mentions "support filtering for specific tags." You SHOULD add an optional parameter for tag filtering, such as:
+*   **Tip - Type Matching Logic:** The core validation logic is straightforward type matching. Create a match expression on the TagValue to extract its variant, then compare against descriptor.value_type(). For example:
     ```rust
-    pub trait OutputFormatter {
-        fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String;
+    match value {
+        TagValue::String(_) => {
+            if descriptor.value_type() != ValueType::String {
+                return Err(ExifToolError::invalid_tag_value(
+                    descriptor.name(),
+                    format!("Expected {:?} but got String", descriptor.value_type())
+                ));
+            }
+        }
+        // ... handle other variants
     }
     ```
-    This will allow callers to specify which tags to include in the output. However, since the current CLI doesn't have tag filtering implemented yet, you can pass `None` for now.
 
-*   **Tip:** For the HumanReadableFormatter, the task specifies output format as "Tag: Value\n". Based on the current main.rs implementation (line 52), the format should be:
-    ```
-    EXIF:Make: Canon
-    EXIF:Model: EOS 5D Mark IV
-    ```
-    Note the space after the colon. You SHOULD match this format for consistency with the existing code.
+*   **Tip - DateTime Validation:** For DateTime values, you need to validate EXIF DateTime format which is `YYYY:MM:DD HH:MM:SS` (colons not hyphens for date, 24-hour time). The task acceptance criteria specifically mentions this format. TagValue::DateTime stores a `chrono::DateTime<Utc>`, so if the TagValue is already a DateTime variant, it's structurally valid. However, you may want to add format validation if constructing from strings in the future. For now, accept any valid DateTime<Utc> value.
 
-*   **Note:** For the HumanReadableFormatter value display, you need to handle the TagValue enum properly. The current main.rs uses `{:?}` (Debug trait at line 52), which outputs the full enum structure like `String("Canon")`. For a cleaner human-readable format, you SHOULD implement custom formatting that extracts just the value. For example:
-    - `TagValue::String("Canon")` should display as `Canon`, not `String("Canon")`
-    - `TagValue::Integer(400)` should display as `400`, not `Integer(400)`
-    - `TagValue::Rational{numerator: 1, denominator: 100}` should display as `1/100`
-    - Consider using a match statement to format each variant appropriately
+*   **Note - Range Validation:** The task mentions "range validation for numeric types if descriptor specifies constraints". However, reviewing the current TagDescriptor structure (line 96-118 in tag_descriptor.rs), there are no constraint fields defined. The acceptance criteria doesn't test range validation. You SHOULD implement basic type checking first, and you MAY skip range validation for now since the schema doesn't support it yet. If you choose to implement range validation, document that it's a future enhancement placeholder.
 
-*   **Note:** For the JsonFormatter, you already have everything you need. The MetadataMap has `#[derive(Serialize)]`, so you can use:
-    ```rust
-    serde_json::to_string_pretty(metadata)
-    ```
-    or
-    ```rust
-    serde_json::to_string(metadata)
-    ```
-    depending on whether you want pretty-printed JSON. The current main.rs uses `to_string_pretty` (line 34), so you SHOULD follow that precedent for consistency.
+*   **Note - Rational Type:** The Rational variant has special structure: `Rational { numerator: i32, denominator: i32 }`. You MUST check that the denominator is not zero as part of validation. A rational number with zero denominator is mathematically invalid and should return an InvalidTagValue error.
 
-*   **Warning:** The acceptance criteria state "JsonFormatter produces valid JSON (parseable by jq)". You MUST handle serde_json serialization errors properly. The `to_string_pretty()` method returns a `Result<String, serde_json::Error>`. Your trait should either:
-    1. Return `Result<String, Error>` instead of `String`, OR
-    2. Handle errors internally and return a fallback (empty string or error message)
+*   **Note - Struct Type:** The Struct variant is for complex XMP structures. For this iteration, basic type matching is sufficient - if descriptor expects Struct and value is Struct, validation passes. Recursive validation of nested structure contents is out of scope for this task.
 
-    I recommend option 1 for better error propagation, but since the task specifies `-> String`, you'll need to handle errors gracefully within the formatter.
+*   **Warning - Test Coverage:** The acceptance criteria requires "at least 5 validation scenarios (valid, wrong type, invalid date, etc.)". Based on the 7 TagValue variants, you MUST write tests covering: (1) Valid type match for each variant (7 tests), (2) Type mismatch scenarios (at least 3 tests), (3) Rational with zero denominator (1 test), (4) DateTime format validation if implemented. Aim for 15-20 unit tests total to meet the "comprehensive" requirement.
 
-*   **Tip:** For unit tests, you SHOULD test the following scenarios:
-    1. Empty MetadataMap (should not panic, should return empty or minimal output)
-    2. MetadataMap with multiple tags of different types (String, Integer, Float, DateTime, Rational)
-    3. Tag filtering: provide `Some(&["EXIF:Make".to_string()])` and verify only that tag appears
-    4. Tag filtering with non-existent tag (should not panic, should return empty output)
-    5. For JsonFormatter: verify output is parseable by `serde_json::from_str()` to ensure valid JSON
-    6. For HumanReadableFormatter: verify tags are sorted alphabetically
-    7. For HumanReadableFormatter: verify proper formatting of each TagValue variant (String, Integer, Float, etc.)
+*   **Tip - Module Integration:** After implementing validation.rs, you MUST add `pub mod validation;` to `src/core/mod.rs` to expose the validation module. Also add `pub use validation::validate_tag_value;` if you want to re-export the function at the core module level for easier importing.
 
-*   **Critical:** The task says to "update main.rs to select formatter based on CLI args." You MUST modify main.rs to:
-    1. Create an instance of the appropriate formatter based on `args.json`
-    2. Call the formatter's `format()` method instead of inline formatting
-    3. Print the result
-    4. Ensure backwards compatibility with current behavior (same output format)
+*   **Tip - Function Signature:** The task specifies the exact signature: `fn validate_tag_value(descriptor: &TagDescriptor, value: &TagValue) -> Result<(), ExifToolError>`. This returns `Result<(), ExifToolError>` where `Ok(())` means validation passed (no data returned, just success), and `Err(ExifToolError)` means validation failed. This signature is idiomatic for validation functions in Rust.
 
-*   **Best Practice:** Since this is a library crate (has both lib.rs and bin target), you SHOULD make the OutputFormatter trait and implementations public so they can be used by library consumers, not just the CLI. Define them as `pub trait` and `pub struct`.
+*   **Tip - Documentation:** Add comprehensive doc comments to the validate_tag_value function explaining: (1) What it validates, (2) When it returns Ok vs Err, (3) Example usage. Follow the documentation style seen in other core modules (see tag_descriptor.rs lines 92-117 for good examples).
 
-*   **Code Style:** The existing codebase follows these patterns you SHOULD maintain:
-    - Comprehensive doc comments (`///`) on all public items with proper formatting
-    - Example code blocks in doc comments showing usage
-    - `#[cfg(test)]` module at the bottom of each file for tests
-    - Import groups: std library first, then external crates, then internal modules
-    - Allow dead_code is currently used liberally in stub files, but you can remove it once code is actually used
+*   **Tip - Error Messages:** Provide clear, actionable error messages. Good examples:
+    - "Type mismatch for tag 'EXIF:Make': expected String but got Integer"
+    - "Invalid Rational value for tag 'EXIF:ExposureTime': denominator cannot be zero"
+    - "Type mismatch for tag 'GPS:GPSLatitude': expected Rational but got String"
 
-*   **Testing Strategy:** The test module structure should follow the pattern seen in metadata_map.rs (lines 168-316):
+*   **Code Pattern from Existing Tests:** The existing test modules follow this pattern (see tag_descriptor.rs lines 179-317):
     ```rust
     #[cfg(test)]
     mod tests {
         use super::*;
-        // Import any additional test dependencies like chrono for DateTime tests
 
         #[test]
-        fn test_human_readable_formatter_empty_metadata() { ... }
+        fn test_validate_string_type_correct() {
+            let descriptor = TagDescriptor::new(/* ... */);
+            let value = TagValue::new_string("Canon");
+            assert!(validate_tag_value(&descriptor, &value).is_ok());
+        }
 
         #[test]
-        fn test_json_formatter_basic() { ... }
-
-        // ... more tests (aim for 10+ tests covering all scenarios)
-    }
-    ```
-
-*   **Formatter Pattern:** Based on the architecture documents mentioning builder patterns and the fact that formatters don't have state, you SHOULD implement formatters as zero-sized types (unit structs):
-    ```rust
-    pub struct HumanReadableFormatter;
-    pub struct JsonFormatter;
-    ```
-    This is more idiomatic Rust than empty structs with fields, and it's zero-cost at runtime.
-
-*   **TagValue Display Logic:** For the HumanReadableFormatter, you'll need to implement display logic for each TagValue variant. Here's a suggested approach:
-    ```rust
-    fn format_tag_value(value: &TagValue) -> String {
-        match value {
-            TagValue::String(s) => s.clone(),
-            TagValue::Integer(i) => i.to_string(),
-            TagValue::Float(f) => f.to_string(),
-            TagValue::Rational { numerator, denominator } => format!("{}/{}", numerator, denominator),
-            TagValue::Binary(bytes) => format!("(Binary, {} bytes)", bytes.len()),
-            TagValue::DateTime(dt) => dt.to_rfc3339(),
-            TagValue::Struct(_) => "(Structured data)".to_string(),
+        fn test_validate_type_mismatch() {
+            // String descriptor, Integer value
+            let descriptor = TagDescriptor::new(/* String type */);
+            let value = TagValue::new_integer(42);
+            let result = validate_tag_value(&descriptor, &value);
+            assert!(result.is_err());
+            // Check error message contains expected text
         }
     }
     ```
-    This provides clean, human-readable output for each type.
+
+*   **Critical Dependency Check:** You MUST verify that `src/core/mod.rs` currently exports the required types. Check that it has:
+    - `pub mod tag_descriptor;` (exports TagDescriptor, ValueType)
+    - `pub mod tag_value;` (exports TagValue)
+    - After your implementation: `pub mod validation;`
 
 ### Summary of Required Changes
 
-1. **src/cli/output_formatter.rs**: Implement trait + 2 structs + unit tests (main work - ~150-200 lines)
-2. **src/cli/mod.rs**: Add `pub mod output_formatter;` (1 line change)
-3. **src/main.rs**: Refactor formatting logic to use new trait (replace ~20 lines with formatter calls)
+1. **src/core/validation.rs**: Implement `validate_tag_value()` function with comprehensive logic (~50-80 lines)
+2. **src/core/validation.rs**: Add unit test module with 15-20 tests (~150-200 lines)
+3. **src/core/mod.rs**: Add `pub mod validation;` (1 line change)
 
-All dependencies are already in Cargo.toml (serde_json), and all input types (MetadataMap, CliArgs, TagValue) are already implemented and working perfectly.
-
-### Example Refactored main.rs Logic
-
-After implementing the formatters, your main.rs should look something like this:
+### Example Implementation Structure
 
 ```rust
-// ... existing imports ...
-use exiftool_rs::cli::output_formatter::{OutputFormatter, HumanReadableFormatter, JsonFormatter};
+//! Tag value validation engine
+//!
+//! This module provides validation logic for metadata tag values.
 
-fn main() {
-    let args = CliArgs::parse();
+use crate::core::tag_descriptor::{TagDescriptor, ValueType};
+use crate::core::tag_value::TagValue;
+use crate::error::ExifToolError;
 
-    // ... existing read_metadata call ...
+/// Validates that a TagValue matches the expected type defined in its TagDescriptor.
+///
+/// This function performs type checking to ensure tag values conform to their
+/// schema definitions before write operations.
+///
+/// # Arguments
+///
+/// * `descriptor` - The tag descriptor containing the expected value type
+/// * `value` - The tag value to validate
+///
+/// # Returns
+///
+/// * `Ok(())` if validation succeeds
+/// * `Err(ExifToolError::InvalidTagValue)` if validation fails
+///
+/// # Examples
+///
+/// ```
+/// use exiftool_rs::core::tag_descriptor::{TagDescriptor, TagId, FormatFamily, ValueType};
+/// use exiftool_rs::core::tag_value::TagValue;
+/// use exiftool_rs::core::validation::validate_tag_value;
+///
+/// let descriptor = TagDescriptor::new(
+///     TagId::new_numeric(0x010F),
+///     "EXIF:Make".to_string(),
+///     FormatFamily::EXIF,
+///     true,
+///     ValueType::String,
+///     "Camera manufacturer".to_string(),
+///     vec!["Canon".to_string()],
+/// );
+///
+/// let value = TagValue::new_string("Nikon");
+/// assert!(validate_tag_value(&descriptor, &value).is_ok());
+/// ```
+pub fn validate_tag_value(
+    descriptor: &TagDescriptor,
+    value: &TagValue,
+) -> Result<(), ExifToolError> {
+    // Implementation here
+    // Match on value variant, compare against descriptor.value_type()
+    // Return Ok(()) for matches, Err for mismatches
+    todo!()
+}
 
-    match read_metadata(&args.file) {
-        Ok(metadata) => {
-            if metadata.is_empty() {
-                println!("No metadata found in file: {}", args.file.display());
-                return;
-            }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // Import test utilities
 
-            // Select formatter based on CLI args
-            let output = if args.json {
-                let formatter = JsonFormatter;
-                formatter.format(&metadata, None)
-            } else {
-                let formatter = HumanReadableFormatter;
-                // Optional: add header info
-                let mut output = format!("File: {}\nFound {} metadata tag(s):\n\n",
-                                        args.file.display(), metadata.len());
-                output.push_str(&formatter.format(&metadata, None));
-                output
-            };
+    #[test]
+    fn test_validate_string_matches() { /* ... */ }
 
-            println!("{}", output);
-        }
-        Err(e) => {
-            // ... existing error handling ...
-        }
-    }
+    #[test]
+    fn test_validate_integer_matches() { /* ... */ }
+
+    // ... 15+ more tests
 }
 ```
 
-### Key Architectural Constraints
-
-1. **Trait-based abstraction** - Use the OutputFormatter trait to allow for future format extensions (CSV, XML, etc.)
-2. **Maintain separation of concerns** - Formatters only handle presentation, no business logic
-3. **Leverage existing serialization** - MetadataMap and TagValue already have Serialize derives
-4. **Preserve current behavior** - Output format should match existing main.rs output for backwards compatibility
-5. **Library-friendly design** - Make formatters public and reusable by library consumers
-
 ### Acceptance Criteria Checklist
 
-After implementation, verify these criteria are met:
+After implementation, verify:
 
-- [ ] `cargo test output_formatter` passes with all unit tests
-- [ ] HumanReadableFormatter outputs "Tag: Value\n" format (e.g., "EXIF:Make: Canon\n")
-- [ ] HumanReadableFormatter displays clean values (not enum variants like "String(...)")
-- [ ] HumanReadableFormatter sorts tags alphabetically
-- [ ] JsonFormatter produces valid JSON (test with `serde_json::from_str()` in tests)
-- [ ] JsonFormatter output can be piped to `jq` successfully (manual test)
-- [ ] Both formatters handle empty MetadataMap gracefully (no panic, return empty string or minimal output)
-- [ ] Tag filtering works when Option<&[String]> is Some (only specified tags in output)
-- [ ] main.rs uses formatters instead of inline formatting logic
-- [ ] CLI behavior is unchanged from user perspective (same output format)
-- [ ] All code has proper documentation comments
-- [ ] No compiler warnings when running `cargo clippy`
+- [ ] `validate_tag_value()` function implemented with correct signature
+- [ ] Function checks String/Integer/Float/Rational/Binary/DateTime/Struct types
+- [ ] Rational validation checks denominator != 0
+- [ ] Function returns `Ok(())` for correct type matches
+- [ ] Function returns `Err(InvalidTagValue)` for type mismatches
+- [ ] Error messages are clear and actionable
+- [ ] Unit tests cover all 7 TagValue variants (7 success tests)
+- [ ] Unit tests cover type mismatches (3+ failure tests)
+- [ ] Unit tests cover Rational zero denominator (1 test)
+- [ ] Unit tests cover edge cases (empty string, max values, etc.)
+- [ ] Total of 15+ unit tests implemented
+- [ ] `cargo test validation` passes all tests
+- [ ] `cargo clippy` shows no warnings
+- [ ] Code has comprehensive documentation comments
+- [ ] `src/core/mod.rs` exports validation module
