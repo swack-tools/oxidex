@@ -1,0 +1,63 @@
+[package]
+name = "exiftool-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["ExifTool-RS Contributors"]
+description = "A modern, high-performance Rust reimplementation of ExifTool for reading, writing, and editing metadata in 300+ file formats"
+license = "GPL-3.0"
+repository = "https://github.com/exiftool-rs/exiftool-rs"
+readme = "README.md"
+keywords = ["exif", "metadata", "xmp", "iptc", "image"]
+categories = ["multimedia::images", "command-line-utilities", "parsing"]
+
+[lib]
+name = "exiftool_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "exiftool-rs"
+path = "src/main.rs"
+
+[dependencies]
+# CLI Framework
+clap = { version = "4.5", features = ["derive", "cargo"] }
+
+# Binary Parsing
+nom = "7.1"
+
+# XML Parsing (for XMP metadata)
+quick-xml = "0.31"
+
+# JSON Output
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Date/Time Handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# String Encoding
+encoding_rs = "0.8"
+
+# Memory-mapped I/O
+memmap2 = "0.9"
+
+# Concurrency
+rayon = "1.10"
+
+[dev-dependencies]
+# Testing
+proptest = "1.4"
+criterion = "0.5"
+tempfile = "3.10"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 0
+
+[profile.test]
+opt-level = 1

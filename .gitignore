@@ -20,3 +20,20 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock file (keep for binary crates, ignore for libraries)
+# Since this is both, we keep Cargo.lock
+# Cargo.lock
+
+# Fuzzing corpus
+fuzz/corpus/
+fuzz/artifacts/
+
+# Benchmark outputs
+benches/target/
