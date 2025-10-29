@@ -33,3 +33,6 @@ mod exiftool_comparison_tests;
 
 #[path = "integration/mp4_tests.rs"]
 mod mp4_tests;
+
+#[path = "integration/copy_metadata_tests.rs"]
+mod copy_metadata_tests;

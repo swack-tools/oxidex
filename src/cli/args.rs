@@ -45,6 +45,13 @@ pub struct CliArgs {
     #[arg(long)]
     pub readonly: bool,
 
+    /// Copy metadata from source file (ExifTool -TagsFromFile syntax).
+    /// Use with optional tag names to copy specific tags, or without to copy all tags.
+    /// Example: exiftool-rs -TagsFromFile src.jpg dest.jpg (copy all)
+    /// Example: exiftool-rs -TagsFromFile src.jpg -EXIF:Artist -EXIF:Copyright dest.jpg
+    #[arg(long = "TagsFromFile")]
+    pub tags_from_file: Option<String>,
+
     /// Tag modifications and file path. Use -TAG=VALUE to modify tags.
     /// Example: -EXIF:Artist="John Doe" -EXIF:Copyright=2025 photo.jpg
     /// The last argument must be the file path.
@@ -107,5 +114,35 @@ impl CliArgs {
         } else {
             s.to_string()
         }
+    }
+
+    /// Extracts tag names to copy when using -TagsFromFile.
+    /// Returns None if -TagsFromFile is not set.
+    /// Returns Some(Vec) of tag names if tags are specified (args starting with '-' but not '=').
+    /// Returns Some(empty Vec) if no specific tags are specified (copy all).
+    pub fn copy_tag_filters(&self) -> Option<Vec<String>> {
+        // If -TagsFromFile is not set, return None
+        self.tags_from_file.as_ref()?;
+
+        // If no additional args (only destination file), copy all tags
+        if self.args.len() <= 1 {
+            return Some(Vec::new());
+        }
+
+        let mut tag_names = Vec::new();
+
+        // Process all arguments except the last one (which is the destination file)
+        for arg in &self.args[..self.args.len() - 1] {
+            // Check if it's a tag name (starts with '-' but does NOT contain '=')
+            if arg.starts_with('-') && !arg.contains('=') {
+                // Extract tag name (remove leading '-')
+                let tag_name = arg.trim_start_matches('-').to_string();
+                tag_names.push(tag_name);
+            }
+        }
+
+        // Return empty vec if no tags specified (means copy all)
+        // Return vec with tag names if specific tags were specified
+        Some(tag_names)
     }
 }

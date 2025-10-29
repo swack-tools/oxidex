@@ -545,6 +545,88 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
     Ok(())
 }
 
+/// Copies metadata from a source file to a destination file.
+///
+/// This function orchestrates the metadata copy workflow:
+/// 1. Reads metadata from the source file
+/// 2. Optionally filters to specified tags
+/// 3. Reads existing metadata from destination file
+/// 4. Merges source tags into destination metadata (preserving unspecified tags)
+/// 5. Writes merged metadata back to destination file
+///
+/// # Arguments
+///
+/// * `src` - Path to the source file to copy metadata from
+/// * `dest` - Path to the destination file to copy metadata to
+/// * `tags` - Optional slice of tag names to copy. If `None`, all tags are copied.
+///
+/// # Returns
+///
+/// * `Ok(())` - Successfully copied metadata
+/// * `Err(ExifToolError)` - Read error, validation error, or write error
+///
+/// # Examples
+///
+/// ```no_run
+/// use exiftool_rs::core::operations::copy_metadata;
+/// use std::path::Path;
+///
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// // Copy all metadata from source to destination
+/// copy_metadata(
+///     Path::new("source.jpg"),
+///     Path::new("dest.jpg"),
+///     None
+/// )?;
+///
+/// // Copy only specific tags
+/// copy_metadata(
+///     Path::new("source.jpg"),
+///     Path::new("dest.jpg"),
+///     Some(&["EXIF:Artist".to_string(), "EXIF:Copyright".to_string()])
+/// )?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Behavior
+///
+/// - Source tags are merged into destination metadata
+/// - Existing destination tags not in the source are preserved
+/// - If a tag exists in both source and destination, the source value overwrites it
+/// - If `tags` filter is specified, only those tags are copied from source
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Source file cannot be read (IoError)
+/// - Destination file cannot be read (IoError)
+/// - Any tag value fails validation (InvalidTagValue)
+/// - Destination file cannot be written (IoError)
+pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result<()> {
+    // Step 1: Read metadata from source file
+    let source_metadata = read_metadata(src)?;
+
+    // Step 2: Read existing metadata from destination file
+    let mut dest_metadata = read_metadata(dest)?;
+
+    // Step 3: Filter and merge source tags into destination metadata
+    for (tag_name, tag_value) in source_metadata.iter() {
+        // Check if this tag should be copied (if filter is specified)
+        let should_copy = tags.is_none_or(|filter| filter.contains(tag_name));
+
+        if should_copy {
+            // Insert tag into destination (merges with existing, preserving others)
+            dest_metadata.insert(tag_name.clone(), tag_value.clone());
+        }
+    }
+
+    // Step 4: Write merged metadata back to destination file
+    write_metadata(dest, &dest_metadata)?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
