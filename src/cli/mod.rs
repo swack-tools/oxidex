@@ -6,3 +6,4 @@
 #![allow(dead_code)]
 
 pub mod args;
+pub mod output_formatter;
