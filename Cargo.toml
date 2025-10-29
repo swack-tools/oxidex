@@ -74,3 +74,6 @@ opt-level = 0
 
 [profile.test]
 opt-level = 1
+
+[features]
+exiftool-comparison = []
