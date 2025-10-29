@@ -20,5 +20,6 @@ pub use file_format::FileFormat;
 pub use file_reader_trait::FileReader;
 pub use format_parser_trait::FormatParser;
 pub use metadata_map::MetadataMap;
+pub use operations::read_metadata;
 pub use tag_descriptor::{FormatFamily, TagDescriptor, TagId, ValueType};
 pub use tag_value::TagValue;

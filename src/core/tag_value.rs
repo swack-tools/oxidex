@@ -140,6 +140,14 @@ impl TagValue {
             _ => None,
         }
     }
+
+    /// Attempts to get the value as a DateTime reference
+    pub fn as_datetime(&self) -> Option<&DateTime<Utc>> {
+        match self {
+            TagValue::DateTime(dt) => Some(dt),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
