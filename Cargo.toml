@@ -44,6 +44,9 @@ memmap2 = "0.9"
 # Concurrency
 rayon = "1.10"
 
+# Lazy Static Initialization
+once_cell = "1.19"
+
 [dev-dependencies]
 # Testing
 proptest = "1.4"

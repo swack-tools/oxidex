@@ -326,6 +326,7 @@ dependencies = [
  "encoding_rs",
  "memmap2",
  "nom",
+ "once_cell",
  "proptest",
  "quick-xml",
  "rayon",
