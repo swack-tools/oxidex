@@ -10,22 +10,28 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I1.T5",
+  "task_id": "I1.T7",
   "iteration_id": "I1",
   "iteration_goal": "Establish project foundation with directory structure, build system, core domain models, architectural diagrams, and basic JPEG EXIF parsing capability to validate end-to-end workflow.",
-  "description": "Create JSON Schema defining the structure for TagDescriptor objects that will be code-generated from ExifTool documentation. Schema should define: tag_id (string or number), tag_name (string), format_family (enum: EXIF, XMP, IPTC, GPS, etc.), writable (boolean), value_type (enum: String, Integer, Rational, Binary, etc.), description (string), example_values (array of strings). Save to api/tag_database_schema.json. Validate against JSON Schema Draft 7 specification.",
+  "description": "Implement port interfaces in `src/core/`: `trait FormatParser` with method `fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap, ExifToolError>` and `fn supports_format(&self, format: FileFormat) -> bool`. Implement `trait FileReader` with methods `fn read(&self, offset: u64, length: usize) -> Result<&[u8], std::io::Error>`, `fn size(&self) -> u64`. Define `enum FileFormat` with variants for JPEG, TIFF, PNG, etc. Add comprehensive documentation comments explaining trait contracts.",
   "agent_type_hint": "BackendAgent",
-  "inputs": "Section 2 (Data Model Overview), Section 2.1 (Key Architectural Artifacts)",
+  "inputs": "Section 2 (Core Architecture - hexagonal architecture ports), Section 2.1 (artifact for format parser trait)",
   "target_files": [
-    "api/tag_database_schema.json"
+    "src/core/format_parser_trait.rs",
+    "src/core/file_reader_trait.rs",
+    "src/core/file_format.rs",
+    "src/core/mod.rs"
   ],
-  "input_files": [],
-  "deliverables": "Valid JSON Schema file",
-  "acceptance_criteria": "JSON Schema validates against Draft 7 spec (use online validator or ajv CLI), schema includes all fields mentioned in task description, schema has appropriate constraints (e.g., tag_name is required, writable is boolean), example valid TagDescriptor object passes schema validation",
+  "input_files": [
+    "src/core/metadata_map.rs",
+    "src/error.rs"
+  ],
+  "deliverables": "Rust trait definitions with documentation, FileFormat enum with initial variants (JPEG, TIFF, PNG, PDF, Unknown)",
+  "acceptance_criteria": "Traits compile successfully, documentation comments explain trait purpose and method contracts, FormatParser trait has parse() and supports_format() methods, FileReader trait has read() and size() methods, FileFormat enum has at least 5 variants, code compiles with `cargo build`",
   "dependencies": [
-    "I1.T1"
+    "I1.T6"
   ],
-  "parallelizable": true,
+  "parallelizable": false,
   "done": false
 }
 ```
@@ -36,13 +42,105 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: Data Model Overview (from 03_System_Structure_and_Data.md)
+### Context: Architectural Style - Layered Hexagonal Architecture (from 02_Architecture_Overview.md)
 
 ```markdown
-### 3.6. Data Model Overview & ERD
+**Primary Style**: **Layered Hexagonal Architecture** (Ports and Adapters)
 
-**Description**: ExifTool-RS operates on files without persistent database storage. The "data model" represents in-memory structures for metadata representation. The Entity-Relationship Diagram below models the logical relationships between metadata concepts.
+**Rationale**:
 
+The Hexagonal Architecture pattern is optimal for ExifTool-RS because:
+
+1. **Format Independence**: The "core domain" (metadata extraction/manipulation logic) must remain isolated from the specifics of 300+ file formats. Hexagonal architecture enforces this separation through ports (interfaces) and adapters (format-specific implementations).
+
+2. **Multiple Access Patterns**: The system must expose:
+   - CLI interface (primary port)
+   - Rust library API (primary port)
+   - C FFI bindings (primary port)
+   - Format parsers (secondary ports)
+   - File system access (secondary port)
+
+   This multiplicity of interfaces aligns perfectly with the ports/adapters model.
+
+3. **Testability**: Hexagonal architecture enables testing the core metadata logic independently of file I/O by mocking the file system port. Critical for achieving 80%+ test coverage.
+
+4. **Extensibility**: New file format support becomes a matter of implementing the format adapter interface without touching core logic. Supports phased rollout strategy (50 formats in v1.0, expanding to 300+).
+
+**Layered Structure**:
+
+```
+┌─────────────────────────────────────────────┐
+│  Application Layer (CLI, FFI, Library API) │  ← Primary Adapters
+├─────────────────────────────────────────────┤
+│       Domain Layer (Metadata Engine)        │  ← Core Business Logic
+├─────────────────────────────────────────────┤
+│  Infrastructure Layer (Format Parsers, I/O) │  ← Secondary Adapters
+└─────────────────────────────────────────────┘
+```
+
+- **Domain Layer**: Format-agnostic metadata models, tag definitions, operations (read/write/copy/transform)
+- **Application Layer**: User-facing interfaces translating commands to domain operations
+- **Infrastructure Layer**: Format-specific parsers/serializers, file system abstraction, configuration
+```
+
+### Context: Component Diagram - Ports and Adapters (from 03_System_Structure_and_Data.md)
+
+```markdown
+### 3.5. Component Diagram(s) (C4 Level 3)
+
+**Description**: This diagram details the internal components of the **Core Library** container, showing the hexagonal architecture layers and their interactions.
+
+**Diagram (PlantUML - Core Library Components)**:
+
+```plantuml
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+
+title Component Diagram - Core Library (exiftool-rs)
+
+Container_Boundary(core_lib, "Core Library") {
+
+  Component(api_facade, "Public API Facade", "Rust modules", "User-facing API: extract(), write(), copy_metadata()")
+
+  ' Domain Layer
+  Component(metadata_model, "Metadata Model", "Rust structs/enums", "TagValue, MetadataMap, TagDescriptor")
+  Component(operations, "Metadata Operations", "Rust traits/impls", "Read, Write, Copy, Transform operations")
+  Component(tag_registry, "Tag Registry", "Generated const maps", "28K+ tag definitions indexed by ID/name")
+  Component(validation, "Validation Engine", "Rust", "Tag value type checking, range validation")
+
+  ' Ports (interfaces)
+  Component(format_port, "Format Parser Port", "Rust trait", "trait FormatParser { fn parse(&self, ...) -> Result<MetadataMap> }")
+  Component(io_port, "I/O Port", "Rust trait", "trait FileReader { fn read(&self, offset, len) -> Result<&[u8]> }")
+
+  ' Infrastructure adapters (in other containers but shown for clarity)
+  Component_Ext(jpeg_adapter, "JPEG Parser", "nom-based", "EXIF/JFIF segment parser")
+  Component_Ext(tiff_adapter, "TIFF Parser", "nom-based", "IFD structure parser")
+  Component_Ext(xmp_adapter, "XMP Parser", "quick-xml", "RDF/XML parser for XMP")
+  Component_Ext(mmap_adapter, "MMap Reader", "memmap2", "Memory-mapped file access")
+}
+
+Rel(api_facade, operations, "Orchestrates")
+Rel(operations, metadata_model, "Manipulates")
+Rel(operations, tag_registry, "Looks up tag definitions")
+Rel(operations, validation, "Validates values via")
+
+Rel(format_port, jpeg_adapter, "Implemented by")
+Rel(format_port, tiff_adapter, "Implemented by")
+Rel(format_port, xmp_adapter, "Implemented by")
+
+Rel(jpeg_adapter, io_port, "Reads via")
+Rel(tiff_adapter, io_port, "Reads via")
+Rel(io_port, mmap_adapter, "Implemented by")
+
+@enduml
+```
+```
+
+### Context: Key Entities - Data Model (from 03_System_Structure_and_Data.md)
+
+```markdown
 #### Key Entities
 
 1. **File**: Represents a media file being processed (JPEG, PNG, etc.)
@@ -53,87 +151,51 @@ The following are the relevant sections from the architecture and plan documents
 6. **IFD (Image File Directory)**: TIFF-specific structural element containing tags
 ```
 
-### Context: TagDescriptor Entity Details (from 03_System_Structure_and_Data.md)
+### Context: Error Handling Pattern (from 04_Behavior_and_Communication.md)
 
 ```markdown
-entity TagDescriptor {
-  primary_key(tag_name) : String
-  --
-  tag_id : u16 | String
-  foreign_key(family_id) : String
-  writable : bool
-  value_type : TagType
-  description : String
-  example_values : Vec<String>
-}
+**Error Handling**: `Result<T, ExifToolError>` throughout
 
-entity FormatFamily {
-  primary_key(family_id) : String
-  --
-  family_name : String
-  specification_url : String
+```rust
+pub enum ExifToolError {
+    IoError(std::io::Error),
+    ParseError { format: String, details: String },
+    TagNotFound { tag_name: String },
+    InvalidTagValue { tag_name: String, expected_type: String },
+    UnsupportedFormat { format: String },
 }
 ```
 
-**Rationale**:
-
-- **No Persistent Database**: The system is stateless. `MetadataMap` exists only in-memory during processing and is serialized to JSON/text output or written back to file metadata.
-
-- **Variant Value Type**: `TagValue.value` uses a Rust `enum` to represent heterogeneous tag types:
-  ```rust
-  enum TagValueData {
-      String(String),
-      Number(f64),
-      Integer(i64),
-      Binary(Vec<u8>),
-      Rational { numerator: i32, denominator: i32 },
-      Struct(HashMap<String, TagValueData>), // For complex XMP structures
-  }
-  ```
-
-- **Tag Descriptor**: Compile-time generated from ExifTool tag database. In practice, this is a large static `HashMap<&'static str, TagDescriptor>` embedded in the binary, not a runtime database.
-
-### Context: Data Model Overview (from 01_Plan_Overview_and_Setup.md)
-
-```markdown
-*   **Data Model Overview:**
-    *   **File:** Represents media file being processed (path, format, size)
-    *   **MetadataMap:** Collection of all tags extracted from a file
-    *   **TagValue:** Single metadata tag with name, value, type information, and optional byte offset
-    *   **TagDescriptor:** Tag definition from database (ID, name, type constraints, format family)
-    *   **FormatFamily:** Grouping of metadata standards (EXIF, XMP, IPTC, MakerNotes)
-    *   **IFD (Image File Directory):** TIFF-specific structural element for tag organization
-
-    **Note:** No persistent database storage. All data structures are in-memory during processing, serialized to JSON/text output or written back to file metadata.
+Errors propagate via `?` operator, no exceptions.
 ```
 
-### Context: Task I1.T5 Specification (from 02_Iteration_I1.md)
+### Context: Task I1.T7 Specification (from 02_Iteration_I1.md)
 
 ```markdown
-*   **Task 1.5: Define Tag Database Schema**
-    *   **Task ID:** `I1.T5`
-    *   **Description:** Create JSON Schema defining the structure for TagDescriptor objects that will be code-generated from ExifTool documentation. Schema should define: tag_id (string or number), tag_name (string), format_family (enum: EXIF, XMP, IPTC, GPS, etc.), writable (boolean), value_type (enum: String, Integer, Rational, Binary, etc.), description (string), example_values (array of strings). Save to `api/tag_database_schema.json`. Validate against JSON Schema Draft 7 specification.
-    *   **Agent Type Hint:** `BackendAgent` or `DocumentationAgent`
-    *   **Inputs:** Section 2 (Data Model Overview), Section 2.1 (Key Architectural Artifacts)
-    *   **Input Files:** []
+<!-- anchor: task-i1-t7 -->
+*   **Task 1.7: Define Format Parser and File Reader Traits**
+    *   **Task ID:** `I1.T7`
+    *   **Description:** Implement port interfaces in `src/core/`: `trait FormatParser` with method `fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap, ExifToolError>` and `fn supports_format(&self, format: FileFormat) -> bool`. Implement `trait FileReader` with methods `fn read(&self, offset: u64, length: usize) -> Result<&[u8], std::io::Error>`, `fn size(&self) -> u64`. Define `enum FileFormat` with variants for JPEG, TIFF, PNG, etc. Add comprehensive documentation comments explaining trait contracts.
+    *   **Agent Type Hint:** `BackendAgent`
+    *   **Inputs:** Section 2 (Core Architecture - hexagonal architecture ports), Section 2.1 (artifact for format parser trait)
+    *   **Input Files:** [`src/core/metadata_map.rs`, `src/error.rs`]
     *   **Target Files:**
-        *   `api/tag_database_schema.json`
+        *   `src/core/format_parser_trait.rs`
+        *   `src/core/file_reader_trait.rs`
+        *   `src/core/file_format.rs` (enum FileFormat)
+        *   `src/core/mod.rs` (export traits)
     *   **Deliverables:**
-        *   Valid JSON Schema file
+        *   Rust trait definitions with documentation
+        *   FileFormat enum with initial variants (JPEG, TIFF, PNG, PDF, Unknown)
     *   **Acceptance Criteria:**
-        *   JSON Schema validates against Draft 7 spec (use online validator or `ajv` CLI)
-        *   Schema includes all fields mentioned in task description
-        *   Schema has appropriate constraints (e.g., tag_name is required, writable is boolean)
-        *   Example valid TagDescriptor object passes schema validation
-    *   **Dependencies:** `I1.T1`
-    *   **Parallelizable:** Yes (can run concurrently with T2, T3, T4, T6 after T1 completes)
-```
-
-### Context: Tag Registry Component (from 03_System_Structure_and_Data.md)
-
-```markdown
-Component(tag_registry, "Tag Registry", "Generated const maps", "28K+ tag definitions indexed by ID/name")
-Component(validation, "Validation Engine", "Rust", "Tag value type checking, range validation")
+        *   Traits compile successfully
+        *   Documentation comments explain trait purpose and method contracts
+        *   FormatParser trait has parse() and supports_format() methods
+        *   FileReader trait has read() and size() methods
+        *   FileFormat enum has at least 5 variants
+        *   Code compiles with `cargo build`
+    *   **Dependencies:** `I1.T6` (needs MetadataMap and ExifToolError)
+    *   **Parallelizable:** No (depends on T6)
 ```
 
 ---
@@ -144,89 +206,77 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `Cargo.toml`
-    *   **Summary:** This is the project manifest for the Rust workspace. It defines the package metadata, dependencies, and build profiles.
-    *   **Current State:** The project is properly initialized with all required dependencies (serde, serde_json, clap, nom, quick-xml, chrono, encoding_rs, memmap2, rayon) already specified. The build system is configured for both library and binary targets.
-    *   **Recommendation:** You DO NOT need to modify this file. The dependencies required for JSON schema work (serde, serde_json) are already present.
-
-*   **File:** `src/core/tag_descriptor.rs`
-    *   **Summary:** This file is a placeholder stub with only comments and an allow(dead_code) directive. It currently contains NO actual implementation.
-    *   **Current State:** Empty stub file with module documentation only.
-    *   **Recommendation:** This file will be implemented in task I1.T6 (next task after I1.T5). The JSON schema you create in this task MUST accurately reflect the Rust structure that will be implemented in tag_descriptor.rs during I1.T6.
-
 *   **File:** `src/core/metadata_map.rs`
-    *   **Summary:** This file is a placeholder stub with only comments and an allow(dead_code) directive. It currently contains NO actual implementation.
-    *   **Current State:** Empty stub file with module documentation only.
-    *   **Recommendation:** This file will be implemented in I1.T6. Your schema focuses on TagDescriptor, not MetadataMap, so this file is NOT directly relevant to your current task.
-
-*   **File:** `src/core/tag_value.rs`
-    *   **Summary:** This file is a placeholder stub with only comments. It currently contains NO actual TagValue enum implementation.
-    *   **Current State:** Empty stub file with module documentation only.
-    *   **Recommendation:** This file will be implemented in I1.T6. The value_type field in your JSON schema MUST match the TagValue enum variants that will be defined in this file (String, Integer, Float, Rational, Binary, DateTime, Struct).
+    *   **Summary:** This file defines the core `MetadataMap` struct, which is a wrapper around `HashMap<String, TagValue>`. It provides typed getter methods (`get_string()`, `get_integer()`, `get_float()`) and implements standard collection operations. The struct derives `Debug`, `Clone`, `PartialEq`, `Serialize`, and `Deserialize` for full serde support.
+    *   **Recommendation:** You MUST import and use `MetadataMap` in your `FormatParser` trait. The return type of the `parse()` method is `Result<MetadataMap, ExifToolError>`. Import it from `super::metadata_map::MetadataMap` or use `crate::core::MetadataMap`.
 
 *   **File:** `src/error/mod.rs`
-    *   **Summary:** This file is a placeholder stub with only comments. It currently contains NO actual ExifToolError enum implementation.
-    *   **Current State:** Empty stub file with module documentation only.
-    *   **Recommendation:** This file is NOT relevant to your current task. You are defining the TagDescriptor schema, which does not involve error types.
+    *   **Summary:** This file defines the `ExifToolError` enum with variants: `IoError`, `ParseError`, `TagNotFound`, `InvalidTagValue`, and `UnsupportedFormat`. It implements `std::error::Error` and `std::fmt::Display`. It also provides a type alias: `pub type Result<T> = std::result::Result<T, ExifToolError>`.
+    *   **Recommendation:** You MUST import `ExifToolError` and the `Result` type alias from `crate::error`. Use `Result<T>` as the return type for the `parse()` method instead of writing out the full `std::result::Result<T, ExifToolError>`. Note that `std::io::Error` should be used directly for `FileReader::read()` since it's a low-level I/O operation.
 
-*   **Directory:** `api/`
-    *   **Summary:** This directory exists but is currently empty.
-    *   **Current State:** The directory was created during project initialization (I1.T1) but contains no files yet.
-    *   **Recommendation:** You MUST create `api/tag_database_schema.json` in this directory. This is the primary deliverable for your task.
+*   **File:** `src/core/tag_descriptor.rs`
+    *   **Summary:** This file defines `TagDescriptor`, `TagId`, `FormatFamily`, and `ValueType` enums. The `FormatFamily` enum already includes variants for EXIF, XMP, IPTC, GPS, ICCProfile, Photoshop, MakerNotes, JFIF, PNG, PDF, and QuickTime.
+    *   **Recommendation:** You SHOULD reference the `FormatFamily` enum when designing your `FileFormat` enum. They serve similar purposes (format classification) and should have similar variants to maintain consistency. However, `FileFormat` is for file-level detection, while `FormatFamily` is for metadata tag categorization.
+
+*   **File:** `src/core/tag_value.rs`
+    *   **Summary:** This file defines the `TagValue` enum with variants: String, Integer, Float, Rational, Binary, DateTime, and Struct. It includes constructors (`new_string()`, `new_integer()`, etc.) and type-checking methods (`is_string()`, `is_integer()`, etc.).
+    *   **Recommendation:** While you won't directly use `TagValue` in your trait definitions, it's important to understand that `MetadataMap` stores `TagValue` instances. Your trait documentation should mention that parsers return a collection of tag name → `TagValue` mappings.
+
+*   **File:** `src/core/mod.rs`
+    *   **Summary:** This is the module root for the core domain layer. It currently exports `file_reader_trait`, `format_parser_trait`, `metadata_map`, `operations`, `tag_descriptor`, `tag_value`, and `validation` modules. It also re-exports commonly used types: `MetadataMap`, `TagDescriptor`, `FormatFamily`, `TagId`, `ValueType`, and `TagValue`.
+    *   **Recommendation:** After implementing your traits, you MUST add public re-exports to this file so that consumers can easily import the traits. Add lines like: `pub use file_reader_trait::FileReader;`, `pub use format_parser_trait::FormatParser;`, and `pub use file_format::FileFormat;` (you'll need to create the `file_format` module first).
+
+*   **File:** `src/core/file_reader_trait.rs`
+    *   **Summary:** This file currently only contains a module comment and `#![allow(dead_code)]`. It is a placeholder waiting for the trait definition.
+    *   **Recommendation:** You MUST implement the `FileReader` trait in this file according to the task specification.
+
+*   **File:** `src/core/format_parser_trait.rs`
+    *   **Summary:** This file currently only contains a module comment and `#![allow(dead_code)]`. It is a placeholder waiting for the trait definition.
+    *   **Recommendation:** You MUST implement the `FormatParser` trait in this file according to the task specification.
+
+*   **File:** `api/tag_database_schema.json`
+    *   **Summary:** This JSON Schema defines the structure of `TagDescriptor` objects for the tag database. It shows the required fields and enums for `format_family` and `value_type`.
+    *   **Recommendation:** While not directly used in your implementation, this schema confirms the design decisions around format families and value types. Your `FileFormat` enum should align with the format families mentioned here.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** According to the architecture, the `tag_id` field can be EITHER a `u16` (numeric ID like 0x010F for EXIF Make) OR a `String` (named ID like "XMP-dc:Creator"). Your JSON schema MUST support BOTH types. Use a `oneOf` constraint with two sub-schemas (one for integer, one for string).
+*   **Tip:** I have confirmed that the project follows Rust 2021 edition idioms. All existing code uses modern patterns like `#![allow(dead_code)]` for work-in-progress modules, comprehensive doc comments with examples, and derives for common traits (Debug, Clone, PartialEq, Serialize, Deserialize).
 
-*   **Tip:** The `format_family` field should be constrained to a specific set of values. Based on the architecture, the valid enum values are: `"EXIF"`, `"XMP"`, `"IPTC"`, `"GPS"`, `"ICC_Profile"`, `"Photoshop"`, `"MakerNotes"`, `"JFIF"`, `"PNG"`, `"PDF"`, `"QuickTime"`. You SHOULD define this as an enum constraint in the schema.
+*   **Tip:** The existing component diagram (`docs/diagrams/component_architecture.puml`) clearly shows that `FormatParser` is a "port" (interface) in the hexagonal architecture. Your trait documentation SHOULD explain this architectural role: it's the boundary between the domain layer (core library) and the infrastructure layer (format-specific parsers).
 
-*   **Tip:** The `value_type` field represents the TagValue enum variants from the architecture. The valid values based on the ERD and architecture are: `"String"`, `"Integer"`, `"Float"`, `"Rational"`, `"Binary"`, `"DateTime"`, `"Struct"`. You MUST constrain this field to these exact values using an enum.
+*   **Tip:** The `FileReader` trait should be designed for zero-copy access. Notice that the method signature uses `&[u8]` as the return type. This allows implementations like `MMapReader` to return direct references to memory-mapped file data without copying. Your documentation should emphasize this design goal.
 
-*   **Note:** The schema you create will be used in TWO ways:
-    1. **Immediate (I1.T6):** As documentation for implementing the Rust TagDescriptor struct in the next task
-    2. **Future (I5.T5):** As a validation schema for the build.rs script that will auto-generate tag definitions from ExifTool source
+*   **Note:** The task requires `FileReader::read()` to return `Result<&[u8], std::io::Error>`. This poses a lifetime challenge: the returned slice must borrow from `&self`. You'll need to declare the trait method with a lifetime parameter: `fn read(&self, offset: u64, length: usize) -> Result<&'_ [u8], std::io::Error>` or use an explicit lifetime like `'a`.
 
-*   **Warning:** The acceptance criteria explicitly require validation against JSON Schema Draft 7 specification. You MUST include `"$schema": "http://json-schema.org/draft-07/schema#"` as the first field in your schema. This ensures compatibility with standard validators.
+*   **Note:** The task specifies that `FormatParser::parse()` takes `reader: &dyn FileReader`. This is a trait object, which means you'll need to handle dynamic dispatch. Make sure the `FileReader` trait is object-safe (no associated types, no `Self: Sized` bounds on methods).
 
-*   **Tip:** Per the acceptance criteria, you SHOULD include an example valid TagDescriptor object that passes schema validation. Consider adding this as documentation in a comment or in a separate `examples` section within the schema itself (though not strictly required by JSON Schema spec).
+*   **Warning:** When creating the `FileFormat` enum, you MUST include at least 5 variants as specified in the acceptance criteria: JPEG, TIFF, PNG, PDF, and Unknown. Consider adding more variants that align with `FormatFamily` for future-proofing (e.g., GIF, BMP, MP4, QuickTime).
 
-*   **Note:** Based on the ERD diagram from the architecture, the TagDescriptor entity has the following field characteristics:
-    - `tag_name`: PRIMARY KEY (required, string, unique identifier)
-    - `tag_id`: Can be u16 or String (required)
-    - `format_family`: Foreign key to FormatFamily (required, string from enum)
-    - `writable`: Boolean (required, indicates if tag can be written)
-    - `value_type`: Enum of TagType (required)
-    - `description`: String (required, human-readable description)
-    - `example_values`: Array of strings (required)
+*   **Warning:** The project uses `#![allow(dead_code)]` to suppress warnings during development. You SHOULD include this attribute at the top of your new trait files since the traits won't be used yet (they'll be implemented in later tasks I1.T8-I1.T11).
 
-*   **Tip:** All fields mentioned in the task description are REQUIRED fields. None are optional. Your schema constraints should reflect this with appropriate `required` array specification.
+*   **Best Practice:** Follow the existing documentation style. Every public trait, method, and enum should have:
+    1. A `///` doc comment explaining its purpose
+    2. `# Examples` section showing usage (if applicable)
+    3. `# Errors` section explaining error conditions (for methods that return `Result`)
+    4. Clear explanation of the trait contract (what implementers must guarantee)
 
-*   **Warning:** The schema will be consumed by Rust code generation tools in iteration I5. Ensure field names use snake_case (Rust convention) NOT camelCase (JavaScript convention). Use: `tag_id`, `tag_name`, `format_family`, `value_type`, `example_values` (NOT `tagId`, `tagName`, etc.).
+*   **Best Practice:** The existing code uses constructor-style methods (e.g., `TagValue::new_string()`). While traits typically don't have constructors, you should document any expected patterns for creating implementations.
 
-### Validation Strategy
+*   **Code Quality:** Make sure to run `cargo build`, `cargo clippy`, and `cargo fmt --check` before considering the task complete. The acceptance criteria explicitly require compilation success and adherence to the project's formatting and linting standards.
 
-*   **Strategy:** After creating the schema file, you MUST validate it. The acceptance criteria mention two validation approaches:
-    1. **Online validator:** Use a service like https://www.jsonschemavalidator.net/ with Draft 7 selected
-    2. **CLI validator:** Use `ajv-cli` if available (`npm install -g ajv-cli`, then `ajv validate -s schema.json -d data.json`)
+*   **Hexagonal Architecture Principle:** Your traits are the "ports" in the ports-and-adapters architecture. They should be defined in terms of domain concepts (MetadataMap, FileFormat) NOT infrastructure details (file paths, specific parser implementations). This keeps the domain layer pure and testable.
 
-*   **Testing:** Create at least one example TagDescriptor JSON object that conforms to your schema. Example based on architecture:
-    ```json
-    {
-      "tag_id": 271,
-      "tag_name": "EXIF:Make",
-      "format_family": "EXIF",
-      "writable": true,
-      "value_type": "String",
-      "description": "Manufacturer of the recording equipment",
-      "example_values": ["Canon", "Nikon", "Sony"]
-    }
-    ```
-    This example should successfully validate against your schema.
+### Critical Implementation Requirements
 
-### Project Context
-
-*   **Completed Tasks:** Tasks I1.T1 (project initialization), I1.T2 (component diagram), I1.T3 (ERD), and I1.T4 (sequence diagram) are complete. The project structure, dependencies, and architectural documentation are all in place.
-
-*   **Next Task:** After you complete I1.T5, the next task will be I1.T6 (Implement Core Domain Models), which will create the actual Rust structs based on the schema you define. Your schema MUST be accurate and complete to enable smooth implementation in I1.T6.
-
-*   **Directory Structure:** The `api/` directory is the correct location for API specifications and schemas. The `docs/` directory contains diagrams and documentation. The `src/` directory contains Rust source code. Keep these concerns separated.
+1. **You MUST create a new file:** `src/core/file_format.rs` with the `FileFormat` enum
+2. **You MUST update:** `src/core/mod.rs` to:
+   - Declare the new `file_format` module with `pub mod file_format;`
+   - Add re-exports: `pub use file_reader_trait::FileReader;`, `pub use format_parser_trait::FormatParser;`, `pub use file_format::FileFormat;`
+3. **You MUST import:** `MetadataMap` from `super::metadata_map` in `format_parser_trait.rs`
+4. **You MUST import:** `ExifToolError` and `Result` type alias from `crate::error`
+5. **You MUST handle:** Lifetime parameters correctly in `FileReader::read()` to return borrowed slices
+6. **You MUST ensure:** Both traits are object-safe for use with `dyn Trait`
+7. **You MUST write:** Comprehensive documentation comments explaining the hexagonal architecture role
+8. **You MUST include:** At least 5 `FileFormat` variants: JPEG, TIFF, PNG, PDF, Unknown
+9. **You SHOULD add:** Derive macros for `FileFormat`: `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `Hash`
+10. **You MUST verify:** Code compiles with `cargo build` without errors or warnings
