@@ -5,11 +5,15 @@
 //! following the hexagonal architecture pattern.
 
 use super::{FileFormat, FileReader, MetadataMap, TagValue};
+use crate::core::validation::validate_tag_value;
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
 use crate::parsers::format_detector::detect_format;
 use crate::parsers::jpeg::segment_parser::parse_segments;
 use crate::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};
+use crate::tag_db::tag_registry::get_tag_descriptor;
+use crate::writers::atomic_writer::write_atomic;
+use crate::writers::jpeg_writer::write_exif_to_jpeg;
 use std::path::Path;
 
 /// Reads metadata from a file at the specified path.
@@ -333,6 +337,168 @@ impl<'a> FileReader for TiffSubReader<'a> {
         let total_size = self.reader.size();
         total_size.saturating_sub(self.base_offset)
     }
+}
+
+/// Writes modified metadata to a file at the specified path.
+///
+/// This function orchestrates the complete metadata write workflow:
+/// 1. Validates all tag values against their type definitions
+/// 2. Opens the original file with MMapReader
+/// 3. Detects file format via magic bytes
+/// 4. Serializes metadata using appropriate format writer
+/// 5. Writes result atomically using atomic_writer
+///
+/// # Arguments
+///
+/// * `path` - Path to the file to write metadata to
+/// * `metadata` - MetadataMap containing tags to write
+///
+/// # Returns
+///
+/// * `Ok(())` - Successfully validated and wrote metadata
+/// * `Err(ExifToolError)` - Validation failure, I/O error, or unsupported format
+///
+/// # Examples
+///
+/// ```no_run
+/// use exiftool_rs::core::operations::{read_metadata, write_metadata};
+/// use exiftool_rs::core::tag_value::TagValue;
+/// use std::path::Path;
+///
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let path = Path::new("photo.jpg");
+///
+/// // Read existing metadata
+/// let mut metadata = read_metadata(path)?;
+///
+/// // Modify a tag
+/// metadata.insert("EXIF:Artist", TagValue::new_string("John Doe"));
+///
+/// // Write back to file
+/// write_metadata(path, &metadata)?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Any tag value fails validation (InvalidTagValue)
+/// - File cannot be opened or read (IoError)
+/// - File format is unsupported (UnsupportedFormat)
+/// - Serialization fails (ParseError)
+/// - Atomic write fails (IoError)
+///
+/// # Validation
+///
+/// All tags are validated before any file operations. Validation checks:
+/// - Type matching (String, Integer, Float, Rational, etc.)
+/// - Value constraints (e.g., Rational denominator != 0)
+///
+/// Tags not in the registry are skipped during validation (allows custom tags).
+pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
+    // PHASE 1: VALIDATION (fail fast before any file operations)
+    // Iterate through all tags and validate each one against its descriptor
+    for (tag_name, tag_value) in metadata.iter() {
+        // Look up tag descriptor in registry
+        if let Some(descriptor) = get_tag_descriptor(tag_name) {
+            // Validate that the tag value matches the expected type
+            validate_tag_value(descriptor, tag_value)?;
+        }
+        // If tag is not in registry, skip validation (allows custom/rare tags)
+    }
+
+    // PHASE 2: READ ORIGINAL FILE
+    // Open file with MMapReader for zero-copy access
+    let reader = MMapReader::new(path)?;
+
+    // PHASE 3: DETECT FORMAT
+    let format = detect_format(&reader)?;
+
+    // PHASE 4: SERIALIZE WITH APPROPRIATE WRITER
+    let serialized_bytes = match format {
+        FileFormat::JPEG => {
+            // Use JPEG writer to serialize metadata
+            write_exif_to_jpeg(&reader, metadata)?
+        }
+        FileFormat::TIFF => {
+            // TIFF writer not yet implemented (will be in I3.T7)
+            return Err(ExifToolError::unsupported_format(
+                "TIFF write operations are not yet supported in this iteration",
+            ));
+        }
+        _ => {
+            return Err(ExifToolError::unsupported_format(format!(
+                "Write operations for format {:?} are not supported",
+                format
+            )));
+        }
+    };
+
+    // PHASE 5: ATOMIC WRITE
+    // Write serialized bytes to file using atomic temp-file-and-rename pattern
+    write_atomic(path, &serialized_bytes)?;
+
+    Ok(())
+}
+
+/// Modifies a single tag in a file's metadata.
+///
+/// This is a convenience function that:
+/// 1. Reads existing metadata from the file
+/// 2. Modifies the specified tag with the new value
+/// 3. Writes all metadata back to the file
+///
+/// This ensures all other tags are preserved unchanged.
+///
+/// # Arguments
+///
+/// * `path` - Path to the file to modify
+/// * `tag_name` - Canonical tag name (e.g., "EXIF:Artist")
+/// * `new_value` - New value for the tag
+///
+/// # Returns
+///
+/// * `Ok(())` - Successfully modified tag and wrote file
+/// * `Err(ExifToolError)` - Read error, validation error, or write error
+///
+/// # Examples
+///
+/// ```no_run
+/// use exiftool_rs::core::operations::modify_tag;
+/// use exiftool_rs::core::tag_value::TagValue;
+/// use std::path::Path;
+///
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let path = Path::new("photo.jpg");
+///
+/// // Modify a single tag
+/// modify_tag(
+///     path,
+///     "EXIF:Artist",
+///     TagValue::new_string("John Doe")
+/// )?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - File cannot be read (IoError)
+/// - New value fails validation (InvalidTagValue)
+/// - File cannot be written (IoError)
+pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()> {
+    // Step 1: Read existing metadata (preserves all other tags)
+    let mut metadata = read_metadata(path)?;
+
+    // Step 2: Modify the single tag
+    metadata.insert(tag_name, new_value);
+
+    // Step 3: Write all metadata back to file
+    write_metadata(path, &metadata)?;
+
+    Ok(())
 }
 
 #[cfg(test)]

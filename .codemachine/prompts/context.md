@@ -10,26 +10,27 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I3.T3",
+  "task_id": "I3.T4",
   "iteration_id": "I3",
   "iteration_goal": "Implement metadata write operations with atomic file handling, extend TIFF parser for standalone TIFF files (not just EXIF in JPEG), implement metadata serialization, and add tag modification capabilities to CLI.",
-  "description": "Implement JPEG EXIF writer in src/writers/jpeg_writer.rs. Create function to write modified EXIF back to JPEG: (1) Read original JPEG using segment parser, (2) Serialize modified EXIF tags using TIFF writer (I3.T2) with EXIF header (Exif\\0\\0 + TIFF IFD), (3) Create new APP1 segment with EXIF marker (0xFFE1), length, and data, (4) Replace old EXIF APP1 segment with new one in JPEG structure, (5) Write modified JPEG to buffer. Handle segment size changes (if new EXIF larger/smaller than original). Add integration test modifying EXIF tag in JPEG and verifying change.",
+  "description": "Implement write operation in src/core/operations.rs: write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> that: (1) Validates all tag values using validation engine (I2.T10), (2) Reads original file, (3) Detects format, (4) Serializes metadata using appropriate writer (JPEG writer for JPEG, TIFF writer for TIFF), (5) Writes result using atomic_writer (I3.T1). Add modify_tag(path, tag_name, new_value) convenience function. Add integration tests for JPEG and error handling (invalid tag value).",
   "agent_type_hint": "BackendAgent",
-  "inputs": "I1.T10 JPEG parser, I3.T2 TIFF writer",
+  "inputs": "I2.T10 validation, I3.T1 atomic writer, I3.T3 JPEG writer",
   "target_files": [
-    "src/writers/jpeg_writer.rs",
-    "src/writers/mod.rs",
-    "tests/integration/jpeg_write_tests.rs"
+    "src/core/operations.rs",
+    "tests/integration/write_operations_tests.rs"
   ],
   "input_files": [
-    "src/parsers/jpeg/segment_parser.rs",
-    "src/writers/tiff_writer.rs"
+    "src/core/validation.rs",
+    "src/writers/atomic_writer.rs",
+    "src/writers/jpeg_writer.rs"
   ],
-  "deliverables": "JPEG EXIF segment writer, integration test for EXIF modification",
-  "acceptance_criteria": "Writer replaces EXIF APP1 segment with modified data, handles EXIF header (Exif\\0\\0) correctly, handles segment size changes (larger/smaller new EXIF), preserves other JPEG segments (XMP, IPTC, image data), integration test: modify EXIF:Artist, re-read, verify new value, cargo test jpeg_write_tests passes",
+  "deliverables": "write_metadata() and modify_tag() functions, validation integration, integration tests",
+  "acceptance_criteria": "write_metadata() validates tags before writing, returns InvalidTagValue error for validation failures, successfully writes modified JPEG with EXIF changes, uses atomic file operations (no corruption on crash), modify_tag() is a convenience wrapper around write_metadata(), integration tests verify successful write and validation errors, cargo test write_operations passes",
   "dependencies": [
-    "I1.T10",
-    "I3.T2"
+    "I2.T10",
+    "I3.T1",
+    "I3.T3"
   ],
   "parallelizable": false,
   "done": false
@@ -42,44 +43,147 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: JPEG EXIF Writing Workflow
+### Context: alternative-flow-metadata-write (from 04_Behavior_and_Communication.md)
 
-**JPEG File Structure Requirements:**
+```markdown
+#### Alternative Flow: Metadata Write Operation
 
-JPEG files consist of a sequence of segments with the following structure:
-- **SOI marker**: 0xFFD8 (Start of Image) - 2 bytes, no length field
-- **Segment sequence**: Each segment has:
-  - **Marker**: 2 bytes (0xFFXX)
-  - **Length**: 2 bytes (big-endian), includes length field but NOT marker
-  - **Data**: Variable-length payload (length - 2 bytes)
-- **EOI marker**: 0xFFD9 (End of Image) - 2 bytes, no length field
+**Description**: Sequence for **modifying metadata and writing back to file**.
 
-**EXIF in JPEG:**
-- EXIF metadata is stored in an APP1 segment (marker 0xFFE1)
-- EXIF APP1 segment structure:
-  1. Marker: 0xFFE1 (2 bytes)
-  2. Length: 2 bytes (big-endian, includes itself + header + TIFF data, but NOT marker)
-  3. EXIF identifier: "Exif\0\0" (6 bytes)
-  4. TIFF IFD data: Complete TIFF structure with header and IFD
+**Diagram (PlantUML)**:
 
-**Critical Implementation Requirements:**
+```plantuml
+@startuml
 
-1. **EXIF Header**: The EXIF APP1 segment MUST begin with the 6-byte identifier "Exif\0\0" (0x45 0x78 0x69 0x66 0x00 0x00)
+actor User
+participant "CLI" as CLI
+participant "Core Library" as Core
+participant "JPEG Parser" as JPEG
+participant "Metadata Writer" as Writer
+participant "I/O Layer" as IO
+participant "File System" as FS
 
-2. **Segment Length Calculation**:
-   - Length field = 2 (length bytes) + 6 (EXIF identifier) + TIFF data size
-   - Total segment size = 2 (marker) + 2 (length) + 6 (EXIF identifier) + TIFF data size
+User -> CLI : exiftool-rs -EXIF:Artist="John Doe" photo.jpg
+CLI -> Core : Metadata::from_path("photo.jpg")
+Core -> JPEG : parse(file)
+JPEG --> Core : existing_metadata
 
-3. **Segment Preservation**: When replacing EXIF:
-   - MUST preserve all non-EXIF segments (XMP, IPTC, other APPx, image data)
-   - MUST preserve segment order (typically: SOI → APP0/JFIF → APP1/EXIF → APP1/XMP → SOS → image data → EOI)
-   - Handle cases where EXIF segment doesn't exist (create new APP1 segment)
-   - Handle cases where multiple APP1 segments exist (only replace EXIF, preserve XMP)
+Core -> Core : modify_tag(existing_metadata, "EXIF:Artist", "John Doe")
+Core -> Core : validate_tag_value("EXIF:Artist", "John Doe")
 
-4. **Size Changes**: The new EXIF segment may be larger or smaller than the original:
-   - Larger: Insert expanded segment, shift remaining segments
-   - Smaller: Insert smaller segment, shift remaining segments
-   - The JPEG structure must remain valid after modification
+alt Validation Passes
+  Core -> Writer : write_metadata(file, modified_metadata, WriteStrategy::InPlace)
+
+  Writer -> Writer : check_format_write_capability(JPEG)
+
+  alt JPEG supports in-place EXIF write
+    Writer -> IO : read_file_to_buffer("photo.jpg")
+    IO -> FS : read()
+    FS --> IO : file_bytes
+    Writer -> Writer : locate_exif_segment(file_bytes)
+    Writer -> Writer : serialize_exif_ifd(modified_metadata)
+    Writer -> Writer : replace_segment_in_buffer(old_exif, new_exif)
+
+    Writer -> IO : write_buffer_to_file("photo.jpg", modified_bytes)
+    IO -> FS : write() with atomic rename
+    FS --> IO : success
+    Writer --> Core : WriteResult::Success
+  else EXIF segment doesn't fit (new data larger)
+    Writer -> Writer : rewrite_entire_file_with_new_exif()
+    Writer --> Core : WriteResult::Success
+  end
+
+  Core --> CLI : Result::Ok(WriteResult)
+  CLI --> User : 1 image files updated
+
+else Validation Fails
+  Core --> CLI : Result::Err(InvalidTagValue)
+  CLI --> User : Error: Invalid value for EXIF:Artist
+end
+
+@enduml
+```
+
+**Key Design Decisions**:
+
+1. **Read-Modify-Write**: Always read existing metadata first to preserve unmodified tags
+2. **In-Place vs. Rewrite**: Attempt in-place modification if new metadata fits in existing segment; otherwise rewrite entire file
+3. **Atomic Write**: Use temporary file + atomic rename to prevent corruption on crash
+4. **Validation Before Write**: Validate tag values against type constraints before any file modification
+```
+
+### Context: task-i3-t4 (from 02_Iteration_I3.md)
+
+```markdown
+*   **Task 3.4: Implement Metadata Write Operation**
+    *   **Task ID:** `I3.T4`
+    *   **Description:** Implement write operation in `src/core/operations.rs`: `write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()>` that: (1) Validates all tag values using validation engine (I2.T10), (2) Reads original file, (3) Detects format, (4) Serializes metadata using appropriate writer (JPEG writer for JPEG, TIFF writer for TIFF), (5) Writes result using atomic_writer (I3.T1). Add `modify_tag(path, tag_name, new_value)` convenience function. Add integration tests for JPEG and error handling (invalid tag value).
+    *   **Agent Type Hint:** `BackendAgent`
+    *   **Inputs:** I2.T10 validation, I3.T1 atomic writer, I3.T3 JPEG writer
+    *   **Input Files:** [`src/core/validation.rs`, `src/writers/atomic_writer.rs`, `src/writers/jpeg_writer.rs`]
+    *   **Target Files:**
+        *   `src/core/operations.rs` (add write functions)
+        *   `tests/integration/write_operations_tests.rs`
+    *   **Deliverables:**
+        *   write_metadata() and modify_tag() functions
+        *   Validation integration
+        *   Integration tests
+    *   **Acceptance Criteria:**
+        *   write_metadata() validates tags before writing
+        *   Returns InvalidTagValue error for validation failures
+        *   Successfully writes modified JPEG with EXIF changes
+        *   Uses atomic file operations (no corruption on crash)
+        *   modify_tag() is a convenience wrapper around write_metadata()
+        *   Integration tests verify successful write and validation errors
+        *   `cargo test write_operations` passes
+    *   **Dependencies:** `I2.T10`, `I3.T1`, `I3.T3`
+    *   **Parallelizable:** No (depends on multiple I3 tasks)
+```
+
+### Context: security-considerations (from 05_Operational_Architecture.md)
+
+```markdown
+#### Security Considerations
+
+**Threat Model**:
+
+ExifTool-RS processes potentially malicious files from untrusted sources (e.g., user uploads, scraped images). Primary threats:
+
+1. **Memory Corruption**: Buffer overflows, use-after-free in parsers
+2. **Resource Exhaustion**: Zip bombs, billion laughs (XML), decompression bombs
+3. **Path Traversal**: Malicious filenames in archive processing
+4. **Code Injection**: Via scripting features (if added)
+
+**Mitigations**:
+
+| **Threat** | **Mitigation** | **Implementation** |
+|------------|---------------|-------------------|
+| Buffer overflows | Rust ownership system | Compile-time prevention via borrow checker |
+| Integer overflows | Checked arithmetic | `#![deny(overflowing_literals)]`, `checked_add()` in parsers |
+| Resource exhaustion | Size limits | Max allocation: 1GB per file, max parse depth: 64 levels (nested IFDs) |
+| Zip bombs | Decompression ratio check | Reject if uncompressed > 100x compressed size |
+| XXE attacks (XML) | Disable external entities | `quick-xml` configured to reject DOCTYPE, external entities |
+| Path traversal | Path sanitization | `canonicalize()` + jail to working directory for batch operations |
+| Dependency vulnerabilities | Automated scanning | `cargo-audit` in CI, Dependabot alerts, minimal dependency tree |
+| Malicious input | Fuzzing | Continuous fuzzing with `cargo-fuzz`, OSS-Fuzz integration target |
+
+**Input Validation**:
+
+All parsers follow defensive pattern:
+```rust
+fn read_u32_at(data: &[u8], offset: usize) -> Result<u32> {
+    let bytes = data.get(offset..offset+4)
+        .ok_or(ParseError::UnexpectedEof)?;  // Bounds check
+    Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
+}
+```
+
+**Secure Defaults**:
+
+- No script execution (unlike Perl ExifTool's `-execute` feature)
+- No network access by default (geolocation requires opt-in `--geolocation` flag)
+- Read-only mode available via `--readonly` flag (prevents accidental writes)
+```
 
 ---
 
@@ -89,146 +193,75 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `src/parsers/jpeg/segment_parser.rs`
-    *   **Summary:** Provides comprehensive JPEG segment parsing using nom combinators. The `parse_segments()` function reads an entire JPEG file and returns a `Vec<Segment>` where each segment contains marker, offset, and data as a borrowed slice. The module handles SOI marker validation, segment iteration, and EOI detection.
-    *   **Recommendation:** You MUST use the `parse_segments()` function to read the original JPEG structure. The `Segment` struct provides `is_app1()`, `is_soi()`, and `is_eoi()` helper methods. Each segment's `data` field contains the payload (excludes marker and length).
-    *   **Critical Detail:** For APP1 segments, the `data` field includes the identifier (e.g., "Exif\0\0" or "http://ns.adobe.com/xap/1.0/\0"). You MUST check for the "Exif\0\0" identifier to distinguish EXIF APP1 segments from XMP APP1 segments.
+*   **File:** `src/core/operations.rs`
+    *   **Summary:** This file contains the core `read_metadata()` orchestration function and parsing logic for JPEG and TIFF formats. It demonstrates the pattern of: (1) opening with MMapReader, (2) format detection, (3) routing to appropriate parser. Currently has only READ operations - you will ADD write operations here.
+    *   **Recommendation:** You MUST follow the same orchestration pattern for `write_metadata()`. The function already imports `MMapReader`, `detect_format`, and parsers. You MUST add imports for validation, atomic writer, and JPEG writer. Look at the existing `parse_jpeg_metadata()` pattern as a reference for handling different formats.
+    *   **Critical Detail:** The file uses helper functions `tag_id_to_name()` and `raw_bytes_to_tag_value()`. Note the current implementation of `read_metadata()` does NOT use the tag registry for validation - it just extracts raw data. Your write operation MUST integrate validation from `src/core/validation.rs`.
 
-*   **File:** `src/writers/tiff_writer.rs`
-    *   **Summary:** Implements TIFF IFD serialization via the `serialize_ifd()` function. Takes a `MetadataMap`, `ByteOrder`, and `ifd_start_offset` and returns a complete IFD structure as `Vec<u8>`. Handles both little-endian and big-endian output, inline values vs. offset values, and tag sorting by ID.
-    *   **Recommendation:** You MUST use `serialize_ifd()` to convert EXIF tags to binary TIFF IFD format. The function filters for "EXIF:" prefixed tags automatically. Note that it returns ONLY the IFD structure (entry count + entries + next IFD offset + value area), NOT the TIFF header.
-    *   **Critical Detail:** For JPEG EXIF, you need to prepend a TIFF header BEFORE the IFD data. The TIFF header is 8 bytes:
-        - Little-endian: [0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00]
-        - Big-endian: [0x4D, 0x4D, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08]
-        - The last 4 bytes are the IFD offset (always 8, pointing right after the header)
+*   **File:** `src/core/validation.rs`
+    *   **Summary:** This file provides the `validate_tag_value(descriptor: &TagDescriptor, value: &TagValue) -> Result<()>` function that performs comprehensive type checking.
+    *   **Recommendation:** You MUST call this validation function for EVERY tag in the MetadataMap before writing. The function is already fully implemented with 20+ test cases. Import it and use it in a loop over all metadata tags.
+    *   **Critical Detail:** Validation requires a `TagDescriptor` object. You will need to look up each tag in the tag registry (see `src/tag_db/tag_registry.rs`) to get its descriptor. The registry uses a static `TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>>` with a `get_tag_descriptor(name: &str)` function.
 
 *   **File:** `src/writers/atomic_writer.rs`
-    *   **Summary:** Provides the `write_atomic()` function for safe file writes using temp-file-and-rename pattern with fsync. Creates temp file in same directory, writes data, syncs to disk, and atomically renames.
-    *   **Recommendation:** You SHOULD use `write_atomic()` when writing the final modified JPEG to disk in I3.T4 (write operations), but for THIS task (I3.T3), you're only implementing the segment replacement logic. The integration test will likely use `write_atomic()` indirectly through the write operations API.
+    *   **Summary:** Provides `write_atomic(path: &Path, data: &[u8]) -> Result<()>` which implements the temp-file-and-rename pattern with fsync guarantees.
+    *   **Recommendation:** You MUST use this function as the FINAL step of your write operation. After you serialize the metadata into bytes, call `write_atomic(path, &bytes)` to safely write to disk. This ensures atomicity - no partial writes even on crash.
+    *   **Critical Detail:** This function is already fully implemented and tested with 10+ test cases. You do NOT need to modify it - just import and use it.
 
-*   **File:** `src/parsers/jpeg/mod.rs`
-    *   **Summary:** Module entry point that re-exports `parse_segments` and `Segment` from `segment_parser`, plus other parsers (exif_parser, xmp_parser, iptc_parser).
-    *   **Recommendation:** You can import directly from `crate::parsers::jpeg::{parse_segments, Segment}` for convenience.
+*   **File:** `src/writers/jpeg_writer.rs`
+    *   **Summary:** Provides `write_exif_to_jpeg(reader: &dyn FileReader, metadata: &MetadataMap) -> Result<Vec<u8>>` which returns the complete modified JPEG as bytes.
+    *   **Recommendation:** You MUST use this function for JPEG files. It handles all the complexity of parsing segments, serializing EXIF, and reconstructing the JPEG structure. Call it with a FileReader and MetadataMap, then pass the returned bytes to `atomic_writer`.
+    *   **Critical Detail:** This function only processes tags with "EXIF:" prefix. It's already fully implemented with 15+ test cases. You do NOT need to modify it - just call it.
+
+*   **File:** `src/tag_db/tag_registry.rs`
+    *   **Summary:** Contains a static registry with 100 TagDescriptor entries using lazy initialization. The main entry point is `get_tag_descriptor(name: &str) -> Option<&TagDescriptor>`.
+    *   **Recommendation:** You SHOULD import and use `get_tag_descriptor()` to look up tag descriptors for validation. If a tag is not in the registry, you SHOULD skip validation for that tag (or log a warning) and proceed with the write.
+    *   **Implementation Note:** The current registry only has 100 tags. User-defined or rare tags may not be present. Your validation loop should handle `None` results gracefully.
+
+*   **File:** `src/core/metadata_map.rs`
+    *   **Summary:** Core data structure storing metadata as `HashMap<String, TagValue>`. Has methods like `get()`, `get_mut()`, `insert()`, `iter()`.
+    *   **Recommendation:** You MUST iterate over all tags in the MetadataMap to validate them. Use `metadata.iter()` which returns an iterator of `(&String, &TagValue)` pairs. Each tag name and value should be validated before proceeding with write.
 
 ### Implementation Tips & Notes
 
-*   **Tip #1 - EXIF Identifier Detection:** When parsing segments to find the EXIF APP1 segment, you MUST check that `segment.data` starts with `b"Exif\0\0"` (6 bytes). Multiple APP1 segments can exist (EXIF, XMP), so don't assume the first APP1 is EXIF.
-    ```rust
-    const EXIF_IDENTIFIER: &[u8] = b"Exif\0\0";
+*   **Tip:** The validation step MUST happen BEFORE any file I/O operations. If validation fails for ANY tag, return the error immediately and do NOT proceed with reading or writing the file. This prevents corrupting files with invalid data.
 
-    fn is_exif_segment(segment: &Segment) -> bool {
-        segment.is_app1() && segment.data.starts_with(EXIF_IDENTIFIER)
-    }
-    ```
+*   **Tip:** For `modify_tag()`, you MUST first call `read_metadata()` to get the existing metadata, then modify the single tag, then call `write_metadata()` with the modified map. This ensures all other tags are preserved. The architecture diagram shows this "Read-Modify-Write" pattern explicitly.
 
-*   **Tip #2 - Segment Reconstruction:** To rebuild the JPEG, you need to write segments in order. For each segment:
-    ```rust
-    // Write marker (2 bytes, big-endian)
-    output.extend_from_slice(&segment.marker.to_be_bytes());
+*   **Note:** The current code in `operations.rs` only supports JPEG and TIFF formats. Your `write_metadata()` function MUST check the detected format and route to the appropriate writer. For now, only JPEG write is implemented (I3.T3 completed), so you SHOULD return `UnsupportedFormat` error for TIFF or other formats (TIFF writer comes in I3.T7).
 
-    // For standalone markers (SOI, EOI, RST0-RST7), no length or data
-    if is_standalone_marker(segment.marker) {
-        continue;
-    }
+*   **Note:** Error handling is critical. The architecture specifies that ALL errors should propagate via `Result<T, ExifToolError>`. The `?` operator should be used throughout. The validation function already returns `ExifToolError::InvalidTagValue`, and the atomic writer converts `io::Error` to `ExifToolError` automatically.
 
-    // Calculate length: 2 (length field itself) + data.len()
-    let length = 2 + segment.data.len();
-    output.extend_from_slice(&(length as u16).to_be_bytes());
+*   **Warning:** The task description says to add integration tests in `tests/integration/write_operations_tests.rs`, which is a NEW file. You MUST create this file. The tests should use the same pattern as `tests/integration/jpeg_tests.rs` (which already exists from I1.T14). Test both successful write scenarios AND validation failure scenarios.
 
-    // Write data
-    output.extend_from_slice(segment.data);
-    ```
+*   **Critical:** When calling `write_exif_to_jpeg()`, you need to pass a `FileReader`. You MUST open the file with `MMapReader` or `BufferedReader` first. The JPEG writer reads the original file to preserve non-EXIF segments, then returns complete modified bytes.
 
-*   **Tip #3 - EXIF APP1 Segment Construction:** When creating a new EXIF APP1 segment:
-    ```rust
-    // 1. Serialize EXIF tags to TIFF IFD
-    let ifd_bytes = serialize_ifd(&metadata, ByteOrder::LittleEndian, 8)?;
+*   **Best Practice:** The architecture emphasizes defensive programming and bounds checking. Even though all input files are validated, always use `.ok_or()` or `.ok_or_else()` when dealing with `Option` types to convert to proper error types rather than `.unwrap()`.
 
-    // 2. Build TIFF header (little-endian example)
-    let tiff_header = vec![0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00];
+*   **Integration Test Structure:** Your test file MUST follow this pattern:
+    1. Create a sample JPEG file (or use one from `tests/fixtures/jpeg/`)
+    2. Call `modify_tag()` to change a tag value
+    3. Re-read the file using `read_metadata()`
+    4. Assert the tag value changed
+    5. Test validation failure by trying to write an invalid tag value (e.g., String where Integer is expected)
 
-    // 3. Combine: EXIF identifier + TIFF header + IFD
-    let mut segment_data = Vec::new();
-    segment_data.extend_from_slice(b"Exif\0\0");
-    segment_data.extend_from_slice(&tiff_header);
-    segment_data.extend_from_slice(&ifd_bytes);
+### Workflow Summary
 
-    // 4. Calculate segment length
-    let segment_length = 2 + segment_data.len(); // 2 for length field itself
+Your implementation workflow should be:
 
-    // 5. Write APP1 marker, length, and data
-    output.extend_from_slice(&0xFFE1u16.to_be_bytes()); // APP1 marker
-    output.extend_from_slice(&(segment_length as u16).to_be_bytes());
-    output.extend_from_slice(&segment_data);
-    ```
+1. **Add imports** to `src/core/operations.rs`: validation, atomic_writer, jpeg_writer, tag_registry
+2. **Implement `write_metadata()`**:
+   - Step 1: Validate ALL tags by looking them up in registry and calling `validate_tag_value()`
+   - Step 2: Open file with `MMapReader` (reuse existing code pattern)
+   - Step 3: Detect format using `detect_format()` (already in file)
+   - Step 4: Match on format and call appropriate writer (only JPEG for now)
+   - Step 5: Get serialized bytes from writer
+   - Step 6: Write atomically using `write_atomic(path, &bytes)`
+3. **Implement `modify_tag()`**:
+   - Call `read_metadata(path)` to get existing metadata
+   - Modify the single tag using `metadata.insert(tag_name, new_value)`
+   - Call `write_metadata(path, &metadata)`
+4. **Create integration test file** `tests/integration/write_operations_tests.rs`
+5. **Write tests**: successful write, validation failure, round-trip verification
 
-*   **Tip #4 - Byte Order Consistency:** The TIFF writer supports both byte orders. For maximum compatibility, use **little-endian** (Intel byte order) as it's more common in modern systems. This matches the example in the TIFF parser tests.
-
-*   **Tip #5 - Segment Order:** When reconstructing the JPEG:
-    - Always keep SOI (0xFFD8) first
-    - Preserve the order of all segments
-    - If replacing EXIF, substitute the new APP1 segment in place of the old one
-    - Keep EOI (0xFFD9) last
-    - If no EXIF segment exists, insert the new APP1 segment early (typically after APP0/JFIF if present, or immediately after SOI)
-
-*   **Warning:** The `segment_parser.rs` uses lifetime-based borrows (`Segment<'a>` with `data: &'a [u8]`). When building a new segment for writing, you'll need to create owned `Vec<u8>` data. Don't try to reuse the borrowed slices directly.
-
-*   **Note:** The integration test should:
-    1. Create a test JPEG with EXIF metadata
-    2. Parse it using `parse_segments()`
-    3. Modify a tag value (e.g., change "EXIF:Artist" from "Original" to "Modified")
-    4. Use your writer function to create modified JPEG bytes
-    5. Parse the modified JPEG again
-    6. Verify the tag value changed and other segments are preserved
-
-### Function Signature Recommendation
-
-Based on the existing codebase patterns, I recommend this public API for your writer:
-
-```rust
-/// Writes modified EXIF metadata to a JPEG file structure.
-///
-/// This function:
-/// 1. Parses the original JPEG using segment_parser
-/// 2. Serializes modified EXIF tags using tiff_writer
-/// 3. Replaces the EXIF APP1 segment (or inserts if not present)
-/// 4. Returns the complete modified JPEG as Vec<u8>
-///
-/// # Parameters
-/// - `reader`: FileReader for reading the original JPEG file
-/// - `metadata`: MetadataMap containing EXIF tags to write (only "EXIF:" tags are processed)
-///
-/// # Returns
-/// - `Ok(Vec<u8>)`: Complete modified JPEG file as bytes
-/// - `Err(ExifToolError)`: If parsing fails or JPEG structure is invalid
-pub fn write_exif_to_jpeg(
-    reader: &dyn FileReader,
-    metadata: &MetadataMap,
-) -> Result<Vec<u8>>
-```
-
-### Testing Strategy
-
-1. **Unit Tests** (in `jpeg_writer.rs`):
-   - Test EXIF segment creation from metadata
-   - Test segment replacement logic
-   - Test handling of missing EXIF segment (insertion)
-   - Test preservation of non-EXIF segments
-
-2. **Integration Tests** (in `tests/integration/jpeg_write_tests.rs`):
-   - Create test JPEG with known EXIF (e.g., Make="Canon", Model="EOS")
-   - Modify one tag (e.g., Artist="TestArtist")
-   - Write and re-parse
-   - Verify: modified tag changed, other tags preserved, non-EXIF segments preserved
-   - Use existing test fixtures or create minimal valid JPEGs programmatically
-
-### Key Imports You'll Need
-
-```rust
-use crate::core::metadata_map::MetadataMap;
-use crate::core::FileReader;
-use crate::error::{ExifToolError, Result};
-use crate::parsers::jpeg::{parse_segments, Segment};
-use crate::parsers::tiff::ifd_parser::ByteOrder;
-use crate::writers::tiff_writer::serialize_ifd;
-```
+All the heavy lifting (validation logic, atomic writing, JPEG serialization) is ALREADY DONE. You are orchestrating these components together.
