@@ -30,3 +30,6 @@ mod write_operations_tests;
 
 #[path = "integration/exiftool_comparison_tests.rs"]
 mod exiftool_comparison_tests;
+
+#[path = "integration/mp4_tests.rs"]
+mod mp4_tests;
