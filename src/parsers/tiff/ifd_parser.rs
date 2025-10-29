@@ -161,10 +161,7 @@ pub fn parse_ifd(
     // Validate IFD size doesn't exceed file
     if ifd_offset + ifd_size as u64 > file_size {
         return Err(ExifToolError::parse_error_at(
-            format!(
-                "IFD size ({} bytes) exceeds file bounds",
-                ifd_size
-            ),
+            format!("IFD size ({} bytes) exceeds file bounds", ifd_size),
             ifd_offset as usize,
         ));
     }
@@ -176,22 +173,26 @@ pub fn parse_ifd(
 
     // Parse IFD entries based on byte order
     let ifd_entries = match byte_order {
-        ByteOrder::LittleEndian => parse_ifd_entries_le(entries_data, entry_count)
-            .map_err(|e| {
-                ExifToolError::parse_error_at(
-                    format!("Failed to parse IFD entries (LE): {}", e),
-                    entries_start as usize,
-                )
-            })?
-            .1,
-        ByteOrder::BigEndian => parse_ifd_entries_be(entries_data, entry_count)
-            .map_err(|e| {
-                ExifToolError::parse_error_at(
-                    format!("Failed to parse IFD entries (BE): {}", e),
-                    entries_start as usize,
-                )
-            })?
-            .1,
+        ByteOrder::LittleEndian => {
+            parse_ifd_entries_le(entries_data, entry_count)
+                .map_err(|e| {
+                    ExifToolError::parse_error_at(
+                        format!("Failed to parse IFD entries (LE): {}", e),
+                        entries_start as usize,
+                    )
+                })?
+                .1
+        }
+        ByteOrder::BigEndian => {
+            parse_ifd_entries_be(entries_data, entry_count)
+                .map_err(|e| {
+                    ExifToolError::parse_error_at(
+                        format!("Failed to parse IFD entries (BE): {}", e),
+                        entries_start as usize,
+                    )
+                })?
+                .1
+        }
     };
 
     // Extract tag values
@@ -520,8 +521,8 @@ mod tests {
         let data = create_sample_ifd_be();
         let reader = TestReader::new(data);
 
-        let tags = parse_ifd(&reader, 0, ByteOrder::BigEndian)
-            .expect("Failed to parse big-endian IFD");
+        let tags =
+            parse_ifd(&reader, 0, ByteOrder::BigEndian).expect("Failed to parse big-endian IFD");
 
         // Should have 3 tags
         assert_eq!(tags.len(), 3);
@@ -558,8 +559,8 @@ mod tests {
         data[5] = 0x00;
 
         let reader = TestReader::new(data);
-        let tags = parse_ifd(&reader, 0, ByteOrder::LittleEndian)
-            .expect("Failed to parse empty IFD");
+        let tags =
+            parse_ifd(&reader, 0, ByteOrder::LittleEndian).expect("Failed to parse empty IFD");
 
         assert_eq!(tags.len(), 0);
     }
