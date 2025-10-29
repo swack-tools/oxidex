@@ -11,3 +11,6 @@ pub mod jpeg;
 pub mod png;
 pub mod tiff;
 pub mod xmp;
+
+// Re-export the format detection function for convenient access
+pub use format_detector::detect_format;
