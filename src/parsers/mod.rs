@@ -5,8 +5,8 @@
 
 #![allow(dead_code)]
 
-pub mod format_detector;
 pub mod common;
+pub mod format_detector;
 pub mod jpeg;
 pub mod png;
 pub mod tiff;

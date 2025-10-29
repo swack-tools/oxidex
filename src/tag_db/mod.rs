@@ -4,5 +4,5 @@
 
 #![allow(dead_code)]
 
-pub mod tag_registry;
 pub mod generated_tags;
+pub mod tag_registry;

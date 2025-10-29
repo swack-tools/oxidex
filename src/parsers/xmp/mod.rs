@@ -4,5 +4,5 @@
 
 #![allow(dead_code)]
 
-pub mod rdf_parser;
 pub mod namespace_resolver;
+pub mod rdf_parser;

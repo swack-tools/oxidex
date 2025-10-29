@@ -4,6 +4,6 @@
 
 #![allow(dead_code)]
 
+pub mod buffered_reader;
 pub mod file_reader;
 pub mod mmap_reader;
-pub mod buffered_reader;

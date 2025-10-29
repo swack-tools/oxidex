@@ -6,10 +6,10 @@
 
 #![allow(dead_code)]
 
-pub mod metadata_map;
-pub mod tag_value;
-pub mod tag_descriptor;
-pub mod operations;
-pub mod validation;
-pub mod format_parser_trait;
 pub mod file_reader_trait;
+pub mod format_parser_trait;
+pub mod metadata_map;
+pub mod operations;
+pub mod tag_descriptor;
+pub mod tag_value;
+pub mod validation;

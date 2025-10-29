@@ -5,5 +5,5 @@
 #![allow(dead_code)]
 
 pub mod ifd_parser;
-pub mod tag_parser;
 pub mod makernote_parser;
+pub mod tag_parser;

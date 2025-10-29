@@ -4,5 +4,5 @@
 
 #![allow(dead_code)]
 
-pub mod exif_types;
 pub mod encoding;
+pub mod exif_types;
