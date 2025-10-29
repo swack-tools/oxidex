@@ -1,0 +1,52 @@
+@startuml
+
+actor User
+participant "CLI" as CLI
+participant "Core Library\n(API Facade)" as Core
+participant "Format\nDetector" as Detector
+participant "JPEG Parser" as JPEG
+participant "EXIF Parser\n(TIFF IFD)" as EXIF
+participant "XMP Parser" as XMP
+participant "I/O Layer\n(memmap2)" as IO
+participant "Tag Registry" as Registry
+participant "File System" as FS
+
+User -> CLI : exiftool-rs photo.jpg
+CLI -> Core : Metadata::from_path("photo.jpg")
+
+Core -> Detector : detect_format("photo.jpg")
+Detector -> IO : read_magic_bytes("photo.jpg", 16)
+IO -> FS : open() + read()
+FS --> IO : bytes [0xFF, 0xD8, 0xFF, ...]
+IO --> Detector : magic bytes
+Detector --> Core : FileFormat::JPEG
+
+Core -> JPEG : parse(io_handle)
+JPEG -> IO : read_segment_markers()
+IO -> FS : read() at offsets
+FS --> IO : JPEG segments
+
+alt EXIF Segment Found (0xFFE1)
+  JPEG -> EXIF : parse_exif_segment(segment_data)
+  EXIF -> EXIF : parse TIFF IFD structure
+  EXIF -> Registry : lookup_tag(0x010F) // Manufacturer tag
+  Registry --> EXIF : TagDescriptor { name: "EXIF:Make", type: String, ... }
+  EXIF --> JPEG : Vec<TagValue> (EXIF tags)
+end
+
+alt XMP Segment Found (0xFFE1 with XMP marker)
+  JPEG -> XMP : parse_xmp_segment(segment_data)
+  XMP -> XMP : parse RDF/XML
+  XMP -> Registry : lookup_tag("xmp:CreateDate")
+  Registry --> XMP : TagDescriptor
+  XMP --> JPEG : Vec<TagValue> (XMP tags)
+end
+
+JPEG --> Core : MetadataMap { tags: [...] }
+Core -> Core : validate_tags(metadata_map)
+Core --> CLI : Result::Ok(Metadata)
+
+CLI -> CLI : format_output(metadata, OutputFormat::Human)
+CLI --> User : Output to stdout:\n  EXIF:Make: Canon\n  EXIF:Model: EOS 5D\n  ...
+
+@enduml
