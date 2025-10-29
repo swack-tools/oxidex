@@ -10,22 +10,31 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I1.T12",
+  "task_id": "I1.T14",
   "iteration_id": "I1",
   "iteration_goal": "Establish project foundation with directory structure, build system, core domain models, architectural diagrams, and basic JPEG EXIF parsing capability to validate end-to-end workflow.",
-  "description": "Write comprehensive integration test plan in `docs/testing/integration_test_plan.md`. Document: (1) Test image corpus strategy (collect 100+ diverse images across formats, including malformed samples), (2) Validation criteria (compare ExifTool-RS output against Perl ExifTool using JSON output diff), (3) Acceptance thresholds (99% tag value match for well-formed files, graceful degradation for malformed), (4) Regression testing approach (lock test corpus in git LFS, run comparison on every commit), (5) Test categories (format coverage, tag coverage, error handling, performance benchmarks).",
-  "agent_type_hint": "DocumentationAgent",
-  "inputs": "Section 2.1 (Key Architectural Artifacts - Test Plan), architecture blueprint testing strategy",
+  "description": "Create integration test in tests/integration/jpeg_tests.rs that demonstrates end-to-end workflow: (1) Use MMapReader to open sample JPEG file (create sample with EXIF in tests/fixtures/jpeg/), (2) Detect format using format_detector, (3) Parse JPEG segments, (4) Parse EXIF IFD from APP1 segment, (5) Extract at least 3 tag values (Make, Model, DateTime), (6) Print extracted values. This test validates the entire parsing pipeline from I1.T8-T11. Test should pass.",
+  "agent_type_hint": "BackendAgent",
+  "inputs": "All code from I1.T8-T11",
   "target_files": [
-    "docs/testing/integration_test_plan.md"
+    "tests/integration/jpeg_tests.rs",
+    "tests/fixtures/jpeg/sample_with_exif.jpg"
   ],
-  "input_files": [],
-  "deliverables": "Markdown document with detailed test plan",
-  "acceptance_criteria": "Document covers all 5 areas mentioned in task description, specifies exact comparison methodology (e.g., `exiftool -json photo.jpg` vs `exiftool-rs -json photo.jpg`), defines pass/fail criteria (e.g., \"99% of tag values must match exactly\"), includes plan for sourcing test images (public datasets, creative commons, generated), mentions git LFS for large binary test files, well-formatted Markdown with clear sections",
+  "input_files": [
+    "src/parsers/format_detector.rs",
+    "src/parsers/jpeg/segment_parser.rs",
+    "src/parsers/tiff/ifd_parser.rs",
+    "src/io/mmap_reader.rs"
+  ],
+  "deliverables": "Integration test demonstrating end-to-end JPEG EXIF extraction, sample JPEG file with EXIF metadata",
+  "acceptance_criteria": "Test successfully opens JPEG file, format detector identifies file as JPEG, segment parser finds APP1 segment, IFD parser extracts Make, Model, DateTime tags, test assertions verify tag values are non-empty strings, cargo test jpeg_tests passes",
   "dependencies": [
-    "I1.T1"
+    "I1.T8",
+    "I1.T9",
+    "I1.T10",
+    "I1.T11"
   ],
-  "parallelizable": true,
+  "parallelizable": false,
   "done": false
 }
 ```
@@ -36,229 +45,56 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: integration-tests (from 03_Verification_and_Glossary.md)
+### Context: key-interaction-flow (from 04_Behavior_and_Communication.md)
 
 ```markdown
-#### Integration Tests (10% of test suite)
-*   **Scope:** End-to-end workflows and CLI operations
-*   **Location:** `tests/integration/`
-*   **Tools:** `cargo test`, filesystem fixtures in `tests/fixtures/`
-*   **Coverage Requirements:**
-    *   Full read workflow: file → metadata extraction → output
-    *   Full write workflow: read → modify → write → verify
-    *   CLI argument parsing and execution
-    *   Batch processing with multiple files
-    *   Error scenarios (missing file, corrupted metadata, permission denied)
-*   **ExifTool Comparison Tests:** Special integration tests comparing output against Perl ExifTool
-    *   Run both tools on same test corpus (100+ images)
-    *   Compare JSON output for tag value parity
-    *   Acceptance threshold: 98%+ match rate
-    *   Conditional on ExifTool availability (`#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]`)
-*   **Examples:**
-    ```rust
-    #[test]
-    fn test_cli_extract_jpeg_exif() {
-        let output = Command::new("./target/debug/exiftool-rs")
-            .arg("tests/fixtures/jpeg/sample.jpg")
-            .output()?;
-        assert!(output.status.success());
-        assert!(String::from_utf8(output.stdout)?.contains("EXIF:Make"));
-    }
+#### Key Interaction Flow (Sequence Diagram)
 
-    #[test]
-    #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
-    fn compare_against_exiftool_jpeg() {
-        let exiftool_json = get_exiftool_output("sample.jpg")?;
-        let our_json = get_exiftool_rs_output("sample.jpg")?;
-        let match_rate = compare_json_outputs(&exiftool_json, &our_json);
-        assert!(match_rate >= 0.98, "Match rate: {}", match_rate);
-    }
-    ```
+**Description**: This diagram illustrates the core workflow for **extracting metadata from a JPEG file**. It shows how the CLI delegates to the core library, which orchestrates format detection, parser selection, and metadata extraction through the hexagonal architecture layers.
+
+**Workflow Breakdown**:
+
+1. **Format Detection**: Read file magic bytes (first 16 bytes) to identify format (JPEG: `0xFF 0xD8`)
+2. **Parser Selection**: Based on format, select appropriate parser implementation (JPEG parser in this case)
+3. **Segment Parsing**: JPEG parser reads segment markers (0xFFE0-0xFFEF) to locate metadata containers
+4. **Metadata Extraction**:
+   - EXIF segment contains TIFF-encoded metadata, parsed via EXIF/TIFF parser
+   - XMP segment contains RDF/XML, parsed via XMP parser
+5. **Tag Resolution**: Each raw tag ID (e.g., TIFF tag 0x010F) is looked up in Tag Registry to get semantic name ("EXIF:Make")
+6. **Validation**: Tag values validated against expected types (e.g., "EXIF:Make" must be string, "EXIF:ISOSpeedRatings" must be integer)
+7. **Output**: Metadata returned to CLI, formatted per user request (human-readable, JSON, CSV, etc.)
 ```
 
-### Context: fuzzing (from 03_Verification_and_Glossary.md)
+### Context: task-i1-t14 (from 02_Iteration_I1.md)
 
 ```markdown
-#### Fuzzing (Continuous)
-*   **Scope:** Crash and hang detection in parsers
-*   **Location:** `fuzz/fuzz_targets/`
-*   **Tools:** `cargo-fuzz` (libFuzzer), OSS-Fuzz integration
-*   **Targets:**
-    *   `fuzz_jpeg` - JPEG segment parser
-    *   `fuzz_tiff` - TIFF IFD parser
-    *   `fuzz_png` - PNG chunk parser
-    *   `fuzz_pdf` - PDF structure parser
-    *   `fuzz_mp4` - QuickTime atom parser
-*   **Corpus:** Seed with valid samples + malformed files
-*   **Coverage:** Aim for 80%+ code coverage via fuzzing (measured with `cargo fuzz coverage`)
-*   **Integration:** OSS-Fuzz for continuous fuzzing, GitHub Actions for PR fuzzing (short runs)
-*   **Triage:** All crashes investigated within 48 hours, fixes prioritized by severity
-```
-
-### Context: security-considerations (from 05_Operational_Architecture.md)
-
-```markdown
-#### Security Considerations
-
-**Threat Model**:
-
-ExifTool-RS processes potentially malicious files from untrusted sources (e.g., user uploads, scraped images). Primary threats:
-
-1. **Memory Corruption**: Buffer overflows, use-after-free in parsers
-2. **Resource Exhaustion**: Zip bombs, billion laughs (XML), decompression bombs
-3. **Path Traversal**: Malicious filenames in archive processing
-4. **Code Injection**: Via scripting features (if added)
-
-**Mitigations**:
-
-| **Threat** | **Mitigation** | **Implementation** |
-|------------|---------------|-------------------|
-| Buffer overflows | Rust ownership system | Compile-time prevention via borrow checker |
-| Integer overflows | Checked arithmetic | `#![deny(overflowing_literals)]`, `checked_add()` in parsers |
-| Resource exhaustion | Size limits | Max allocation: 1GB per file, max parse depth: 64 levels (nested IFDs) |
-| Zip bombs | Decompression ratio check | Reject if uncompressed > 100x compressed size |
-| XXE attacks (XML) | Disable external entities | `quick-xml` configured to reject DOCTYPE, external entities |
-| Path traversal | Path sanitization | `canonicalize()` + jail to working directory for batch operations |
-| Dependency vulnerabilities | Automated scanning | `cargo-audit` in CI, Dependabot alerts, minimal dependency tree |
-| Malicious input | Fuzzing | Continuous fuzzing with `cargo-fuzz`, OSS-Fuzz integration target |
-
-**Input Validation**:
-
-All parsers follow defensive pattern:
-```rust
-fn read_u32_at(data: &[u8], offset: usize) -> Result<u32> {
-    let bytes = data.get(offset..offset+4)
-        .ok_or(ParseError::UnexpectedEof)?;  // Bounds check
-    Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
-}
-```
-
-**Secure Defaults**:
-
-- No script execution (unlike Perl ExifTool's `-execute` feature)
-- No network access by default (geolocation requires opt-in `--geolocation` flag)
-- Read-only mode available via `--readonly` flag (prevents accidental writes)
-```
-
-### Context: unit-tests (from 03_Verification_and_Glossary.md)
-
-```markdown
-#### Unit Tests (70% of test suite)
-*   **Scope:** Individual functions and modules
-*   **Location:** Inline in source files (`#[cfg(test)] mod tests`) and `tests/` directory
-*   **Tools:** `cargo test`, standard Rust test framework
-*   **Coverage Requirements:**
-    *   All parser functions (format detection, segment parsing, IFD parsing, tag extraction)
-    *   Data model operations (metadata map accessors, tag value conversions)
-    *   Validation logic (tag value type checking, constraint validation)
-    *   Error handling paths (parse errors, I/O errors, validation failures)
-*   **Acceptance Criteria:** 80%+ line coverage (measured with `cargo-tarpaulin` or `cargo-llvm-cov`)
-*   **Examples:**
-    ```rust
-    #[test]
-    fn test_jpeg_magic_bytes_detection() {
-        let data = vec![0xFF, 0xD8, 0xFF, 0xE0];
-        assert_eq!(detect_format(&data), FileFormat::JPEG);
-    }
-
-    #[test]
-    fn test_tag_value_type_validation() {
-        let descriptor = TagDescriptor { /* String type */ };
-        let value = TagValue::Integer(42);
-        assert!(validate_tag_value(&descriptor, &value).is_err());
-    }
-    ```
-```
-
-### Context: property-based-tests (from 03_Verification_and_Glossary.md)
-
-```markdown
-#### Property-Based Tests (20% of test suite)
-*   **Scope:** Invariant verification and round-trip testing
-*   **Location:** `tests/property/`
-*   **Tools:** `proptest` crate
-*   **Coverage Requirements:**
-    *   Round-trip serialization: `parse(serialize(x)) == x`
-    *   Date/time arithmetic correctness
-    *   File format preservation (write doesn't corrupt image data)
-    *   Tag value conversions (string ↔ integer ↔ rational)
-*   **Examples:**
-    ```rust
-    proptest! {
-        #[test]
-        fn roundtrip_exif_datetime(dt: DateTime<Utc>) {
-            let serialized = serialize_exif_datetime(dt);
-            let deserialized = parse_exif_datetime(&serialized)?;
-            assert_eq!(dt.timestamp(), deserialized.timestamp());
-        }
-
-        #[test]
-        fn jpeg_write_preserves_image_data(metadata: MetadataMap) {
-            let original = read_jpeg("test.jpg")?;
-            write_metadata("test.jpg", &metadata)?;
-            let modified = read_jpeg("test.jpg")?;
-            assert_eq!(original.image_data, modified.image_data);
-        }
-    }
-    ```
-```
-
-### Context: benchmarking (from 03_Verification_and_Glossary.md)
-
-```markdown
-#### Benchmarking (Regression Detection)
-*   **Scope:** Performance validation and regression detection
-*   **Location:** `benches/`
-*   **Tools:** `criterion` (statistical benchmarking), `hyperfine` (CLI benchmarking)
-*   **Benchmarks:**
-    *   Format detection (1000 iterations)
-    *   JPEG EXIF extraction (single file, 1000x)
-    *   Batch processing (1000 files)
-    *   Write operation (modify + rewrite)
-    *   Comparison vs. Perl ExifTool (wall-clock time, memory usage)
-*   **Regression Detection:** CI fails if performance degrades >10% vs. baseline
-*   **Reporting:** `criterion` generates HTML reports in `target/criterion/`
-```
-
-### Context: task-i1-t12 (from 02_Iteration_I1.md)
-
-```markdown
-*   **Task 1.12: Create Integration Test Plan Document**
-    *   **Task ID:** `I1.T12`
-    *   **Description:** Write comprehensive integration test plan in `docs/testing/integration_test_plan.md`. Document: (1) Test image corpus strategy (collect 100+ diverse images across formats, including malformed samples), (2) Validation criteria (compare ExifTool-RS output against Perl ExifTool using JSON output diff), (3) Acceptance thresholds (99% tag value match for well-formed files, graceful degradation for malformed), (4) Regression testing approach (lock test corpus in git LFS, run comparison on every commit), (5) Test categories (format coverage, tag coverage, error handling, performance benchmarks).
-    *   **Agent Type Hint:** `DocumentationAgent`
-    *   **Inputs:** Section 2.1 (Key Architectural Artifacts - Test Plan), architecture blueprint testing strategy
-    *   **Input Files:** []
-    *   **Target Files:**
-        *   `docs/testing/integration_test_plan.md`
-    *   **Deliverables:**
-        *   Markdown document with detailed test plan
+*   **Task 1.14: Implement End-to-End Test (JPEG EXIF Extraction)**
+    *   **Task ID:** `I1.T14`
+    *   **Description:** Create integration test in `tests/integration/jpeg_tests.rs` that demonstrates end-to-end workflow: (1) Use MMapReader to open sample JPEG file (create sample with EXIF in tests/fixtures/jpeg/), (2) Detect format using format_detector, (3) Parse JPEG segments, (4) Parse EXIF IFD from APP1 segment, (5) Extract at least 3 tag values (Make, Model, DateTime), (6) Print extracted values. This test validates the entire parsing pipeline from I1.T8-T11. Test should pass.
     *   **Acceptance Criteria:**
-        *   Document covers all 5 areas mentioned in task description
-        *   Specifies exact comparison methodology (e.g., `exiftool -json photo.jpg` vs `exiftool-rs -json photo.jpg`)
-        *   Defines pass/fail criteria (e.g., "99% of tag values must match exactly")
-        *   Includes plan for sourcing test images (public datasets, creative commons, generated)
-        *   Mentions git LFS for large binary test files
-        *   Well-formatted Markdown with clear sections
-    *   **Dependencies:** `I1.T1`
-    *   **Parallelizable:** Yes (can be written in parallel with code development)
+        *   Test successfully opens JPEG file
+        *   Format detector identifies file as JPEG
+        *   Segment parser finds APP1 segment
+        *   IFD parser extracts Make, Model, DateTime tags
+        *   Test assertions verify tag values are non-empty strings
+        *   `cargo test jpeg_tests` passes
 ```
 
-### Context: ci-cd-pipeline (from 03_Verification_and_Glossary.md)
+### Context: data-model-overview (from 03_System_Structure_and_Data.md)
 
 ```markdown
-### 5.2. CI/CD Pipeline
+### 3.6. Data Model Overview & ERD
 
-#### Continuous Integration (GitHub Actions)
+**Description**: ExifTool-RS operates on files without persistent database storage. The "data model" represents in-memory structures for metadata representation.
 
-**Workflow: `.github/workflows/ci.yml`**
-*   **Triggers:** Every push, every pull request
-*   **Matrix:**
-    *   OS: `ubuntu-latest`, `macos-latest`, `windows-latest`
-    *   Rust version: `stable`, `beta` (optional: `nightly` for feature preview)
-*   **Steps:**
-    1. **Checkout:** Clone repository
-    2. **Setup Rust:** Install Rust toolchain via `dtolnay/rust-toolchain`
+#### Key Entities
+
+1. **File**: Represents a media file being processed (JPEG, PNG, etc.)
+2. **MetadataMap**: Collection of all metadata tags extracted from a file
+3. **TagValue**: A single metadata tag with its name, value, and type information
+4. **TagDescriptor**: Definition of a tag (from tag database) including ID, name, type constraints, format family
+5. **FormatFamily**: Grouping of related metadata standards (EXIF, XMP, IPTC, MakerNotes)
+6. **IFD (Image File Directory)**: TIFF-specific structural element containing tags
 ```
 
 ---
@@ -269,63 +105,94 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `tests/fixtures/`
-    *   **Summary:** This directory structure already exists with subdirectories for `jpeg/`, `png/`, `tiff/`, and `malformed/` test images. The subdirectories are currently empty but provide the correct organizational structure.
-    *   **Recommendation:** Reference this existing directory structure in your integration test plan. The plan should document how test images will be organized within these directories.
-
-*   **File:** `tests/integration/`
-    *   **Summary:** Empty directory that will house integration test Rust code files (like `jpeg_tests.rs`, `png_tests.rs`, etc.).
-    *   **Recommendation:** Your test plan should specify that integration tests will be placed here and reference the example integration test code shown in the verification strategy.
-
-*   **File:** `tests/property/`
-    *   **Summary:** Empty directory designated for property-based tests using `proptest`.
-    *   **Recommendation:** Your test plan should distinguish between integration tests (end-to-end workflows) and property-based tests (invariant verification).
-
 *   **File:** `src/parsers/format_detector.rs`
-    *   **Summary:** This file demonstrates the project's current testing patterns. It contains comprehensive unit tests at the module level using `#[cfg(test)] mod tests` with a `TestReader` implementation for testing. Tests cover normal cases, edge cases, and error conditions.
-    *   **Recommendation:** Your integration test plan should reference the existing unit testing patterns and note that integration tests will build upon these unit tests by testing complete workflows rather than isolated functions.
+    *   **Summary:** This file contains the `detect_format()` function that reads the first 16 bytes of a file and identifies the format by magic bytes. It returns a `FileFormat` enum.
+    *   **Recommendation:** You MUST use this function in your integration test to detect that the JPEG file is indeed a JPEG format. Import it: `use exiftool_rs::parsers::format_detector::detect_format;`
+    *   **Key Function Signature:** `pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat>`
+    *   **Expected Output:** Returns `Ok(FileFormat::JPEG)` for JPEG files that start with `0xFF 0xD8 0xFF`
 
-*   **File:** `src/error/mod.rs`
-    *   **Summary:** Defines the `ExifToolError` enum with variants for `IoError`, `ParseError`, `TagNotFound`, `InvalidTagValue`, and `UnsupportedFormat`. Includes comprehensive error handling and test coverage.
-    *   **Recommendation:** Your test plan should specify that error handling scenarios (malformed files, missing files, corrupted metadata) should trigger these specific error types and validate that appropriate errors are returned.
+*   **File:** `src/parsers/jpeg/segment_parser.rs`
+    *   **Summary:** This file contains the JPEG segment parser using nom combinators. The key function is `parse_segments()` which returns a `Vec<Segment>`.
+    *   **Recommendation:** You MUST use this function to parse the JPEG file and find APP1 segments containing EXIF data. The function is: `pub fn parse_segments<'a>(reader: &'a dyn FileReader) -> Result<Vec<Segment<'a>>, ExifToolError>`
+    *   **Key Struct:** `Segment` has fields: `marker` (u16), `offset` (u64), `data` (&[u8])
+    *   **Key Constants:** `APP1_MARKER = 0xFFE1` - This is what you need to filter for EXIF segments
+    *   **Helper Method:** `Segment::is_app1()` returns true if the segment is an APP1 segment (0xFFE1)
 
-*   **File:** `Cargo.toml`
-    *   **Summary:** The project uses `proptest`, `criterion`, and `tempfile` as dev-dependencies. The project version is `0.1.0` and targets GPL-3.0 license.
-    *   **Recommendation:** Your test plan should reference these testing tools and specify which types of tests use which tools (proptest for property-based, criterion for benchmarks).
+*   **File:** `src/parsers/tiff/ifd_parser.rs`
+    *   **Summary:** This file contains the TIFF IFD parser that extracts tag values from EXIF data. The key function is `parse_ifd()`.
+    *   **Recommendation:** You MUST use this function to parse the EXIF IFD structure from the APP1 segment data. The function signature is: `pub fn parse_ifd(reader: &dyn FileReader, ifd_offset: u64, byte_order: ByteOrder) -> Result<Vec<(u16, Vec<u8>)>>`
+    *   **Important:** EXIF data in JPEG APP1 segments has a 6-byte header "Exif\0\0" followed by the TIFF header. You need to skip this 6-byte prefix before passing to the IFD parser.
+    *   **Key Constants for Tags:**
+        - Make tag: `0x010F`
+        - Model tag: `0x0110`
+        - DateTime tag: `0x0132`
+    *   **Byte Order Detection:** The TIFF header starts with either "II" (0x4949, little-endian) or "MM" (0x4D4D, big-endian). You must detect this and pass the correct `ByteOrder` enum value.
 
-*   **File:** `.gitignore`
-    *   **Summary:** Currently configured to ignore `fuzz/corpus/` and `fuzz/artifacts/` but does NOT include any Git LFS configuration. No `.gitattributes` file exists.
-    *   **Recommendation:** Your test plan MUST include instructions for setting up Git LFS for test images, as this is not yet configured. Include the specific commands to set up LFS (e.g., `git lfs install`, `git lfs track "tests/fixtures/**/*.jpg"`).
+*   **File:** `src/io/mmap_reader.rs`
+    *   **Summary:** This file contains the `MMapReader` struct that implements the `FileReader` trait using memory-mapped I/O.
+    *   **Recommendation:** You MUST use `MMapReader::new(path)` to open the test JPEG file. This is the most efficient way to read files.
+    *   **Constructor Signature:** `pub fn new(path: &Path) -> io::Result<Self>`
+    *   **Note:** The MMapReader implements the FileReader trait, which provides `read(offset, length)` and `size()` methods.
+
+*   **File:** `src/core/file_format.rs`
+    *   **Summary:** Defines the `FileFormat` enum with variants like JPEG, TIFF, PNG, PDF, Unknown.
+    *   **Usage:** You will compare the detected format against `FileFormat::JPEG` in your test assertions.
+
+*   **File:** `src/error.rs`
+    *   **Summary:** Defines the `ExifToolError` enum for error handling.
+    *   **Recommendation:** The parsing functions return `Result<T, ExifToolError>`. Use `.expect()` or `.unwrap()` in tests for simplicity, or proper error handling if needed.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** The architecture documents specify a 98%+ match rate for ExifTool comparison tests, but the task description specifies 99%. You should use **99%** as specified in the task acceptance criteria, as that's the target for this specific iteration.
+*   **Tip: EXIF Data Structure in JPEG APP1 Segments**
+    - APP1 segments with EXIF have this structure:
+        1. APP1 marker: 2 bytes (0xFFE1)
+        2. Segment length: 2 bytes (big-endian)
+        3. EXIF identifier: 6 bytes ("Exif\0\0" = `[0x45, 0x78, 0x69, 0x66, 0x00, 0x00]`)
+        4. TIFF header: starts at offset 6 in the segment data
+            - Byte order: 2 bytes ("II" or "MM")
+            - Magic number: 2 bytes (0x002A for LE or 0x2A00 for BE)
+            - IFD offset: 4 bytes (offset to first IFD, usually 0x00000008 which means 8 bytes from TIFF header start)
+        5. IFD data: follows the TIFF header
 
-*   **Note:** The existing `docs/` directory structure already includes `docs/diagrams/` (with PlantUML and Mermaid files) but `docs/testing/` does not exist yet. You MUST create this directory before writing the file.
+*   **Tip: Creating Test JPEG with EXIF**
+    - You SHOULD create a valid JPEG file with embedded EXIF data. The simplest approach is to create a minimal JPEG programmatically in your test with synthetic EXIF data.
+    - Structure: SOI (0xFFD8) + APP1 (with EXIF) + minimal image data + EOI (0xFFD9)
+    - You can use the test helper patterns from `segment_parser.rs` tests as inspiration.
 
-*   **Warning:** Git LFS is mentioned in the task but is NOT currently set up in the project. Your test plan must include:
-    1. Instructions to install Git LFS
-    2. Configuration file `.gitattributes` to track binary test images
-    3. Commands to track test fixtures: `git lfs track "tests/fixtures/**/*.jpg" "tests/fixtures/**/*.png" "tests/fixtures/**/*.tif"`
-    4. Note about storage quotas and repository size management
+*   **Tip: Parsing Workflow**
+    1. Open file with `MMapReader::new()`
+    2. Detect format with `detect_format(reader)`
+    3. Parse segments with `parse_segments(reader)`
+    4. Filter for APP1 segments: `segments.iter().filter(|s| s.is_app1())`
+    5. Check EXIF identifier: ensure segment.data starts with "Exif\0\0"
+    6. Create a sub-reader or slice from offset 6 onwards (after "Exif\0\0")
+    7. Detect byte order from TIFF header (first 2 bytes after EXIF identifier)
+    8. Parse IFD with `parse_ifd(sub_reader, ifd_offset, byte_order)`
+    9. Extract tags 0x010F (Make), 0x0110 (Model), 0x0132 (DateTime)
+    10. Convert raw bytes to strings (these tags are ASCII type, so UTF-8 decode)
 
-*   **Tip:** The security considerations section emphasizes testing with malicious input. Your test plan should specifically address the `tests/fixtures/malformed/` directory and describe what types of malformed files should be included (truncated files, files with invalid magic bytes, files with malicious payloads designed to trigger parser edge cases).
+*   **Note: Test Infrastructure**
+    - The directory `tests/integration/` already exists but is empty.
+    - The directory `tests/fixtures/jpeg/` already exists but is empty.
+    - You MUST create both `tests/integration/jpeg_tests.rs` and a sample JPEG file in `tests/fixtures/jpeg/sample_with_exif.jpg`.
 
-*   **Note:** The project uses Rust's standard test framework (`cargo test`). The integration test plan should specify the exact command to run tests: `cargo test --test '*'` for all integration tests, or `cargo test --features exiftool-comparison` for comparison tests.
+*   **Note: Tag Value Decoding**
+    - The IFD parser returns `Vec<(u16, Vec<u8>)>` - tag ID and raw bytes.
+    - For ASCII tags (Make, Model, DateTime), you can decode with `String::from_utf8_lossy(&bytes)` or `std::str::from_utf8(&bytes)`.
+    - Remember that ASCII strings in EXIF are null-terminated, so you may want to trim the trailing null byte.
 
-*   **Tip:** Benchmarking is mentioned as a test category but is separate from functional testing. Use `criterion` for microbenchmarks and suggest using `hyperfine` for CLI-level performance comparison against Perl ExifTool.
+*   **Warning: TIFF Header Offset**
+    - When calling `parse_ifd()`, the `ifd_offset` parameter is relative to the START of the TIFF header, NOT the start of the segment data.
+    - You need to create a FileReader that treats the TIFF header start as offset 0. One approach is to wrap the segment data in a temporary reader struct.
 
-*   **Note:** The project architecture emphasizes cross-platform support (Linux, macOS, Windows). Your test plan should mention that the test corpus and comparison methodology must work consistently across all three platforms.
+*   **Recommendation: Use Existing Test Patterns**
+    - Both `segment_parser.rs` and `ifd_parser.rs` have comprehensive unit tests with `TestReader` implementations.
+    - You can reference these patterns for creating test data and assertions.
+    - The tests show how to create synthetic binary data for JPEG segments and TIFF IFDs.
 
-*   **Warning:** The task specifies "lock test corpus in git LFS, run comparison on every commit" but this needs clarification. Git LFS stores file pointers in commits, not the actual files. Your plan should clarify that:
-    1. Test images are committed via Git LFS (pointers only)
-    2. CI/CD pipeline will download actual files from LFS during test runs
-    3. This requires configuring GitHub Actions to have LFS access
-
-*   **Tip:** For sourcing test images, recommend specific public datasets:
-    - EXIF Test Suite from exiv2 project (permissive license)
-    - Unsplash free images (CC0 license)
-    - Generated synthetic images with known EXIF using Python/ImageMagick
-    - Deliberately malformed images for security testing
-
-*   **Note:** The verification strategy shows examples using `Command::new()` to spawn CLI processes. Your test plan should specify this pattern for CLI integration tests and distinguish it from library API integration tests (which would directly call Rust functions).
+*   **Important: Acceptance Criteria**
+    - The test MUST successfully extract Make, Model, and DateTime tags.
+    - The test MUST verify that these tag values are non-empty strings.
+    - The test MUST pass when running `cargo test jpeg_tests`.
+    - You should add `println!()` statements to print the extracted values as requested in the task description.
