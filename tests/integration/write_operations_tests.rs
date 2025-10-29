@@ -95,10 +95,7 @@ fn test_write_metadata_successful_jpeg_write() {
 
     // Re-read and verify changes
     let updated_metadata = read_metadata(temp_path).expect("Failed to read updated metadata");
-    assert_eq!(
-        updated_metadata.get_string("EXIF:Artist"),
-        Some("John Doe")
-    );
+    assert_eq!(updated_metadata.get_string("EXIF:Artist"), Some("John Doe"));
     assert_eq!(
         updated_metadata.get_string("EXIF:Copyright"),
         Some("Copyright 2024")
@@ -184,18 +181,11 @@ fn test_modify_tag_single_tag_modification() {
 
     // Verify original value
     let original_metadata = read_metadata(temp_path).expect("Failed to read metadata");
-    assert_eq!(
-        original_metadata.get_string("EXIF:Make"),
-        Some("Canon")
-    );
+    assert_eq!(original_metadata.get_string("EXIF:Make"), Some("Canon"));
 
     // Modify a single tag using modify_tag()
-    modify_tag(
-        temp_path,
-        "EXIF:Artist",
-        TagValue::new_string("Jane Smith"),
-    )
-    .expect("Failed to modify tag");
+    modify_tag(temp_path, "EXIF:Artist", TagValue::new_string("Jane Smith"))
+        .expect("Failed to modify tag");
 
     // Re-read and verify changes
     let updated_metadata = read_metadata(temp_path).expect("Failed to read updated metadata");
@@ -217,12 +207,8 @@ fn test_modify_tag_overwrites_existing_value() {
     let temp_path = temp_file.path();
 
     // Modify existing tag
-    modify_tag(
-        temp_path,
-        "EXIF:Make",
-        TagValue::new_string("Nikon"),
-    )
-    .expect("Failed to modify tag");
+    modify_tag(temp_path, "EXIF:Make", TagValue::new_string("Nikon"))
+        .expect("Failed to modify tag");
 
     // Verify the tag was overwritten
     let updated_metadata = read_metadata(temp_path).expect("Failed to read metadata");
