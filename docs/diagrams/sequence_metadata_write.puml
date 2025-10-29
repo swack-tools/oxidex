@@ -1,0 +1,69 @@
+@startuml
+
+actor User
+participant "CLI" as CLI
+participant "Core Library" as Core
+participant "JPEG Parser" as JPEG
+participant "Validation" as Validation
+participant "Metadata Writer" as Writer
+participant "I/O Layer" as IO
+participant "File System" as FS
+
+User -> CLI : exiftool-rs -EXIF:Artist="John Doe" photo.jpg
+CLI -> Core : Metadata::from_path("photo.jpg")
+Core -> JPEG : parse(file)
+JPEG -> IO : read_file("photo.jpg")
+IO -> FS : open() + read()
+FS --> IO : file_bytes
+IO --> JPEG : file_data
+JPEG --> Core : existing_metadata
+
+Core -> Core : modify_tag(existing_metadata, "EXIF:Artist", "John Doe")
+Core -> Validation : validate_tag_value("EXIF:Artist", "John Doe")
+Validation -> Validation : check_tag_type_constraints()
+
+alt Validation Passes
+  Validation --> Core : ValidationResult::Ok
+  Core -> Writer : write_metadata(file, modified_metadata, WriteStrategy::InPlace)
+
+  Writer -> Writer : check_format_write_capability(JPEG)
+
+  alt JPEG supports in-place EXIF write
+    Writer -> IO : read_file_to_buffer("photo.jpg")
+    IO -> FS : read()
+    FS --> IO : file_bytes
+    IO --> Writer : file_buffer
+    Writer -> Writer : locate_exif_segment(file_bytes)
+    Writer -> Writer : serialize_exif_ifd(modified_metadata)
+    Writer -> Writer : replace_segment_in_buffer(old_exif, new_exif)
+
+    Writer -> IO : write_to_temp_file("photo.jpg.tmp", modified_bytes)
+    IO -> FS : create_temp() + write()
+    FS --> IO : temp_file_created
+    Writer -> IO : atomic_rename("photo.jpg.tmp", "photo.jpg")
+    IO -> FS : rename() [atomic operation]
+    FS --> IO : success
+    IO --> Writer : write_complete
+    Writer --> Core : WriteResult::Success
+  else EXIF segment doesn't fit (new data larger)
+    Writer -> Writer : rewrite_entire_file_with_new_exif()
+    Writer -> IO : write_to_temp_file("photo.jpg.tmp", full_file_bytes)
+    IO -> FS : create_temp() + write()
+    FS --> IO : temp_file_created
+    Writer -> IO : atomic_rename("photo.jpg.tmp", "photo.jpg")
+    IO -> FS : rename() [atomic operation]
+    FS --> IO : success
+    IO --> Writer : write_complete
+    Writer --> Core : WriteResult::Success
+  end
+
+  Core --> CLI : Result::Ok(WriteResult)
+  CLI --> User : 1 image files updated
+
+else Validation Fails
+  Validation --> Core : ValidationResult::Err(InvalidTagValue)
+  Core --> CLI : Result::Err(InvalidTagValue)
+  CLI --> User : Error: Invalid value for EXIF:Artist
+end
+
+@enduml
