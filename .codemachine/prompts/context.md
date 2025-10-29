@@ -10,26 +10,25 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I1.T7",
+  "task_id": "I1.T8",
   "iteration_id": "I1",
   "iteration_goal": "Establish project foundation with directory structure, build system, core domain models, architectural diagrams, and basic JPEG EXIF parsing capability to validate end-to-end workflow.",
-  "description": "Implement port interfaces in `src/core/`: `trait FormatParser` with method `fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap, ExifToolError>` and `fn supports_format(&self, format: FileFormat) -> bool`. Implement `trait FileReader` with methods `fn read(&self, offset: u64, length: usize) -> Result<&[u8], std::io::Error>`, `fn size(&self) -> u64`. Define `enum FileFormat` with variants for JPEG, TIFF, PNG, etc. Add comprehensive documentation comments explaining trait contracts.",
+  "description": "Implement FileReader trait in src/io/: MMapReader using memmap2 crate for memory-mapped file access (efficient for large files), and BufferedReader using std::io::BufReader for streaming access. Both should handle file opening, error propagation, and boundary checking. Add unit tests verifying read() operations at various offsets.",
   "agent_type_hint": "BackendAgent",
-  "inputs": "Section 2 (Core Architecture - hexagonal architecture ports), Section 2.1 (artifact for format parser trait)",
+  "inputs": "I1.T7 FileReader trait definition",
   "target_files": [
-    "src/core/format_parser_trait.rs",
-    "src/core/file_reader_trait.rs",
-    "src/core/file_format.rs",
-    "src/core/mod.rs"
+    "src/io/mmap_reader.rs",
+    "src/io/buffered_reader.rs",
+    "src/io/file_reader.rs",
+    "src/io/mod.rs"
   ],
   "input_files": [
-    "src/core/metadata_map.rs",
-    "src/error.rs"
+    "src/core/file_reader_trait.rs"
   ],
-  "deliverables": "Rust trait definitions with documentation, FileFormat enum with initial variants (JPEG, TIFF, PNG, PDF, Unknown)",
-  "acceptance_criteria": "Traits compile successfully, documentation comments explain trait purpose and method contracts, FormatParser trait has parse() and supports_format() methods, FileReader trait has read() and size() methods, FileFormat enum has at least 5 variants, code compiles with `cargo build`",
+  "deliverables": "MMapReader and BufferedReader implementations, unit tests for both readers",
+  "acceptance_criteria": "Both readers implement FileReader trait, MMapReader uses memmap2::Mmap internally, BufferedReader uses std::io::BufReader internally, read() method handles out-of-bounds requests gracefully (return error), size() method returns correct file size, unit tests verify reading at offset 0, middle, and end of file, cargo test passes for io module",
   "dependencies": [
-    "I1.T6"
+    "I1.T7"
   ],
   "parallelizable": false,
   "done": false
@@ -42,9 +41,11 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: Architectural Style - Layered Hexagonal Architecture (from 02_Architecture_Overview.md)
+### Context: architectural-style (from 02_Architecture_Overview.md)
 
 ```markdown
+### 3.1. Architectural Style
+
 **Primary Style**: **Layered Hexagonal Architecture** (Ports and Adapters)
 
 **Rationale**:
@@ -83,119 +84,73 @@ The Hexagonal Architecture pattern is optimal for ExifTool-RS because:
 - **Infrastructure Layer**: Format-specific parsers/serializers, file system abstraction, configuration
 ```
 
-### Context: Component Diagram - Ports and Adapters (from 03_System_Structure_and_Data.md)
+### Context: technology-stack-summary (from 02_Architecture_Overview.md)
+
+```markdown
+### 3.2. Technology Stack Summary
+
+| **Category** | **Technology Choice** | **Justification** |
+|--------------|----------------------|-------------------|
+| **Image I/O** | `memmap2` (memory-mapped files) | Efficient large file access without loading entire file into memory |
+
+**Key Libraries Detail**:
+
+- **`memmap2`**: Memory-mapped files via `Mmap::map(&file)`. Enables zero-copy parsing for formats with known offsets (JPEG EXIF segment, PNG chunks).
+
+**Dependency Philosophy**:
+- **Minimize Count**: Target < 50 direct dependencies to reduce supply chain risk
+- **Prefer `no_std` Compatible**: Where possible (e.g., `nom`, `binrw`) to enable future embedded/WASM use
+- **Audit Regularly**: `cargo-audit` in CI pipeline to catch vulnerabilities in transitive dependencies
+```
+
+### Context: component-diagram (from 03_System_Structure_and_Data.md)
 
 ```markdown
 ### 3.5. Component Diagram(s) (C4 Level 3)
 
 **Description**: This diagram details the internal components of the **Core Library** container, showing the hexagonal architecture layers and their interactions.
 
-**Diagram (PlantUML - Core Library Components)**:
-
-```plantuml
-@startuml
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
-
-LAYOUT_WITH_LEGEND()
-
-title Component Diagram - Core Library (exiftool-rs)
-
-Container_Boundary(core_lib, "Core Library") {
-
-  Component(api_facade, "Public API Facade", "Rust modules", "User-facing API: extract(), write(), copy_metadata()")
-
-  ' Domain Layer
-  Component(metadata_model, "Metadata Model", "Rust structs/enums", "TagValue, MetadataMap, TagDescriptor")
-  Component(operations, "Metadata Operations", "Rust traits/impls", "Read, Write, Copy, Transform operations")
-  Component(tag_registry, "Tag Registry", "Generated const maps", "28K+ tag definitions indexed by ID/name")
-  Component(validation, "Validation Engine", "Rust", "Tag value type checking, range validation")
-
+Component_Boundary(core_lib, "Core Library") {
   ' Ports (interfaces)
-  Component(format_port, "Format Parser Port", "Rust trait", "trait FormatParser { fn parse(&self, ...) -> Result<MetadataMap> }")
   Component(io_port, "I/O Port", "Rust trait", "trait FileReader { fn read(&self, offset, len) -> Result<&[u8]> }")
 
   ' Infrastructure adapters (in other containers but shown for clarity)
-  Component_Ext(jpeg_adapter, "JPEG Parser", "nom-based", "EXIF/JFIF segment parser")
-  Component_Ext(tiff_adapter, "TIFF Parser", "nom-based", "IFD structure parser")
-  Component_Ext(xmp_adapter, "XMP Parser", "quick-xml", "RDF/XML parser for XMP")
   Component_Ext(mmap_adapter, "MMap Reader", "memmap2", "Memory-mapped file access")
 }
-
-Rel(api_facade, operations, "Orchestrates")
-Rel(operations, metadata_model, "Manipulates")
-Rel(operations, tag_registry, "Looks up tag definitions")
-Rel(operations, validation, "Validates values via")
-
-Rel(format_port, jpeg_adapter, "Implemented by")
-Rel(format_port, tiff_adapter, "Implemented by")
-Rel(format_port, xmp_adapter, "Implemented by")
 
 Rel(jpeg_adapter, io_port, "Reads via")
 Rel(tiff_adapter, io_port, "Reads via")
 Rel(io_port, mmap_adapter, "Implemented by")
-
-@enduml
-```
 ```
 
-### Context: Key Entities - Data Model (from 03_System_Structure_and_Data.md)
+### Context: task-i1-t8 (from 02_Iteration_I1.md)
 
 ```markdown
-#### Key Entities
-
-1. **File**: Represents a media file being processed (JPEG, PNG, etc.)
-2. **MetadataMap**: Collection of all metadata tags extracted from a file
-3. **TagValue**: A single metadata tag with its name, value, and type information
-4. **TagDescriptor**: Definition of a tag (from tag database) including ID, name, type constraints, format family
-5. **FormatFamily**: Grouping of related metadata standards (EXIF, XMP, IPTC, MakerNotes)
-6. **IFD (Image File Directory)**: TIFF-specific structural element containing tags
-```
-
-### Context: Error Handling Pattern (from 04_Behavior_and_Communication.md)
-
-```markdown
-**Error Handling**: `Result<T, ExifToolError>` throughout
-
-```rust
-pub enum ExifToolError {
-    IoError(std::io::Error),
-    ParseError { format: String, details: String },
-    TagNotFound { tag_name: String },
-    InvalidTagValue { tag_name: String, expected_type: String },
-    UnsupportedFormat { format: String },
-}
-```
-
-Errors propagate via `?` operator, no exceptions.
-```
-
-### Context: Task I1.T7 Specification (from 02_Iteration_I1.md)
-
-```markdown
-<!-- anchor: task-i1-t7 -->
-*   **Task 1.7: Define Format Parser and File Reader Traits**
-    *   **Task ID:** `I1.T7`
-    *   **Description:** Implement port interfaces in `src/core/`: `trait FormatParser` with method `fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap, ExifToolError>` and `fn supports_format(&self, format: FileFormat) -> bool`. Implement `trait FileReader` with methods `fn read(&self, offset: u64, length: usize) -> Result<&[u8], std::io::Error>`, `fn size(&self) -> u64`. Define `enum FileFormat` with variants for JPEG, TIFF, PNG, etc. Add comprehensive documentation comments explaining trait contracts.
+<!-- anchor: task-i1-t8 -->
+*   **Task 1.8: Implement File Reader Adapters (MMap and Buffered)**
+    *   **Task ID:** `I1.T8`
+    *   **Description:** Implement FileReader trait in `src/io/`: `MMapReader` using `memmap2` crate for memory-mapped file access (efficient for large files), and `BufferedReader` using `std::io::BufReader` for streaming access. Both should handle file opening, error propagation, and boundary checking. Add unit tests verifying read() operations at various offsets.
     *   **Agent Type Hint:** `BackendAgent`
-    *   **Inputs:** Section 2 (Core Architecture - hexagonal architecture ports), Section 2.1 (artifact for format parser trait)
-    *   **Input Files:** [`src/core/metadata_map.rs`, `src/error.rs`]
+    *   **Inputs:** I1.T7 FileReader trait definition
+    *   **Input Files:** [`src/core/file_reader_trait.rs`]
     *   **Target Files:**
-        *   `src/core/format_parser_trait.rs`
-        *   `src/core/file_reader_trait.rs`
-        *   `src/core/file_format.rs` (enum FileFormat)
-        *   `src/core/mod.rs` (export traits)
+        *   `src/io/mmap_reader.rs`
+        *   `src/io/buffered_reader.rs`
+        *   `src/io/file_reader.rs` (re-exports both)
+        *   `src/io/mod.rs`
     *   **Deliverables:**
-        *   Rust trait definitions with documentation
-        *   FileFormat enum with initial variants (JPEG, TIFF, PNG, PDF, Unknown)
+        *   MMapReader and BufferedReader implementations
+        *   Unit tests for both readers
     *   **Acceptance Criteria:**
-        *   Traits compile successfully
-        *   Documentation comments explain trait purpose and method contracts
-        *   FormatParser trait has parse() and supports_format() methods
-        *   FileReader trait has read() and size() methods
-        *   FileFormat enum has at least 5 variants
-        *   Code compiles with `cargo build`
-    *   **Dependencies:** `I1.T6` (needs MetadataMap and ExifToolError)
-    *   **Parallelizable:** No (depends on T6)
+        *   Both readers implement FileReader trait
+        *   MMapReader uses memmap2::Mmap internally
+        *   BufferedReader uses std::io::BufReader internally
+        *   read() method handles out-of-bounds requests gracefully (return error)
+        *   size() method returns correct file size
+        *   Unit tests verify reading at offset 0, middle, and end of file
+        *   `cargo test` passes for io module
+    *   **Dependencies:** `I1.T7` (needs FileReader trait)
+    *   **Parallelizable:** No (depends on T7)
 ```
 
 ---
@@ -206,77 +161,87 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `src/core/metadata_map.rs`
-    *   **Summary:** This file defines the core `MetadataMap` struct, which is a wrapper around `HashMap<String, TagValue>`. It provides typed getter methods (`get_string()`, `get_integer()`, `get_float()`) and implements standard collection operations. The struct derives `Debug`, `Clone`, `PartialEq`, `Serialize`, and `Deserialize` for full serde support.
-    *   **Recommendation:** You MUST import and use `MetadataMap` in your `FormatParser` trait. The return type of the `parse()` method is `Result<MetadataMap, ExifToolError>`. Import it from `super::metadata_map::MetadataMap` or use `crate::core::MetadataMap`.
+*   **File:** `src/core/file_reader_trait.rs`
+    *   **Summary:** This file contains the complete `FileReader` trait definition that serves as the secondary port in the hexagonal architecture. The trait defines two methods: `read(&self, offset: u64, length: usize) -> io::Result<&[u8]>` for reading file slices and `size(&self) -> u64` for getting total file size. The trait is object-safe and designed for zero-copy access patterns.
+    *   **Recommendation:** You MUST import and implement this trait exactly as specified. The trait contract requires:
+        - `read()` must return borrowed slices valid for the lifetime of `&self`
+        - `read()` must return `Err` if `offset + length` exceeds file size
+        - `size()` must return consistent values during the reader's lifetime
+        - Implementations should be thread-safe if intended for concurrent access
+    *   **Critical Detail:** The trait returns `io::Result<&[u8]>` (standard library result), NOT `crate::error::Result`. This is intentional to keep the infrastructure layer decoupled from domain errors.
 
 *   **File:** `src/error/mod.rs`
-    *   **Summary:** This file defines the `ExifToolError` enum with variants: `IoError`, `ParseError`, `TagNotFound`, `InvalidTagValue`, and `UnsupportedFormat`. It implements `std::error::Error` and `std::fmt::Display`. It also provides a type alias: `pub type Result<T> = std::result::Result<T, ExifToolError>`.
-    *   **Recommendation:** You MUST import `ExifToolError` and the `Result` type alias from `crate::error`. Use `Result<T>` as the return type for the `parse()` method instead of writing out the full `std::result::Result<T, ExifToolError>`. Note that `std::io::Error` should be used directly for `FileReader::read()` since it's a low-level I/O operation.
+    *   **Summary:** Defines the `ExifToolError` enum with variants: `IoError`, `ParseError`, `TagNotFound`, `InvalidTagValue`, and `UnsupportedFormat`. Provides conversion from `std::io::Error` to `ExifToolError` via the `From` trait.
+    *   **Recommendation:** For the file readers, you should use `std::io::Error` directly since they are infrastructure adapters. The conversion to `ExifToolError` happens at the domain layer boundary, not in the I/O adapters.
 
-*   **File:** `src/core/tag_descriptor.rs`
-    *   **Summary:** This file defines `TagDescriptor`, `TagId`, `FormatFamily`, and `ValueType` enums. The `FormatFamily` enum already includes variants for EXIF, XMP, IPTC, GPS, ICCProfile, Photoshop, MakerNotes, JFIF, PNG, PDF, and QuickTime.
-    *   **Recommendation:** You SHOULD reference the `FormatFamily` enum when designing your `FileFormat` enum. They serve similar purposes (format classification) and should have similar variants to maintain consistency. However, `FileFormat` is for file-level detection, while `FormatFamily` is for metadata tag categorization.
-
-*   **File:** `src/core/tag_value.rs`
-    *   **Summary:** This file defines the `TagValue` enum with variants: String, Integer, Float, Rational, Binary, DateTime, and Struct. It includes constructors (`new_string()`, `new_integer()`, etc.) and type-checking methods (`is_string()`, `is_integer()`, etc.).
-    *   **Recommendation:** While you won't directly use `TagValue` in your trait definitions, it's important to understand that `MetadataMap` stores `TagValue` instances. Your trait documentation should mention that parsers return a collection of tag name → `TagValue` mappings.
+*   **File:** `src/io/mod.rs`
+    *   **Summary:** This is the module root that currently declares three submodules: `buffered_reader`, `file_reader`, and `mmap_reader`. The file is minimal with just module declarations.
+    *   **Recommendation:** You SHOULD add public re-exports after implementing the readers to make them easily accessible. For example: `pub use mmap_reader::MMapReader;` and `pub use buffered_reader::BufferedReader;`.
 
 *   **File:** `src/core/mod.rs`
-    *   **Summary:** This is the module root for the core domain layer. It currently exports `file_reader_trait`, `format_parser_trait`, `metadata_map`, `operations`, `tag_descriptor`, `tag_value`, and `validation` modules. It also re-exports commonly used types: `MetadataMap`, `TagDescriptor`, `FormatFamily`, `TagId`, `ValueType`, and `TagValue`.
-    *   **Recommendation:** After implementing your traits, you MUST add public re-exports to this file so that consumers can easily import the traits. Add lines like: `pub use file_reader_trait::FileReader;`, `pub use format_parser_trait::FormatParser;`, and `pub use file_format::FileFormat;` (you'll need to create the `file_format` module first).
+    *   **Summary:** The domain layer module root that re-exports core types including `FileReader` from `file_reader_trait`. This confirms the trait is already part of the public API surface.
+    *   **Recommendation:** You do NOT need to modify this file. The trait is already properly exported and your implementations in `src/io/` will be infrastructure adapters.
 
-*   **File:** `src/core/file_reader_trait.rs`
-    *   **Summary:** This file currently only contains a module comment and `#![allow(dead_code)]`. It is a placeholder waiting for the trait definition.
-    *   **Recommendation:** You MUST implement the `FileReader` trait in this file according to the task specification.
-
-*   **File:** `src/core/format_parser_trait.rs`
-    *   **Summary:** This file currently only contains a module comment and `#![allow(dead_code)]`. It is a placeholder waiting for the trait definition.
-    *   **Recommendation:** You MUST implement the `FormatParser` trait in this file according to the task specification.
-
-*   **File:** `api/tag_database_schema.json`
-    *   **Summary:** This JSON Schema defines the structure of `TagDescriptor` objects for the tag database. It shows the required fields and enums for `format_family` and `value_type`.
-    *   **Recommendation:** While not directly used in your implementation, this schema confirms the design decisions around format families and value types. Your `FileFormat` enum should align with the format families mentioned here.
+*   **File:** `Cargo.toml`
+    *   **Summary:** Project configuration with all required dependencies already declared. The `memmap2 = "0.9"` dependency is present under `[dependencies]`, confirming it's available for use. Also includes `tempfile = "3.10"` under `[dev-dependencies]` which you can use for creating test files.
+    *   **Recommendation:** You do NOT need to modify `Cargo.toml`. All required dependencies are already configured.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** I have confirmed that the project follows Rust 2021 edition idioms. All existing code uses modern patterns like `#![allow(dead_code)]` for work-in-progress modules, comprehensive doc comments with examples, and derives for common traits (Debug, Clone, PartialEq, Serialize, Deserialize).
+*   **Tip: MMapReader Lifetime Management:** When using `memmap2::Mmap`, the memory-mapped region must outlive any slices returned by `read()`. Store the `Mmap` in a struct field and return slices that borrow from it. Use `unsafe { mmap.get_unchecked(start..end) }` for zero-copy access (after bounds checking).
 
-*   **Tip:** The existing component diagram (`docs/diagrams/component_architecture.puml`) clearly shows that `FormatParser` is a "port" (interface) in the hexagonal architecture. Your trait documentation SHOULD explain this architectural role: it's the boundary between the domain layer (core library) and the infrastructure layer (format-specific parsers).
+*   **Tip: BufferedReader Caching Strategy:** `std::io::BufReader` is designed for streaming, not random access. To implement the `FileReader` trait, you'll need to store the file handle and implement seeking. Consider using `std::io::Seek` to position to the offset, then reading into a temporary buffer that you return a slice from. This means you'll need to store a buffer in the struct and manage its lifetime carefully.
 
-*   **Tip:** The `FileReader` trait should be designed for zero-copy access. Notice that the method signature uses `&[u8]` as the return type. This allows implementations like `MMapReader` to return direct references to memory-mapped file data without copying. Your documentation should emphasize this design goal.
+*   **Note: The FileReader trait signature challenge:** The trait requires returning `&[u8]` borrowed from `&self`. For `BufferedReader`, you cannot return slices from the `BufReader` directly because `read()` returns owned data. You MUST store a buffer in the struct (e.g., `Vec<u8>`) and return slices from it. Use `RefCell<Vec<u8>>` for interior mutability if needed, or reconsider the design to use a pinned buffer.
 
-*   **Note:** The task requires `FileReader::read()` to return `Result<&[u8], std::io::Error>`. This poses a lifetime challenge: the returned slice must borrow from `&self`. You'll need to declare the trait method with a lifetime parameter: `fn read(&self, offset: u64, length: usize) -> Result<&'_ [u8], std::io::Error>` or use an explicit lifetime like `'a`.
+*   **Warning: Thread Safety Considerations:** The trait documentation mentions thread-safety. For `MMapReader`, memory-mapped regions are inherently shareable across threads (read-only). For `BufferedReader`, if you use `RefCell` for interior mutability, it will NOT be thread-safe (not `Sync`). Document this limitation or use `Mutex` instead of `RefCell` if thread-safety is required.
 
-*   **Note:** The task specifies that `FormatParser::parse()` takes `reader: &dyn FileReader`. This is a trait object, which means you'll need to handle dynamic dispatch. Make sure the `FileReader` trait is object-safe (no associated types, no `Self: Sized` bounds on methods).
+*   **Tip: Unit Test Strategy:** The acceptance criteria require testing reads at offset 0, middle, and end of file. Use `tempfile::NamedTempFile` to create test files with known content. Test cases should verify:
+    1. Successful reads returning correct data
+    2. Out-of-bounds reads returning `Err`
+    3. Read at exact end of file (offset = size, length = 0)
+    4. `size()` returning correct value
+    5. Multiple sequential reads
 
-*   **Warning:** When creating the `FileFormat` enum, you MUST include at least 5 variants as specified in the acceptance criteria: JPEG, TIFF, PNG, PDF, and Unknown. Consider adding more variants that align with `FormatFamily` for future-proofing (e.g., GIF, BMP, MP4, QuickTime).
+*   **Tip: Error Handling for Out-of-Bounds:** The trait contract requires returning `Err` if `offset + length` exceeds file size. Use `std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "read beyond end of file")` for consistency with the example in `file_reader_trait.rs`.
 
-*   **Warning:** The project uses `#![allow(dead_code)]` to suppress warnings during development. You SHOULD include this attribute at the top of your new trait files since the traits won't be used yet (they'll be implemented in later tasks I1.T8-I1.T11).
+*   **Critical: The FileReader trait returns borrowed data:** This is a zero-copy interface. For `MMapReader`, this is natural (return slices from mmap). For `BufferedReader`, you'll need to carefully manage buffer lifetime. Consider these options:
+    1. Store buffer as `Vec<u8>` in struct, return slices (requires interior mutability)
+    2. Use `Rc<RefCell<Vec<u8>>>` for shared ownership
+    3. Accept that `BufferedReader` may need to allocate per-read (less efficient but simpler)
 
-*   **Best Practice:** Follow the existing documentation style. Every public trait, method, and enum should have:
-    1. A `///` doc comment explaining its purpose
-    2. `# Examples` section showing usage (if applicable)
-    3. `# Errors` section explaining error conditions (for methods that return `Result`)
-    4. Clear explanation of the trait contract (what implementers must guarantee)
+*   **Recommendation: File Opening Strategy:** Both readers should accept a file path in their constructor. For `MMapReader`, use `std::fs::File::open()` then `memmap2::Mmap::map(&file)`. For `BufferedReader`, use `std::fs::File::open()` wrapped in `BufReader::new()`. Handle file opening errors by returning `io::Result` from the constructor.
 
-*   **Best Practice:** The existing code uses constructor-style methods (e.g., `TagValue::new_string()`). While traits typically don't have constructors, you should document any expected patterns for creating implementations.
+*   **Note: The file_reader.rs placeholder:** The current `src/io/file_reader.rs` is just a placeholder with a comment. You should use this file to re-export both readers for convenience: `pub use crate::io::mmap_reader::MMapReader;` and `pub use crate::io::buffered_reader::BufferedReader;`.
 
-*   **Code Quality:** Make sure to run `cargo build`, `cargo clippy`, and `cargo fmt --check` before considering the task complete. The acceptance criteria explicitly require compilation success and adherence to the project's formatting and linting standards.
+*   **Recommendation: Struct Design Patterns:**
+    - `MMapReader`: Store `file: File` and `mmap: Mmap` in struct
+    - `BufferedReader`: Store `file: File`, `reader: BufReader<File>`, and `buffer: RefCell<Vec<u8>>` OR use a different approach where you return owned data wrapped in a lifetime-extending container
 
-*   **Hexagonal Architecture Principle:** Your traits are the "ports" in the ports-and-adapters architecture. They should be defined in terms of domain concepts (MetadataMap, FileFormat) NOT infrastructure details (file paths, specific parser implementations). This keeps the domain layer pure and testable.
+*   **Critical Architecture Note:** These readers are **infrastructure adapters** implementing the **secondary port** (`FileReader` trait). They should have NO dependencies on domain layer code except the trait itself. Do NOT import `ExifToolError` or any domain models in these files.
 
-### Critical Implementation Requirements
+### Suggested Implementation Approach
 
-1. **You MUST create a new file:** `src/core/file_format.rs` with the `FileFormat` enum
-2. **You MUST update:** `src/core/mod.rs` to:
-   - Declare the new `file_format` module with `pub mod file_format;`
-   - Add re-exports: `pub use file_reader_trait::FileReader;`, `pub use format_parser_trait::FormatParser;`, `pub use file_format::FileFormat;`
-3. **You MUST import:** `MetadataMap` from `super::metadata_map` in `format_parser_trait.rs`
-4. **You MUST import:** `ExifToolError` and `Result` type alias from `crate::error`
-5. **You MUST handle:** Lifetime parameters correctly in `FileReader::read()` to return borrowed slices
-6. **You MUST ensure:** Both traits are object-safe for use with `dyn Trait`
-7. **You MUST write:** Comprehensive documentation comments explaining the hexagonal architecture role
-8. **You MUST include:** At least 5 `FileFormat` variants: JPEG, TIFF, PNG, PDF, Unknown
-9. **You SHOULD add:** Derive macros for `FileFormat`: `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `Hash`
-10. **You MUST verify:** Code compiles with `cargo build` without errors or warnings
+1. **Start with MMapReader** (simpler due to natural zero-copy semantics):
+   - Implement constructor: `pub fn new(path: &Path) -> io::Result<Self>`
+   - Store `Mmap` in struct field
+   - Implement `FileReader` trait with bounds checking
+   - Write comprehensive unit tests
+
+2. **Then implement BufferedReader** (more complex due to lifetime constraints):
+   - Decide on buffer management strategy (see tips above)
+   - Implement constructor similar to MMapReader
+   - Implement `FileReader` trait with seeking and buffering
+   - Write unit tests
+
+3. **Update mod.rs and file_reader.rs** with proper re-exports
+
+4. **Run `cargo test` to verify** all tests pass and meet acceptance criteria
+
+### Key Differences from Standard Practice
+
+*   **Zero-Copy Requirement:** Unlike typical file readers that return owned `Vec<u8>`, this trait requires returning borrowed slices. This is by design for performance (avoiding allocations in hot parsing loops).
+
+*   **Object-Safe Trait:** The trait is designed for dynamic dispatch (`dyn FileReader`). All methods use `&self` and return non-generic types to maintain object-safety.
+
+*   **No Error Wrapping at This Layer:** These adapters return `std::io::Error`, not `ExifToolError`. The domain layer (parsers) will handle conversion when needed.
