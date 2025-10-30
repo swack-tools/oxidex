@@ -96,3 +96,36 @@ opt-level = 1
 
 [features]
 exiftool-comparison = []
+
+# Debian Package Configuration (cargo-deb)
+# Install cargo-deb: cargo install cargo-deb
+# Build: cargo deb
+[package.metadata.deb]
+maintainer = "ExifTool-RS Contributors <exiftool-rs@example.com>"
+copyright = "2025, ExifTool-RS Contributors"
+license-file = ["LICENSE", "4"]
+extended-description = """\
+A modern, high-performance Rust reimplementation of ExifTool for reading, \
+writing, and editing metadata in over 300 file formats including JPEG, PNG, \
+TIFF, RAW, PDF, and many others. Provides both a command-line interface and \
+library for metadata extraction and manipulation."""
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/exiftool-rs", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/exiftool-rs/", "644"],
+    ["LICENSE", "usr/share/doc/exiftool-rs/", "644"],
+]
+
+# RPM Package Configuration (cargo-generate-rpm)
+# Install cargo-generate-rpm: cargo install cargo-generate-rpm
+# Build: cargo build --release && cargo generate-rpm
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/exiftool-rs", dest = "/usr/bin/exiftool-rs", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/exiftool-rs/README.md", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/doc/exiftool-rs/LICENSE", mode = "644" },
+]
+[package.metadata.generate-rpm.requires]
+# No runtime dependencies - statically linked binary

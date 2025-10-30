@@ -55,9 +55,112 @@ This design ensures:
 
 ## Installation
 
-**Note**: ExifTool-RS is not yet ready for production use.
+**Note**: ExifTool-RS is not yet ready for production use. Pre-built packages are available for testing.
+
+### From Debian Package (Ubuntu/Debian Linux)
+
+For Debian-based Linux distributions (Ubuntu, Debian, Linux Mint, etc.):
+
+```bash
+# Download the .deb package from GitHub Releases
+wget https://github.com/exiftool-rs/exiftool-rs/releases/download/v0.1.0/exiftool-rs_0.1.0_amd64.deb
+
+# Install using dpkg
+sudo dpkg -i exiftool-rs_0.1.0_amd64.deb
+
+# Or using apt (resolves dependencies automatically)
+sudo apt install ./exiftool-rs_0.1.0_amd64.deb
+
+# Verify installation
+exiftool-rs --version
+```
+
+To build your own `.deb` package:
+
+```bash
+# Install cargo-deb
+cargo install cargo-deb
+
+# Build the Debian package
+cargo deb
+
+# Package will be created at: target/debian/exiftool-rs_0.1.0_amd64.deb
+```
+
+### From RPM Package (Fedora/RHEL/CentOS/openSUSE)
+
+For RPM-based Linux distributions (Fedora, RHEL, CentOS, openSUSE, etc.):
+
+```bash
+# Download the .rpm package from GitHub Releases
+wget https://github.com/exiftool-rs/exiftool-rs/releases/download/v0.1.0/exiftool-rs-0.1.0-1.x86_64.rpm
+
+# Install using dnf (Fedora/RHEL 8+)
+sudo dnf install exiftool-rs-0.1.0-1.x86_64.rpm
+
+# Or using yum (older RHEL/CentOS)
+sudo yum install exiftool-rs-0.1.0-1.x86_64.rpm
+
+# Or using rpm directly
+sudo rpm -i exiftool-rs-0.1.0-1.x86_64.rpm
+
+# Verify installation
+exiftool-rs --version
+```
+
+To build your own `.rpm` package:
+
+```bash
+# Install cargo-generate-rpm
+cargo install cargo-generate-rpm
+
+# Build the release binary first
+cargo build --release
+
+# Generate the RPM package
+cargo generate-rpm
+
+# Package will be created at: target/generate-rpm/exiftool-rs-0.1.0-1.x86_64.rpm
+```
+
+### From Homebrew (macOS)
+
+For macOS users with [Homebrew](https://brew.sh):
+
+```bash
+# Install from Homebrew formula (source build)
+brew install --build-from-source https://raw.githubusercontent.com/exiftool-rs/exiftool-rs/main/packaging/homebrew/exiftool-rs.rb
+
+# Or install from local formula file
+brew install --build-from-source ./packaging/homebrew/exiftool-rs.rb
+
+# Verify installation
+exiftool-rs --version
+```
+
+**Note**: The Homebrew formula builds from source, which may take 5-10 minutes depending on your system. Future releases will include pre-built bottles for faster installation.
+
+### From Pre-Built Binaries
+
+Static binaries are available for all major platforms on the [GitHub Releases](https://github.com/exiftool-rs/exiftool-rs/releases) page:
+
+- **Linux** (x86_64): `exiftool-rs-x86_64-linux-musl.tar.gz`
+- **Linux** (ARM64): `exiftool-rs-aarch64-linux-musl.tar.gz`
+- **macOS** (Intel): `exiftool-rs-x86_64-macos.tar.gz`
+- **macOS** (Apple Silicon): `exiftool-rs-aarch64-macos.tar.gz`
+- **Windows** (x86_64): `exiftool-rs-x86_64-windows.zip`
+
+```bash
+# Example: Install on Linux (x86_64)
+wget https://github.com/exiftool-rs/exiftool-rs/releases/download/v0.1.0/exiftool-rs-x86_64-linux-musl.tar.gz
+tar xzf exiftool-rs-x86_64-linux-musl.tar.gz
+sudo mv exiftool-rs /usr/local/bin/
+exiftool-rs --version
+```
 
 ### From Source
+
+For development or building from source:
 
 ```bash
 # Clone the repository
@@ -69,6 +172,9 @@ cargo build --release
 
 # Run
 ./target/release/exiftool-rs
+
+# Optional: Install to system path
+cargo install --path .
 ```
 
 ## Usage
