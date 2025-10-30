@@ -113,13 +113,19 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
             "CreationDate" => {
                 // Format PDF date to EXIF format
                 if let Some(formatted_date) = format_pdf_date(&value) {
-                    metadata.insert("PDF:CreateDate".to_string(), TagValue::new_string(formatted_date));
+                    metadata.insert(
+                        "PDF:CreateDate".to_string(),
+                        TagValue::new_string(formatted_date),
+                    );
                 }
             }
             "ModDate" => {
                 // Format PDF date to EXIF format
                 if let Some(formatted_date) = format_pdf_date(&value) {
-                    metadata.insert("PDF:ModifyDate".to_string(), TagValue::new_string(formatted_date));
+                    metadata.insert(
+                        "PDF:ModifyDate".to_string(),
+                        TagValue::new_string(formatted_date),
+                    );
                 }
             }
             _ => {
@@ -130,7 +136,10 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
 
     // Try to extract page count from the document catalog
     if let Ok(page_count) = extract_page_count(reader) {
-        metadata.insert("PDF:PageCount".to_string(), TagValue::new_integer(page_count as i64));
+        metadata.insert(
+            "PDF:PageCount".to_string(),
+            TagValue::new_integer(page_count as i64),
+        );
     }
 
     Ok(metadata)
@@ -158,9 +167,21 @@ fn format_pdf_date(pdf_date: &str) -> Option<String> {
     let month = &date_str[4..6];
     let day = &date_str[6..8];
 
-    let hour = if date_str.len() >= 10 { &date_str[8..10] } else { "00" };
-    let minute = if date_str.len() >= 12 { &date_str[10..12] } else { "00" };
-    let second = if date_str.len() >= 14 { &date_str[12..14] } else { "00" };
+    let hour = if date_str.len() >= 10 {
+        &date_str[8..10]
+    } else {
+        "00"
+    };
+    let minute = if date_str.len() >= 12 {
+        &date_str[10..12]
+    } else {
+        "00"
+    };
+    let second = if date_str.len() >= 14 {
+        &date_str[12..14]
+    } else {
+        "00"
+    };
 
     // Parse timezone
     let timezone = if date_str.len() > 14 {
@@ -188,7 +209,10 @@ fn format_pdf_date(pdf_date: &str) -> Option<String> {
         "".to_string()
     };
 
-    Some(format!("{}:{}:{} {}:{}:{}{}", year, month, day, hour, minute, second, timezone))
+    Some(format!(
+        "{}:{}:{} {}:{}:{}{}",
+        year, month, day, hour, minute, second, timezone
+    ))
 }
 
 /// Extracts page count from PDF document catalog.

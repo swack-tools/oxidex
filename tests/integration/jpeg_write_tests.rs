@@ -126,7 +126,10 @@ fn parse_exif_tags(tiff_data: &[u8]) -> Result<Vec<(u16, Vec<u8>)>, Box<dyn std:
     let tags = parse_ifd(&reader, 8, byte_order)?;
 
     // Convert from (u16, u16, Vec<u8>) to (u16, Vec<u8>) by dropping field_type
-    let tags_without_type = tags.into_iter().map(|(tag_id, _field_type, _value_count, value)| (tag_id, value)).collect();
+    let tags_without_type = tags
+        .into_iter()
+        .map(|(tag_id, _field_type, _value_count, value)| (tag_id, value))
+        .collect();
 
     Ok(tags_without_type)
 }

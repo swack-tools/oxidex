@@ -187,13 +187,7 @@ fn extract_movie_header(mvhd: &Atom, metadata: &mut MetadataMap) -> Result<(), S
     // 92-95: current time (4 bytes)
     // 96-99: next track ID (4 bytes)
 
-    let (
-        creation_time,
-        modification_time,
-        timescale,
-        duration,
-        rate_offset,
-    ) = if version == 1 {
+    let (creation_time, modification_time, timescale, duration, rate_offset) = if version == 1 {
         // Version 1: 64-bit times
         if data.len() < 28 {
             return Ok(());
@@ -251,8 +245,12 @@ fn extract_movie_header(mvhd: &Atom, metadata: &mut MetadataMap) -> Result<(), S
 
     // Preferred rate (fixed-point 16.16) - at offset 20 for version 0
     if data.len() > rate_offset + 3 {
-        let rate =
-            i32::from_be_bytes([data[rate_offset], data[rate_offset + 1], data[rate_offset + 2], data[rate_offset + 3]]);
+        let rate = i32::from_be_bytes([
+            data[rate_offset],
+            data[rate_offset + 1],
+            data[rate_offset + 2],
+            data[rate_offset + 3],
+        ]);
         let rate_value = rate as f64 / 65536.0;
         metadata.insert(
             "QuickTime:PreferredRate".to_string(),
