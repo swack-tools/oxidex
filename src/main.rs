@@ -7,6 +7,7 @@ use exiftool_rs::cli::args::CliArgs;
 use exiftool_rs::cli::batch_processor;
 use exiftool_rs::cli::output_formatter::{HumanReadableFormatter, JsonFormatter, OutputFormatter};
 use exiftool_rs::cli::rename;
+use exiftool_rs::core::date_shift::{shift_metadata_dates, ShiftOperation};
 use exiftool_rs::core::operations::{copy_metadata, modify_tag, read_metadata};
 use exiftool_rs::core::tag_value::TagValue;
 use std::process;
@@ -30,8 +31,12 @@ fn main() {
         }
     };
 
-    // Check if this is a rename operation (-FileName<pattern>)
-    if let Some(pattern) = args.filename_pattern() {
+    // Check if this is a date shift operation
+    let date_shifts = args.date_shift_operations();
+    if !date_shifts.is_empty() {
+        // Date shift mode
+        handle_date_shift_operation(&file, &args);
+    } else if let Some(pattern) = args.filename_pattern() {
         // Rename mode
         handle_rename_operation(&file, &pattern, &args);
     } else if args.tags_from_file.is_some() {
@@ -364,4 +369,105 @@ fn handle_rename_operation(file: &std::path::Path, pattern: &str, args: &CliArgs
             process::exit(1);
         }
     }
+}
+
+/// Handles date shift operations (shifting date/time tags by offset)
+fn handle_date_shift_operation(file: &std::path::Path, args: &CliArgs) {
+    // Extract date shift operations
+    let date_shifts = args.date_shift_operations();
+
+    // Check readonly flag FIRST - if set, prevent any writes
+    if args.readonly {
+        eprintln!("Error: Cannot shift dates in read-only mode (--readonly flag set)");
+        process::exit(1);
+    }
+
+    // Verify file exists
+    if !file.exists() {
+        eprintln!("Error: File not found: {}", file.display());
+        process::exit(1);
+    }
+
+    // Check if file is writable
+    let file_metadata = match std::fs::metadata(file) {
+        Ok(metadata) => {
+            if metadata.permissions().readonly() {
+                eprintln!("Error: File is read-only: {}", file.display());
+                process::exit(1);
+            }
+            metadata
+        }
+        Err(e) => {
+            eprintln!("Error: Cannot access file '{}': {}", file.display(), e);
+            process::exit(1);
+        }
+    };
+
+    // Save original modification time if preserve_file_times is enabled
+    let original_mtime = if args.preserve_file_times {
+        match file_metadata.modified() {
+            Ok(mtime) => Some(mtime),
+            Err(e) => {
+                eprintln!("Warning: Could not read file modification time: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Create backup if requested
+    if args.backup {
+        let mut backup_path = file.as_os_str().to_owned();
+        backup_path.push(".bak");
+        let backup_path = std::path::PathBuf::from(backup_path);
+
+        if let Err(e) = std::fs::copy(file, &backup_path) {
+            eprintln!(
+                "Error: Failed to create backup file '{}': {}",
+                backup_path.display(),
+                e
+            );
+            process::exit(1);
+        }
+    }
+
+    // Apply each date shift operation
+    for (tag_pattern, op_str, offset_or_value) in &date_shifts {
+        // Parse operation type
+        let operation = match op_str.as_str() {
+            "+=" => ShiftOperation::Add,
+            "-=" => ShiftOperation::Subtract,
+            "=" => ShiftOperation::Set,
+            _ => {
+                eprintln!("Error: Invalid date shift operation '{}'", op_str);
+                eprintln!("Supported operations: +=, -=, =");
+                process::exit(1);
+            }
+        };
+
+        // Apply the date shift
+        if let Err(e) = shift_metadata_dates(file, tag_pattern, offset_or_value, operation) {
+            eprintln!(
+                "Error: Failed to shift dates for '{}': {}",
+                tag_pattern, e
+            );
+            process::exit(1);
+        }
+    }
+
+    // Restore original modification time if requested
+    if let Some(mtime) = original_mtime {
+        use std::fs::File;
+        match File::open(file).and_then(|f| f.set_modified(mtime)) {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Warning: Could not restore file modification time: {}", e);
+                // Don't exit - the shift succeeded, only mtime restoration failed
+            }
+        }
+    }
+
+    // Print success message (matching ExifTool format)
+    println!("    1 image files updated");
 }

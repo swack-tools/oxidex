@@ -179,4 +179,92 @@ impl CliArgs {
         }
         None
     }
+
+    /// Parses date shift arguments (e.g., "-AllDates+=1:0:0 0:0:0" or "-EXIF:DateTime-=0:1:0 0:0:0")
+    /// Returns a vector of (tag_pattern, operation, offset_or_value) tuples
+    ///
+    /// # Format
+    ///
+    /// Date shift arguments follow the format: `-TAG_PATTERN{+= | -= | =}OFFSET`
+    /// - TAG_PATTERN: "AllDates" or specific tag name (e.g., "EXIF:DateTime")
+    /// - Operation: `+=` (add), `-=` (subtract), `=` (set absolute)
+    /// - OFFSET: For += and -=: "Y:M:D H:M:S" format
+    ///   For =: "YYYY:MM:DD HH:MM:SS" absolute datetime format
+    ///
+    /// # Examples
+    ///
+    /// - `-AllDates+=1:0:0 0:0:0` -> Add 1 year to all date tags
+    /// - `-EXIF:DateTime-=0:1:0 0:0:0` -> Subtract 1 month from DateTime
+    /// - `-EXIF:DateTime=2025:01:15 10:30:00` -> Set DateTime to specific value
+    pub fn date_shift_operations(&self) -> Vec<(String, String, String)> {
+        if self.args.len() <= 1 {
+            return Vec::new();
+        }
+
+        let mut operations = Vec::new();
+
+        // Process all arguments except the last one (which is the file)
+        for arg in &self.args[..self.args.len() - 1] {
+            if let Some((tag, op, value)) = Self::parse_date_shift(arg) {
+                operations.push((tag, op, value));
+            }
+        }
+
+        operations
+    }
+
+    /// Parses a single date shift argument
+    /// Returns (tag_pattern, operation, offset_or_value) or None if not a date shift argument
+    ///
+    /// Supports three operation types:
+    /// - `+=`: Add offset (e.g., "-AllDates+=1:0:0 0:0:0")
+    /// - `-=`: Subtract offset (e.g., "-EXIF:DateTime-=0:1:0 0:0:0")
+    /// - `=`: Set absolute (e.g., "-EXIF:DateTime=2025:01:15 10:30:00")
+    fn parse_date_shift(arg: &str) -> Option<(String, String, String)> {
+        // Date shift args must start with '-'
+        if !arg.starts_with('-') {
+            return None;
+        }
+
+        // Check for += operator first (must check before single =)
+        if let Some(pos) = arg.find("+=") {
+            let tag = arg[1..pos].to_string(); // Remove leading '-'
+            let value = arg[pos + 2..].to_string();
+            return Some((tag, "+=".to_string(), value));
+        }
+
+        // Check for -= operator
+        if let Some(pos) = arg.find("-=") {
+            let tag = arg[1..pos].to_string();
+            let value = arg[pos + 2..].to_string();
+            return Some((tag, "-=".to_string(), value));
+        }
+
+        // Check for = operator (but not if it's part of += or -=)
+        // Also need to distinguish from regular tag modifications
+        if let Some(pos) = arg.find('=') {
+            let tag = arg[1..pos].to_string();
+            let value = arg[pos + 1..].to_string();
+
+            // Check if this looks like a date shift operation
+            // Date shifts should have either:
+            // - "AllDates" as the tag pattern (case-insensitive)
+            // - A tag containing a date-related keyword (DateTime, Date, CreateDate, etc.)
+            // - A value in date format (contains colons and spaces like "Y:M:D H:M:S" or "YYYY:MM:DD HH:MM:SS")
+
+            let tag_lower = tag.to_lowercase();
+            let is_date_tag = tag_lower == "alldates"
+                || tag_lower.contains("date")
+                || tag_lower.contains("time");
+
+            let is_date_value = value.contains(':') && value.contains(' ');
+
+            // Only treat as date shift if both tag and value look date-related
+            if is_date_tag && is_date_value {
+                return Some((tag, "=".to_string(), value));
+            }
+        }
+
+        None
+    }
 }

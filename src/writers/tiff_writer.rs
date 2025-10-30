@@ -454,9 +454,25 @@ fn convert_tag_value_to_entry(
             }))
         }
 
+        TagValue::DateTime(dt) => {
+            // Format DateTime to EXIF format string: "YYYY:MM:DD HH:MM:SS"
+            use crate::core::date_shift::format_exif_datetime;
+            let datetime_str = format_exif_datetime(dt);
+
+            // Add null terminator
+            let mut bytes = datetime_str.into_bytes();
+            bytes.push(0);
+
+            Ok(Some(IfdEntryData {
+                tag_id,
+                field_type: ExifType::Ascii,
+                value_count: bytes.len() as u32,
+                value_bytes: bytes,
+            }))
+        }
+
         // Unsupported types - skip for now (will add TODO in tests)
         TagValue::Float(_) => Ok(None),
-        TagValue::DateTime(_) => Ok(None),
         TagValue::Struct(_) => Ok(None),
     }
 }
