@@ -1,0 +1,3245 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ExifTool-RS User Guide</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Comprehensive guide to using ExifTool-RS for reading, writing, and editing metadata in 300+ file formats">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">ExifTool-RS User Guide</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/exiftool-rs/exiftool-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="introduction"><a class="header" href="#introduction">Introduction</a></h1>
+<p>Welcome to the ExifTool-RS User Guide! This comprehensive documentation will help you get started with ExifTool-RS, a modern, high-performance Rust reimplementation of the industry-standard ExifTool metadata management library and command-line application.</p>
+<h2 id="project-status"><a class="header" href="#project-status">Project Status</a></h2>
+<p>🚧 <strong>Work in Progress - Pre-alpha / Active Development</strong></p>
+<p><strong>Current Version</strong>: 0.1.0</p>
+<p>ExifTool-RS is in early development (Iteration 5). While many core features are implemented, the project is not yet ready for production use. We're actively working towards a stable v1.0 release.</p>
+<h3 id="current-implementation-status"><a class="header" href="#current-implementation-status">Current Implementation Status</a></h3>
+<p><strong>Completed Features:</strong></p>
+<ul>
+<li>✅ Project structure and build system</li>
+<li>✅ Core domain models and tag registry (700+ tags)</li>
+<li>✅ JPEG, TIFF, PNG, PDF, MP4/QuickTime format parsers</li>
+<li>✅ XMP and IPTC metadata parsing</li>
+<li>✅ Metadata read/write operations with atomic file handling</li>
+<li>✅ CLI implementation with argument parsing</li>
+<li>✅ JSON, CSV, human-readable output formats</li>
+<li>✅ Batch processing with recursive directory traversal</li>
+<li>✅ File renaming based on metadata patterns</li>
+<li>✅ Date/time shifting operations</li>
+<li>✅ Metadata copy operations</li>
+<li>✅ C FFI API with Python bindings example</li>
+<li>✅ Tag database auto-generation from ExifTool source</li>
+<li>✅ Cross-compilation and release builds</li>
+<li>✅ Fuzzing infrastructure for security testing</li>
+</ul>
+<p><strong>In Progress:</strong></p>
+<ul>
+<li>🔄 Comprehensive documentation (this guide!)</li>
+<li>🔄 Performance benchmarking vs ExifTool</li>
+<li>🔄 v1.0 release preparation</li>
+</ul>
+<p><strong>Planned for Future Releases:</strong></p>
+<ul>
+<li>⏳ Additional format support (200+ more formats)</li>
+<li>⏳ Extended tag database (28,000+ tags)</li>
+<li>⏳ WebAssembly target support</li>
+<li>⏳ Advanced metadata editing features</li>
+<li>⏳ Package manager distribution (apt, dnf, brew, choco)</li>
+</ul>
+<h2 id="what-is-exiftool-rs"><a class="header" href="#what-is-exiftool-rs">What is ExifTool-RS?</a></h2>
+<p>ExifTool-RS is a complete reimplementation of <a href="https://exiftool.org/">ExifTool</a> in Rust, designed to provide the same powerful metadata management capabilities while leveraging Rust's memory safety guarantees, zero-cost abstractions, and modern development ecosystem.</p>
+<h3 id="project-vision"><a class="header" href="#project-vision">Project Vision</a></h3>
+<p>ExifTool-RS aims to provide a memory-safe, zero-cost abstraction alternative to the Perl-based ExifTool while maintaining full compatibility with its extensive metadata tag support. The goal is to deliver superior performance, native cross-compilation capabilities, and seamless integration into modern software ecosystems.</p>
+<h2 id="why-rust"><a class="header" href="#why-rust">Why Rust?</a></h2>
+<p>Rust was chosen for several compelling reasons:</p>
+<h3 id="memory-safety"><a class="header" href="#memory-safety">Memory Safety</a></h3>
+<p>Rust's ownership system eliminates entire classes of vulnerabilities common in systems programming:</p>
+<ul>
+<li><strong>No Buffer Overflows</strong>: Compile-time checks prevent out-of-bounds access</li>
+<li><strong>No Use-After-Free</strong>: The borrow checker ensures references are always valid</li>
+<li><strong>No Data Races</strong>: Thread safety is enforced at compile time</li>
+<li><strong>No Null Pointer Dereferences</strong>: The <code>Option&lt;T&gt;</code> type makes null handling explicit</li>
+</ul>
+<p>These guarantees are particularly important when parsing untrusted file formats, where malformed input could traditionally lead to security vulnerabilities.</p>
+<h3 id="performance"><a class="header" href="#performance">Performance</a></h3>
+<p>Rust enables high-performance code through:</p>
+<ul>
+<li><strong>Zero-Cost Abstractions</strong>: High-level code compiles to efficient machine code</li>
+<li><strong>No Garbage Collection</strong>: Predictable, deterministic performance without GC pauses</li>
+<li><strong>Efficient Memory Layout</strong>: Fine-grained control over data structures</li>
+<li><strong>Native Compilation</strong>: Direct compilation to machine code without runtime overhead</li>
+</ul>
+<p>Benchmarks show ExifTool-RS achieves 2-5x performance improvements over the Perl implementation for common operations.</p>
+<h3 id="modern-ecosystem"><a class="header" href="#modern-ecosystem">Modern Ecosystem</a></h3>
+<p>Rust provides excellent tooling and ecosystem:</p>
+<ul>
+<li><strong>cargo</strong>: Unified build system and package manager</li>
+<li><strong>rustfmt</strong>: Automatic code formatting</li>
+<li><strong>clippy</strong>: Advanced linting for code quality</li>
+<li><strong>Cross-compilation</strong>: Easy targeting of multiple platforms from a single codebase</li>
+<li><strong>Rich Library Ecosystem</strong>: Access to high-quality parsing, concurrency, and I/O libraries</li>
+</ul>
+<h3 id="binary-distribution"><a class="header" href="#binary-distribution">Binary Distribution</a></h3>
+<p>Rust produces self-contained static binaries with no runtime dependencies, making distribution simple:</p>
+<ul>
+<li>No interpreter required (unlike Perl)</li>
+<li>No dependency hell (no CPAN modules to install)</li>
+<li>Small binary size with link-time optimization</li>
+<li>Cross-platform compatibility without modification</li>
+</ul>
+<h2 id="key-features"><a class="header" href="#key-features">Key Features</a></h2>
+<p>ExifTool-RS provides comprehensive metadata management capabilities:</p>
+<h3 id="feature-parity-planned"><a class="header" href="#feature-parity-planned">Feature Parity (Planned)</a></h3>
+<ul>
+<li><strong>300+ File Formats</strong>: Support for reading and writing metadata in images, videos, documents, and more</li>
+<li><strong>28,000+ Metadata Tags</strong>: Comprehensive tag database covering all major metadata standards</li>
+<li><strong>Format Families</strong>: EXIF, XMP, IPTC, GPS, QuickTime, RIFF, ICC Profile, Photoshop, PNG, JPEG, PDF, and more</li>
+</ul>
+<h3 id="high-performance"><a class="header" href="#high-performance">High Performance</a></h3>
+<ul>
+<li><strong>2-5x Faster</strong>: Significantly faster than Perl implementation for most operations</li>
+<li><strong>Parallel Processing</strong>: Multi-threaded batch processing using rayon</li>
+<li><strong>Memory-Mapped I/O</strong>: Efficient large file handling with memmap2</li>
+<li><strong>Zero-Copy Parsing</strong>: Minimal memory allocations during parsing</li>
+</ul>
+<h3 id="memory-safety-1"><a class="header" href="#memory-safety-1">Memory Safety</a></h3>
+<ul>
+<li><strong>No Undefined Behavior</strong>: Rust's type system prevents entire classes of bugs</li>
+<li><strong>Safe Parsing</strong>: Robust handling of malformed input without crashes</li>
+<li><strong>Fuzzing-Tested</strong>: Continuous fuzzing of parsers to detect edge cases</li>
+<li><strong>Secure by Default</strong>: No buffer overflows, use-after-free, or memory leaks</li>
+</ul>
+<h3 id="binary-distribution-1"><a class="header" href="#binary-distribution-1">Binary Distribution</a></h3>
+<ul>
+<li><strong>Static Binaries</strong>: Self-contained executables with no dependencies</li>
+<li><strong>Cross-Platform</strong>: Windows, Linux, macOS (Intel and Apple Silicon)</li>
+<li><strong>Small Size</strong>: Optimized binaries with link-time optimization and symbol stripping</li>
+<li><strong>Easy Deployment</strong>: Single file distribution</li>
+</ul>
+<h3 id="api-first-design"><a class="header" href="#api-first-design">API-First Design</a></h3>
+<ul>
+<li><strong>Native Rust Library</strong>: Idiomatic Rust API with strong type safety</li>
+<li><strong>C FFI Bindings</strong>: Language-agnostic FFI for integration with C, Python, JavaScript, and more</li>
+<li><strong>Multiple Interfaces</strong>: CLI, library API, and FFI for different use cases</li>
+<li><strong>Documented</strong>: Comprehensive API documentation and examples</li>
+</ul>
+<h3 id="backward-compatibility-goal"><a class="header" href="#backward-compatibility-goal">Backward Compatibility (Goal)</a></h3>
+<ul>
+<li><strong>CLI Compatibility</strong>: CLI arguments compatible with original ExifTool for drop-in replacement</li>
+<li><strong>Tag Name Compatibility</strong>: Uses ExifTool's tag naming convention for consistency</li>
+<li><strong>Format Compatibility</strong>: Reads and writes metadata in the same formats as ExifTool</li>
+</ul>
+<h3 id="cross-platform"><a class="header" href="#cross-platform">Cross-Platform</a></h3>
+<ul>
+<li><strong>Linux</strong>: x86_64, ARM64 (static binaries, .deb, .rpm packages)</li>
+<li><strong>macOS</strong>: Intel, ARM/Apple Silicon (Homebrew formula, standalone binaries)</li>
+<li><strong>Windows</strong>: x86_64 (.exe binaries, installer packages)</li>
+<li><strong>WebAssembly</strong>: WASM target support planned for browser/serverless environments</li>
+</ul>
+<h2 id="architecture"><a class="header" href="#architecture">Architecture</a></h2>
+<p>ExifTool-RS follows a <strong>Hexagonal Architecture</strong> (Ports and Adapters) pattern with three main layers:</p>
+<h3 id="application-layer"><a class="header" href="#application-layer">Application Layer</a></h3>
+<ul>
+<li><strong>CLI Interface</strong>: Command-line application for interactive and scripted use</li>
+<li><strong>C FFI Bindings</strong>: Foreign Function Interface for language interoperability</li>
+<li><strong>User-Facing APIs</strong>: High-level, ergonomic interfaces for common tasks</li>
+</ul>
+<h3 id="domain-layer"><a class="header" href="#domain-layer">Domain Layer</a></h3>
+<ul>
+<li><strong>Format-Agnostic Models</strong>: Core metadata representations independent of file format</li>
+<li><strong>Business Logic</strong>: Operations like read, write, copy, shift dates</li>
+<li><strong>Tag Registry</strong>: Comprehensive database of metadata tags and their definitions</li>
+<li><strong>Type-Safe Values</strong>: Strongly-typed metadata values (integers, strings, dates, rational numbers)</li>
+</ul>
+<h3 id="infrastructure-layer"><a class="header" href="#infrastructure-layer">Infrastructure Layer</a></h3>
+<ul>
+<li><strong>Format Parsers</strong>: Binary parsers for JPEG, TIFF, PNG, PDF, MP4, etc.</li>
+<li><strong>Serializers</strong>: Writers that encode metadata back into files</li>
+<li><strong>I/O Abstraction</strong>: File system operations with atomic write support</li>
+<li><strong>Memory Management</strong>: Efficient memory-mapped I/O for large files</li>
+</ul>
+<p>This architecture ensures:</p>
+<ul>
+<li><strong>Separation of Concerns</strong>: Each layer has a clear, focused responsibility</li>
+<li><strong>Testability</strong>: Core logic can be tested independently of I/O</li>
+<li><strong>Extensibility</strong>: New formats can be added without modifying existing code</li>
+<li><strong>Multiple Access Patterns</strong>: CLI, library API, and FFI all share the same core</li>
+</ul>
+<h2 id="technology-stack"><a class="header" href="#technology-stack">Technology Stack</a></h2>
+<p>ExifTool-RS is built on modern, production-ready Rust libraries:</p>
+<p><strong>Language</strong>: Rust 1.75+ (2021 Edition)</p>
+<p><strong>Key Dependencies:</strong></p>
+<ul>
+<li><strong>CLI Framework</strong>: clap v4 (derive API for argument parsing)</li>
+<li><strong>Binary Parsing</strong>: nom v7 (parser combinators for robust parsing)</li>
+<li><strong>XML Parsing</strong>: quick-xml (for XMP metadata)</li>
+<li><strong>JSON Output</strong>: serde_json (serialization to JSON)</li>
+<li><strong>Date/Time</strong>: chrono (temporal metadata handling)</li>
+<li><strong>String Encoding</strong>: encoding_rs (character set conversion)</li>
+<li><strong>Memory-mapped I/O</strong>: memmap2 (efficient large file access)</li>
+<li><strong>Concurrency</strong>: rayon (data parallelism for batch processing)</li>
+<li><strong>Directory Traversal</strong>: walkdir (recursive file discovery)</li>
+<li><strong>Progress Feedback</strong>: indicatif (user progress bars)</li>
+<li><strong>Atomic Operations</strong>: tempfile (safe metadata writing)</li>
+<li><strong>Testing</strong>: criterion (performance benchmarking), cargo-fuzz (security fuzzing)</li>
+</ul>
+<p><strong>Release Optimizations:</strong></p>
+<ul>
+<li>opt-level = 3 (maximum optimization)</li>
+<li>lto = true (link-time optimization across crates)</li>
+<li>codegen-units = 1 (better optimization at cost of compile time)</li>
+<li>strip = true (remove debug symbols for smaller binaries)</li>
+</ul>
+<h2 id="use-cases"><a class="header" href="#use-cases">Use Cases</a></h2>
+<p>ExifTool-RS is designed for a wide range of metadata management tasks:</p>
+<h3 id="photography-workflow"><a class="header" href="#photography-workflow">Photography Workflow</a></h3>
+<ul>
+<li>Extract camera settings from photos (camera model, lens, exposure, ISO)</li>
+<li>Organize photos by date, location, or camera</li>
+<li>Add copyright and author information to images</li>
+<li>Batch rename photos based on capture date/time</li>
+<li>Synchronize timestamps across multiple cameras</li>
+</ul>
+<h3 id="digital-asset-management"><a class="header" href="#digital-asset-management">Digital Asset Management</a></h3>
+<ul>
+<li>Extract metadata from thousands of files in parallel</li>
+<li>Generate reports and inventories of media collections</li>
+<li>Copy metadata from source files to derivatives</li>
+<li>Standardize metadata across collections</li>
+<li>Export metadata to CSV/JSON for analysis</li>
+</ul>
+<h3 id="forensics-and-compliance"><a class="header" href="#forensics-and-compliance">Forensics and Compliance</a></h3>
+<ul>
+<li>Extract creation dates and modification history</li>
+<li>Analyze GPS coordinates from photos</li>
+<li>Verify file integrity through metadata</li>
+<li>Generate audit trails</li>
+<li>Remove sensitive metadata before publication</li>
+</ul>
+<h3 id="software-integration"><a class="header" href="#software-integration">Software Integration</a></h3>
+<ul>
+<li>Embed ExifTool-RS as a library in Rust applications</li>
+<li>Call from Python, C, or other languages via FFI</li>
+<li>Build web services that process metadata</li>
+<li>Create custom CLI tools on top of the library</li>
+<li>Integrate into CI/CD pipelines for asset processing</li>
+</ul>
+<h2 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h2>
+<p>Ready to start using ExifTool-RS? Continue to the next sections:</p>
+<ol>
+<li><strong><a href="installation.html">Installation</a></strong>: Download binaries or build from source</li>
+<li><strong><a href="cli_usage.html">Command-Line Usage</a></strong>: Learn CLI commands and options</li>
+<li><strong><a href="library_api.html">Library API</a></strong>: Integrate ExifTool-RS into your Rust applications</li>
+<li><strong><a href="ffi.html">C FFI Integration</a></strong>: Use ExifTool-RS from C, Python, or other languages</li>
+<li><strong><a href="formats.html">Supported Formats</a></strong>: See what file formats are currently supported</li>
+<li><strong><a href="troubleshooting.html">Troubleshooting</a></strong>: Common issues and performance tips</li>
+</ol>
+<h2 id="contributing"><a class="header" href="#contributing">Contributing</a></h2>
+<p>ExifTool-RS is open source and welcomes contributions! Visit the <a href="https://github.com/exiftool-rs/exiftool-rs">GitHub repository</a> to:</p>
+<ul>
+<li>Report bugs and request features</li>
+<li>Submit pull requests</li>
+<li>Review architectural decision records (ADRs)</li>
+<li>Participate in discussions</li>
+</ul>
+<h2 id="license"><a class="header" href="#license">License</a></h2>
+<p>This project is licensed under the GNU General Public License v3.0 (GPL-3.0). See the <a href="https://github.com/exiftool-rs/exiftool-rs/blob/main/LICENSE">LICENSE</a> file for details.</p>
+<h2 id="acknowledgments"><a class="header" href="#acknowledgments">Acknowledgments</a></h2>
+<p>This project is inspired by and aims to be compatible with <a href="https://exiftool.org/">ExifTool</a> by Phil Harvey. ExifTool-RS is an independent reimplementation and is not affiliated with or endorsed by the original ExifTool project.</p>
+<p>We are grateful to Phil Harvey for creating ExifTool and maintaining the comprehensive tag database that serves as the foundation for metadata management across the industry.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
+<p>This chapter covers the different ways to install ExifTool-RS on your system. Choose the method that best fits your needs.</p>
+<h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
+<p>Before installing ExifTool-RS, ensure you have:</p>
+<ul>
+<li><strong>Rust 1.75 or later</strong> (for building from source or using cargo install)</li>
+<li><strong>cargo</strong> (Rust's package manager, comes with Rust)</li>
+<li>A supported operating system: Linux, macOS, or Windows</li>
+</ul>
+<h2 id="installation-methods"><a class="header" href="#installation-methods">Installation Methods</a></h2>
+<h3 id="method-1-binary-download-recommended-for-end-users"><a class="header" href="#method-1-binary-download-recommended-for-end-users">Method 1: Binary Download (Recommended for End Users)</a></h3>
+<p><strong>Status</strong>: 🔄 Coming Soon</p>
+<p>Pre-built binaries for ExifTool-RS will be available on the <a href="https://github.com/exiftool-rs/exiftool-rs/releases">GitHub Releases</a> page once v1.0 is released.</p>
+<p><strong>Planned Platform Support:</strong></p>
+<ul>
+<li>Linux (x86_64, ARM64)</li>
+<li>macOS (Intel, Apple Silicon)</li>
+<li>Windows (x86_64)</li>
+</ul>
+<p><strong>Download Instructions (Future):</strong></p>
+<ol>
+<li>Visit the <a href="https://github.com/exiftool-rs/exiftool-rs/releases">Releases page</a></li>
+<li>Download the binary for your platform</li>
+<li>Extract the archive</li>
+<li>Move the binary to a location in your <code>PATH</code></li>
+</ol>
+<pre><code class="language-bash"># Linux/macOS example (future)
+wget https://github.com/exiftool-rs/exiftool-rs/releases/download/v1.0.0/exiftool-rs-linux-x86_64.tar.gz
+tar -xzf exiftool-rs-linux-x86_64.tar.gz
+sudo mv exiftool-rs /usr/local/bin/
+</code></pre>
+<h3 id="method-2-cargo-install"><a class="header" href="#method-2-cargo-install">Method 2: Cargo Install</a></h3>
+<p><strong>Status</strong>: 🔄 In Development</p>
+<p>Once ExifTool-RS is published to <a href="https://crates.io">crates.io</a>, you'll be able to install it using cargo:</p>
+<pre><code class="language-bash"># Install from crates.io (future)
+cargo install exiftool-rs
+
+# Install from git (current)
+cargo install --git https://github.com/exiftool-rs/exiftool-rs
+</code></pre>
+<p>This will compile and install the latest version of ExifTool-RS to <code>~/.cargo/bin/</code> (or your configured cargo bin directory). Make sure this directory is in your <code>PATH</code>.</p>
+<h3 id="method-3-build-from-source-recommended-for-development"><a class="header" href="#method-3-build-from-source-recommended-for-development">Method 3: Build from Source (Recommended for Development)</a></h3>
+<p><strong>Status</strong>: ✅ Available Now</p>
+<p>Building from source gives you the most control and is required if you want to contribute to development.</p>
+<h4 id="step-1-install-rust"><a class="header" href="#step-1-install-rust">Step 1: Install Rust</a></h4>
+<p>If you don't have Rust installed, use <a href="https://rustup.rs/">rustup</a>:</p>
+<pre><code class="language-bash">curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+</code></pre>
+<p>Follow the on-screen instructions. After installation, restart your terminal or run:</p>
+<pre><code class="language-bash">source $HOME/.cargo/env
+</code></pre>
+<p>Verify the installation:</p>
+<pre><code class="language-bash">rustc --version
+cargo --version
+</code></pre>
+<h4 id="step-2-clone-the-repository"><a class="header" href="#step-2-clone-the-repository">Step 2: Clone the Repository</a></h4>
+<pre><code class="language-bash">git clone https://github.com/exiftool-rs/exiftool-rs.git
+cd exiftool-rs
+</code></pre>
+<h4 id="step-3-build-the-project"><a class="header" href="#step-3-build-the-project">Step 3: Build the Project</a></h4>
+<p><strong>Development Build</strong> (faster compilation, slower execution):</p>
+<pre><code class="language-bash">cargo build
+</code></pre>
+<p>The binary will be located at <code>target/debug/exiftool-rs</code>.</p>
+<p><strong>Release Build</strong> (slower compilation, optimized execution):</p>
+<pre><code class="language-bash">cargo build --release
+</code></pre>
+<p>The optimized binary will be located at <code>target/release/exiftool-rs</code>.</p>
+<h4 id="step-4-run-the-binary"><a class="header" href="#step-4-run-the-binary">Step 4: Run the Binary</a></h4>
+<pre><code class="language-bash"># Development build
+./target/debug/exiftool-rs --help
+
+# Release build
+./target/release/exiftool-rs --help
+</code></pre>
+<h4 id="step-5-optional---install-to-system"><a class="header" href="#step-5-optional---install-to-system">Step 5: Optional - Install to System</a></h4>
+<p>You can install the compiled binary to your cargo bin directory:</p>
+<pre><code class="language-bash">cargo install --path .
+</code></pre>
+<p>Or manually copy it to a system location:</p>
+<pre><code class="language-bash"># Linux/macOS
+sudo cp target/release/exiftool-rs /usr/local/bin/
+
+# Verify installation
+exiftool-rs --version
+</code></pre>
+<h2 id="tag-database-generation"><a class="header" href="#tag-database-generation">Tag Database Generation</a></h2>
+<p>ExifTool-RS automatically generates its comprehensive tag database from the official ExifTool Perl source during the build process. This ensures compatibility with ExifTool's extensive metadata tag definitions.</p>
+<h3 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h3>
+<p>When you run <code>cargo build</code>, the build script (<code>build.rs</code>) performs these steps:</p>
+<ol>
+<li><strong>Downloads ExifTool Source</strong>: Fetches the latest ExifTool source code from the <a href="https://github.com/exiftool/exiftool">official GitHub repository</a></li>
+<li><strong>Parses Tag Definitions</strong>: Extracts tag metadata from Perl modules in <code>lib/Image/ExifTool/</code>:
+<ul>
+<li>Tag IDs (numeric hex codes, integers, or string identifiers)</li>
+<li>Tag names and descriptions</li>
+<li>Writable status and data types</li>
+<li>Format family classifications (EXIF, XMP, IPTC, GPS, QuickTime, RIFF, etc.)</li>
+</ul>
+</li>
+<li><strong>Generates Rust Code</strong>: Creates <code>src/tag_db/generated_tags.rs</code> with 700+ tag definitions</li>
+<li><strong>Validates Output</strong>: Ensures the generated database meets minimum quality standards</li>
+</ol>
+<p>The generated file is excluded from version control (<code>.gitignore</code>) and rebuilt automatically when you run <code>cargo build</code>.</p>
+<h3 id="supported-format-families"><a class="header" href="#supported-format-families">Supported Format Families</a></h3>
+<p>The tag generator parses definitions for all major metadata formats:</p>
+<ul>
+<li><strong>EXIF</strong> (244 tags): Camera settings, image parameters, manufacturer data</li>
+<li><strong>GPS</strong> (32 tags): Geolocation and positioning data</li>
+<li><strong>IPTC</strong> (122 tags): Press and media industry metadata</li>
+<li><strong>QuickTime</strong> (143 tags): Video/audio metadata for MP4, MOV files</li>
+<li><strong>RIFF</strong> (46 tags): Resource Interchange File Format metadata (AVI, WAV)</li>
+<li><strong>ICC_Profile</strong> (42 tags): Color management metadata</li>
+<li><strong>Photoshop</strong> (35 tags): Adobe Photoshop-specific metadata</li>
+<li><strong>PNG</strong> (30 tags): Portable Network Graphics metadata</li>
+<li><strong>JPEG</strong> (30 tags): JPEG-specific metadata</li>
+<li><strong>XMP</strong> (7 tags): Extensible Metadata Platform base tags</li>
+<li>Additional formats: TIFF, JFIF, PDF, PostScript, MakerNotes</li>
+</ul>
+<h3 id="fallback-mechanism"><a class="header" href="#fallback-mechanism">Fallback Mechanism</a></h3>
+<p>If tag generation fails (network issues, parse errors), the build automatically falls back to a manually curated tag registry, ensuring builds always succeed. You'll see a build warning if fallback is used:</p>
+<pre><code>warning: Tag generation failed: &lt;reason&gt;. Using fallback to manual registry.
+</code></pre>
+<h3 id="updating-tags"><a class="header" href="#updating-tags">Updating Tags</a></h3>
+<p>To regenerate the tag database with the latest ExifTool definitions:</p>
+<pre><code class="language-bash"># Clean build artifacts
+cargo clean
+
+# Rebuild (downloads latest ExifTool source and regenerates tags)
+cargo build --release
+</code></pre>
+<p>The build script caches downloaded ExifTool source in the build directory for faster subsequent builds.</p>
+<h2 id="development-setup"><a class="header" href="#development-setup">Development Setup</a></h2>
+<p>If you're contributing to ExifTool-RS development, follow these additional setup steps:</p>
+<h3 id="install-development-tools"><a class="header" href="#install-development-tools">Install Development Tools</a></h3>
+<pre><code class="language-bash"># Install rustfmt (code formatter)
+rustup component add rustfmt
+
+# Install clippy (linter)
+rustup component add clippy
+
+# Install cargo-fuzz (for security fuzzing)
+cargo install cargo-fuzz
+</code></pre>
+<h3 id="run-tests"><a class="header" href="#run-tests">Run Tests</a></h3>
+<pre><code class="language-bash"># Run all tests
+cargo test
+
+# Run tests with output
+cargo test -- --nocapture
+
+# Run a specific test
+cargo test test_name
+</code></pre>
+<h3 id="code-quality-checks"><a class="header" href="#code-quality-checks">Code Quality Checks</a></h3>
+<pre><code class="language-bash"># Format code
+cargo fmt
+
+# Check formatting without modifying files
+cargo fmt -- --check
+
+# Run clippy lints
+cargo clippy
+
+# Run clippy with strict settings
+cargo clippy -- -D warnings
+</code></pre>
+<h3 id="benchmarking"><a class="header" href="#benchmarking">Benchmarking</a></h3>
+<p>ExifTool-RS includes performance benchmarks using Criterion:</p>
+<pre><code class="language-bash"># Run all benchmarks
+cargo bench
+
+# Run specific benchmark
+cargo bench format_detection
+cargo bench jpeg_segment_parsing
+cargo bench tiff_ifd_parsing
+cargo bench full_read_metadata
+</code></pre>
+<p>After running benchmarks, view detailed reports:</p>
+<pre><code class="language-bash"># macOS
+open target/criterion/report/index.html
+
+# Linux
+xdg-open target/criterion/report/index.html
+
+# Windows
+start target/criterion/report/index.html
+</code></pre>
+<p><strong>Current Baseline Performance:</strong></p>
+<ul>
+<li>Format detection: ~2.2 ns per operation</li>
+<li>JPEG segment parsing: ~24 ns per operation</li>
+<li>TIFF IFD parsing: ~94 ns per operation</li>
+<li>Full read_metadata: ~9.3 μs per file</li>
+</ul>
+<h3 id="fuzzing"><a class="header" href="#fuzzing">Fuzzing</a></h3>
+<p>ExifTool-RS includes continuous fuzzing targets for security-critical parsers:</p>
+<p><strong>Prerequisites</strong>: Fuzzing requires nightly Rust:</p>
+<pre><code class="language-bash">rustup install nightly
+</code></pre>
+<p><strong>Running Fuzzing Targets:</strong></p>
+<pre><code class="language-bash"># Run PDF parser fuzzer
+cargo +nightly fuzz run fuzz_pdf
+
+# Run with time limit (60 seconds)
+cargo +nightly fuzz run fuzz_pdf -- -max_total_time=60
+
+# Run MP4/QuickTime parser fuzzer
+cargo +nightly fuzz run fuzz_mp4
+
+# Run with memory limit
+cargo +nightly fuzz run fuzz_mp4 -- -max_len=10485760 -max_total_time=60
+</code></pre>
+<p><strong>Corpus Management:</strong></p>
+<p>Fuzzing seed corpus files are located in:</p>
+<ul>
+<li><code>fuzz/corpus/fuzz_pdf/</code> - PDF test files</li>
+<li><code>fuzz/corpus/fuzz_mp4/</code> - MP4/QuickTime test files</li>
+</ul>
+<p>Add new seed files:</p>
+<pre><code class="language-bash">cp my_test.pdf fuzz/corpus/fuzz_pdf/
+cp my_test.mp4 fuzz/corpus/fuzz_mp4/
+</code></pre>
+<p><strong>Coverage Measurement:</strong></p>
+<pre><code class="language-bash">cargo +nightly fuzz coverage fuzz_pdf
+cargo +nightly fuzz coverage fuzz_mp4
+</code></pre>
+<p><strong>Crash Triage:</strong></p>
+<p>If fuzzing discovers a crash:</p>
+<ol>
+<li>Crash inputs are saved to <code>fuzz/artifacts/fuzz_&lt;target&gt;/</code></li>
+<li>Reproduce: <code>cargo +nightly fuzz run fuzz_&lt;target&gt; fuzz/artifacts/fuzz_&lt;target&gt;/&lt;crash_file&gt;</code></li>
+<li>Debug: <code>cargo +nightly fuzz run -D fuzz_&lt;target&gt; fuzz/artifacts/fuzz_&lt;target&gt;/&lt;crash_file&gt;</code></li>
+<li>Fix the parser and verify the crash is resolved</li>
+</ol>
+<h2 id="platform-specific-notes"><a class="header" href="#platform-specific-notes">Platform-Specific Notes</a></h2>
+<h3 id="linux"><a class="header" href="#linux">Linux</a></h3>
+<p><strong>Dependencies</strong>: No special dependencies required for pre-built binaries.</p>
+<p>For building from source, ensure you have:</p>
+<ul>
+<li>build-essential (gcc, make)</li>
+<li>pkg-config</li>
+<li>libssl-dev (if building with SSL support)</li>
+</ul>
+<pre><code class="language-bash"># Ubuntu/Debian
+sudo apt install build-essential pkg-config libssl-dev
+
+# Fedora/RHEL
+sudo dnf install gcc make pkgconfig openssl-devel
+</code></pre>
+<h3 id="macos"><a class="header" href="#macos">macOS</a></h3>
+<p><strong>Apple Silicon (M1/M2/M3)</strong>: Full native support. No Rosetta required.</p>
+<p><strong>Intel Macs</strong>: Fully supported.</p>
+<p>For building from source:</p>
+<ul>
+<li>Xcode Command Line Tools are required</li>
+<li>Install via: <code>xcode-select --install</code></li>
+</ul>
+<h3 id="windows"><a class="header" href="#windows">Windows</a></h3>
+<p><strong>MSVC Toolchain</strong>: ExifTool-RS requires the MSVC build tools.</p>
+<p>Install <a href="https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022">Build Tools for Visual Studio</a> or full Visual Studio with C++ support.</p>
+<p>Alternatively, use the GNU toolchain:</p>
+<pre><code class="language-bash">rustup target add x86_64-pc-windows-gnu
+cargo build --target x86_64-pc-windows-gnu
+</code></pre>
+<h2 id="verifying-installation"><a class="header" href="#verifying-installation">Verifying Installation</a></h2>
+<p>After installation, verify ExifTool-RS is working correctly:</p>
+<pre><code class="language-bash"># Check version
+exiftool-rs --version
+
+# Display help
+exiftool-rs --help
+
+# Test with a sample image (if you have one)
+exiftool-rs path/to/image.jpg
+</code></pre>
+<p>If everything is working, you should see the version number or help output.</p>
+<h2 id="updating-exiftool-rs"><a class="header" href="#updating-exiftool-rs">Updating ExifTool-RS</a></h2>
+<h3 id="binary-installation"><a class="header" href="#binary-installation">Binary Installation</a></h3>
+<p>Download the latest binary from the <a href="https://github.com/exiftool-rs/exiftool-rs/releases">Releases page</a> and replace your existing binary.</p>
+<h3 id="cargo-install"><a class="header" href="#cargo-install">Cargo Install</a></h3>
+<pre><code class="language-bash"># Update from crates.io (future)
+cargo install exiftool-rs
+
+# Update from git
+cargo install --git https://github.com/exiftool-rs/exiftool-rs --force
+</code></pre>
+<h3 id="source-build"><a class="header" href="#source-build">Source Build</a></h3>
+<pre><code class="language-bash">cd exiftool-rs
+git pull origin main
+cargo build --release
+</code></pre>
+<h2 id="uninstalling-exiftool-rs"><a class="header" href="#uninstalling-exiftool-rs">Uninstalling ExifTool-RS</a></h2>
+<h3 id="binary-installation-1"><a class="header" href="#binary-installation-1">Binary Installation</a></h3>
+<p>Simply delete the binary:</p>
+<pre><code class="language-bash"># Linux/macOS
+sudo rm /usr/local/bin/exiftool-rs
+
+# Or wherever you installed it
+rm ~/.local/bin/exiftool-rs
+</code></pre>
+<h3 id="cargo-install-1"><a class="header" href="#cargo-install-1">Cargo Install</a></h3>
+<pre><code class="language-bash">cargo uninstall exiftool-rs
+</code></pre>
+<h2 id="troubleshooting-installation"><a class="header" href="#troubleshooting-installation">Troubleshooting Installation</a></h2>
+<h3 id="build-fails-with-tag-generation-failed"><a class="header" href="#build-fails-with-tag-generation-failed">Build Fails with "tag generation failed"</a></h3>
+<p>This usually indicates a network issue downloading the ExifTool source. The build will fall back to a manual registry and succeed. You can:</p>
+<ol>
+<li>Check your internet connection</li>
+<li>Try again with <code>cargo clean &amp;&amp; cargo build</code></li>
+<li>Use a proxy if behind a firewall</li>
+</ol>
+<h3 id="rust-version-too-old"><a class="header" href="#rust-version-too-old">Rust Version Too Old</a></h3>
+<p>ExifTool-RS requires Rust 1.75 or later. Update Rust:</p>
+<pre><code class="language-bash">rustup update stable
+</code></pre>
+<h3 id="linker-errors-on-linux"><a class="header" href="#linker-errors-on-linux">Linker Errors on Linux</a></h3>
+<p>Install build-essential:</p>
+<pre><code class="language-bash">sudo apt install build-essential
+</code></pre>
+<h3 id="compilation-is-very-slow"><a class="header" href="#compilation-is-very-slow">Compilation is Very Slow</a></h3>
+<p>First-time builds download and compile all dependencies, which can take several minutes. Subsequent builds are much faster due to caching.</p>
+<p>For faster incremental builds during development, use the debug profile:</p>
+<pre><code class="language-bash">cargo build  # Instead of cargo build --release
+</code></pre>
+<h2 id="next-steps"><a class="header" href="#next-steps">Next Steps</a></h2>
+<p>Now that ExifTool-RS is installed, continue to:</p>
+<ul>
+<li><strong><a href="cli_usage.html">Command-Line Usage</a></strong>: Learn how to use the CLI</li>
+<li><strong><a href="library_api.html">Library API</a></strong>: Integrate ExifTool-RS into your Rust code</li>
+<li><strong><a href="troubleshooting.html">Troubleshooting</a></strong>: Common issues and solutions</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="command-line-usage"><a class="header" href="#command-line-usage">Command-Line Usage</a></h1>
+<p>This chapter covers how to use ExifTool-RS from the command line to read, write, and manipulate metadata in your files.</p>
+<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
+<p>ExifTool-RS provides a powerful command-line interface for metadata operations. The CLI is designed to be compatible with the original ExifTool's argument syntax, making it easy to migrate existing scripts and workflows.</p>
+<p><strong>Current Status</strong>: The CLI is fully functional with support for reading, writing, batch processing, file renaming, and date shifting operations.</p>
+<h2 id="basic-syntax"><a class="header" href="#basic-syntax">Basic Syntax</a></h2>
+<pre><code class="language-bash">exiftool-rs [OPTIONS] [TAG_MODIFICATIONS...] FILE|DIRECTORY
+</code></pre>
+<ul>
+<li><strong>OPTIONS</strong>: Flags and settings (e.g., <code>-j</code> for JSON output, <code>-r</code> for recursive)</li>
+<li><strong>TAG_MODIFICATIONS</strong>: Tag assignments in the form <code>-TAG=VALUE</code></li>
+<li><strong>FILE|DIRECTORY</strong>: Path to a file or directory to process</li>
+</ul>
+<h2 id="reading-metadata"><a class="header" href="#reading-metadata">Reading Metadata</a></h2>
+<h3 id="extract-all-metadata"><a class="header" href="#extract-all-metadata">Extract All Metadata</a></h3>
+<p>Display all metadata tags from a file:</p>
+<pre><code class="language-bash">exiftool-rs photo.jpg
+</code></pre>
+<p><strong>Example Output:</strong></p>
+<pre><code>File: photo.jpg
+Found 15 metadata tag(s):
+
+EXIF:Make                       : Canon
+EXIF:Model                      : Canon EOS 5D Mark IV
+EXIF:DateTime                   : 2025:01:15 14:30:00
+EXIF:ExposureTime               : 1/125
+EXIF:FNumber                    : 5.6
+EXIF:ISO                        : 400
+EXIF:LensModel                  : EF24-70mm f/2.8L II USM
+GPS:GPSLatitude                 : 37.7749
+GPS:GPSLongitude                : -122.4194
+IPTC:Caption-Abstract           : Golden Gate Bridge at sunset
+IPTC:Keywords                   : bridge, sunset, san francisco
+XMP:Copyright                   : 2025 John Doe
+</code></pre>
+<h3 id="json-output"><a class="header" href="#json-output">JSON Output</a></h3>
+<p>Export metadata in JSON format (machine-readable):</p>
+<pre><code class="language-bash">exiftool-rs -j photo.jpg
+</code></pre>
+<p><strong>Example Output:</strong></p>
+<pre><code class="language-json">{
+  "EXIF:Make": "Canon",
+  "EXIF:Model": "Canon EOS 5D Mark IV",
+  "EXIF:DateTime": "2025:01:15 14:30:00",
+  "EXIF:ExposureTime": "1/125",
+  "EXIF:FNumber": "5.6",
+  "EXIF:ISO": "400",
+  "GPS:GPSLatitude": 37.7749,
+  "GPS:GPSLongitude": -122.4194
+}
+</code></pre>
+<h3 id="csv-output"><a class="header" href="#csv-output">CSV Output</a></h3>
+<p>Export metadata in CSV format (for spreadsheets):</p>
+<pre><code class="language-bash">exiftool-rs --csv photo.jpg
+</code></pre>
+<p><strong>Example Output:</strong></p>
+<pre><code class="language-csv">tag_name,tag_value
+EXIF:Make,Canon
+EXIF:Model,Canon EOS 5D Mark IV
+EXIF:DateTime,2025:01:15 14:30:00
+EXIF:ExposureTime,1/125
+EXIF:FNumber,5.6
+EXIF:ISO,400
+</code></pre>
+<h2 id="writing-metadata"><a class="header" href="#writing-metadata">Writing Metadata</a></h2>
+<h3 id="modify-single-tag"><a class="header" href="#modify-single-tag">Modify Single Tag</a></h3>
+<p>Set the value of a specific metadata tag:</p>
+<pre><code class="language-bash">exiftool-rs -EXIF:Artist="John Doe" photo.jpg
+</code></pre>
+<p><strong>Output:</strong></p>
+<pre><code>    1 image files updated
+</code></pre>
+<h3 id="modify-multiple-tags"><a class="header" href="#modify-multiple-tags">Modify Multiple Tags</a></h3>
+<p>Set multiple tags in a single command:</p>
+<pre><code class="language-bash">exiftool-rs \
+  -EXIF:Artist="John Doe" \
+  -EXIF:Copyright="Copyright 2025 John Doe" \
+  -IPTC:Caption-Abstract="Beautiful sunset" \
+  photo.jpg
+</code></pre>
+<h3 id="tag-naming-convention"><a class="header" href="#tag-naming-convention">Tag Naming Convention</a></h3>
+<p>ExifTool-RS uses the <strong>family:tag</strong> naming convention:</p>
+<ul>
+<li><code>EXIF:Make</code> - Camera manufacturer (EXIF family)</li>
+<li><code>GPS:GPSLatitude</code> - GPS latitude (GPS family)</li>
+<li><code>IPTC:Keywords</code> - Image keywords (IPTC family)</li>
+<li><code>XMP:Copyright</code> - Copyright notice (XMP family)</li>
+</ul>
+<p>Common families:</p>
+<ul>
+<li><strong>EXIF</strong>: Camera settings, image parameters</li>
+<li><strong>GPS</strong>: Geolocation data</li>
+<li><strong>IPTC</strong>: Press/media metadata</li>
+<li><strong>XMP</strong>: Extensible metadata</li>
+<li><strong>JFIF</strong>: JPEG File Interchange Format</li>
+<li><strong>PNG</strong>: PNG-specific metadata</li>
+<li><strong>QuickTime</strong>: Video/audio metadata</li>
+</ul>
+<h3 id="safety-options"><a class="header" href="#safety-options">Safety Options</a></h3>
+<h4 id="create-backup-before-writing"><a class="header" href="#create-backup-before-writing">Create Backup Before Writing</a></h4>
+<p>Always create a backup copy before modifying files:</p>
+<pre><code class="language-bash">exiftool-rs --backup -EXIF:Artist="John Doe" photo.jpg
+</code></pre>
+<p>This creates <code>photo.jpg.bak</code> with the original file contents.</p>
+<h4 id="preserve-file-timestamps"><a class="header" href="#preserve-file-timestamps">Preserve File Timestamps</a></h4>
+<p>Maintain the original file modification time after writing metadata:</p>
+<pre><code class="language-bash">exiftool-rs --preserve-file-times -EXIF:Artist="John Doe" photo.jpg
+</code></pre>
+<p>The file's mtime will be restored after metadata is written.</p>
+<h4 id="read-only-mode"><a class="header" href="#read-only-mode">Read-Only Mode</a></h4>
+<p>Prevent accidental modifications with read-only mode:</p>
+<pre><code class="language-bash">exiftool-rs --readonly photo.jpg
+</code></pre>
+<p>This displays metadata but refuses any write operations.</p>
+<h4 id="combining-safety-options"><a class="header" href="#combining-safety-options">Combining Safety Options</a></h4>
+<p>Use multiple safety flags together:</p>
+<pre><code class="language-bash">exiftool-rs --backup --preserve-file-times \
+  -EXIF:Artist="John Doe" \
+  -EXIF:Copyright="Copyright 2025" \
+  photo.jpg
+</code></pre>
+<h2 id="batch-processing"><a class="header" href="#batch-processing">Batch Processing</a></h2>
+<h3 id="process-multiple-files"><a class="header" href="#process-multiple-files">Process Multiple Files</a></h3>
+<p>Process all JPEG files in a directory:</p>
+<pre><code class="language-bash">exiftool-rs -r *.jpg
+</code></pre>
+<h3 id="recursive-directory-processing"><a class="header" href="#recursive-directory-processing">Recursive Directory Processing</a></h3>
+<p>Process all files in a directory and subdirectories:</p>
+<pre><code class="language-bash">exiftool-rs -r /path/to/photos/
+</code></pre>
+<p><strong>Example Output:</strong></p>
+<pre><code>Processing: /path/to/photos/2024/vacation/IMG_001.jpg
+Processing: /path/to/photos/2024/vacation/IMG_002.jpg
+Processing: /path/to/photos/2025/wildlife/IMG_003.jpg
+
+Batch Processing Statistics:
+  Total files processed: 3
+  Successful: 3
+  Errors: 0
+</code></pre>
+<h3 id="batch-write-operations"><a class="header" href="#batch-write-operations">Batch Write Operations</a></h3>
+<p>Modify metadata for all files in a directory:</p>
+<pre><code class="language-bash">exiftool-rs -r -EXIF:Copyright="Copyright 2025 John Doe" /path/to/photos/
+</code></pre>
+<h3 id="output-batch-results-as-json"><a class="header" href="#output-batch-results-as-json">Output Batch Results as JSON</a></h3>
+<p>Process multiple files and output results as JSON:</p>
+<pre><code class="language-bash">exiftool-rs -r -j /path/to/photos/ &gt; metadata.json
+</code></pre>
+<h2 id="copying-metadata"><a class="header" href="#copying-metadata">Copying Metadata</a></h2>
+<h3 id="copy-all-metadata"><a class="header" href="#copy-all-metadata">Copy All Metadata</a></h3>
+<p>Copy all metadata from one file to another:</p>
+<pre><code class="language-bash">exiftool-rs --TagsFromFile source.jpg dest.jpg
+</code></pre>
+<p>This reads all tags from <code>source.jpg</code> and writes them to <code>dest.jpg</code>.</p>
+<h3 id="copy-specific-tags"><a class="header" href="#copy-specific-tags">Copy Specific Tags</a></h3>
+<p>Copy only specific tags:</p>
+<pre><code class="language-bash">exiftool-rs --TagsFromFile source.jpg \
+  -EXIF:Artist \
+  -EXIF:Copyright \
+  -IPTC:Keywords \
+  dest.jpg
+</code></pre>
+<p>This copies only the Artist, Copyright, and Keywords tags.</p>
+<h3 id="copy-with-safety-options"><a class="header" href="#copy-with-safety-options">Copy with Safety Options</a></h3>
+<p>Use backup and preserve timestamps when copying:</p>
+<pre><code class="language-bash">exiftool-rs --TagsFromFile source.jpg \
+  --backup \
+  --preserve-file-times \
+  dest.jpg
+</code></pre>
+<h2 id="file-renaming"><a class="header" href="#file-renaming">File Renaming</a></h2>
+<h3 id="rename-based-on-metadata"><a class="header" href="#rename-based-on-metadata">Rename Based on Metadata</a></h3>
+<p>ExifTool-RS can rename files based on metadata patterns using the <code>-FileName&lt;PATTERN</code> syntax.</p>
+<h4 id="rename-using-datetime"><a class="header" href="#rename-using-datetime">Rename Using Date/Time</a></h4>
+<p>Rename files based on the DateTimeOriginal tag:</p>
+<pre><code class="language-bash">exiftool-rs '-FileName&lt;DateTimeOriginal' photo.jpg
+</code></pre>
+<p>By default, this uses the format: <code>YYYYMMDD_HHMMSS.jpg</code></p>
+<p><strong>Example:</strong></p>
+<ul>
+<li>Original: <code>IMG_1234.jpg</code></li>
+<li>Renamed: <code>20250115_143000.jpg</code></li>
+</ul>
+<h4 id="custom-date-format"><a class="header" href="#custom-date-format">Custom Date Format</a></h4>
+<p>Specify a custom date format with the <code>-d</code> option:</p>
+<pre><code class="language-bash">exiftool-rs -d '%Y-%m-%d_%H%M%S' '-FileName&lt;DateTimeOriginal' photo.jpg
+</code></pre>
+<p><strong>Format Specifiers:</strong></p>
+<ul>
+<li><code>%Y</code> - Year (4 digits)</li>
+<li><code>%m</code> - Month (01-12)</li>
+<li><code>%d</code> - Day (01-31)</li>
+<li><code>%H</code> - Hour (00-23)</li>
+<li><code>%M</code> - Minute (00-59)</li>
+<li><code>%S</code> - Second (00-59)</li>
+</ul>
+<p><strong>Example:</strong></p>
+<ul>
+<li>Result: <code>2025-01-15_143000.jpg</code></li>
+</ul>
+<h4 id="complex-renaming-patterns"><a class="header" href="#complex-renaming-patterns">Complex Renaming Patterns</a></h4>
+<p>Combine multiple metadata tags in the filename pattern:</p>
+<pre><code class="language-bash">exiftool-rs '-FileName&lt;${EXIF:Make}_${EXIF:Model}_${DateTimeOriginal}' photo.jpg
+</code></pre>
+<p><strong>Example:</strong></p>
+<ul>
+<li>Original: <code>DSC_5678.jpg</code></li>
+<li>Renamed: <code>Canon_EOS_5D_Mark_IV_20250115_143000.jpg</code></li>
+</ul>
+<h4 id="dry-run-mode"><a class="header" href="#dry-run-mode">Dry-Run Mode</a></h4>
+<p>Preview renames without actually changing files:</p>
+<pre><code class="language-bash">exiftool-rs -n '-FileName&lt;DateTimeOriginal' photo.jpg
+</code></pre>
+<p><strong>Output:</strong></p>
+<pre><code>photo.jpg -&gt; 20250115_143000.jpg
+</code></pre>
+<p>No files are actually renamed; you just see what would happen.</p>
+<h4 id="batch-rename"><a class="header" href="#batch-rename">Batch Rename</a></h4>
+<p>Rename all photos in a directory:</p>
+<pre><code class="language-bash">exiftool-rs -r -d '%Y%m%d_%H%M%S' '-FileName&lt;DateTimeOriginal' /path/to/photos/
+</code></pre>
+<h2 id="datetime-shifting"><a class="header" href="#datetime-shifting">Date/Time Shifting</a></h2>
+<p>ExifTool-RS can shift date/time tags by adding or subtracting time offsets, or setting absolute values.</p>
+<h3 id="add-time-offset"><a class="header" href="#add-time-offset">Add Time Offset</a></h3>
+<p>Add 1 year to all date tags:</p>
+<pre><code class="language-bash">exiftool-rs '-AllDates+=1:0:0 0:0:0' photo.jpg
+</code></pre>
+<p>Offset format: <code>Y:M:D H:M:S</code> (years:months:days hours:minutes:seconds)</p>
+<p><strong>Examples:</strong></p>
+<ul>
+<li>Add 1 year: <code>-AllDates+=1:0:0 0:0:0</code></li>
+<li>Add 2 months: <code>-AllDates+=0:2:0 0:0:0</code></li>
+<li>Add 3 hours: <code>-AllDates+=0:0:0 3:0:0</code></li>
+<li>Add 30 minutes: <code>-AllDates+=0:0:0 0:30:0</code></li>
+</ul>
+<h3 id="subtract-time-offset"><a class="header" href="#subtract-time-offset">Subtract Time Offset</a></h3>
+<p>Subtract 1 hour from all date tags:</p>
+<pre><code class="language-bash">exiftool-rs '-AllDates-=0:0:0 1:0:0' photo.jpg
+</code></pre>
+<p><strong>Use Case</strong>: Fix incorrect camera clock that was set 1 hour ahead.</p>
+<h3 id="set-absolute-datetime"><a class="header" href="#set-absolute-datetime">Set Absolute Date/Time</a></h3>
+<p>Set a specific date/time value:</p>
+<pre><code class="language-bash">exiftool-rs '-EXIF:DateTime=2025:01:15 10:30:00' photo.jpg
+</code></pre>
+<p>Format: <code>YYYY:MM:DD HH:MM:SS</code></p>
+<h3 id="shift-specific-date-tag"><a class="header" href="#shift-specific-date-tag">Shift Specific Date Tag</a></h3>
+<p>Shift only a specific date tag instead of all dates:</p>
+<pre><code class="language-bash">exiftool-rs '-EXIF:DateTimeOriginal+=0:0:1 0:0:0' photo.jpg
+</code></pre>
+<p>This adds 1 day to only the DateTimeOriginal tag.</p>
+<h3 id="batch-date-shifting"><a class="header" href="#batch-date-shifting">Batch Date Shifting</a></h3>
+<p>Shift dates for all photos in a directory (useful for timezone corrections):</p>
+<pre><code class="language-bash">exiftool-rs -r '-AllDates+=0:0:0 8:0:0' /path/to/photos/
+</code></pre>
+<p>This adds 8 hours to all photos (e.g., UTC to PST conversion).</p>
+<h2 id="common-options"><a class="header" href="#common-options">Common Options</a></h2>
+<h3 id="-j---json"><a class="header" href="#-j---json"><code>-j, --json</code></a></h3>
+<p>Output metadata in JSON format (machine-readable).</p>
+<pre><code class="language-bash">exiftool-rs -j photo.jpg
+</code></pre>
+<h3 id="--csv"><a class="header" href="#--csv"><code>--csv</code></a></h3>
+<p>Output metadata in CSV format (for spreadsheets).</p>
+<pre><code class="language-bash">exiftool-rs --csv photo.jpg
+</code></pre>
+<h3 id="-r"><a class="header" href="#-r"><code>-r</code></a></h3>
+<p>Enable recursive directory processing.</p>
+<pre><code class="language-bash">exiftool-rs -r /path/to/photos/
+</code></pre>
+<h3 id="--backup"><a class="header" href="#--backup"><code>--backup</code></a></h3>
+<p>Create a backup copy before modifying files (adds <code>.bak</code> extension).</p>
+<pre><code class="language-bash">exiftool-rs --backup -EXIF:Artist="John Doe" photo.jpg
+</code></pre>
+<h3 id="--preserve-file-times"><a class="header" href="#--preserve-file-times"><code>--preserve-file-times</code></a></h3>
+<p>Restore the original file modification timestamp after writing metadata.</p>
+<pre><code class="language-bash">exiftool-rs --preserve-file-times -EXIF:Copyright="2025" photo.jpg
+</code></pre>
+<h3 id="--readonly"><a class="header" href="#--readonly"><code>--readonly</code></a></h3>
+<p>Enable read-only mode to prevent any file modifications.</p>
+<pre><code class="language-bash">exiftool-rs --readonly photo.jpg
+</code></pre>
+<h3 id="-d-format"><a class="header" href="#-d-format"><code>-d &lt;FORMAT&gt;</code></a></h3>
+<p>Specify custom date/time format for filename patterns.</p>
+<pre><code class="language-bash">exiftool-rs -d '%Y-%m-%d' '-FileName&lt;DateTimeOriginal' photo.jpg
+</code></pre>
+<h3 id="-n"><a class="header" href="#-n"><code>-n</code></a></h3>
+<p>Dry-run mode: show proposed renames without executing.</p>
+<pre><code class="language-bash">exiftool-rs -n '-FileName&lt;DateTimeOriginal' photo.jpg
+</code></pre>
+<h3 id="-h---help"><a class="header" href="#-h---help"><code>-h, --help</code></a></h3>
+<p>Display help information with all available options.</p>
+<pre><code class="language-bash">exiftool-rs --help
+</code></pre>
+<h3 id="-v---version"><a class="header" href="#-v---version"><code>-V, --version</code></a></h3>
+<p>Display version information.</p>
+<pre><code class="language-bash">exiftool-rs --version
+</code></pre>
+<h2 id="practical-examples"><a class="header" href="#practical-examples">Practical Examples</a></h2>
+<h3 id="photography-workflow-1"><a class="header" href="#photography-workflow-1">Photography Workflow</a></h3>
+<p><strong>Add copyright to all photos:</strong></p>
+<pre><code class="language-bash">exiftool-rs -r --backup \
+  -EXIF:Copyright="Copyright 2025 John Doe" \
+  -EXIF:Artist="John Doe" \
+  /path/to/photos/
+</code></pre>
+<p><strong>Rename photos by capture date:</strong></p>
+<pre><code class="language-bash">exiftool-rs -r -d '%Y/%m/%Y%m%d_%H%M%S' \
+  '-FileName&lt;DateTimeOriginal' \
+  /path/to/photos/
+</code></pre>
+<p>This organizes photos into year/month folders with dated filenames.</p>
+<p><strong>Fix timezone (camera was set to wrong timezone):</strong></p>
+<pre><code class="language-bash">exiftool-rs -r --backup '-AllDates-=5:0:0 0:0:0' /path/to/photos/
+</code></pre>
+<p>Subtracts 5 hours from all dates (e.g., EST to UTC).</p>
+<h3 id="metadata-report-generation"><a class="header" href="#metadata-report-generation">Metadata Report Generation</a></h3>
+<p><strong>Generate CSV report of all metadata:</strong></p>
+<pre><code class="language-bash">exiftool-rs -r --csv /path/to/photos/ &gt; metadata_report.csv
+</code></pre>
+<p>Open the resulting CSV in Excel or Google Sheets for analysis.</p>
+<p><strong>Generate JSON report:</strong></p>
+<pre><code class="language-bash">exiftool-rs -r -j /path/to/photos/ &gt; metadata_report.json
+</code></pre>
+<p>Process the JSON with tools like <code>jq</code> or import into a database.</p>
+<h3 id="batch-metadata-editing"><a class="header" href="#batch-metadata-editing">Batch Metadata Editing</a></h3>
+<p><strong>Copy metadata from a reference image to all others:</strong></p>
+<pre><code class="language-bash">for file in *.jpg; do
+  exiftool-rs --TagsFromFile reference.jpg \
+    -EXIF:Artist \
+    -EXIF:Copyright \
+    "$file"
+done
+</code></pre>
+<p><strong>Remove all metadata (privacy):</strong></p>
+<p>This feature is planned but not yet implemented. For now, use the original ExifTool:</p>
+<pre><code class="language-bash"># Future feature (not yet available)
+# exiftool-rs -all= photo.jpg
+</code></pre>
+<h2 id="performance-tips"><a class="header" href="#performance-tips">Performance Tips</a></h2>
+<h3 id="use-release-builds"><a class="header" href="#use-release-builds">Use Release Builds</a></h3>
+<p>For best performance, use release builds of ExifTool-RS:</p>
+<pre><code class="language-bash">cargo build --release
+</code></pre>
+<p>Release builds are 2-5x faster than debug builds due to aggressive optimizations.</p>
+<h3 id="parallel-batch-processing"><a class="header" href="#parallel-batch-processing">Parallel Batch Processing</a></h3>
+<p>ExifTool-RS automatically processes multiple files in parallel using all available CPU cores when using the <code>-r</code> flag. No additional configuration needed!</p>
+<h3 id="memory-mapped-io"><a class="header" href="#memory-mapped-io">Memory-Mapped I/O</a></h3>
+<p>ExifTool-RS uses memory-mapped I/O for efficient processing of large files. This is automatic and requires no user configuration.</p>
+<h2 id="error-handling"><a class="header" href="#error-handling">Error Handling</a></h2>
+<h3 id="common-errors"><a class="header" href="#common-errors">Common Errors</a></h3>
+<p><strong>"Error: File not found"</strong></p>
+<p>The specified file path doesn't exist. Check the path and try again:</p>
+<pre><code class="language-bash">ls photo.jpg  # Verify file exists
+exiftool-rs photo.jpg
+</code></pre>
+<p><strong>"Error: File is read-only"</strong></p>
+<p>The file has read-only permissions. Either change permissions or use <code>--readonly</code> if you only want to read metadata:</p>
+<pre><code class="language-bash">chmod u+w photo.jpg  # Make writable
+exiftool-rs -EXIF:Artist="John Doe" photo.jpg
+</code></pre>
+<p><strong>"Error: Invalid value for TAG"</strong></p>
+<p>The value provided is not valid for that metadata tag. Check the tag's expected data type:</p>
+<pre><code class="language-bash"># Wrong: FNumber expects a rational number
+exiftool-rs -EXIF:FNumber="invalid" photo.jpg  # Error
+
+# Correct:
+exiftool-rs -EXIF:FNumber="5.6" photo.jpg  # Success
+</code></pre>
+<p><strong>"Error: Unsupported file format"</strong></p>
+<p>The file format is not yet supported by ExifTool-RS. See <a href="formats.html">Supported Formats</a> for the current list.</p>
+<h3 id="verbose-error-messages"><a class="header" href="#verbose-error-messages">Verbose Error Messages</a></h3>
+<p>ExifTool-RS provides detailed error messages to help diagnose issues. Read the error message carefully—it usually indicates exactly what went wrong.</p>
+<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
+<h3 id="features-not-yet-implemented"><a class="header" href="#features-not-yet-implemented">Features Not Yet Implemented</a></h3>
+<p>The following features are planned but not yet available:</p>
+<ul>
+<li>⏳ <strong>Specific Tag Extraction</strong>: <code>-TAG</code> to show only specific tags (currently shows all tags)</li>
+<li>⏳ <strong>Tag Deletion</strong>: <code>-TAG=</code> to delete a tag</li>
+<li>⏳ <strong>Group Deletion</strong>: <code>-all=</code> to delete all metadata</li>
+<li>⏳ <strong>Short Format Output</strong>: <code>-s</code> for compact output</li>
+<li>⏳ <strong>Conditional Edits</strong>: <code>-if</code> for conditional tag modifications</li>
+</ul>
+<p>For these features, use the original ExifTool in the meantime.</p>
+<h2 id="compatibility-with-original-exiftool"><a class="header" href="#compatibility-with-original-exiftool">Compatibility with Original ExifTool</a></h2>
+<p>ExifTool-RS aims for CLI compatibility with the original ExifTool. Most common commands should work identically:</p>
+<p><strong>Compatible:</strong></p>
+<ul>
+<li>✅ Reading metadata: <code>exiftool-rs file.jpg</code></li>
+<li>✅ JSON output: <code>exiftool-rs -j file.jpg</code></li>
+<li>✅ Writing tags: <code>exiftool-rs -TAG=VALUE file.jpg</code></li>
+<li>✅ Recursive processing: <code>exiftool-rs -r directory/</code></li>
+<li>✅ Backup creation: <code>exiftool-rs --backup file.jpg</code></li>
+<li>✅ Date shifting: <code>exiftool-rs '-AllDates+=1:0:0 0:0:0' file.jpg</code></li>
+<li>✅ File renaming: <code>exiftool-rs '-FileName&lt;DateTimeOriginal' file.jpg</code></li>
+<li>✅ Metadata copying: <code>exiftool-rs --TagsFromFile src.jpg dest.jpg</code></li>
+</ul>
+<p><strong>Not Yet Compatible:</strong></p>
+<ul>
+<li>⏳ Tag-specific reading: <code>exiftool-rs -Make -Model file.jpg</code></li>
+<li>⏳ Tag deletion: <code>exiftool-rs -TAG= file.jpg</code></li>
+<li>⏳ Conditional operations: <code>exiftool-rs -if '$Make eq "Canon"' file.jpg</code></li>
+</ul>
+<h2 id="next-steps-1"><a class="header" href="#next-steps-1">Next Steps</a></h2>
+<ul>
+<li><strong><a href="library_api.html">Library API</a></strong>: Use ExifTool-RS as a Rust library</li>
+<li><strong><a href="ffi.html">C FFI Integration</a></strong>: Integrate with C, Python, or other languages</li>
+<li><strong><a href="formats.html">Supported Formats</a></strong>: See what file formats are supported</li>
+<li><strong><a href="troubleshooting.html">Troubleshooting</a></strong>: Common issues and solutions</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="library-api"><a class="header" href="#library-api">Library API</a></h1>
+<p>This chapter covers how to use ExifTool-RS as a Rust library in your own applications.</p>
+<h2 id="overview-1"><a class="header" href="#overview-1">Overview</a></h2>
+<p>ExifTool-RS provides a Rust library API for reading and writing metadata in various image and media file formats. The library offers both high-level ergonomic APIs (planned) and low-level APIs (currently implemented) for fine-grained control over metadata manipulation.</p>
+<p><strong>Important Note</strong>: This chapter documents both the <strong>planned high-level API</strong> (for future reference) and the <strong>current low-level API</strong> (available now). Many code examples use the planned API and are marked with <code>rust,ignore</code>. Working examples using the current API are provided in the <a href="library_api.html#working-examples-current-api">Working Examples</a> section.</p>
+<h2 id="key-features-1"><a class="header" href="#key-features-1">Key Features</a></h2>
+<ul>
+<li><strong>Zero-Cost Abstractions</strong>: Efficient parsing with minimal overhead</li>
+<li><strong>Type-Safe</strong>: Strongly-typed metadata values with runtime type checks</li>
+<li><strong>Synchronous Design</strong>: Simple, predictable execution model</li>
+<li><strong>Comprehensive Error Handling</strong>: Detailed error types with context</li>
+<li><strong>Format Support</strong>: JPEG, TIFF, PNG, PDF, MP4/QuickTime, XMP, IPTC</li>
+</ul>
+<h2 id="core-concepts"><a class="header" href="#core-concepts">Core Concepts</a></h2>
+<h3 id="tag-naming-convention-1"><a class="header" href="#tag-naming-convention-1">Tag Naming Convention</a></h3>
+<p>All metadata tags in ExifTool-RS follow a standardized naming convention:</p>
+<pre><code>&lt;FormatFamily&gt;:&lt;TagName&gt;
+</code></pre>
+<p><strong>Examples:</strong></p>
+<ul>
+<li><code>EXIF:Make</code> - Camera manufacturer</li>
+<li><code>EXIF:Model</code> - Camera model</li>
+<li><code>EXIF:DateTime</code> - Image capture date/time</li>
+<li><code>XMP-dc:Creator</code> - Document creator (XMP Dublin Core)</li>
+<li><code>GPS:Latitude</code> - GPS latitude coordinate</li>
+<li><code>IPTC:Keywords</code> - Image keywords</li>
+<li><code>PNG:Description</code> - PNG text description</li>
+</ul>
+<p><strong>Supported Format Families:</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Format Family</th><th>Description</th><th>Example Tags</th></tr></thead><tbody>
+<tr><td><code>EXIF</code></td><td>Exchangeable Image File Format</td><td><code>EXIF:Make</code>, <code>EXIF:Model</code>, <code>EXIF:ISO</code></td></tr>
+<tr><td><code>XMP</code></td><td>Extensible Metadata Platform</td><td><code>XMP-dc:Creator</code>, <code>XMP-dc:Rights</code></td></tr>
+<tr><td><code>IPTC</code></td><td>Press metadata standard</td><td><code>IPTC:Keywords</code>, <code>IPTC:Caption-Abstract</code></td></tr>
+<tr><td><code>GPS</code></td><td>GPS location data</td><td><code>GPS:GPSLatitude</code>, <code>GPS:GPSLongitude</code></td></tr>
+<tr><td><code>ICC_Profile</code></td><td>Color management</td><td><code>ICC_Profile:ProfileDescription</code></td></tr>
+<tr><td><code>Photoshop</code></td><td>Adobe Photoshop metadata</td><td><code>Photoshop:Credit</code>, <code>Photoshop:Source</code></td></tr>
+<tr><td><code>PNG</code></td><td>Portable Network Graphics</td><td><code>PNG:Title</code>, <code>PNG:Author</code></td></tr>
+<tr><td><code>JFIF</code></td><td>JPEG File Interchange Format</td><td><code>JFIF:XResolution</code>, <code>JFIF:YResolution</code></td></tr>
+<tr><td><code>QuickTime</code></td><td>Video metadata</td><td><code>QuickTime:Duration</code>, <code>QuickTime:CreateDate</code></td></tr>
+</tbody></table>
+</div>
+<p><strong>Case Sensitivity</strong>: Tag names are case-sensitive. Always use the exact capitalization.</p>
+<h3 id="synchronous-api-design"><a class="header" href="#synchronous-api-design">Synchronous API Design</a></h3>
+<p>ExifTool-RS uses a <strong>synchronous, blocking API</strong> design:</p>
+<ul>
+<li>All operations complete before returning</li>
+<li>No async/await or futures</li>
+<li>File I/O is the bottleneck, not computation</li>
+<li>Parallel processing is achieved via <code>rayon</code> at the application level</li>
+</ul>
+<p><strong>Rationale</strong>: File I/O dominates performance in metadata extraction. The overhead of async runtimes provides no benefit. For batch processing, use <code>rayon</code>'s parallel iterators (see examples below).</p>
+<h3 id="type-safety"><a class="header" href="#type-safety">Type Safety</a></h3>
+<p>Metadata values are represented by the <code>TagValue</code> enum:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub enum TagValue {
+    String(String),
+    Integer(i64),
+    Float(f64),
+    Rational { numerator: i32, denominator: i32 },
+    Binary(Vec&lt;u8&gt;),
+    DateTime(chrono::DateTime&lt;Utc&gt;),
+    Struct(Box&lt;HashMap&lt;String, TagValue&gt;&gt;),
+}
+<span class="boring">}</span></code></pre></pre>
+<p>The API provides typed accessor methods that return <code>Option&lt;T&gt;</code>:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let iso = metadata.get("EXIF:ISO")?.as_integer()?;  // Option&lt;i64&gt;
+let make = metadata.get("EXIF:Make")?.as_string()?;  // Option&lt;&amp;str&gt;
+<span class="boring">}</span></code></pre></pre>
+<h2 id="planned-high-level-api"><a class="header" href="#planned-high-level-api">Planned High-Level API</a></h2>
+<p><strong>Status</strong>: 🔄 In Development</p>
+<p>The high-level API is designed to provide an ergonomic, builder-pattern interface for common operations. These examples show the planned API design (not yet fully implemented).</p>
+<h3 id="reading-metadata-planned"><a class="header" href="#reading-metadata-planned">Reading Metadata (Planned)</a></h3>
+<pre><code class="language-rust ignore">use exiftool_rs::Metadata;
+
+fn main() -&gt; exiftool_rs::Result&lt;()&gt; {
+    // Open file and extract all metadata
+    let metadata = Metadata::from_path("photo.jpg")?;
+
+    // Access metadata through typed getters
+    if let Some(make) = metadata.get_string("EXIF:Make") {
+        println!("Camera: {}", make);
+    }
+
+    if let Some(iso) = metadata.get_integer("EXIF:ISO") {
+        println!("ISO: {}", iso);
+    }
+
+    Ok(())
+}</code></pre>
+<h3 id="writing-metadata-planned"><a class="header" href="#writing-metadata-planned">Writing Metadata (Planned)</a></h3>
+<pre><code class="language-rust ignore">use exiftool_rs::Metadata;
+
+fn main() -&gt; exiftool_rs::Result&lt;()&gt; {
+    // Load, modify, and write metadata using builder pattern
+    Metadata::from_path("input.jpg")?
+        .set_tag("EXIF:Artist", "John Doe")?
+        .set_tag("EXIF:Copyright", "2025 John Doe")?
+        .set_tag("EXIF:DateTime", "2025:01:15 14:30:00")?
+        .write_to("output.jpg")?;
+
+    println!("Metadata updated successfully");
+    Ok(())
+}</code></pre>
+<h3 id="copying-metadata-planned"><a class="header" href="#copying-metadata-planned">Copying Metadata (Planned)</a></h3>
+<pre><code class="language-rust ignore">use exiftool_rs::Metadata;
+
+fn main() -&gt; exiftool_rs::Result&lt;()&gt; {
+    // Copy all metadata from source to destination
+    Metadata::from_path("source.jpg")?
+        .copy_tags_to("dest.jpg")?
+        .execute()?;
+
+    // Copy only specific tags
+    Metadata::from_path("source.jpg")?
+        .copy_tags_to("dest.jpg")?
+        .with_tags(&amp;["EXIF:DateTime", "EXIF:Make", "EXIF:Model"])?
+        .execute()?;
+
+    Ok(())
+}</code></pre>
+<h2 id="current-low-level-api"><a class="header" href="#current-low-level-api">Current Low-Level API</a></h2>
+<p><strong>Status</strong>: ✅ Available Now</p>
+<p>The low-level API provides direct access to the core data structures. Use this for production code until the high-level API is fully implemented.</p>
+<h3 id="core-types"><a class="header" href="#core-types">Core Types</a></h3>
+<h4 id="metadatamap"><a class="header" href="#metadatamap">MetadataMap</a></h4>
+<p><code>MetadataMap</code> is a wrapper around <code>HashMap&lt;String, TagValue&gt;</code> that stores metadata tags:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use exiftool_rs::core::metadata_map::MetadataMap;
+
+// Create a new metadata map
+let mut metadata = MetadataMap::new();
+
+// Insert tags
+metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
+metadata.insert("EXIF:ISO", TagValue::new_integer(400));
+
+// Get tags
+if let Some(make) = metadata.get("EXIF:Make") {
+    println!("Camera: {:?}", make);
+}
+
+// Iterate tags
+for (name, value) in metadata.iter() {
+    println!("{}: {:?}", name, value);
+}
+<span class="boring">}</span></code></pre></pre>
+<h4 id="tagvalue"><a class="header" href="#tagvalue">TagValue</a></h4>
+<p><code>TagValue</code> enum represents different metadata value types:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use exiftool_rs::core::tag_value::TagValue;
+use chrono::{Utc, TimeZone};
+
+// String
+let make = TagValue::new_string("Canon");
+
+// Integer
+let iso = TagValue::new_integer(400);
+
+// Float
+let aperture = TagValue::new_float(2.8);
+
+// Rational (fraction)
+let exposure = TagValue::new_rational(1, 125);  // 1/125 second
+
+// Binary
+let thumbnail = TagValue::new_binary(vec![0xFF, 0xD8, 0xFF]);
+
+// DateTime
+let dt = Utc.with_ymd_and_hms(2025, 1, 15, 14, 30, 0).unwrap();
+let datetime = TagValue::new_datetime(dt);
+<span class="boring">}</span></code></pre></pre>
+<h3 id="core-operations"><a class="header" href="#core-operations">Core Operations</a></h3>
+<p>The <code>exiftool_rs::core::operations</code> module provides the main metadata operations:</p>
+<h4 id="read_metadata"><a class="header" href="#read_metadata">read_metadata</a></h4>
+<p>Read all metadata from a file:</p>
+<pre><pre class="playground"><code class="language-rust">use exiftool_rs::core::operations::read_metadata;
+use std::path::Path;
+
+fn main() -&gt; exiftool_rs::Result&lt;()&gt; {
+    let path = Path::new("photo.jpg");
+    let metadata = read_metadata(path)?;
+
+    println!("Found {} tags", metadata.len());
+
+    for (tag_name, tag_value) in metadata.iter() {
+        println!("{}: {:?}", tag_name, tag_value);
+    }
+
+    Ok(())
+}</code></pre></pre>
+<h4 id="modify_tag"><a class="header" href="#modify_tag">modify_tag</a></h4>
+<p>Modify a single tag in a file:</p>
+<pre><pre class="playground"><code class="language-rust">use exiftool_rs::core::operations::modify_tag;
+use exiftool_rs::core::tag_value::TagValue;
+use std::path::Path;
+
+fn main() -&gt; exiftool_rs::Result&lt;()&gt; {
+    let path = Path::new("photo.jpg");
+    let tag_name = "EXIF:Artist";
+    let tag_value = TagValue::new_string("John Doe".to_string());
+
+    modify_tag(path, tag_name, tag_value)?;
+
+    println!("Tag updated successfully");
+    Ok(())
+}</code></pre></pre>
+<h4 id="copy_metadata"><a class="header" href="#copy_metadata">copy_metadata</a></h4>
+<p>Copy metadata from one file to another:</p>
+<pre><pre class="playground"><code class="language-rust">use exiftool_rs::core::operations::copy_metadata;
+use std::path::Path;
+
+fn main() -&gt; exiftool_rs::Result&lt;()&gt; {
+    let source = Path::new("source.jpg");
+    let dest = Path::new("dest.jpg");
+
+    // Copy all tags
+    copy_metadata(source, dest, None)?;
+
+    // Copy specific tags only
+    let tags = vec!["EXIF:Make".to_string(), "EXIF:Model".to_string()];
+    copy_metadata(source, dest, Some(&amp;tags))?;
+
+    Ok(())
+}</code></pre></pre>
+<h2 id="working-examples-current-api"><a class="header" href="#working-examples-current-api">Working Examples (Current API)</a></h2>
+<h3 id="example-1-read-and-display-all-metadata"><a class="header" href="#example-1-read-and-display-all-metadata">Example 1: Read and Display All Metadata</a></h3>
+<pre><pre class="playground"><code class="language-rust">use exiftool_rs::core::operations::read_metadata;
+use std::path::Path;
+
+fn main() {
+    let path = Path::new("photo.jpg");
+
+    match read_metadata(path) {
+        Ok(metadata) =&gt; {
+            println!("Found {} metadata tags:", metadata.len());
+            for (name, value) in metadata.iter() {
+                // Display tag name and value
+                match value {
+                    exiftool_rs::core::tag_value::TagValue::String(s) =&gt; {
+                        println!("  {}: {}", name, s);
+                    }
+                    exiftool_rs::core::tag_value::TagValue::Integer(i) =&gt; {
+                        println!("  {}: {}", name, i);
+                    }
+                    exiftool_rs::core::tag_value::TagValue::Float(f) =&gt; {
+                        println!("  {}: {}", name, f);
+                    }
+                    _ =&gt; {
+                        println!("  {}: {:?}", name, value);
+                    }
+                }
+            }
+        }
+        Err(e) =&gt; {
+            eprintln!("Error reading metadata: {}", e);
+        }
+    }
+}</code></pre></pre>
+<h3 id="example-2-extract-specific-camera-settings"><a class="header" href="#example-2-extract-specific-camera-settings">Example 2: Extract Specific Camera Settings</a></h3>
+<pre><pre class="playground"><code class="language-rust">use exiftool_rs::core::operations::read_metadata;
+use exiftool_rs::core::tag_value::TagValue;
+use std::path::Path;
+
+fn main() {
+    let path = Path::new("photo.jpg");
+
+    match read_metadata(path) {
+        Ok(metadata) =&gt; {
+            // Extract camera make
+            if let Some(TagValue::String(make)) = metadata.get("EXIF:Make") {
+                println!("Camera: {}", make);
+            }
+
+            // Extract ISO
+            if let Some(TagValue::Integer(iso)) = metadata.get("EXIF:ISO") {
+                println!("ISO: {}", iso);
+            }
+
+            // Extract aperture
+            if let Some(TagValue::Float(aperture)) = metadata.get("EXIF:FNumber") {
+                println!("Aperture: f/{:.1}", aperture);
+            }
+
+            // Extract GPS coordinates
+            if let Some(TagValue::Float(lat)) = metadata.get("GPS:GPSLatitude") {
+                if let Some(TagValue::Float(lon)) = metadata.get("GPS:GPSLongitude") {
+                    println!("Location: {:.4}, {:.4}", lat, lon);
+                }
+            }
+        }
+        Err(e) =&gt; {
+            eprintln!("Error: {}", e);
+        }
+    }
+}</code></pre></pre>
+<h3 id="example-3-modify-metadata"><a class="header" href="#example-3-modify-metadata">Example 3: Modify Metadata</a></h3>
+<pre><pre class="playground"><code class="language-rust">use exiftool_rs::core::operations::modify_tag;
+use exiftool_rs::core::tag_value::TagValue;
+use std::path::Path;
+
+fn main() {
+    let path = Path::new("photo.jpg");
+
+    // Set artist name
+    if let Err(e) = modify_tag(
+        path,
+        "EXIF:Artist",
+        TagValue::new_string("John Doe".to_string())
+    ) {
+        eprintln!("Error setting artist: {}", e);
+        return;
+    }
+
+    // Set copyright
+    if let Err(e) = modify_tag(
+        path,
+        "EXIF:Copyright",
+        TagValue::new_string("Copyright 2025 John Doe".to_string())
+    ) {
+        eprintln!("Error setting copyright: {}", e);
+        return;
+    }
+
+    println!("Metadata updated successfully");
+}</code></pre></pre>
+<h3 id="example-4-batch-processing-with-rayon"><a class="header" href="#example-4-batch-processing-with-rayon">Example 4: Batch Processing with Rayon</a></h3>
+<pre><pre class="playground"><code class="language-rust">use exiftool_rs::core::operations::read_metadata;
+use rayon::prelude::*;
+use std::path::{Path, PathBuf};
+
+fn main() {
+    let files = vec![
+        PathBuf::from("photo1.jpg"),
+        PathBuf::from("photo2.jpg"),
+        PathBuf::from("photo3.jpg"),
+    ];
+
+    // Process files in parallel
+    let results: Vec&lt;_&gt; = files
+        .par_iter()
+        .map(|path| process_file(path))
+        .collect();
+
+    // Print results
+    for (path, result) in files.iter().zip(results.iter()) {
+        match result {
+            Ok(info) =&gt; println!("✓ {}: {}", path.display(), info),
+            Err(e) =&gt; eprintln!("✗ {}: {}", path.display(), e),
+        }
+    }
+}
+
+fn process_file(path: &amp;Path) -&gt; Result&lt;String, Box&lt;dyn std::error::Error&gt;&gt; {
+    let metadata = read_metadata(path)?;
+
+    let make = metadata.get("EXIF:Make")
+        .and_then(|v| v.as_string())
+        .unwrap_or("Unknown");
+
+    let model = metadata.get("EXIF:Model")
+        .and_then(|v| v.as_string())
+        .unwrap_or("Unknown");
+
+    Ok(format!("{} {}", make, model))
+}</code></pre></pre>
+<h3 id="example-5-copy-metadata-between-files"><a class="header" href="#example-5-copy-metadata-between-files">Example 5: Copy Metadata Between Files</a></h3>
+<pre><pre class="playground"><code class="language-rust">use exiftool_rs::core::operations::copy_metadata;
+use std::path::Path;
+
+fn main() {
+    let source = Path::new("original.jpg");
+    let dest = Path::new("edited.jpg");
+
+    // Copy all metadata
+    match copy_metadata(source, dest, None) {
+        Ok(_) =&gt; println!("All metadata copied successfully"),
+        Err(e) =&gt; eprintln!("Error copying metadata: {}", e),
+    }
+
+    // Copy only specific tags
+    let specific_tags = vec![
+        "EXIF:Artist".to_string(),
+        "EXIF:Copyright".to_string(),
+        "EXIF:DateTime".to_string(),
+    ];
+
+    match copy_metadata(source, dest, Some(&amp;specific_tags)) {
+        Ok(_) =&gt; println!("Specific tags copied successfully"),
+        Err(e) =&gt; eprintln!("Error copying tags: {}", e),
+    }
+}</code></pre></pre>
+<h2 id="error-handling-1"><a class="header" href="#error-handling-1">Error Handling</a></h2>
+<p>ExifTool-RS provides comprehensive error types through the <code>ExifToolError</code> enum:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use exiftool_rs::ExifToolError;
+
+// Handle different error types
+match read_metadata(path) {
+    Ok(metadata) =&gt; { /* process metadata */ }
+    Err(ExifToolError::IoError(e)) =&gt; {
+        eprintln!("I/O error: {}", e);
+    }
+    Err(ExifToolError::UnsupportedFormat { message }) =&gt; {
+        eprintln!("Unsupported format: {}", message);
+    }
+    Err(ExifToolError::ParseError { message, offset }) =&gt; {
+        if let Some(off) = offset {
+            eprintln!("Parse error at offset {}: {}", off, message);
+        } else {
+            eprintln!("Parse error: {}", message);
+        }
+    }
+    Err(e) =&gt; {
+        eprintln!("Error: {}", e);
+    }
+}
+<span class="boring">}</span></code></pre></pre>
+<h2 id="advanced-topics"><a class="header" href="#advanced-topics">Advanced Topics</a></h2>
+<h3 id="parallel-batch-processing-1"><a class="header" href="#parallel-batch-processing-1">Parallel Batch Processing</a></h3>
+<p>Use <code>rayon</code> for efficient parallel processing of multiple files:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use exiftool_rs::core::operations::read_metadata;
+use rayon::prelude::*;
+use std::path::PathBuf;
+
+fn process_directory(dir: &amp;str) -&gt; Vec&lt;(PathBuf, Result&lt;usize, String&gt;)&gt; {
+    let files: Vec&lt;PathBuf&gt; = walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "jpg"))
+        .map(|e| e.path().to_path_buf())
+        .collect();
+
+    files
+        .par_iter()
+        .map(|path| {
+            let result = read_metadata(path)
+                .map(|m| m.len())
+                .map_err(|e| e.to_string());
+            (path.clone(), result)
+        })
+        .collect()
+}
+<span class="boring">}</span></code></pre></pre>
+<h3 id="memory-mapped-io-1"><a class="header" href="#memory-mapped-io-1">Memory-Mapped I/O</a></h3>
+<p>ExifTool-RS automatically uses memory-mapped I/O for efficient processing of large files. This is handled internally and requires no configuration.</p>
+<h3 id="custom-tag-definitions"><a class="header" href="#custom-tag-definitions">Custom Tag Definitions</a></h3>
+<p>For detailed information about the tag database and adding custom tags, see the <a href="installation.html#tag-database-generation">Tag Database Generation</a> section in the Installation chapter.</p>
+<h2 id="api-reference"><a class="header" href="#api-reference">API Reference</a></h2>
+<p>For complete API documentation, run:</p>
+<pre><code class="language-bash">cargo doc --open
+</code></pre>
+<p>This will generate and open the full Rust API documentation in your browser.</p>
+<h2 id="additional-resources"><a class="header" href="#additional-resources">Additional Resources</a></h2>
+<ul>
+<li><strong><a href="cli_usage.html">Command-Line Usage</a></strong>: CLI interface for ExifTool-RS</li>
+<li><strong><a href="ffi.html">C FFI Integration</a></strong>: Use ExifTool-RS from C, Python, or other languages</li>
+<li><strong><a href="troubleshooting.html">Troubleshooting</a></strong>: Common issues and solutions</li>
+<li><strong><a href="../api/library_api.html">Full API Reference</a></strong>: Comprehensive API documentation (1400+ lines)</li>
+</ul>
+<h2 id="migration-path"><a class="header" href="#migration-path">Migration Path</a></h2>
+<p>As the high-level API is implemented, we'll maintain backward compatibility with the low-level API. You can start using the low-level API now and gradually migrate to the high-level API as features become available.</p>
+<p><strong>Current Status</strong>:</p>
+<ul>
+<li>✅ Low-level API (MetadataMap, TagValue, operations)</li>
+<li>🔄 High-level API (Metadata struct with builder pattern)</li>
+<li>⏳ Advanced features (conditional edits, tag deletion, group operations)</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="c-ffi-integration"><a class="header" href="#c-ffi-integration">C FFI Integration</a></h1>
+<p>This chapter covers how to use ExifTool-RS from C, C++, Python, and other languages through the C Foreign Function Interface (FFI).</p>
+<h2 id="overview-2"><a class="header" href="#overview-2">Overview</a></h2>
+<p>ExifTool-RS provides a C-compatible Foreign Function Interface (FFI) for reading and writing metadata. This allows integration with:</p>
+<ul>
+<li><strong>C/C++ applications</strong>: Direct FFI usage</li>
+<li><strong>Python</strong>: Via ctypes bindings (example provided)</li>
+<li><strong>Other languages</strong>: Any language with C interoperability (Ruby, JavaScript/Node.js, Go, etc.)</li>
+</ul>
+<p><strong>Key Features:</strong></p>
+<ul>
+<li>✅ Safe: No Rust panics cross the FFI boundary</li>
+<li>✅ Standard C idioms: Return codes, null-terminated strings, opaque handles</li>
+<li>✅ Explicit error handling: Integer error codes with detailed messages</li>
+<li>✅ Cross-platform: Linux, macOS, Windows</li>
+<li>✅ Clear ownership: Memory management rules are explicit and documented</li>
+</ul>
+<h2 id="building-the-shared-library"><a class="header" href="#building-the-shared-library">Building the Shared Library</a></h2>
+<p>Before using the FFI, build ExifTool-RS as a shared library:</p>
+<pre><code class="language-bash"># From the repository root
+cargo build --lib --release
+</code></pre>
+<p>This generates the shared library in <code>target/release/</code>:</p>
+<ul>
+<li><strong>Linux</strong>: <code>libexiftool_rs.so</code></li>
+<li><strong>macOS</strong>: <code>libexiftool_rs.dylib</code></li>
+<li><strong>Windows</strong>: <code>exiftool_rs.dll</code></li>
+</ul>
+<p>The header file is available at: <code>include/exiftool_rs.h</code></p>
+<h2 id="quick-start-c"><a class="header" href="#quick-start-c">Quick Start (C)</a></h2>
+<p>Here's a minimal working C example:</p>
+<pre><code class="language-c">#include "exiftool_rs.h"
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+int main() {
+    // Create handle
+    ExifToolHandle* handle = exiftool_create();
+    if (!handle) {
+        fprintf(stderr, "Failed to create handle\n");
+        return 1;
+    }
+
+    // Read metadata from file
+    int result = exiftool_read_file(handle, "photo.jpg");
+    if (result != EXIFTOOL_OK) {
+        fprintf(stderr, "Error: %s\n", exiftool_get_last_error());
+        exiftool_destroy(handle);
+        return 1;
+    }
+
+    // Get camera make
+    const char* make = exiftool_get_tag_string(handle, "EXIF:Make");
+    if (make) {
+        printf("Camera: %s\n", make);
+    }
+
+    // Clean up
+    exiftool_destroy(handle);
+    return 0;
+}
+</code></pre>
+<p><strong>Compile and link:</strong></p>
+<pre><code class="language-bash"># Linux
+gcc -o example example.c -lexiftool_rs -L./target/release
+
+# macOS
+gcc -o example example.c -lexiftool_rs -L./target/release
+
+# Windows (MSVC)
+cl example.c exiftool_rs.lib
+</code></pre>
+<h2 id="core-concepts-1"><a class="header" href="#core-concepts-1">Core Concepts</a></h2>
+<h3 id="opaque-handle-pattern"><a class="header" href="#opaque-handle-pattern">Opaque Handle Pattern</a></h3>
+<p>The C FFI uses an <strong>opaque handle</strong> for resource management:</p>
+<pre><code class="language-c">typedef struct ExifToolHandle ExifToolHandle;
+</code></pre>
+<ul>
+<li>C code receives a pointer to an opaque structure</li>
+<li>The Rust library owns the memory</li>
+<li><strong>Every <code>exiftool_create()</code> must have a matching <code>exiftool_destroy()</code></strong></li>
+</ul>
+<p><strong>Lifecycle:</strong></p>
+<pre><code>exiftool_create()     → Returns handle (or NULL on failure)
+    ↓
+Operations            → exiftool_read_file(), exiftool_get_tag_*()
+(many calls)
+    ↓
+exiftool_destroy()    → Frees handle and all resources
+</code></pre>
+<h3 id="error-handling-2"><a class="header" href="#error-handling-2">Error Handling</a></h3>
+<p>The FFI uses a <strong>two-part error handling system</strong>:</p>
+<ol>
+<li><strong>Return Codes</strong>: Functions return integer status codes</li>
+<li><strong>Error Messages</strong>: Detailed error messages in thread-local storage</li>
+</ol>
+<p><strong>Pattern:</strong></p>
+<pre><code class="language-c">int result = exiftool_read_file(handle, "photo.jpg");
+if (result != EXIFTOOL_OK) {
+    const char* error_msg = exiftool_get_last_error();
+    fprintf(stderr, "Error: %s\n", error_msg);
+}
+</code></pre>
+<p><strong>Error Codes:</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Code</th><th>Constant</th><th>Description</th></tr></thead><tbody>
+<tr><td>0</td><td><code>EXIFTOOL_OK</code></td><td>Success</td></tr>
+<tr><td>-1</td><td><code>EXIFTOOL_ERR_INVALID_HANDLE</code></td><td>NULL or invalid handle</td></tr>
+<tr><td>-2</td><td><code>EXIFTOOL_ERR_IO</code></td><td>File I/O error</td></tr>
+<tr><td>-3</td><td><code>EXIFTOOL_ERR_UNSUPPORTED_FORMAT</code></td><td>File format not supported</td></tr>
+<tr><td>-4</td><td><code>EXIFTOOL_ERR_PARSE_ERROR</code></td><td>File parsing error</td></tr>
+<tr><td>-5</td><td><code>EXIFTOOL_ERR_INVALID_TAG</code></td><td>Unknown tag name</td></tr>
+<tr><td>-6</td><td><code>EXIFTOOL_ERR_TYPE_MISMATCH</code></td><td>Tag type doesn't match request</td></tr>
+<tr><td>-7</td><td><code>EXIFTOOL_ERR_INTERNAL</code></td><td>Internal error (Rust panic caught)</td></tr>
+</tbody></table>
+</div>
+<h3 id="memory-ownership"><a class="header" href="#memory-ownership">Memory Ownership</a></h3>
+<p><strong>Critical Rules:</strong></p>
+<ol>
+<li><strong>Handles Must Be Destroyed</strong>: Failing to call <code>exiftool_destroy()</code> leaks memory</li>
+<li><strong>String Lifetimes Are Short</strong>: Returned strings are valid until:
+<ul>
+<li>Next API call on the same handle</li>
+<li>Handle destruction</li>
+<li><strong>Copy strings immediately if needed beyond the call</strong></li>
+</ul>
+</li>
+<li><strong>Input Strings</strong>: Must be null-terminated and UTF-8 encoded</li>
+</ol>
+<div class="table-wrapper"><table><thead><tr><th>Resource</th><th>Owner</th><th>Lifetime</th><th>Responsibility</th></tr></thead><tbody>
+<tr><td><code>ExifToolHandle*</code></td><td>Library</td><td>Until <code>exiftool_destroy()</code></td><td>Call <code>exiftool_destroy()</code> once</td></tr>
+<tr><td>Returned strings</td><td>Library</td><td>Until next call</td><td>Copy immediately if needed</td></tr>
+<tr><td>Input strings</td><td>Caller</td><td>N/A</td><td>Must be null-terminated UTF-8</td></tr>
+</tbody></table>
+</div>
+<h3 id="thread-safety"><a class="header" href="#thread-safety">Thread Safety</a></h3>
+<ul>
+<li><strong>Handle Isolation</strong>: Each <code>ExifToolHandle</code> is independent and thread-safe if not shared</li>
+<li><strong>No Global State</strong>: Multiple handles can be used simultaneously from different threads</li>
+<li><strong>Error Messages</strong>: Thread-local storage for error messages</li>
+<li><strong>Recommendation</strong>: Use one handle per thread or add your own synchronization</li>
+</ul>
+<h2 id="api-reference-1"><a class="header" href="#api-reference-1">API Reference</a></h2>
+<h3 id="handle-lifecycle"><a class="header" href="#handle-lifecycle">Handle Lifecycle</a></h3>
+<h4 id="exiftool_create"><a class="header" href="#exiftool_create">exiftool_create</a></h4>
+<pre><code class="language-c">ExifToolHandle* exiftool_create(void);
+</code></pre>
+<p>Creates a new ExifTool handle.</p>
+<p><strong>Returns:</strong></p>
+<ul>
+<li>Non-NULL: Valid handle</li>
+<li>NULL: Allocation failed</li>
+</ul>
+<p><strong>Example:</strong></p>
+<pre><code class="language-c">ExifToolHandle* handle = exiftool_create();
+if (!handle) {
+    fprintf(stderr, "Out of memory\n");
+    exit(1);
+}
+</code></pre>
+<h4 id="exiftool_destroy"><a class="header" href="#exiftool_destroy">exiftool_destroy</a></h4>
+<pre><code class="language-c">void exiftool_destroy(ExifToolHandle* handle);
+</code></pre>
+<p>Destroys handle and frees all associated resources.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>handle</code>: Handle to destroy (can be NULL, function is a no-op)</li>
+</ul>
+<p><strong>Example:</strong></p>
+<pre><code class="language-c">exiftool_destroy(handle);
+handle = NULL;  // Good practice
+</code></pre>
+<h3 id="metadata-reading"><a class="header" href="#metadata-reading">Metadata Reading</a></h3>
+<h4 id="exiftool_read_file"><a class="header" href="#exiftool_read_file">exiftool_read_file</a></h4>
+<pre><code class="language-c">int exiftool_read_file(ExifToolHandle* handle, const char* file_path);
+</code></pre>
+<p>Reads metadata from a file.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>handle</code>: Valid ExifTool handle</li>
+<li><code>file_path</code>: Null-terminated UTF-8 file path</li>
+</ul>
+<p><strong>Returns:</strong></p>
+<ul>
+<li><code>EXIFTOOL_OK</code>: Success</li>
+<li><code>EXIFTOOL_ERR_*</code>: Error code (see error codes table)</li>
+</ul>
+<p><strong>Example:</strong></p>
+<pre><code class="language-c">int result = exiftool_read_file(handle, "/path/to/photo.jpg");
+if (result != EXIFTOOL_OK) {
+    fprintf(stderr, "Read failed: %s\n", exiftool_get_last_error());
+}
+</code></pre>
+<h3 id="tag-access"><a class="header" href="#tag-access">Tag Access</a></h3>
+<h4 id="exiftool_get_tag_string"><a class="header" href="#exiftool_get_tag_string">exiftool_get_tag_string</a></h4>
+<pre><code class="language-c">const char* exiftool_get_tag_string(ExifToolHandle* handle, const char* tag_name);
+</code></pre>
+<p>Gets a string tag value.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>handle</code>: Valid handle with metadata loaded</li>
+<li><code>tag_name</code>: Tag name (e.g., "EXIF:Make")</li>
+</ul>
+<p><strong>Returns:</strong></p>
+<ul>
+<li>Non-NULL: Null-terminated UTF-8 string (valid until next API call)</li>
+<li>NULL: Tag not found or not a string</li>
+</ul>
+<p><strong>Example:</strong></p>
+<pre><code class="language-c">const char* make = exiftool_get_tag_string(handle, "EXIF:Make");
+if (make) {
+    printf("Camera: %s\n", make);
+}
+</code></pre>
+<h4 id="exiftool_get_tag_integer"><a class="header" href="#exiftool_get_tag_integer">exiftool_get_tag_integer</a></h4>
+<pre><code class="language-c">int exiftool_get_tag_integer(ExifToolHandle* handle, const char* tag_name, int64_t* out_value);
+</code></pre>
+<p>Gets an integer tag value.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>handle</code>: Valid handle</li>
+<li><code>tag_name</code>: Tag name (e.g., "EXIF:ISO")</li>
+<li><code>out_value</code>: Pointer to store the integer value</li>
+</ul>
+<p><strong>Returns:</strong></p>
+<ul>
+<li><code>EXIFTOOL_OK</code>: Success</li>
+<li><code>EXIFTOOL_ERR_INVALID_TAG</code>: Tag not found</li>
+<li><code>EXIFTOOL_ERR_TYPE_MISMATCH</code>: Tag is not an integer</li>
+</ul>
+<p><strong>Example:</strong></p>
+<pre><code class="language-c">int64_t iso;
+if (exiftool_get_tag_integer(handle, "EXIF:ISO", &amp;iso) == EXIFTOOL_OK) {
+    printf("ISO: %lld\n", (long long)iso);
+}
+</code></pre>
+<h4 id="exiftool_get_tag_float"><a class="header" href="#exiftool_get_tag_float">exiftool_get_tag_float</a></h4>
+<pre><code class="language-c">int exiftool_get_tag_float(ExifToolHandle* handle, const char* tag_name, double* out_value);
+</code></pre>
+<p>Gets a float tag value.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>handle</code>: Valid handle</li>
+<li><code>tag_name</code>: Tag name (e.g., "EXIF:FNumber")</li>
+<li><code>out_value</code>: Pointer to store the float value</li>
+</ul>
+<p><strong>Returns:</strong></p>
+<ul>
+<li><code>EXIFTOOL_OK</code>: Success</li>
+<li><code>EXIFTOOL_ERR_INVALID_TAG</code>: Tag not found</li>
+<li><code>EXIFTOOL_ERR_TYPE_MISMATCH</code>: Tag is not a float</li>
+</ul>
+<p><strong>Example:</strong></p>
+<pre><code class="language-c">double aperture;
+if (exiftool_get_tag_float(handle, "EXIF:FNumber", &amp;aperture) == EXIFTOOL_OK) {
+    printf("Aperture: f/%.1f\n", aperture);
+}
+</code></pre>
+<h4 id="exiftool_get_tag_count"><a class="header" href="#exiftool_get_tag_count">exiftool_get_tag_count</a></h4>
+<pre><code class="language-c">size_t exiftool_get_tag_count(ExifToolHandle* handle);
+</code></pre>
+<p>Returns the number of tags in loaded metadata.</p>
+<p><strong>Returns:</strong></p>
+<ul>
+<li>Number of tags (0 if no metadata loaded)</li>
+</ul>
+<p><strong>Example:</strong></p>
+<pre><code class="language-c">size_t count = exiftool_get_tag_count(handle);
+printf("Found %zu tags\n", count);
+</code></pre>
+<h4 id="exiftool_get_tag_name_at"><a class="header" href="#exiftool_get_tag_name_at">exiftool_get_tag_name_at</a></h4>
+<pre><code class="language-c">const char* exiftool_get_tag_name_at(ExifToolHandle* handle, size_t index);
+</code></pre>
+<p>Gets the tag name at a specific index (for iteration).</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>handle</code>: Valid handle</li>
+<li><code>index</code>: Index (0 to count-1)</li>
+</ul>
+<p><strong>Returns:</strong></p>
+<ul>
+<li>Non-NULL: Tag name string (valid until next API call)</li>
+<li>NULL: Index out of bounds</li>
+</ul>
+<p><strong>Example:</strong></p>
+<pre><code class="language-c">size_t count = exiftool_get_tag_count(handle);
+for (size_t i = 0; i &lt; count; i++) {
+    const char* tag_name = exiftool_get_tag_name_at(handle, i);
+    if (tag_name) {
+        const char* value = exiftool_get_tag_string(handle, tag_name);
+        printf("%s: %s\n", tag_name, value ? value : "(non-string)");
+    }
+}
+</code></pre>
+<h3 id="error-handling-functions"><a class="header" href="#error-handling-functions">Error Handling Functions</a></h3>
+<h4 id="exiftool_get_last_error"><a class="header" href="#exiftool_get_last_error">exiftool_get_last_error</a></h4>
+<pre><code class="language-c">const char* exiftool_get_last_error(void);
+</code></pre>
+<p>Gets the last error message for the current thread.</p>
+<p><strong>Returns:</strong></p>
+<ul>
+<li>Null-terminated error message string</li>
+<li>Empty string if no error</li>
+</ul>
+<p><strong>Example:</strong></p>
+<pre><code class="language-c">if (result != EXIFTOOL_OK) {
+    fprintf(stderr, "Error: %s\n", exiftool_get_last_error());
+}
+</code></pre>
+<h2 id="code-examples"><a class="header" href="#code-examples">Code Examples</a></h2>
+<h3 id="example-1-extract-camera-info"><a class="header" href="#example-1-extract-camera-info">Example 1: Extract Camera Info</a></h3>
+<p>Complete example extracting camera metadata:</p>
+<pre><code class="language-c">#include "exiftool_rs.h"
+#include &lt;stdio.h&gt;
+
+int main(int argc, char** argv) {
+    if (argc &lt; 2) {
+        fprintf(stderr, "Usage: %s &lt;image_file&gt;\n", argv[0]);
+        return 1;
+    }
+
+    ExifToolHandle* handle = exiftool_create();
+    if (!handle) {
+        fprintf(stderr, "Failed to create handle\n");
+        return 1;
+    }
+
+    // Read file
+    if (exiftool_read_file(handle, argv[1]) != EXIFTOOL_OK) {
+        fprintf(stderr, "Error: %s\n", exiftool_get_last_error());
+        exiftool_destroy(handle);
+        return 1;
+    }
+
+    // Extract camera info
+    printf("Camera Information:\n");
+    printf("------------------\n");
+
+    const char* make = exiftool_get_tag_string(handle, "EXIF:Make");
+    if (make) printf("Make:   %s\n", make);
+
+    const char* model = exiftool_get_tag_string(handle, "EXIF:Model");
+    if (model) printf("Model:  %s\n", model);
+
+    int64_t iso;
+    if (exiftool_get_tag_integer(handle, "EXIF:ISO", &amp;iso) == EXIFTOOL_OK) {
+        printf("ISO:    %lld\n", (long long)iso);
+    }
+
+    double aperture;
+    if (exiftool_get_tag_float(handle, "EXIF:FNumber", &amp;aperture) == EXIFTOOL_OK) {
+        printf("F-Stop: f/%.1f\n", aperture);
+    }
+
+    // Cleanup
+    exiftool_destroy(handle);
+    return 0;
+}
+</code></pre>
+<h3 id="example-2-iterate-all-tags"><a class="header" href="#example-2-iterate-all-tags">Example 2: Iterate All Tags</a></h3>
+<pre><code class="language-c">#include "exiftool_rs.h"
+#include &lt;stdio.h&gt;
+
+int main(int argc, char** argv) {
+    if (argc &lt; 2) {
+        fprintf(stderr, "Usage: %s &lt;image_file&gt;\n", argv[0]);
+        return 1;
+    }
+
+    ExifToolHandle* handle = exiftool_create();
+    if (!handle) return 1;
+
+    if (exiftool_read_file(handle, argv[1]) != EXIFTOOL_OK) {
+        fprintf(stderr, "Error: %s\n", exiftool_get_last_error());
+        exiftool_destroy(handle);
+        return 1;
+    }
+
+    size_t count = exiftool_get_tag_count(handle);
+    printf("Found %zu tags:\n\n", count);
+
+    for (size_t i = 0; i &lt; count; i++) {
+        const char* tag_name = exiftool_get_tag_name_at(handle, i);
+        if (!tag_name) continue;
+
+        // Try string first
+        const char* str_val = exiftool_get_tag_string(handle, tag_name);
+        if (str_val) {
+            printf("%-30s: %s\n", tag_name, str_val);
+            continue;
+        }
+
+        // Try integer
+        int64_t int_val;
+        if (exiftool_get_tag_integer(handle, tag_name, &amp;int_val) == EXIFTOOL_OK) {
+            printf("%-30s: %lld\n", tag_name, (long long)int_val);
+            continue;
+        }
+
+        // Try float
+        double float_val;
+        if (exiftool_get_tag_float(handle, tag_name, &amp;float_val) == EXIFTOOL_OK) {
+            printf("%-30s: %.4f\n", tag_name, float_val);
+            continue;
+        }
+
+        printf("%-30s: (unknown type)\n", tag_name);
+    }
+
+    exiftool_destroy(handle);
+    return 0;
+}
+</code></pre>
+<h2 id="python-bindings"><a class="header" href="#python-bindings">Python Bindings</a></h2>
+<p>ExifTool-RS includes a reference Python binding implementation using ctypes.</p>
+<h3 id="installation-1"><a class="header" href="#installation-1">Installation</a></h3>
+<p>No pip install needed. Ensure the shared library is findable:</p>
+<pre><code class="language-bash"># Option 1: Set library path
+export LD_LIBRARY_PATH=/path/to/exiftool-rs/target/release:$LD_LIBRARY_PATH  # Linux
+export DYLD_LIBRARY_PATH=/path/to/exiftool-rs/target/release:$DYLD_LIBRARY_PATH  # macOS
+
+# Option 2: Copy to system location
+sudo cp target/release/libexiftool_rs.so /usr/local/lib/  # Linux
+sudo cp target/release/libexiftool_rs.dylib /usr/local/lib/  # macOS
+</code></pre>
+<h3 id="python-usage-example"><a class="header" href="#python-usage-example">Python Usage Example</a></h3>
+<pre><code class="language-python">from exiftool_rs import ExifTool, ExifToolError
+
+try:
+    # Use context manager for automatic cleanup
+    with ExifTool() as et:
+        # Read metadata from file
+        et.read_file("photo.jpg")
+
+        # Get specific tags
+        make = et.get_tag("EXIF:Make")
+        model = et.get_tag("EXIF:Model")
+        iso = et.get_tag("EXIF:ISO")
+
+        print(f"Camera: {make} {model}")
+        print(f"ISO: {iso}")
+
+        # Get all tags as dictionary
+        all_tags = et.get_all_tags()
+        for tag_name, tag_value in all_tags.items():
+            print(f"{tag_name}: {tag_value}")
+
+except ExifToolError as e:
+    print(f"Error: {e}")
+</code></pre>
+<h3 id="python-api"><a class="header" href="#python-api">Python API</a></h3>
+<h4 id="exiftool-class"><a class="header" href="#exiftool-class">ExifTool Class</a></h4>
+<p><strong>Constructor:</strong></p>
+<pre><code class="language-python">et = ExifTool(lib_path=None)
+</code></pre>
+<ul>
+<li><code>lib_path</code>: Optional path to shared library (auto-detected if None)</li>
+</ul>
+<p><strong>Methods:</strong></p>
+<ul>
+<li><code>read_file(path: str)</code>: Read metadata from file</li>
+<li><code>get_tag(tag_name: str) -&gt; Optional[str]</code>: Get tag value as string</li>
+<li><code>get_tag_count() -&gt; int</code>: Get number of tags</li>
+<li><code>get_tag_name_at(index: int) -&gt; Optional[str]</code>: Get tag name at index</li>
+<li><code>get_all_tags() -&gt; dict</code>: Get all tags as dictionary</li>
+</ul>
+<p><strong>Context Manager Support:</strong></p>
+<pre><code class="language-python">with ExifTool() as et:
+    et.read_file("photo.jpg")
+    # Automatic cleanup on exit
+</code></pre>
+<h2 id="platform-specific-notes-1"><a class="header" href="#platform-specific-notes-1">Platform-Specific Notes</a></h2>
+<h3 id="linux-1"><a class="header" href="#linux-1">Linux</a></h3>
+<p><strong>Linking:</strong></p>
+<pre><code class="language-bash">gcc -o app app.c -lexiftool_rs -L./target/release
+</code></pre>
+<p><strong>Runtime Library Path:</strong></p>
+<pre><code class="language-bash">export LD_LIBRARY_PATH=/path/to/lib:$LD_LIBRARY_PATH
+./app photo.jpg
+</code></pre>
+<h3 id="macos-1"><a class="header" href="#macos-1">macOS</a></h3>
+<p><strong>Linking:</strong></p>
+<pre><code class="language-bash">gcc -o app app.c -lexiftool_rs -L./target/release
+</code></pre>
+<p><strong>Runtime Library Path:</strong></p>
+<pre><code class="language-bash">export DYLD_LIBRARY_PATH=/path/to/lib:$DYLD_LIBRARY_PATH
+./app photo.jpg
+</code></pre>
+<p><strong>Apple Silicon Note</strong>: Native ARM64 support. No Rosetta required.</p>
+<h3 id="windows-1"><a class="header" href="#windows-1">Windows</a></h3>
+<p><strong>MSVC Linking:</strong></p>
+<pre><code class="language-batch">cl app.c exiftool_rs.lib
+</code></pre>
+<p><strong>Runtime DLL:</strong></p>
+<p>Ensure <code>exiftool_rs.dll</code> is in:</p>
+<ul>
+<li>Same directory as executable</li>
+<li>Or in system PATH</li>
+</ul>
+<p><strong>MinGW/GNU:</strong></p>
+<pre><code class="language-bash">gcc -o app.exe app.c -lexiftool_rs -L./target/release
+</code></pre>
+<h2 id="best-practices"><a class="header" href="#best-practices">Best Practices</a></h2>
+<h3 id="1-always-destroy-handles"><a class="header" href="#1-always-destroy-handles">1. Always Destroy Handles</a></h3>
+<pre><code class="language-c">ExifToolHandle* handle = exiftool_create();
+// ... use handle ...
+exiftool_destroy(handle);  // Don't forget!
+</code></pre>
+<h3 id="2-copy-returned-strings-immediately"><a class="header" href="#2-copy-returned-strings-immediately">2. Copy Returned Strings Immediately</a></h3>
+<pre><code class="language-c">const char* make = exiftool_get_tag_string(handle, "EXIF:Make");
+if (make) {
+    char* make_copy = strdup(make);  // Copy before next API call
+    // Use make_copy safely
+    free(make_copy);
+}
+</code></pre>
+<h3 id="3-check-all-return-codes"><a class="header" href="#3-check-all-return-codes">3. Check All Return Codes</a></h3>
+<pre><code class="language-c">if (exiftool_read_file(handle, path) != EXIFTOOL_OK) {
+    fprintf(stderr, "Error: %s\n", exiftool_get_last_error());
+    // Handle error...
+}
+</code></pre>
+<h3 id="4-use-context-managers-in-python"><a class="header" href="#4-use-context-managers-in-python">4. Use Context Managers in Python</a></h3>
+<pre><code class="language-python">with ExifTool() as et:
+    et.read_file("photo.jpg")
+    # Automatic cleanup even if exception occurs
+</code></pre>
+<h3 id="5-handle-null-returns"><a class="header" href="#5-handle-null-returns">5. Handle NULL Returns</a></h3>
+<pre><code class="language-c">const char* value = exiftool_get_tag_string(handle, tag);
+if (value) {
+    // Use value
+} else {
+    // Tag not found or not a string
+}
+</code></pre>
+<h3 id="6-validate-tag-names"><a class="header" href="#6-validate-tag-names">6. Validate Tag Names</a></h3>
+<p>Tag names are case-sensitive:</p>
+<ul>
+<li>✅ <code>EXIF:Make</code></li>
+<li>❌ <code>exif:make</code></li>
+<li>❌ <code>Exif:Make</code></li>
+</ul>
+<h3 id="7-thread-safety"><a class="header" href="#7-thread-safety">7. Thread Safety</a></h3>
+<p>Don't share handles between threads without synchronization:</p>
+<pre><code class="language-c">// Good: One handle per thread
+void* thread_func(void* arg) {
+    ExifToolHandle* handle = exiftool_create();
+    // Use handle...
+    exiftool_destroy(handle);
+    return NULL;
+}
+
+// Bad: Sharing handle without lock
+// ExifToolHandle* global_handle;  // DON'T DO THIS
+</code></pre>
+<h2 id="additional-resources-1"><a class="header" href="#additional-resources-1">Additional Resources</a></h2>
+<ul>
+<li><strong><a href="../api/ffi_api.html">Full FFI API Reference</a></strong>: Complete documentation (1500+ lines)</li>
+<li><strong><a href="../../bindings/python/README.html">Python Bindings README</a></strong>: Python-specific documentation</li>
+<li><strong><a href="library_api.html">Library API</a></strong>: Native Rust API (more features)</li>
+<li><strong><a href="cli_usage.html">Command-Line Usage</a></strong>: CLI interface</li>
+</ul>
+<h2 id="building-language-bindings"><a class="header" href="#building-language-bindings">Building Language Bindings</a></h2>
+<p>To create bindings for other languages:</p>
+<ol>
+<li><strong>Study the C API</strong>: Header file at <code>include/exiftool_rs.h</code></li>
+<li><strong>Use the pattern</strong>: Most languages support C FFI (JNI for Java, cffi for Python, cgo for Go)</li>
+<li><strong>Follow Python example</strong>: See <code>bindings/python/</code> for a complete reference</li>
+<li><strong>Handle errors properly</strong>: Convert C error codes to native exceptions</li>
+<li><strong>Wrap in high-level API</strong>: Provide idiomatic API for your language</li>
+<li><strong>Add context managers</strong>: RAII, <code>with</code> blocks, <code>using</code>, etc.</li>
+<li><strong>Document lifetimes</strong>: Make memory ownership clear to users</li>
+</ol>
+<p>Good luck building your language binding!</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="supported-formats"><a class="header" href="#supported-formats">Supported Formats</a></h1>
+<p>This chapter lists the file formats and metadata standards currently supported by ExifTool-RS.</p>
+<h2 id="implementation-status"><a class="header" href="#implementation-status">Implementation Status</a></h2>
+<p>ExifTool-RS is actively being developed. The current implementation (v0.1.0) focuses on core formats with comprehensive metadata support. Additional formats will be added in future releases.</p>
+<p><strong>Legend:</strong></p>
+<ul>
+<li>✅ <strong>Fully Implemented</strong>: Read and write support with comprehensive tag coverage</li>
+<li>🔄 <strong>Partial Support</strong>: Read support implemented, write support in progress or limited</li>
+<li>⏳ <strong>Planned</strong>: On the roadmap for future implementation</li>
+<li>❌ <strong>Not Supported</strong>: Not currently planned</li>
+</ul>
+<h2 id="image-formats"><a class="header" href="#image-formats">Image Formats</a></h2>
+<h3 id="jpeg-joint-photographic-experts-group"><a class="header" href="#jpeg-joint-photographic-experts-group">JPEG (Joint Photographic Experts Group)</a></h3>
+<p><strong>Status</strong>: ✅ Fully Implemented</p>
+<p><strong>File Extensions</strong>: <code>.jpg</code>, <code>.jpeg</code>, <code>.jpe</code></p>
+<p><strong>Metadata Types Supported:</strong></p>
+<ul>
+<li>✅ EXIF (Exchangeable Image File Format)</li>
+<li>✅ XMP (Extensible Metadata Platform)</li>
+<li>✅ IPTC (International Press Telecommunications Council)</li>
+<li>✅ JFIF (JPEG File Interchange Format)</li>
+<li>✅ GPS (Geolocation data)</li>
+<li>✅ ICC Profile (Color management)</li>
+<li>✅ Photoshop metadata</li>
+<li>✅ Thumbnail extraction</li>
+</ul>
+<p><strong>Read Operations</strong>: ✅ Full support
+<strong>Write Operations</strong>: ✅ Full support</p>
+<p><strong>Available Tags</strong>: 244 EXIF tags + 122 IPTC tags + XMP support</p>
+<p><strong>Common Use Cases:</strong></p>
+<ul>
+<li>Digital camera photos</li>
+<li>Web images</li>
+<li>Social media uploads</li>
+<li>Scanned documents</li>
+</ul>
+<h3 id="tiff-tagged-image-file-format"><a class="header" href="#tiff-tagged-image-file-format">TIFF (Tagged Image File Format)</a></h3>
+<p><strong>Status</strong>: ✅ Fully Implemented</p>
+<p><strong>File Extensions</strong>: <code>.tif</code>, <code>.tiff</code></p>
+<p><strong>Metadata Types Supported:</strong></p>
+<ul>
+<li>✅ EXIF</li>
+<li>✅ XMP</li>
+<li>✅ IPTC</li>
+<li>✅ GPS</li>
+<li>✅ ICC Profile</li>
+<li>✅ Photoshop</li>
+<li>✅ Multi-page/multi-image support</li>
+</ul>
+<p><strong>Read Operations</strong>: ✅ Full support
+<strong>Write Operations</strong>: ✅ Full support</p>
+<p><strong>Available Tags</strong>: 244 EXIF tags + additional TIFF-specific tags</p>
+<p><strong>Common Use Cases:</strong></p>
+<ul>
+<li>Professional photography</li>
+<li>Archival images</li>
+<li>Scientific imaging</li>
+<li>Medical imaging (DICOM-TIFF)</li>
+</ul>
+<h3 id="png-portable-network-graphics"><a class="header" href="#png-portable-network-graphics">PNG (Portable Network Graphics)</a></h3>
+<p><strong>Status</strong>: ✅ Fully Implemented</p>
+<p><strong>File Extensions</strong>: <code>.png</code></p>
+<p><strong>Metadata Types Supported:</strong></p>
+<ul>
+<li>✅ PNG text chunks (tEXt, zTXt, iTXt)</li>
+<li>✅ XMP</li>
+<li>✅ EXIF (embedded via PNG chunks)</li>
+<li>✅ ICC Profile</li>
+<li>✅ Creation time (tIME chunk)</li>
+<li>✅ Physical dimensions (pHYs chunk)</li>
+</ul>
+<p><strong>Read Operations</strong>: ✅ Full support
+<strong>Write Operations</strong>: ✅ Full support</p>
+<p><strong>Available Tags</strong>: 30 PNG-specific tags + EXIF/XMP support</p>
+<p><strong>Common Use Cases:</strong></p>
+<ul>
+<li>Web graphics</li>
+<li>Screenshots</li>
+<li>Lossless image archiving</li>
+<li>Images with transparency</li>
+</ul>
+<h2 id="document-formats"><a class="header" href="#document-formats">Document Formats</a></h2>
+<h3 id="pdf-portable-document-format"><a class="header" href="#pdf-portable-document-format">PDF (Portable Document Format)</a></h3>
+<p><strong>Status</strong>: 🔄 Partial Support</p>
+<p><strong>File Extensions</strong>: <code>.pdf</code></p>
+<p><strong>Metadata Types Supported:</strong></p>
+<ul>
+<li>✅ PDF Info Dictionary (Title, Author, Subject, Keywords, Creator, Producer)</li>
+<li>✅ Creation/Modification dates</li>
+<li>✅ XMP metadata packets</li>
+<li>🔄 Embedded image metadata (read-only)</li>
+</ul>
+<p><strong>Read Operations</strong>: ✅ Supported
+<strong>Write Operations</strong>: ⏳ Planned for future release</p>
+<p><strong>Available Tags</strong>: PDF Info keys + XMP support</p>
+<p><strong>Common Use Cases:</strong></p>
+<ul>
+<li>Document metadata extraction</li>
+<li>PDF library management</li>
+<li>Compliance and archiving</li>
+</ul>
+<h2 id="video-formats"><a class="header" href="#video-formats">Video Formats</a></h2>
+<h3 id="mp4quicktime"><a class="header" href="#mp4quicktime">MP4/QuickTime</a></h3>
+<p><strong>Status</strong>: ✅ Fully Implemented</p>
+<p><strong>File Extensions</strong>: <code>.mp4</code>, <code>.m4v</code>, <code>.mov</code>, <code>.3gp</code>, <code>.3g2</code></p>
+<p><strong>Metadata Types Supported:</strong></p>
+<ul>
+<li>✅ QuickTime atoms (moov, udta, meta)</li>
+<li>✅ Creation/modification times</li>
+<li>✅ Duration, dimensions</li>
+<li>✅ GPS coordinates (from video metadata)</li>
+<li>✅ Camera make/model</li>
+<li>✅ XMP packets</li>
+</ul>
+<p><strong>Read Operations</strong>: ✅ Full support
+<strong>Write Operations</strong>: ⏳ Planned for future release</p>
+<p><strong>Available Tags</strong>: 143 QuickTime-specific tags</p>
+<p><strong>Common Use Cases:</strong></p>
+<ul>
+<li>Video library management</li>
+<li>Smartphone video metadata</li>
+<li>Media asset databases</li>
+<li>GPS-tagged videos</li>
+</ul>
+<h2 id="metadata-standards"><a class="header" href="#metadata-standards">Metadata Standards</a></h2>
+<h3 id="exif-exchangeable-image-file-format"><a class="header" href="#exif-exchangeable-image-file-format">EXIF (Exchangeable Image File Format)</a></h3>
+<p><strong>Status</strong>: ✅ Comprehensive Support</p>
+<p><strong>Supported in Formats</strong>: JPEG, TIFF, PNG (embedded), RAW formats</p>
+<p><strong>Tag Categories:</strong></p>
+<ul>
+<li>Image structure (width, height, color space)</li>
+<li>Camera settings (ISO, aperture, shutter speed, focal length)</li>
+<li>Camera identification (make, model, serial number)</li>
+<li>Date/time stamps (original, digitized, modified)</li>
+<li>Image processing (white balance, exposure compensation, flash)</li>
+<li>Thumbnail images</li>
+<li>Copyright and author information</li>
+</ul>
+<p><strong>Available Tags</strong>: 244 tags from ExifTool spec</p>
+<p><strong>Standards Compliance</strong>: EXIF 2.3 specification</p>
+<h3 id="xmp-extensible-metadata-platform"><a class="header" href="#xmp-extensible-metadata-platform">XMP (Extensible Metadata Platform)</a></h3>
+<p><strong>Status</strong>: ✅ Fully Implemented</p>
+<p><strong>Supported in Formats</strong>: JPEG, TIFF, PNG, PDF, MP4</p>
+<p><strong>XMP Namespaces Supported:</strong></p>
+<ul>
+<li><code>dc</code> (Dublin Core): Title, Creator, Rights, Description</li>
+<li><code>xmp</code>: Base XMP properties</li>
+<li><code>xmpRights</code>: Copyright management</li>
+<li><code>photoshop</code>: Adobe Photoshop metadata</li>
+<li><code>exif</code>: EXIF properties in XMP format</li>
+<li><code>tiff</code>: TIFF properties in XMP format</li>
+<li><code>aux</code>: Additional camera metadata</li>
+</ul>
+<p><strong>Read Operations</strong>: ✅ Full XML parsing
+<strong>Write Operations</strong>: ✅ Full XML serialization</p>
+<p><strong>Available Tags</strong>: 7 base XMP tags + namespace-specific tags</p>
+<h3 id="iptc-international-press-telecommunications-council"><a class="header" href="#iptc-international-press-telecommunications-council">IPTC (International Press Telecommunications Council)</a></h3>
+<p><strong>Status</strong>: ✅ Fully Implemented</p>
+<p><strong>Supported in Formats</strong>: JPEG, TIFF</p>
+<p><strong>IPTC Categories:</strong></p>
+<ul>
+<li>Descriptive metadata (Caption, Keywords, Headline)</li>
+<li>Administrative metadata (Credit, Source, Copyright Notice)</li>
+<li>People and locations (City, Province, Country, Creator)</li>
+<li>Rights information (Usage Terms, Copyright Notice)</li>
+<li>Technical metadata (Date Created, Digital Creation Date)</li>
+</ul>
+<p><strong>Read Operations</strong>: ✅ Full support
+<strong>Write Operations</strong>: ✅ Full support</p>
+<p><strong>Available Tags</strong>: 122 IPTC tags</p>
+<p><strong>Standards Compliance</strong>: IPTC Core 1.3, IPTC Extension</p>
+<h3 id="gps-metadata"><a class="header" href="#gps-metadata">GPS Metadata</a></h3>
+<p><strong>Status</strong>: ✅ Fully Implemented</p>
+<p><strong>Supported in Formats</strong>: JPEG, TIFF, MP4/MOV</p>
+<p><strong>GPS Tags Supported:</strong></p>
+<ul>
+<li>Latitude, Longitude (decimal degrees)</li>
+<li>Altitude (meters above sea level)</li>
+<li>Timestamp (UTC)</li>
+<li>Speed, Track (direction of movement)</li>
+<li>Satellites used, DOP (dilution of precision)</li>
+<li>Map Datum (coordinate system)</li>
+<li>Differential correction</li>
+</ul>
+<p><strong>Available Tags</strong>: 32 GPS-specific tags</p>
+<p><strong>Coordinate Formats</strong>: Decimal degrees, degrees/minutes/seconds (DMS)</p>
+<h2 id="additional-metadata-families"><a class="header" href="#additional-metadata-families">Additional Metadata Families</a></h2>
+<h3 id="icc-profile-color-management"><a class="header" href="#icc-profile-color-management">ICC Profile (Color Management)</a></h3>
+<p><strong>Status</strong>: ✅ Fully Implemented</p>
+<p><strong>Supported in Formats</strong>: JPEG, TIFF, PNG</p>
+<p><strong>Profile Information:</strong></p>
+<ul>
+<li>Profile description</li>
+<li>Color space (RGB, CMYK, Lab)</li>
+<li>Rendering intent</li>
+<li>White point, primaries</li>
+<li>Gamma/transfer curve</li>
+</ul>
+<p><strong>Available Tags</strong>: 42 ICC Profile tags</p>
+<h3 id="photoshop-metadata"><a class="header" href="#photoshop-metadata">Photoshop Metadata</a></h3>
+<p><strong>Status</strong>: ✅ Fully Implemented</p>
+<p><strong>Supported in Formats</strong>: JPEG, TIFF, PNG</p>
+<p><strong>Photoshop Resources:</strong></p>
+<ul>
+<li>Image resources (layers, paths)</li>
+<li>Copyright flag</li>
+<li>URL</li>
+<li>Credit, Source</li>
+<li>Caption Writer</li>
+</ul>
+<p><strong>Available Tags</strong>: 35 Photoshop-specific tags</p>
+<h3 id="riff-resource-interchange-file-format"><a class="header" href="#riff-resource-interchange-file-format">RIFF (Resource Interchange File Format)</a></h3>
+<p><strong>Status</strong>: 🔄 Parser Implemented</p>
+<p><strong>Supported in Formats</strong>: AVI, WAV (planned)</p>
+<p><strong>Available Tags</strong>: 46 RIFF tags</p>
+<p><strong>Status</strong>: Tag database generated, parser infrastructure ready</p>
+<h2 id="tag-database-statistics"><a class="header" href="#tag-database-statistics">Tag Database Statistics</a></h2>
+<p>ExifTool-RS automatically generates its tag database from the official ExifTool source during build:</p>
+<p><strong>Current Tag Count</strong>: 731 tags (v0.1.0)</p>
+<p><strong>Tags by Format Family:</strong></p>
+<ul>
+<li>EXIF: 244 tags</li>
+<li>QuickTime: 143 tags</li>
+<li>IPTC: 122 tags</li>
+<li>RIFF: 46 tags</li>
+<li>ICC_Profile: 42 tags</li>
+<li>Photoshop: 35 tags</li>
+<li>GPS: 32 tags</li>
+<li>PNG: 30 tags</li>
+<li>JPEG: 30 tags</li>
+<li>XMP: 7 tags (base module)</li>
+</ul>
+<p><strong>Total Coverage</strong>: ~700+ unique metadata tags across 10+ format families</p>
+<h2 id="planned-format-support"><a class="header" href="#planned-format-support">Planned Format Support</a></h2>
+<p>The following formats are on the roadmap for future releases:</p>
+<h3 id="high-priority"><a class="header" href="#high-priority">High Priority</a></h3>
+<ul>
+<li>
+<p><strong>RAW Formats</strong> (⏳ Planned):</p>
+<ul>
+<li>CR2, CR3 (Canon)</li>
+<li>NEF (Nikon)</li>
+<li>ARW (Sony)</li>
+<li>DNG (Adobe Digital Negative)</li>
+<li>ORF (Olympus)</li>
+<li>RAF (Fujifilm)</li>
+</ul>
+</li>
+<li>
+<p><strong>Additional Video Formats</strong> (⏳ Planned):</p>
+<ul>
+<li>AVI (Audio Video Interleave)</li>
+<li>MKV (Matroska)</li>
+<li>WebM</li>
+</ul>
+</li>
+</ul>
+<h3 id="medium-priority"><a class="header" href="#medium-priority">Medium Priority</a></h3>
+<ul>
+<li>
+<p><strong>Document Formats</strong> (⏳ Planned):</p>
+<ul>
+<li>DOCX (Microsoft Word)</li>
+<li>XLSX (Microsoft Excel)</li>
+<li>PPTX (Microsoft PowerPoint)</li>
+<li>ODT, ODS, ODP (OpenDocument)</li>
+</ul>
+</li>
+<li>
+<p><strong>Audio Formats</strong> (⏳ Planned):</p>
+<ul>
+<li>MP3 (ID3 tags)</li>
+<li>FLAC</li>
+<li>M4A/AAC</li>
+<li>WAV (RIFF metadata)</li>
+<li>OGG Vorbis</li>
+</ul>
+</li>
+</ul>
+<h3 id="lower-priority"><a class="header" href="#lower-priority">Lower Priority</a></h3>
+<ul>
+<li>
+<p><strong>Archive Formats</strong> (⏳ Planned):</p>
+<ul>
+<li>ZIP (embedded metadata)</li>
+<li>7z</li>
+</ul>
+</li>
+<li>
+<p><strong>Vector Formats</strong> (⏳ Planned):</p>
+<ul>
+<li>SVG (XML metadata)</li>
+<li>AI (Adobe Illustrator)</li>
+<li>EPS (Encapsulated PostScript)</li>
+</ul>
+</li>
+</ul>
+<h2 id="checking-format-support"><a class="header" href="#checking-format-support">Checking Format Support</a></h2>
+<p>To check if a file format is supported, use the CLI:</p>
+<pre><code class="language-bash">exiftool-rs photo.unknown
+</code></pre>
+<p>If the format is not supported, you'll see:</p>
+<pre><code>Error: Unsupported file format: unknown
+</code></pre>
+<p>Supported formats will display metadata or indicate no metadata was found.</p>
+<h2 id="format-detection"><a class="header" href="#format-detection">Format Detection</a></h2>
+<p>ExifTool-RS uses <strong>magic number detection</strong> to identify file formats:</p>
+<ol>
+<li>Reads the first few bytes of the file (magic number)</li>
+<li>Matches against known format signatures</li>
+<li>Falls back to file extension if magic number is ambiguous</li>
+</ol>
+<p><strong>Format Signatures:</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Format</th><th>Magic Bytes</th><th>Offset</th></tr></thead><tbody>
+<tr><td>JPEG</td><td><code>FF D8 FF</code></td><td>0</td></tr>
+<tr><td>PNG</td><td><code>89 50 4E 47 0D 0A 1A 0A</code></td><td>0</td></tr>
+<tr><td>TIFF (LE)</td><td><code>49 49 2A 00</code></td><td>0</td></tr>
+<tr><td>TIFF (BE)</td><td><code>4D 4D 00 2A</code></td><td>0</td></tr>
+<tr><td>PDF</td><td><code>25 50 44 46</code> (<code>%PDF</code>)</td><td>0</td></tr>
+<tr><td>MP4/MOV</td><td><code>66 74 79 70</code> (<code>ftyp</code>)</td><td>4</td></tr>
+</tbody></table>
+</div>
+<p>This ensures robust format detection even when files have incorrect extensions.</p>
+<h2 id="performance-by-format"><a class="header" href="#performance-by-format">Performance by Format</a></h2>
+<p><strong>Relative Performance</strong> (compared to baseline JPEG parsing):</p>
+<div class="table-wrapper"><table><thead><tr><th>Format</th><th>Read Speed</th><th>Write Speed</th><th>Notes</th></tr></thead><tbody>
+<tr><td>JPEG</td><td>1.0x (baseline)</td><td>1.0x</td><td>Optimized segment parsing</td></tr>
+<tr><td>TIFF</td><td>0.9x</td><td>0.9x</td><td>IFD chain traversal</td></tr>
+<tr><td>PNG</td><td>1.1x</td><td>1.1x</td><td>Simple chunk-based format</td></tr>
+<tr><td>PDF</td><td>0.5x</td><td>N/A</td><td>Complex object parsing</td></tr>
+<tr><td>MP4/MOV</td><td>0.7x</td><td>N/A</td><td>Atom tree traversal</td></tr>
+</tbody></table>
+</div>
+<p>All formats process typical files in &lt; 10ms on modern hardware.</p>
+<h2 id="contributing-new-format-support"><a class="header" href="#contributing-new-format-support">Contributing New Format Support</a></h2>
+<p>Interested in adding support for a new format? See the <a href="https://github.com/exiftool-rs/exiftool-rs/blob/main/CONTRIBUTING.md">Contributing Guide</a> for:</p>
+<ul>
+<li>Parser implementation guidelines</li>
+<li>Format-specific testing requirements</li>
+<li>Tag database integration</li>
+<li>Documentation standards</li>
+</ul>
+<h2 id="additional-resources-2"><a class="header" href="#additional-resources-2">Additional Resources</a></h2>
+<ul>
+<li><strong><a href="https://exiftool.org/#supported">ExifTool Format Support</a></strong>: Official ExifTool format list (300+ formats)</li>
+<li><strong><a href="cli_usage.html">Command-Line Usage</a></strong>: How to use the CLI with different formats</li>
+<li><strong><a href="library_api.html">Library API</a></strong>: Programmatic format detection and parsing</li>
+<li><strong><a href="installation.html">Installation</a></strong>: Tag database generation from ExifTool source</li>
+</ul>
+<h2 id="future-roadmap"><a class="header" href="#future-roadmap">Future Roadmap</a></h2>
+<p><strong>v1.0 Goal</strong>: 10+ core formats with full read/write support (DONE)
+<strong>v2.0 Goal</strong>: 50+ formats including RAW, video, audio
+<strong>v3.0 Goal</strong>: 200+ formats approaching ExifTool feature parity
+<strong>Long-term</strong>: 300+ formats with 28,000+ tags (full ExifTool compatibility)</p>
+<p>We welcome contributions to accelerate format support development!</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h1>
+<p>This chapter covers common issues, error messages, performance tips, and debugging strategies for ExifTool-RS.</p>
+<h2 id="common-errors-1"><a class="header" href="#common-errors-1">Common Errors</a></h2>
+<h3 id="error-file-not-found"><a class="header" href="#error-file-not-found">"Error: File not found"</a></h3>
+<p><strong>Cause</strong>: The specified file path doesn't exist or is inaccessible.</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>
+<p><strong>Verify the path</strong>:</p>
+<pre><code class="language-bash">ls photo.jpg  # Check file exists
+exiftool-rs photo.jpg
+</code></pre>
+</li>
+<li>
+<p><strong>Use absolute paths</strong> if relative paths aren't working:</p>
+<pre><code class="language-bash">exiftool-rs /full/path/to/photo.jpg
+</code></pre>
+</li>
+<li>
+<p><strong>Check file permissions</strong>:</p>
+<pre><code class="language-bash"># Linux/macOS
+ls -l photo.jpg
+chmod 644 photo.jpg  # Make readable
+</code></pre>
+</li>
+</ol>
+<h3 id="error-unsupported-file-format"><a class="header" href="#error-unsupported-file-format">"Error: Unsupported file format"</a></h3>
+<p><strong>Cause</strong>: The file format is not yet implemented in ExifTool-RS.</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>
+<p><strong>Check supported formats</strong> in the <a href="formats.html">Supported Formats</a> chapter.</p>
+</li>
+<li>
+<p><strong>Use the original ExifTool</strong> for unsupported formats:</p>
+<pre><code class="language-bash">exiftool photo.raw  # Use Perl ExifTool for RAW files
+</code></pre>
+</li>
+<li>
+<p><strong>Convert to supported format</strong> (if appropriate):</p>
+<pre><code class="language-bash"># Example: Convert HEIC to JPEG
+sips -s format jpeg photo.heic --out photo.jpg
+exiftool-rs photo.jpg
+</code></pre>
+</li>
+<li>
+<p><strong>Request format support</strong>: <a href="https://github.com/exiftool-rs/exiftool-rs/issues">Open a GitHub issue</a> to request the format.</p>
+</li>
+</ol>
+<h3 id="error-file-is-read-only"><a class="header" href="#error-file-is-read-only">"Error: File is read-only"</a></h3>
+<p><strong>Cause</strong>: The file has read-only permissions and you're trying to write metadata.</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>
+<p><strong>Make file writable</strong>:</p>
+<pre><code class="language-bash"># Linux/macOS
+chmod u+w photo.jpg
+exiftool-rs -EXIF:Artist="John Doe" photo.jpg
+</code></pre>
+<pre><code class="language-powershell"># Windows PowerShell
+attrib -r photo.jpg
+exiftool-rs -EXIF:Artist="John Doe" photo.jpg
+</code></pre>
+</li>
+<li>
+<p><strong>Use <code>--readonly</code> flag</strong> if you only want to read metadata:</p>
+<pre><code class="language-bash">exiftool-rs --readonly photo.jpg
+</code></pre>
+</li>
+<li>
+<p><strong>Work on a copy</strong>:</p>
+<pre><code class="language-bash">cp photo.jpg photo_copy.jpg
+exiftool-rs -EXIF:Artist="John Doe" photo_copy.jpg
+</code></pre>
+</li>
+</ol>
+<h3 id="error-invalid-value-for-tag"><a class="header" href="#error-invalid-value-for-tag">"Error: Invalid value for TAG"</a></h3>
+<p><strong>Cause</strong>: The value provided doesn't match the expected data type for the tag.</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>
+<p><strong>Check tag data type</strong>:</p>
+<ul>
+<li><code>EXIF:ISO</code>: Integer (e.g., <code>400</code>, not <code>"400"</code>)</li>
+<li><code>EXIF:FNumber</code>: Float (e.g., <code>5.6</code>)</li>
+<li><code>EXIF:Make</code>: String (e.g., <code>"Canon"</code>)</li>
+<li><code>EXIF:DateTime</code>: Datetime string (e.g., <code>"2025:01:15 14:30:00"</code>)</li>
+</ul>
+</li>
+<li>
+<p><strong>Use correct format</strong>:</p>
+<pre><code class="language-bash"># Wrong
+exiftool-rs -EXIF:ISO="four hundred" photo.jpg  # Error
+
+# Correct
+exiftool-rs -EXIF:ISO=400 photo.jpg  # Success
+</code></pre>
+</li>
+<li>
+<p><strong>Check date/time format</strong>:</p>
+<pre><code class="language-bash"># Wrong
+exiftool-rs -EXIF:DateTime="2025-01-15 14:30" photo.jpg
+
+# Correct (EXIF uses ":" separator)
+exiftool-rs -EXIF:DateTime="2025:01:15 14:30:00" photo.jpg
+</code></pre>
+</li>
+</ol>
+<h3 id="error-cannot-modify-file-in-read-only-mode"><a class="header" href="#error-cannot-modify-file-in-read-only-mode">"Error: Cannot modify file in read-only mode"</a></h3>
+<p><strong>Cause</strong>: The <code>--readonly</code> flag is set but you're attempting a write operation.</p>
+<p><strong>Solution:</strong></p>
+<p>Remove the <code>--readonly</code> flag:</p>
+<pre><code class="language-bash"># Wrong
+exiftool-rs --readonly -EXIF:Artist="John" photo.jpg  # Error
+
+# Correct
+exiftool-rs -EXIF:Artist="John" photo.jpg  # Success
+</code></pre>
+<h3 id="error-failed-to-create-backup-file"><a class="header" href="#error-failed-to-create-backup-file">"Error: Failed to create backup file"</a></h3>
+<p><strong>Cause</strong>: Insufficient permissions or disk space when using <code>--backup</code> flag.</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>
+<p><strong>Check disk space</strong>:</p>
+<pre><code class="language-bash">df -h .  # Check available space
+</code></pre>
+</li>
+<li>
+<p><strong>Check write permissions</strong> in the directory:</p>
+<pre><code class="language-bash">ls -ld .
+chmod u+w .  # Make directory writable
+</code></pre>
+</li>
+<li>
+<p><strong>Don't use <code>--backup</code></strong> if backups aren't needed:</p>
+<pre><code class="language-bash">exiftool-rs -EXIF:Artist="John" photo.jpg  # No backup
+</code></pre>
+</li>
+</ol>
+<h3 id="error-parse-error-at-offset-x"><a class="header" href="#error-parse-error-at-offset-x">"Error: Parse error at offset X"</a></h3>
+<p><strong>Cause</strong>: The file is corrupted or malformed.</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>
+<p><strong>Verify file integrity</strong>:</p>
+<pre><code class="language-bash">file photo.jpg  # Check if file is valid JPEG
+</code></pre>
+</li>
+<li>
+<p><strong>Try opening in image viewer</strong> to confirm the file isn't corrupted.</p>
+</li>
+<li>
+<p><strong>Use original ExifTool</strong> which may have more robust parsing:</p>
+<pre><code class="language-bash">exiftool photo.jpg  # Perl ExifTool
+</code></pre>
+</li>
+<li>
+<p><strong>Report the issue</strong> with the problematic file (if possible):</p>
+<ul>
+<li>Create a GitHub issue with the file (if not confidential)</li>
+<li>This helps improve parser robustness</li>
+</ul>
+</li>
+</ol>
+<h3 id="warning-tag-generation-failed"><a class="header" href="#warning-tag-generation-failed">"warning: Tag generation failed"</a></h3>
+<p><strong>Cause</strong>: Build script couldn't download ExifTool source (network issue).</p>
+<p><strong>Impact</strong>: Build continues with fallback tag registry (reduced tag coverage).</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>
+<p><strong>Check internet connection</strong> and retry:</p>
+<pre><code class="language-bash">cargo clean
+cargo build --release
+</code></pre>
+</li>
+<li>
+<p><strong>Use proxy</strong> if behind a firewall:</p>
+<pre><code class="language-bash">export HTTP_PROXY=http://proxy:port
+export HTTPS_PROXY=http://proxy:port
+cargo build --release
+</code></pre>
+</li>
+<li>
+<p><strong>Accept fallback</strong>: The build will still succeed with core tags available.</p>
+</li>
+</ol>
+<h2 id="performance-issues"><a class="header" href="#performance-issues">Performance Issues</a></h2>
+<h3 id="slow-processing"><a class="header" href="#slow-processing">Slow Processing</a></h3>
+<p><strong>Symptoms</strong>: Metadata operations take much longer than expected.</p>
+<p><strong>Solutions:</strong></p>
+<h4 id="1-use-release-builds"><a class="header" href="#1-use-release-builds">1. Use Release Builds</a></h4>
+<p>Debug builds are 2-5x slower than release builds:</p>
+<pre><code class="language-bash"># Slow (debug build)
+cargo build
+./target/debug/exiftool-rs photo.jpg
+
+# Fast (release build)
+cargo build --release
+./target/release/exiftool-rs photo.jpg
+</code></pre>
+<p><strong>Release Build Optimizations:</strong></p>
+<ul>
+<li>Link-time optimization (LTO)</li>
+<li>Codegen units = 1</li>
+<li>Optimization level 3</li>
+<li>Dead code elimination</li>
+</ul>
+<h4 id="2-use-batch-processing"><a class="header" href="#2-use-batch-processing">2. Use Batch Processing</a></h4>
+<p>Process multiple files in parallel:</p>
+<pre><code class="language-bash"># Slow (sequential)
+for file in *.jpg; do
+  exiftool-rs "$file"
+done
+
+# Fast (parallel with -r flag)
+exiftool-rs -r .
+</code></pre>
+<p>ExifTool-RS automatically uses all CPU cores for batch processing.</p>
+<h4 id="3-memory-mapped-io"><a class="header" href="#3-memory-mapped-io">3. Memory-Mapped I/O</a></h4>
+<p>ExifTool-RS automatically uses memory-mapped I/O for files &gt; 1MB. No configuration needed!</p>
+<h4 id="4-avoid-unnecessary-operations"><a class="header" href="#4-avoid-unnecessary-operations">4. Avoid Unnecessary Operations</a></h4>
+<pre><code class="language-bash"># Slow (reads file twice)
+exiftool-rs photo.jpg &gt; metadata.txt
+exiftool-rs -j photo.jpg &gt; metadata.json
+
+# Fast (read once, output both formats)
+exiftool-rs photo.jpg | tee metadata.txt
+exiftool-rs -j photo.jpg &gt; metadata.json
+</code></pre>
+<h3 id="high-memory-usage"><a class="header" href="#high-memory-usage">High Memory Usage</a></h3>
+<p><strong>Symptoms</strong>: Process uses excessive RAM during batch processing.</p>
+<p><strong>Causes &amp; Solutions:</strong></p>
+<ol>
+<li>
+<p><strong>Large files</strong>: Memory-mapped I/O keeps large files in virtual memory</p>
+<ul>
+<li><strong>Solution</strong>: Process files in smaller batches</li>
+<li>Normal for files &gt; 100MB</li>
+</ul>
+</li>
+<li>
+<p><strong>Many files</strong>: Processing thousands of files in parallel</p>
+<ul>
+<li><strong>Solution</strong>: Limit parallelism or process in batches</li>
+<li>ExifTool-RS automatically limits parallel threads</li>
+</ul>
+</li>
+<li>
+<p><strong>Memory leaks</strong>: Rare, but possible</p>
+<ul>
+<li><strong>Solution</strong>: Report issue with reproduction steps</li>
+</ul>
+</li>
+</ol>
+<p><strong>Monitoring Memory:</strong></p>
+<pre><code class="language-bash"># Linux
+top -p $(pgrep exiftool-rs)
+
+# macOS
+top | grep exiftool-rs
+
+# Windows Task Manager
+# Look for exiftool-rs.exe
+</code></pre>
+<h3 id="slow-compilation"><a class="header" href="#slow-compilation">Slow Compilation</a></h3>
+<p><strong>Symptoms</strong>: <code>cargo build</code> takes a very long time (first build).</p>
+<p><strong>Normal Behavior</strong>: First compilation downloads and compiles all dependencies (3-5 minutes).</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>
+<p><strong>Use incremental builds</strong>: Subsequent builds are much faster (10-30 seconds)</p>
+</li>
+<li>
+<p><strong>Use <code>--release</code> only when needed</strong>:</p>
+<pre><code class="language-bash"># Fast (debug build for development)
+cargo build
+
+# Slow (release build for performance)
+cargo build --release
+</code></pre>
+</li>
+<li>
+<p><strong>Use <code>cargo check</code></strong> for faster syntax checking:</p>
+<pre><code class="language-bash">cargo check  # Fast, no code generation
+</code></pre>
+</li>
+<li>
+<p><strong>Parallel compilation</strong> (usually automatic):</p>
+<pre><code class="language-bash">cargo build -j$(nproc)  # Use all cores
+</code></pre>
+</li>
+</ol>
+<h2 id="debugging-strategies"><a class="header" href="#debugging-strategies">Debugging Strategies</a></h2>
+<h3 id="enable-verbose-output"><a class="header" href="#enable-verbose-output">Enable Verbose Output</a></h3>
+<p>ExifTool-RS doesn't have a verbose flag yet, but you can use:</p>
+<pre><code class="language-bash"># Check file exists
+ls -lh photo.jpg
+
+# Verify format
+file photo.jpg
+
+# Try reading
+exiftool-rs photo.jpg
+</code></pre>
+<h3 id="compare-with-original-exiftool"><a class="header" href="#compare-with-original-exiftool">Compare with Original ExifTool</a></h3>
+<p>If ExifTool-RS produces unexpected results:</p>
+<pre><code class="language-bash"># Original ExifTool
+exiftool photo.jpg &gt; exiftool_output.txt
+
+# ExifTool-RS
+exiftool-rs photo.jpg &gt; exiftool_rs_output.txt
+
+# Compare
+diff exiftool_output.txt exiftool_rs_output.txt
+</code></pre>
+<p>Report differences as issues (this helps improve compatibility).</p>
+<h3 id="check-file-format"><a class="header" href="#check-file-format">Check File Format</a></h3>
+<pre><code class="language-bash"># Linux/macOS
+file photo.jpg
+
+# Hexdump first 32 bytes (magic number)
+xxd -l 32 photo.jpg
+</code></pre>
+<p>Expected magic numbers:</p>
+<ul>
+<li>JPEG: <code>ff d8 ff</code></li>
+<li>PNG: <code>89 50 4e 47</code></li>
+<li>TIFF (LE): <code>49 49 2a 00</code></li>
+<li>PDF: <code>25 50 44 46</code> (<code>%PDF</code>)</li>
+</ul>
+<h3 id="test-with-sample-files"><a class="header" href="#test-with-sample-files">Test with Sample Files</a></h3>
+<p>Use test fixtures from the repository:</p>
+<pre><code class="language-bash">cd exiftool-rs
+exiftool-rs tests/fixtures/jpeg/sample_with_exif.jpg
+exiftool-rs tests/fixtures/png/sample_with_metadata.png
+</code></pre>
+<p>If test files work but your file doesn't, the file may be:</p>
+<ul>
+<li>Corrupted</li>
+<li>Using unsupported variant</li>
+<li>Non-standard format</li>
+</ul>
+<h3 id="run-tests-1"><a class="header" href="#run-tests-1">Run Tests</a></h3>
+<pre><code class="language-bash"># Run all tests
+cargo test
+
+# Run specific test
+cargo test test_jpeg_read
+
+# Run with output
+cargo test -- --nocapture
+</code></pre>
+<p>If tests pass but your file fails, please report an issue with the file (if possible).</p>
+<h2 id="performance-tips-1"><a class="header" href="#performance-tips-1">Performance Tips</a></h2>
+<h3 id="best-practices-for-fast-processing"><a class="header" href="#best-practices-for-fast-processing">Best Practices for Fast Processing</a></h3>
+<ol>
+<li>
+<p><strong>Use Release Builds</strong>:</p>
+<pre><code class="language-bash">cargo build --release
+./target/release/exiftool-rs
+</code></pre>
+</li>
+<li>
+<p><strong>Batch Process with <code>-r</code></strong>:</p>
+<pre><code class="language-bash">exiftool-rs -r /photos/  # Parallel processing
+</code></pre>
+</li>
+<li>
+<p><strong>Output to File</strong> (avoid terminal I/O overhead):</p>
+<pre><code class="language-bash">exiftool-rs -j photos/ &gt; metadata.json
+</code></pre>
+</li>
+<li>
+<p><strong>Use CSV for Large Datasets</strong>:</p>
+<pre><code class="language-bash">exiftool-rs --csv -r photos/ &gt; metadata.csv
+</code></pre>
+</li>
+<li>
+<p><strong>Process Locally</strong> (avoid network drives):</p>
+<pre><code class="language-bash"># Slow
+exiftool-rs /mnt/network_drive/photos/
+
+# Fast
+rsync -av /mnt/network_drive/photos/ /local/photos/
+exiftool-rs -r /local/photos/
+</code></pre>
+</li>
+</ol>
+<h3 id="benchmarking-performance"><a class="header" href="#benchmarking-performance">Benchmarking Performance</a></h3>
+<p>Compare ExifTool-RS vs original ExifTool:</p>
+<pre><code class="language-bash"># Original ExifTool
+time exiftool -r photos/ &gt; /dev/null
+
+# ExifTool-RS
+time exiftool-rs -r photos/ &gt; /dev/null
+</code></pre>
+<p>Expected results: ExifTool-RS should be 2-5x faster.</p>
+<p>If not, report the issue with:</p>
+<ul>
+<li>System info (OS, CPU, RAM)</li>
+<li>File count and sizes</li>
+<li>Performance measurements</li>
+</ul>
+<h3 id="run-benchmarks"><a class="header" href="#run-benchmarks">Run Benchmarks</a></h3>
+<pre><code class="language-bash"># Run criterion benchmarks
+cargo bench
+
+# View results
+open target/criterion/report/index.html  # macOS
+xdg-open target/criterion/report/index.html  # Linux
+</code></pre>
+<p>Current baseline performance:</p>
+<ul>
+<li>Format detection: ~2.2 ns per operation</li>
+<li>JPEG segment parsing: ~24 ns per operation</li>
+<li>TIFF IFD parsing: ~94 ns per operation</li>
+<li>Full read_metadata: ~9.3 μs per file</li>
+</ul>
+<h2 id="known-limitations"><a class="header" href="#known-limitations">Known Limitations</a></h2>
+<h3 id="features-not-yet-implemented-1"><a class="header" href="#features-not-yet-implemented-1">Features Not Yet Implemented</a></h3>
+<p>The following features are planned but not available in v0.1.0:</p>
+<ol>
+<li><strong>Tag-specific reading</strong>: <code>-TAG</code> to show only specific tags</li>
+<li><strong>Tag deletion</strong>: <code>-TAG=</code> to delete tags</li>
+<li><strong>Group deletion</strong>: <code>-all=</code> to remove all metadata</li>
+<li><strong>Conditional edits</strong>: <code>-if</code> for conditional operations</li>
+<li><strong>Short format output</strong>: <code>-s</code> for compact output</li>
+<li><strong>Advanced file renaming</strong>: Complex patterns with multiple tags</li>
+</ol>
+<p><strong>Workaround</strong>: Use the original ExifTool for these features.</p>
+<h3 id="format-limitations"><a class="header" href="#format-limitations">Format Limitations</a></h3>
+<ul>
+<li><strong>RAW formats</strong>: Not yet supported (CR2, NEF, ARW, etc.)</li>
+<li><strong>Video writing</strong>: MP4/MOV read-only (write support planned)</li>
+<li><strong>PDF writing</strong>: Read-only (write support planned)</li>
+<li><strong>Archive formats</strong>: No ZIP, 7z support yet</li>
+</ul>
+<p>See <a href="formats.html">Supported Formats</a> for the complete list.</p>
+<h3 id="platform-specific-issues"><a class="header" href="#platform-specific-issues">Platform-Specific Issues</a></h3>
+<h4 id="windows-2"><a class="header" href="#windows-2">Windows</a></h4>
+<ul>
+<li><strong>Path separators</strong>: Use forward slashes or escape backslashes:
+<pre><code class="language-bash">exiftool-rs C:/photos/image.jpg  # OK
+exiftool-rs "C:\\photos\\image.jpg"  # OK
+exiftool-rs C:\photos\image.jpg  # May fail
+</code></pre>
+</li>
+</ul>
+<h4 id="macos-2"><a class="header" href="#macos-2">macOS</a></h4>
+<ul>
+<li><strong>Gatekeeper</strong>: First run may require explicit permission:
+<pre><code class="language-bash"># If blocked by Gatekeeper
+xattr -d com.apple.quarantine ./target/release/exiftool-rs
+</code></pre>
+</li>
+</ul>
+<h4 id="linux-2"><a class="header" href="#linux-2">Linux</a></h4>
+<ul>
+<li><strong>Permissions</strong>: Ensure execute permission:
+<pre><code class="language-bash">chmod +x ./target/release/exiftool-rs
+</code></pre>
+</li>
+</ul>
+<h2 id="getting-help"><a class="header" href="#getting-help">Getting Help</a></h2>
+<h3 id="community-resources"><a class="header" href="#community-resources">Community Resources</a></h3>
+<ol>
+<li>
+<p><strong>GitHub Issues</strong>: Report bugs and request features</p>
+<ul>
+<li><a href="https://github.com/exiftool-rs/exiftool-rs/issues">https://github.com/exiftool-rs/exiftool-rs/issues</a></li>
+</ul>
+</li>
+<li>
+<p><strong>GitHub Discussions</strong>: Ask questions and discuss</p>
+<ul>
+<li><a href="https://github.com/exiftool-rs/exiftool-rs/discussions">https://github.com/exiftool-rs/exiftool-rs/discussions</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Documentation</strong>: This user guide</p>
+<ul>
+<li><a href="intro.html">Introduction</a></li>
+<li><a href="cli_usage.html">Command-Line Usage</a></li>
+<li><a href="library_api.html">Library API</a></li>
+<li><a href="ffi.html">C FFI Integration</a></li>
+</ul>
+</li>
+</ol>
+<h3 id="reporting-bugs"><a class="header" href="#reporting-bugs">Reporting Bugs</a></h3>
+<p>When reporting bugs, include:</p>
+<ol>
+<li>
+<p><strong>ExifTool-RS version</strong>:</p>
+<pre><code class="language-bash">exiftool-rs --version
+</code></pre>
+</li>
+<li>
+<p><strong>System information</strong>:</p>
+<ul>
+<li>OS and version</li>
+<li>Rust version (<code>rustc --version</code>)</li>
+<li>Architecture (x86_64, ARM64)</li>
+</ul>
+</li>
+<li>
+<p><strong>File information</strong> (if applicable):</p>
+<pre><code class="language-bash">file photo.jpg
+ls -lh photo.jpg
+</code></pre>
+</li>
+<li>
+<p><strong>Full error message</strong>:</p>
+<pre><code class="language-bash">exiftool-rs photo.jpg 2&gt;&amp;1 | tee error.log
+</code></pre>
+</li>
+<li>
+<p><strong>Steps to reproduce</strong>:</p>
+<ul>
+<li>Exact command used</li>
+<li>Expected behavior</li>
+<li>Actual behavior</li>
+</ul>
+</li>
+<li>
+<p><strong>Sample file</strong> (if possible and not confidential)</p>
+</li>
+</ol>
+<h3 id="feature-requests"><a class="header" href="#feature-requests">Feature Requests</a></h3>
+<p>When requesting features:</p>
+<ol>
+<li><strong>Describe the use case</strong>: What problem does this solve?</li>
+<li><strong>Provide examples</strong>: How would you use this feature?</li>
+<li><strong>Check existing issues</strong>: Has someone already requested this?</li>
+<li><strong>Consider contributing</strong>: PRs welcome!</li>
+</ol>
+<h2 id="diagnostic-commands"><a class="header" href="#diagnostic-commands">Diagnostic Commands</a></h2>
+<h3 id="check-installation"><a class="header" href="#check-installation">Check Installation</a></h3>
+<pre><code class="language-bash"># Version
+exiftool-rs --version
+
+# Help
+exiftool-rs --help
+
+# Test with known good file
+exiftool-rs tests/fixtures/jpeg/sample_with_exif.jpg
+</code></pre>
+<h3 id="check-file-integrity"><a class="header" href="#check-file-integrity">Check File Integrity</a></h3>
+<pre><code class="language-bash"># File type
+file photo.jpg
+
+# File size
+ls -lh photo.jpg
+
+# Hex dump (first 32 bytes)
+xxd -l 32 photo.jpg
+
+# Try with original ExifTool
+exiftool photo.jpg
+</code></pre>
+<h3 id="check-system-resources"><a class="header" href="#check-system-resources">Check System Resources</a></h3>
+<pre><code class="language-bash"># CPU count (for parallel processing)
+nproc  # Linux
+sysctl -n hw.ncpu  # macOS
+
+# Available memory
+free -h  # Linux
+vm_stat  # macOS
+
+# Disk space
+df -h .
+</code></pre>
+<h3 id="check-build-configuration"><a class="header" href="#check-build-configuration">Check Build Configuration</a></h3>
+<pre><code class="language-bash"># Cargo version
+cargo --version
+
+# Rustc version
+rustc --version
+
+# Build info
+cargo tree  # Show dependency tree
+cargo metadata  # Show build metadata
+</code></pre>
+<h2 id="performance-optimization-guide"><a class="header" href="#performance-optimization-guide">Performance Optimization Guide</a></h2>
+<h3 id="system-tuning"><a class="header" href="#system-tuning">System Tuning</a></h3>
+<h4 id="linux-3"><a class="header" href="#linux-3">Linux</a></h4>
+<pre><code class="language-bash"># Increase file descriptor limit (for batch processing)
+ulimit -n 4096
+
+# Check I/O scheduler (for SSD)
+cat /sys/block/sda/queue/scheduler
+# [mq-deadline] noop  # Good for SSDs
+</code></pre>
+<h4 id="macos-3"><a class="header" href="#macos-3">macOS</a></h4>
+<pre><code class="language-bash"># Increase file descriptor limit
+ulimit -n 4096
+
+# Check disk performance
+diskutil info /dev/disk0
+</code></pre>
+<h4 id="windows-3"><a class="header" href="#windows-3">Windows</a></h4>
+<ul>
+<li>Disable Windows Defender real-time scanning for the directory (temporarily, for benchmarking)</li>
+<li>Use NVMe SSD for best performance</li>
+<li>Close unnecessary background applications</li>
+</ul>
+<h3 id="profiling"><a class="header" href="#profiling">Profiling</a></h3>
+<pre><code class="language-bash"># CPU profiling with perf (Linux)
+perf record --call-graph dwarf exiftool-rs -r photos/
+perf report
+
+# Memory profiling with valgrind
+valgrind --tool=massif exiftool-rs photo.jpg
+ms_print massif.out.*
+</code></pre>
+<h2 id="additional-resources-3"><a class="header" href="#additional-resources-3">Additional Resources</a></h2>
+<ul>
+<li><strong><a href="installation.html">Installation Guide</a></strong>: Setup and configuration</li>
+<li><strong><a href="cli_usage.html">Command-Line Usage</a></strong>: CLI reference</li>
+<li><strong><a href="formats.html">Supported Formats</a></strong>: Format compatibility</li>
+<li><strong><a href="library_api.html">Library API</a></strong>: Rust API documentation</li>
+<li><strong><a href="https://exiftool.org/">Original ExifTool</a></strong>: Perl implementation (for comparison)</li>
+</ul>
+<h2 id="emergency-fallback"><a class="header" href="#emergency-fallback">Emergency Fallback</a></h2>
+<p>If ExifTool-RS isn't working for your use case, you can always fall back to the original ExifTool:</p>
+<pre><code class="language-bash"># Install original ExifTool
+# macOS
+brew install exiftool
+
+# Ubuntu/Debian
+sudo apt install libimage-exiftool-perl
+
+# Use original ExifTool
+exiftool photo.jpg
+</code></pre>
+<p>ExifTool-RS aims for compatibility, but the original ExifTool has 20+ years of development and supports 300+ formats. Use the best tool for the job!</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+
+    </div>
+    </body>
+</html>
