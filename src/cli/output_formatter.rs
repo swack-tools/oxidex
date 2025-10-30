@@ -26,6 +26,7 @@
 
 use crate::core::metadata_map::MetadataMap;
 use crate::core::tag_value::TagValue;
+use csv::Writer;
 
 /// Trait for formatting metadata into different output formats
 ///
@@ -143,6 +144,84 @@ impl OutputFormatter for JsonFormatter {
                 format!("{{\"error\": \"Failed to serialize metadata: {}\"}}", e)
             }
         }
+    }
+}
+
+/// Formats metadata as CSV
+///
+/// Output format: Two-column CSV with "Tag" and "Value" headers.
+/// Each metadata entry becomes a row with the tag name and its formatted value.
+/// The CSV is RFC 4180 compliant and parseable by standard tools (Excel, pandas).
+///
+/// # Examples
+///
+/// ```
+/// use exiftool_rs::cli::output_formatter::{OutputFormatter, CsvFormatter};
+/// use exiftool_rs::core::metadata_map::MetadataMap;
+/// use exiftool_rs::core::tag_value::TagValue;
+///
+/// let mut metadata = MetadataMap::new();
+/// metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
+/// metadata.insert("EXIF:ISO", TagValue::new_integer(400));
+///
+/// let formatter = CsvFormatter;
+/// let csv = formatter.format(&metadata, None);
+/// // Output:
+/// // Tag,Value
+/// // EXIF:ISO,400
+/// // EXIF:Make,Canon
+/// ```
+pub struct CsvFormatter;
+
+impl OutputFormatter for CsvFormatter {
+    fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
+        if metadata.is_empty() {
+            return String::new();
+        }
+
+        // Collect tags into a vector for sorting
+        let mut tags: Vec<_> = metadata.iter().collect();
+
+        // Filter tags if a filter is provided
+        if let Some(filter) = filter_tags {
+            tags.retain(|(name, _)| filter.contains(name));
+            if tags.is_empty() {
+                return String::new();
+            }
+        }
+
+        // Sort tags alphabetically by name
+        tags.sort_by_key(|(name, _)| *name);
+
+        // Create CSV writer that writes to a Vec<u8> buffer
+        let mut wtr = Writer::from_writer(vec![]);
+
+        // Write header row
+        if wtr.write_record(["Tag", "Value"]).is_err() {
+            return String::from("Tag,Value\n");
+        }
+
+        // Write data rows
+        for (tag_name, tag_value) in tags {
+            let formatted_value = format_tag_value(tag_value);
+            if wtr.write_record([tag_name, &formatted_value]).is_err() {
+                // Skip this record if write fails, but continue
+                continue;
+            }
+        }
+
+        // Flush the writer and get the buffer
+        if wtr.flush().is_err() {
+            return String::from("Tag,Value\n");
+        }
+
+        let data = match wtr.into_inner() {
+            Ok(buffer) => buffer,
+            Err(_) => return String::from("Tag,Value\n"),
+        };
+
+        // Convert bytes to UTF-8 string
+        String::from_utf8(data).unwrap_or_else(|_| String::from("Tag,Value\n"))
     }
 }
 
@@ -392,5 +471,171 @@ mod tests {
         map.insert("key".to_string(), TagValue::new_string("value"));
         let value = TagValue::new_struct(map);
         assert_eq!(format_tag_value(&value), "(Structured data)");
+    }
+
+    // CSV Formatter Tests
+    #[test]
+    fn test_csv_formatter_empty_metadata() {
+        let metadata = MetadataMap::new();
+        let formatter = CsvFormatter;
+        let output = formatter.format(&metadata, None);
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn test_csv_formatter_single_tag() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
+
+        let formatter = CsvFormatter;
+        let output = formatter.format(&metadata, None);
+
+        // Verify CSV format
+        assert!(output.starts_with("Tag,Value\n"));
+        assert!(output.contains("EXIF:Make,Canon"));
+
+        // Verify it's parseable as CSV
+        let mut rdr = csv::Reader::from_reader(output.as_bytes());
+        let records: Vec<_> = rdr.records().collect();
+        assert_eq!(records.len(), 1);
+    }
+
+    #[test]
+    fn test_csv_formatter_multiple_tags_sorted() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("EXIF:Model", TagValue::new_string("EOS 5D"));
+        metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
+        metadata.insert("EXIF:ISO", TagValue::new_integer(400));
+
+        let formatter = CsvFormatter;
+        let output = formatter.format(&metadata, None);
+
+        // Verify header
+        assert!(output.starts_with("Tag,Value\n"));
+
+        // Parse CSV to verify structure
+        let mut rdr = csv::Reader::from_reader(output.as_bytes());
+        let records: Vec<_> = rdr.records().map(|r| r.unwrap()).collect();
+        assert_eq!(records.len(), 3);
+
+        // Verify tags are sorted alphabetically
+        assert_eq!(records[0].get(0), Some("EXIF:ISO"));
+        assert_eq!(records[0].get(1), Some("400"));
+        assert_eq!(records[1].get(0), Some("EXIF:Make"));
+        assert_eq!(records[1].get(1), Some("Canon"));
+        assert_eq!(records[2].get(0), Some("EXIF:Model"));
+        assert_eq!(records[2].get(1), Some("EOS 5D"));
+    }
+
+    #[test]
+    fn test_csv_formatter_all_value_types() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
+        metadata.insert("EXIF:ISO", TagValue::new_integer(800));
+        metadata.insert("EXIF:FNumber", TagValue::new_float(2.8));
+        metadata.insert("EXIF:ExposureTime", TagValue::new_rational(1, 100));
+        metadata.insert(
+            "EXIF:ThumbnailData",
+            TagValue::new_binary(vec![0xFF, 0xD8, 0xFF, 0xE0]),
+        );
+
+        let dt = Utc.with_ymd_and_hms(2023, 6, 15, 12, 30, 0).unwrap();
+        metadata.insert("EXIF:DateTime", TagValue::new_datetime(dt));
+
+        let formatter = CsvFormatter;
+        let output = formatter.format(&metadata, None);
+
+        // Verify all types are formatted correctly in CSV
+        assert!(output.contains("EXIF:Make,Canon"));
+        assert!(output.contains("EXIF:ISO,800"));
+        assert!(output.contains("EXIF:FNumber,2.8"));
+        assert!(output.contains("EXIF:ExposureTime,1/100"));
+        assert!(output.contains("EXIF:ThumbnailData,\"(Binary, 4 bytes)\""));
+        assert!(output.contains("EXIF:DateTime,2023-06-15T12:30:00+00:00"));
+
+        // Verify it's valid parseable CSV
+        let mut rdr = csv::Reader::from_reader(output.as_bytes());
+        let records: Vec<_> = rdr.records().collect();
+        assert_eq!(records.len(), 6);
+    }
+
+    #[test]
+    fn test_csv_formatter_with_filter() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
+        metadata.insert("EXIF:Model", TagValue::new_string("EOS 5D"));
+        metadata.insert("EXIF:ISO", TagValue::new_integer(400));
+
+        let formatter = CsvFormatter;
+        let filter = vec!["EXIF:Make".to_string(), "EXIF:ISO".to_string()];
+        let output = formatter.format(&metadata, Some(&filter));
+
+        // Verify only filtered tags appear
+        assert!(output.contains("EXIF:Make,Canon"));
+        assert!(output.contains("EXIF:ISO,400"));
+        assert!(!output.contains("EXIF:Model"));
+
+        // Verify CSV structure
+        let mut rdr = csv::Reader::from_reader(output.as_bytes());
+        let records: Vec<_> = rdr.records().collect();
+        assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn test_csv_formatter_filter_nonexistent_tag() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
+
+        let formatter = CsvFormatter;
+        let filter = vec!["EXIF:NonExistent".to_string()];
+        let output = formatter.format(&metadata, Some(&filter));
+
+        // No matching tags, should return empty string
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn test_csv_formatter_special_characters() {
+        let mut metadata = MetadataMap::new();
+        // Test comma in value (should be quoted by csv crate)
+        metadata.insert("EXIF:Artist", TagValue::new_string("Doe, John"));
+        // Test quotes in value (should be escaped)
+        metadata.insert("EXIF:Copyright", TagValue::new_string("Copyright \"2023\""));
+
+        let formatter = CsvFormatter;
+        let output = formatter.format(&metadata, None);
+
+        // Verify CSV handles special characters correctly
+        let mut rdr = csv::Reader::from_reader(output.as_bytes());
+        let records: Vec<_> = rdr.records().map(|r| r.unwrap()).collect();
+        assert_eq!(records.len(), 2);
+
+        // CSV reader should correctly parse values with commas and quotes
+        assert!(records.iter().any(|r| r.get(1) == Some("Doe, John")));
+        assert!(records.iter().any(|r| r.get(1) == Some("Copyright \"2023\"")));
+    }
+
+    #[test]
+    fn test_csv_formatter_valid_csv_structure() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
+        metadata.insert("EXIF:Model", TagValue::new_string("EOS R5"));
+        metadata.insert("EXIF:ISO", TagValue::new_integer(800));
+        metadata.insert("EXIF:FNumber", TagValue::new_float(2.8));
+
+        let formatter = CsvFormatter;
+        let output = formatter.format(&metadata, None);
+
+        // Verify it's parseable by csv crate (same as Excel/pandas would use)
+        // Check headers
+        let mut rdr = csv::Reader::from_reader(output.as_bytes());
+        let headers = rdr.headers().unwrap();
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers.get(0), Some("Tag"));
+        assert_eq!(headers.get(1), Some("Value"));
+
+        // Check records
+        let records: Vec<_> = rdr.records().map(|r| r.unwrap()).collect();
+        assert_eq!(records.len(), 4);
     }
 }

@@ -14,6 +14,10 @@ pub struct CliArgs {
     #[arg(short, long)]
     pub json: bool,
 
+    /// Output in CSV format
+    #[arg(long)]
+    pub csv: bool,
+
     /// Short output format (not yet fully implemented)
     #[arg(short = 's')]
     pub short_format: bool,

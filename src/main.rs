@@ -5,7 +5,7 @@
 use clap::Parser;
 use exiftool_rs::cli::args::CliArgs;
 use exiftool_rs::cli::batch_processor;
-use exiftool_rs::cli::output_formatter::{HumanReadableFormatter, JsonFormatter, OutputFormatter};
+use exiftool_rs::cli::output_formatter::{CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter};
 use exiftool_rs::cli::rename;
 use exiftool_rs::core::date_shift::{shift_metadata_dates, ShiftOperation};
 use exiftool_rs::core::operations::{copy_metadata, modify_tag, read_metadata};
@@ -54,7 +54,7 @@ fn main() {
             handle_write_operation(&file, &args);
         } else {
             // Read mode: display metadata
-            handle_read_operation(&file, args.json);
+            handle_read_operation(&file, &args);
         }
     }
 }
@@ -157,7 +157,7 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
 }
 
 /// Handles read operations (displaying metadata)
-fn handle_read_operation(file: &std::path::Path, json_output: bool) {
+fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
     match read_metadata(file) {
         Ok(metadata) => {
             // Check if any metadata was found
@@ -167,7 +167,13 @@ fn handle_read_operation(file: &std::path::Path, json_output: bool) {
             }
 
             // Output based on requested format using formatters
-            if json_output {
+            // Check CSV first, then JSON, then default to human-readable
+            if args.csv {
+                // CSV output format
+                let formatter = CsvFormatter;
+                let output = formatter.format(&metadata, None);
+                print!("{}", output);
+            } else if args.json {
                 // JSON output format
                 let formatter = JsonFormatter;
                 let output = formatter.format(&metadata, None);
