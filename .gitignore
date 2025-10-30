@@ -37,3 +37,19 @@ fuzz/artifacts/
 
 # Benchmark outputs
 benches/target/
+
+# Claude Code config
+.claude/
+
+# Helper scripts and temporary files
+generate_tags.py
+additional_tags.txt
+exif_additional.txt
+new_tags.txt
+
+# MCP config (if not needed in repo)
+.mcp.json
+
+# Codemachine temporary/draft files
+.codemachine/inputs/*.3.md
+.codemachine/inputs/*.4md
