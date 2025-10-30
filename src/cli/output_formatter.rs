@@ -193,6 +193,10 @@ fn tag_value_to_json(value: &TagValue) -> serde_json::Value {
             }
             serde_json::Value::Object(obj)
         }
+        TagValue::Array(values) => {
+            let array: Vec<serde_json::Value> = values.iter().map(tag_value_to_json).collect();
+            serde_json::Value::Array(array)
+        }
     }
 }
 
@@ -290,6 +294,10 @@ fn format_tag_value(value: &TagValue) -> String {
         TagValue::Binary(bytes) => format!("(Binary, {} bytes)", bytes.len()),
         TagValue::DateTime(dt) => dt.to_rfc3339(),
         TagValue::Struct(_) => "(Structured data)".to_string(),
+        TagValue::Array(values) => {
+            let formatted: Vec<String> = values.iter().map(format_tag_value).collect();
+            format!("[{}]", formatted.join(", "))
+        }
     }
 }
 

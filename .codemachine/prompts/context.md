@@ -26,6 +26,237 @@ This is the full specification of the task you must complete.
     "tests/integration/exiftool_comparison_tests.rs",
     "tests/fixtures/"
   ],
+  "deliverables": "Comprehensive test suite (100+ images), CI integration, test results reporting",
+  "acceptance_criteria": "Test corpus contains 100+ diverse images, tests cover all supported formats (JPEG, TIFF, PNG, PDF, MP4), tests cover all operations (read, write, copy, rename, date shift), 98%+ tag match rate achieved for reads, round-trip tests pass (write → read → verify), CI runs tests on every commit (with ExifTool installed in CI environment), README shows test results badge (pass/fail)",
+  "dependencies": [],
+  "parallelizable": false,
+  "done": false
+}
+```
+
+---
+
+## 2. Architectural & Planning Context
+
+The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
+
+### Context: Integration Test Plan (from docs/testing/integration_test_plan.md)
+
+The integration test plan document provides comprehensive guidance on:
+
+**Test Image Corpus Strategy**:
+- Target: 100+ images across all supported formats
+- Diversity Matrix covering Simple, Complex, Edge Cases, and Malformed files
+- JPEG: 50 total (15 simple, 15 complex, 10 edge, 10 malformed)
+- PNG: 30 total (10 simple, 10 complex, 5 edge, 5 malformed)
+- TIFF: 25 total (8 simple, 8 complex, 4 edge, 5 malformed)
+- WebP: 15 total, HEIC: 10 total
+
+**Validation Methodology**:
+- Reference Implementation: Perl ExifTool v12.70+
+- Comparison via JSON output: `exiftool -json -a -G1 -struct`
+- Match rate calculation: (Matched Tags / Total Tags) × 100
+- Floating-point tolerance: GPS ±0.0001°, other measurements ±0.01
+
+**Acceptance Criteria**:
+- Well-formed files: 99% match rate minimum
+- Complex files: 99% match rate minimum
+- Edge cases: 95% match rate minimum
+- Malformed files: Graceful error handling (no crashes)
+- Overall target: 98%+ for read operations
+
+**CI/CD Integration**:
+- GitHub Actions workflow with ExifTool installation
+- Tests run with `--features exiftool-comparison`
+- Match rate threshold enforcement
+- Cross-platform testing (Linux, macOS, Windows)
+
+### Context: Verification Strategy (from plan documentation)
+
+**Testing Levels**:
+- Unit tests: 80%+ coverage target
+- Property-based tests: Round-trip verification with proptest
+- Integration tests: End-to-end workflows and ExifTool comparison
+- Fuzzing: Continuous fuzzing with cargo-fuzz and OSS-Fuzz
+- Benchmarking: Performance regression detection with criterion
+
+**Integration Tests**:
+- End-to-end workflow tests
+- ExifTool comparison tests with JSON output diff
+- Format coverage across all supported types
+- Error handling for malformed files
+
+**CI/CD Pipeline**:
+- GitHub Actions for CI, fuzzing, and releases
+- Build, test, lint, audit, coverage on every push/PR
+- Cross-platform matrix: ubuntu-latest, macos-latest, windows-latest
+
+**Code Quality Gates**:
+- Compilation without warnings
+- All tests pass
+- Clippy clean
+- Coverage ≥80%
+- No cargo audit vulnerabilities
+
+**Release Criteria for v1.0**:
+- All features implemented
+- Test coverage ≥80%
+- Documentation complete
+- Performance benchmarks meet targets (2-5x faster than Perl)
+- Binary distributions available
+
+---
+
+## 3. Codebase Analysis & Strategic Guidance
+
+The following analysis is based on my direct review of the current codebase. Use these notes and tips to guide your implementation.
+
+### Relevant Existing Code
+
+*   **File:** `tests/integration/exiftool_comparison_tests.rs`
+    *   **Summary:** This file contains the comprehensive comparison test framework. It has 882 lines implementing comparison infrastructure, helper functions, and 10 test cases covering JPEG, PNG, TIFF, PDF, and MP4 formats.
+    *   **Current Coverage:** The file header comments indicate **102+ test images** across 5 formats: JPEG (30), PNG (33), TIFF (20), PDF (10), MP4 (9).
+    *   **Status:** The test corpus already **exceeds the 100+ image requirement** (102 images total). The task is marked as "100% ✅" in comments (line 22).
+    *   **Recommendation:** You SHOULD focus on completing the remaining TODO items in the file, specifically:
+        - Write round-trip tests (lines 622-651 are commented out)
+        - Implement copy metadata tests
+        - Implement rename functionality tests
+        - Implement date shift tests
+    *   **Key Functions Already Implemented:**
+        - `is_exiftool_available()`: Checks for Perl ExifTool in PATH
+        - `get_perl_exiftool_output()`: Executes Perl ExifTool with correct flags
+        - `get_exiftool_rs_output()`: Executes ExifTool-RS binary
+        - `compare_json_outputs()`: Compares JSON outputs with tolerance
+        - `values_match()`: Smart comparison with floating-point tolerance
+        - `should_skip_tag()`: Filters out pseudo-tags (System:, File:, ExifTool:)
+    *   **Test Functions:** 10 comparison tests already implemented covering all 5 formats
+
+*   **File:** `.github/workflows/ci.yml`
+    *   **Summary:** GitHub Actions CI workflow with 4 jobs: test, audit, coverage, integration-tests.
+    *   **Integration Tests Job:** Lines 104-167 implement comprehensive integration testing:
+        - Cross-platform matrix (ubuntu, macos, windows)
+        - Perl ExifTool installation for all platforms
+        - Tests run with `--features exiftool-comparison`
+        - Comparison reports generated and uploaded
+    *   **Status:** CI integration is **already complete**.
+    *   **Recommendation:** The CI workflow is already properly configured. No changes needed unless you want to add match rate threshold enforcement.
+
+*   **File:** `docs/testing/integration_test_plan.md`
+    *   **Summary:** Comprehensive 1089-line integration test plan document.
+    *   **Coverage:** Detailed guidance on corpus strategy, validation methodology, acceptance criteria, Git LFS setup, CI/CD integration, test categories, and implementation roadmap.
+    *   **Recommendation:** Use this as the **authoritative reference** for implementation decisions. All strategies and thresholds are defined here.
+
+*   **File:** `README.md`
+    *   **Summary:** Project README with CI badges, project vision, architecture overview, current status, and installation instructions.
+    *   **Current Badges:** Lines 3-4 show CI and Integration Tests badges already configured.
+    *   **Recommendation:** The README already has the test results badge as required by acceptance criteria. You MAY want to update the "Current Status" section if additional test coverage is added.
+
+### Test Corpus Status
+
+Based on my file count analysis:
+- **JPEG files:** 32 (target: 50, current: 64% of target)
+- **PNG files:** 33 (target: 30, current: 110% of target ✅)
+- **TIFF files:** 20 (target: 25, current: 80% of target)
+- **PDF files:** 10 (target: N/A in plan but mentioned in test, current: adequate)
+- **MP4 files:** 9 (target: N/A in plan but mentioned in test, current: adequate)
+- **Total files:** 110 (104 images + some metadata files)
+- **Total images:** 102+ (as stated in test file header)
+
+**Status:** ✅ The test corpus **already meets the 100+ image requirement**.
+
+### Implementation Tips & Notes
+
+*   **Tip:** The task description says "Expand integration test suite from I3.T10 to cover all supported formats and operations." However, my analysis shows that **format coverage is already complete** (all 5 formats have comparison tests).
+
+*   **Note:** The **primary gap** is in **operation coverage**. The test file has TODO comments for:
+    1. Write round-trip tests (line 622-627)
+    2. Copy metadata tests (line 629-635)
+    3. Rename file pattern tests (line 637-643)
+    4. Date shift tests (line 645-651)
+
+*   **Recommendation:** Focus your implementation effort on adding these **4 operation test categories** rather than expanding the image corpus (which already exceeds requirements).
+
+*   **Warning:** The acceptance criteria mentions "tests cover all operations (read, write, copy, rename, date shift)". Currently, only **read operations** are tested. You MUST implement the write/copy/rename/date-shift tests to meet acceptance criteria.
+
+*   **Critical Implementation Detail:** For write round-trip tests, you should:
+    1. Read original metadata
+    2. Modify a tag value (e.g., `EXIF:Artist`)
+    3. Write back to file (using atomic file operations from I3.T1)
+    4. Re-read metadata
+    5. Verify the modified value persists
+    6. Optionally compare with Perl ExifTool's write behavior
+
+*   **Match Rate Achievement:** The existing comparison tests already achieve **98%+ match rates** based on the threshold assertions in the code (line 407, 456, 505, etc. all assert `>= 98.0`). The framework is working correctly.
+
+*   **CI Integration Status:** The CI workflow already:
+    - Installs Perl ExifTool on all platforms ✅
+    - Runs tests with `--features exiftool-comparison` ✅
+    - Generates comparison reports ✅
+    - Uploads artifacts ✅
+    - The only missing piece is **automatic match rate threshold enforcement** (checking if rate < 98% and failing the build)
+
+*   **Quick Win:** You can add match rate threshold enforcement to CI by parsing test output or generating a JSON report with match rates, then checking it in a CI step (similar to lines 650-656 in the integration_test_plan.md example).
+
+### Suggested Implementation Plan
+
+Based on my analysis, here's what you should do to complete I5.T9:
+
+1. **Implement Write Round-Trip Tests** (Priority: HIGH)
+   - File: `tests/integration/exiftool_comparison_tests.rs`
+   - Uncomment and implement `test_write_roundtrip_jpeg_artist()` (line 622-627)
+   - Add similar tests for PNG, TIFF, PDF if write support exists
+   - Verify tag modification persists after write → read cycle
+
+2. **Implement Copy Metadata Tests** (Priority: HIGH)
+   - Implement `test_copy_metadata_jpeg_to_jpeg()` (line 629-635)
+   - Use the `copy_metadata()` function from I4.T4 (check if implemented)
+   - Compare with Perl ExifTool's `-TagsFromFile` behavior
+
+3. **Implement Rename Tests** (Priority: MEDIUM)
+   - Implement `test_rename_file_pattern()` (line 637-643)
+   - Use the rename functionality from I4.T6 (check if implemented)
+   - Verify file renaming based on DateTimeOriginal pattern
+
+4. **Implement Date Shift Tests** (Priority: MEDIUM)
+   - Implement `test_date_shift_all_dates()` (line 645-651)
+   - Use the date shift functionality from I4.T7 (check if implemented)
+   - Verify all date tags are shifted by the specified offset
+
+5. **Add CI Match Rate Threshold** (Priority: LOW)
+   - File: `.github/workflows/ci.yml`
+   - Add a step to parse test output and extract match rates
+   - Fail CI if any test has match rate < 98%
+   - Example implementation in integration_test_plan.md lines 650-656
+
+6. **Optional: Document Known Discrepancies** (Priority: LOW)
+   - Create `tests/integration/KNOWN_DISCREPANCIES.md`
+   - Document any systematic differences between ExifTool-RS and Perl ExifTool
+   - Include justification for each discrepancy
+
+**CRITICAL CHECK:** Before implementing write/copy/rename/date-shift tests, you MUST verify that these features are actually implemented in the codebase. If they're not implemented yet (because they're from later iterations), you'll need to either:
+- Skip those tests with a TODO comment explaining they're blocked on feature implementation
+- Or focus only on expanding read operation coverage if write operations aren't ready
+
+Let me know if you need me to check which of these features are actually implemented in the codebase.
+
+```json
+{
+  "task_id": "I5.T9",
+  "iteration_id": "I5",
+  "iteration_goal": "Implement C FFI bindings for cross-language integration, automate tag database generation from ExifTool specs, set up cross-compilation and release builds, create comprehensive documentation, and polish for v1.0 release.",
+  "description": "Expand integration test suite from I3.T10 to cover all supported formats and operations. Test corpus: 100+ images across JPEG (various EXIF/XMP combinations), TIFF (multi-page, big/little-endian), PNG (text, eXIf), PDF (Info, XMP), MP4 (iTunes, keys/ilst). Test operations: read, write, copy, rename, date shift. Compare against ExifTool for all operations. Acceptance threshold: 98%+ tag value match for reads, successful round-trip for writes. Run as part of CI on every commit (with feature flag). Document test results in CI badge.",
+  "agent_type_hint": "BackendAgent",
+  "inputs": "I3.T10 comparison test framework, all implemented features",
+  "target_files": [
+    "tests/integration/exiftool_comparison_tests.rs",
+    "tests/fixtures/",
+    ".github/workflows/ci.yml",
+    "README.md"
+  ],
+  "input_files": [
+    "tests/integration/exiftool_comparison_tests.rs",
+    "tests/fixtures/"
+  ],
   "deliverables": "Comprehensive test suite (100+ images), CI integration, Test results reporting",
   "acceptance_criteria": "Test corpus contains 100+ diverse images, Tests cover all supported formats (JPEG, TIFF, PNG, PDF, MP4), Tests cover all operations (read, write, copy, rename, date shift), 98%+ tag match rate achieved for reads, Round-trip tests pass (write → read → verify), CI runs tests on every commit (with ExifTool installed in CI environment), README shows test results badge (pass/fail)",
   "dependencies": [],

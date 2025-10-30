@@ -107,13 +107,40 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         return Err(ExifToolError::parse_error("File too small to be a PDF"));
     }
 
-    let signature_data = reader.read(0, PDF_SIGNATURE.len())?;
-    if !signature_data.starts_with(PDF_SIGNATURE) {
+    // Read first 20 bytes to get version
+    let header_size = std::cmp::min(20, file_size as usize);
+    let header_data = reader.read(0, header_size)?;
+
+    if !header_data.starts_with(PDF_SIGNATURE) {
         return Err(ExifToolError::parse_error("Invalid PDF signature"));
     }
 
     // Initialize combined metadata map
     let mut metadata = MetadataMap::with_capacity(20);
+
+    // Extract PDF version from header (e.g., "%PDF-1.4")
+    if let Ok(header_str) = std::str::from_utf8(header_data) {
+        if let Some(version_str) = header_str.strip_prefix("%PDF-") {
+            if let Some(version_end) = version_str.find(|c: char| !c.is_ascii_digit() && c != '.') {
+                let version = &version_str[..version_end];
+                if let Ok(version_float) = version.parse::<f64>() {
+                    metadata.insert("PDF:PDFVersion".to_string(), crate::core::TagValue::new_float(version_float));
+                }
+            }
+        }
+    }
+
+    // Check for linearization (optimize for web display)
+    // Linearized PDFs have a linearization dictionary in the first object
+    let check_size = std::cmp::min(2048, file_size as usize);
+    let check_data = reader.read(0, check_size)?;
+    if let Ok(check_str) = std::str::from_utf8(check_data) {
+        let is_linearized = check_str.contains("/Linearized");
+        metadata.insert(
+            "PDF:Linearized".to_string(),
+            crate::core::TagValue::new_string(if is_linearized { "Yes" } else { "No" }),
+        );
+    }
 
     // Extract Info dictionary metadata
     match parse_info_dict(reader) {

@@ -474,6 +474,7 @@ fn convert_tag_value_to_entry(
         // Unsupported types - skip for now (will add TODO in tests)
         TagValue::Float(_) => Ok(None),
         TagValue::Struct(_) => Ok(None),
+        TagValue::Array(_) => Ok(None), // Arrays not yet supported in TIFF writer
     }
 }
 
