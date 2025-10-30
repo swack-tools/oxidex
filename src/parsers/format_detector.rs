@@ -18,6 +18,7 @@
 //! - TIFF (Big-Endian): 0x4D 0x4D 0x00 0x2A
 //! - PNG: 0x89 0x50 0x4E 0x47
 //! - PDF: 0x25 0x50 0x44 0x46
+//! - QuickTime/MP4: "ftyp" at bytes 4-7
 //!
 //! Unknown formats return `FileFormat::Unknown`.
 //!
@@ -137,6 +138,13 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
     // PDF: 0x25 0x50 0x44 0x46 ("%PDF")
     if magic_bytes.len() >= 4 && magic_bytes.starts_with(&[0x25, 0x50, 0x44, 0x46]) {
         return Ok(FileFormat::PDF);
+    }
+
+    // QuickTime/MP4: Check for "ftyp" atom at bytes 4-7
+    // MP4/MOV files have structure: [4 bytes size][4 bytes type "ftyp"]
+    // Common types after ftyp: "isom", "mp42", "mp41", "M4V ", "qt  ", etc.
+    if magic_bytes.len() >= 8 && &magic_bytes[4..8] == b"ftyp" {
+        return Ok(FileFormat::QuickTime);
     }
 
     // JPEG: 0xFF 0xD8 0xFF (SOI marker + start of next marker)

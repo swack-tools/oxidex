@@ -10,6 +10,8 @@ use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
 use crate::parsers::format_detector::detect_format;
 use crate::parsers::jpeg::segment_parser::parse_segments;
+use crate::parsers::pdf::parse_pdf_metadata;
+use crate::parsers::quicktime::parse_quicktime_metadata;
 use crate::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};
 use crate::tag_db::tag_registry::get_tag_descriptor;
 use crate::writers::atomic_writer::write_atomic;
@@ -72,6 +74,12 @@ pub fn read_metadata(path: &Path) -> Result<MetadataMap> {
     match format {
         FileFormat::JPEG => parse_jpeg_metadata(&reader),
         FileFormat::TIFF => parse_tiff_metadata(&reader),
+        FileFormat::PDF => parse_pdf_metadata(&reader),
+        FileFormat::QuickTime => {
+            // QuickTime parser returns Result<MetadataMap, String>, need to convert
+            parse_quicktime_metadata(&reader)
+                .map_err(|e| ExifToolError::parse_error(format!("QuickTime parse error: {}", e)))
+        }
         _ => Err(ExifToolError::unsupported_format(format!(
             "Format {:?} not yet supported in this iteration",
             format
