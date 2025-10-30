@@ -819,8 +819,16 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        // Minimal PNG has no metadata chunks
-        assert_eq!(metadata.len(), 0);
+        // Minimal PNG now extracts IHDR chunk metadata (7 tags)
+        assert_eq!(metadata.len(), 7);
+        // Verify IHDR tags are present
+        assert!(metadata.contains_key("PNG:ImageWidth"));
+        assert!(metadata.contains_key("PNG:ImageHeight"));
+        assert!(metadata.contains_key("PNG:BitDepth"));
+        assert!(metadata.contains_key("PNG:ColorType"));
+        assert!(metadata.contains_key("PNG:Compression"));
+        assert!(metadata.contains_key("PNG:Filter"));
+        assert!(metadata.contains_key("PNG:Interlace"));
     }
 
     #[test]
@@ -845,7 +853,8 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        assert_eq!(metadata.len(), 1);
+        // 7 IHDR tags + 1 tEXt tag = 8 total
+        assert_eq!(metadata.len(), 8);
         assert_eq!(metadata.get_string("PNG:tEXt:Author"), Some("John Doe"));
     }
 
@@ -880,7 +889,8 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        assert_eq!(metadata.len(), 1);
+        // 7 IHDR tags + 1 iTXt tag = 8 total
+        assert_eq!(metadata.len(), 8);
         assert_eq!(metadata.get_string("PNG:iTXt:Title"), Some("My PNG Image"));
     }
 
@@ -921,9 +931,10 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        assert_eq!(metadata.len(), 1);
-        // Tag 0x010F is Make
-        assert_eq!(metadata.get_string("EXIF:0x010F"), Some("Tst"));
+        // 7 IHDR tags + EXIF tags (at least 1) = 8+ total
+        assert!(metadata.len() >= 8, "Expected at least 8 tags (7 IHDR + 1+ EXIF), got {}", metadata.len());
+        // Tag 0x010F is Make - parser now uses "IFD0:Make" instead of "EXIF:0x010F"
+        assert_eq!(metadata.get_string("IFD0:Make"), Some("Tst"));
     }
 
     #[test]

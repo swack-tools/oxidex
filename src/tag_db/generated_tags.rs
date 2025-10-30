@@ -4,7 +4,7 @@
 //! DO NOT EDIT MANUALLY - CHANGES WILL BE OVERWRITTEN
 //!
 //! Generated from ExifTool GitHub repository: https://github.com/exiftool/exiftool
-//! Total tags: 731
+//! Total tags: 733 (731 + 2 manual additions: StripOffsets, StripByteCounts)
 
 #![allow(dead_code)]
 
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 /// This registry is populated during the build process by parsing
 /// ExifTool Perl modules and extracting tag metadata.
 pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
-    let mut registry = HashMap::with_capacity(731);
+    let mut registry = HashMap::with_capacity(733);
 
     // =============================
     // GPS TAGS (32 total)
@@ -4155,6 +4155,19 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
     );
 
     registry.insert(
+        "EXIF:StripOffsets",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0111),
+            "EXIF:StripOffsets".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "StripOffsets tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
         "EXIF:Orientation",
         TagDescriptor::new(
             TagId::new_numeric(0x0112),
@@ -4189,6 +4202,19 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             true,
             ValueType::Integer,
             "RowsPerStrip tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:StripByteCounts",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0117),
+            "EXIF:StripByteCounts".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "StripByteCounts tag".to_string(),
             vec!["100".to_string()],
         ),
     );
