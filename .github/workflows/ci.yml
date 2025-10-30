@@ -44,6 +44,23 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Install cbindgen
+        run: cargo install cbindgen --locked
+
+      - name: Verify C header is up-to-date
+        run: |
+          cbindgen --config cbindgen.toml --crate exiftool-rs --output api/exiftool_rs.h.tmp
+          if ! diff -q api/exiftool_rs.h api/exiftool_rs.h.tmp; then
+            echo "Error: C header file is out of date. Please regenerate it with:"
+            echo "  cbindgen --config cbindgen.toml --crate exiftool-rs --output api/exiftool_rs.h"
+            echo ""
+            echo "Differences:"
+            diff api/exiftool_rs.h api/exiftool_rs.h.tmp || true
+            exit 1
+          fi
+          rm api/exiftool_rs.h.tmp
+          echo "C header file is up-to-date"
+
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
