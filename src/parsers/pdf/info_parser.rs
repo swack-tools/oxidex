@@ -75,7 +75,7 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
 
     // Read the last 1024 bytes to find trailer
     let tail_size = std::cmp::min(1024, file_size as usize);
-    let tail_offset = file_size - tail_size as u64;
+    let tail_offset = file_size.saturating_sub(tail_size as u64);
     let tail_data = reader.read(tail_offset, tail_size)?;
 
     // Find startxref and get xref offset
@@ -135,7 +135,12 @@ fn find_xref_offset(tail_data: &[u8]) -> Result<u64> {
         .ok_or_else(|| ExifToolError::parse_error("startxref not found in PDF"))?;
 
     // Extract the number after startxref
-    let after_keyword = &tail_str[startxref_pos + 9..]; // "startxref".len() = 9
+    let after_start = startxref_pos.checked_add(9)
+        .ok_or_else(|| ExifToolError::parse_error("Offset overflow after startxref"))?;
+    if after_start > tail_str.len() {
+        return Err(ExifToolError::parse_error("Invalid startxref position"));
+    }
+    let after_keyword = &tail_str[after_start..];
 
     // Parse the offset number
     let (_, offset) = parse_number(after_keyword.as_bytes())
@@ -242,7 +247,17 @@ fn parse_xref_entries(input: &[u8]) -> IResult<&[u8], HashMap<u32, u64>> {
 
             // Parse each entry in this subsection
             for i in 0..count {
-                let obj_num = start_num as u32 + i as u32;
+                // Use checked_add to prevent overflow - skip invalid entries
+                let obj_num = match (start_num as u32).checked_add(i as u32) {
+                    Some(num) => num,
+                    None => {
+                        // Skip this entry if object number would overflow
+                        if let Ok((inp, _)) = take_until::<_, _, nom::error::Error<&[u8]>>("\n")(input) {
+                            input = &inp[1..];
+                        }
+                        continue;
+                    }
+                };
 
                 // Parse xref entry: "offset generation n/f"
                 let parse_entry = tuple((
@@ -293,7 +308,15 @@ fn parse_info_object(input: &[u8]) -> Result<HashMap<String, String>> {
         .find(">>")
         .ok_or_else(|| ExifToolError::parse_error("Info dictionary end >> not found"))?;
 
-    let dict_content = &input_str[dict_start + 2..dict_start + dict_end];
+    // Use checked_add to prevent overflow when calculating dictionary bounds
+    let content_start = dict_start.checked_add(2)
+        .ok_or_else(|| ExifToolError::parse_error("Dictionary offset overflow"))?;
+    let content_end = dict_start.checked_add(dict_end)
+        .ok_or_else(|| ExifToolError::parse_error("Dictionary end offset overflow"))?;
+    if content_end > input_str.len() {
+        return Err(ExifToolError::parse_error("Dictionary extends beyond input"));
+    }
+    let dict_content = &input_str[content_start..content_end];
 
     // Parse dictionary entries
     let (_, entries) = parse_dict_entries(dict_content.as_bytes())
