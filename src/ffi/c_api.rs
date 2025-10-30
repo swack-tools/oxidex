@@ -20,8 +20,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::ptr;
 
-use crate::core::{MetadataMap, TagValue};
 use crate::core::operations::{read_metadata, write_metadata};
+use crate::core::{MetadataMap, TagValue};
 use crate::error::ExifToolError;
 
 // ============================================================================
@@ -74,15 +74,18 @@ fn error_to_code(err: &ExifToolError) -> c_int {
             };
             (EXIFTOOL_ERR_PARSE, msg)
         }
-        ExifToolError::TagNotFound { tag_name } => {
-            (EXIFTOOL_ERR_TAG_NOT_FOUND, format!("Tag not found: {}", tag_name))
-        }
-        ExifToolError::InvalidTagValue { tag_name, reason } => {
-            (EXIFTOOL_ERR_INVALID_TAG_VALUE, format!("Invalid value for tag '{}': {}", tag_name, reason))
-        }
-        ExifToolError::UnsupportedFormat { message } => {
-            (EXIFTOOL_ERR_UNSUPPORTED_FORMAT, format!("Unsupported format: {}", message))
-        }
+        ExifToolError::TagNotFound { tag_name } => (
+            EXIFTOOL_ERR_TAG_NOT_FOUND,
+            format!("Tag not found: {}", tag_name),
+        ),
+        ExifToolError::InvalidTagValue { tag_name, reason } => (
+            EXIFTOOL_ERR_INVALID_TAG_VALUE,
+            format!("Invalid value for tag '{}': {}", tag_name, reason),
+        ),
+        ExifToolError::UnsupportedFormat { message } => (
+            EXIFTOOL_ERR_UNSUPPORTED_FORMAT,
+            format!("Unsupported format: {}", message),
+        ),
     };
     set_last_error(msg);
     code
@@ -163,7 +166,9 @@ unsafe fn handle_to_context<'a>(handle: *const ExifToolHandle) -> Option<&'a Exi
 /// # Safety
 /// The pointer must be a valid pointer previously created by `Box::into_raw()`
 /// and not yet reclaimed.
-unsafe fn handle_to_context_mut<'a>(handle: *mut ExifToolHandle) -> Option<&'a mut ExifToolContext> {
+unsafe fn handle_to_context_mut<'a>(
+    handle: *mut ExifToolHandle,
+) -> Option<&'a mut ExifToolContext> {
     if handle.is_null() {
         None
     } else {
@@ -250,7 +255,10 @@ pub extern "C" fn exiftool_destroy(handle: *mut ExifToolHandle) {
 /// # Thread Safety
 /// Not thread-safe. Do not call concurrently on the same handle.
 #[no_mangle]
-pub extern "C" fn exiftool_read_file(handle: *mut ExifToolHandle, filepath: *const c_char) -> c_int {
+pub extern "C" fn exiftool_read_file(
+    handle: *mut ExifToolHandle,
+    filepath: *const c_char,
+) -> c_int {
     // Catch panics at FFI boundary
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
         // Check for NULL pointers
@@ -348,7 +356,10 @@ pub extern "C" fn exiftool_get_tag_count(handle: *const ExifToolHandle) -> usize
 /// # Thread Safety
 /// Thread-safe for read-only access.
 #[no_mangle]
-pub extern "C" fn exiftool_get_tag_name_at(handle: *const ExifToolHandle, index: usize) -> *const c_char {
+pub extern "C" fn exiftool_get_tag_name_at(
+    handle: *const ExifToolHandle,
+    index: usize,
+) -> *const c_char {
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
         if handle.is_null() {
             return ptr::null();
@@ -394,7 +405,10 @@ pub extern "C" fn exiftool_get_tag_name_at(handle: *const ExifToolHandle, index:
 /// # Thread Safety
 /// Thread-safe for read-only access.
 #[no_mangle]
-pub extern "C" fn exiftool_has_tag(handle: *const ExifToolHandle, tag_name: *const c_char) -> c_int {
+pub extern "C" fn exiftool_has_tag(
+    handle: *const ExifToolHandle,
+    tag_name: *const c_char,
+) -> c_int {
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
         if handle.is_null() || tag_name.is_null() {
             return 0;
@@ -442,7 +456,10 @@ pub extern "C" fn exiftool_has_tag(handle: *const ExifToolHandle, tag_name: *con
 /// # Thread Safety
 /// Thread-safe for read-only access.
 #[no_mangle]
-pub extern "C" fn exiftool_get_tag_string(handle: *const ExifToolHandle, tag_name: *const c_char) -> *const c_char {
+pub extern "C" fn exiftool_get_tag_string(
+    handle: *const ExifToolHandle,
+    tag_name: *const c_char,
+) -> *const c_char {
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
         if handle.is_null() || tag_name.is_null() {
             return ptr::null();
@@ -680,7 +697,10 @@ pub extern "C" fn exiftool_set_tag_string(
         };
 
         // Set the tag
-        context.metadata.insert(name_str.to_string(), TagValue::new_string(value_str.to_string()));
+        context.metadata.insert(
+            name_str.to_string(),
+            TagValue::new_string(value_str.to_string()),
+        );
         // Rebuild tag cache since we modified metadata
         context.rebuild_tag_cache();
 
@@ -738,7 +758,9 @@ pub extern "C" fn exiftool_set_tag_integer(
         };
 
         // Set the tag
-        context.metadata.insert(name_str.to_string(), TagValue::new_integer(value));
+        context
+            .metadata
+            .insert(name_str.to_string(), TagValue::new_integer(value));
         // Rebuild tag cache since we modified metadata
         context.rebuild_tag_cache();
 
@@ -803,7 +825,9 @@ pub extern "C" fn exiftool_set_tag_float(
         };
 
         // Set the tag
-        context.metadata.insert(name_str.to_string(), TagValue::new_float(value));
+        context
+            .metadata
+            .insert(name_str.to_string(), TagValue::new_float(value));
         // Rebuild tag cache since we modified metadata
         context.rebuild_tag_cache();
 
@@ -832,7 +856,10 @@ pub extern "C" fn exiftool_set_tag_float(
 /// # Thread Safety
 /// Not thread-safe.
 #[no_mangle]
-pub extern "C" fn exiftool_remove_tag(handle: *mut ExifToolHandle, tag_name: *const c_char) -> c_int {
+pub extern "C" fn exiftool_remove_tag(
+    handle: *mut ExifToolHandle,
+    tag_name: *const c_char,
+) -> c_int {
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
         if handle.is_null() || tag_name.is_null() {
             set_last_error("NULL pointer provided".to_string());
@@ -891,7 +918,10 @@ pub extern "C" fn exiftool_remove_tag(handle: *mut ExifToolHandle, tag_name: *co
 /// # Thread Safety
 /// Thread-safe for read-only access to handle.
 #[no_mangle]
-pub extern "C" fn exiftool_write_file(handle: *const ExifToolHandle, filepath: *const c_char) -> c_int {
+pub extern "C" fn exiftool_write_file(
+    handle: *const ExifToolHandle,
+    filepath: *const c_char,
+) -> c_int {
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
         if handle.is_null() || filepath.is_null() {
             set_last_error("NULL pointer provided".to_string());
@@ -968,7 +998,8 @@ pub extern "C" fn exiftool_get_last_error() -> *const c_char {
             }
 
             ERROR_CSTRING.with(|cache| {
-                *cache.borrow_mut() = CString::new(msg).unwrap_or_else(|_| CString::new("Error message contains null byte").unwrap());
+                *cache.borrow_mut() = CString::new(msg)
+                    .unwrap_or_else(|_| CString::new("Error message contains null byte").unwrap());
                 cache.borrow().as_ptr()
             })
         })

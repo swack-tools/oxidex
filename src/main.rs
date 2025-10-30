@@ -5,7 +5,9 @@
 use clap::Parser;
 use exiftool_rs::cli::args::CliArgs;
 use exiftool_rs::cli::batch_processor;
-use exiftool_rs::cli::output_formatter::{CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter};
+use exiftool_rs::cli::output_formatter::{
+    CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter,
+};
 use exiftool_rs::cli::rename;
 use exiftool_rs::core::date_shift::{shift_metadata_dates, ShiftOperation};
 use exiftool_rs::core::operations::{copy_metadata, modify_tag, read_metadata};
@@ -253,7 +255,10 @@ fn handle_copy_operation(dest_file: &std::path::Path, args: &CliArgs) {
     let file_metadata = match std::fs::metadata(dest_file) {
         Ok(metadata) => {
             if metadata.permissions().readonly() {
-                eprintln!("Error: Destination file is read-only: {}", dest_file.display());
+                eprintln!(
+                    "Error: Destination file is read-only: {}",
+                    dest_file.display()
+                );
                 process::exit(1);
             }
             metadata
@@ -306,11 +311,7 @@ fn handle_copy_operation(dest_file: &std::path::Path, args: &CliArgs) {
     };
 
     // Perform the copy operation
-    if let Err(e) = copy_metadata(
-        &src_file,
-        dest_file,
-        tags_to_copy.as_deref(),
-    ) {
+    if let Err(e) = copy_metadata(&src_file, dest_file, tags_to_copy.as_deref()) {
         eprintln!(
             "Error: Failed to copy metadata from '{}' to '{}': {}",
             src_file.display(),
@@ -454,10 +455,7 @@ fn handle_date_shift_operation(file: &std::path::Path, args: &CliArgs) {
 
         // Apply the date shift
         if let Err(e) = shift_metadata_dates(file, tag_pattern, offset_or_value, operation) {
-            eprintln!(
-                "Error: Failed to shift dates for '{}': {}",
-                tag_pattern, e
-            );
+            eprintln!("Error: Failed to shift dates for '{}': {}", tag_pattern, e);
             process::exit(1);
         }
     }

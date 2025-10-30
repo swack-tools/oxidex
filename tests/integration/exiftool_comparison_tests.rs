@@ -201,11 +201,8 @@ fn values_match(perl_val: &Value, rust_val: &Value) -> bool {
             if p.len() != r.len() {
                 return false;
             }
-            p.iter().all(|(key, pv)| {
-                r.get(key)
-                    .map(|rv| values_match(pv, rv))
-                    .unwrap_or(false)
-            })
+            p.iter()
+                .all(|(key, pv)| r.get(key).map(|rv| values_match(pv, rv)).unwrap_or(false))
         }
 
         // Null values
@@ -225,11 +222,19 @@ fn values_match(perl_val: &Value, rust_val: &Value) -> bool {
 /// - List of mismatches with details
 fn compare_json_outputs(perl_json: &str, rust_json: &str) -> Result<MatchReport, String> {
     // Parse JSON outputs
-    let perl_data: Vec<HashMap<String, Value>> = serde_json::from_str(perl_json)
-        .map_err(|e| format!("Failed to parse Perl ExifTool JSON: {}\nOutput:\n{}", e, perl_json))?;
+    let perl_data: Vec<HashMap<String, Value>> = serde_json::from_str(perl_json).map_err(|e| {
+        format!(
+            "Failed to parse Perl ExifTool JSON: {}\nOutput:\n{}",
+            e, perl_json
+        )
+    })?;
 
-    let rust_data: Vec<HashMap<String, Value>> = serde_json::from_str(rust_json)
-        .map_err(|e| format!("Failed to parse ExifTool-RS JSON: {}\nOutput:\n{}", e, rust_json))?;
+    let rust_data: Vec<HashMap<String, Value>> = serde_json::from_str(rust_json).map_err(|e| {
+        format!(
+            "Failed to parse ExifTool-RS JSON: {}\nOutput:\n{}",
+            e, rust_json
+        )
+    })?;
 
     // Both tools output an array with a single object
     if perl_data.is_empty() {
@@ -280,7 +285,10 @@ fn compare_json_outputs(perl_json: &str, rust_json: &str) -> Result<MatchReport,
             continue;
         }
         if !perl_tags.contains_key(key) {
-            eprintln!("Warning: ExifTool-RS has additional tag not in Perl ExifTool: {}", key);
+            eprintln!(
+                "Warning: ExifTool-RS has additional tag not in Perl ExifTool: {}",
+                key
+            );
         }
     }
 
@@ -311,19 +319,21 @@ fn test_comparison_jpeg_with_exif() {
     );
 
     // Execute both tools
-    let perl_json = get_perl_exiftool_output(test_file)
-        .expect("Failed to get Perl ExifTool output");
-    let rust_json = get_exiftool_rs_output(test_file)
-        .expect("Failed to get ExifTool-RS output");
+    let perl_json =
+        get_perl_exiftool_output(test_file).expect("Failed to get Perl ExifTool output");
+    let rust_json = get_exiftool_rs_output(test_file).expect("Failed to get ExifTool-RS output");
 
     // Compare outputs
-    let report = compare_json_outputs(&perl_json, &rust_json)
-        .expect("Failed to compare JSON outputs");
+    let report =
+        compare_json_outputs(&perl_json, &rust_json).expect("Failed to compare JSON outputs");
 
     // Print results
     println!("\n=== JPEG with EXIF Comparison Results ===");
     println!("Match rate: {:.2}%", report.match_rate);
-    println!("Matched: {}/{} tags", report.matched_tags, report.total_tags);
+    println!(
+        "Matched: {}/{} tags",
+        report.matched_tags, report.total_tags
+    );
 
     if !report.mismatches.is_empty() {
         println!("\nMismatches ({}):", report.mismatches.len());
@@ -361,17 +371,19 @@ fn test_comparison_jpeg_with_exif_xmp() {
         test_file
     );
 
-    let perl_json = get_perl_exiftool_output(test_file)
-        .expect("Failed to get Perl ExifTool output");
-    let rust_json = get_exiftool_rs_output(test_file)
-        .expect("Failed to get ExifTool-RS output");
+    let perl_json =
+        get_perl_exiftool_output(test_file).expect("Failed to get Perl ExifTool output");
+    let rust_json = get_exiftool_rs_output(test_file).expect("Failed to get ExifTool-RS output");
 
-    let report = compare_json_outputs(&perl_json, &rust_json)
-        .expect("Failed to compare JSON outputs");
+    let report =
+        compare_json_outputs(&perl_json, &rust_json).expect("Failed to compare JSON outputs");
 
     println!("\n=== JPEG with EXIF+XMP Comparison Results ===");
     println!("Match rate: {:.2}%", report.match_rate);
-    println!("Matched: {}/{} tags", report.matched_tags, report.total_tags);
+    println!(
+        "Matched: {}/{} tags",
+        report.matched_tags, report.total_tags
+    );
 
     if !report.mismatches.is_empty() {
         println!("\nMismatches ({}):", report.mismatches.len());
@@ -408,17 +420,19 @@ fn test_comparison_tiff() {
         test_file
     );
 
-    let perl_json = get_perl_exiftool_output(test_file)
-        .expect("Failed to get Perl ExifTool output");
-    let rust_json = get_exiftool_rs_output(test_file)
-        .expect("Failed to get ExifTool-RS output");
+    let perl_json =
+        get_perl_exiftool_output(test_file).expect("Failed to get Perl ExifTool output");
+    let rust_json = get_exiftool_rs_output(test_file).expect("Failed to get ExifTool-RS output");
 
-    let report = compare_json_outputs(&perl_json, &rust_json)
-        .expect("Failed to compare JSON outputs");
+    let report =
+        compare_json_outputs(&perl_json, &rust_json).expect("Failed to compare JSON outputs");
 
     println!("\n=== TIFF Comparison Results ===");
     println!("Match rate: {:.2}%", report.match_rate);
-    println!("Matched: {}/{} tags", report.matched_tags, report.total_tags);
+    println!(
+        "Matched: {}/{} tags",
+        report.matched_tags, report.total_tags
+    );
 
     if !report.mismatches.is_empty() {
         println!("\nMismatches ({}):", report.mismatches.len());

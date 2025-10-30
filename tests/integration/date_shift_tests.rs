@@ -36,8 +36,12 @@ fn test_shift_dates_add_one_day() {
     let metadata = read_metadata(path).expect("Failed to read metadata");
 
     // Check DateTime
-    let value = metadata.get("EXIF:DateTime").expect("EXIF:DateTime not found");
-    let dt = value.as_datetime().expect("EXIF:DateTime is not a DateTime value");
+    let value = metadata
+        .get("EXIF:DateTime")
+        .expect("EXIF:DateTime not found");
+    let dt = value
+        .as_datetime()
+        .expect("EXIF:DateTime is not a DateTime value");
 
     // Should be 2025-01-16 10:30:00
     assert_eq!(dt.year(), 2025);
@@ -54,14 +58,23 @@ fn test_shift_dates_subtract_one_month() {
     let path = temp_file.path();
 
     // Subtract 1 month from DateTime
-    let result = shift_metadata_dates(path, "EXIF:DateTime", "0:1:0 0:0:0", ShiftOperation::Subtract);
+    let result = shift_metadata_dates(
+        path,
+        "EXIF:DateTime",
+        "0:1:0 0:0:0",
+        ShiftOperation::Subtract,
+    );
     assert!(result.is_ok(), "Failed to shift dates: {:?}", result.err());
 
     // Read metadata and verify dates were shifted
     let metadata = read_metadata(path).expect("Failed to read metadata");
 
-    let value = metadata.get("EXIF:DateTime").expect("EXIF:DateTime not found");
-    let dt = value.as_datetime().expect("EXIF:DateTime is not a DateTime value");
+    let value = metadata
+        .get("EXIF:DateTime")
+        .expect("EXIF:DateTime not found");
+    let dt = value
+        .as_datetime()
+        .expect("EXIF:DateTime is not a DateTime value");
 
     // Should be 2024-12-15 10:30:00
     assert_eq!(dt.year(), 2024);
@@ -77,14 +90,22 @@ fn test_shift_specific_tag_only() {
 
     // Shift DateTime by 1 day
     let result = shift_metadata_dates(path, "EXIF:DateTime", "0:0:1 0:0:0", ShiftOperation::Add);
-    assert!(result.is_ok(), "Failed to shift DateTime: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to shift DateTime: {:?}",
+        result.err()
+    );
 
     // Read metadata again
     let metadata = read_metadata(path).expect("Failed to read metadata");
 
     // DateTime should be shifted
-    let value = metadata.get("EXIF:DateTime").expect("EXIF:DateTime not found");
-    let dt = value.as_datetime().expect("EXIF:DateTime is not a DateTime value");
+    let value = metadata
+        .get("EXIF:DateTime")
+        .expect("EXIF:DateTime not found");
+    let dt = value
+        .as_datetime()
+        .expect("EXIF:DateTime is not a DateTime value");
     assert_eq!(dt.day(), 16);
 }
 
@@ -101,8 +122,12 @@ fn test_shift_dates_add_hours_and_minutes() {
     // Read metadata and verify dates were shifted
     let metadata = read_metadata(path).expect("Failed to read metadata");
 
-    let value = metadata.get("EXIF:DateTime").expect("EXIF:DateTime not found");
-    let dt = value.as_datetime().expect("EXIF:DateTime is not a DateTime value");
+    let value = metadata
+        .get("EXIF:DateTime")
+        .expect("EXIF:DateTime not found");
+    let dt = value
+        .as_datetime()
+        .expect("EXIF:DateTime is not a DateTime value");
 
     // Original: 10:30:00, After +6:30: 17:00:00
     assert_eq!(dt.hour(), 17);
@@ -127,8 +152,12 @@ fn test_shift_dates_set_absolute() {
     // Read metadata and verify date was set
     let metadata = read_metadata(path).expect("Failed to read metadata");
 
-    let value = metadata.get("EXIF:DateTime").expect("EXIF:DateTime not found");
-    let dt = value.as_datetime().expect("EXIF:DateTime is not a DateTime value");
+    let value = metadata
+        .get("EXIF:DateTime")
+        .expect("EXIF:DateTime not found");
+    let dt = value
+        .as_datetime()
+        .expect("EXIF:DateTime is not a DateTime value");
 
     assert_eq!(dt.year(), 2026);
     assert_eq!(dt.month(), 6);
@@ -151,8 +180,12 @@ fn test_shift_dates_complex_offset() {
     // Read metadata and verify dates were shifted
     let metadata = read_metadata(path).expect("Failed to read metadata");
 
-    let value = metadata.get("EXIF:DateTime").expect("EXIF:DateTime not found");
-    let dt = value.as_datetime().expect("EXIF:DateTime is not a DateTime value");
+    let value = metadata
+        .get("EXIF:DateTime")
+        .expect("EXIF:DateTime not found");
+    let dt = value
+        .as_datetime()
+        .expect("EXIF:DateTime is not a DateTime value");
 
     // From 2025-01-15 10:30:00
     // Add 1 year 2 months = 2026-03-15
@@ -201,7 +234,10 @@ fn test_shift_dates_preserves_other_tags() {
 
     // Add a non-DateTime tag to the metadata
     let mut metadata = read_metadata(path).expect("Failed to read metadata");
-    metadata.insert("EXIF:Artist".to_string(), TagValue::new_string("Test Artist"));
+    metadata.insert(
+        "EXIF:Artist".to_string(),
+        TagValue::new_string("Test Artist"),
+    );
     write_metadata(path, &metadata).expect("Failed to write metadata");
 
     // Shift dates

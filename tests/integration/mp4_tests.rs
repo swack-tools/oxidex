@@ -41,7 +41,10 @@ fn test_parse_sample_mp4_metadata() {
 
     let metadata = result.unwrap();
 
-    println!("Extracted {} metadata fields from sample.mp4:", metadata.len());
+    println!(
+        "Extracted {} metadata fields from sample.mp4:",
+        metadata.len()
+    );
     for (key, value) in metadata.iter() {
         println!("  {}: {:?}", key, value);
     }
@@ -218,8 +221,11 @@ fn test_parse_invalid_mp4() {
     // Either is acceptable for an invalid file
     let error_msg = result.unwrap_err().to_string();
     assert!(
-        error_msg.contains("Invalid") || error_msg.contains("Failed to read") || error_msg.contains("No moov atom"),
-        "Expected error for invalid file, got: {}", error_msg
+        error_msg.contains("Invalid")
+            || error_msg.contains("Failed to read")
+            || error_msg.contains("No moov atom"),
+        "Expected error for invalid file, got: {}",
+        error_msg
     );
 }
 
@@ -291,7 +297,10 @@ fn test_mp4_both_itunes_and_quicktime_metadata() {
         .filter(|(k, _)| k.starts_with("QuickTime:"))
         .count();
 
-    println!("iTunes tags: {}, QuickTime tags: {}", itunes_count, qt_count);
+    println!(
+        "iTunes tags: {}, QuickTime tags: {}",
+        itunes_count, qt_count
+    );
 
     // Should have both types
     assert!(itunes_count > 0, "No iTunes metadata extracted");

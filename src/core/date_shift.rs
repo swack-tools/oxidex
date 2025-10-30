@@ -138,7 +138,9 @@ pub fn parse_offset(s: &str) -> Result<DateOffset> {
         ExifToolError::parse_error(format!("Invalid seconds value '{}'", time_parts[2]))
     })?;
 
-    Ok(DateOffset::new(years, months, days, hours, minutes, seconds))
+    Ok(DateOffset::new(
+        years, months, days, hours, minutes, seconds,
+    ))
 }
 
 /// Parses an EXIF DateTime string into a chrono::DateTime<Utc>
@@ -167,13 +169,17 @@ pub fn format_exif_datetime(dt: &DateTime<Utc>) -> String {
 /// # Returns
 ///
 /// The shifted DateTime or an error if overflow occurs
-pub fn apply_shift(dt: DateTime<Utc>, offset: &DateOffset, op: ShiftOperation) -> Result<DateTime<Utc>> {
+pub fn apply_shift(
+    dt: DateTime<Utc>,
+    offset: &DateOffset,
+    op: ShiftOperation,
+) -> Result<DateTime<Utc>> {
     match op {
         ShiftOperation::Set => {
             // For Set operation, the offset is not used - the caller should parse the absolute value
             // This case should not be reached if used correctly
             Err(ExifToolError::parse_error(
-                "apply_shift called with Set operation - use parse_absolute_datetime instead"
+                "apply_shift called with Set operation - use parse_absolute_datetime instead",
             ))
         }
         ShiftOperation::Add => {
@@ -183,8 +189,11 @@ pub fn apply_shift(dt: DateTime<Utc>, offset: &DateOffset, op: ShiftOperation) -
             // Add years and months (using chrono::Months for proper overflow handling)
             let total_months = (offset.years * 12) + offset.months;
             if total_months > 0 {
-                result = result.checked_add_months(Months::new(total_months))
-                    .ok_or_else(|| ExifToolError::parse_error("Date overflow when adding months"))?;
+                result = result
+                    .checked_add_months(Months::new(total_months))
+                    .ok_or_else(|| {
+                        ExifToolError::parse_error("Date overflow when adding months")
+                    })?;
             }
 
             // Add days, hours, minutes, seconds (using chrono::Duration)
@@ -193,8 +202,9 @@ pub fn apply_shift(dt: DateTime<Utc>, offset: &DateOffset, op: ShiftOperation) -
                 + Duration::minutes(offset.minutes)
                 + Duration::seconds(offset.seconds);
 
-            result = result.checked_add_signed(duration)
-                .ok_or_else(|| ExifToolError::parse_error("Date overflow when adding time offset"))?;
+            result = result.checked_add_signed(duration).ok_or_else(|| {
+                ExifToolError::parse_error("Date overflow when adding time offset")
+            })?;
 
             Ok(result)
         }
@@ -205,8 +215,11 @@ pub fn apply_shift(dt: DateTime<Utc>, offset: &DateOffset, op: ShiftOperation) -
             // Subtract years and months (using chrono::Months for proper overflow handling)
             let total_months = (offset.years * 12) + offset.months;
             if total_months > 0 {
-                result = result.checked_sub_months(Months::new(total_months))
-                    .ok_or_else(|| ExifToolError::parse_error("Date underflow when subtracting months"))?;
+                result = result
+                    .checked_sub_months(Months::new(total_months))
+                    .ok_or_else(|| {
+                        ExifToolError::parse_error("Date underflow when subtracting months")
+                    })?;
             }
 
             // Subtract days, hours, minutes, seconds (using chrono::Duration)
@@ -215,8 +228,9 @@ pub fn apply_shift(dt: DateTime<Utc>, offset: &DateOffset, op: ShiftOperation) -
                 + Duration::minutes(offset.minutes)
                 + Duration::seconds(offset.seconds);
 
-            result = result.checked_sub_signed(duration)
-                .ok_or_else(|| ExifToolError::parse_error("Date underflow when subtracting time offset"))?;
+            result = result.checked_sub_signed(duration).ok_or_else(|| {
+                ExifToolError::parse_error("Date underflow when subtracting time offset")
+            })?;
 
             Ok(result)
         }

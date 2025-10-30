@@ -146,7 +146,7 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     // If we didn't extract any metadata at all, return error
     if metadata.is_empty() {
         return Err(ExifToolError::parse_error(
-            "No metadata found in PDF (no Info dictionary or XMP)"
+            "No metadata found in PDF (no Info dictionary or XMP)",
         ));
     }
 
@@ -244,12 +244,22 @@ startxref
         assert_eq!(metadata.get_string("PDF:Title"), Some("Test PDF Document"));
         assert_eq!(metadata.get_string("PDF:Author"), Some("John Doe"));
         assert_eq!(metadata.get_string("PDF:Subject"), Some("Testing"));
-        assert_eq!(metadata.get_string("PDF:Keywords"), Some("test, pdf, metadata"));
+        assert_eq!(
+            metadata.get_string("PDF:Keywords"),
+            Some("test, pdf, metadata")
+        );
         assert_eq!(metadata.get_string("PDF:Creator"), Some("ExifTool-RS Test"));
-        assert_eq!(metadata.get_string("PDF:Producer"), Some("PDF Generator 1.0"));
+        assert_eq!(
+            metadata.get_string("PDF:Producer"),
+            Some("PDF Generator 1.0")
+        );
 
         // Should have at least 5 metadata fields as per acceptance criteria
-        assert!(metadata.len() >= 5, "Should have at least 5 metadata fields, got {}", metadata.len());
+        assert!(
+            metadata.len() >= 5,
+            "Should have at least 5 metadata fields, got {}",
+            metadata.len()
+        );
     }
 
     #[test]
@@ -259,7 +269,10 @@ startxref
 
         let result = parse_pdf_metadata(&reader);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid PDF signature"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid PDF signature"));
     }
 
     #[test]

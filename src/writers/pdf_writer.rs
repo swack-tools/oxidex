@@ -220,7 +220,8 @@ fn parse_trailer_refs(xref_data: &[u8]) -> Result<(ObjectRef, ObjectRef, u32)> {
 
     // Parse /Size
     let size = parse_dict_integer(dict_content, "/Size")
-        .ok_or_else(|| ExifToolError::parse_error("/Size not found in trailer"))? as u32;
+        .ok_or_else(|| ExifToolError::parse_error("/Size not found in trailer"))?
+        as u32;
 
     Ok((info_ref, root_ref, size))
 }
@@ -293,8 +294,7 @@ fn parse_xref_table(xref_data: &[u8]) -> Result<HashMap<u32, u64>> {
         // Parse subsection header: "start_obj_num count"
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() == 2 {
-            if let (Ok(start_num), Ok(count)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
-            {
+            if let (Ok(start_num), Ok(count)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
                 // Parse each entry in this subsection
                 for i in 0..count {
                     if let Some(entry_line) = lines.next() {
@@ -335,7 +335,12 @@ fn build_modified_pdf(
 
         if obj_num == structure.info_object_num {
             // Write modified Info dictionary
-            write_info_object(&mut buffer, obj_num, structure.info_generation, modified_metadata)?;
+            write_info_object(
+                &mut buffer,
+                obj_num,
+                structure.info_generation,
+                modified_metadata,
+            )?;
         } else {
             // Copy object from original file
             copy_object(&mut buffer, original_reader, offset)?;
@@ -414,7 +419,9 @@ fn serialize_pdf_field(buffer: &mut Vec<u8>, field_name: &str, value: &TagValue)
     match value {
         TagValue::String(s) => {
             // Check if string contains non-ASCII characters
-            if s.chars().all(|c| c.is_ascii() && c != '(' && c != ')' && c != '\\') {
+            if s.chars()
+                .all(|c| c.is_ascii() && c != '(' && c != ')' && c != '\\')
+            {
                 // Use string literal for ASCII
                 buffer.extend_from_slice(b"(");
                 buffer.extend_from_slice(s.as_bytes());
@@ -440,7 +447,10 @@ fn serialize_pdf_field(buffer: &mut Vec<u8>, field_name: &str, value: &TagValue)
         TagValue::Float(f) => {
             buffer.extend_from_slice(f.to_string().as_bytes());
         }
-        TagValue::Rational { numerator, denominator } => {
+        TagValue::Rational {
+            numerator,
+            denominator,
+        } => {
             // Write as fraction string
             let rational_str = format!("{}/{}", numerator, denominator);
             buffer.extend_from_slice(b"(");
@@ -506,11 +516,7 @@ fn copy_object(buffer: &mut Vec<u8>, reader: &dyn FileReader, offset: u64) -> Re
 }
 
 /// Writes the xref (cross-reference) table
-fn write_xref_table(
-    buffer: &mut Vec<u8>,
-    offsets: &HashMap<u32, u64>,
-    size: u32,
-) -> Result<()> {
+fn write_xref_table(buffer: &mut Vec<u8>, offsets: &HashMap<u32, u64>, size: u32) -> Result<()> {
     buffer.extend_from_slice(b"xref\n");
 
     // Write subsection header

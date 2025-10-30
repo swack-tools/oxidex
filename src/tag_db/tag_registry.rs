@@ -840,12 +840,11 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
         ),
     );
 
+    // ===========================
+    // EXIF TAGS (300+ total)
+    // ===========================
 
-// ===========================
-// EXIF TAGS (300+ total)
-// ===========================
-
-// --- Additional EXIF/TIFF Standard Tags (150 tags) ---
+    // --- Additional EXIF/TIFF Standard Tags (150 tags) ---
     registry.insert(
         "EXIF:SubfileType",
         TagDescriptor::new(
@@ -2302,12 +2301,11 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
         ),
     );
 
+    // ===========================
+    // MAKER NOTES TAGS (90 total)
+    // ===========================
 
-// ===========================
-// MAKER NOTES TAGS (90 total)
-// ===========================
-
-// --- Canon MakerNotes (30 tags) ---
+    // --- Canon MakerNotes (30 tags) ---
     registry.insert(
         "Canon:ModelID",
         TagDescriptor::new(
@@ -2343,7 +2341,10 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
             true,
             ValueType::String,
             "Canon image type".to_string(),
-            vec!["IMG:EOS 5D Mark IV JPEG".to_string(), "CRW:EOS-1D X RAW".to_string()],
+            vec![
+                "IMG:EOS 5D Mark IV JPEG".to_string(),
+                "CRW:EOS-1D X RAW".to_string(),
+            ],
         ),
     );
 
@@ -2698,8 +2699,7 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
         ),
     );
 
-
-// --- Nikon MakerNotes (30 tags) ---
+    // --- Nikon MakerNotes (30 tags) ---
     registry.insert(
         "Nikon:MakerNoteVersion",
         TagDescriptor::new(
@@ -3090,8 +3090,7 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
         ),
     );
 
-
-// --- Sony MakerNotes (30 tags) ---
+    // --- Sony MakerNotes (30 tags) ---
     registry.insert(
         "Sony:SonyModelID",
         TagDescriptor::new(
@@ -3482,12 +3481,11 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
         ),
     );
 
+    // ===========================
+    // GPS TAGS (30+ total)
+    // ===========================
 
-// ===========================
-// GPS TAGS (30+ total)
-// ===========================
-
-// --- Additional GPS Tags (12 tags) ---
+    // --- Additional GPS Tags (12 tags) ---
     registry.insert(
         "GPS:GPSDestLatitudeRef",
         TagDescriptor::new(
@@ -3644,12 +3642,11 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
         ),
     );
 
+    // ===========================
+    // XMP TAGS (100+ total)
+    // ===========================
 
-// ===========================
-// XMP TAGS (100+ total)
-// ===========================
-
-// --- Additional XMP Tags (80 tags) ---
+    // --- Additional XMP Tags (80 tags) ---
     registry.insert(
         "XMP:Source",
         TagDescriptor::new(
@@ -4690,10 +4687,9 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
         ),
     );
 
-
-// ===========================
-// IPTC TAGS (50+ total)
-// ===========================
+    // ===========================
+    // IPTC TAGS (50+ total)
+    // ===========================
 
     registry.insert(
         "IPTC:ApplicationRecordVersion",
@@ -5345,10 +5341,9 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
         ),
     );
 
-
-// ===========================
-// PDF TAGS (11 total)
-// ===========================
+    // ===========================
+    // PDF TAGS (11 total)
+    // ===========================
 
     registry.insert(
         "PDF:Title",
@@ -5463,7 +5458,11 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
             true,
             ValueType::String,
             "Trapping information".to_string(),
-            vec!["True".to_string(), "False".to_string(), "Unknown".to_string()],
+            vec![
+                "True".to_string(),
+                "False".to_string(),
+                "Unknown".to_string(),
+            ],
         ),
     );
 
@@ -5493,10 +5492,9 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
         ),
     );
 
-
-// ===========================
-// QUICKTIME TAGS (11 total)
-// ===========================
+    // ===========================
+    // QUICKTIME TAGS (11 total)
+    // ===========================
 
     registry.insert(
         "QuickTime:Title",
@@ -5640,7 +5638,6 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
             vec!["2024-03-15T14:30:45Z".to_string()],
         ),
     );
-
 
     // --- More EXIF Tags (40 tags) ---
     registry.insert(
@@ -6241,7 +6238,6 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
             vec!["Acme Corp".to_string()],
         ),
     );
-
 
     // ===========================
     // GPS TAGS (32 total)
@@ -6991,7 +6987,7 @@ mod tests {
                 FormatFamily::PDF => pdf_count += 1,
                 FormatFamily::QuickTime => quicktime_count += 1,
                 FormatFamily::MakerNotes => makernotes_count += 1,
-                _ => {},
+                _ => {}
             }
         }
 
@@ -7031,7 +7027,13 @@ mod tests {
             quicktime_count
         );
 
-        let total = exif_count + makernotes_count + gps_count + xmp_count + iptc_count + pdf_count + quicktime_count;
+        let total = exif_count
+            + makernotes_count
+            + gps_count
+            + xmp_count
+            + iptc_count
+            + pdf_count
+            + quicktime_count;
         assert!(
             total >= 500,
             "Total tag count should be at least 500, found {}",

@@ -257,9 +257,8 @@ impl CliArgs {
             // - A value in date format (contains colons and spaces like "Y:M:D H:M:S" or "YYYY:MM:DD HH:MM:SS")
 
             let tag_lower = tag.to_lowercase();
-            let is_date_tag = tag_lower == "alldates"
-                || tag_lower.contains("date")
-                || tag_lower.contains("time");
+            let is_date_tag =
+                tag_lower == "alldates" || tag_lower.contains("date") || tag_lower.contains("time");
 
             let is_date_value = value.contains(':') && value.contains(' ');
 

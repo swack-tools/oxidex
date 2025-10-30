@@ -612,7 +612,9 @@ mod tests {
 
         // CSV reader should correctly parse values with commas and quotes
         assert!(records.iter().any(|r| r.get(1) == Some("Doe, John")));
-        assert!(records.iter().any(|r| r.get(1) == Some("Copyright \"2023\"")));
+        assert!(records
+            .iter()
+            .any(|r| r.get(1) == Some("Copyright \"2023\"")));
     }
 
     #[test]

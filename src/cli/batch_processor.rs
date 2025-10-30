@@ -54,7 +54,7 @@ impl BatchStats {
 const SUPPORTED_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "jpe", "jfif", // JPEG
     "tif", "tiff", // TIFF
-    "png", // PNG
+    "png",  // PNG
     "mp4", "m4v", "m4a", "m4b", "mov", // MP4/QuickTime
     "pdf", // PDF
 ];
@@ -147,10 +147,7 @@ fn collect_files(path: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
         if is_supported_file(path) {
             files.push(path.to_path_buf());
         } else {
-            eprintln!(
-                "Warning: File type not supported: {}",
-                path.display()
-            );
+            eprintln!("Warning: File type not supported: {}", path.display());
         }
     } else if path.is_dir() {
         // Directory - walk and collect files
@@ -338,14 +335,10 @@ fn apply_modifications(
 
     // Create backup if requested
     if args.backup {
-        let backup_path = path.with_extension(
-            format!(
-                "{}.bak",
-                path.extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-            )
-        );
+        let backup_path = path.with_extension(format!(
+            "{}.bak",
+            path.extension().and_then(|e| e.to_str()).unwrap_or("")
+        ));
         fs::copy(path, &backup_path)?;
     }
 
@@ -424,10 +417,7 @@ fn output_json_results(results: &[(PathBuf, Result<crate::core::MetadataMap>)]) 
             match result {
                 Ok(metadata) => {
                     let mut obj = serde_json::Map::new();
-                    obj.insert(
-                        "SourceFile".to_string(),
-                        json!(path.display().to_string()),
-                    );
+                    obj.insert("SourceFile".to_string(), json!(path.display().to_string()));
 
                     // Add all metadata tags
                     for (tag_name, tag_value) in metadata.iter() {
@@ -435,7 +425,10 @@ fn output_json_results(results: &[(PathBuf, Result<crate::core::MetadataMap>)]) 
                             TagValue::String(s) => json!(s),
                             TagValue::Integer(i) => json!(i),
                             TagValue::Float(f) => json!(f),
-                            TagValue::Rational { numerator, denominator } => {
+                            TagValue::Rational {
+                                numerator,
+                                denominator,
+                            } => {
                                 json!(format!("{}/{}", numerator, denominator))
                             }
                             TagValue::Binary(b) => {
