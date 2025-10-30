@@ -211,6 +211,12 @@ fn should_skip_tag(tag_name: &str) -> bool {
         return true;
     }
 
+    // Skip Composite: namespace (derived tags calculated by Perl ExifTool)
+    // Examples: Composite:Megapixels, Composite:ImageSize, Composite:GPSPosition
+    if tag_name.starts_with("Composite:") {
+        return true;
+    }
+
     // Skip specific metadata fields
     if tag_name == "SourceFile" {
         return true;

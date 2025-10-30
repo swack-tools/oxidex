@@ -10,6 +10,7 @@ use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
 use crate::parsers::format_detector::detect_format;
 use crate::parsers::jpeg::segment_parser::parse_segments;
+use crate::parsers::jpeg::xmp_parser::extract_xmp_from_segments;
 use crate::parsers::pdf::parse_pdf_metadata;
 use crate::parsers::png::parse_png_metadata;
 use crate::parsers::quicktime::parse_quicktime_metadata;
@@ -248,6 +249,28 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                     eprintln!("Warning: Failed to parse EXIF IFD: {}", e);
                 }
             }
+        }
+    }
+
+    // Extract XMP metadata from APP1 segments
+    match extract_xmp_from_segments(&segments) {
+        Ok(xmp_tags) => {
+            // Add all XMP tags to metadata
+            for (tag_name, value) in xmp_tags {
+                // Try to parse as integer first, then as float, otherwise keep as string
+                let tag_value = if let Ok(int_val) = value.parse::<i64>() {
+                    TagValue::Integer(int_val)
+                } else if let Ok(float_val) = value.parse::<f64>() {
+                    TagValue::Float(float_val)
+                } else {
+                    TagValue::String(value)
+                };
+                metadata.insert(tag_name, tag_value);
+            }
+        }
+        Err(e) => {
+            // Log error but continue processing (don't fail entire read)
+            eprintln!("Warning: Failed to parse XMP: {}", e);
         }
     }
 
