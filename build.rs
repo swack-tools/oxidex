@@ -29,6 +29,12 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/tag_db/tag_registry.rs");
 
+    // Skip generation if the file already exists (for crates.io publishing)
+    if Path::new(GENERATED_TAGS_PATH).exists() {
+        println!("cargo:warning=Using existing generated_tags.rs (file already exists)");
+        return;
+    }
+
     match generate_tag_database() {
         Ok(tag_count) => {
             if tag_count >= MIN_TAG_COUNT {
