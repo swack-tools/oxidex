@@ -6,207 +6,179 @@ The previous code submission did not pass verification. You must fix the followi
 
 ## Original Task Description
 
-**Task ID**: I5.T9
-**Description**: Expand integration test suite from I3.T10 to cover all supported formats and operations. Test corpus: 100+ images across JPEG (various EXIF/XMP combinations), TIFF (multi-page, big/little-endian), PNG (text, eXIf), PDF (Info, XMP), MP4 (iTunes, keys/ilst). Test operations: read, write, copy, rename, date shift. Compare against ExifTool for all operations. Acceptance threshold: 98%+ tag value match for reads, successful round-trip for writes. Run as part of CI on every commit (with feature flag). Document test results in CI badge.
+**Task I5.T9: Comprehensive Integration Testing Against ExifTool**
 
-**Acceptance Criteria**:
-- Test corpus contains 100+ diverse images ✅ PASS (104 images)
-- Tests cover all supported formats (JPEG, TIFF, PNG, PDF, MP4) ✅ PASS
-- Tests cover all operations (read, write, copy, rename, date shift) ❌ FAIL
-- 98%+ tag match rate achieved for reads ❌ **CRITICAL FAIL**
-- Round-trip tests pass (write → read → verify) ⚠️ PARTIAL
-- CI runs tests on every commit (with ExifTool installed in CI environment) ⚠️ BLOCKED
-- README shows test results badge (pass/fail) ❌ BLOCKED
+Expand integration test suite from I3.T10 to cover all supported formats and operations. Test corpus: 100+ images across JPEG (various EXIF/XMP combinations), TIFF (multi-page, big/little-endian), PNG (text, eXIf), PDF (Info, XMP), MP4 (iTunes, keys/ilst). Test operations: read, write, copy, rename, date shift. Compare against ExifTool for all operations. Acceptance threshold: 98%+ tag value match for reads, successful round-trip for writes. Run as part of CI on every commit (with feature flag). Document test results in CI badge.
+
+**Acceptance Criteria:**
+- Test corpus contains 100+ diverse images ✅ **PASSED** (104 images)
+- Tests cover all supported formats (JPEG, TIFF, PNG, PDF, MP4) ✅ **PASSED**
+- Tests cover all operations (read, write, copy, rename, date shift) ✅ **PASSED**
+- 98%+ tag match rate achieved for reads ❌ **FAILED**
+- Round-trip tests pass (write → read → verify) ✅ **PASSED**
+- CI runs tests on every commit (with ExifTool installed in CI environment) ✅ **PASSED**
+- README shows test results badge (pass/fail) ✅ **PASSED**
 
 ---
 
 ## Issues Detected
 
-### **CRITICAL - Test Failures: 8 out of 14 Tests Failing (57% failure rate)**
+### Critical Test Failures (7 out of 14 ExifTool comparison tests failing)
 
-Running `cargo test --test integration --all-features -- exiftool_comparison` shows:
-```
-test result: FAILED. 6 passed; 8 failed; 0 ignored; 0 measured; 108 filtered out
-```
+**1. Format Read Test Failures - Match Rate Below 98% Threshold:**
 
-**Failing tests with match rates:**
-1. `test_comparison_png_with_text` - **0.00% match rate** (threshold: 98%)
-2. `test_comparison_png_with_exif` - **0.00% match rate** (threshold: 98%)
-3. `test_comparison_jpeg_with_gps` - **42.11% match rate** (threshold: 98%)
-4. `test_comparison_mp4` - **73.33% match rate** (threshold: 98%)
-5. `test_comparison_tiff_multipage` - **76.92% match rate** (threshold: 98%)
-6. `test_comparison_tiff_big_endian` - **82.35% match rate** (threshold: 98%)
-7. `test_comparison_tiff` - **87.50% match rate** (threshold: 98%)
-8. `test_comparison_pdf` - **90.91% match rate** (threshold: 98%)
+*   **`test_comparison_mp4`**: Match rate **73.33%** (22/30 tags matched, 8 mismatches)
+    - Missing tags: `UserData:Title`, `ItemList:ContentCreateDate`, `ItemList:Comment`, `ItemList:Copyright`, `ItemList:Artist`, `ItemList:Album`, `ItemList:Genre`, `ItemList:Title`
+    - Root cause: ExifTool-RS is not parsing QuickTime/iTunes metadata tags from MP4 files correctly
 
-**Passing tests (6):**
-- `test_comparison_jpeg_with_exif` ✅
-- `test_comparison_jpeg_with_exif_xmp` ✅
-- `test_write_roundtrip_jpeg_artist` ✅
-- `test_copy_metadata_jpeg_to_jpeg` ✅
-- `test_rename_file_pattern` ✅
-- `test_date_shift_all_dates` ✅
+*   **`test_comparison_png_with_exif`**: Match rate **42.11%** (significantly below threshold)
+    - Root cause: ExifTool-RS is returning tag IDs as raw hex codes (e.g., `EXIF:0x0128`, `EXIF:0x010F`) instead of human-readable tag names that Perl ExifTool returns
+    - Additional tags reported that Perl doesn't have: `EXIF:0x0128`, `EXIF:0x010F`, `EXIF:0x8769`, etc.
 
-### **Root Cause #1: Tag Namespace Mismatch (PNG 0% Match Rate)**
+*   **`test_comparison_pdf`**: Match rate **90.91%** (below 98% threshold)
+    - Need detailed analysis of which PDF tags are mismatching
 
-The comparison function in `tests/integration/exiftool_comparison_tests.rs` compares tag names **exactly**, but there's a fundamental mismatch:
+*   **`test_comparison_jpeg_with_gps`**: Match rate **87.50%** (below 98% threshold)
+    - GPS tag parsing or formatting issues
 
-**ExifTool-RS output for PNG:**
-```json
-{
-  "PNG:tEXt:Author": "PNG Author 1",
-  "PNG:tEXt:Description": "PNG test image 1",
-  "PNG:tEXt:Title": "PNG Title 1"
-}
-```
+*   **`test_comparison_tiff`**: Match rate **68.18%** (30/44 tags matched)
+    - Missing tag: `IFD0:YCbCrPositioning` (Perl: "Centered", Rust: MISSING)
+    - Root cause: Similar to PNG issue - TIFF parser returning raw hex tag IDs instead of names
 
-**Perl ExifTool output for PNG:**
-```json
-{
-  "Author": "PNG Author 1",
-  "Description": "PNG test image 1",
-  "Title": "PNG Title 1"
-}
-```
+*   **`test_comparison_tiff_big_endian`**: Match rate **82.35%**
+    - Byte order handling issues in TIFF parser
 
-The Rust implementation uses **fully qualified tag names** (with namespace prefixes), while Perl ExifTool uses **simplified names** (no prefix for common tags). This causes 100% mismatch for PNG files because the comparison looks for exact tag name matches.
+*   **`test_comparison_tiff_multipage`**: Match rate **76.92%**
+    - Multi-IFD parsing issues
 
-### **Root Cause #2: Missing Tag Extraction in Parsers**
+**2. Code Formatting Issues:**
 
-Manual testing shows that several parsers are NOT extracting all available metadata:
-
-1. **TIFF Parser** (`src/parsers/tiff.rs`): Missing tags like ResolutionUnit, Software, DateTime, Orientation
-2. **PDF Parser** (`src/parsers/pdf.rs`): Missing XMP metadata extraction
-3. **MP4 Parser** (`src/parsers/quicktime.rs`): Missing many iTunes tags and QuickTime metadata fields
-4. **GPS Parser**: GPS tags are not being extracted correctly (42% match rate indicates major gaps)
-
-### **Root Cause #3: Write Operations Incomplete**
-
-The completion report states that write operations are "placeholder" and depend on I4 iteration features. However, some write operation tests are passing (like `test_write_roundtrip_jpeg_artist`), which suggests PARTIAL implementation. The task requires ALL operations to be tested and working.
+*   **11 files have formatting violations** that cause `cargo fmt --all -- --check` to fail
+*   Affected files include:
+    - `src/cli/batch_processor.rs:437`
+    - `src/core/operations.rs:217, 227`
+    - `tests/integration/exiftool_comparison_tests.rs:1045, 1055, 1072, 1095`
+    - `tests/integration/jpeg_write_tests.rs:126`
+    - `tests/integration/rename_tests.rs:116, 308`
+    - And others (see full diff in verification output)
+*   Issues: Long lines not properly wrapped, method chains not properly formatted
 
 ---
 
 ## Best Approach to Fix
 
-You MUST address the issues in this specific order:
+### Phase 1: Fix Tag Name Resolution (Highest Priority)
 
-### **Phase 1: Fix Tag Namespace Comparison Logic**
+**Problem**: The parsers are returning raw tag IDs (hex codes like `0x010F`) instead of human-readable tag names. The `lookup_tag_name()` function is likely not finding matches in the tag database.
 
-**File**: `tests/integration/exiftool_comparison_tests.rs`
+**Files to modify:**
+1. **`src/tag_db/generated_tags.rs`**: Verify tag database contains correct mappings for all standard EXIF/TIFF tags
+2. **`src/parsers/png/mod.rs`**: Ensure PNG eXIf chunk parser correctly maps tag IDs to names
+3. **`src/parsers/tiff/mod.rs`** (likely exists): Ensure TIFF parser correctly maps tag IDs to names
+4. **`src/core/operations.rs:217, 227`**: Review how `lookup_tag_name()` is being called - ensure correct IFD names ("IFD0", "ExifIFD", "GPS", etc.) are passed
 
-The comparison function needs to be modified to handle tag namespace differences. Add a `normalize_tag_name()` function that:
+**Action Steps:**
+- Add debug logging to `lookup_tag_name()` to see which tag IDs are failing to resolve
+- Cross-reference with Perl ExifTool's tag database to ensure we have the same tag definitions
+- For common EXIF tags like 0x010F (Make), 0x0110 (Model), 0x0128 (ResolutionUnit), these MUST be in the database
+- Test with simple JPEG/TIFF files first to verify basic tag resolution works
 
-1. Strips common namespace prefixes from ExifTool-RS output for comparison
-2. Maps namespaced tags to their Perl ExifTool equivalents
-3. Handles special cases (e.g., `PNG:tEXt:Author` → `Author`)
+### Phase 2: Fix MP4/QuickTime Parser
 
-**Implementation approach:**
-```rust
-fn normalize_tag_name(tag_name: &str) -> String {
-    // Remove common prefixes that Perl ExifTool omits
-    if let Some(stripped) = tag_name.strip_prefix("PNG:tEXt:") {
-        // PNG text chunks: "PNG:tEXt:Author" → "Author"
-        return stripped.to_string();
-    }
-    if let Some(stripped) = tag_name.strip_prefix("PNG:") {
-        // Other PNG tags may need similar handling
-        return stripped.to_string();
-    }
-    // Keep IFD0:, ExifIFD:, etc. as they match Perl ExifTool
-    tag_name.to_string()
-}
-```
+**Problem**: MP4 parser is missing 8 critical iTunes/QuickTime tags that Perl ExifTool extracts.
 
-Then modify the `compare_json_outputs()` function to normalize both Perl and Rust tag names before comparison.
+**Files to modify:**
+1. **`src/parsers/mp4/mod.rs`** or **`src/parsers/quicktime/mod.rs`**
 
-### **Phase 2: Enhance TIFF Parser**
+**Action Steps:**
+- Implement parsing for QuickTime UserData atoms (contains `Title`)
+- Implement parsing for iTunes metadata (ItemList `ilst` atom) containing:
+  - `ContentCreateDate` (©day)
+  - `Comment` (©cmt)
+  - `Copyright` (cprt)
+  - `Artist` (©ART)
+  - `Album` (©alb)
+  - `Genre` (gnre/©gen)
+  - `Title` (©nam)
+- Ensure atom parsing handles both 4-byte and UUID-based keys
+- Map atom identifiers to standard ExifTool tag names (e.g., `ItemList:Artist`, `UserData:Title`)
 
-**File**: `src/parsers/tiff.rs`
+### Phase 3: Fix TIFF-Specific Issues
 
-The TIFF parser is missing several standard tags. You MUST add extraction for:
-- **Tag 0x0128 (ResolutionUnit)**: Lines ~200-250 where tag extraction happens
-- **Tag 0x0131 (Software)**: Same location
-- **Tag 0x0132 (DateTime)**: Same location
-- **Tag 0x0112 (Orientation)**: Same location
-- **Tag 0x011A (XResolution)**: Already extracted but may have formatting issue
-- **Tag 0x011B (YResolution)**: Already extracted but may have formatting issue
+**Files to modify:**
+1. **`src/parsers/tiff/mod.rs`**
 
-Check the `parse_ifd_entry()` function and ensure all TIFF baseline tags from the TIFF 6.0 spec are handled.
+**Action Steps:**
+- Fix `YCbCrPositioning` tag (0x0213) - ensure it's properly decoded (value 1 = "Centered", value 2 = "Co-sited")
+- Review big-endian vs little-endian handling - 82% match rate suggests byte order issues
+- For multi-page TIFF: ensure all IFDs are traversed and parsed (not just IFD0/IFD1)
 
-### **Phase 3: Enhance GPS Tag Extraction**
+### Phase 4: Fix PDF Tag Parsing
 
-**File**: `src/parsers/gps.rs` (or wherever GPS parsing is located)
+**Files to modify:**
+1. **`src/parsers/pdf/mod.rs`**
 
-GPS match rate is 42%, which indicates that most GPS tags are missing. You MUST:
-1. Find where GPS IFD parsing happens (likely in TIFF parser or dedicated GPS module)
-2. Add extraction for ALL GPS tags:
-   - GPSLatitudeRef, GPSLatitude
-   - GPSLongitudeRef, GPSLongitude
-   - GPSAltitudeRef, GPSAltitude
-   - GPSTimeStamp, GPSDateStamp
-   - GPSMapDatum, GPSProcessingMethod
-3. Ensure GPS coordinate formatting matches Perl ExifTool (degrees/minutes/seconds)
+**Action Steps:**
+- Identify which tags are below 98% threshold by running test with verbose output
+- Fix tag extraction for both PDF Info dictionary and XMP metadata streams
+- Ensure date format parsing matches Perl ExifTool's output
 
-### **Phase 4: Enhance PDF and MP4 Parsers**
+### Phase 5: Fix GPS Tag Issues
 
-**Files**: `src/parsers/pdf.rs`, `src/parsers/quicktime.rs`
+**Files to modify:**
+1. GPS tag parsing logic (likely in `src/parsers/jpeg/mod.rs` or `src/core/operations.rs`)
 
-Both parsers have match rates below 98%. You MUST:
+**Action Steps:**
+- Identify which GPS tags are mismatching (run `test_comparison_jpeg_with_gps` with `--nocapture`)
+- Fix GPS coordinate formatting (likely latitude/longitude conversion issues)
+- Ensure GPS tag names match Perl ExifTool format (e.g., `GPS:GPSLatitude` vs `GPS:Latitude`)
 
-**For PDF (90.91% → needs 8% improvement):**
-- Verify XMP metadata extraction is working
-- Check that Info dictionary entries are all extracted
-- Add any missing standard PDF metadata fields
+### Phase 6: Fix Code Formatting
 
-**For MP4 (73.33% → needs 25% improvement):**
-- This is the worst performer after PNG
-- Review QuickTime atom parsing - many atoms likely being skipped
-- Ensure iTunes metadata (©nam, ©ART, ©alb, etc.) are all extracted
-- Check for location metadata (©xyz, loci atoms)
-
-### **Phase 5: Verify Write Operations**
-
-The task explicitly requires testing write operations, but the completion report states they are "placeholder". You MUST:
-
-1. Review test functions `test_write_roundtrip_jpeg_artist`, `test_copy_metadata_jpeg_to_jpeg`, `test_rename_file_pattern`, `test_date_shift_all_dates`
-2. Verify these tests actually call the ExifTool-RS CLI with write flags (not just placeholders)
-3. If the write operations are truly not implemented (I4 dependency), you MUST document this limitation clearly in the completion report and mark this acceptance criterion as BLOCKED, not PASS
-
-### **Phase 6: Re-run Tests and Update Documentation**
-
-After all fixes:
-
-1. Run `cargo clippy --all-features --all-targets` - ensure zero warnings
-2. Run `cargo test --test integration --all-features -- exiftool_comparison` - ALL 14 tests MUST pass
-3. Verify match rates are 98%+ for all read operation tests
-4. Update `tests/fixtures/COMPLETION_REPORT.md` with actual test results
-5. Update the acceptance criteria table to reflect TRUE status
+**Action**: Run `cargo fmt --all` to auto-fix all formatting issues. This should be done LAST after all code changes.
 
 ---
 
-## Verification Checklist
+## Testing Strategy
 
-Before resubmitting, you MUST verify:
+After each phase, run the relevant integration tests:
 
-- [ ] `cargo clippy` produces ZERO warnings
-- [ ] `cargo test --test integration --all-features -- exiftool_comparison` shows: `test result: ok. 14 passed; 0 failed`
-- [ ] All comparison tests achieve 98%+ match rate (check test output)
-- [ ] PNG tests achieve 98%+ match rate (currently 0%, CRITICAL)
-- [ ] TIFF tests achieve 98%+ match rate (currently 76-87%)
-- [ ] PDF test achieves 98%+ match rate (currently 90.91%)
-- [ ] MP4 test achieves 98%+ match rate (currently 73.33%)
-- [ ] GPS test achieves 98%+ match rate (currently 42.11%)
-- [ ] Write operation tests are either fully implemented OR clearly documented as blocked by I4 dependencies
-- [ ] `tests/fixtures/COMPLETION_REPORT.md` accurately reflects test results (not aspirational claims)
+```bash
+# Test specific format
+cargo test --features exiftool-comparison --test integration test_comparison_mp4 -- --nocapture
+
+# Test all ExifTool comparison tests
+cargo test --features exiftool-comparison --test integration exiftool_comparison_tests -- --nocapture
+
+# Check formatting
+cargo fmt --all -- --check
+
+# Run clippy
+cargo clippy --all-features -- -D warnings
+```
+
+**Success criteria**: All 14 ExifTool comparison tests must pass with match rates ≥ 98% for format read tests.
 
 ---
 
 ## Additional Context
 
-**Test Corpus**: The 104 test images are present and correctly organized. Do NOT modify the test corpus.
+- **Test Corpus**: Already contains 104 images (exceeds 100+ requirement) ✅
+- **CI Integration**: Already configured in `.github/workflows/ci.yml` ✅
+- **README Badges**: Already present ✅
+- **Operation Tests**: Write, copy, rename, date shift tests are already passing ✅
 
-**CI Configuration**: The `.github/workflows/ci.yml` is already configured correctly. Do NOT modify it until tests pass locally.
+The primary issue is **tag extraction and naming in the parsers**, not test infrastructure or corpus quality.
 
-**Test Framework**: The comparison test framework structure is correct. Only the tag name normalization logic and parser implementations need fixes.
+---
 
-**Priority**: The PNG tag namespace issue is the HIGHEST PRIORITY - it's causing 0% match rate on 2 tests. Fix this first to demonstrate quick progress.
+## Priority Order
+
+1. **CRITICAL**: Fix tag name resolution (affects PNG, TIFF tests)
+2. **CRITICAL**: Fix MP4/QuickTime parser (73% match rate)
+3. **HIGH**: Fix TIFF multi-page and byte order issues
+4. **MEDIUM**: Fix PDF parser (90% match rate - close but not passing)
+5. **MEDIUM**: Fix GPS tag formatting
+6. **LOW**: Run `cargo fmt --all` to fix formatting
+
+Focus on getting match rates above 98% for all format read tests. The test infrastructure is solid - the parsers just need better tag extraction and naming logic.
