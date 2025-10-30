@@ -1,25 +1,25 @@
 {
   "version": "1.0",
   "description": "Test corpus for ExifTool-RS integration tests comparing output against Perl ExifTool",
-  "total_images": 5,
+  "total_images": 102,
   "target_images": 100,
   "formats": {
     "jpeg": {
-      "count": 2,
+      "count": 30,
       "target": 50,
       "categories": {
         "simple": {
-          "count": 1,
+          "count": 16,
           "target": 15,
           "description": "Basic JPEG with standard EXIF"
         },
         "complex": {
-          "count": 1,
+          "count": 11,
           "target": 15,
           "description": "JPEG with EXIF+XMP, GPS, maker notes"
         },
         "edge_cases": {
-          "count": 0,
+          "count": 3,
           "target": 10,
           "description": "Large dimensions, unusual orientations, progressive encoding"
         },
@@ -31,74 +31,74 @@
       }
     },
     "png": {
-      "count": 0,
+      "count": 33,
       "target": 30,
       "categories": {
         "simple": {
-          "count": 0,
+          "count": 15,
           "target": 10,
           "description": "PNG with text chunks (tEXt, zTXt)"
         },
         "complex": {
-          "count": 0,
+          "count": 12,
           "target": 10,
           "description": "PNG with eXIf chunk, ICC profile"
         },
         "edge_cases": {
-          "count": 0,
+          "count": 6,
           "target": 10,
           "description": "Interlaced, animated (APNG)"
         }
       }
     },
     "tiff": {
-      "count": 1,
+      "count": 20,
       "target": 25,
       "categories": {
         "simple": {
-          "count": 1,
+          "count": 11,
           "target": 10,
           "description": "Single-page TIFF, little-endian"
         },
         "complex": {
-          "count": 0,
+          "count": 6,
           "target": 10,
           "description": "Multi-page TIFF, big-endian, compression variants"
         },
         "edge_cases": {
-          "count": 0,
+          "count": 3,
           "target": 5,
           "description": "Very large images, unusual bit depths"
         }
       }
     },
     "pdf": {
-      "count": 1,
+      "count": 10,
       "target": 15,
       "categories": {
         "simple": {
-          "count": 1,
+          "count": 6,
           "target": 5,
           "description": "PDF with Info dictionary"
         },
         "complex": {
-          "count": 0,
+          "count": 4,
           "target": 10,
           "description": "PDF with XMP, embedded images, annotations"
         }
       }
     },
     "mp4": {
-      "count": 1,
+      "count": 9,
       "target": 15,
       "categories": {
         "simple": {
-          "count": 1,
+          "count": 6,
           "target": 5,
           "description": "MP4 with basic iTunes metadata"
         },
         "complex": {
-          "count": 0,
+          "count": 3,
           "target": 10,
           "description": "MP4 with keys/ilst, GPS track, multiple streams"
         }
@@ -193,6 +193,9 @@
     "Test fixtures are tracked with Git LFS (see .gitattributes)",
     "Images must be properly licensed (GPL-compatible or public domain)",
     "Each fixture should be documented with source and expected metadata",
-    "Target: 100+ images for comprehensive coverage"
+    "Target: 100+ images for comprehensive coverage",
+    "102 images currently in corpus (30 JPEG, 33 PNG, 20 TIFF, 10 PDF, 9 MP4)",
+    "Most images are synthetically generated using ImageMagick + ExifTool (GPL-3.0)",
+    "Synthetic images have known metadata for predictable comparison testing"
   ]
 }

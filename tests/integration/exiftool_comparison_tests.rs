@@ -616,42 +616,231 @@ fn test_comparison_mp4() {
 // }
 
 // ============================================================================
-// Additional Format Tests - To Be Implemented When Fixtures Available
+// Additional Format Tests - Implemented with Synthetic Fixtures
 // ============================================================================
 
-// TODO: Implement when PNG fixtures with text chunks are available
-// #[test]
-// #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
-// fn test_comparison_png_with_text() {
-//     // Test PNG with tEXt, zTXt, iTXt chunks
-// }
+#[test]
+#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
+fn test_comparison_png_with_text() {
+    if !is_exiftool_available() {
+        eprintln!("Skipping test: Perl ExifTool not found in PATH");
+        return;
+    }
 
-// TODO: Implement when PNG fixtures with eXIf chunk are available
-// #[test]
-// #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
-// fn test_comparison_png_with_exif() {
-//     // Test PNG with eXIf chunk (EXIF in PNG)
-// }
+    let test_file = Path::new("tests/fixtures/png/simple/synthetic_text_001.png");
+    assert!(
+        test_file.exists(),
+        "Test fixture not found: {:?}",
+        test_file
+    );
 
-// TODO: Implement when multi-page TIFF fixtures are available
-// #[test]
-// #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
-// fn test_comparison_tiff_multipage() {
-//     // Test multi-page TIFF with multiple IFDs
-// }
+    let perl_json =
+        get_perl_exiftool_output(test_file).expect("Failed to get Perl ExifTool output");
+    let rust_json = get_exiftool_rs_output(test_file).expect("Failed to get ExifTool-RS output");
 
-// TODO: Implement when JPEG with GPS metadata is available
-// #[test]
-// #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
-// fn test_comparison_jpeg_with_gps() {
-//     // Test JPEG with GPS coordinates
-//     // Validate GPS coordinate tolerance (±0.0001°)
-// }
+    let report =
+        compare_json_outputs(&perl_json, &rust_json).expect("Failed to compare JSON outputs");
 
-// TODO: Implement when files with maker notes are available
-// #[test]
-// #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
-// fn test_comparison_jpeg_with_maker_notes() {
-//     // Test JPEG from Canon, Nikon, Sony cameras
-//     // Document known discrepancies in maker note decoding
-// }
+    println!("\n=== PNG with Text Chunks Comparison Results ===");
+    println!("Match rate: {:.2}%", report.match_rate);
+    println!(
+        "Matched: {}/{} tags",
+        report.matched_tags, report.total_tags
+    );
+
+    if !report.mismatches.is_empty() {
+        println!("\nMismatches ({}):", report.mismatches.len());
+        for mismatch in &report.mismatches {
+            println!("  {}", mismatch.tag_name);
+            println!("    Perl:  {}", mismatch.perl_value);
+            println!("    Rust:  {}", mismatch.rust_value);
+        }
+    }
+
+    assert!(
+        report.match_rate >= 98.0,
+        "Match rate {:.2}% below 98% threshold",
+        report.match_rate
+    );
+}
+
+#[test]
+#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
+fn test_comparison_png_with_exif() {
+    if !is_exiftool_available() {
+        eprintln!("Skipping test: Perl ExifTool not found in PATH");
+        return;
+    }
+
+    let test_file = Path::new("tests/fixtures/png/complex/synthetic_exif_001.png");
+    assert!(
+        test_file.exists(),
+        "Test fixture not found: {:?}",
+        test_file
+    );
+
+    let perl_json =
+        get_perl_exiftool_output(test_file).expect("Failed to get Perl ExifTool output");
+    let rust_json = get_exiftool_rs_output(test_file).expect("Failed to get ExifTool-RS output");
+
+    let report =
+        compare_json_outputs(&perl_json, &rust_json).expect("Failed to compare JSON outputs");
+
+    println!("\n=== PNG with eXIf Chunk Comparison Results ===");
+    println!("Match rate: {:.2}%", report.match_rate);
+    println!(
+        "Matched: {}/{} tags",
+        report.matched_tags, report.total_tags
+    );
+
+    if !report.mismatches.is_empty() {
+        println!("\nMismatches ({}):", report.mismatches.len());
+        for mismatch in &report.mismatches {
+            println!("  {}", mismatch.tag_name);
+            println!("    Perl:  {}", mismatch.perl_value);
+            println!("    Rust:  {}", mismatch.rust_value);
+        }
+    }
+
+    assert!(
+        report.match_rate >= 98.0,
+        "Match rate {:.2}% below 98% threshold",
+        report.match_rate
+    );
+}
+
+#[test]
+#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
+fn test_comparison_tiff_multipage() {
+    if !is_exiftool_available() {
+        eprintln!("Skipping test: Perl ExifTool not found in PATH");
+        return;
+    }
+
+    let test_file = Path::new("tests/fixtures/tiff/complex/multipage.tif");
+    assert!(
+        test_file.exists(),
+        "Test fixture not found: {:?}",
+        test_file
+    );
+
+    let perl_json =
+        get_perl_exiftool_output(test_file).expect("Failed to get Perl ExifTool output");
+    let rust_json = get_exiftool_rs_output(test_file).expect("Failed to get ExifTool-RS output");
+
+    let report =
+        compare_json_outputs(&perl_json, &rust_json).expect("Failed to compare JSON outputs");
+
+    println!("\n=== Multi-page TIFF Comparison Results ===");
+    println!("Match rate: {:.2}%", report.match_rate);
+    println!(
+        "Matched: {}/{} tags",
+        report.matched_tags, report.total_tags
+    );
+
+    if !report.mismatches.is_empty() {
+        println!("\nMismatches ({}):", report.mismatches.len());
+        for mismatch in &report.mismatches {
+            println!("  {}", mismatch.tag_name);
+            println!("    Perl:  {}", mismatch.perl_value);
+            println!("    Rust:  {}", mismatch.rust_value);
+        }
+    }
+
+    assert!(
+        report.match_rate >= 98.0,
+        "Match rate {:.2}% below 98% threshold",
+        report.match_rate
+    );
+}
+
+#[test]
+#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
+fn test_comparison_jpeg_with_gps() {
+    if !is_exiftool_available() {
+        eprintln!("Skipping test: Perl ExifTool not found in PATH");
+        return;
+    }
+
+    let test_file = Path::new("tests/fixtures/jpeg/complex/synthetic_gps_001.jpg");
+    assert!(
+        test_file.exists(),
+        "Test fixture not found: {:?}",
+        test_file
+    );
+
+    let perl_json =
+        get_perl_exiftool_output(test_file).expect("Failed to get Perl ExifTool output");
+    let rust_json = get_exiftool_rs_output(test_file).expect("Failed to get ExifTool-RS output");
+
+    let report =
+        compare_json_outputs(&perl_json, &rust_json).expect("Failed to compare JSON outputs");
+
+    println!("\n=== JPEG with GPS Coordinates Comparison Results ===");
+    println!("Match rate: {:.2}%", report.match_rate);
+    println!(
+        "Matched: {}/{} tags",
+        report.matched_tags, report.total_tags
+    );
+
+    if !report.mismatches.is_empty() {
+        println!("\nMismatches ({}):", report.mismatches.len());
+        for mismatch in &report.mismatches {
+            println!("  {}", mismatch.tag_name);
+            println!("    Perl:  {}", mismatch.perl_value);
+            println!("    Rust:  {}", mismatch.rust_value);
+        }
+    }
+
+    // GPS coordinates should match within ±0.0001° tolerance (configured in values_match)
+    assert!(
+        report.match_rate >= 98.0,
+        "Match rate {:.2}% below 98% threshold",
+        report.match_rate
+    );
+}
+
+#[test]
+#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
+fn test_comparison_tiff_big_endian() {
+    if !is_exiftool_available() {
+        eprintln!("Skipping test: Perl ExifTool not found in PATH");
+        return;
+    }
+
+    let test_file = Path::new("tests/fixtures/tiff/complex/big_endian_001.tif");
+    assert!(
+        test_file.exists(),
+        "Test fixture not found: {:?}",
+        test_file
+    );
+
+    let perl_json =
+        get_perl_exiftool_output(test_file).expect("Failed to get Perl ExifTool output");
+    let rust_json = get_exiftool_rs_output(test_file).expect("Failed to get ExifTool-RS output");
+
+    let report =
+        compare_json_outputs(&perl_json, &rust_json).expect("Failed to compare JSON outputs");
+
+    println!("\n=== Big-Endian TIFF Comparison Results ===");
+    println!("Match rate: {:.2}%", report.match_rate);
+    println!(
+        "Matched: {}/{} tags",
+        report.matched_tags, report.total_tags
+    );
+
+    if !report.mismatches.is_empty() {
+        println!("\nMismatches ({}):", report.mismatches.len());
+        for mismatch in &report.mismatches {
+            println!("  {}", mismatch.tag_name);
+            println!("    Perl:  {}", mismatch.perl_value);
+            println!("    Rust:  {}", mismatch.rust_value);
+        }
+    }
+
+    assert!(
+        report.match_rate >= 98.0,
+        "Match rate {:.2}% below 98% threshold",
+        report.match_rate
+    );
+}
