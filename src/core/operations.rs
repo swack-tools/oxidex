@@ -675,47 +675,81 @@ fn raw_bytes_to_tag_value(
             }
 
             // SHORT (type 3): unsigned 16-bit integers
-            ExifType::Short if value_count > 1 && bytes.len() >= (value_count as usize * 2) => {
-                // Array of shorts - format as space-separated string
-                let mut values = Vec::new();
-                for i in 0..value_count as usize {
-                    let offset = i * 2;
-                    let value = match byte_order {
-                        ByteOrder::LittleEndian => {
-                            u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
-                        }
-                        ByteOrder::BigEndian => {
-                            u16::from_be_bytes([bytes[offset], bytes[offset + 1]])
-                        }
-                    };
-                    values.push(value.to_string());
+            ExifType::Short if bytes.len() >= 2 => {
+                // Handle array of shorts
+                if value_count > 1 && bytes.len() >= (value_count as usize * 2) {
+                    let mut values = Vec::new();
+                    for i in 0..value_count as usize {
+                        let offset = i * 2;
+                        let value = match byte_order {
+                            ByteOrder::LittleEndian => {
+                                u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+                            }
+                            ByteOrder::BigEndian => {
+                                u16::from_be_bytes([bytes[offset], bytes[offset + 1]])
+                            }
+                        };
+                        values.push(value.to_string());
+                    }
+                    return TagValue::new_string(values.join(" "));
                 }
-                return TagValue::new_string(values.join(" "));
+
+                // Handle single SHORT value
+                let value = match byte_order {
+                    ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
+                    ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
+                } as i64;
+
+                // Try to convert to enum string if applicable
+                if let Some(enum_str) = tiff_enum_to_string(tag_id, value) {
+                    return TagValue::new_string(enum_str);
+                }
+
+                return TagValue::new_integer(value);
             }
 
             // LONG (type 4): unsigned 32-bit integers
-            ExifType::Long if value_count > 1 && bytes.len() >= (value_count as usize * 4) => {
-                // Array of longs - format as space-separated string
-                let mut values = Vec::new();
-                for i in 0..value_count as usize {
-                    let offset = i * 4;
-                    let value = match byte_order {
-                        ByteOrder::LittleEndian => u32::from_le_bytes([
-                            bytes[offset],
-                            bytes[offset + 1],
-                            bytes[offset + 2],
-                            bytes[offset + 3],
-                        ]),
-                        ByteOrder::BigEndian => u32::from_be_bytes([
-                            bytes[offset],
-                            bytes[offset + 1],
-                            bytes[offset + 2],
-                            bytes[offset + 3],
-                        ]),
-                    };
-                    values.push(value.to_string());
+            ExifType::Long if bytes.len() >= 4 => {
+                // Handle array of longs
+                if value_count > 1 && bytes.len() >= (value_count as usize * 4) {
+                    let mut values = Vec::new();
+                    for i in 0..value_count as usize {
+                        let offset = i * 4;
+                        let value = match byte_order {
+                            ByteOrder::LittleEndian => u32::from_le_bytes([
+                                bytes[offset],
+                                bytes[offset + 1],
+                                bytes[offset + 2],
+                                bytes[offset + 3],
+                            ]),
+                            ByteOrder::BigEndian => u32::from_be_bytes([
+                                bytes[offset],
+                                bytes[offset + 1],
+                                bytes[offset + 2],
+                                bytes[offset + 3],
+                            ]),
+                        };
+                        values.push(value.to_string());
+                    }
+                    return TagValue::new_string(values.join(" "));
                 }
-                return TagValue::new_string(values.join(" "));
+
+                // Handle single LONG value
+                let value = match byte_order {
+                    ByteOrder::LittleEndian => {
+                        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                    }
+                    ByteOrder::BigEndian => {
+                        u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                    }
+                } as i64;
+
+                // Try to convert to enum string if applicable
+                if let Some(enum_str) = tiff_enum_to_string(tag_id, value) {
+                    return TagValue::new_string(enum_str);
+                }
+
+                return TagValue::new_integer(value);
             }
 
             // ASCII (type 2): null-terminated string

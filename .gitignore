@@ -56,6 +56,8 @@ generate_tags.py
 additional_tags.txt
 exif_additional.txt
 new_tags.txt
+test_tag_lookup
+test_tag_lookup.rs
 
 # MCP config (if not needed in repo)
 .mcp.json

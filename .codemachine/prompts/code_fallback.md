@@ -1,245 +1,164 @@
 # Code Refinement Task
 
-The previous code submission did not pass verification. You must fix the following issues and resubmit your work.
+The previous code submission did not pass verification. The integration test suite is well-implemented with 104 test images and comprehensive coverage, but **5 out of 14 ExifTool comparison tests FAIL** the required 98% tag match rate threshold.
 
 ---
 
 ## Original Task Description
 
-**Task ID**: I5.T9
-**Iteration Goal**: Implement C FFI bindings for cross-language integration, automate tag database generation from ExifTool specs, set up cross-compilation and release builds, create comprehensive documentation, and polish for v1.0 release.
+**Task I5.T9**: Expand integration test suite from I3.T10 to cover all supported formats and operations. Test corpus: 100+ images across JPEG (various EXIF/XMP combinations), TIFF (multi-page, big/little-endian), PNG (text, eXIf), PDF (Info, XMP), MP4 (iTunes, keys/ilst). Test operations: read, write, copy, rename, date shift. Compare against ExifTool for all operations.
 
-**Description**: Expand integration test suite from I3.T10 to cover all supported formats and operations. Test corpus: 100+ images across JPEG (various EXIF/XMP combinations), TIFF (multi-page, big/little-endian), PNG (text, eXIf), PDF (Info, XMP), MP4 (iTunes, keys/ilst). Test operations: read, write, copy, rename, date shift. Compare against ExifTool for all operations. Acceptance threshold: 98%+ tag value match for reads, successful round-trip for writes. Run as part of CI on every commit (with feature flag). Document test results in CI badge.
-
-**Acceptance Criteria**:
-- Test corpus contains 100+ diverse images ✅ (VERIFIED: 104 files)
-- Tests cover all supported formats (JPEG, TIFF, PNG, PDF, MP4) ✅ (VERIFIED: All formats covered)
-- Tests cover all operations (read, write, copy, rename, date shift) ✅ (VERIFIED: All operations covered)
-- **98%+ tag match rate achieved for reads** ❌ (FAILED: 7 of 14 tests failing)
-- Round-trip tests pass (write → read → verify) ✅ (VERIFIED: Passing)
-- CI runs tests on every commit (with ExifTool installed in CI environment) ✅ (VERIFIED: Configured)
-- README shows test results badge (pass/fail) ✅ (VERIFIED: Badge present)
+**Acceptance threshold**: 98%+ tag value match for reads, successful round-trip for writes. Run as part of CI on every commit (with feature flag). Document test results in CI badge.
 
 ---
 
 ## Issues Detected
 
-### Critical Test Failures (7 of 14 tests failing with match rate < 98%)
+The integration test infrastructure is complete (104 images, 14 test functions, CI configured), but the **underlying parsers have value formatting mismatches** that prevent achieving the 98% match rate:
 
-**Test Results Summary**:
-- ✅ **7 tests passing**: `test_comparison_jpeg_with_exif`, `test_comparison_jpeg_with_exif_xmp`, `test_comparison_png_with_text`, `test_write_roundtrip_jpeg_artist`, `test_copy_metadata_jpeg_to_jpeg`, `test_rename_file_pattern`, `test_date_shift_all_dates`
-- ❌ **7 tests failing**: All failing due to match rate below 98% threshold
+### Test Failures (5/14 tests below 98% threshold):
 
-#### Failed Test 1: `test_comparison_jpeg_with_gps`
-- **Match Rate**: Below 98% (specific rate not shown in output)
-- **Root Cause**: GPS metadata parsing or comparison issues
+1. **`test_comparison_tiff`**: 87.50% match rate
+   - **Issue**: `ExifIFD:ExposureTime` - Perl outputs `"1/100"`, Rust outputs `Number(0.01)`
+   - **Root cause**: Rational number formatting difference
 
-#### Failed Test 2: `test_comparison_mp4`
-- **Match Rate**: Below 98% (specific rate not shown in output)
-- **Root Cause**: QuickTime/MP4 metadata extraction discrepancies
+2. **`test_comparison_pdf`**: 90.91% match rate
+   - **Issue**: `PDF:Keywords` - Perl outputs `Array [String("exiftool"), String("rust"), ...]`, Rust outputs `String("exiftool, rust, pdf, metadata, test")`
+   - **Root cause**: Array vs comma-separated string representation
 
-#### Failed Test 3: `test_comparison_pdf`
-- **Match Rate**: Below 98% (specific rate not shown in output)
-- **Root Cause**: PDF Info/XMP metadata extraction issues
+3. **`test_comparison_mp4`**: 73.33% match rate (22/30 tags matched)
+   - **Issues**: 8 missing tags: `ItemList:Title`, `ItemList:Comment`, `ItemList:Genre`, `ItemList:ContentCreateDate`, `ItemList:Copyright`, `ItemList:Album`, `ItemList:Artist`, `UserData:Title`
+   - **Root cause**: MP4 parser not extracting ItemList (ilst) metadata atoms correctly
 
-#### Failed Test 4: `test_comparison_png_with_exif`
-- **Match Rate**: 93.18% (41/44 tags matched)
-- **Specific Issues**:
-  1. **Type Mismatch - PNG:ExifExifOffset**: Perl returns `Number(164)`, Rust returns `String("164")` - numeric tag being serialized as string
-  2. **Type Mismatch - PNG:ExifYCbCrPositioning**: Perl returns `Number(1)`, Rust returns `String("1")` - numeric tag being serialized as string
-  3. **Type Mismatch - PNG:ExifColorSpace**: Perl returns `Number(65535)`, Rust returns `String("65535")` - numeric tag being serialized as string
-- **Root Cause**: PNG eXIf chunk parser is not properly handling numeric EXIF tag types - converting them to strings instead of preserving numeric types
+4. **`test_comparison_png_with_exif`**: 97.73% match rate (just below 98%)
+   - **Issue**: `PNG:ExifExifVersion` - Perl outputs `"0232"`, Rust outputs `"..."`
+   - **Root cause**: ExifVersion tag value formatting in PNG eXIf chunk parser
 
-#### Failed Test 5: `test_comparison_tiff`
-- **Match Rate**: Below 98% (specific rate not shown in output)
-- **Root Cause**: TIFF IFD parsing issues, likely related to StripOffsets/StripByteCounts
+5. **`test_comparison_jpeg_with_gps`**: 52.63% match rate
+   - **Issues**:
+     - GPS coordinates: Perl outputs `"37 deg 46' 33.24\""`, Rust outputs `"37.0000000000 46.0000000000 33.2400000000"`
+     - JFIF tags missing: `JFIF:JFIFVersion`, `JFIF:ResolutionUnit`, `JFIF:XResolution`, `JFIF:YResolution`
+     - GPS version: Perl outputs `"2.3.0.0"`, Rust outputs `Number(770)`
+     - ComponentsConfiguration: Perl outputs `"Y, Cb, Cr, -"`, Rust outputs `Number(197121)`
+   - **Root cause**: GPS coordinate formatting, JFIF segment not parsed, enum tag value decoding
 
-#### Failed Test 6: `test_comparison_tiff_big_endian`
-- **Match Rate**: 82.35% (below 98%)
-- **Specific Issues**:
-  1. **Missing Tags - IFD0:StripByteCounts**: Perl extracts `String("998400 998400 883200")`, Rust has MISSING
-  2. **Missing Tags - IFD0:StripOffsets**: Perl extracts `String("334 998734 1997134")`, Rust has MISSING
-  3. **Precision Mismatch - IFD0:PrimaryChromaticities**: Minor floating-point precision difference (should be within tolerance but failing)
-- **Root Cause**: Big-endian TIFF parser is not extracting StripOffsets (0x0111) and StripByteCounts (0x0117) tags for image data strips
+### Additional Issues:
 
-#### Failed Test 7: `test_comparison_tiff_multipage`
-- **Match Rate**: 76.92% (40/52 tags matched)
-- **Specific Issues**:
-  1. **Missing Tags - StripOffsets/StripByteCounts**: Missing across IFD0, IFD1, IFD2 (6 missing tags total) - critical for multi-page TIFF navigation
-  2. **Type Mismatch - SubfileType**: Perl returns `String("Single page of multi-page image")`, Rust returns `Number(2)` - tag is being returned as raw numeric value instead of interpreted string
-  3. **Precision Mismatch - PrimaryChromaticities**: Across all 3 IFDs, minor floating-point precision differences
-  4. **Unexpected Tags**: 6 tags with hex IDs (0x0111, 0x0117) appearing across IFD0/1/2 - these are the raw numeric tag IDs for StripOffsets/StripByteCounts being exposed instead of properly named tags
-- **Root Cause**: Multi-page TIFF parser has two critical issues:
-  - Not extracting StripOffsets (0x0111) and StripByteCounts (0x0117) as named tags
-  - Not interpreting SubfileType (0x00FE) enum values into human-readable strings
+6. **Linting Error Fixed**: `src/parsers/png/mod.rs:444` - Unused variable `value_count` was prefixed with underscore
 
 ---
 
 ## Best Approach to Fix
 
-### Fix 1: PNG eXIf Chunk Numeric Tag Type Preservation
+You must **modify the format-specific parsers** to output tag values in formats that match Perl ExifTool's conventions. The comparison test framework is correct—the parsers need adjustment.
 
-**File**: `src/parsers/png/mod.rs` (likely around the eXIf chunk parsing section)
+### Priority 1: Fix GPS Coordinate Formatting (JPEG GPS test: 52.63% → 98%+)
 
-**Problem**: When parsing EXIF data embedded in PNG eXIf chunks, numeric EXIF tag values (ExifOffset, YCbCrPositioning, ColorSpace) are being converted to strings instead of preserving their numeric types.
+**File**: `src/parsers/tiff/ifd_parser.rs` or GPS value formatter
 
-**Action Required**:
-1. Locate the PNG eXIf chunk parsing code (search for "eXIf" or "exif_chunk" in `src/parsers/png/mod.rs`)
-2. Find where EXIF tag values are being serialized/converted
-3. Ensure numeric EXIF tags preserve their original type:
-   - Tag 0x8769 (ExifOffset) should remain as `TagValue::Integer(164)` not `TagValue::String("164")`
-   - Tag 0xA001 (ColorSpace) should remain as `TagValue::Integer(65535)` not `TagValue::String("65535")`
-   - Tag 0x0213 (YCbCrPositioning) should remain as `TagValue::Integer(1)` not `TagValue::String("1")`
-4. The fix likely involves checking the TIFF data type (SHORT, LONG, etc.) and creating the appropriate `TagValue` enum variant instead of defaulting to `String`
+**Action**: When outputting GPS coordinates (GPSLatitude, GPSLongitude), format as DMS (degrees/minutes/seconds) string instead of raw rational array:
+- Change: `"37.0000000000 46.0000000000 33.2400000000"`
+- To: `"37 deg 46' 33.24\""`
 
-**Expected Outcome**: `test_comparison_png_with_exif` match rate increases from 93.18% to 100% (all 3 mismatches resolved)
+**Also fix**:
+- `GPS:GPSVersionID`: Convert byte array `[2, 3, 0, 0]` → string `"2.3.0.0"`
+- `GPS:GPSAltitude`: Append unit " m" (e.g., `"110"` → `"110 m"`)
 
----
+### Priority 2: Add JFIF Segment Parser (JPEG GPS test: 52.63% → 98%+)
 
-### Fix 2: TIFF Parser - StripOffsets and StripByteCounts Extraction
+**File**: `src/parsers/jpeg/mod.rs`
 
-**File**: `src/parsers/tiff/ifd_parser.rs`
+**Action**: The JPEG parser currently skips JFIF (APP0) segments. You must:
+1. Detect APP0 JFIF marker (0xFFE0 with "JFIF\0" identifier)
+2. Extract: `JFIFVersion` (2 bytes → format as X.YY, e.g., `[1, 1]` → `Number(1.01)`)
+3. Extract: `ResolutionUnit` (1 byte → decode: 0="None", 1="inches", 2="cm")
+4. Extract: `XResolution`, `YResolution` (2 bytes each, big-endian unsigned short)
+5. Namespace tags as `JFIF:TagName`
 
-**Problem**: TIFF parser is not extracting critical image data location tags (StripOffsets 0x0111 and StripByteCounts 0x0117) for both big-endian and multi-page TIFF files.
+### Priority 3: Fix Rational Number Display (TIFF test: 87.50% → 98%+)
 
-**Action Required**:
-1. Locate the IFD tag extraction logic in `src/parsers/tiff/ifd_parser.rs`
-2. Verify that tag definitions for 0x0111 (StripOffsets) and 0x0117 (StripByteCounts) exist in `src/parsers/tiff/tiff_enums.rs`
-3. If missing, add these tag definitions:
-   ```rust
-   pub const TAG_STRIP_OFFSETS: u16 = 0x0111;
-   pub const TAG_STRIP_BYTE_COUNTS: u16 = 0x0117;
-   ```
-4. Ensure the IFD parser correctly handles array values for these tags (they contain multiple offsets/counts for tiled/stripped images)
-5. For multi-page TIFFs, ensure each IFD (IFD0, IFD1, IFD2, etc.) is being parsed independently and these tags are extracted for each page
-6. The tags should be formatted as space-separated strings when there are multiple values (e.g., `"334 998734 1997134"`)
+**File**: `src/parsers/common/exif_types.rs` or `src/core/metadata.rs`
 
-**Expected Outcome**:
-- `test_comparison_tiff` passes with 98%+ match rate
-- `test_comparison_tiff_big_endian` match rate increases from 82.35% to 98%+
-- `test_comparison_tiff_multipage` match rate increases from 76.92% to 98%+ (resolves 6 missing tag issues)
+**Action**: When a tag is defined as RATIONAL type (e.g., ExposureTime), output as fraction string instead of decimal:
+- Change: `TagValue::Number(0.01)`
+- To: `TagValue::String("1/100")`
 
----
+**Implementation**: Add a function to convert float back to simplified fraction (use GCD algorithm). Apply to known RATIONAL tags: ExposureTime, ShutterSpeedValue, ApertureValue, FocalLength, etc.
 
-### Fix 3: TIFF Parser - SubfileType Enum Interpretation
+### Priority 4: Fix Enum Tag Decoding (JPEG GPS test)
 
-**File**: `src/parsers/tiff/tiff_enums.rs` and `src/parsers/tiff/ifd_parser.rs`
+**File**: `src/parsers/tiff/ifd_parser.rs` or `src/tag_db/mod.rs`
 
-**Problem**: SubfileType (tag 0x00FE) is being returned as raw numeric value `Number(2)` instead of interpreted string `"Single page of multi-page image"`.
+**Action**: Decode numeric enum values to human-readable strings for specific tags:
+- `ExifIFD:ComponentsConfiguration`: Decode bytes `[1, 2, 3, 0]` → `"Y, Cb, Cr, -"` (use lookup: 0="-", 1="Y", 2="Cb", 3="Cr", 4="R", 5="G", 6="B")
 
-**Action Required**:
-1. Locate or create an enum mapping for SubfileType in `src/parsers/tiff/tiff_enums.rs`:
-   ```rust
-   pub fn interpret_subfile_type(value: u32) -> String {
-       match value {
-           0 => "Full-resolution image".to_string(),
-           1 => "Reduced-resolution image".to_string(),
-           2 => "Single page of multi-page image".to_string(),
-           3 => "Single page of multi-page reduced-resolution image".to_string(),
-           4 => "Transparency mask".to_string(),
-           5 => "Transparency mask of reduced-resolution image".to_string(),
-           6 => "Transparency mask of multi-page image".to_string(),
-           7 => "Transparency mask of reduced-resolution multi-page image".to_string(),
-           _ => format!("Unknown ({})", value),
-       }
-   }
-   ```
-2. In the IFD parser, when encountering tag 0x00FE (SubfileType), apply this interpretation instead of returning the raw number
-3. Return `TagValue::String(interpret_subfile_type(raw_value))` instead of `TagValue::Integer(raw_value)`
+### Priority 5: Fix MP4 ItemList Parsing (MP4 test: 73.33% → 98%+)
 
-**Expected Outcome**: `test_comparison_tiff_multipage` resolves 3 SubfileType mismatches (IFD0, IFD1, IFD2)
+**File**: `src/parsers/mp4/mod.rs`
 
----
+**Action**: The MP4 parser is not extracting `ilst` (ItemList) atoms correctly. You must:
+1. Ensure `ilst` atom handler traverses all child atoms (©nam, ©cmt, ©gen, ©day, cprt, ©alb, ©ART)
+2. Parse data atoms inside each tag atom (skip type/flags, extract UTF-8 string)
+3. Map to standard tag names: `©nam` → `ItemList:Title`, `©ART` → `ItemList:Artist`, etc.
+4. Also extract `UserData:Title` from `udta` atom if present
 
-### Fix 4: Investigate and Fix GPS, MP4, and PDF Match Rate Issues
+### Priority 6: Fix PDF Keywords Array (PDF test: 90.91% → 98%+)
 
-**Files**:
-- `src/parsers/tiff/ifd_parser.rs` (for GPS - EXIF GPS IFD)
-- `src/parsers/quicktime/metadata_extractor.rs` (for MP4)
-- `src/parsers/pdf/mod.rs` (for PDF)
+**File**: `src/parsers/pdf/info_parser.rs`
 
-**Problem**: Three tests are failing but the specific match rates and mismatches were not shown in the truncated output.
+**Action**: Parse `/Keywords` as array instead of string when it contains commas:
+- Change: `TagValue::String("exiftool, rust, pdf, metadata, test")`
+- To: `TagValue::Array(vec![TagValue::String("exiftool"), TagValue::String("rust"), ...])`
 
-**Action Required**:
-1. Run each failing test individually with full output to identify specific mismatches:
-   ```bash
-   cargo test --release --features exiftool-comparison test_comparison_jpeg_with_gps -- --nocapture
-   cargo test --release --features exiftool-comparison test_comparison_mp4 -- --nocapture
-   cargo test --release --features exiftool-comparison test_comparison_pdf -- --nocapture
-   ```
-2. Analyze the mismatch reports to identify:
-   - Missing tags (tags Perl ExifTool extracts but Rust doesn't)
-   - Type mismatches (numeric vs string, as seen in PNG/TIFF issues)
-   - Value interpretation issues (enum values not being translated to strings)
-3. Apply similar fixes as above:
-   - Ensure all standard GPS tags are extracted
-   - Verify MP4/QuickTime atom parsing is complete
-   - Check PDF Info dictionary and XMP stream parsing
-4. Common issues to look for:
-   - GPS tags might have coordinate formatting differences (degrees/minutes/seconds)
-   - MP4 metadata might have atom namespace issues (com.apple.quicktime vs iTunes)
-   - PDF might have encoding issues with special characters in Info dictionary
+**Implementation**: Split on `, ` delimiter and create array of string values.
 
-**Expected Outcome**: All 3 tests pass with 98%+ match rate
+### Priority 7: Fix PNG ExifVersion (PNG eXIf test: 97.73% → 98%+)
 
----
+**File**: `src/parsers/png/mod.rs` (eXIf chunk handler)
 
-### Fix 5: Floating-Point Precision Tolerance
+**Action**: The ExifVersion tag (0x9000) should output raw byte values as string, not ellipsis:
+- Change: `TagValue::String("...")`
+- To: `TagValue::String("0232")` (hex representation of bytes [0x30, 0x32, 0x33, 0x32])
 
-**File**: `tests/integration/exiftool_comparison_tests.rs` (around the comparison logic)
-
-**Problem**: PrimaryChromaticities values show minor floating-point precision differences that should be within tolerance but are causing mismatches.
-
-**Action Required**:
-1. Locate the floating-point comparison logic in the test file (likely in a `compare_tag_values` or similar function)
-2. Verify the tolerance is correctly applied:
-   - GPS coordinates should have tolerance of ±0.0001°
-   - Other floating-point values should have tolerance of ±0.01
-3. For PrimaryChromaticities values like `0.150000006` vs `0.1500000060`, ensure the comparison recognizes these as equivalent within tolerance
-4. The comparison might need to parse string representations of floats and compare numerically rather than string comparison
-
-**Expected Outcome**: PrimaryChromaticities mismatches in TIFF tests are resolved (appears in multipage and big-endian tests)
+**Implementation**: In `raw_bytes_to_tag_value_no_enum()` function, check if tag is ExifVersion (0x9000) and format bytes as ASCII string.
 
 ---
 
 ## Testing Instructions
 
-After implementing the fixes above, verify the results:
+After making each fix, run the specific failing test to verify:
 
-1. **Run all ExifTool comparison tests**:
-   ```bash
-   cargo test --release --features exiftool-comparison exiftool_comparison_tests:: -- --nocapture
-   ```
+```bash
+# Test individual failures
+cargo test --features exiftool-comparison test_comparison_jpeg_with_gps -- --nocapture
+cargo test --features exiftool-comparison test_comparison_tiff -- --nocapture
+cargo test --features exiftool-comparison test_comparison_mp4 -- --nocapture
+cargo test --features exiftool-comparison test_comparison_pdf -- --nocapture
+cargo test --features exiftool-comparison test_comparison_png_with_exif -- --nocapture
 
-2. **Verify match rates**: All 14 tests should pass with the following results:
-   - All read operation tests: 98%+ match rate
-   - Write round-trip test: 98%+ match rate (already passing)
-   - Copy/rename/date shift tests: Current thresholds maintained (already passing)
+# Run all comparison tests
+cargo test --features exiftool-comparison exiftool_comparison_tests -- --nocapture
+```
 
-3. **Expected final results**:
-   ```
-   test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured
-   ```
-
-4. **Run linter** to ensure no new warnings:
-   ```bash
-   cargo clippy --all-targets --all-features -- -D warnings
-   ```
-
-5. **Verify CI** still runs correctly (no changes needed to `.github/workflows/ci.yml`)
+**Success criteria**: All 14 comparison tests must show `ok` status with match rates ≥98% for read operations.
 
 ---
 
-## Summary
+## Files to Modify (in priority order)
 
-The integration test suite infrastructure is complete with 104 test files and 14 comprehensive test functions covering all required formats and operations. However, **7 of the 14 tests are failing** due to metadata extraction and type conversion issues in the parsers:
+1. `src/parsers/jpeg/mod.rs` - Add JFIF segment parser
+2. `src/parsers/tiff/ifd_parser.rs` - Fix GPS coordinate formatting, enum decoding
+3. `src/parsers/common/exif_types.rs` - Add rational-to-fraction converter
+4. `src/parsers/mp4/mod.rs` - Fix ItemList atom extraction
+5. `src/parsers/pdf/info_parser.rs` - Fix Keywords array parsing
+6. `src/parsers/png/mod.rs` - Fix ExifVersion formatting in eXIf chunks
 
-1. **PNG eXIf parser**: Converting numeric EXIF tags to strings (3 tag mismatches)
-2. **TIFF parser**: Not extracting StripOffsets/StripByteCounts (6+ missing tags across tests)
-3. **TIFF parser**: Not interpreting SubfileType enum values (3 raw number mismatches)
-4. **TIFF parser**: Potential floating-point precision tolerance issue
-5. **GPS/MP4/PDF parsers**: Unknown issues requiring investigation
+---
 
-**Priority**: Focus on TIFF parser fixes (Fix 2 and Fix 3) first as they affect 3 failing tests, then PNG eXIf fix (Fix 1), then investigate remaining 3 failures (Fix 4).
+## Important Notes
 
-**Success Criteria**: All 14 tests passing with 0 failures, achieving the required 98%+ match rate for read operations.
+- **DO NOT modify** `tests/integration/exiftool_comparison_tests.rs` - the test framework is correct
+- **DO NOT modify** `.github/workflows/ci.yml` - CI configuration is correct
+- **DO NOT add** more test fixtures - 104 images is sufficient
+- **Focus on parser output formatting** to match Perl ExifTool conventions
+- The 98% threshold is strict by design - aim for 99%+ where possible
