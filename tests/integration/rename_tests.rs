@@ -116,7 +116,7 @@ fn test_build_new_filename_simple_tag() {
     let metadata = read_metadata(&test_file).unwrap();
 
     // Build new filename with simple tag
-    let new_name = build_new_filename("DateTimeOriginal", &metadata, &test_file, None).unwrap();
+    let new_name = build_new_filename("ExifIFD:DateTimeOriginal", &metadata, &test_file, None).unwrap();
 
     // Should contain the datetime value (sanitized)
     assert!(new_name.contains("2025"));
@@ -136,7 +136,7 @@ fn test_build_new_filename_with_date_format() {
 
     // Build new filename with date formatting
     let new_name = build_new_filename(
-        "DateTimeOriginal",
+        "ExifIFD:DateTimeOriginal",
         &metadata,
         &test_file,
         Some("%Y%m%d_%H%M%S"),
@@ -159,7 +159,7 @@ fn test_build_new_filename_with_extension() {
 
     // Build new filename with extension placeholder
     let new_name = build_new_filename(
-        "${EXIF:DateTimeOriginal}%%e",
+        "${ExifIFD:DateTimeOriginal}%%e",
         &metadata,
         &test_file,
         Some("%Y%m%d_%H%M%S"),
@@ -182,7 +182,7 @@ fn test_build_new_filename_multiple_tags() {
 
     // Build new filename with multiple tags
     let new_name =
-        build_new_filename("${EXIF:Make}_${EXIF:Model}", &metadata, &test_file, None).unwrap();
+        build_new_filename("${IFD0:Make}_${IFD0:Model}", &metadata, &test_file, None).unwrap();
 
     // Should contain both Make and Model
     assert_eq!(new_name, "Canon_EOS 5D");
@@ -198,7 +198,7 @@ fn test_rename_file_dry_run() {
     // Perform dry-run rename
     let result = rename_file(
         &test_file,
-        "${EXIF:DateTimeOriginal}%%e",
+        "${ExifIFD:DateTimeOriginal}%%e",
         Some("%Y%m%d_%H%M%S"),
         true, // dry_run = true
     );
@@ -223,7 +223,7 @@ fn test_rename_file_actual_rename() {
     // Perform actual rename
     let result = rename_file(
         &test_file,
-        "${EXIF:DateTimeOriginal}%%e",
+        "${ExifIFD:DateTimeOriginal}%%e",
         Some("%Y%m%d_%H%M%S"),
         false, // dry_run = false
     );
@@ -258,7 +258,7 @@ fn test_rename_file_collision_detection() {
     // Attempt rename (should fail due to collision)
     let result = rename_file(
         &test_file,
-        "${EXIF:DateTimeOriginal}%%e",
+        "${ExifIFD:DateTimeOriginal}%%e",
         Some("%Y%m%d_%H%M%S"),
         false,
     );
@@ -286,7 +286,7 @@ fn test_rename_with_missing_tag() {
     // Try to rename with a tag that doesn't exist
     let result = rename_file(
         &test_file,
-        "EXIF:GPS:Latitude", // This tag doesn't exist in our test file
+        "GPS:GPSLatitude", // This tag doesn't exist in our test file
         None,
         false,
     );
@@ -308,7 +308,7 @@ fn test_rename_sanitizes_invalid_characters() {
     let metadata = read_metadata(&test_file).unwrap();
 
     // DateTimeOriginal contains colons which are invalid on some filesystems
-    let new_name = build_new_filename("DateTimeOriginal", &metadata, &test_file, None).unwrap();
+    let new_name = build_new_filename("ExifIFD:DateTimeOriginal", &metadata, &test_file, None).unwrap();
 
     // Colons should be replaced with underscores
     assert!(!new_name.contains(':'));
@@ -325,7 +325,7 @@ fn test_rename_preserves_file_in_same_directory() {
     // Perform rename
     let result = rename_file(
         &test_file,
-        "${EXIF:DateTimeOriginal}%%e",
+        "${ExifIFD:DateTimeOriginal}%%e",
         Some("%Y%m%d_%H%M%S"),
         false,
     );

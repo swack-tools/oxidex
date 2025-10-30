@@ -148,8 +148,8 @@ fn test_modify_exif_tag_in_jpeg() {
 
     // Create modified metadata with new Artist tag
     let mut metadata = MetadataMap::new();
-    metadata.insert("EXIF:Artist", TagValue::new_string("TestArtist"));
-    metadata.insert("EXIF:Make", TagValue::new_string("ModifiedMake"));
+    metadata.insert("IFD0:Artist", TagValue::new_string("TestArtist"));
+    metadata.insert("IFD0:Make", TagValue::new_string("ModifiedMake"));
 
     // Write modified JPEG
     let modified_jpeg = write_exif_to_jpeg(&reader, &metadata).expect("Write should succeed");
@@ -213,7 +213,7 @@ fn test_preserve_non_exif_segments() {
 
     // Modify EXIF
     let mut metadata = MetadataMap::new();
-    metadata.insert("EXIF:Copyright", TagValue::new_string("Test"));
+    metadata.insert("IFD0:Copyright", TagValue::new_string("Test"));
 
     let modified_jpeg = write_exif_to_jpeg(&reader, &metadata).expect("Write should succeed");
 
@@ -247,7 +247,7 @@ fn test_insert_exif_when_missing() {
 
     // Add EXIF metadata
     let mut metadata = MetadataMap::new();
-    metadata.insert("EXIF:Make", TagValue::new_string("NewCamera"));
+    metadata.insert("IFD0:Make", TagValue::new_string("NewCamera"));
 
     let modified_jpeg = write_exif_to_jpeg(&reader, &metadata).expect("Write should succeed");
 
@@ -280,16 +280,16 @@ fn test_handle_size_changes() {
     // Add large metadata (longer than original)
     let mut metadata = MetadataMap::new();
     metadata.insert(
-        "EXIF:Make",
+        "IFD0:Make",
         TagValue::new_string("VeryLongCameraManufacturerName"),
     );
     metadata.insert(
-        "EXIF:Model",
+        "IFD0:Model",
         TagValue::new_string("VeryLongCameraModelNameHere"),
     );
-    metadata.insert("EXIF:Artist", TagValue::new_string("VeryLongArtistName"));
+    metadata.insert("IFD0:Artist", TagValue::new_string("VeryLongArtistName"));
     metadata.insert(
-        "EXIF:Copyright",
+        "IFD0:Copyright",
         TagValue::new_string("VeryLongCopyrightNotice"),
     );
 
@@ -308,7 +308,7 @@ fn test_handle_size_changes() {
 
     // Now write smaller metadata
     let mut small_metadata = MetadataMap::new();
-    small_metadata.insert("EXIF:Make", TagValue::new_string("X"));
+    small_metadata.insert("IFD0:Make", TagValue::new_string("X"));
 
     let smaller_jpeg = write_exif_to_jpeg(&reader, &small_metadata).expect("Write should succeed");
 
@@ -339,8 +339,8 @@ fn test_write_to_real_file() -> Result<(), Box<dyn std::error::Error>> {
 
     // Modify metadata
     let mut metadata = MetadataMap::new();
-    metadata.insert("EXIF:Artist", TagValue::new_string("FileTestArtist"));
-    metadata.insert("EXIF:Software", TagValue::new_string("exiftool-rs"));
+    metadata.insert("IFD0:Artist", TagValue::new_string("FileTestArtist"));
+    metadata.insert("IFD0:Software", TagValue::new_string("exiftool-rs"));
 
     // Write modified JPEG
     let modified_jpeg = write_exif_to_jpeg(&reader, &metadata)?;
@@ -400,7 +400,7 @@ fn test_preserve_xmp_alongside_exif() {
 
     // Modify EXIF
     let mut metadata = MetadataMap::new();
-    metadata.insert("EXIF:Make", TagValue::new_string("TestCamera"));
+    metadata.insert("IFD0:Make", TagValue::new_string("TestCamera"));
 
     let modified_jpeg = write_exif_to_jpeg(&reader, &metadata).unwrap();
 

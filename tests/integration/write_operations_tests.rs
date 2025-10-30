@@ -83,27 +83,27 @@ fn test_write_metadata_successful_jpeg_write() {
     let mut metadata = read_metadata(temp_path).expect("Failed to read metadata");
 
     // Verify original values
-    assert_eq!(metadata.get_string("EXIF:Make"), Some("Canon"));
-    assert_eq!(metadata.get_string("EXIF:Model"), Some("EOS R5"));
+    assert_eq!(metadata.get_string("IFD0:Make"), Some("Canon"));
+    assert_eq!(metadata.get_string("IFD0:Model"), Some("EOS R5"));
 
     // Modify metadata
-    metadata.insert("EXIF:Artist", TagValue::new_string("John Doe"));
-    metadata.insert("EXIF:Copyright", TagValue::new_string("Copyright 2024"));
+    metadata.insert("IFD0:Artist", TagValue::new_string("John Doe"));
+    metadata.insert("IFD0:Copyright", TagValue::new_string("Copyright 2024"));
 
     // Write metadata back
     write_metadata(temp_path, &metadata).expect("Failed to write metadata");
 
     // Re-read and verify changes
     let updated_metadata = read_metadata(temp_path).expect("Failed to read updated metadata");
-    assert_eq!(updated_metadata.get_string("EXIF:Artist"), Some("John Doe"));
+    assert_eq!(updated_metadata.get_string("IFD0:Artist"), Some("John Doe"));
     assert_eq!(
-        updated_metadata.get_string("EXIF:Copyright"),
+        updated_metadata.get_string("IFD0:Copyright"),
         Some("Copyright 2024")
     );
 
     // Verify original tags are preserved
-    assert_eq!(updated_metadata.get_string("EXIF:Make"), Some("Canon"));
-    assert_eq!(updated_metadata.get_string("EXIF:Model"), Some("EOS R5"));
+    assert_eq!(updated_metadata.get_string("IFD0:Make"), Some("Canon"));
+    assert_eq!(updated_metadata.get_string("IFD0:Model"), Some("EOS R5"));
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn test_write_metadata_validation_fails_for_invalid_type() {
     let mut metadata = read_metadata(temp_path).expect("Failed to read metadata");
 
     // Attempt to write an invalid value (Integer where String is expected)
-    metadata.insert("EXIF:Make", TagValue::new_integer(42));
+    metadata.insert("IFD0:Make", TagValue::new_integer(42));
 
     // Write should fail with InvalidTagValue error
     let result = write_metadata(temp_path, &metadata);
@@ -126,7 +126,7 @@ fn test_write_metadata_validation_fails_for_invalid_type() {
     // Verify error is InvalidTagValue
     match result {
         Err(exiftool_rs::error::ExifToolError::InvalidTagValue { tag_name, reason }) => {
-            assert_eq!(tag_name, "EXIF:Make");
+            assert_eq!(tag_name, "IFD0:Make");
             assert!(
                 reason.contains("Type mismatch"),
                 "Expected type mismatch error, got: {}",
@@ -138,7 +138,7 @@ fn test_write_metadata_validation_fails_for_invalid_type() {
 
     // Verify file was not modified (original data intact)
     let unchanged_metadata = read_metadata(temp_path).expect("Failed to read metadata");
-    assert_eq!(unchanged_metadata.get_string("EXIF:Make"), Some("Canon"));
+    assert_eq!(unchanged_metadata.get_string("IFD0:Make"), Some("Canon"));
 }
 
 #[test]
@@ -152,7 +152,7 @@ fn test_write_metadata_validation_fails_for_rational_zero_denominator() {
     let mut metadata = read_metadata(temp_path).expect("Failed to read metadata");
 
     // Attempt to write a Rational with zero denominator (invalid)
-    metadata.insert("EXIF:ExposureTime", TagValue::new_rational(1, 0));
+    metadata.insert("ExifIFD:ExposureTime", TagValue::new_rational(1, 0));
 
     // Write should fail with InvalidTagValue error
     let result = write_metadata(temp_path, &metadata);
@@ -161,7 +161,7 @@ fn test_write_metadata_validation_fails_for_rational_zero_denominator() {
     // Verify error is InvalidTagValue with denominator message
     match result {
         Err(exiftool_rs::error::ExifToolError::InvalidTagValue { tag_name, reason }) => {
-            assert_eq!(tag_name, "EXIF:ExposureTime");
+            assert_eq!(tag_name, "ExifIFD:ExposureTime");
             assert!(
                 reason.contains("denominator"),
                 "Expected denominator error, got: {}",
@@ -181,22 +181,22 @@ fn test_modify_tag_single_tag_modification() {
 
     // Verify original value
     let original_metadata = read_metadata(temp_path).expect("Failed to read metadata");
-    assert_eq!(original_metadata.get_string("EXIF:Make"), Some("Canon"));
+    assert_eq!(original_metadata.get_string("IFD0:Make"), Some("Canon"));
 
     // Modify a single tag using modify_tag()
-    modify_tag(temp_path, "EXIF:Artist", TagValue::new_string("Jane Smith"))
+    modify_tag(temp_path, "IFD0:Artist", TagValue::new_string("Jane Smith"))
         .expect("Failed to modify tag");
 
     // Re-read and verify changes
     let updated_metadata = read_metadata(temp_path).expect("Failed to read updated metadata");
     assert_eq!(
-        updated_metadata.get_string("EXIF:Artist"),
+        updated_metadata.get_string("IFD0:Artist"),
         Some("Jane Smith")
     );
 
     // Verify original tags are preserved
-    assert_eq!(updated_metadata.get_string("EXIF:Make"), Some("Canon"));
-    assert_eq!(updated_metadata.get_string("EXIF:Model"), Some("EOS R5"));
+    assert_eq!(updated_metadata.get_string("IFD0:Make"), Some("Canon"));
+    assert_eq!(updated_metadata.get_string("IFD0:Model"), Some("EOS R5"));
 }
 
 #[test]
@@ -207,15 +207,15 @@ fn test_modify_tag_overwrites_existing_value() {
     let temp_path = temp_file.path();
 
     // Modify existing tag
-    modify_tag(temp_path, "EXIF:Make", TagValue::new_string("Nikon"))
+    modify_tag(temp_path, "IFD0:Make", TagValue::new_string("Nikon"))
         .expect("Failed to modify tag");
 
     // Verify the tag was overwritten
     let updated_metadata = read_metadata(temp_path).expect("Failed to read metadata");
-    assert_eq!(updated_metadata.get_string("EXIF:Make"), Some("Nikon"));
+    assert_eq!(updated_metadata.get_string("IFD0:Make"), Some("Nikon"));
 
     // Verify other tags are preserved
-    assert_eq!(updated_metadata.get_string("EXIF:Model"), Some("EOS R5"));
+    assert_eq!(updated_metadata.get_string("IFD0:Model"), Some("EOS R5"));
 }
 
 #[test]
@@ -234,12 +234,12 @@ fn test_write_metadata_round_trip_preserves_data() {
     // Re-read and verify no changes
     let round_trip_metadata = read_metadata(temp_path).expect("Failed to read metadata");
     assert_eq!(
-        round_trip_metadata.get_string("EXIF:Make"),
-        original_metadata.get_string("EXIF:Make")
+        round_trip_metadata.get_string("IFD0:Make"),
+        original_metadata.get_string("IFD0:Make")
     );
     assert_eq!(
-        round_trip_metadata.get_string("EXIF:Model"),
-        original_metadata.get_string("EXIF:Model")
+        round_trip_metadata.get_string("IFD0:Model"),
+        original_metadata.get_string("IFD0:Model")
     );
 }
 
@@ -254,8 +254,8 @@ fn test_write_metadata_validates_multiple_tags() {
     let mut metadata = read_metadata(temp_path).expect("Failed to read metadata");
 
     // Add multiple tags of different types
-    metadata.insert("EXIF:Software", TagValue::new_string("ExifTool-RS"));
-    metadata.insert("EXIF:Copyright", TagValue::new_string("Copyright 2024"));
+    metadata.insert("IFD0:Software", TagValue::new_string("ExifTool-RS"));
+    metadata.insert("IFD0:Copyright", TagValue::new_string("Copyright 2024"));
 
     // Write should succeed (validation passes for all tags)
     write_metadata(temp_path, &metadata).expect("Failed to write metadata");
@@ -263,16 +263,16 @@ fn test_write_metadata_validates_multiple_tags() {
     // Re-read and verify tags were written
     let updated_metadata = read_metadata(temp_path).expect("Failed to read metadata");
     assert_eq!(
-        updated_metadata.get_string("EXIF:Software"),
+        updated_metadata.get_string("IFD0:Software"),
         Some("ExifTool-RS")
     );
     assert_eq!(
-        updated_metadata.get_string("EXIF:Copyright"),
+        updated_metadata.get_string("IFD0:Copyright"),
         Some("Copyright 2024")
     );
 
     // Verify original tags still present
-    assert_eq!(updated_metadata.get_string("EXIF:Make"), Some("Canon"));
+    assert_eq!(updated_metadata.get_string("IFD0:Make"), Some("Canon"));
 }
 
 #[test]
@@ -287,7 +287,7 @@ fn test_write_metadata_atomic_operation() {
 
     // Modify and write
     let mut modified_metadata = original_metadata.clone();
-    modified_metadata.insert("EXIF:Artist", TagValue::new_string("Atomic Test"));
+    modified_metadata.insert("IFD0:Artist", TagValue::new_string("Atomic Test"));
     write_metadata(temp_path, &modified_metadata).expect("Failed to write metadata");
 
     // Verify file is still valid JPEG (starts with SOI, ends with EOI)
@@ -302,7 +302,7 @@ fn test_write_metadata_atomic_operation() {
     // Verify metadata is readable
     let final_metadata = read_metadata(temp_path).expect("Failed to read metadata");
     assert_eq!(
-        final_metadata.get_string("EXIF:Artist"),
+        final_metadata.get_string("IFD0:Artist"),
         Some("Atomic Test")
     );
 }
@@ -318,16 +318,16 @@ fn test_write_metadata_with_integer_tags() {
     let mut metadata = read_metadata(temp_path).expect("Failed to read metadata");
 
     // Add integer tags
-    metadata.insert("EXIF:ISO", TagValue::new_integer(400));
-    metadata.insert("EXIF:Orientation", TagValue::new_integer(1));
+    metadata.insert("ExifIFD:ISO", TagValue::new_integer(400));
+    metadata.insert("IFD0:Orientation", TagValue::new_integer(1));
 
     // Write metadata
     write_metadata(temp_path, &metadata).expect("Failed to write metadata");
 
     // Verify integer tags were written correctly
     let updated_metadata = read_metadata(temp_path).expect("Failed to read metadata");
-    assert_eq!(updated_metadata.get_integer("EXIF:ISO"), Some(400));
-    assert_eq!(updated_metadata.get_integer("EXIF:Orientation"), Some(1));
+    assert_eq!(updated_metadata.get_integer("ExifIFD:ISO"), Some(400));
+    assert_eq!(updated_metadata.get_integer("IFD0:Orientation"), Some(1));
 }
 
 #[test]
@@ -341,8 +341,8 @@ fn test_write_metadata_with_rational_tags() {
     let mut metadata = read_metadata(temp_path).expect("Failed to read metadata");
 
     // Add rational tags
-    metadata.insert("EXIF:ExposureTime", TagValue::new_rational(1, 125));
-    metadata.insert("EXIF:FNumber", TagValue::new_rational(28, 10));
+    metadata.insert("ExifIFD:ExposureTime", TagValue::new_rational(1, 125));
+    metadata.insert("ExifIFD:FNumber", TagValue::new_rational(28, 10));
 
     // Write metadata - the main goal is to verify validation passes and write succeeds
     write_metadata(temp_path, &metadata).expect("Failed to write metadata");

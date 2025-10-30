@@ -240,24 +240,29 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 ///
 /// Attempts to lookup the tag in the registry. If not found, returns
 /// a fallback name in the format "FAMILY:0xXXXX".
+///
+/// Note: Uses "IFD0:" prefix for main IFD tags to match Perl ExifTool's -G1 output.
 fn tag_id_to_name(tag_id: u16, family: &str) -> String {
     // Try to find a tag descriptor matching this numeric ID
     // The registry is currently keyed by name, so we need to search by ID
     // For now, use a simple mapping for common tags
+    //
+    // Using IFD0: prefix for main IFD tags to match Perl ExifTool's -G1 output
+    // (Perl ExifTool uses IFD0 for the main image IFD, not "EXIF")
     match tag_id {
-        0x010F => "EXIF:Make".to_string(),
-        0x0110 => "EXIF:Model".to_string(),
-        0x0112 => "EXIF:Orientation".to_string(),
-        0x0131 => "EXIF:Software".to_string(),
-        0x0132 => "EXIF:DateTime".to_string(),
-        0x013B => "EXIF:Artist".to_string(),
-        0x8298 => "EXIF:Copyright".to_string(),
-        0x829A => "EXIF:ExposureTime".to_string(),
-        0x829D => "EXIF:FNumber".to_string(),
-        0x8827 => "EXIF:ISO".to_string(),
-        0x9003 => "EXIF:DateTimeOriginal".to_string(),
-        0x9004 => "EXIF:DateTimeDigitized".to_string(),
-        0x920A => "EXIF:FocalLength".to_string(),
+        0x010F => "IFD0:Make".to_string(),
+        0x0110 => "IFD0:Model".to_string(),
+        0x0112 => "IFD0:Orientation".to_string(),
+        0x0131 => "IFD0:Software".to_string(),
+        0x0132 => "IFD0:ModifyDate".to_string(), // Perl ExifTool calls this ModifyDate, not DateTime
+        0x013B => "IFD0:Artist".to_string(),
+        0x8298 => "IFD0:Copyright".to_string(),
+        0x829A => "ExifIFD:ExposureTime".to_string(), // SubIFD tags use ExifIFD prefix
+        0x829D => "ExifIFD:FNumber".to_string(),
+        0x8827 => "ExifIFD:ISO".to_string(),
+        0x9003 => "ExifIFD:DateTimeOriginal".to_string(),
+        0x9004 => "ExifIFD:CreateDate".to_string(), // Perl ExifTool calls this CreateDate
+        0x920A => "ExifIFD:FocalLength".to_string(),
         _ => format!("{}:0x{:04X}", family, tag_id),
     }
 }
@@ -673,9 +678,9 @@ mod tests {
 
     #[test]
     fn test_tag_id_to_name_known_tags() {
-        assert_eq!(tag_id_to_name(0x010F, "EXIF"), "EXIF:Make");
-        assert_eq!(tag_id_to_name(0x0110, "EXIF"), "EXIF:Model");
-        assert_eq!(tag_id_to_name(0x0132, "EXIF"), "EXIF:DateTime");
+        assert_eq!(tag_id_to_name(0x010F, "EXIF"), "IFD0:Make");
+        assert_eq!(tag_id_to_name(0x0110, "EXIF"), "IFD0:Model");
+        assert_eq!(tag_id_to_name(0x0132, "EXIF"), "IFD0:ModifyDate");
     }
 
     #[test]

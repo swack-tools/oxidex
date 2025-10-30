@@ -249,9 +249,9 @@ fn test_write_exif_chunk() {
 
     // Create metadata with EXIF tags
     let mut metadata = MetadataMap::new();
-    metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
-    metadata.insert("EXIF:Model", TagValue::new_string("EOS R5"));
-    metadata.insert("EXIF:ImageWidth", TagValue::new_integer(1920));
+    metadata.insert("IFD0:Make", TagValue::new_string("Canon"));
+    metadata.insert("IFD0:Model", TagValue::new_string("EOS R5"));
+    metadata.insert("IFD0:ImageWidth", TagValue::new_integer(1920));
 
     // Write to temp file
     let temp_dir = TempDir::new().unwrap();
@@ -390,7 +390,7 @@ fn test_mixed_metadata_types() {
     let mut metadata = MetadataMap::new();
     metadata.insert("PNG:tEXt:Author", TagValue::new_string("John Doe"));
     metadata.insert("PNG:iTXt:Description", TagValue::new_string("Test 测试"));
-    metadata.insert("EXIF:Make", TagValue::new_string("TestMake"));
+    metadata.insert("IFD0:Make", TagValue::new_string("TestMake"));
 
     // Write to temp file
     let temp_dir = TempDir::new().unwrap();

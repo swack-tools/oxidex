@@ -28,8 +28,8 @@ fn test_shift_dates_add_one_day() {
     let temp_file = create_test_file_with_metadata();
     let path = temp_file.path();
 
-    // Add 1 day to DateTime (the fixture has EXIF:DateTime)
-    let result = shift_metadata_dates(path, "EXIF:DateTime", "0:0:1 0:0:0", ShiftOperation::Add);
+    // Add 1 day to DateTime (the fixture has IFD0:ModifyDate)
+    let result = shift_metadata_dates(path, "IFD0:ModifyDate", "0:0:1 0:0:0", ShiftOperation::Add);
     assert!(result.is_ok(), "Failed to shift dates: {:?}", result.err());
 
     // Read metadata and verify dates were shifted
@@ -37,11 +37,11 @@ fn test_shift_dates_add_one_day() {
 
     // Check DateTime
     let value = metadata
-        .get("EXIF:DateTime")
-        .expect("EXIF:DateTime not found");
+        .get("IFD0:ModifyDate")
+        .expect("IFD0:ModifyDate not found");
     let dt = value
         .as_datetime()
-        .expect("EXIF:DateTime is not a DateTime value");
+        .expect("IFD0:ModifyDate is not a DateTime value");
 
     // Should be 2025-01-16 10:30:00
     assert_eq!(dt.year(), 2025);
@@ -60,7 +60,7 @@ fn test_shift_dates_subtract_one_month() {
     // Subtract 1 month from DateTime
     let result = shift_metadata_dates(
         path,
-        "EXIF:DateTime",
+        "IFD0:ModifyDate",
         "0:1:0 0:0:0",
         ShiftOperation::Subtract,
     );
@@ -70,11 +70,11 @@ fn test_shift_dates_subtract_one_month() {
     let metadata = read_metadata(path).expect("Failed to read metadata");
 
     let value = metadata
-        .get("EXIF:DateTime")
-        .expect("EXIF:DateTime not found");
+        .get("IFD0:ModifyDate")
+        .expect("IFD0:ModifyDate not found");
     let dt = value
         .as_datetime()
-        .expect("EXIF:DateTime is not a DateTime value");
+        .expect("IFD0:ModifyDate is not a DateTime value");
 
     // Should be 2024-12-15 10:30:00
     assert_eq!(dt.year(), 2024);
@@ -89,7 +89,7 @@ fn test_shift_specific_tag_only() {
     let path = temp_file.path();
 
     // Shift DateTime by 1 day
-    let result = shift_metadata_dates(path, "EXIF:DateTime", "0:0:1 0:0:0", ShiftOperation::Add);
+    let result = shift_metadata_dates(path, "IFD0:ModifyDate", "0:0:1 0:0:0", ShiftOperation::Add);
     assert!(
         result.is_ok(),
         "Failed to shift DateTime: {:?}",
@@ -101,11 +101,11 @@ fn test_shift_specific_tag_only() {
 
     // DateTime should be shifted
     let value = metadata
-        .get("EXIF:DateTime")
-        .expect("EXIF:DateTime not found");
+        .get("IFD0:ModifyDate")
+        .expect("IFD0:ModifyDate not found");
     let dt = value
         .as_datetime()
-        .expect("EXIF:DateTime is not a DateTime value");
+        .expect("IFD0:ModifyDate is not a DateTime value");
     assert_eq!(dt.day(), 16);
 }
 
@@ -116,18 +116,18 @@ fn test_shift_dates_add_hours_and_minutes() {
     let path = temp_file.path();
 
     // Add 6 hours and 30 minutes to DateTime
-    let result = shift_metadata_dates(path, "EXIF:DateTime", "0:0:0 6:30:0", ShiftOperation::Add);
+    let result = shift_metadata_dates(path, "IFD0:ModifyDate", "0:0:0 6:30:0", ShiftOperation::Add);
     assert!(result.is_ok(), "Failed to shift dates: {:?}", result.err());
 
     // Read metadata and verify dates were shifted
     let metadata = read_metadata(path).expect("Failed to read metadata");
 
     let value = metadata
-        .get("EXIF:DateTime")
-        .expect("EXIF:DateTime not found");
+        .get("IFD0:ModifyDate")
+        .expect("IFD0:ModifyDate not found");
     let dt = value
         .as_datetime()
-        .expect("EXIF:DateTime is not a DateTime value");
+        .expect("IFD0:ModifyDate is not a DateTime value");
 
     // Original: 10:30:00, After +6:30: 17:00:00
     assert_eq!(dt.hour(), 17);
@@ -143,7 +143,7 @@ fn test_shift_dates_set_absolute() {
     // Set DateTime to absolute value
     let result = shift_metadata_dates(
         path,
-        "EXIF:DateTime",
+        "IFD0:ModifyDate",
         "2026:06:15 14:45:30",
         ShiftOperation::Set,
     );
@@ -153,11 +153,11 @@ fn test_shift_dates_set_absolute() {
     let metadata = read_metadata(path).expect("Failed to read metadata");
 
     let value = metadata
-        .get("EXIF:DateTime")
-        .expect("EXIF:DateTime not found");
+        .get("IFD0:ModifyDate")
+        .expect("IFD0:ModifyDate not found");
     let dt = value
         .as_datetime()
-        .expect("EXIF:DateTime is not a DateTime value");
+        .expect("IFD0:ModifyDate is not a DateTime value");
 
     assert_eq!(dt.year(), 2026);
     assert_eq!(dt.month(), 6);
@@ -174,18 +174,18 @@ fn test_shift_dates_complex_offset() {
     let path = temp_file.path();
 
     // Add 1 year, 2 months, 3 days, 4 hours, 5 minutes, 6 seconds
-    let result = shift_metadata_dates(path, "EXIF:DateTime", "1:2:3 4:5:6", ShiftOperation::Add);
+    let result = shift_metadata_dates(path, "IFD0:ModifyDate", "1:2:3 4:5:6", ShiftOperation::Add);
     assert!(result.is_ok(), "Failed to shift dates: {:?}", result.err());
 
     // Read metadata and verify dates were shifted
     let metadata = read_metadata(path).expect("Failed to read metadata");
 
     let value = metadata
-        .get("EXIF:DateTime")
-        .expect("EXIF:DateTime not found");
+        .get("IFD0:ModifyDate")
+        .expect("IFD0:ModifyDate not found");
     let dt = value
         .as_datetime()
-        .expect("EXIF:DateTime is not a DateTime value");
+        .expect("IFD0:ModifyDate is not a DateTime value");
 
     // From 2025-01-15 10:30:00
     // Add 1 year 2 months = 2026-03-15
@@ -206,7 +206,7 @@ fn test_shift_dates_invalid_offset_format() {
     let path = temp_file.path();
 
     // Try with invalid offset format
-    let result = shift_metadata_dates(path, "EXIF:DateTime", "invalid", ShiftOperation::Add);
+    let result = shift_metadata_dates(path, "IFD0:ModifyDate", "invalid", ShiftOperation::Add);
     assert!(result.is_err(), "Should fail with invalid offset format");
 }
 
@@ -235,19 +235,19 @@ fn test_shift_dates_preserves_other_tags() {
     // Add a non-DateTime tag to the metadata
     let mut metadata = read_metadata(path).expect("Failed to read metadata");
     metadata.insert(
-        "EXIF:Artist".to_string(),
+        "IFD0:Artist".to_string(),
         TagValue::new_string("Test Artist"),
     );
     write_metadata(path, &metadata).expect("Failed to write metadata");
 
     // Shift dates
-    let result = shift_metadata_dates(path, "EXIF:DateTime", "0:0:1 0:0:0", ShiftOperation::Add);
+    let result = shift_metadata_dates(path, "IFD0:ModifyDate", "0:0:1 0:0:0", ShiftOperation::Add);
     assert!(result.is_ok());
 
     // Read metadata and verify non-DateTime tag is preserved
     let metadata = read_metadata(path).expect("Failed to read metadata");
     assert_eq!(
-        metadata.get("EXIF:Artist").and_then(|v| v.as_string()),
+        metadata.get("IFD0:Artist").and_then(|v| v.as_string()),
         Some("Test Artist")
     );
 }

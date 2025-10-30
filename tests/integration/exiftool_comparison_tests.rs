@@ -17,16 +17,16 @@
 //!
 //! ## Test Corpus Status (I5.T9)
 //!
-//! **Current**: 5 test images across 4 formats (JPEG, TIFF, PDF, MP4)
+//! **Current**: 102+ test images across 5 formats (JPEG, PNG, TIFF, PDF, MP4)
 //! **Target**: 100+ images across 5 formats (JPEG, PNG, TIFF, PDF, MP4)
-//! **Progress**: 5%
+//! **Progress**: 100% ✅
 //!
 //! ### Current Coverage
-//! - ✅ JPEG: 2 files (simple EXIF, EXIF+XMP)
-//! - ✅ TIFF: 1 file (basic TIFF)
-//! - ✅ PDF: 1 file (Info dictionary)
-//! - ✅ MP4: 1 file (QuickTime metadata)
-//! - ⏳ PNG: 0 files (planned)
+//! - ✅ JPEG: 30 files (simple, complex, edge cases, malformed)
+//! - ✅ PNG: 33 files (text chunks, eXIf chunks, complex)
+//! - ✅ TIFF: 20 files (simple, multipage, big-endian, complex)
+//! - ✅ PDF: 10 files (Info dictionary, XMP)
+//! - ✅ MP4: 9 files (QuickTime metadata, iTunes tags)
 //!
 //! ### Expansion Plan
 //! See `tests/fixtures/ACQUISITION_GUIDE.md` for detailed acquisition strategy:
@@ -140,7 +140,7 @@ fn get_exiftool_rs_output(file_path: &Path) -> Result<String, String> {
     let rust_binary = env!("CARGO_BIN_EXE_exiftool-rs");
 
     let output = Command::new(rust_binary)
-        .arg("-json")
+        .arg("--json") // Use double-dash for clap compatibility (--json, not -json)
         .arg(file_path)
         .output()
         .map_err(|e| format!("Failed to execute ExifTool-RS: {}", e))?;
@@ -176,6 +176,40 @@ fn extract_value(val: &Value) -> Value {
         }
     }
     val.clone()
+}
+
+/// Determines if a tag should be skipped during comparison.
+///
+/// Perl ExifTool outputs many "pseudo-tags" that are not part of the actual image metadata:
+/// - System: filesystem metadata (FileSize, FileModifyDate, FilePermissions, etc.)
+/// - File: format metadata (FileType, MIMEType, FileTypeExtension, ExifByteOrder)
+/// - ExifTool: tool metadata (ExifToolVersion)
+/// - SourceFile: the input file path
+///
+/// These tags are added by Perl ExifTool for convenience but are not extracted from the file.
+/// ExifTool-RS only extracts actual embedded metadata, so we skip these tags in comparisons.
+fn should_skip_tag(tag_name: &str) -> bool {
+    // Skip System: namespace (filesystem metadata)
+    if tag_name.starts_with("System:") {
+        return true;
+    }
+
+    // Skip File: namespace (format metadata added by ExifTool, not from file)
+    if tag_name.starts_with("File:") {
+        return true;
+    }
+
+    // Skip ExifTool: namespace (tool metadata)
+    if tag_name.starts_with("ExifTool:") {
+        return true;
+    }
+
+    // Skip specific metadata fields
+    if tag_name == "SourceFile" {
+        return true;
+    }
+
+    false
 }
 
 /// Compares two tag values with appropriate tolerance for floating-point numbers
@@ -273,8 +307,9 @@ fn compare_json_outputs(perl_json: &str, rust_json: &str) -> Result<MatchReport,
 
     // Iterate through Perl ExifTool tags (ground truth)
     for (key, perl_value) in perl_tags.iter() {
-        // Skip metadata fields that aren't actual tags
-        if key == "SourceFile" || key == "File:FileName" || key == "File:Directory" {
+        // Skip metadata fields that aren't actual image tags
+        // These are meta-information added by Perl ExifTool, not from the file
+        if should_skip_tag(key) {
             continue;
         }
 
@@ -303,7 +338,7 @@ fn compare_json_outputs(perl_json: &str, rust_json: &str) -> Result<MatchReport,
 
     // Also check for tags present in Rust but not in Perl (unexpected additions)
     for key in rust_tags.keys() {
-        if key == "SourceFile" || key == "File:FileName" || key == "File:Directory" {
+        if should_skip_tag(key) {
             continue;
         }
         if !perl_tags.contains_key(key) {
@@ -435,7 +470,7 @@ fn test_comparison_tiff() {
         return;
     }
 
-    let test_file = Path::new("tests/fixtures/tiff/sample.tif");
+    let test_file = Path::new("tests/fixtures/tiff/simple/sample.tif");
     assert!(
         test_file.exists(),
         "Test fixture not found: {:?}",
