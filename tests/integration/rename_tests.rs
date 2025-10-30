@@ -116,13 +116,7 @@ fn test_build_new_filename_simple_tag() {
     let metadata = read_metadata(&test_file).unwrap();
 
     // Build new filename with simple tag
-    let new_name = build_new_filename(
-        "DateTimeOriginal",
-        &metadata,
-        &test_file,
-        None,
-    )
-    .unwrap();
+    let new_name = build_new_filename("DateTimeOriginal", &metadata, &test_file, None).unwrap();
 
     // Should contain the datetime value (sanitized)
     assert!(new_name.contains("2025"));
@@ -187,13 +181,8 @@ fn test_build_new_filename_multiple_tags() {
     let metadata = read_metadata(&test_file).unwrap();
 
     // Build new filename with multiple tags
-    let new_name = build_new_filename(
-        "${EXIF:Make}_${EXIF:Model}",
-        &metadata,
-        &test_file,
-        None,
-    )
-    .unwrap();
+    let new_name =
+        build_new_filename("${EXIF:Make}_${EXIF:Model}", &metadata, &test_file, None).unwrap();
 
     // Should contain both Make and Model
     assert_eq!(new_name, "Canon_EOS 5D");
@@ -319,13 +308,7 @@ fn test_rename_sanitizes_invalid_characters() {
     let metadata = read_metadata(&test_file).unwrap();
 
     // DateTimeOriginal contains colons which are invalid on some filesystems
-    let new_name = build_new_filename(
-        "DateTimeOriginal",
-        &metadata,
-        &test_file,
-        None,
-    )
-    .unwrap();
+    let new_name = build_new_filename("DateTimeOriginal", &metadata, &test_file, None).unwrap();
 
     // Colons should be replaced with underscores
     assert!(!new_name.contains(':'));

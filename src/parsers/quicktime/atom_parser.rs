@@ -135,10 +135,13 @@ fn parse_atom(input: &[u8]) -> IResult<&[u8], Atom<'_>> {
     // Take the atom data
     let (input, data) = take(actual_size)(input)?;
 
-    Ok((input, Atom {
-        atom_type: atom_type.1,
-        data,
-    }))
+    Ok((
+        input,
+        Atom {
+            atom_type: atom_type.1,
+            data,
+        },
+    ))
 }
 
 /// Parse multiple atoms from input

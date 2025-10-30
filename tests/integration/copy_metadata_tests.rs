@@ -110,7 +110,10 @@ fn test_copy_all_metadata_between_jpegs() -> Result<(), Box<dyn std::error::Erro
     // Verify tags were copied from source
     assert_eq!(dest_metadata.get_string("EXIF:Make"), Some("Canon"));
     assert_eq!(dest_metadata.get_string("EXIF:Model"), Some("EOS R5"));
-    assert_eq!(dest_metadata.get_string("EXIF:Artist"), Some("SourceArtist"));
+    assert_eq!(
+        dest_metadata.get_string("EXIF:Artist"),
+        Some("SourceArtist")
+    );
 
     Ok(())
 }
@@ -141,7 +144,10 @@ fn test_copy_specific_tags_only() -> Result<(), Box<dyn std::error::Error>> {
     let dest_metadata = read_metadata(dest_path)?;
 
     // Verify Artist was copied from source
-    assert_eq!(dest_metadata.get_string("EXIF:Artist"), Some("SourceArtist"));
+    assert_eq!(
+        dest_metadata.get_string("EXIF:Artist"),
+        Some("SourceArtist")
+    );
 
     // Verify Make and Model were NOT copied (should still have original dest values)
     assert_eq!(

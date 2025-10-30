@@ -92,11 +92,12 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
     let xref_map = parse_xref_table(xref_data)?;
 
     // Get Info object offset from xref table
-    let info_offset = xref_map
-        .get(&info_ref.object_num)
-        .ok_or_else(|| ExifToolError::parse_error(format!(
-            "Info object {} not found in xref table", info_ref.object_num
-        )))?;
+    let info_offset = xref_map.get(&info_ref.object_num).ok_or_else(|| {
+        ExifToolError::parse_error(format!(
+            "Info object {} not found in xref table",
+            info_ref.object_num
+        ))
+    })?;
 
     // Read Info object (up to 4KB should be enough for metadata)
     let info_size = std::cmp::min(4096, file_size.saturating_sub(*info_offset) as usize);
@@ -135,7 +136,8 @@ fn find_xref_offset(tail_data: &[u8]) -> Result<u64> {
         .ok_or_else(|| ExifToolError::parse_error("startxref not found in PDF"))?;
 
     // Extract the number after startxref
-    let after_start = startxref_pos.checked_add(9)
+    let after_start = startxref_pos
+        .checked_add(9)
         .ok_or_else(|| ExifToolError::parse_error("Offset overflow after startxref"))?;
     if after_start > tail_str.len() {
         return Err(ExifToolError::parse_error("Invalid startxref position"));
@@ -188,20 +190,20 @@ fn parse_object_reference(input: &[u8]) -> IResult<&[u8], ObjectRef> {
     let (input, _) = multispace0(input)?;
     let (input, _) = tag(b"R")(input)?;
 
-    Ok((input, ObjectRef {
-        object_num: object_num as u32,
-        generation: generation as u16,
-    }))
+    Ok((
+        input,
+        ObjectRef {
+            object_num: object_num as u32,
+            generation: generation as u16,
+        },
+    ))
 }
 
 /// Parses a decimal number from bytes
 fn parse_number(input: &[u8]) -> IResult<&[u8], u64> {
     preceded(
         multispace0,
-        map_res(
-            map_res(digit1, str::from_utf8),
-            |s: &str| s.parse::<u64>()
-        )
+        map_res(map_res(digit1, str::from_utf8), |s: &str| s.parse::<u64>()),
     )(input)
 }
 
@@ -252,7 +254,9 @@ fn parse_xref_entries(input: &[u8]) -> IResult<&[u8], HashMap<u32, u64>> {
                     Some(num) => num,
                     None => {
                         // Skip this entry if object number would overflow
-                        if let Ok((inp, _)) = take_until::<_, _, nom::error::Error<&[u8]>>("\n")(input) {
+                        if let Ok((inp, _)) =
+                            take_until::<_, _, nom::error::Error<&[u8]>>("\n")(input)
+                        {
                             input = &inp[1..];
                         }
                         continue;
@@ -278,7 +282,8 @@ fn parse_xref_entries(input: &[u8]) -> IResult<&[u8], HashMap<u32, u64>> {
                     }
                 } else {
                     // If we can't parse an entry, skip to next line
-                    if let Ok((inp, _)) = take_until::<_, _, nom::error::Error<&[u8]>>("\n")(input) {
+                    if let Ok((inp, _)) = take_until::<_, _, nom::error::Error<&[u8]>>("\n")(input)
+                    {
                         input = &inp[1..];
                     } else {
                         break;
@@ -309,12 +314,16 @@ fn parse_info_object(input: &[u8]) -> Result<HashMap<String, String>> {
         .ok_or_else(|| ExifToolError::parse_error("Info dictionary end >> not found"))?;
 
     // Use checked_add to prevent overflow when calculating dictionary bounds
-    let content_start = dict_start.checked_add(2)
+    let content_start = dict_start
+        .checked_add(2)
         .ok_or_else(|| ExifToolError::parse_error("Dictionary offset overflow"))?;
-    let content_end = dict_start.checked_add(dict_end)
+    let content_end = dict_start
+        .checked_add(dict_end)
         .ok_or_else(|| ExifToolError::parse_error("Dictionary end offset overflow"))?;
     if content_end > input_str.len() {
-        return Err(ExifToolError::parse_error("Dictionary extends beyond input"));
+        return Err(ExifToolError::parse_error(
+            "Dictionary extends beyond input",
+        ));
     }
     let dict_content = &input_str[content_start..content_end];
 
@@ -340,7 +349,8 @@ fn parse_dict_entry(input: &[u8]) -> IResult<&[u8], (String, String)> {
     // Parse key: /KeyName
     let (input, _) = tag(b"/")(input)?;
     let (input, key) = take_while1(|c: u8| c.is_ascii_alphanumeric())(input)?;
-    let key = str::from_utf8(key).map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Char)))?;
+    let key = str::from_utf8(key)
+        .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Char)))?;
 
     // Skip whitespace
     let (input, _) = space0(input)?;
@@ -380,11 +390,7 @@ fn parse_dict_value(input: &[u8]) -> IResult<&[u8], String> {
 
 /// Parses a PDF string literal: (text)
 fn parse_string_literal(input: &[u8]) -> IResult<&[u8], String> {
-    let (input, content) = delimited(
-        tag(b"("),
-        take_while(|c| c != b')'),
-        tag(b")")
-    )(input)?;
+    let (input, content) = delimited(tag(b"("), take_while(|c| c != b')'), tag(b")"))(input)?;
 
     let text = str::from_utf8(content)
         .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Char)))?;
@@ -397,7 +403,7 @@ fn parse_hex_string(input: &[u8]) -> IResult<&[u8], String> {
     let (input, content) = delimited(
         tag(b"<"),
         take_while(|c: u8| c.is_ascii_hexdigit() || c.is_ascii_whitespace()),
-        tag(b">")
+        tag(b">"),
     )(input)?;
 
     // Convert hex to string
@@ -412,12 +418,13 @@ fn parse_hex_string(input: &[u8]) -> IResult<&[u8], String> {
         // UTF-16BE with BOM
         let bytes: std::result::Result<Vec<u8>, _> = (4..hex_clean.len())
             .step_by(2)
-            .map(|i| u8::from_str_radix(&hex_clean[i..i+2], 16))
+            .map(|i| u8::from_str_radix(&hex_clean[i..i + 2], 16))
             .collect();
 
         if let Ok(bytes) = bytes {
             // Convert UTF-16BE bytes to string
-            let u16_vec: Vec<u16> = bytes.chunks(2)
+            let u16_vec: Vec<u16> = bytes
+                .chunks(2)
                 .filter_map(|chunk| {
                     if chunk.len() == 2 {
                         Some(u16::from_be_bytes([chunk[0], chunk[1]]))
@@ -438,9 +445,9 @@ fn parse_hex_string(input: &[u8]) -> IResult<&[u8], String> {
         .step_by(2)
         .map(|i| {
             if i + 1 < hex_clean.len() {
-                u8::from_str_radix(&hex_clean[i..i+2], 16)
+                u8::from_str_radix(&hex_clean[i..i + 2], 16)
             } else {
-                u8::from_str_radix(&hex_clean[i..i+1], 16)
+                u8::from_str_radix(&hex_clean[i..i + 1], 16)
             }
         })
         .collect();
@@ -455,7 +462,8 @@ fn parse_hex_string(input: &[u8]) -> IResult<&[u8], String> {
 /// Parses a PDF name value: /Name
 fn parse_name_value(input: &[u8]) -> IResult<&[u8], String> {
     let (input, _) = tag(b"/")(input)?;
-    let (input, name) = take_while1(|c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')(input)?;
+    let (input, name) =
+        take_while1(|c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')(input)?;
 
     let text = str::from_utf8(name)
         .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Char)))?;

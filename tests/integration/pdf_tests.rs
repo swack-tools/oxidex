@@ -253,7 +253,11 @@ startxref
     let _ = std::fs::remove_file(&temp_path);
 
     // Should succeed
-    assert!(result.is_ok(), "Failed to parse PDF with XMP: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse PDF with XMP: {:?}",
+        result.err()
+    );
 
     let metadata = result.unwrap();
 

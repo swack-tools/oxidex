@@ -106,7 +106,10 @@ fn parse_pattern(pattern: &str) -> Result<Vec<PatternToken>> {
     // If the pattern is just a simple tag name (no special syntax)
     if tokens.is_empty() && !current_literal.is_empty() {
         // Check if it looks like a tag name (contains letters and maybe colon)
-        if current_literal.chars().all(|c| c.is_alphanumeric() || c == ':' || c == '_') {
+        if current_literal
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == ':' || c == '_')
+        {
             tokens.push(PatternToken::Tag(current_literal.clone()));
             current_literal.clear();
         }
@@ -129,10 +132,7 @@ fn parse_pattern(pattern: &str) -> Result<Vec<PatternToken>> {
 /// Tries in order:
 /// 1. Exact tag name (e.g., "EXIF:DateTimeOriginal")
 /// 2. Unqualified name with EXIF prefix (e.g., "DateTimeOriginal" -> "EXIF:DateTimeOriginal")
-fn resolve_tag<'a>(
-    metadata: &'a crate::core::MetadataMap,
-    tag_name: &str,
-) -> Option<&'a TagValue> {
+fn resolve_tag<'a>(metadata: &'a crate::core::MetadataMap, tag_name: &str) -> Option<&'a TagValue> {
     // Try exact match first
     if let Some(value) = metadata.get(tag_name) {
         return Some(value);
@@ -153,10 +153,7 @@ fn resolve_tag<'a>(
 ///
 /// If date_format is provided and the value is a DateTime, applies the format.
 /// Otherwise, converts the value to its string representation.
-fn format_tag_value(
-    value: &TagValue,
-    date_format: Option<&str>,
-) -> Result<String> {
+fn format_tag_value(value: &TagValue, date_format: Option<&str>) -> Result<String> {
     match value {
         TagValue::DateTime(dt) => {
             if let Some(format) = date_format {
@@ -170,19 +167,22 @@ fn format_tag_value(
         TagValue::String(s) => Ok(s.clone()),
         TagValue::Integer(i) => Ok(i.to_string()),
         TagValue::Float(f) => Ok(f.to_string()),
-        TagValue::Rational { numerator, denominator } => {
+        TagValue::Rational {
+            numerator,
+            denominator,
+        } => {
             if *denominator == 1 {
                 Ok(numerator.to_string())
             } else {
                 Ok(format!("{}/{}", numerator, denominator))
             }
         }
-        TagValue::Binary(_) => {
-            Err(ExifToolError::parse_error("Cannot use binary tag in filename"))
-        }
-        TagValue::Struct(_) => {
-            Err(ExifToolError::parse_error("Cannot use struct tag in filename"))
-        }
+        TagValue::Binary(_) => Err(ExifToolError::parse_error(
+            "Cannot use binary tag in filename",
+        )),
+        TagValue::Struct(_) => Err(ExifToolError::parse_error(
+            "Cannot use struct tag in filename",
+        )),
     }
 }
 
@@ -204,10 +204,9 @@ fn substitute_pattern(
             }
             PatternToken::Tag(tag_name) => {
                 // Resolve tag in metadata
-                let value = resolve_tag(metadata, tag_name)
-                    .ok_or_else(|| {
-                        ExifToolError::parse_error(format!("Tag '{}' not found in metadata", tag_name))
-                    })?;
+                let value = resolve_tag(metadata, tag_name).ok_or_else(|| {
+                    ExifToolError::parse_error(format!("Tag '{}' not found in metadata", tag_name))
+                })?;
 
                 // Format value for filename
                 let formatted = format_tag_value(value, date_format)?;
@@ -373,13 +372,19 @@ mod tests {
     fn test_parse_pattern_with_extension() {
         let tokens = parse_pattern("${EXIF:DateTimeOriginal}%%e").unwrap();
         assert_eq!(tokens.len(), 2);
-        assert_eq!(tokens[0], PatternToken::Tag("EXIF:DateTimeOriginal".to_string()));
+        assert_eq!(
+            tokens[0],
+            PatternToken::Tag("EXIF:DateTimeOriginal".to_string())
+        );
         assert_eq!(tokens[1], PatternToken::Extension);
     }
 
     #[test]
     fn test_sanitize_filename() {
-        assert_eq!(sanitize_filename("2025:01:15 10:30:00"), "2025_01_15 10_30_00");
+        assert_eq!(
+            sanitize_filename("2025:01:15 10:30:00"),
+            "2025_01_15 10_30_00"
+        );
         assert_eq!(sanitize_filename("Canon/EOS"), "Canon_EOS");
         assert_eq!(sanitize_filename("test<file>.jpg"), "test_file_.jpg");
     }
@@ -401,7 +406,9 @@ mod tests {
     #[test]
     fn test_format_tag_value_datetime_with_format() {
         use chrono::TimeZone;
-        let dt = chrono::Utc.with_ymd_and_hms(2025, 1, 15, 10, 30, 0).unwrap();
+        let dt = chrono::Utc
+            .with_ymd_and_hms(2025, 1, 15, 10, 30, 0)
+            .unwrap();
         let value = TagValue::new_datetime(dt);
         let result = format_tag_value(&value, Some("%Y%m%d_%H%M%S")).unwrap();
         assert_eq!(result, "20250115_103000");

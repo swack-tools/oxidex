@@ -110,11 +110,7 @@ fn test_write_and_read_modified_title() {
     let temp_path = temp_dir.join("test_write_title.pdf");
     let result = write_pdf_file(&temp_path, &original_reader, &metadata);
 
-    assert!(
-        result.is_ok(),
-        "Failed to write PDF: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Failed to write PDF: {:?}", result.err());
 
     // Read back and verify
     let reader = BufferedReader::new(&temp_path).expect("Failed to open written PDF");
@@ -123,7 +119,11 @@ fn test_write_and_read_modified_title() {
     // Clean up
     let _ = std::fs::remove_file(&temp_path);
 
-    assert!(parsed.is_ok(), "Failed to parse written PDF: {:?}", parsed.err());
+    assert!(
+        parsed.is_ok(),
+        "Failed to parse written PDF: {:?}",
+        parsed.err()
+    );
     let parsed_metadata = parsed.unwrap();
 
     // Verify the Title was modified
@@ -170,7 +170,10 @@ fn test_write_multiple_field_modifications() {
     assert_eq!(parsed.get_string("PDF:Title"), Some("New Title"));
     assert_eq!(parsed.get_string("PDF:Author"), Some("New Author"));
     assert_eq!(parsed.get_string("PDF:Subject"), Some("New Subject"));
-    assert_eq!(parsed.get_string("PDF:Keywords"), Some("new, modified, test"));
+    assert_eq!(
+        parsed.get_string("PDF:Keywords"),
+        Some("new, modified, test")
+    );
     assert_eq!(parsed.get_string("PDF:Creator"), Some("Modified Creator"));
     assert_eq!(parsed.get_string("PDF:Producer"), Some("Modified Producer"));
 }
@@ -182,7 +185,10 @@ fn test_write_with_special_characters() {
 
     // Test special characters and unicode
     let mut metadata = MetadataMap::new();
-    metadata.insert("PDF:Title", TagValue::new_string("Test: Special & Characters"));
+    metadata.insert(
+        "PDF:Title",
+        TagValue::new_string("Test: Special & Characters"),
+    );
     metadata.insert("PDF:Author", TagValue::new_string("Müller, François"));
     metadata.insert("PDF:Subject", TagValue::new_string("R&D Project (2024)"));
     metadata.insert("PDF:Keywords", TagValue::new_string("test, special"));
@@ -206,10 +212,7 @@ fn test_write_with_special_characters() {
         parsed.get_string("PDF:Title"),
         Some("Test: Special & Characters")
     );
-    assert_eq!(
-        parsed.get_string("PDF:Author"),
-        Some("Müller, François")
-    );
+    assert_eq!(parsed.get_string("PDF:Author"), Some("Müller, François"));
 }
 
 #[test]
@@ -257,8 +260,7 @@ fn test_write_preserves_pdf_structure() {
 
     let temp_dir = std::env::temp_dir();
     let temp_path = temp_dir.join("test_write_structure.pdf");
-    write_pdf_file(&temp_path, &original_reader, &metadata)
-        .expect("Failed to write PDF");
+    write_pdf_file(&temp_path, &original_reader, &metadata).expect("Failed to write PDF");
 
     // Read the written file
     let written_data = std::fs::read(&temp_path).expect("Failed to read written PDF");
@@ -295,7 +297,10 @@ fn test_write_with_long_values() {
 
     // Test with long string values
     let long_title = "A".repeat(200);
-    let long_keywords = (0..50).map(|i| format!("keyword{}", i)).collect::<Vec<_>>().join(", ");
+    let long_keywords = (0..50)
+        .map(|i| format!("keyword{}", i))
+        .collect::<Vec<_>>()
+        .join(", ");
 
     let mut metadata = MetadataMap::new();
     metadata.insert("PDF:Title", TagValue::new_string(long_title.clone()));
@@ -318,7 +323,10 @@ fn test_write_with_long_values() {
     let _ = std::fs::remove_file(&temp_path);
 
     assert_eq!(parsed.get_string("PDF:Title"), Some(long_title.as_str()));
-    assert_eq!(parsed.get_string("PDF:Keywords"), Some(long_keywords.as_str()));
+    assert_eq!(
+        parsed.get_string("PDF:Keywords"),
+        Some(long_keywords.as_str())
+    );
 }
 
 #[test]
@@ -361,10 +369,7 @@ fn test_write_to_sample_fixture() {
 
     // Verify other fields remain (check Author as example)
     if let Some(original_author) = original_metadata.get_string("PDF:Author") {
-        assert_eq!(
-            parsed.get_string("PDF:Author"),
-            Some(original_author)
-        );
+        assert_eq!(parsed.get_string("PDF:Author"), Some(original_author));
     }
 }
 
@@ -383,8 +388,7 @@ fn test_xref_table_correctness() {
 
     let temp_dir = std::env::temp_dir();
     let temp_path = temp_dir.join("test_xref.pdf");
-    write_pdf_file(&temp_path, &original_reader, &metadata)
-        .expect("Failed to write PDF");
+    write_pdf_file(&temp_path, &original_reader, &metadata).expect("Failed to write PDF");
 
     let written_data = std::fs::read(&temp_path).expect("Failed to read written PDF");
     let _ = std::fs::remove_file(&temp_path);
@@ -437,8 +441,7 @@ fn test_output_pdf_is_valid() {
 
     let temp_dir = std::env::temp_dir();
     let temp_path = temp_dir.join("test_valid.pdf");
-    write_pdf_file(&temp_path, &original_reader, &metadata)
-        .expect("Failed to write PDF");
+    write_pdf_file(&temp_path, &original_reader, &metadata).expect("Failed to write PDF");
 
     // The ultimate test: can we parse it back without errors?
     let reader = BufferedReader::new(&temp_path).expect("Failed to open written PDF");

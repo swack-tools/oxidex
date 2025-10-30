@@ -6,8 +6,8 @@
 //! 3. MP4 metadata with keys/ilst (moov→meta→keys + moov→meta→ilst)
 //! 4. XMP metadata in uuid atoms
 
-use crate::core::{MetadataMap, TagValue};
 use super::atom_parser::Atom;
+use crate::core::{MetadataMap, TagValue};
 use std::collections::HashMap;
 
 /// Extract all metadata from QuickTime/MP4 atoms
@@ -127,8 +127,10 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
                             if let Ok(s) = std::str::from_utf8(atom_bytes) {
                                 &format!("iTunes:{}", s)
                             } else {
-                                &format!("iTunes:{:02X}{:02X}{:02X}{:02X}",
-                                    atom_bytes[0], atom_bytes[1], atom_bytes[2], atom_bytes[3])
+                                &format!(
+                                    "iTunes:{:02X}{:02X}{:02X}{:02X}",
+                                    atom_bytes[0], atom_bytes[1], atom_bytes[2], atom_bytes[3]
+                                )
                             }
                         }
                     };
@@ -273,10 +275,9 @@ fn extract_itunes_data_value(data: &[u8]) -> Option<TagValue> {
             // Signed integer (1, 2, 3, or 4 bytes)
             match value_data.len() {
                 1 => Some(TagValue::Integer(value_data[0] as i64)),
-                2 => Some(TagValue::Integer(i16::from_be_bytes([
-                    value_data[0],
-                    value_data[1],
-                ]) as i64)),
+                2 => Some(TagValue::Integer(
+                    i16::from_be_bytes([value_data[0], value_data[1]]) as i64,
+                )),
                 4 => Some(TagValue::Integer(i32::from_be_bytes([
                     value_data[0],
                     value_data[1],
