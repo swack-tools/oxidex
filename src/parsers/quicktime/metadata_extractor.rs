@@ -487,18 +487,18 @@ fn extract_user_data_atoms(udta: &Atom, metadata: &mut MetadataMap) -> Result<()
         if atom_bytes[0] == 0xA9 {
             if let Some(value) = extract_string_value(atom.data) {
                 let tag_name = match atom_bytes {
-                    b"\xa9nam" => "QuickTime:Title",
-                    b"\xa9ART" => "QuickTime:Artist",
-                    b"\xa9alb" => "QuickTime:Album",
-                    b"\xa9day" => "QuickTime:Year",
-                    b"\xa9cmt" => "QuickTime:Comment",
-                    b"\xa9cpy" => "QuickTime:Copyright",
-                    b"\xa9gen" => "QuickTime:Genre",
-                    b"\xa9too" => "QuickTime:Encoder",
-                    b"\xa9des" => "QuickTime:Description",
-                    b"\xa9dir" => "QuickTime:Director",
-                    b"\xa9prd" => "QuickTime:Producer",
-                    b"\xa9prf" => "QuickTime:Performers",
+                    b"\xa9nam" => "UserData:Title",
+                    b"\xa9ART" => "UserData:Artist",
+                    b"\xa9alb" => "UserData:Album",
+                    b"\xa9day" => "UserData:Year",
+                    b"\xa9cmt" => "UserData:Comment",
+                    b"\xa9cpy" => "UserData:Copyright",
+                    b"\xa9gen" => "UserData:Genre",
+                    b"\xa9too" => "UserData:Encoder",
+                    b"\xa9des" => "UserData:Description",
+                    b"\xa9dir" => "UserData:Director",
+                    b"\xa9prd" => "UserData:Producer",
+                    b"\xa9prf" => "UserData:Performers",
                     _ => continue, // Skip unknown atoms
                 };
 
@@ -540,27 +540,27 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
             if let Some(data_atom) = item.find_child("data") {
                 if let Some(value) = extract_itunes_data_value(data_atom.data) {
                     let tag_name = match atom_bytes {
-                        b"\xa9nam" => "iTunes:Title",
-                        b"\xa9ART" => "iTunes:Artist",
-                        b"\xa9alb" => "iTunes:Album",
-                        b"\xa9day" => "iTunes:Year",
-                        b"\xa9cmt" => "iTunes:Comment",
-                        b"\xa9gen" => "iTunes:Genre",
-                        b"\xa9too" => "iTunes:Encoder",
-                        b"aART" => "iTunes:AlbumArtist",
-                        b"\xa9wrt" => "iTunes:Composer",
-                        b"\xa9grp" => "iTunes:Grouping",
-                        b"trkn" => "iTunes:TrackNumber",
-                        b"disk" => "iTunes:DiscNumber",
-                        b"cprt" | b"\xa9cpy" => "iTunes:Copyright",
+                        b"\xa9nam" => "ItemList:Title",
+                        b"\xa9ART" => "ItemList:Artist",
+                        b"\xa9alb" => "ItemList:Album",
+                        b"\xa9day" => "ItemList:ContentCreateDate",
+                        b"\xa9cmt" => "ItemList:Comment",
+                        b"\xa9gen" => "ItemList:Genre",
+                        b"\xa9too" => "ItemList:Encoder",
+                        b"aART" => "ItemList:AlbumArtist",
+                        b"\xa9wrt" => "ItemList:Composer",
+                        b"\xa9grp" => "ItemList:Grouping",
+                        b"trkn" => "ItemList:TrackNumber",
+                        b"disk" => "ItemList:DiscNumber",
+                        b"cprt" | b"\xa9cpy" => "ItemList:Copyright",
                         _ => {
-                            // Store unknown iTunes tags with their FourCC
+                            // Store unknown ItemList tags with their FourCC
                             // Try to convert to string, otherwise use hex representation
                             if let Ok(s) = std::str::from_utf8(atom_bytes) {
-                                &format!("iTunes:{}", s)
+                                &format!("ItemList:{}", s)
                             } else {
                                 &format!(
-                                    "iTunes:{:02X}{:02X}{:02X}{:02X}",
+                                    "ItemList:{:02X}{:02X}{:02X}{:02X}",
                                     atom_bytes[0], atom_bytes[1], atom_bytes[2], atom_bytes[3]
                                 )
                             }
