@@ -31,9 +31,16 @@ Thumbs.db
 # Since this is both, we keep Cargo.lock
 # Cargo.lock
 
-# Fuzzing artifacts (keep corpus seed files, exclude generated artifacts and target)
+# Fuzzing artifacts (keep named corpus seed files like *.pdf, *.mp4, exclude fuzzer-generated hash files)
 fuzz/target/
 fuzz/artifacts/
+# Exclude all files in corpus directories
+fuzz/corpus/*/*
+# But keep named seed files (*.pdf, *.mp4, etc.)
+!fuzz/corpus/*/*.pdf
+!fuzz/corpus/*/*.mp4
+!fuzz/corpus/*/*.jpg
+!fuzz/corpus/*/*.png
 
 # Benchmark outputs
 benches/target/
