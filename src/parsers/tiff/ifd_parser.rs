@@ -498,21 +498,21 @@ mod tests {
         assert_eq!(tags.len(), 3);
 
         // Check Make tag (0x010F)
-        let make = tags.iter().find(|(id, _)| *id == 0x010F);
+        let make = tags.iter().find(|(id, _, _)| *id == 0x010F);
         assert!(make.is_some());
-        let (_, make_value) = make.unwrap();
+        let (_, _, make_value) = make.unwrap();
         assert_eq!(make_value, b"Canon\0");
 
         // Check Model tag (0x0110)
-        let model = tags.iter().find(|(id, _)| *id == 0x0110);
+        let model = tags.iter().find(|(id, _, _)| *id == 0x0110);
         assert!(model.is_some());
-        let (_, model_value) = model.unwrap();
+        let (_, _, model_value) = model.unwrap();
         assert_eq!(model_value, b"EOS\0");
 
         // Check DateTime tag (0x0132)
-        let datetime = tags.iter().find(|(id, _)| *id == 0x0132);
+        let datetime = tags.iter().find(|(id, _, _)| *id == 0x0132);
         assert!(datetime.is_some());
-        let (_, datetime_value) = datetime.unwrap();
+        let (_, _, datetime_value) = datetime.unwrap();
         assert_eq!(datetime_value, b"2024:01:01 12:00:00\0");
     }
 
@@ -528,21 +528,21 @@ mod tests {
         assert_eq!(tags.len(), 3);
 
         // Check Make tag
-        let make = tags.iter().find(|(id, _)| *id == 0x010F);
+        let make = tags.iter().find(|(id, _, _)| *id == 0x010F);
         assert!(make.is_some());
-        let (_, make_value) = make.unwrap();
+        let (_, _, make_value) = make.unwrap();
         assert_eq!(make_value, b"Canon\0");
 
         // Check Model tag
-        let model = tags.iter().find(|(id, _)| *id == 0x0110);
+        let model = tags.iter().find(|(id, _, _)| *id == 0x0110);
         assert!(model.is_some());
-        let (_, model_value) = model.unwrap();
+        let (_, _, model_value) = model.unwrap();
         assert_eq!(model_value, b"EOS\0");
 
         // Check DateTime tag
-        let datetime = tags.iter().find(|(id, _)| *id == 0x0132);
+        let datetime = tags.iter().find(|(id, _, _)| *id == 0x0132);
         assert!(datetime.is_some());
-        let (_, datetime_value) = datetime.unwrap();
+        let (_, _, datetime_value) = datetime.unwrap();
         assert_eq!(datetime_value, b"2024:01:01 12:00:00\0");
     }
 
