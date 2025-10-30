@@ -508,7 +508,7 @@ fn raw_bytes_to_tag_value(bytes: &[u8], field_type: u16, byte_order: ByteOrder) 
                     ByteOrder::LittleEndian => i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
                     ByteOrder::BigEndian => i32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
                 };
-                return TagValue::new_rational(numerator as i32, denominator as i32);
+                return TagValue::new_rational(numerator, denominator);
             }
 
             // ASCII (type 2): null-terminated string

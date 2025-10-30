@@ -62,7 +62,7 @@ fn test_parse_multi_page_tiff() {
     );
 
     // Print all extracted tags for debugging
-    for (tag_id, value) in &tags {
+    for (tag_id, _field_type, value) in &tags {
         println!("  Tag 0x{:04X}: {} bytes", tag_id, value.len());
     }
 }
@@ -81,16 +81,16 @@ fn test_extract_tags_from_ifd0() {
     // - Make (0x010F)
     // - ExifIFDPointer (0x8769)
 
-    let has_width = tags.iter().any(|(id, _)| *id == 0x0100);
+    let has_width = tags.iter().any(|(id, _, _)| *id == 0x0100);
     assert!(has_width, "Should have ImageWidth tag (0x0100)");
 
-    let has_length = tags.iter().any(|(id, _)| *id == 0x0101);
+    let has_length = tags.iter().any(|(id, _, _)| *id == 0x0101);
     assert!(has_length, "Should have ImageLength tag (0x0101)");
 
-    let has_make = tags.iter().any(|(id, _)| *id == 0x010F);
+    let has_make = tags.iter().any(|(id, _, _)| *id == 0x010F);
     assert!(has_make, "Should have Make tag (0x010F)");
 
-    let has_exif_pointer = tags.iter().any(|(id, _)| *id == 0x8769);
+    let has_exif_pointer = tags.iter().any(|(id, _, _)| *id == 0x8769);
     assert!(has_exif_pointer, "Should have ExifIFDPointer tag (0x8769)");
 }
 
@@ -103,11 +103,11 @@ fn test_extract_tags_from_ifd1() {
     let tags = parse_tiff_file(&reader).expect("Failed to parse TIFF file");
 
     // IFD1 should contain Model tag (0x0110)
-    let has_model = tags.iter().any(|(id, _)| *id == 0x0110);
+    let has_model = tags.iter().any(|(id, _, _)| *id == 0x0110);
     assert!(has_model, "Should have Model tag (0x0110) from IFD1");
 
     // Should have multiple ImageWidth/ImageLength tags (one from each IFD)
-    let width_count = tags.iter().filter(|(id, _)| *id == 0x0100).count();
+    let width_count = tags.iter().filter(|(id, _, _)| *id == 0x0100).count();
     assert!(
         width_count >= 2,
         "Should have ImageWidth from both IFD0 and IFD1"
@@ -126,13 +126,13 @@ fn test_extract_exif_sub_ifd_tags() {
     // - ExposureTime (0x829A)
     // - FNumber (0x829D)
 
-    let has_exposure_time = tags.iter().any(|(id, _)| *id == 0x829A);
+    let has_exposure_time = tags.iter().any(|(id, _, _)| *id == 0x829A);
     assert!(
         has_exposure_time,
         "Should have ExposureTime tag (0x829A) from EXIF sub-IFD"
     );
 
-    let has_fnumber = tags.iter().any(|(id, _)| *id == 0x829D);
+    let has_fnumber = tags.iter().any(|(id, _, _)| *id == 0x829D);
     assert!(
         has_fnumber,
         "Should have FNumber tag (0x829D) from EXIF sub-IFD"
@@ -148,7 +148,7 @@ fn test_verify_tag_values() {
     let tags = parse_tiff_file(&reader).expect("Failed to parse TIFF file");
 
     // Find Make tag and verify value
-    if let Some((_, make_value)) = tags.iter().find(|(id, _)| *id == 0x010F) {
+    if let Some((_, _, make_value)) = tags.iter().find(|(id, _, _)| *id == 0x010F) {
         let make_str = String::from_utf8_lossy(make_value);
         assert!(
             make_str.contains("TestCamera"),
@@ -160,7 +160,7 @@ fn test_verify_tag_values() {
     }
 
     // Find Model tag and verify value
-    if let Some((_, model_value)) = tags.iter().find(|(id, _)| *id == 0x0110) {
+    if let Some((_, _, model_value)) = tags.iter().find(|(id, _, _)| *id == 0x0110) {
         let model_str = String::from_utf8_lossy(model_value);
         assert!(
             model_str.contains("TestModel"),
@@ -190,10 +190,10 @@ fn test_image_dimensions_from_ifd0() {
     let tags = parse_tiff_file(&reader).expect("Failed to parse TIFF file");
 
     // Find first ImageWidth tag (from IFD0)
-    let width_tag = tags.iter().find(|(id, _)| *id == 0x0100);
+    let width_tag = tags.iter().find(|(id, _, _)| *id == 0x0100);
     assert!(width_tag.is_some(), "Should have ImageWidth tag");
 
-    let (_, width_bytes) = width_tag.unwrap();
+    let (_, _, width_bytes) = width_tag.unwrap();
     // ImageWidth in fixture is 640 (0x0280 in little-endian SHORT format)
     // SHORT = 2 bytes
     assert!(
@@ -215,7 +215,7 @@ fn test_thumbnail_dimensions_from_ifd1() {
     let tags = parse_tiff_file(&reader).expect("Failed to parse TIFF file");
 
     // Find all ImageWidth tags (IFD0 and IFD1)
-    let width_tags: Vec<_> = tags.iter().filter(|(id, _)| *id == 0x0100).collect();
+    let width_tags: Vec<_> = tags.iter().filter(|(id, _, _)| *id == 0x0100).collect();
 
     assert!(
         width_tags.len() >= 2,
@@ -223,7 +223,7 @@ fn test_thumbnail_dimensions_from_ifd1() {
     );
 
     // Second width should be from IFD1 (thumbnail)
-    let (_, width_bytes) = width_tags[1];
+    let (_, _, width_bytes) = width_tags[1];
     let width = u16::from_le_bytes([width_bytes[0], width_bytes[1]]);
     assert_eq!(width, 160, "IFD1 ImageWidth (thumbnail) should be 160");
 }
@@ -237,13 +237,13 @@ fn test_rational_tag_from_exif_sub_ifd() {
     let tags = parse_tiff_file(&reader).expect("Failed to parse TIFF file");
 
     // Find ExposureTime tag (RATIONAL: numerator/denominator, 8 bytes)
-    let exposure_tag = tags.iter().find(|(id, _)| *id == 0x829A);
+    let exposure_tag = tags.iter().find(|(id, _, _)| *id == 0x829A);
     assert!(
         exposure_tag.is_some(),
         "Should have ExposureTime tag from EXIF sub-IFD"
     );
 
-    let (_, exposure_bytes) = exposure_tag.unwrap();
+    let (_, _, exposure_bytes) = exposure_tag.unwrap();
     // RATIONAL = 2 x u32 = 8 bytes
     assert_eq!(
         exposure_bytes.len(),
@@ -301,7 +301,7 @@ fn test_all_expected_tags_present() {
 
     // Count occurrences of each tag type
     let mut found_tags = std::collections::HashMap::new();
-    for (tag_id, _) in &tags {
+    for (tag_id, _, _) in &tags {
         *found_tags.entry(*tag_id).or_insert(0) += 1;
     }
 

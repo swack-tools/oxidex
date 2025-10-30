@@ -691,11 +691,11 @@ mod tests {
         assert_eq!(tags.len(), 2);
 
         // Verify ImageWidth (0x0100)
-        let width = tags.iter().find(|(id, _)| *id == 0x0100);
+        let width = tags.iter().find(|(id, _, _)| *id == 0x0100);
         assert!(width.is_some());
 
         // Verify ImageLength (0x0101)
-        let length = tags.iter().find(|(id, _)| *id == 0x0101);
+        let length = tags.iter().find(|(id, _, _)| *id == 0x0101);
         assert!(length.is_some());
     }
 
@@ -710,10 +710,10 @@ mod tests {
         assert_eq!(tags.len(), 2);
 
         // Should have both ImageWidth and ImageLength
-        let width = tags.iter().find(|(id, _)| *id == 0x0100);
+        let width = tags.iter().find(|(id, _, _)| *id == 0x0100);
         assert!(width.is_some(), "Should have ImageWidth from IFD0");
 
-        let length = tags.iter().find(|(id, _)| *id == 0x0101);
+        let length = tags.iter().find(|(id, _, _)| *id == 0x0101);
         assert!(length.is_some(), "Should have ImageLength from IFD1");
     }
 
