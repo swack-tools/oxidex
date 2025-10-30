@@ -788,21 +788,21 @@ mod tests {
         assert_eq!(parsed.len(), 3);
 
         // Verify Make
-        let make = parsed.iter().find(|(id, _, _)| *id == 0x010F);
+        let make = parsed.iter().find(|(id, _, _, _)| *id == 0x010F);
         assert!(make.is_some());
-        let (_, _, make_value) = make.unwrap();
+        let (_, _, _, make_value) = make.unwrap();
         assert_eq!(make_value, b"Canon\0");
 
         // Verify Model
-        let model = parsed.iter().find(|(id, _, _)| *id == 0x0110);
+        let model = parsed.iter().find(|(id, _, _, _)| *id == 0x0110);
         assert!(model.is_some());
-        let (_, _, model_value) = model.unwrap();
+        let (_, _, _, model_value) = model.unwrap();
         assert_eq!(model_value, b"EOS\0");
 
         // Verify ISO
-        let iso = parsed.iter().find(|(id, _, _)| *id == 0x8827);
+        let iso = parsed.iter().find(|(id, _, _, _)| *id == 0x8827);
         assert!(iso.is_some());
-        let (_, _, iso_value) = iso.unwrap();
+        let (_, _, _, iso_value) = iso.unwrap();
         assert_eq!(u16::from_le_bytes([iso_value[0], iso_value[1]]), 400);
     }
 
@@ -824,15 +824,15 @@ mod tests {
         assert_eq!(parsed.len(), 2);
 
         // Verify Make
-        let make = parsed.iter().find(|(id, _, _)| *id == 0x010F);
+        let make = parsed.iter().find(|(id, _, _, _)| *id == 0x010F);
         assert!(make.is_some());
-        let (_, _, make_value) = make.unwrap();
+        let (_, _, _, make_value) = make.unwrap();
         assert_eq!(make_value, b"Nikon\0");
 
         // Verify Model
-        let model = parsed.iter().find(|(id, _, _)| *id == 0x0110);
+        let model = parsed.iter().find(|(id, _, _, _)| *id == 0x0110);
         assert!(model.is_some());
-        let (_, _, model_value) = model.unwrap();
+        let (_, _, _, model_value) = model.unwrap();
         assert_eq!(model_value, b"D850\0");
     }
 
@@ -851,9 +851,9 @@ mod tests {
         // Verify
         assert_eq!(parsed.len(), 1);
 
-        let fnumber = parsed.iter().find(|(id, _, _)| *id == 0x829D);
+        let fnumber = parsed.iter().find(|(id, _, _, _)| *id == 0x829D);
         assert!(fnumber.is_some());
-        let (_, _, value) = fnumber.unwrap();
+        let (_, _, _, value) = fnumber.unwrap();
 
         // Should be 8 bytes: numerator (28) + denominator (10)
         assert_eq!(value.len(), 8);

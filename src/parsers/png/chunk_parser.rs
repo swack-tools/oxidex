@@ -526,7 +526,7 @@ pub fn parse_time_chunk(data: &[u8]) -> Result<String> {
 ///
 /// - `Ok(Vec<(tag_id, raw_bytes)>)`: Parsed EXIF tags
 /// - `Err`: Parse error
-pub fn parse_exif_chunk(data: &[u8]) -> Result<Vec<(u16, u16, Vec<u8>)>> {
+pub fn parse_exif_chunk(data: &[u8]) -> Result<Vec<(u16, u16, u32, Vec<u8>)>> {
     // Minimum TIFF header size: 2 (byte order) + 2 (magic) + 4 (offset) = 8 bytes
     if data.len() < 8 {
         return Err(ExifToolError::parse_error(
@@ -789,7 +789,7 @@ mod tests {
         let tags = result.unwrap();
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].0, 0x010F); // Make tag
-        assert_eq!(&tags[0].2, b"Test\0");
+        assert_eq!(&tags[0].3, b"Test\0");
     }
 
     #[test]

@@ -172,7 +172,7 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                     let mut gps_ifd_offset = None;
 
                     // Convert raw tag data to MetadataMap entries
-                    for (tag_id, field_type, raw_bytes) in &tags {
+                    for (tag_id, field_type, value_count, raw_bytes) in &tags {
                         // Check for EXIF Sub-IFD pointer (tag 0x8769)
                         if *tag_id == 0x8769 && raw_bytes.len() >= 4 {
                             let offset = match byte_order {
@@ -217,7 +217,7 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                         let tag_name = lookup_tag_name(*tag_id, "IFD0");
 
                         // Convert raw bytes to TagValue
-                        let tag_value = raw_bytes_to_tag_value(raw_bytes, *field_type, byte_order);
+                        let tag_value = raw_bytes_to_tag_value(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
 
                         metadata.insert(tag_name, tag_value);
                     }
@@ -225,9 +225,9 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                     // Parse EXIF Sub-IFD if present
                     if let Some(offset) = exif_ifd_offset {
                         if let Ok(exif_tags) = parse_ifd(&tiff_reader, offset, byte_order) {
-                            for (tag_id, field_type, raw_bytes) in exif_tags {
+                            for (tag_id, field_type, value_count, raw_bytes) in exif_tags {
                                 let tag_name = lookup_tag_name(tag_id, "ExifIFD");
-                                let tag_value = raw_bytes_to_tag_value(&raw_bytes, field_type, byte_order);
+                                let tag_value = raw_bytes_to_tag_value(&raw_bytes, field_type, value_count, tag_id, byte_order);
                                 metadata.insert(tag_name, tag_value);
                             }
                         }
@@ -236,9 +236,9 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                     // Parse GPS Sub-IFD if present
                     if let Some(offset) = gps_ifd_offset {
                         if let Ok(gps_tags) = parse_ifd(&tiff_reader, offset, byte_order) {
-                            for (tag_id, field_type, raw_bytes) in gps_tags {
+                            for (tag_id, field_type, value_count, raw_bytes) in gps_tags {
                                 let tag_name = lookup_tag_name(tag_id, "GPS");
-                                let tag_value = raw_bytes_to_tag_value(&raw_bytes, field_type, byte_order);
+                                let tag_value = raw_bytes_to_tag_value(&raw_bytes, field_type, value_count, tag_id, byte_order);
                                 metadata.insert(tag_name, tag_value);
                             }
                         }
@@ -344,7 +344,7 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         let mut gps_ifd_offset = None;
 
         // Convert tags to metadata
-        for (tag_id, field_type, raw_bytes) in &tags {
+        for (tag_id, field_type, value_count, raw_bytes) in &tags {
             // Check for EXIF Sub-IFD pointer (tag 0x8769)
             if *tag_id == 0x8769 && raw_bytes.len() >= 4 {
                 let offset = match byte_order {
@@ -387,16 +387,16 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 
             // Convert tag to metadata
             let tag_name = lookup_tag_name(*tag_id, ifd_name);
-            let tag_value = raw_bytes_to_tag_value(raw_bytes, *field_type, byte_order);
+            let tag_value = raw_bytes_to_tag_value(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
             metadata.insert(tag_name, tag_value);
         }
 
         // Parse EXIF Sub-IFD if present
         if let Some(offset) = exif_ifd_offset {
             if let Ok(exif_tags) = parse_ifd(reader, offset, byte_order) {
-                for (tag_id, field_type, raw_bytes) in exif_tags {
+                for (tag_id, field_type, value_count, raw_bytes) in exif_tags {
                     let tag_name = lookup_tag_name(tag_id, "ExifIFD");
-                    let tag_value = raw_bytes_to_tag_value(&raw_bytes, field_type, byte_order);
+                    let tag_value = raw_bytes_to_tag_value(&raw_bytes, field_type, value_count, tag_id, byte_order);
                     metadata.insert(tag_name, tag_value);
                 }
             }
@@ -405,9 +405,9 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         // Parse GPS Sub-IFD if present
         if let Some(offset) = gps_ifd_offset {
             if let Ok(gps_tags) = parse_ifd(reader, offset, byte_order) {
-                for (tag_id, field_type, raw_bytes) in gps_tags {
+                for (tag_id, field_type, value_count, raw_bytes) in gps_tags {
                     let tag_name = lookup_tag_name(tag_id, "GPS");
-                    let tag_value = raw_bytes_to_tag_value(&raw_bytes, field_type, byte_order);
+                    let tag_value = raw_bytes_to_tag_value(&raw_bytes, field_type, value_count, tag_id, byte_order);
                     metadata.insert(tag_name, tag_value);
                 }
             }
@@ -497,19 +497,48 @@ fn parse_exif_datetime(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
 ///
 /// * `bytes` - The raw bytes to convert
 /// * `field_type` - The EXIF field type (from IFD entry)
+/// * `value_count` - The number of values (from IFD entry)
+/// * `tag_id` - The tag ID (for enum mapping and special handling)
 /// * `byte_order` - The byte order for interpreting multi-byte values
 ///
 /// # Returns
 ///
 /// A TagValue representing the data
-fn raw_bytes_to_tag_value(bytes: &[u8], field_type: u16, byte_order: ByteOrder) -> TagValue {
+fn raw_bytes_to_tag_value(bytes: &[u8], field_type: u16, value_count: u32, tag_id: u16, byte_order: ByteOrder) -> TagValue {
     use crate::parsers::common::exif_types::ExifType;
+    use crate::parsers::tiff::tiff_enums::tiff_enum_to_string;
 
     // Try to convert field_type to ExifType
     if let Some(exif_type) = ExifType::from_u16(field_type) {
         match exif_type {
             // RATIONAL (type 5): two 32-bit unsigned integers (numerator/denominator)
-            ExifType::Rational if bytes.len() == 8 => {
+            ExifType::Rational if bytes.len() >= 8 => {
+                // Check if this is an array of rationals (count > 1)
+                if value_count > 1 && bytes.len() >= (value_count as usize * 8) {
+                    // Parse array of rationals and format as space-separated decimals
+                    let mut values = Vec::new();
+                    for i in 0..value_count as usize {
+                        let offset = i * 8;
+                        let numerator = match byte_order {
+                            ByteOrder::LittleEndian => u32::from_le_bytes([bytes[offset], bytes[offset+1], bytes[offset+2], bytes[offset+3]]),
+                            ByteOrder::BigEndian => u32::from_be_bytes([bytes[offset], bytes[offset+1], bytes[offset+2], bytes[offset+3]]),
+                        };
+                        let denominator = match byte_order {
+                            ByteOrder::LittleEndian => u32::from_le_bytes([bytes[offset+4], bytes[offset+5], bytes[offset+6], bytes[offset+7]]),
+                            ByteOrder::BigEndian => u32::from_be_bytes([bytes[offset+4], bytes[offset+5], bytes[offset+6], bytes[offset+7]]),
+                        };
+                        if denominator != 0 {
+                            values.push(numerator as f64 / denominator as f64);
+                        } else {
+                            values.push(numerator as f64);
+                        }
+                    }
+                    // Format as space-separated string to match Perl ExifTool
+                    let formatted = values.iter().map(|v| format!("{:.10}", v)).collect::<Vec<_>>().join(" ");
+                    return TagValue::new_string(formatted);
+                }
+
+                // Single rational value
                 let numerator = match byte_order {
                     ByteOrder::LittleEndian => u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
                     ByteOrder::BigEndian => u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
@@ -522,7 +551,30 @@ fn raw_bytes_to_tag_value(bytes: &[u8], field_type: u16, byte_order: ByteOrder) 
             }
 
             // SRATIONAL (type 10): two 32-bit signed integers (numerator/denominator)
-            ExifType::SRational if bytes.len() == 8 => {
+            ExifType::SRational if bytes.len() >= 8 => {
+                // Check if this is an array
+                if value_count > 1 && bytes.len() >= (value_count as usize * 8) {
+                    let mut values = Vec::new();
+                    for i in 0..value_count as usize {
+                        let offset = i * 8;
+                        let numerator = match byte_order {
+                            ByteOrder::LittleEndian => i32::from_le_bytes([bytes[offset], bytes[offset+1], bytes[offset+2], bytes[offset+3]]),
+                            ByteOrder::BigEndian => i32::from_be_bytes([bytes[offset], bytes[offset+1], bytes[offset+2], bytes[offset+3]]),
+                        };
+                        let denominator = match byte_order {
+                            ByteOrder::LittleEndian => i32::from_le_bytes([bytes[offset+4], bytes[offset+5], bytes[offset+6], bytes[offset+7]]),
+                            ByteOrder::BigEndian => i32::from_be_bytes([bytes[offset+4], bytes[offset+5], bytes[offset+6], bytes[offset+7]]),
+                        };
+                        if denominator != 0 {
+                            values.push(numerator as f64 / denominator as f64);
+                        } else {
+                            values.push(numerator as f64);
+                        }
+                    }
+                    let formatted = values.iter().map(|v| format!("{:.10}", v)).collect::<Vec<_>>().join(" ");
+                    return TagValue::new_string(formatted);
+                }
+
                 let numerator = match byte_order {
                     ByteOrder::LittleEndian => i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
                     ByteOrder::BigEndian => i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
@@ -532,6 +584,36 @@ fn raw_bytes_to_tag_value(bytes: &[u8], field_type: u16, byte_order: ByteOrder) 
                     ByteOrder::BigEndian => i32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
                 };
                 return TagValue::new_rational(numerator, denominator);
+            }
+
+            // SHORT (type 3): unsigned 16-bit integers
+            ExifType::Short if value_count > 1 && bytes.len() >= (value_count as usize * 2) => {
+                // Array of shorts - format as space-separated string
+                let mut values = Vec::new();
+                for i in 0..value_count as usize {
+                    let offset = i * 2;
+                    let value = match byte_order {
+                        ByteOrder::LittleEndian => u16::from_le_bytes([bytes[offset], bytes[offset+1]]),
+                        ByteOrder::BigEndian => u16::from_be_bytes([bytes[offset], bytes[offset+1]]),
+                    };
+                    values.push(value.to_string());
+                }
+                return TagValue::new_string(values.join(" "));
+            }
+
+            // LONG (type 4): unsigned 32-bit integers
+            ExifType::Long if value_count > 1 && bytes.len() >= (value_count as usize * 4) => {
+                // Array of longs - format as space-separated string
+                let mut values = Vec::new();
+                for i in 0..value_count as usize {
+                    let offset = i * 4;
+                    let value = match byte_order {
+                        ByteOrder::LittleEndian => u32::from_le_bytes([bytes[offset], bytes[offset+1], bytes[offset+2], bytes[offset+3]]),
+                        ByteOrder::BigEndian => u32::from_be_bytes([bytes[offset], bytes[offset+1], bytes[offset+2], bytes[offset+3]]),
+                    };
+                    values.push(value.to_string());
+                }
+                return TagValue::new_string(values.join(" "));
             }
 
             // ASCII (type 2): null-terminated string
@@ -563,6 +645,10 @@ fn raw_bytes_to_tag_value(bytes: &[u8], field_type: u16, byte_order: ByteOrder) 
             ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
             ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
         } as i64;
+        // Try to map to enum string
+        if let Some(enum_str) = tiff_enum_to_string(tag_id, value) {
+            return TagValue::new_string(enum_str);
+        }
         return TagValue::new_integer(value);
     } else if bytes.len() == 4 {
         // Check if it looks like a string (4-character ASCII string like "EOS\0")
@@ -591,6 +677,10 @@ fn raw_bytes_to_tag_value(bytes: &[u8], field_type: u16, byte_order: ByteOrder) 
             ByteOrder::LittleEndian => u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
             ByteOrder::BigEndian => u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
         } as i64;
+        // Try to map to enum string
+        if let Some(enum_str) = tiff_enum_to_string(tag_id, value) {
+            return TagValue::new_string(enum_str);
+        }
         return TagValue::new_integer(value);
     }
 
@@ -949,7 +1039,7 @@ mod tests {
     fn test_raw_bytes_to_tag_value_string() {
         use crate::parsers::tiff::ifd_parser::ByteOrder;
         let bytes = b"Canon\0";
-        let value = raw_bytes_to_tag_value(bytes, 2, ByteOrder::LittleEndian); // Type 2 = ASCII
+        let value = raw_bytes_to_tag_value(bytes, 2, 1, 0, ByteOrder::LittleEndian); // Type 2 = ASCII
         assert_eq!(value.as_string(), Some("Canon"));
     }
 
@@ -957,7 +1047,7 @@ mod tests {
     fn test_raw_bytes_to_tag_value_integer_u16() {
         use crate::parsers::tiff::ifd_parser::ByteOrder;
         let bytes = [0x05, 0x00]; // 5 in little-endian
-        let value = raw_bytes_to_tag_value(&bytes, 3, ByteOrder::LittleEndian); // Type 3 = SHORT
+        let value = raw_bytes_to_tag_value(&bytes, 3, 1, 0, ByteOrder::LittleEndian); // Type 3 = SHORT
         assert_eq!(value.as_integer(), Some(5));
     }
 
@@ -965,7 +1055,7 @@ mod tests {
     fn test_raw_bytes_to_tag_value_integer_u32() {
         use crate::parsers::tiff::ifd_parser::ByteOrder;
         let bytes = [0x64, 0x00, 0x00, 0x00]; // 100 in little-endian
-        let value = raw_bytes_to_tag_value(&bytes, 4, ByteOrder::LittleEndian); // Type 4 = LONG
+        let value = raw_bytes_to_tag_value(&bytes, 4, 1, 0, ByteOrder::LittleEndian); // Type 4 = LONG
         // Fallback conversion treats 4 bytes as integer
         assert_eq!(value.as_integer(), Some(100));
     }
@@ -974,7 +1064,7 @@ mod tests {
     fn test_raw_bytes_to_tag_value_binary() {
         use crate::parsers::tiff::ifd_parser::ByteOrder;
         let bytes = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x10, 0x20]; // Non-ASCII bytes
-        let value = raw_bytes_to_tag_value(&bytes, 7, ByteOrder::LittleEndian); // Type 7 = UNDEFINED
+        let value = raw_bytes_to_tag_value(&bytes, 7, 1, 0, ByteOrder::LittleEndian); // Type 7 = UNDEFINED
         assert!(value.is_binary());
     }
 

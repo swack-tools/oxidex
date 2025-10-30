@@ -258,7 +258,7 @@ fn extract_u32_from_tag_value(value: &[u8], byte_order: ByteOrder) -> Option<u32
 ///
 /// # Returns
 ///
-/// - `Ok(Vec<(u16, Vec<u8>)>)`: Vector of (tag_id, raw_value_bytes) pairs from all IFDs
+/// - `Ok(Vec<(u16, u16, u32, Vec<u8>)>)`: Vector of (tag_id, field_type, value_count, raw_value_bytes) from all IFDs
 /// - `Err(ExifToolError)`: Parse error, I/O error, or invalid file structure
 ///
 /// # Errors
@@ -287,7 +287,7 @@ fn extract_u32_from_tag_value(value: &[u8], byte_order: ByteOrder) -> Option<u32
 /// # Ok(())
 /// # }
 /// ```
-pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<Vec<(u16, u16, Vec<u8>)>> {
+pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<Vec<(u16, u16, u32, Vec<u8>)>> {
     // Parse header
     let header = parse_tiff_header(reader)?;
     let byte_order = header.byte_order;
@@ -331,7 +331,7 @@ pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<Vec<(u16, u16, Vec<u8>
         let tags = parse_ifd(reader, current_offset, byte_order)?;
 
         // Check for sub-IFD pointers and recursively parse them
-        for (tag_id, _field_type, value) in &tags {
+        for (tag_id, _field_type, _value_count, value) in &tags {
             match *tag_id {
                 EXIF_IFD_POINTER | GPS_INFO_IFD_POINTER | INTEROPERABILITY_IFD_POINTER => {
                     if let Some(sub_ifd_offset) = extract_u32_from_tag_value(value, byte_order) {
@@ -691,11 +691,11 @@ mod tests {
         assert_eq!(tags.len(), 2);
 
         // Verify ImageWidth (0x0100)
-        let width = tags.iter().find(|(id, _, _)| *id == 0x0100);
+        let width = tags.iter().find(|(id, _, _, _)| *id == 0x0100);
         assert!(width.is_some());
 
         // Verify ImageLength (0x0101)
-        let length = tags.iter().find(|(id, _, _)| *id == 0x0101);
+        let length = tags.iter().find(|(id, _, _, _)| *id == 0x0101);
         assert!(length.is_some());
     }
 
@@ -710,10 +710,10 @@ mod tests {
         assert_eq!(tags.len(), 2);
 
         // Should have both ImageWidth and ImageLength
-        let width = tags.iter().find(|(id, _, _)| *id == 0x0100);
+        let width = tags.iter().find(|(id, _, _, _)| *id == 0x0100);
         assert!(width.is_some(), "Should have ImageWidth from IFD0");
 
-        let length = tags.iter().find(|(id, _, _)| *id == 0x0101);
+        let length = tags.iter().find(|(id, _, _, _)| *id == 0x0101);
         assert!(length.is_some(), "Should have ImageLength from IFD1");
     }
 
