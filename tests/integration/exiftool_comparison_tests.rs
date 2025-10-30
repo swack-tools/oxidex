@@ -185,6 +185,51 @@ fn extract_value(val: &Value) -> Value {
     val.clone()
 }
 
+/// Normalizes tag names to handle namespace differences between Perl ExifTool and ExifTool-RS
+///
+/// ExifTool-RS uses fully qualified tag names with chunk/segment prefixes (e.g., "PNG:tEXt:Author"),
+/// while Perl ExifTool often simplifies these to just the namespace and tag (e.g., "PNG:Author").
+/// This function normalizes both formats to enable comparison.
+fn normalize_tag_name(tag_name: &str) -> String {
+    // PNG tEXt date chunks MUST be handled first (more specific prefix)
+    // "PNG:tEXt:date:create" → "PNG:Datecreate"
+    // Perl ExifTool lowercases the entire tag after "Date"
+    if let Some(rest) = tag_name.strip_prefix("PNG:tEXt:date:") {
+        return format!("PNG:Date{}", rest);
+    }
+
+    // PNG tEXt exif chunks: "PNG:tEXt:exif:Make" → "PNG:ExifMake"
+    // Perl ExifTool capitalizes "exif" prefix
+    if let Some(rest) = tag_name.strip_prefix("PNG:tEXt:exif:") {
+        return format!("PNG:Exif{}", rest);
+    }
+
+    // PNG tEXt chunks (general case, less specific): "PNG:tEXt:Author" → "PNG:Author"
+    if let Some(stripped) = tag_name.strip_prefix("PNG:tEXt:") {
+        return format!("PNG:{}", stripped);
+    }
+
+    // PNG other chunk types (zTXt, iTXt) - similar normalization
+    if let Some(stripped) = tag_name.strip_prefix("PNG:zTXt:") {
+        return format!("PNG:{}", stripped);
+    }
+    if let Some(stripped) = tag_name.strip_prefix("PNG:iTXt:") {
+        return format!("PNG:{}", stripped);
+    }
+
+    // PNG-pHYs namespace: "PNG-pHYs:PixelUnits" stays as is (Perl uses this format)
+    // PNG namespace for chunk data: "PNG:ImageWidth" stays as is
+
+    // EXIF raw tag IDs: "EXIF:0x010F" should match "IFD0:Make" etc.
+    // This is complex - we'll rely on the parser to use proper names instead
+
+    // GPS namespace: "GPS:GPSLatitude" → stays as is
+    // EXIF namespace: "EXIF:Artist" → stays as is
+    // IFD0, ExifIFD namespaces: stay as is
+
+    tag_name.to_string()
+}
+
 /// Determines if a tag should be skipped during comparison.
 ///
 /// Perl ExifTool outputs many "pseudo-tags" that are not part of the actual image metadata:
@@ -316,32 +361,45 @@ fn compare_json_outputs(perl_json: &str, rust_json: &str) -> Result<MatchReport,
     let perl_tags = &perl_data[0];
     let rust_tags = &rust_data[0];
 
+    // Build normalized lookup maps for both sets of tags
+    // This allows bidirectional mapping: normalized_name -> (original_name, value)
+    let mut perl_normalized: HashMap<String, (String, &Value)> = HashMap::new();
+    let mut rust_normalized: HashMap<String, (String, &Value)> = HashMap::new();
+
+    for (key, value) in perl_tags.iter() {
+        if !should_skip_tag(key) {
+            let normalized = normalize_tag_name(key);
+            perl_normalized.insert(normalized, (key.clone(), value));
+        }
+    }
+
+    for (key, value) in rust_tags.iter() {
+        if !should_skip_tag(key) {
+            let normalized = normalize_tag_name(key);
+            rust_normalized.insert(normalized, (key.clone(), value));
+        }
+    }
+
     let mut report = MatchReport::new();
 
-    // Iterate through Perl ExifTool tags (ground truth)
-    for (key, perl_value) in perl_tags.iter() {
-        // Skip metadata fields that aren't actual image tags
-        // These are meta-information added by Perl ExifTool, not from the file
-        if should_skip_tag(key) {
-            continue;
-        }
-
+    // Iterate through Perl ExifTool tags (ground truth) using normalized names
+    for (normalized_key, (original_perl_key, perl_value)) in perl_normalized.iter() {
         report.total_tags += 1;
 
-        match rust_tags.get(key) {
-            Some(rust_value) if values_match(perl_value, rust_value) => {
+        match rust_normalized.get(normalized_key) {
+            Some((_original_rust_key, rust_value)) if values_match(perl_value, rust_value) => {
                 report.matched_tags += 1;
             }
-            Some(rust_value) => {
+            Some((_original_rust_key, rust_value)) => {
                 report.mismatches.push(TagMismatch {
-                    tag_name: key.clone(),
+                    tag_name: original_perl_key.clone(),
                     perl_value: format!("{:?}", perl_value),
                     rust_value: format!("{:?}", rust_value),
                 });
             }
             None => {
                 report.mismatches.push(TagMismatch {
-                    tag_name: key.clone(),
+                    tag_name: original_perl_key.clone(),
                     perl_value: format!("{:?}", perl_value),
                     rust_value: "MISSING".to_string(),
                 });
@@ -350,14 +408,11 @@ fn compare_json_outputs(perl_json: &str, rust_json: &str) -> Result<MatchReport,
     }
 
     // Also check for tags present in Rust but not in Perl (unexpected additions)
-    for key in rust_tags.keys() {
-        if should_skip_tag(key) {
-            continue;
-        }
-        if !perl_tags.contains_key(key) {
+    for (normalized_key, (original_rust_key, _)) in rust_normalized.iter() {
+        if !perl_normalized.contains_key(normalized_key) {
             eprintln!(
-                "Warning: ExifTool-RS has additional tag not in Perl ExifTool: {}",
-                key
+                "Warning: ExifTool-RS has additional tag not in Perl ExifTool: {} (normalized: {})",
+                original_rust_key, normalized_key
             );
         }
     }

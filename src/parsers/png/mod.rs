@@ -41,7 +41,8 @@ pub mod chunk_parser;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use chunk_parser::{
-    parse_chunk, parse_exif_chunk, parse_itxt_chunk, parse_png_signature, parse_text_chunk,
+    parse_bkgd_chunk, parse_chrm_chunk, parse_chunk, parse_exif_chunk, parse_ihdr_chunk,
+    parse_itxt_chunk, parse_phys_chunk, parse_png_signature, parse_text_chunk, parse_time_chunk,
     PNG_SIGNATURE,
 };
 
@@ -118,6 +119,100 @@ pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 
         // Process metadata chunks
         match &chunk.chunk_type {
+            b"IHDR" => {
+                // Parse IHDR chunk (image header)
+                if let Ok((width, height, bit_depth, color_type, compression, filter, interlace)) =
+                    parse_ihdr_chunk(&chunk.data)
+                {
+                    metadata.insert("PNG:ImageWidth".to_string(), TagValue::new_integer(width as i64));
+                    metadata.insert("PNG:ImageHeight".to_string(), TagValue::new_integer(height as i64));
+                    metadata.insert("PNG:BitDepth".to_string(), TagValue::new_integer(bit_depth as i64));
+
+                    // Color type enum
+                    let color_type_str = match color_type {
+                        0 => "Grayscale",
+                        2 => "RGB",
+                        3 => "Palette",
+                        4 => "Grayscale with Alpha",
+                        6 => "RGB with Alpha",
+                        _ => "Unknown",
+                    };
+                    metadata.insert("PNG:ColorType".to_string(), TagValue::new_string(color_type_str));
+
+                    // Compression method (always 0 for PNG)
+                    if compression == 0 {
+                        metadata.insert("PNG:Compression".to_string(), TagValue::new_string("Deflate/Inflate"));
+                    }
+
+                    // Filter method (always 0 for PNG)
+                    if filter == 0 {
+                        metadata.insert("PNG:Filter".to_string(), TagValue::new_string("Adaptive"));
+                    }
+
+                    // Interlace method
+                    let interlace_str = match interlace {
+                        0 => "Noninterlaced",
+                        1 => "Adam7 Interlace",
+                        _ => "Unknown",
+                    };
+                    metadata.insert("PNG:Interlace".to_string(), TagValue::new_string(interlace_str));
+                }
+            }
+
+            b"cHRM" => {
+                // Parse cHRM chunk (chromaticity)
+                if let Ok((white_x, white_y, red_x, red_y, green_x, green_y, blue_x, blue_y)) =
+                    parse_chrm_chunk(&chunk.data)
+                {
+                    metadata.insert("PNG:WhitePointX".to_string(), TagValue::new_float(white_x));
+                    metadata.insert("PNG:WhitePointY".to_string(), TagValue::new_float(white_y));
+                    metadata.insert("PNG:RedX".to_string(), TagValue::new_float(red_x));
+                    metadata.insert("PNG:RedY".to_string(), TagValue::new_float(red_y));
+                    metadata.insert("PNG:GreenX".to_string(), TagValue::new_float(green_x));
+                    metadata.insert("PNG:GreenY".to_string(), TagValue::new_float(green_y));
+                    metadata.insert("PNG:BlueX".to_string(), TagValue::new_float(blue_x));
+                    metadata.insert("PNG:BlueY".to_string(), TagValue::new_float(blue_y));
+                }
+            }
+
+            b"pHYs" => {
+                // Parse pHYs chunk (physical pixel dimensions)
+                if let Ok((pixels_x, pixels_y, unit)) = parse_phys_chunk(&chunk.data) {
+                    metadata.insert("PNG-pHYs:PixelsPerUnitX".to_string(), TagValue::new_integer(pixels_x as i64));
+                    metadata.insert("PNG-pHYs:PixelsPerUnitY".to_string(), TagValue::new_integer(pixels_y as i64));
+
+                    let unit_str = match unit {
+                        0 => "Unknown",
+                        1 => "Meters",
+                        _ => "Unknown",
+                    };
+                    metadata.insert("PNG-pHYs:PixelUnits".to_string(), TagValue::new_string(unit_str));
+                }
+            }
+
+            b"bKGD" => {
+                // Parse bKGD chunk (background color)
+                if let Ok(bg_value) = parse_bkgd_chunk(&chunk.data) {
+                    metadata.insert("PNG:BackgroundColor".to_string(), TagValue::new_integer(bg_value as i64));
+                }
+            }
+
+            b"tIME" => {
+                // Parse tIME chunk (modification time)
+                if let Ok(datetime) = parse_time_chunk(&chunk.data) {
+                    metadata.insert("PNG:ModifyDate".to_string(), TagValue::new_string(datetime));
+                }
+            }
+
+            b"PLTE" => {
+                // Parse PLTE chunk (palette)
+                // Perl ExifTool shows "(Binary data N bytes, use -b option to extract)"
+                metadata.insert(
+                    "PNG:Palette".to_string(),
+                    TagValue::new_string(format!("(Binary data {} bytes, use -b option to extract)", chunk.data.len()))
+                );
+            }
+
             b"tEXt" => {
                 // Parse tEXt chunk
                 if let Ok((keyword, text)) = parse_text_chunk(&chunk.data) {
