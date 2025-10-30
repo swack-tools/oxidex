@@ -52,6 +52,17 @@ pub struct CliArgs {
     #[arg(long = "TagsFromFile")]
     pub tags_from_file: Option<String>,
 
+    /// Date format string for DateTime tags in filename patterns (using chrono format).
+    /// Example: -d %Y%m%d_%H%M%S
+    /// Common specifiers: %Y (year), %m (month), %d (day), %H (hour), %M (minute), %S (second)
+    #[arg(short = 'd')]
+    pub date_format: Option<String>,
+
+    /// Dry-run mode: show proposed renames without executing.
+    /// Prints "old_name -> new_name" for each file without actually renaming.
+    #[arg(short = 'n')]
+    pub dry_run: bool,
+
     /// Tag modifications and file path. Use -TAG=VALUE to modify tags.
     /// Example: -EXIF:Artist="John Doe" -EXIF:Copyright=2025 photo.jpg
     /// The last argument must be the file path.
@@ -144,5 +155,28 @@ impl CliArgs {
         // Return empty vec if no tags specified (means copy all)
         // Return vec with tag names if specific tags were specified
         Some(tag_names)
+    }
+
+    /// Extracts the filename pattern from -FileName<pattern> argument.
+    /// Returns None if no -FileName argument is found.
+    /// Returns Some(pattern) with the pattern after the '<' character.
+    ///
+    /// Example: '-FileName<DateTimeOriginal' -> Some("DateTimeOriginal")
+    /// Example: '-FileName<${EXIF:Make}_${EXIF:Model}' -> Some("${EXIF:Make}_${EXIF:Model}")
+    pub fn filename_pattern(&self) -> Option<String> {
+        for arg in &self.args {
+            // Check if this is a -FileName argument
+            if arg.starts_with("-FileName") || arg.starts_with("'FileName") {
+                // Find the '<' character that separates -FileName from the pattern
+                if let Some(pos) = arg.find('<') {
+                    // Extract everything after '<'
+                    let pattern = &arg[pos + 1..];
+                    // Remove trailing quote if present (from '-FileName<pattern')
+                    let pattern = pattern.trim_end_matches('\'');
+                    return Some(pattern.to_string());
+                }
+            }
+        }
+        None
     }
 }

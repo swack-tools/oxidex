@@ -10,17 +10,38 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I4.T5",
+  "task_id": "I4.T6",
   "iteration_id": "I4",
   "iteration_goal": "Add support for PDF and MP4/QuickTime formats, implement batch processing with recursive directory traversal and parallel execution, add metadata copying between files, and expand tag registry.",
-  "description": "Expand tag registry in src/tag_db/tag_registry.rs from 100 to 500 tags. Add tags from: (1) EXIF (complete common tags, add maker-specific tags for Canon, Nikon, Sony), (2) XMP (Dublin Core, IPTC Core, Camera Raw), (3) IPTC (Application Record), (4) GPS (complete all GPS tags), (5) PDF metadata, (6) QuickTime/MP4 metadata. Reference ExifTool tag documentation for definitions. Update unit tests to verify new tags.",
+  "description": "Implement file renaming feature in src/cli/rename.rs. Support CLI pattern: exiftool-rs '-FileName<DateTimeOriginal' -d %Y%m%d_%H%M%S%%-.c.%%e <files> to rename files based on metadata. Parse filename pattern with variable substitution (e.g., ${EXIF:DateTimeOriginal}, ${EXIF:Make}). Support date formatting via -d flag (use chrono format strings). Add safety checks: dry-run mode (-n), prevent overwrites without confirmation. Add integration test.",
   "agent_type_hint": "BackendAgent",
-  "inputs": "ExifTool tag documentation (https://exiftool.org/TagNames/), I2.T2 tag registry structure",
-  "target_files": ["src/tag_db/tag_registry.rs"],
-  "input_files": ["src/tag_db/tag_registry.rs"],
-  "deliverables": "Tag registry with 500 tags, updated unit tests",
-  "acceptance_criteria": "Registry contains 500+ TagDescriptor entries, tags cover: EXIF (300+), XMP (100+), IPTC (50+), GPS (30+), PDF (10+), QuickTime (10+), all tags have valid type and format family information, unit tests verify lookup for at least 50 tags across all families, cargo test tag_registry passes",
-  "dependencies": ["I2.T2"],
+  "inputs": "ExifTool -FileName and -d flag syntax, I2.T3 read operations",
+  "target_files": [
+    "src/cli/rename.rs",
+    "src/cli/args.rs",
+    "src/cli/mod.rs",
+    "src/main.rs",
+    "tests/integration/rename_tests.rs"
+  ],
+  "input_files": [
+    "src/core/operations.rs",
+    "src/cli/args.rs"
+  ],
+  "deliverables": [
+    "File renaming based on metadata",
+    "Variable substitution in filename patterns",
+    "Date formatting support",
+    "Dry-run mode"
+  ],
+  "acceptance_criteria": [
+    "Supports -FileName pattern with metadata variable substitution",
+    "-d flag applies date format to DateTime tags",
+    "-n dry-run shows proposed renames without executing",
+    "Prevents accidental overwrites (checks if target exists)",
+    "Integration test: rename JPEGs by DateTimeOriginal, verify new names",
+    "cargo test rename_tests passes"
+  ],
+  "dependencies": ["I2.T3"],
   "parallelizable": true,
   "done": false
 }
@@ -32,82 +53,72 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: Tag Registry Structure and Requirements
+### Context: task-i4-t6 (from .codemachine/artifacts/plan/02_Iteration_I4.md)
 
-**From Task I2.T2 (Completed Dependency):**
+```markdown
+<!-- anchor: task-i4-t6 -->
+*   **Task 4.6: Implement File Renaming Based on Metadata**
+    *   **Task ID:** `I4.T6`
+    *   **Description:** Implement file renaming feature in `src/cli/rename.rs`. Support CLI pattern: `exiftool-rs '-FileName<DateTimeOriginal' -d %Y%m%d_%H%M%S%%-.c.%%e <files>` to rename files based on metadata. Parse filename pattern with variable substitution (e.g., ${EXIF:DateTimeOriginal}, ${EXIF:Make}). Support date formatting via `-d` flag (use `chrono` format strings). Add safety checks: dry-run mode (`-n`), prevent overwrites without confirmation. Add integration test.
+    *   **Agent Type Hint:** `BackendAgent`
+    *   **Inputs:** ExifTool -FileName and -d flag syntax, I2.T3 read operations
+    *   **Input Files:** [`src/core/operations.rs`, `src/cli/args.rs`]
+    *   **Target Files:**
+        *   `src/cli/rename.rs`
+        *   `src/cli/args.rs` (add rename arguments)
+        *   `src/cli/mod.rs`
+        *   `src/main.rs` (integrate renaming)
+        *   `tests/integration/rename_tests.rs`
+    *   **Deliverables:**
+        *   File renaming based on metadata
+        *   Variable substitution in filename patterns
+        *   Date formatting support
+        *   Dry-run mode
+    *   **Acceptance Criteria:**
+        *   Supports -FileName pattern with metadata variable substitution
+        *   `-d` flag applies date format to DateTime tags
+        *   `-n` dry-run shows proposed renames without executing
+        *   Prevents accidental overwrites (checks if target exists)
+        *   Integration test: rename JPEGs by DateTimeOriginal, verify new names
+        *   `cargo test rename_tests` passes
+    *   **Dependencies:** `I2.T3`
+    *   **Parallelizable:** Yes (can be developed in parallel with other I4 tasks)
+```
 
-The tag registry was initially created with 100 common tags manually covering:
-- EXIF (60+ tags): Camera information, exposure settings, image properties, date/time, color/scene information
-- GPS (20+ tags): Location data, altitude, timestamps, speed, direction
-- XMP (20+ tags): Dublin Core and XMP Basic metadata
+### Context: iteration-4-plan (from .codemachine/artifacts/plan/02_Iteration_I4.md)
 
-The registry uses a `HashMap<&'static str, TagDescriptor>` with lazy initialization via `once_cell::Lazy`. Each TagDescriptor contains:
-- `tag_id`: Either numeric (EXIF/GPS) or named (XMP)
-- `tag_name`: Canonical name like "EXIF:Make" or "XMP:Creator"
-- `format_family`: FormatFamily enum (EXIF, XMP, IPTC, GPS, PDF, QuickTime, etc.)
-- `writable`: Boolean indicating if tag can be written
-- `value_type`: ValueType enum (String, Integer, Float, Rational, Binary, DateTime, Struct)
-- `description`: Human-readable purpose
-- `example_values`: Vec of example strings
+```markdown
+<!-- anchor: iteration-4-plan -->
+### Iteration 4: Extended Format Support (PDF, MP4) & Batch Processing
 
-**Key Design Patterns:**
-- Tags use prefix notation: "EXIF:Make", "GPS:GPSLatitude", "XMP:Creator"
-- Numeric tag IDs for EXIF/GPS (e.g., 0x010F for Make)
-- String-based tag IDs for XMP (e.g., "XMP-dc:Creator")
-- Lookup function: `get_tag_descriptor(name: &str) -> Option<&TagDescriptor>`
-- Count function: `tag_count() -> usize`
+*   **Iteration ID:** `I4`
+*   **Goal:** Add support for PDF and MP4/QuickTime formats, implement batch processing with recursive directory traversal and parallel execution, add metadata copying between files, and expand tag registry.
+*   **Prerequisites:** `I3` (write operations, atomic file handling, core formats supported)
+```
 
-### Context: Tag Database Schema
+### Context: tag-naming-convention (from docs/api/library_api.md)
 
-**From api/tag_database_schema.json:**
+```markdown
+### Tag Naming Convention
 
-The JSON Schema defines validation rules for TagDescriptor objects:
-- Required fields: tag_id, tag_name, format_family, writable, value_type, description, example_values
-- tag_id: oneOf [integer 0-65535, string with minLength 1]
-- tag_name: Must match pattern `^[A-Za-z0-9_:-]+$`
-- format_family: Enum with 11 values including EXIF, XMP, IPTC, GPS, ICC_Profile, Photoshop, MakerNotes, JFIF, PNG, PDF, QuickTime
-- value_type: Enum with 7 types (String, Integer, Float, Rational, Binary, DateTime, Struct)
-- example_values: Array with minItems 1 and uniqueItems constraint
+All metadata tags in ExifTool-RS follow a standardized naming convention:
 
-### Context: Tag Categories to Add
+```
+<FormatFamily>:<TagName>
+```
 
-**Based on Task Description, you must expand to 500 tags covering:**
+**Examples:**
 
-1. **EXIF Tags (expand from 60 to 300+):**
-   - Complete common EXIF tags from TIFF specification
-   - Maker-specific tags for Canon (CanonCustom, CanonFileInfo, CanonShotInfo, CanonAFInfo)
-   - Maker-specific tags for Nikon (NikonColorMode, NikonFlashInfo, NikonShootingMode, NikonVRInfo)
-   - Maker-specific tags for Sony (SonyModelID, SonyCreativeStyle, SonyColorMode, SonyAutoHDR)
-   - Additional exposure and scene tags
-   - File structure tags (StripOffsets, StripByteCounts, TileOffsets, etc.)
+- `EXIF:Make` - Camera manufacturer (EXIF format)
+- `EXIF:Model` - Camera model
+- `EXIF:DateTime` - Image capture date/time
+- `XMP-dc:Creator` - Document creator (XMP Dublin Core namespace)
+- `GPS:Latitude` - GPS latitude coordinate
+- `IPTC:Keywords` - Image keywords
+- `PNG:Description` - PNG text chunk description
 
-2. **XMP Tags (expand from 20 to 100+):**
-   - Complete Dublin Core namespace (dc:source, dc:type, dc:coverage, dc:relation)
-   - IPTC Core for XMP (Iptc4xmpCore:Location, Iptc4xmpCore:CountryCode, Iptc4xmpCore:Scene)
-   - Camera Raw namespace (crs:Temperature, crs:Tint, crs:Exposure2012, crs:Contrast2012, crs:Highlights2012, crs:Shadows2012)
-   - Photoshop namespace (photoshop:Credit, photoshop:Source, photoshop:Headline, photoshop:City, photoshop:Country)
-   - Rights management (xmpRights:UsageTerms, xmpRights:WebStatement)
-
-3. **IPTC Tags (add 50+ new):**
-   - Application Record 2 tags (Caption, Headline, Keywords, Category, SupplementalCategories)
-   - By-line, By-line Title, Credit, Source
-   - City, Province-State, Country, Original Transmission Reference
-   - Date and time stamps
-   - Priority, Urgency, Object Name
-
-4. **GPS Tags (expand from 20 to 30+):**
-   - Complete all GPS IFD tags (GPSDestBearing, GPSDestDistance, GPSDestLatitude, GPSDestLongitude)
-   - GPS Processing Method, GPS Area Information
-   - GPS Differential correction
-
-5. **PDF Metadata (add 10+ tags):**
-   - Info dictionary: Title, Author, Subject, Keywords, Creator, Producer, CreationDate, ModDate
-   - Trapped, GTS_PDFXVersion
-
-6. **QuickTime/MP4 Metadata (add 10+ tags):**
-   - User data atoms: ©nam (title), ©ART (artist), ©alb (album), ©day (year)
-   - ©cmt (comment), ©gen (genre), ©wrt (composer)
-   - Location data for videos, Duration, TrackID
+**Case Sensitivity:** Tag names are **case-sensitive**.
+```
 
 ---
 
@@ -117,142 +128,158 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `src/tag_db/tag_registry.rs`
-    *   **Summary:** This is the main file you MUST modify. It currently contains exactly 100 TagDescriptor entries organized into three categories: 60 EXIF tags (subdivided into Camera Information, Exposure Settings, Image Properties, Date/Time, and Color/Scene), 20 GPS tags, and 20 XMP tags. The registry uses `once_cell::Lazy<HashMap<&'static str, TagDescriptor>>` for lazy initialization with zero-cost abstraction.
-    *   **Current Structure:** The file is 1,627 lines. Lines 11-1391 define the TAG_REGISTRY static with all tag insertions. Lines 1393-1415 contain the public API functions (`get_tag_descriptor`, `tag_count`). Lines 1424-1626 contain comprehensive unit tests.
-    *   **Recommendation:** You MUST expand this registry from 100 to 500+ tags. Follow the existing pattern exactly:
-        - Keep the organizational comments (e.g., `// ===== EXIF TAGS (300 total) =====`)
-        - Use sub-categories with descriptive comments (e.g., `// --- Camera Information (X tags) ---`)
-        - Each tag insertion follows this pattern:
-          ```rust
-          registry.insert(
-              "EXIF:TagName",
-              TagDescriptor::new(
-                  TagId::new_numeric(0xXXXX),  // or TagId::new_named("XMP-ns:Name")
-                  "EXIF:TagName".to_string(),
-                  FormatFamily::EXIF,
-                  true,  // or false for writable
-                  ValueType::String,  // or Integer, Rational, etc.
-                  "Human-readable description".to_string(),
-                  vec!["example1".to_string(), "example2".to_string()],
-              ),
-          );
-          ```
-    *   **Critical:** Update line 14 to change capacity from 100 to 512: `HashMap::with_capacity(512)`
-    *   **Critical:** Update line 1430 test to expect 500+ tags: `assert_eq!(tag_count(), 500, "Registry must contain at least 500 tags");` (or use >= assertion)
+*   **File:** `src/core/operations.rs`
+    *   **Summary:** This file contains the core metadata operations including `read_metadata()`, `write_metadata()`, `modify_tag()`, and `copy_metadata()`. It orchestrates format detection, parser selection, and metadata extraction following the hexagonal architecture pattern.
+    *   **Recommendation:** You MUST import and use the `read_metadata()` function from this file to extract metadata tags for use in filename patterns. This is the canonical way to read metadata in the project.
+    *   **Important Detail:** The file includes helper functions like `tag_id_to_name()`, `is_datetime_string()`, and `parse_exif_datetime()` which parse EXIF DateTime format ("YYYY:MM:DD HH:MM:SS"). You can reference these for understanding the DateTime format.
+    *   **Key Imports:** The module uses `chrono` for DateTime handling and returns `chrono::DateTime<Utc>` for DateTime values.
 
-*   **File:** `src/core/tag_descriptor.rs`
-    *   **Summary:** Defines the `TagDescriptor` struct and related enums (`TagId`, `FormatFamily`, `ValueType`). This file provides the data structures you'll use but should NOT be modified for this task.
-    *   **Key Types:**
-        - `TagId`: enum with `Numeric(u16)` and `Named(String)` variants
-        - `FormatFamily`: enum with 11 variants (EXIF, XMP, IPTC, GPS, ICCProfile, Photoshop, MakerNotes, JFIF, PNG, PDF, QuickTime)
-        - `ValueType`: enum with 7 variants (String, Integer, Float, Rational, Binary, DateTime, Struct)
-    *   **Recommendation:** Import these types as shown in tag_registry.rs line 7: `use crate::core::tag_descriptor::{FormatFamily, TagDescriptor, TagId, ValueType};`
+*   **File:** `src/cli/args.rs`
+    *   **Summary:** This file defines the CLI argument structure using `clap::Parser`. It currently supports flags like `-json`, `--preserve-file-times`, `--backup`, `--readonly`, and `--TagsFromFile` with variable tag modification arguments.
+    *   **Recommendation:** You MUST extend this file to add the following arguments for the rename feature:
+        - `-FileName` pattern argument (Note: ExifTool uses the syntax `'-FileName<DateTimeOriginal'` where the pattern comes after `<`)
+        - `-d` date format string argument
+        - `-n` dry-run/no-execute flag
+    *   **Pattern to Follow:** The existing `tag_modifications()` method shows how to parse arguments with special syntax (e.g., `-TAG=VALUE`). You should implement similar parsing logic for the `-FileName<pattern>` syntax.
+    *   **Key Pattern:** The `parse_modification()` method uses `splitn(2, '=')` to handle values that may contain the delimiter. Use a similar approach for parsing the `-FileName<pattern>` syntax.
 
-*   **File:** `api/tag_database_schema.json`
-    *   **Summary:** JSON Schema defining the structure and validation rules for TagDescriptor objects. Used for documentation and potential future code generation.
-    *   **Recommendation:** Use this as a reference for valid tag structures, but you don't need to modify it for this task.
+*   **File:** `src/core/metadata_map.rs`
+    *   **Summary:** This file defines the `MetadataMap` structure which stores key-value pairs of metadata tags. It uses a `HashMap<String, TagValue>` internally and provides typed getter methods.
+    *   **Recommendation:** You SHOULD use the `MetadataMap::get()` method to retrieve tag values from the metadata when substituting variables in filename patterns.
+    *   **Type System:** TagValue is an enum that can be String, Integer, Float, Rational, Binary, DateTime, or Struct. You'll need to handle type conversion when formatting values into filenames.
 
-*   **File:** `src/tag_db/mod.rs`
-    *   **Summary:** Module file that exports the tag registry functions. Re-exports `get_tag_descriptor` and `tag_count` for easier access.
-    *   **Recommendation:** No changes needed to this file for this task.
+*   **File:** `src/core/tag_value.rs`
+    *   **Summary:** Defines the `TagValue` enum with variants for different metadata value types. Provides constructor methods like `new_string()`, `new_integer()`, `new_datetime()`, and accessor methods like `as_string()`, `as_integer()`, `as_datetime()`.
+    *   **Recommendation:** You MUST use the `as_string()` and `as_datetime()` methods to safely extract values from TagValue when building filenames.
+    *   **DateTime Handling:** The TagValue::DateTime variant stores `chrono::DateTime<Utc>`. You'll need to format this using the chrono format string provided via the `-d` flag.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** The task requires referencing ExifTool tag documentation at https://exiftool.org/TagNames/. You should reference these specific pages:
-    - https://exiftool.org/TagNames/EXIF.html - Complete EXIF tag list
-    - https://exiftool.org/TagNames/Canon.html - Canon maker notes
-    - https://exiftool.org/TagNames/Nikon.html - Nikon maker notes
-    - https://exiftool.org/TagNames/Sony.html - Sony maker notes
-    - https://exiftool.org/TagNames/XMP.html - XMP namespaces
-    - https://exiftool.org/TagNames/IPTC.html - IPTC Application Record
-    - https://exiftool.org/TagNames/GPS.html - Complete GPS tags
-    - https://exiftool.org/TagNames/PDF.html - PDF metadata
-    - https://exiftool.org/TagNames/QuickTime.html - QuickTime/MP4 tags
+*   **Tip:** The project already has `chrono` as a dependency (visible in `src/core/operations.rs` imports). You SHOULD use `chrono::format::strftime` or the `format()` method on DateTime to apply the user's date format string.
 
-*   **Note:** The existing code has comprehensive test coverage. You MUST add or update tests to verify the new tags:
-    - Update `test_registry_count()` to expect 500+ tags
-    - Update `test_tag_distribution()` to verify new counts:
-        - EXIF: 300+ tags (including MakerNotes)
-        - XMP: 100+ tags
-        - IPTC: 50+ tags
-        - GPS: 30+ tags
-        - PDF: 10+ tags
-        - QuickTime: 10+ tags
-    - Add new test cases to verify lookup for at least 50 tags across all families (you can add tests like `test_iptc_headline_lookup()`, `test_pdf_title_lookup()`, `test_canon_model_id_lookup()`, etc.)
+*   **Tip:** For variable substitution in filename patterns, you'll need to parse patterns like:
+    - `${EXIF:DateTimeOriginal}` - standard variable syntax
+    - `%Y%m%d_%H%M%S` - strftime-style date format placeholders
+    - `%%e` - file extension (note the double %% for literal %)
+    - `%%-.c` - counter for avoiding name collisions (optional enhancement)
 
-*   **Tip:** For maker-specific tags, use the FormatFamily::MakerNotes enum value. Follow the naming convention from ExifTool:
-    - Canon tags: "Canon:ModelID", "Canon:CanonFirmwareVersion", etc. with TagId::new_numeric() for numeric IDs
-    - Nikon tags: "Nikon:ShutterCount", "Nikon:SerialNumber", etc.
-    - Sony tags: "Sony:SonyModelID", "Sony:CreativeStyle", etc.
+*   **Note:** ExifTool's actual syntax for -FileName is: `'-FileName<DateTimeOriginal'` which means "set FileName from the DateTimeOriginal tag". The `<` character is a redirection operator. When combined with `-d`, the date format is applied to DateTime tags before substitution.
 
-*   **Tip:** For IPTC tags, use FormatFamily::IPTC and follow the naming convention "IPTC:Caption-Abstract", "IPTC:Headline", etc. IPTC tags typically use numeric IDs (record number + dataset number).
+*   **Warning:** File renaming is a destructive operation. You MUST implement:
+    1. **Dry-run mode (`-n` flag):** Print proposed renames without executing
+    2. **Collision detection:** Check if target filename already exists before renaming
+    3. **Error handling:** Continue processing other files if one rename fails (graceful degradation)
 
-*   **Tip:** For XMP tags, use TagId::new_named() with the full namespace prefix:
-    - Dublin Core: "XMP-dc:source", "XMP-dc:type", etc.
-    - IPTC Core: "XMP-iptcCore:Location", "XMP-iptcCore:CountryCode", etc.
-    - Camera Raw: "XMP-crs:Temperature", "XMP-crs:Exposure2012", etc.
-    - Photoshop: "XMP-photoshop:Credit", "XMP-photoshop:City", etc.
+*   **Testing Strategy:** Create integration tests with sample JPEG files that have EXIF:DateTimeOriginal tags. Verify:
+    1. Correct filename generation from metadata
+    2. Dry-run mode doesn't actually rename files
+    3. Collision detection prevents overwrites
+    4. Date formatting works with various chrono format strings
 
-*   **Warning:** Be careful with tag ID conflicts. EXIF numeric IDs must be unique within the EXIF namespace. Check ExifTool documentation for correct tag IDs to avoid collisions.
+*   **Architecture Pattern:** Following the existing CLI pattern in `src/main.rs`, you should:
+    1. Parse arguments in `CliArgs`
+    2. Implement the rename logic in a new `src/cli/rename.rs` module
+    3. Call the rename function from `main.rs` when rename arguments are detected
+    4. Return a Result type for proper error propagation
 
-*   **Note:** The acceptance criteria requires "cargo test tag_registry passes". After adding all tags, run the following to verify:
-    ```bash
-    cargo test --lib tag_registry
-    ```
-    All existing tests must pass, plus any new tests you add.
+*   **Edge Cases to Handle:**
+    1. Tag doesn't exist in metadata (substitute with empty string or skip file?)
+    2. Tag value is not a string or DateTime (convert to string representation)
+    3. Resulting filename contains invalid characters for the OS
+    4. File has no parent directory (can't rename)
+    5. Permission denied on rename operation
 
-*   **Performance Note:** The HashMap uses capacity 100 currently. With 500+ tags, you should increase the initial capacity to avoid reallocations. Use `HashMap::with_capacity(512)` on line 14 of tag_registry.rs.
+*   **Reference Implementation:** Look at how `modify_tag()` in `src/core/operations.rs` handles read-modify-write workflow. Your rename feature should follow a similar pattern: read metadata → build new filename → perform rename operation.
 
-*   **Code Quality:** Follow the existing code style exactly:
-    - Use 4-space indentation
-    - Add organizational comments for major sections and subsections
-    - Keep tag insertions in logical groups (don't intermix EXIF, XMP, IPTC randomly)
-    - Use descriptive, accurate descriptions from ExifTool documentation
-    - Provide at least 1-2 meaningful example values for each tag
+*   **Security Note:** Ensure filename patterns cannot contain path traversal sequences like `../` or absolute paths. Renamed files should always stay in the same directory as the original file.
 
-*   **Documentation:** Each tag should have:
-    - Accurate tag ID from ExifTool specifications
-    - Correct canonical name with proper prefix (EXIF:, GPS:, XMP:, IPTC:, PDF:, QuickTime:, Canon:, Nikon:, Sony:)
-    - Correct FormatFamily enum value
-    - Correct writability flag (most tags are writable, but some like version numbers are read-only)
-    - Correct ValueType based on data format
-    - Clear, concise description
-    - Realistic example values
+### ExifTool -FileName Syntax Reference
 
-*   **Verification Strategy:** After implementation:
-    1. Run `cargo build` to ensure code compiles
-    2. Run `cargo test --lib tag_registry` to verify all tests pass
-    3. Run `cargo clippy` to check for any warnings
-    4. Verify the count: the registry should have exactly 500+ tags (be generous, 520-550 is fine to exceed requirements)
-    5. Verify distribution: Use the `test_tag_distribution()` test to ensure you meet the minimums for each family
+Based on the task description and ExifTool documentation, the `-FileName` syntax works as follows:
+
+```bash
+# Basic syntax: rename from a tag value
+exiftool-rs '-FileName<DateTimeOriginal' photo.jpg
+# Result: photo.jpg → "2025:01:15 10:30:00.jpg" (direct tag value)
+
+# With date formatting: -d applies format to DateTime tags
+exiftool-rs '-FileName<DateTimeOriginal' -d %Y%m%d_%H%M%S photo.jpg
+# Result: photo.jpg → "20250115_103000.jpg"
+
+# With extension preservation: %%e inserts original extension
+exiftool-rs '-FileName<DateTimeOriginal' -d %Y%m%d_%H%M%S%%-.%%e photo.jpg
+# Result: photo.jpg → "20250115_103000.jpg"
+
+# With Make tag: non-DateTime tags used as-is
+exiftool-rs '-FileName<Make_Model' photo.jpg
+# Result: photo.jpg → "Canon_EOS 5D.jpg"
+
+# Dry-run mode: -n shows what would happen without executing
+exiftool-rs -n '-FileName<DateTimeOriginal' -d %Y%m%d photo.jpg
+# Output: "photo.jpg → 20250115.jpg" (no actual rename)
+```
+
+**Key Implementation Requirements:**
+
+1. The `-FileName` argument should accept a pattern starting with `<` followed by tag name(s)
+2. Tag names in the pattern should support the standard `FAMILY:TagName` format (e.g., `EXIF:DateTimeOriginal` or just `DateTimeOriginal`)
+3. The `-d` flag provides a chrono format string that applies to all DateTime tags in the pattern
+4. Special placeholders:
+   - `%%e` = original file extension (with dot)
+   - `%%-.c` = counter for collisions (optional, can start with `.c` for first collision, `.2c` for second, etc.)
+5. Multiple tags can be combined with underscores or other separators
+6. The `-n` flag enables dry-run mode (print only, don't execute)
+
+### Suggested Implementation Phases
+
+**Phase 1: Argument Parsing**
+- Extend `CliArgs` in `src/cli/args.rs` with `-FileName`, `-d`, and `-n` arguments
+- Implement parsing logic to extract the pattern from `-FileName<pattern>` syntax
+- Add validation to ensure the pattern is valid
+
+**Phase 2: Pattern Substitution Engine**
+- Create `src/cli/rename.rs` with a function to parse and substitute variables
+- Implement tag name extraction from patterns (e.g., extract "DateTimeOriginal" from `<DateTimeOriginal>`)
+- Handle special placeholders like `%%e` for extension
+- Support both simple tag references and complex patterns
+
+**Phase 3: Date Formatting**
+- If `-d` flag is provided and tag value is DateTime, apply chrono formatting
+- Convert DateTime to string using the provided format string
+- Handle format errors gracefully (invalid format strings)
+
+**Phase 4: Rename Execution**
+- Implement file rename operation using `std::fs::rename()`
+- Add dry-run mode logic (print proposed renames, don't execute)
+- Add collision detection (check if target exists)
+- Add error handling and reporting
+
+**Phase 5: Integration and Testing**
+- Update `src/main.rs` to detect rename arguments and call rename function
+- Create integration tests in `tests/integration/rename_tests.rs`
+- Test with various patterns, formats, and edge cases
+- Ensure all acceptance criteria are met
 
 ---
 
-## Task Execution Checklist
+## 4. Final Checklist for the Coder Agent
 
-1. ✅ Read and understand the existing tag_registry.rs structure
-2. ⬜ Research ExifTool documentation for the 400 additional tags needed
-3. ⬜ Plan tag organization (decide how to group the 300+ EXIF tags, 100+ XMP tags, etc.)
-4. ⬜ Update HashMap capacity to 512 on line 14
-5. ⬜ Add EXIF tags (expand to 300+):
-   - ⬜ Common EXIF tags from TIFF spec
-   - ⬜ Canon maker notes (ModelID, FirmwareVersion, etc.)
-   - ⬜ Nikon maker notes (ShutterCount, SerialNumber, etc.)
-   - ⬜ Sony maker notes (SonyModelID, CreativeStyle, etc.)
-6. ⬜ Add XMP tags (expand to 100+):
-   - ⬜ Complete Dublin Core namespace
-   - ⬜ IPTC Core for XMP
-   - ⬜ Camera Raw namespace
-   - ⬜ Photoshop namespace
-7. ⬜ Add IPTC tags (50+): Application Record 2 tags
-8. ⬜ Add GPS tags (expand to 30+): Complete GPS IFD
-9. ⬜ Add PDF metadata tags (10+): Info dictionary
-10. ⬜ Add QuickTime/MP4 tags (10+): User data atoms
-11. ⬜ Update test_registry_count() to expect 500+
-12. ⬜ Update test_tag_distribution() with new minimums
-13. ⬜ Add new unit tests for tag lookup verification (50+ tags across families)
-14. ⬜ Run `cargo build` and fix any compilation errors
-15. ⬜ Run `cargo test --lib tag_registry` and ensure all tests pass
-16. ⬜ Run `cargo clippy` and address any warnings
-17. ⬜ Verify final tag count is 500+ via tag_count() function
+Before you begin coding, ensure you understand:
+
+- ✅ The `-FileName<pattern>` syntax and how it differs from standard CLI arguments
+- ✅ How to use `read_metadata()` from `src/core/operations.rs` to extract tag values
+- ✅ How to work with `TagValue` enum and handle different types (String, DateTime, Integer)
+- ✅ How to use `chrono` to format DateTime values with user-provided format strings
+- ✅ The importance of dry-run mode (`-n`) and collision detection for safety
+- ✅ The existing CLI argument parsing patterns in `src/cli/args.rs`
+- ✅ The project's error handling patterns using `Result<T, ExifToolError>`
+
+**Critical Success Factors:**
+
+1. **Correctness:** Filenames must be generated accurately from metadata tags
+2. **Safety:** Dry-run mode and collision detection prevent data loss
+3. **Compatibility:** Follow ExifTool's -FileName syntax for user familiarity
+4. **Error Handling:** Gracefully handle missing tags, invalid formats, and I/O errors
+5. **Testing:** Integration tests must cover all acceptance criteria
+
+Good luck! 🚀
