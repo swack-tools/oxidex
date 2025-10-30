@@ -391,6 +391,7 @@ fn parse_and_insert_exif_tags(exif_data: &[u8], metadata: &mut MetadataMap) -> R
                 raw_bytes,
                 *field_type,
                 *value_count,
+                *tag_id,
                 byte_order,
             );
             metadata.insert(format!("PNG:Exif{}", stripped), raw_value);
@@ -412,7 +413,7 @@ fn parse_and_insert_exif_tags(exif_data: &[u8], metadata: &mut MetadataMap) -> R
                 // Also add the PNG:Exif version (WITHOUT enum interpretation, raw values only)
                 if let Some(stripped) = base_tag_name.strip_prefix("ExifIFD:") {
                     let raw_value =
-                        raw_bytes_to_tag_value_no_enum(&raw_bytes, field_type, value_count, byte_order);
+                        raw_bytes_to_tag_value_no_enum(&raw_bytes, field_type, value_count, tag_id, byte_order);
                     metadata.insert(format!("PNG:Exif{}", stripped), raw_value);
                 }
             }
@@ -442,10 +443,13 @@ fn raw_bytes_to_tag_value_no_enum(
     bytes: &[u8],
     field_type: u16,
     _value_count: u32,
+    tag_id: u16,
     byte_order: crate::parsers::tiff::ifd_parser::ByteOrder,
 ) -> TagValue {
     use crate::parsers::common::exif_types::ExifType;
     use crate::parsers::tiff::ifd_parser::ByteOrder;
+
+    const EXIF_VERSION: u16 = 0x9000;
 
     if let Some(exif_type) = ExifType::from_u16(field_type) {
         match exif_type {
@@ -480,6 +484,12 @@ fn raw_bytes_to_tag_value_no_enum(
 
             // UNDEFINED (type 7): Return as binary or special string
             ExifType::Undefined => {
+                // Special handling for ExifVersion (tag 0x9000)
+                if tag_id == EXIF_VERSION && bytes.len() >= 4 {
+                    // ExifVersion is stored as ASCII bytes
+                    let version = String::from_utf8_lossy(&bytes[0..4]);
+                    return TagValue::new_string(version.to_string());
+                }
                 // Perl ExifTool shows UNDEFINED bytes as "..." in PNG:Exif namespace
                 return TagValue::new_string("...");
             }
