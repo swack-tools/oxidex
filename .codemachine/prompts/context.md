@@ -10,23 +10,24 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I4.T10",
-  "iteration_id": "I4",
-  "iteration_goal": "Add support for PDF and MP4/QuickTime formats, implement batch processing with recursive directory traversal and parallel execution, add metadata copying between files, and expand tag registry.",
-  "description": "Create fuzzing harnesses in fuzz/fuzz_targets/ for PDF and MP4 parsers. Set up continuous fuzzing: (1) Create fuzz_pdf.rs calling PDF parser with fuzzer-generated input, (2) Create fuzz_mp4.rs calling MP4 parser, (3) Seed corpus with sample valid files, (4) Configure cargo-fuzz to run both targets, (5) Document fuzzing process in README. Optionally submit to OSS-Fuzz for continuous fuzzing infrastructure.",
-  "agent_type_hint": "BackendAgent",
-  "inputs": "I4.T1 PDF parser, I4.T2 MP4 parser, cargo-fuzz documentation",
-  "input_files": ["src/parsers/pdf/mod.rs", "src/parsers/quicktime/mod.rs"],
+  "task_id": "I5.T1",
+  "iteration_id": "I5",
+  "iteration_goal": "Implement C FFI bindings for cross-language integration, automate tag database generation from ExifTool specs, set up cross-compilation and release builds, create comprehensive documentation, and polish for v1.0 release.",
+  "description": "Design C-compatible FFI API in docs/api/ffi_api.md. Define: (1) Handle-based lifecycle (exiftool_create(), exiftool_destroy()), (2) Error handling (return codes, exiftool_get_last_error()), (3) Metadata reading (exiftool_read_file(), exiftool_get_tag_string(), exiftool_get_tag_count(), iterator for tags), (4) Metadata writing (exiftool_set_tag(), exiftool_write_file()), (5) Memory management (caller vs. library ownership). Document with C code examples. Ensure API is minimal, safe (no panics across FFI boundary), and idiomatic for C consumers.",
+  "agent_type_hint": "DocumentationAgent",
+  "inputs": "Section 2 (API Contract Style - C FFI), FFI best practices",
   "target_files": [
-    "fuzz/fuzz_targets/fuzz_pdf.rs",
-    "fuzz/fuzz_targets/fuzz_mp4.rs",
-    "fuzz/corpus/pdf/",
-    "fuzz/corpus/mp4/",
-    "README.md"
+    "docs/api/ffi_api.md"
   ],
-  "deliverables": "Fuzzing targets for PDF and MP4, seed corpus, documentation",
-  "acceptance_criteria": "cargo fuzz run fuzz_pdf executes without errors, cargo fuzz run fuzz_mp4 executes without errors, corpus contains at least 3 valid samples each, fuzzing runs for at least 1 minute without crashes (manual verification), README documents how to run fuzzing",
-  "dependencies": ["I4.T1", "I4.T2"],
+  "input_files": [
+    "src/core/operations.rs"
+  ],
+  "deliverables": "Comprehensive C FFI API documentation, C code examples",
+  "acceptance_criteria": "API follows C conventions (handles, return codes, null-terminated strings), error handling is explicit (no panics, all errors returned as codes), memory management is clear (who owns what), at least 5 C code examples showing usage, well-formatted Markdown",
+  "dependencies": [
+    "I2.T3",
+    "I3.T4"
+  ],
   "parallelizable": true,
   "done": false
 }
@@ -38,41 +39,211 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: deeper-dive-fuzzing (from 06_Rationale_and_Future.md)
+### Context: architectural-style (from 02_Architecture_Overview.md)
 
 ```markdown
-#### 6. Comprehensive Fuzzing Strategy
+### 3.1. Architectural Style
 
-**Current State**: Conceptual (use `cargo-fuzz`).
+**Primary Style**: **Layered Hexagonal Architecture** (Ports and Adapters)
 
-**Needs**:
-- Fuzzing harnesses for each format parser
-- Corpus seeding (known-good and known-malicious files)
-- Continuous fuzzing infrastructure (OSS-Fuzz integration)
-- Crash triage and fix workflow
+**Rationale**:
 
-**Key Questions**:
-- How to measure coverage (format code paths, not just line coverage)?
-- How to prioritize fuzz findings (crash vs. hang vs. incorrect output)?
+The Hexagonal Architecture pattern is optimal for ExifTool-RS because:
+
+1. **Format Independence**: The "core domain" (metadata extraction/manipulation logic) must remain isolated from the specifics of 300+ file formats. Hexagonal architecture enforces this separation through ports (interfaces) and adapters (format-specific implementations).
+
+2. **Multiple Access Patterns**: The system must expose:
+   - CLI interface (primary port)
+   - Rust library API (primary port)
+   - C FFI bindings (primary port)
+   - Format parsers (secondary ports)
+   - File system access (secondary port)
+
+   This multiplicity of interfaces aligns perfectly with the ports/adapters model.
+
+3. **Testability**: Hexagonal architecture enables testing the core metadata logic independently of file I/O by mocking the file system port. Critical for achieving 80%+ test coverage.
+
+4. **Extensibility**: New file format support becomes a matter of implementing the format adapter interface without touching core logic. Supports phased rollout strategy (50 formats in v1.0, expanding to 300+).
+
+**Layered Structure**:
+
+```
+┌─────────────────────────────────────────────┐
+│  Application Layer (CLI, FFI, Library API) │  ← Primary Adapters
+├─────────────────────────────────────────────┤
+│       Domain Layer (Metadata Engine)        │  ← Core Business Logic
+├─────────────────────────────────────────────┤
+│  Infrastructure Layer (Format Parsers, I/O) │  ← Secondary Adapters
+└─────────────────────────────────────────────┘
 ```
 
-### Context: fuzzing (from 03_Verification_and_Glossary.md)
+- **Domain Layer**: Format-agnostic metadata models, tag definitions, operations (read/write/copy/transform)
+- **Application Layer**: User-facing interfaces translating commands to domain operations
+- **Infrastructure Layer**: Format-specific parsers/serializers, file system abstraction, configuration
+```
+
+### Context: technology-stack-summary (from 02_Architecture_Overview.md)
 
 ```markdown
-#### Fuzzing (Continuous)
-*   **Scope:** Crash and hang detection in parsers
-*   **Location:** `fuzz/fuzz_targets/`
-*   **Tools:** `cargo-fuzz` (libFuzzer), OSS-Fuzz integration
-*   **Targets:**
-    *   `fuzz_jpeg` - JPEG segment parser
-    *   `fuzz_tiff` - TIFF IFD parser
-    *   `fuzz_png` - PNG chunk parser
-    *   `fuzz_pdf` - PDF structure parser
-    *   `fuzz_mp4` - QuickTime atom parser
-*   **Corpus:** Seed with valid samples + malformed files
-*   **Coverage:** Aim for 80%+ code coverage via fuzzing (measured with `cargo fuzz coverage`)
-*   **Integration:** OSS-Fuzz for continuous fuzzing, GitHub Actions for PR fuzzing (short runs)
-*   **Triage:** All crashes investigated within 48 hours, fixes prioritized by severity
+### 3.2. Technology Stack Summary
+
+| **Category** | **Technology Choice** | **Justification** |
+|--------------|----------------------|-------------------|
+| **Core Language** | Rust 1.75+ (2021 Edition) | Memory safety, zero-cost abstractions, excellent concurrency primitives, cross-platform support |
+| **CLI Framework** | `clap` v4 (derive API) | Industry standard, excellent help generation, argument validation, backward compatibility via value parsers |
+| **Binary Parsing** | `nom` v7 + `binrw` | `nom` for complex formats (TIFF, QuickTime), `binrw` for simple struct-based formats (BMP, WAV) |
+| **XML Parsing (XMP)** | `quick-xml` | Streaming parser, low memory footprint, namespace support for XMP |
+| **JSON Output** | `serde_json` | De facto standard, excellent performance, integration with domain models via derives |
+| **Date/Time** | `chrono` | Comprehensive timezone support, EXIF date format parsing |
+| **String Encoding** | `encoding_rs` (WHATWG standard) | Handles legacy encodings in IPTC/EXIF (Latin1, UTF-8, UTF-16) |
+| **Image I/O** | `memmap2` (memory-mapped files) | Efficient large file access without loading entire file into memory |
+| **Concurrency** | `rayon` (data parallelism) | Transparent batch processing parallelization, work-stealing scheduler |
+| **Testing** | `cargo test` + `proptest` (property-based) | Unit tests for parsers, property-based testing for round-trip serialization |
+| **Fuzzing** | `cargo-fuzz` (libFuzzer) | Continuous fuzzing of format parsers to discover crash/hang bugs |
+| **C FFI** | `cbindgen` (header generation) | Automated C header generation from Rust API |
+| **Documentation** | `rustdoc` + `mdBook` (user guide) | API docs from source comments, separate user guide for CLI |
+| **Build System** | `cargo` + `cross` (cross-compilation) | Standard Rust tooling, `cross` for ARM/Windows builds from Linux |
+| **CI/CD** | GitHub Actions | Free for open source, matrix builds across OS/architecture |
+| **Code Quality** | `clippy`, `rustfmt`, `cargo-audit` | Linting, formatting, dependency vulnerability scanning |
+| **Benchmarking** | `criterion` | Statistical benchmarking framework, regression detection |
+```
+
+### Context: security-considerations (from 05_Operational_Architecture.md)
+
+```markdown
+#### Security Considerations
+
+**Threat Model**:
+
+ExifTool-RS processes potentially malicious files from untrusted sources (e.g., user uploads, scraped images). Primary threats:
+
+1. **Memory Corruption**: Buffer overflows, use-after-free in parsers
+2. **Resource Exhaustion**: Zip bombs, billion laughs (XML), decompression bombs
+3. **Path Traversal**: Malicious filenames in archive processing
+4. **Code Injection**: Via scripting features (if added)
+
+**Mitigations**:
+
+| **Threat** | **Mitigation** | **Implementation** |
+|------------|---------------|-------------------|
+| Buffer overflows | Rust ownership system | Compile-time prevention via borrow checker |
+| Integer overflows | Checked arithmetic | `#![deny(overflowing_literals)]`, `checked_add()` in parsers |
+| Resource exhaustion | Size limits | Max allocation: 1GB per file, max parse depth: 64 levels (nested IFDs) |
+| Zip bombs | Decompression ratio check | Reject if uncompressed > 100x compressed size |
+| XXE attacks (XML) | Disable external entities | `quick-xml` configured to reject DOCTYPE, external entities |
+| Path traversal | Path sanitization | `canonicalize()` + jail to working directory for batch operations |
+| Dependency vulnerabilities | Automated scanning | `cargo-audit` in CI, Dependabot alerts, minimal dependency tree |
+| Malicious input | Fuzzing | Continuous fuzzing with `cargo-fuzz`, OSS-Fuzz integration target |
+
+**Input Validation**:
+
+All parsers follow defensive pattern:
+```rust
+fn read_u32_at(data: &[u8], offset: usize) -> Result<u32> {
+    let bytes = data.get(offset..offset+4)
+        .ok_or(ParseError::UnexpectedEof)?;  // Bounds check
+    Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
+}
+```
+
+**Secure Defaults**:
+
+- No script execution (unlike Perl ExifTool's `-execute` feature)
+- No network access by default (geolocation requires opt-in `--geolocation` flag)
+- Read-only mode available via `--readonly` flag (prevents accidental writes)
+```
+
+### Context: directory-structure (from 01_Plan_Overview_and_Setup.md)
+
+```markdown
+├── src/ffi/                             # C FFI bindings
+│       ├── mod.rs
+│       └── c_api.rs                     # C-compatible function exports
+│
+├── docs/                                # Documentation and design artifacts
+│   ├── diagrams/                        # UML diagrams (PlantUML, Mermaid)
+│   │   ├── component_architecture.puml
+│   │   ├── metadata_erd.mmd
+│   │   ├── sequence_metadata_extraction.puml
+│   │   └── sequence_metadata_write.puml
+│   │
+│   ├── api/                             # API specifications
+│   │   ├── library_api.md               # Rust library API docs
+│   │   └── ffi_api.md                   # C FFI API docs
+│
+├── api/                                 # API specification files
+│   ├── tag_database_schema.json         # JSON Schema for tag definitions
+│   └── exiftool_rs.h                    # C FFI header (cbindgen-generated)
+```
+
+### Context: library-api-reference (from docs/api/library_api.md)
+
+```markdown
+# ExifTool-RS Library API Reference
+
+**Version:** 0.1.0
+**Last Updated:** 2025-10-29
+
+## Core Concepts
+
+### Tag Naming Convention
+
+All metadata tags in ExifTool-RS follow a standardized naming convention:
+
+```
+<FormatFamily>:<TagName>
+```
+
+**Examples:**
+
+- `EXIF:Make` - Camera manufacturer (EXIF format)
+- `EXIF:Model` - Camera model
+- `EXIF:DateTime` - Image capture date/time
+- `XMP-dc:Creator` - Document creator (XMP Dublin Core namespace)
+- `GPS:Latitude` - GPS latitude coordinate
+- `IPTC:Keywords` - Image keywords
+- `PNG:Description` - PNG text chunk description
+
+### Synchronous API Design
+
+ExifTool-RS uses a **synchronous, blocking API** design:
+
+- All operations complete before returning
+- No async/await or futures
+- File I/O is the bottleneck, not computation
+- Parallel processing is achieved via `rayon` at the application level
+
+### Type Safety
+
+Metadata values are represented by the `TagValue` enum, which provides type safety at runtime:
+
+```rust
+pub enum TagValue {
+    String(String),
+    Integer(i64),
+    Float(f64),
+    Rational { numerator: i32, denominator: i32 },
+    Binary(Vec<u8>),
+    DateTime(chrono::DateTime<Utc>),
+    Struct(Box<HashMap<String, TagValue>>),
+}
+```
+
+## Error Handling
+
+### ExifToolError
+
+The library uses a comprehensive error type:
+
+```rust
+pub enum ExifToolError {
+    IoError(io::Error),
+    ParseError { message: String, offset: Option<usize> },
+    TagNotFound { tag_name: String },
+    InvalidTagValue { tag_name: String, reason: String },
+    UnsupportedFormat { message: String },
+}
+```
 ```
 
 ---
@@ -83,86 +254,109 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `fuzz/fuzz_targets/fuzz_pdf.rs`
-    *   **Summary:** ALREADY EXISTS! This file contains a complete fuzzing harness for the PDF parser. It implements a `FuzzReader` struct that wraps the fuzzer input and calls `parse_pdf_metadata()`.
-    *   **Recommendation:** You MUST verify this file is correct and complete. The task requires creating this file, but it already exists. Review it for correctness - it uses saturating arithmetic to prevent panics and properly implements the FileReader trait.
+*   **File:** `src/core/operations.rs`
+    *   **Summary:** This file contains the core metadata read and write operations. The `read_metadata(path: &Path) -> Result<MetadataMap>` function orchestrates file opening, format detection, and parser selection. The `write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()>` function handles validation and atomic file writing.
+    *   **Recommendation:** Your FFI API MUST expose these core operations. The C API should wrap `read_metadata()` for file reading and `write_metadata()` for file writing. Study the error handling patterns used here - all functions return `Result<T, ExifToolError>`.
 
-*   **File:** `fuzz/fuzz_targets/fuzz_mp4.rs`
-    *   **Summary:** ALREADY EXISTS! This file contains a complete fuzzing harness for the MP4/QuickTime parser. It implements the same pattern as the PDF fuzzer, calling `parse_quicktime_metadata()`.
-    *   **Recommendation:** You MUST verify this file is correct and complete. Both fuzzers follow the same pattern with a `FuzzReader` implementation.
+*   **File:** `src/core/metadata_map.rs`
+    *   **Summary:** Defines `MetadataMap`, the primary in-memory structure for metadata storage. It's a wrapper around `HashMap<String, TagValue>` with typed getter methods like `get_string()`, `get_integer()`, `get_float()`, and `get_datetime()`.
+    *   **Recommendation:** Your FFI API MUST provide safe access to this structure. Consider a handle-based approach where `MetadataMap` is an opaque pointer. You will need to expose methods to iterate over tags, get tag count, and retrieve individual tag values by name.
 
-*   **File:** `fuzz/Cargo.toml`
-    *   **Summary:** The fuzzing project manifest already includes both `fuzz_pdf` and `fuzz_mp4` as binary targets.
-    *   **Recommendation:** Verify the configuration is correct. Both targets are already registered in the `[[bin]]` sections.
+*   **File:** `src/core/tag_value.rs`
+    *   **Summary:** Defines the `TagValue` enum with variants: String, Integer, Float, Rational, Binary, DateTime, Struct. Each variant has typed accessor methods (`as_string()`, `as_integer()`, etc.) that return `Option<T>`.
+    *   **Recommendation:** The C FFI MUST handle the polymorphic nature of TagValue safely. Consider returning an enum discriminant or type code along with the value to enable safe downcasting in C.
 
-*   **File:** `src/parsers/pdf/mod.rs`
-    *   **Summary:** This is the PDF parser entry point. It exports the public function `parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap>` which is what the fuzzer calls. The parser verifies PDF signature, extracts Info dictionary metadata, and XMP metadata.
-    *   **Recommendation:** The fuzzer MUST use this exact function signature. The existing fuzz_pdf.rs already does this correctly.
+*   **File:** `src/error/mod.rs`
+    *   **Summary:** Defines `ExifToolError` enum with variants: IoError, ParseError, TagNotFound, InvalidTagValue, UnsupportedFormat. Each has helper constructors and implements Display for error messages.
+    *   **Recommendation:** Your FFI error handling MUST convert Rust `Result<T>` into C-style return codes. Define numeric error codes (e.g., `EXIFTOOL_OK = 0`, `EXIFTOOL_ERR_IO = 1`, etc.). Store the last error message in thread-local storage so C callers can retrieve it with `exiftool_get_last_error()`.
 
-*   **File:** `src/parsers/quicktime/mod.rs`
-    *   **Summary:** This is the QuickTime/MP4 parser entry point. It exports `parse_quicktime_metadata(reader: &dyn FileReader) -> Result<MetadataMap, String>`. Note the different error type (String vs Result).
-    *   **Recommendation:** The fuzzer uses this function. Note the error type difference between PDF (returns `Result<MetadataMap>`) and QuickTime (returns `Result<MetadataMap, String>`).
+*   **File:** `src/lib.rs`
+    *   **Summary:** The root library module that declares all public modules. The crate is organized into Application Layer (cli, ffi), Domain Layer (core), and Infrastructure Layer (parsers, writers, io).
+    *   **Recommendation:** Your FFI module already exists at `src/ffi/`. The current `c_api.rs` file is just a placeholder with a comment. This is where you will implement the actual FFI functions in the next task (I5.T2).
 
-*   **File:** `src/core/file_reader_trait.rs`
-    *   **Summary:** Defines the `FileReader` trait with two methods: `read(&self, offset: u64, length: usize) -> io::Result<&[u8]>` and `size(&self) -> u64`. The trait is object-safe and designed for zero-copy access.
-    *   **Recommendation:** Your `FuzzReader` implementation MUST implement this trait exactly. Both existing fuzzers already do this correctly with saturating arithmetic to prevent panics.
-
-*   **File:** `fuzz/corpus/fuzz_pdf/`
-    *   **Summary:** This directory ALREADY EXISTS and contains HUNDREDS of corpus files (both hash-named files from fuzzing and 3 named .pdf files: minimal.pdf, sample.pdf, special_chars.pdf).
-    *   **Recommendation:** The corpus is already seeded with valid samples. You should verify there are at least 3 valid PDF samples (acceptance criteria met).
-
-*   **File:** `fuzz/corpus/fuzz_mp4/`
-    *   **Summary:** This directory ALREADY EXISTS and contains HUNDREDS of corpus files plus 3 named .mp4 files: minimal_itunes.mp4, minimal_quicktime.mp4, sample.mp4.
-    *   **Recommendation:** The corpus is already seeded with valid samples. You should verify there are at least 3 valid MP4 samples (acceptance criteria met).
+*   **File:** `docs/api/library_api.md`
+    *   **Summary:** Comprehensive Rust library API documentation covering tag naming conventions, synchronous design, type safety, high-level and low-level APIs, error handling, and code examples.
+    *   **Recommendation:** Use this as a reference model for your C FFI documentation. The FFI API should maintain consistency with the Rust API design principles (explicit error handling, type safety where possible, clear ownership semantics).
 
 ### Implementation Tips & Notes
 
-*   **CRITICAL FINDING:** All fuzzing infrastructure appears to be ALREADY IMPLEMENTED! Both fuzz_pdf.rs and fuzz_mp4.rs exist, both are configured in fuzz/Cargo.toml, and both corpus directories contain valid seed files.
+*   **Tip:** The FFI API MUST use **handle-based lifecycle management**. C callers will receive opaque pointers (handles) to Rust objects. Example pattern:
+    ```c
+    ExifToolHandle* handle = exiftool_create();
+    int result = exiftool_read_file(handle, "photo.jpg");
+    const char* make = exiftool_get_tag_string(handle, "EXIF:Make");
+    exiftool_destroy(handle);
+    ```
 
-*   **Tip:** The main remaining work is to:
-    1. Verify the fuzzing targets work correctly (`cargo fuzz run fuzz_pdf` and `cargo fuzz run fuzz_mp4`)
-    2. Update the README.md with fuzzing documentation
-    3. Optionally run the fuzzers for 1+ minute to verify they don't crash
+*   **Tip:** For error handling, follow the **return code + last error** pattern used by many C libraries:
+    - Functions return `int` status codes (0 = success, non-zero = error)
+    - Store error details in thread-local storage
+    - Provide `const char* exiftool_get_last_error()` to retrieve human-readable error messages
+    - This prevents panics from crossing FFI boundary
 
-*   **Note:** Both fuzzing harnesses use the same pattern:
-    - Implement a `FuzzReader` struct wrapping a `Vec<u8>`
-    - Implement `FileReader` trait with saturating arithmetic to prevent panics
-    - Call the parser and discard errors (we only care about crashes/panics, not parse errors)
-    - Use `#![no_main]` and `libfuzzer_sys::fuzz_target!` macro
+*   **Tip:** Memory management MUST be crystal clear. Document these rules:
+    1. **Handles**: Library owns handles. Caller MUST call `exiftool_destroy()` to free.
+    2. **Strings returned by library**: Library owns. Valid until next API call or handle destruction. Caller should copy if needed.
+    3. **Strings passed by caller**: Caller owns. Library copies immediately if needed.
+    4. **Binary data**: Use explicit length parameters, never rely on null-termination for binary data.
 
-*   **Warning:** The PDF parser returns `Result<MetadataMap>` (using the project's `Result` type) while the QuickTime parser returns `Result<MetadataMap, String>`. Both fuzzers handle this correctly by discarding results with `let _ = ...`.
+*   **Note:** The existing Rust API uses `std::path::Path` which accepts many types via `AsRef<Path>`. For C FFI, you MUST use `const char*` null-terminated strings for file paths. Convert using `std::ffi::CStr` and handle UTF-8 validation carefully (paths may not be valid UTF-8 on all platforms).
 
-*   **Documentation Task:** The README.md currently does not mention fuzzing. You MUST add a section explaining:
-    - How to install cargo-fuzz (`cargo install cargo-fuzz`)
-    - How to run the fuzzers (`cargo fuzz run fuzz_pdf`, `cargo fuzz run fuzz_mp4`)
-    - Where the corpus files are located
-    - How to view fuzzing coverage (`cargo fuzz coverage fuzz_pdf`)
-    - That crashes are saved to `fuzz/artifacts/`
+*   **Note:** Iterator pattern for tag enumeration is critical. C callers will need to iterate over all tags in a MetadataMap. Consider two approaches:
+    1. **Callback-based**: `void exiftool_iterate_tags(handle, callback_fn, user_data)`
+    2. **Index-based**: `const char* exiftool_get_tag_name_at(handle, size_t index)` with `size_t exiftool_get_tag_count(handle)`
 
-*   **Acceptance Criteria Verification:**
-    - ✅ `fuzz_pdf.rs` exists
-    - ✅ `fuzz_mp4.rs` exists
-    - ✅ Both are configured in `fuzz/Cargo.toml`
-    - ✅ Corpus contains 3+ valid PDF samples (minimal.pdf, sample.pdf, special_chars.pdf)
-    - ✅ Corpus contains 3+ valid MP4 samples (minimal_itunes.mp4, minimal_quicktime.mp4, sample.mp4)
-    - ⚠️ Need to verify `cargo fuzz run` executes without errors (manual test required)
-    - ❌ README does not document fuzzing process (needs to be added)
+    The index-based approach is simpler and more familiar to C developers.
 
-### Corpus Seeding Strategy
+*   **Warning:** The C FFI MUST catch ALL Rust panics at the boundary using `std::panic::catch_unwind()`. A Rust panic unwinding into C code is undefined behavior and will corrupt the stack. Wrap all FFI entry points with panic guards.
 
-*   **PDF Corpus:** The corpus already contains 3 named seed files plus hundreds of fuzzer-generated files. The named files represent different PDF structures:
-    - `minimal.pdf` - likely a minimal valid PDF
-    - `sample.pdf` - a more complete example
-    - `special_chars.pdf` - tests edge cases with special characters
+*   **Warning:** Thread safety: The Rust `MetadataMap` is NOT `Sync` (cannot be shared between threads). Document that handles are NOT thread-safe and callers must synchronize access themselves or use one handle per thread.
 
-*   **MP4 Corpus:** The corpus contains 3 named seed files:
-    - `minimal_itunes.mp4` - iTunes-style metadata format
-    - `minimal_quicktime.mp4` - Classic QuickTime format
-    - `sample.mp4` - Complete example file
+*   **Best Practice:** Provide at least 5 C code examples in the documentation:
+    1. Basic usage: create handle, read file, get tag, destroy
+    2. Error handling: checking return codes, retrieving error messages
+    3. Iterating all tags in a file
+    4. Modifying metadata: read, modify, write back
+    5. Memory safety: demonstrating proper handle lifecycle
 
-*   **Recommendation:** The corpus seeding is already excellent. These seed files cover the major format variants mentioned in the parser documentation (iTunes metadata, QuickTime user data, classic MP4).
+*   **Best Practice:** The API should be **minimal but complete**. Don't expose every internal detail. Focus on the most common use cases:
+    - Create/destroy handle
+    - Read metadata from file
+    - Write metadata to file
+    - Get tag value (string, integer, float variants)
+    - Set tag value
+    - Get tag count and iterate tags
+    - Error retrieval
 
-### GitHub Actions CI Integration
+*   **Reference:** Look at successful C FFI examples from other Rust projects:
+    - `libgit2` (C library, but good reference for API design)
+    - `sqlite3` (excellent error handling pattern)
+    - `ImageMagick` (opaque handle pattern)
+    - Rust crates like `rust-openssl`, `nix` (Rust->C FFI examples)
 
-*   **Note:** The existing `.github/workflows/ci.yml` contains test, audit, and coverage jobs, but does NOT include a fuzzing job.
-*   **Optional Enhancement:** If you want to add PR fuzzing (short runs), you could add a new job that runs each fuzzer for 60 seconds on pull requests. However, this is NOT required by the acceptance criteria.
+### Code Structure Recommendations
+
+Your `docs/api/ffi_api.md` document should follow this structure:
+
+1. **Introduction**: Purpose, C FFI overview, safety guarantees
+2. **Quick Start**: Minimal working example (5-10 lines)
+3. **Core Concepts**: Handles, error handling, memory ownership, thread safety
+4. **API Reference**: Organized by category
+   - Handle lifecycle functions
+   - Metadata reading functions
+   - Metadata writing functions
+   - Tag access functions
+   - Error handling functions
+5. **Type Definitions**: C structs, enums, error codes
+6. **Code Examples**: At least 5 complete, runnable examples
+7. **Best Practices**: Common pitfalls, safety guidelines
+8. **Platform Notes**: Windows/Linux/macOS-specific considerations
+
+Each function should document:
+- Function signature
+- Purpose (one-line summary)
+- Parameters (type, ownership, constraints)
+- Return value (success/error codes)
+- Errors (what can go wrong)
+- Example usage
+- Safety notes (can this panic? memory ownership?)
