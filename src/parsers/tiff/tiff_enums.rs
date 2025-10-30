@@ -59,7 +59,9 @@ pub fn tiff_enum_to_string(tag_id: u16, value: i64) -> Option<String> {
             34713 => Some("Nikon NEF Compressed".to_string()),
             34715 => Some("JBIG2 TIFF FX".to_string()),
             34718 => Some("Microsoft Document Imaging (MDI) Binary Level Codec".to_string()),
-            34719 => Some("Microsoft Document Imaging (MDI) Progressive Transform Codec".to_string()),
+            34719 => {
+                Some("Microsoft Document Imaging (MDI) Progressive Transform Codec".to_string())
+            }
             34720 => Some("Microsoft Document Imaging (MDI) Vector".to_string()),
             34892 => Some("Lossy JPEG".to_string()),
             65000 => Some("Kodak DCR Compressed".to_string()),

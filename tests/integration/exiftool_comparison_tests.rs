@@ -713,8 +713,8 @@ fn test_write_roundtrip_jpeg_artist() {
     }
 
     // Create temp file with .jpg extension
-    let temp_file = NamedTempFile::new_in(std::env::temp_dir())
-        .expect("Failed to create temp file");
+    let temp_file =
+        NamedTempFile::new_in(std::env::temp_dir()).expect("Failed to create temp file");
     let temp_path = temp_file.path();
 
     // Copy test file to temp location
@@ -735,17 +735,20 @@ fn test_write_roundtrip_jpeg_artist() {
     println!("Perl ExifTool wrote Artist tag: {}", test_artist);
 
     // Step 2: Read back with both tools
-    let perl_readback = get_perl_exiftool_output(temp_path)
-        .expect("Failed to read back with Perl ExifTool");
-    let rust_readback = get_exiftool_rs_output(temp_path)
-        .expect("Failed to read back with ExifTool-RS");
+    let perl_readback =
+        get_perl_exiftool_output(temp_path).expect("Failed to read back with Perl ExifTool");
+    let rust_readback =
+        get_exiftool_rs_output(temp_path).expect("Failed to read back with ExifTool-RS");
 
     // Step 3: Compare outputs
     let report = compare_json_outputs(&perl_readback, &rust_readback)
         .expect("Failed to compare JSON outputs");
 
     println!("Match rate after write: {:.2}%", report.match_rate);
-    println!("Matched: {}/{} tags", report.matched_tags, report.total_tags);
+    println!(
+        "Matched: {}/{} tags",
+        report.matched_tags, report.total_tags
+    );
 
     if !report.mismatches.is_empty() {
         println!("\nMismatches ({}):", report.mismatches.len());
@@ -757,20 +760,22 @@ fn test_write_roundtrip_jpeg_artist() {
     }
 
     // Verify Artist tag was read correctly by both tools
-    let perl_data: Vec<HashMap<String, Value>> = serde_json::from_str(&perl_readback)
-        .expect("Failed to parse Perl JSON");
-    let rust_data: Vec<HashMap<String, Value>> = serde_json::from_str(&rust_readback)
-        .expect("Failed to parse Rust JSON");
+    let perl_data: Vec<HashMap<String, Value>> =
+        serde_json::from_str(&perl_readback).expect("Failed to parse Perl JSON");
+    let rust_data: Vec<HashMap<String, Value>> =
+        serde_json::from_str(&rust_readback).expect("Failed to parse Rust JSON");
 
     assert!(!perl_data.is_empty(), "Perl output empty");
     assert!(!rust_data.is_empty(), "Rust output empty");
 
     // Check that Artist tag is present and matches
-    let perl_artist = perl_data[0].get("EXIF:Artist")
+    let perl_artist = perl_data[0]
+        .get("EXIF:Artist")
         .or_else(|| perl_data[0].get("IFD0:Artist"))
         .or_else(|| perl_data[0].get("Artist"))
         .expect("Artist tag not found in Perl output");
-    let rust_artist = rust_data[0].get("EXIF:Artist")
+    let rust_artist = rust_data[0]
+        .get("EXIF:Artist")
         .or_else(|| rust_data[0].get("IFD0:Artist"))
         .or_else(|| rust_data[0].get("Artist"))
         .expect("Artist tag not found in Rust output");
@@ -816,15 +821,18 @@ fn test_copy_metadata_jpeg_to_jpeg() {
     // Destination file (minimal metadata)
     let dest_file = Path::new("tests/fixtures/jpeg/simple/synthetic_001.jpg");
     if !dest_file.exists() {
-        eprintln!("Skipping test: Destination fixture not found: {:?}", dest_file);
+        eprintln!(
+            "Skipping test: Destination fixture not found: {:?}",
+            dest_file
+        );
         return;
     }
 
     println!("\n=== Copy Metadata Test: JPEG to JPEG ===");
 
     // Create temp destination file
-    let temp_dest = NamedTempFile::new_in(std::env::temp_dir())
-        .expect("Failed to create temp destination");
+    let temp_dest =
+        NamedTempFile::new_in(std::env::temp_dir()).expect("Failed to create temp destination");
     let temp_dest_path = temp_dest.path();
     fs::copy(dest_file, temp_dest_path).expect("Failed to copy destination file");
 
@@ -842,22 +850,25 @@ fn test_copy_metadata_jpeg_to_jpeg() {
     println!("Perl ExifTool copied metadata from source to destination");
 
     // Read back with both tools and compare
-    let perl_output = get_perl_exiftool_output(temp_dest_path)
-        .expect("Failed to read with Perl ExifTool");
-    let rust_output = get_exiftool_rs_output(temp_dest_path)
-        .expect("Failed to read with ExifTool-RS");
+    let perl_output =
+        get_perl_exiftool_output(temp_dest_path).expect("Failed to read with Perl ExifTool");
+    let rust_output =
+        get_exiftool_rs_output(temp_dest_path).expect("Failed to read with ExifTool-RS");
 
-    let report = compare_json_outputs(&perl_output, &rust_output)
-        .expect("Failed to compare JSON outputs");
+    let report =
+        compare_json_outputs(&perl_output, &rust_output).expect("Failed to compare JSON outputs");
 
     // Parse JSON for additional verifications
-    let perl_data: Vec<HashMap<String, Value>> = serde_json::from_str(&perl_output)
-        .expect("Failed to parse Perl JSON");
-    let rust_data: Vec<HashMap<String, Value>> = serde_json::from_str(&rust_output)
-        .expect("Failed to parse Rust JSON");
+    let perl_data: Vec<HashMap<String, Value>> =
+        serde_json::from_str(&perl_output).expect("Failed to parse Perl JSON");
+    let rust_data: Vec<HashMap<String, Value>> =
+        serde_json::from_str(&rust_output).expect("Failed to parse Rust JSON");
 
     println!("Match rate after copy: {:.2}%", report.match_rate);
-    println!("Matched: {}/{} tags", report.matched_tags, report.total_tags);
+    println!(
+        "Matched: {}/{} tags",
+        report.matched_tags, report.total_tags
+    );
 
     if !report.mismatches.is_empty() {
         println!("\nMismatches ({}):", report.mismatches.len());
@@ -894,8 +905,12 @@ fn test_copy_metadata_jpeg_to_jpeg() {
         rust_data[0].len()
     );
 
-    println!("\n✅ Copy metadata test passed! (Match rate: {:.2}%, {} Rust tags, {} Perl tags)",
-             report.match_rate, rust_data[0].len(), perl_data[0].len());
+    println!(
+        "\n✅ Copy metadata test passed! (Match rate: {:.2}%, {} Rust tags, {} Perl tags)",
+        report.match_rate,
+        rust_data[0].len(),
+        perl_data[0].len()
+    );
 }
 
 #[test]
@@ -927,15 +942,17 @@ fn test_rename_file_pattern() {
     println!("Original filename: test_rename.jpg");
 
     // First, check what DateTimeOriginal value exists
-    let metadata_check = get_perl_exiftool_output(&temp_file_path)
-        .expect("Failed to read metadata");
+    let metadata_check =
+        get_perl_exiftool_output(&temp_file_path).expect("Failed to read metadata");
     println!("Original metadata check:");
 
-    let metadata_json: Vec<HashMap<String, Value>> = serde_json::from_str(&metadata_check)
-        .expect("Failed to parse metadata JSON");
+    let metadata_json: Vec<HashMap<String, Value>> =
+        serde_json::from_str(&metadata_check).expect("Failed to parse metadata JSON");
     if !metadata_json.is_empty() {
-        if let Some(datetime) = metadata_json[0].get("EXIF:DateTimeOriginal")
-            .or_else(|| metadata_json[0].get("DateTimeOriginal")) {
+        if let Some(datetime) = metadata_json[0]
+            .get("EXIF:DateTimeOriginal")
+            .or_else(|| metadata_json[0].get("DateTimeOriginal"))
+        {
             println!("  DateTimeOriginal: {:?}", datetime);
         }
     }
@@ -976,16 +993,19 @@ fn test_rename_file_pattern() {
         println!("\nVerifying metadata from: {}", file_path.display());
 
         // Read with both tools and compare
-        let perl_output = get_perl_exiftool_output(&file_path)
-            .expect("Failed to read with Perl ExifTool");
-        let rust_output = get_exiftool_rs_output(&file_path)
-            .expect("Failed to read with ExifTool-RS");
+        let perl_output =
+            get_perl_exiftool_output(&file_path).expect("Failed to read with Perl ExifTool");
+        let rust_output =
+            get_exiftool_rs_output(&file_path).expect("Failed to read with ExifTool-RS");
 
         let report = compare_json_outputs(&perl_output, &rust_output)
             .expect("Failed to compare JSON outputs");
 
         println!("Match rate after rename: {:.2}%", report.match_rate);
-        println!("Matched: {}/{} tags", report.matched_tags, report.total_tags);
+        println!(
+            "Matched: {}/{} tags",
+            report.matched_tags, report.total_tags
+        );
 
         // For rename operations, we verify that files remain readable and core tags match
         // Lower threshold (85%) accounts for potential differences in derived/composite tags
@@ -995,7 +1015,10 @@ fn test_rename_file_pattern() {
             report.match_rate
         );
 
-        println!("\n✅ Rename file pattern test passed! (Match rate: {:.2}%)", report.match_rate);
+        println!(
+            "\n✅ Rename file pattern test passed! (Match rate: {:.2}%)",
+            report.match_rate
+        );
     } else {
         panic!("No files found in temp directory after rename");
     }
@@ -1023,18 +1046,18 @@ fn test_date_shift_all_dates() {
     println!("\n=== Date Shift Test: All Dates ===");
 
     // Create temp file
-    let temp_file = NamedTempFile::new_in(std::env::temp_dir())
-        .expect("Failed to create temp file");
+    let temp_file =
+        NamedTempFile::new_in(std::env::temp_dir()).expect("Failed to create temp file");
     let temp_path = temp_file.path();
     fs::copy(test_file, temp_path).expect("Failed to copy test file");
 
     // Read original dates
-    let original_output = get_perl_exiftool_output(temp_path)
-        .expect("Failed to read original metadata");
+    let original_output =
+        get_perl_exiftool_output(temp_path).expect("Failed to read original metadata");
 
     println!("Original dates:");
-    let original_json: Vec<HashMap<String, Value>> = serde_json::from_str(&original_output)
-        .expect("Failed to parse original JSON");
+    let original_json: Vec<HashMap<String, Value>> =
+        serde_json::from_str(&original_output).expect("Failed to parse original JSON");
     if !original_json.is_empty() {
         for (key, value) in &original_json[0] {
             if key.contains("Date") || key.contains("Time") {
@@ -1045,7 +1068,7 @@ fn test_date_shift_all_dates() {
 
     // Use Perl ExifTool to shift all dates by +1 day, +2 hours
     let shift_status = Command::new("exiftool")
-        .arg("-AllDates+=0:0:1 2:0:0")  // Add 1 day and 2 hours
+        .arg("-AllDates+=0:0:1 2:0:0") // Add 1 day and 2 hours
         .arg("-overwrite_original")
         .arg(temp_path)
         .status()
@@ -1055,14 +1078,13 @@ fn test_date_shift_all_dates() {
     println!("\nPerl ExifTool shifted all dates by +1 day, +2 hours");
 
     // Read shifted dates with both tools
-    let perl_output = get_perl_exiftool_output(temp_path)
-        .expect("Failed to read with Perl ExifTool");
-    let rust_output = get_exiftool_rs_output(temp_path)
-        .expect("Failed to read with ExifTool-RS");
+    let perl_output =
+        get_perl_exiftool_output(temp_path).expect("Failed to read with Perl ExifTool");
+    let rust_output = get_exiftool_rs_output(temp_path).expect("Failed to read with ExifTool-RS");
 
     println!("\nShifted dates (Perl ExifTool):");
-    let perl_json: Vec<HashMap<String, Value>> = serde_json::from_str(&perl_output)
-        .expect("Failed to parse Perl JSON");
+    let perl_json: Vec<HashMap<String, Value>> =
+        serde_json::from_str(&perl_output).expect("Failed to parse Perl JSON");
     if !perl_json.is_empty() {
         for (key, value) in &perl_json[0] {
             if key.contains("Date") || key.contains("Time") {
@@ -1072,11 +1094,14 @@ fn test_date_shift_all_dates() {
     }
 
     // Compare outputs
-    let report = compare_json_outputs(&perl_output, &rust_output)
-        .expect("Failed to compare JSON outputs");
+    let report =
+        compare_json_outputs(&perl_output, &rust_output).expect("Failed to compare JSON outputs");
 
     println!("\nMatch rate after date shift: {:.2}%", report.match_rate);
-    println!("Matched: {}/{} tags", report.matched_tags, report.total_tags);
+    println!(
+        "Matched: {}/{} tags",
+        report.matched_tags, report.total_tags
+    );
 
     if !report.mismatches.is_empty() {
         println!("\nMismatches ({}):", report.mismatches.len());
@@ -1095,7 +1120,10 @@ fn test_date_shift_all_dates() {
         report.match_rate
     );
 
-    println!("\n✅ Date shift test passed! (Match rate: {:.2}%)", report.match_rate);
+    println!(
+        "\n✅ Date shift test passed! (Match rate: {:.2}%)",
+        report.match_rate
+    );
 }
 
 // ============================================================================

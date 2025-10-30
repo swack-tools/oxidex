@@ -356,7 +356,15 @@ pub fn parse_ihdr_chunk(data: &[u8]) -> Result<(u32, u32, u8, u8, u8, u8, u8)> {
     let filter = data[11];
     let interlace = data[12];
 
-    Ok((width, height, bit_depth, color_type, compression, filter, interlace))
+    Ok((
+        width,
+        height,
+        bit_depth,
+        color_type,
+        compression,
+        filter,
+        interlace,
+    ))
 }
 
 /// Parses a cHRM chunk (Primary Chromaticities).
@@ -402,7 +410,9 @@ pub fn parse_chrm_chunk(data: &[u8]) -> Result<ChromaticityValues> {
     let blue_x = u32::from_be_bytes([data[24], data[25], data[26], data[27]]) as f64 / 100000.0;
     let blue_y = u32::from_be_bytes([data[28], data[29], data[30], data[31]]) as f64 / 100000.0;
 
-    Ok((white_x, white_y, red_x, red_y, green_x, green_y, blue_x, blue_y))
+    Ok((
+        white_x, white_y, red_x, red_y, green_x, green_y, blue_x, blue_y,
+    ))
 }
 
 /// Parses a pHYs chunk (Physical Pixel Dimensions).
@@ -457,7 +467,7 @@ pub fn parse_phys_chunk(data: &[u8]) -> Result<(u32, u32, u8)> {
 /// - `Err`: Parse error
 pub fn parse_bkgd_chunk(data: &[u8]) -> Result<u16> {
     match data.len() {
-        1 => Ok(data[0] as u16), // Palette index
+        1 => Ok(data[0] as u16),                         // Palette index
         2 => Ok(u16::from_be_bytes([data[0], data[1]])), // Gray value
         6 => Ok(u16::from_be_bytes([data[0], data[1]])), // Red component (simplified)
         _ => Err(ExifToolError::parse_error(format!(
@@ -503,7 +513,10 @@ pub fn parse_time_chunk(data: &[u8]) -> Result<String> {
     let minute = data[5];
     let second = data[6];
 
-    Ok(format!("{:04}:{:02}:{:02} {:02}:{:02}:{:02}", year, month, day, hour, minute, second))
+    Ok(format!(
+        "{:04}:{:02}:{:02} {:02}:{:02}:{:02}",
+        year, month, day, hour, minute, second
+    ))
 }
 
 /// Parses an eXIf chunk and extracts EXIF tags using the TIFF parser.
@@ -574,12 +587,12 @@ pub fn parse_exif_chunk(data: &[u8]) -> Result<IfdEntries> {
 /// Simple in-memory FileReader implementation for EXIF data embedded in PNG.
 ///
 /// This is used to wrap eXIf chunk data so it can be passed to the TIFF IFD parser.
-struct ExifDataReader {
+pub(super) struct ExifDataReader {
     data: Vec<u8>,
 }
 
 impl ExifDataReader {
-    fn new(data: Vec<u8>) -> Self {
+    pub(super) fn new(data: Vec<u8>) -> Self {
         Self { data }
     }
 }

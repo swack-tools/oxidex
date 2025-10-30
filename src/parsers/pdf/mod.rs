@@ -124,7 +124,10 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             if let Some(version_end) = version_str.find(|c: char| !c.is_ascii_digit() && c != '.') {
                 let version = &version_str[..version_end];
                 if let Ok(version_float) = version.parse::<f64>() {
-                    metadata.insert("PDF:PDFVersion".to_string(), crate::core::TagValue::new_float(version_float));
+                    metadata.insert(
+                        "PDF:PDFVersion".to_string(),
+                        crate::core::TagValue::new_float(version_float),
+                    );
                 }
             }
         }

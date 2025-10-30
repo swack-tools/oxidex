@@ -437,12 +437,15 @@ fn output_json_results(results: &[(PathBuf, Result<crate::core::MetadataMap>)]) 
                             TagValue::DateTime(dt) => json!(dt.to_rfc3339()),
                             TagValue::Struct(_) => json!("(Structured data)"),
                             TagValue::Array(values) => {
-                                let array: Vec<serde_json::Value> = values.iter().map(|v| match v {
-                                    TagValue::String(s) => json!(s),
-                                    TagValue::Integer(i) => json!(i),
-                                    TagValue::Float(f) => json!(f),
-                                    _ => json!(format!("{:?}", v)),
-                                }).collect();
+                                let array: Vec<serde_json::Value> = values
+                                    .iter()
+                                    .map(|v| match v {
+                                        TagValue::String(s) => json!(s),
+                                        TagValue::Integer(i) => json!(i),
+                                        TagValue::Float(f) => json!(f),
+                                        _ => json!(format!("{:?}", v)),
+                                    })
+                                    .collect();
                                 json!(array)
                             }
                         };

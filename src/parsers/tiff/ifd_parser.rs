@@ -241,7 +241,12 @@ pub fn parse_ifd(
             reader.read(value_offset, total_size)?.to_vec()
         };
 
-        result.push((entry.tag_id, entry.field_type, entry.value_count, value_bytes));
+        result.push((
+            entry.tag_id,
+            entry.field_type,
+            entry.value_count,
+            value_bytes,
+        ));
     }
 
     Ok(result)
