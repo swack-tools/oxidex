@@ -60,3 +60,9 @@ new_tags.txt
 # Codemachine temporary/draft files
 .codemachine/inputs/*.3.md
 .codemachine/inputs/*.4md
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
