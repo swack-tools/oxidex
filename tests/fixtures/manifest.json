@@ -1,0 +1,198 @@
+{
+  "version": "1.0",
+  "description": "Test corpus for ExifTool-RS integration tests comparing output against Perl ExifTool",
+  "total_images": 5,
+  "target_images": 100,
+  "formats": {
+    "jpeg": {
+      "count": 2,
+      "target": 50,
+      "categories": {
+        "simple": {
+          "count": 1,
+          "target": 15,
+          "description": "Basic JPEG with standard EXIF"
+        },
+        "complex": {
+          "count": 1,
+          "target": 15,
+          "description": "JPEG with EXIF+XMP, GPS, maker notes"
+        },
+        "edge_cases": {
+          "count": 0,
+          "target": 10,
+          "description": "Large dimensions, unusual orientations, progressive encoding"
+        },
+        "malformed": {
+          "count": 0,
+          "target": 10,
+          "description": "Truncated, invalid segments, corrupted markers"
+        }
+      }
+    },
+    "png": {
+      "count": 0,
+      "target": 30,
+      "categories": {
+        "simple": {
+          "count": 0,
+          "target": 10,
+          "description": "PNG with text chunks (tEXt, zTXt)"
+        },
+        "complex": {
+          "count": 0,
+          "target": 10,
+          "description": "PNG with eXIf chunk, ICC profile"
+        },
+        "edge_cases": {
+          "count": 0,
+          "target": 10,
+          "description": "Interlaced, animated (APNG)"
+        }
+      }
+    },
+    "tiff": {
+      "count": 1,
+      "target": 25,
+      "categories": {
+        "simple": {
+          "count": 1,
+          "target": 10,
+          "description": "Single-page TIFF, little-endian"
+        },
+        "complex": {
+          "count": 0,
+          "target": 10,
+          "description": "Multi-page TIFF, big-endian, compression variants"
+        },
+        "edge_cases": {
+          "count": 0,
+          "target": 5,
+          "description": "Very large images, unusual bit depths"
+        }
+      }
+    },
+    "pdf": {
+      "count": 1,
+      "target": 15,
+      "categories": {
+        "simple": {
+          "count": 1,
+          "target": 5,
+          "description": "PDF with Info dictionary"
+        },
+        "complex": {
+          "count": 0,
+          "target": 10,
+          "description": "PDF with XMP, embedded images, annotations"
+        }
+      }
+    },
+    "mp4": {
+      "count": 1,
+      "target": 15,
+      "categories": {
+        "simple": {
+          "count": 1,
+          "target": 5,
+          "description": "MP4 with basic iTunes metadata"
+        },
+        "complex": {
+          "count": 0,
+          "target": 10,
+          "description": "MP4 with keys/ilst, GPS track, multiple streams"
+        }
+      }
+    }
+  },
+  "fixtures": [
+    {
+      "path": "jpeg/simple/sample_with_exif.jpg",
+      "format": "JPEG",
+      "category": "simple",
+      "source": "internal",
+      "license": "GPL-3.0",
+      "metadata_types": ["EXIF"],
+      "description": "Basic JPEG with standard EXIF tags",
+      "expected_tags": ["EXIF:Make", "EXIF:Model", "EXIF:DateTime"]
+    },
+    {
+      "path": "jpeg/complex/sample_with_exif_xmp.jpg",
+      "format": "JPEG",
+      "category": "complex",
+      "source": "internal",
+      "license": "GPL-3.0",
+      "metadata_types": ["EXIF", "XMP"],
+      "description": "JPEG with both EXIF and XMP metadata",
+      "expected_tags": ["EXIF:Make", "XMP:Creator", "XMP:Title"]
+    },
+    {
+      "path": "tiff/simple/sample.tif",
+      "format": "TIFF",
+      "category": "simple",
+      "source": "internal",
+      "license": "GPL-3.0",
+      "metadata_types": ["EXIF"],
+      "description": "Basic TIFF with EXIF IFD",
+      "expected_tags": ["EXIF:ImageWidth", "EXIF:ImageHeight"]
+    },
+    {
+      "path": "pdf/simple/sample.pdf",
+      "format": "PDF",
+      "category": "simple",
+      "source": "internal",
+      "license": "GPL-3.0",
+      "metadata_types": ["PDF"],
+      "description": "PDF with Info dictionary",
+      "expected_tags": ["PDF:Title", "PDF:Author", "PDF:Creator"]
+    },
+    {
+      "path": "mp4/simple/sample.mp4",
+      "format": "MP4",
+      "category": "simple",
+      "source": "internal",
+      "license": "GPL-3.0",
+      "metadata_types": ["QuickTime"],
+      "description": "MP4 with basic QuickTime metadata",
+      "expected_tags": ["QuickTime:CreateDate", "QuickTime:Duration"]
+    }
+  ],
+  "acquisition_plan": {
+    "sources": [
+      {
+        "name": "Exiv2 Test Suite",
+        "url": "https://github.com/Exiv2/exiv2/tree/main/test/data",
+        "license": "GPL-2.0",
+        "estimated_count": 40,
+        "formats": ["JPEG", "TIFF", "PNG"]
+      },
+      {
+        "name": "Unsplash",
+        "url": "https://unsplash.com",
+        "license": "CC0",
+        "estimated_count": 30,
+        "formats": ["JPEG"],
+        "notes": "Real-world photos with GPS metadata"
+      },
+      {
+        "name": "Synthetic Images",
+        "tool": "ImageMagick + exiftool",
+        "estimated_count": 30,
+        "formats": ["JPEG", "PNG", "TIFF"],
+        "notes": "Generated images with known metadata for edge cases"
+      }
+    ]
+  },
+  "match_rate_thresholds": {
+    "simple": 0.99,
+    "complex": 0.99,
+    "edge_cases": 0.95,
+    "malformed": 0.90
+  },
+  "notes": [
+    "Test fixtures are tracked with Git LFS (see .gitattributes)",
+    "Images must be properly licensed (GPL-compatible or public domain)",
+    "Each fixture should be documented with source and expected metadata",
+    "Target: 100+ images for comprehensive coverage"
+  ]
+}

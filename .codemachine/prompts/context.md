@@ -10,24 +10,25 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I5.T8",
+  "task_id": "I5.T9",
   "iteration_id": "I5",
   "iteration_goal": "Implement C FFI bindings for cross-language integration, automate tag database generation from ExifTool specs, set up cross-compilation and release builds, create comprehensive documentation, and polish for v1.0 release.",
-  "description": "Create distribution packages: (1) Debian .deb package (use cargo-deb), (2) RPM package (use cargo-generate-rpm), (3) Homebrew formula (Ruby DSL defining package). Configure package metadata (name, version, description, dependencies, installation paths). Test packages: install, run, uninstall. Add instructions to README for each distribution method. Optionally set up package repository or publish to existing repos (crates.io for Rust crate, homebrew-core for Homebrew).",
-  "agent_type_hint": "SetupAgent",
-  "inputs": "Packaging tool documentation (cargo-deb, cargo-generate-rpm), Homebrew formula guide",
+  "description": "Expand integration test suite from I3.T10 to cover all supported formats and operations. Test corpus: 100+ images across JPEG (various EXIF/XMP combinations), TIFF (multi-page, big/little-endian), PNG (text, eXIf), PDF (Info, XMP), MP4 (iTunes, keys/ilst). Test operations: read, write, copy, rename, date shift. Compare against ExifTool for all operations. Acceptance threshold: 98%+ tag value match for reads, successful round-trip for writes. Run as part of CI on every commit (with feature flag). Document test results in CI badge.",
+  "agent_type_hint": "BackendAgent",
+  "inputs": "I3.T10 comparison test framework, all implemented features",
   "target_files": [
-    "Cargo.toml",
-    "packaging/homebrew/exiftool-rs.rb",
+    "tests/integration/exiftool_comparison_tests.rs",
+    "tests/fixtures/",
+    ".github/workflows/ci.yml",
     "README.md"
   ],
   "input_files": [
-    "Cargo.toml",
-    "README.md"
+    "tests/integration/exiftool_comparison_tests.rs",
+    "tests/fixtures/"
   ],
-  "deliverables": ".deb package, .rpm package, Homebrew formula, installation documentation",
-  "acceptance_criteria": "cargo deb generates valid .deb package, cargo generate-rpm generates valid .rpm package, Homebrew formula installs from source or binary, packages install binary to /usr/bin or /usr/local/bin, packages include man page (optional) and README, manual test: install package, run exiftool-rs --version, uninstall, README documents installation for each package type",
-  "dependencies": ["I5.T6"],
+  "deliverables": "Comprehensive test suite (100+ images), CI integration, test results reporting",
+  "acceptance_criteria": "Test corpus contains 100+ diverse images, tests cover all supported formats (JPEG, TIFF, PNG, PDF, MP4), tests cover all operations (read, write, copy, rename, date shift), 98%+ tag match rate achieved for reads, round-trip tests pass (write → read → verify), CI runs tests on every commit (with ExifTool installed in CI environment), README shows test results badge (pass/fail)",
+  "dependencies": [],
   "parallelizable": false,
   "done": false
 }
@@ -39,150 +40,108 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: deployment-view (from 05_Operational_Architecture.md)
+### Context: integration-tests (from 03_Verification_and_Glossary.md)
 
 ```markdown
-<!-- anchor: deployment-view -->
-### 3.9. Deployment View
+#### Integration Tests (10% of test suite)
+*   **Scope:** End-to-end workflows and CLI operations
+*   **Location:** `tests/integration/`
+*   **Tools:** `cargo test`, filesystem fixtures in `tests/fixtures/`
+*   **Coverage Requirements:**
+    *   Full read workflow: file → metadata extraction → output
+    *   Full write workflow: read → modify → write → verify
+    *   CLI argument parsing and execution
+    *   Batch processing with multiple files
+    *   Error scenarios (missing file, corrupted metadata, permission denied)
+*   **ExifTool Comparison Tests:** Special integration tests comparing output against Perl ExifTool
+    *   Run both tools on same test corpus (100+ images)
+    *   Compare JSON output for tag value parity
+    *   Acceptance threshold: 98%+ match rate
+    *   Conditional on ExifTool availability (`#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]`)
+*   **Examples:**
+    ```rust
+    #[test]
+    fn test_cli_extract_jpeg_exif() {
+        let output = Command::new("./target/debug/exiftool-rs")
+            .arg("tests/fixtures/jpeg/sample.jpg")
+            .output()?;
+        assert!(output.status.success());
+        assert!(String::from_utf8(output.stdout)?.contains("EXIF:Make"));
+    }
 
-<!-- anchor: target-environment -->
-#### Target Environment
-
-**Primary**: **Local developer machines and CI/CD pipelines**
-
-**Supported Platforms**:
-
-| **OS** | **Architecture** | **Distribution Method** |
-|--------|-----------------|------------------------|
-| Linux | x86_64, aarch64 | Static binary, `.deb`/`.rpm` packages, cargo install |
-| macOS | x86_64 (Intel), aarch64 (Apple Silicon) | Homebrew formula, static binary |
-| Windows | x86_64 | `.exe` installer, `scoop`/`chocolatey` packages, static binary |
-| FreeBSD | x86_64 | Cargo install, ports tree |
-| WebAssembly | wasm32-unknown-unknown | NPM package (`@exiftool-rs/wasm`) |
-
-**Secondary**: **Embedded in larger applications** (via Rust crate or FFI bindings)
-
-<!-- anchor: deployment-strategy -->
-#### Deployment Strategy
-
-**Distribution Models**:
-
-1. **Standalone Binary** (Primary):
-   - Single static executable with no dependencies
-   - Cross-compiled via `cross` tool for all platforms
-   - Distributed via GitHub Releases with checksums
-   - Size: ~8MB (stripped, LTO, compressed with UPX)
-
-2. **Rust Crate** (Library):
-   - Published to crates.io as `exiftool-rs`
-   - Applications add `exiftool-rs = "1.0"` to `Cargo.toml`
-   - Compiled into consuming application's binary
-
-3. **C FFI Shared Library**:
-   - `libexiftool_rs.so` (Linux), `.dylib` (macOS), `.dll` (Windows)
-   - Header file generated via `cbindgen`
-   - Used by Python (`ctypes`), Node.js (`ffi-napi`), Go (`cgo`)
-
-4. **Container Image** (Optional):
-   - Minimal Alpine Linux image with static binary
-   - Size: ~15MB total
-   - Example: `docker run exiftool-rs/exiftool:latest photo.jpg`
-
-**Build Process**:
-
-```yaml
-# GitHub Actions workflow
-name: Release Build
-
-on:
-  push:
-    tags: ['v*']
-
-jobs:
-  build-matrix:
-    strategy:
-      matrix:
-        target:
-          - x86_64-unknown-linux-musl
-          - x86_64-apple-darwin
-          - aarch64-apple-darwin
-          - x86_64-pc-windows-gnu
-
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: cross-rs/cross@v1
-
-      - run: cross build --release --target ${{ matrix.target }}
-      - run: strip target/${{ matrix.target }}/release/exiftool-rs  # Reduce size
-      - run: upx target/${{ matrix.target }}/release/exiftool-rs    # Compress
-
-      - uses: actions/upload-artifact@v3
-        with:
-          name: exiftool-rs-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/exiftool-rs
-```
+    #[test]
+    #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
+    fn compare_against_exiftool_jpeg() {
+        let exiftool_json = get_exiftool_output("sample.jpg")?;
+        let our_json = get_exiftool_rs_output("sample.jpg")?;
+        let match_rate = compare_json_outputs(&exiftool_json, &our_json);
+        assert!(match_rate >= 0.98, "Match rate: {}", match_rate);
+    }
+    ```
 ```
 
-### Context: task-i5-t8 (from 02_Iteration_I5.md)
+### Context: testing-levels (from 03_Verification_and_Glossary.md)
 
 ```markdown
-<!-- anchor: task-i5-t8 -->
-*   **Task 5.8: Create Packaging for Distribution (deb, rpm, Homebrew)**
-    *   **Task ID:** `I5.T8`
-    *   **Description:** Create distribution packages: (1) Debian .deb package (use `cargo-deb`), (2) RPM package (use `cargo-generate-rpm`), (3) Homebrew formula (Ruby DSL defining package). Configure package metadata (name, version, description, dependencies, installation paths). Test packages: install, run, uninstall. Add instructions to README for each distribution method. Optionally set up package repository or publish to existing repos (crates.io for Rust crate, homebrew-core for Homebrew).
-    *   **Agent Type Hint:** `SetupAgent`
-    *   **Inputs:** Packaging tool documentation (cargo-deb, cargo-generate-rpm), Homebrew formula guide
-    *   **Input Files:** [`Cargo.toml`, `README.md`]
-    *   **Target Files:**
-        *   `Cargo.toml` (add `[package.metadata.deb]` and `[package.metadata.generate-rpm]` sections)
-        *   `packaging/homebrew/exiftool-rs.rb` (Homebrew formula)
-        *   `README.md` (add package installation instructions)
-    *   **Deliverables:**
-        *   .deb package
-        *   .rpm package
-        *   Homebrew formula
-        *   Installation documentation
-    *   **Acceptance Criteria:**
-        *   `cargo deb` generates valid .deb package
-        *   `cargo generate-rpm` generates valid .rpm package
-        *   Homebrew formula installs from source or binary
-        *   Packages install binary to /usr/bin or /usr/local/bin
-        *   Packages include man page (optional) and README
-        *   Manual test: install package, run `exiftool-rs --version`, uninstall
-        *   README documents installation for each package type
-    *   **Dependencies:** `I5.T6` (needs release binaries)
-    *   **Parallelizable:** Partially (can define package metadata early, test after binaries available)
+### 5.1. Testing Levels
+
+The project employs a comprehensive testing pyramid to ensure correctness and reliability:
+
+#### Unit Tests (70% of test suite)
+*   **Scope:** Individual functions and modules
+*   **Location:** Inline in source files (`#[cfg(test)] mod tests`) and `tests/` directory
+*   **Tools:** `cargo test`, standard Rust test framework
+*   **Coverage Requirements:**
+    *   All parser functions (format detection, segment parsing, IFD parsing, tag extraction)
+    *   Data model operations (metadata map accessors, tag value conversions)
+    *   Validation logic (tag value type checking, constraint validation)
+    *   Error handling paths (parse errors, I/O errors, validation failures)
+*   **Acceptance Criteria:** 80%+ line coverage (measured with `cargo-tarpaulin` or `cargo-llvm-cov`)
 ```
 
-### Context: task-i5-t6 (from 02_Iteration_I5.md)
+### Context: ci-cd-pipeline (from 03_Verification_and_Glossary.md)
 
 ```markdown
-<!-- anchor: task-i5-t6 -->
-*   **Task 5.6: Set Up Cross-Compilation with cross**
-    *   **Task ID:** `I5.T6`
-    *   **Description:** Configure cross-compilation for Linux, macOS, Windows, and ARM targets using `cross` tool. Create `Cross.toml` configuration. Set up GitHub Actions release workflow in `.github/workflows/release.yml` to build binaries for: (1) x86_64-unknown-linux-musl (static Linux), (2) x86_64-apple-darwin (macOS Intel), (3) aarch64-apple-darwin (macOS ARM), (4) x86_64-pc-windows-gnu (Windows), (5) aarch64-unknown-linux-musl (Linux ARM). Apply optimizations: LTO, strip symbols, UPX compression (optional). Upload artifacts to GitHub Releases on git tag push.
-    *   **Agent Type Hint:** `SetupAgent`
-    *   **Inputs:** `cross` tool documentation, GitHub Actions best practices
-    *   **Input Files:** [`Cargo.toml`]
-    *   **Target Files:**
-        *   `Cross.toml`
-        *   `.github/workflows/release.yml`
-        *   `Cargo.toml` (add `[profile.release]` optimizations)
-    *   **Deliverables:**
-        *   Cross-compilation configuration
-        *   GitHub Actions release workflow
-        *   Optimized release binaries
-    *   **Acceptance Criteria:**
-        *   Cross.toml exists with target configurations
-        *   Release workflow builds for all 5 targets
-        *   Binaries are statically linked (no external dependencies)
-        *   Release profile has: lto = true, codegen-units = 1, opt-level = z (size) or 3 (speed)
-        *   Binaries stripped of debug symbols
-        *   Workflow uploads binaries to GitHub Releases on tag push (test with manual tag)
-        *   Binary sizes: Linux ~8MB, Windows ~9MB, macOS ~10MB (approximate)
-    *   **Dependencies:** []
-    *   **Parallelizable:** Yes
+### 5.2. CI/CD Pipeline
+
+#### Continuous Integration (GitHub Actions)
+
+**Workflow: `.github/workflows/ci.yml`**
+*   **Triggers:** Every push, every pull request
+*   **Matrix:**
+    *   OS: `ubuntu-latest`, `macos-latest`, `windows-latest`
+    *   Rust version: `stable`, `beta` (optional: `nightly` for feature preview)
+*   **Steps:**
+    1. **Checkout:** Clone repository
+    2. **Setup Rust:** Install Rust toolchain via `dtolnay/rust-toolchain`
+```
+
+### Context: security-considerations (from 05_Operational_Architecture.md)
+
+```markdown
+#### Security Considerations
+
+**Threat Model**:
+
+ExifTool-RS processes potentially malicious files from untrusted sources (e.g., user uploads, scraped images). Primary threats:
+
+1. **Memory Corruption**: Buffer overflows, use-after-free in parsers
+2. **Resource Exhaustion**: Zip bombs, billion laughs (XML), decompression bombs
+3. **Path Traversal**: Malicious filenames in archive processing
+4. **Code Injection**: Via scripting features (if added)
+
+**Mitigations**:
+
+| **Threat** | **Mitigation** | **Implementation** |
+|------------|---------------|-------------------|
+| Buffer overflows | Rust ownership system | Compile-time prevention via borrow checker |
+| Integer overflows | Checked arithmetic | `#![deny(overflowing_literals)]`, `checked_add()` in parsers |
+| Resource exhaustion | Size limits | Max allocation: 1GB per file, max parse depth: 64 levels (nested IFDs) |
+| Zip bombs | Decompression ratio check | Reject if uncompressed > 100x compressed size |
+| XXE attacks (XML) | Disable external entities | `quick-xml` configured to reject DOCTYPE, external entities |
+| Path traversal | Path sanitization | `canonicalize()` + jail to working directory for batch operations |
+| Dependency vulnerabilities | Automated scanning | `cargo-audit` in CI, Dependabot alerts, minimal dependency tree |
+| Malicious input | Fuzzing | Continuous fuzzing with `cargo-fuzz`, OSS-Fuzz integration target |
 ```
 
 ---
@@ -193,101 +152,125 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
+*   **File:** `tests/integration/exiftool_comparison_tests.rs`
+    *   **Summary:** This file contains the core comparison test framework with 3 existing tests (JPEG with EXIF, JPEG with EXIF+XMP, TIFF). It includes sophisticated comparison logic with tolerance for floating-point values, TagValue enum unwrapping, and detailed mismatch reporting.
+    *   **Recommendation:** You MUST extend this file by adding additional test functions for the missing formats and operations. The existing infrastructure (MatchReport, compare_json_outputs, values_match) is well-designed and SHOULD be reused. Pay special attention to the TODO comments at the end of the file (lines 461-485) which list exactly what needs to be implemented.
+    *   **Key Functions to Understand:**
+        - `get_perl_exiftool_output()` - Executes Perl ExifTool with flags `-json -a -G1 -struct`
+        - `get_exiftool_rs_output()` - Executes the compiled ExifTool-RS binary
+        - `compare_json_outputs()` - Core comparison logic with 95% threshold
+        - `values_match()` - Handles type mismatches, floating-point tolerance, nested structures
+    *   **Important Details:** Tests are conditionally compiled with `#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]` and check for ExifTool availability at runtime.
+
+*   **File:** `docs/testing/integration_test_plan.md`
+    *   **Summary:** This is a comprehensive 1089-line integration testing plan that defines the exact test corpus requirements, validation methodology, acceptance criteria, and directory structure for test fixtures.
+    *   **Recommendation:** You MUST follow this plan as the authoritative specification. It defines:
+        - Test corpus: 130+ images across 5 formats (JPEG: 50, PNG: 30, TIFF: 25, WebP: 15, HEIC: 10)
+        - Directory structure: `tests/fixtures/{format}/{simple|complex|edge_cases|malformed}/`
+        - Match rate thresholds: 99% for simple/complex, 95% for edge cases
+        - Comparison methodology: JSON output comparison with tolerance for GPS coordinates (±0.0001°) and other floats (±0.01)
+    *   **Critical Sections:**
+        - Section 2.2: Image Sourcing Strategy (use Exiv2 test suite, Unsplash, synthetic images)
+        - Section 3.3: JSON Output Comparison (exact comparison logic already implemented in exiftool_comparison_tests.rs)
+        - Section 5.1: Git LFS Setup (test images should be tracked with Git LFS to avoid bloating repository)
+
+*   **File:** `.github/workflows/ci.yml`
+    *   **Summary:** Current CI workflow tests on Ubuntu, macOS, Windows with build, test, clippy, and format checks. Also includes security audit and code coverage jobs.
+    *   **Recommendation:** You MUST extend this workflow to add ExifTool installation and run comparison tests. The plan (Section 5.2 in integration_test_plan.md) provides the exact workflow steps needed:
+        - Install Perl ExifTool via package manager (apt-get, brew, choco)
+        - Run `cargo test --features exiftool-comparison`
+        - Generate comparison report and upload artifacts
+        - Check match rate threshold (fail if < 99%)
+    *   **Important Note:** The existing workflow has no ExifTool installation step. This is a critical missing piece.
+
+*   **File:** `tests/fixtures/`
+    *   **Summary:** Currently contains only 5 test files (2 JPEG, 1 TIFF, 1 PDF, 1 MP4). The task requires expanding this to 100+ images.
+    *   **Recommendation:** You MUST create the directory structure defined in the integration test plan (Section 2.3):
+        ```
+        tests/fixtures/
+        ├── jpeg/simple/      (15 images)
+        ├── jpeg/complex/     (15 images)
+        ├── jpeg/edge_cases/  (10 images)
+        ├── jpeg/malformed/   (10 images)
+        ├── png/simple/       (10 images)
+        ├── png/complex/      (10 images)
+        ... and so on
+        ```
+    *   **Git LFS Requirement:** The plan specifies that test images MUST be tracked with Git LFS. You should create `.gitattributes` with patterns like `tests/fixtures/**/*.jpg filter=lfs diff=lfs merge=lfs -text`.
+
 *   **File:** `Cargo.toml`
-    *   **Summary:** This is the project's package manifest. It already contains comprehensive metadata including name, version (0.1.0), description, license (GPL-3.0), repository URL, keywords, and categories. The package is configured to build both a library and binary with multiple crate types (lib, staticlib, cdylib). Release profile is already optimized with LTO, strip, and codegen-units=1.
-    *   **Recommendation:** You MUST add two new metadata sections to this file: `[package.metadata.deb]` for Debian packaging configuration and `[package.metadata.generate-rpm]` for RPM packaging configuration. DO NOT modify the existing `[package]` section or `[profile.release]` settings as they are already correctly configured per I5.T6.
-    *   **Key Values to Use:** name="exiftool-rs", version="0.1.0", authors=["ExifTool-RS Contributors"], description="A modern, high-performance Rust reimplementation of ExifTool for reading, writing, and editing metadata in 300+ file formats", license="GPL-3.0"
-
-*   **File:** `Cross.toml`
-    *   **Summary:** This file exists and is fully configured with cross-compilation targets for all five platforms: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, x86_64-apple-darwin, aarch64-apple-darwin, x86_64-pc-windows-gnu. It uses the official cross-rs Docker images.
-    *   **Recommendation:** This file is complete from I5.T6. You SHOULD NOT modify it unless you discover packaging-specific build requirements. The cross tool will use this configuration to build the binaries that your packages will install.
-
-*   **File:** `.github/workflows/release.yml`
-    *   **Summary:** This is a comprehensive GitHub Actions workflow that handles release automation. It creates GitHub releases, builds binaries for all 5 targets using cross/cargo, strips symbols, creates archives (.tar.gz for Linux/macOS, .zip for Windows), generates SHA256 checksums, and uploads artifacts to GitHub Releases. The workflow triggers on git tags matching 'v*' pattern.
-    *   **Recommendation:** This workflow is complete from I5.T6. The binaries it produces are what your Debian and RPM packages will ultimately install. You MAY want to reference the archive naming convention (e.g., exiftool-rs-x86_64-linux-musl.tar.gz) when writing your Homebrew formula, as it can download directly from GitHub Releases.
-    *   **Note:** The workflow already handles binary stripping and optimization, so your package configurations don't need to re-strip binaries.
-
-*   **File:** `README.md`
-    *   **Summary:** The README currently has basic project information, a "Current Status" section showing work in progress, and placeholders for usage documentation. It has an "Installation" section with only "From Source" instructions using cargo build.
-    *   **Recommendation:** You MUST add a new section documenting all three package installation methods. Insert this BEFORE the "Usage" section. The structure should include: (1) "From Debian Package" with apt/dpkg commands, (2) "From RPM Package" with dnf/yum/rpm commands, (3) "From Homebrew" with brew install command, (4) keep existing "From Source" section. Use clear markdown formatting with code blocks for commands.
+    *   **Summary:** Project configuration with the `exiftool-comparison` feature flag already defined (line 98).
+    *   **Recommendation:** No changes needed to Cargo.toml - the feature flag infrastructure is already in place. Tests should use `#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]` as done in existing tests.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** The `packaging/` directory does not exist yet. You MUST create it with this structure: `packaging/homebrew/` for the Homebrew formula. The .deb and .rpm packages are generated artifacts (not source files), so they don't need dedicated directories - cargo-deb and cargo-generate-rpm will output them to the target/ directory.
+*   **Tip 1 - Test Fixture Acquisition:** The integration test plan (Section 2.2) recommends three sources for test images:
+    1. Exiv2 test suite (30-40 images) - GPL-compatible, diverse EXIF/IPTC/XMP coverage
+    2. Unsplash (20-30 images) - CC0 public domain, real-world photos with GPS
+    3. Synthetic generated images (20-30 images) - Created with ImageMagick + exiftool for known metadata
 
-*   **Tip:** For cargo-deb configuration, you MUST specify at a minimum: `assets` (which files to include in the package - at minimum the binary), `maintainer-scripts` (optional pre/post install scripts), `extended-description`, and `section` (typically "utils" for command-line tools). The binary should be installed to `/usr/bin/exiftool-rs`. Consider including the README and LICENSE files as documentation.
+    You SHOULD prioritize downloadable public datasets first (Exiv2, sample repos) before generating synthetic images, as this provides real-world diversity.
 
-*   **Tip:** For cargo-generate-rpm configuration, you MUST specify: `assets` (similar to deb), `license` (GPL-3.0), and optionally `post_install_script` and `pre_uninstall_script`. The binary should install to `/usr/bin/exiftool-rs`.
+*   **Tip 2 - Test Coverage Strategy:** The task acceptance criteria requires testing all operations: read, write, copy, rename, date shift. Currently only read operations are tested. You MUST add test functions for:
+    - Write round-trip: modify tag → write → read → verify change
+    - Copy metadata: `-TagsFromFile` operation
+    - Rename: `-FileName` pattern substitution
+    - Date shift: `-AllDates+=` operation
 
-*   **Tip:** For the Homebrew formula, you have TWO options:
-    1. **Source-based installation:** The formula builds from source using `cargo install`. This is simpler but slower for users.
-    2. **Binary bottles:** The formula downloads pre-built binaries from GitHub Releases. This is faster but requires maintaining bottles for each macOS version/architecture.
+    These operations are all implemented in previous iterations (I3.T4, I4.T4, I4.T6, I4.T7), so you can test them.
 
-    For this task, I RECOMMEND starting with a source-based formula (option 1) as it's simpler and the release.yml workflow already provides binaries. You can add bottles later as an enhancement.
+*   **Tip 3 - CI Badge and Reporting:** The acceptance criteria requires "README shows test results badge (pass/fail)". You SHOULD:
+    1. Add a workflow status badge to README.md: `[![Integration Tests](https://github.com/org/repo/workflows/Integration%20Tests/badge.svg)](https://github.com/org/repo/actions)`
+    2. Generate a comparison report that gets uploaded as a GitHub Actions artifact
+    3. Optionally use `$GITHUB_STEP_SUMMARY` to show match rates in the Actions UI
 
-*   **Tip:** The Homebrew formula should follow this structure:
-    ```ruby
-    class ExiftoolRs < Formula
-      desc "Modern, high-performance Rust reimplementation of ExifTool"
-      homepage "https://github.com/exiftool-rs/exiftool-rs"
-      url "https://github.com/exiftool-rs/exiftool-rs/archive/refs/tags/v0.1.0.tar.gz"
-      sha256 "..." # Generate this
-      license "GPL-3.0"
+*   **Tip 4 - Match Rate Threshold:** The existing tests use 95% threshold, but the task specifies 98%+ for reads. You SHOULD update the assertion threshold to align with the requirement: `assert!(report.match_rate >= 98.0, ...)`. The integration test plan suggests 99% for well-formed files (Section 4.1.1).
 
-      depends_on "rust" => :build
+*   **Warning:** The current test fixture directory is very small (5 files). Acquiring and organizing 100+ test images is a significant undertaking. You SHOULD start by creating the directory structure and adding a smaller representative corpus (e.g., 10-20 images) to validate the test infrastructure works, then expand to the full 100+ corpus iteratively.
 
-      def install
-        system "cargo", "install", *std_cargo_args
-      end
+*   **Note:** The integration test plan mentions running comparison tests "on every commit" in CI. However, the tests may be slow with 100+ images. You SHOULD consider adding a timeout to the CI job (e.g., `timeout-minutes: 30`) and potentially using test sharding or only running on certain branches (main, release/*) to avoid CI bottlenecks.
 
-      test do
-        system "#{bin}/exiftool-rs", "--version"
-      end
-    end
-    ```
+*   **Performance Consideration:** The comparison tests shell out to both Perl ExifTool and ExifTool-RS for every test file. With 100+ images, this could take several minutes. The test plan (Section 6.4) suggests using `hyperfine` for CLI benchmarking, which handles warmup runs and statistical analysis. You SHOULD consider whether to run full comparison on all files or sample a subset for PR CI runs.
 
-*   **Warning:** Neither cargo-deb nor cargo-generate-rpm are installed in the project's development environment yet. Your implementation MUST include installation instructions in comments or README about installing these tools: `cargo install cargo-deb` and `cargo install cargo-generate-rpm`.
+*   **ExifTool Version Dependency:** The integration test plan (Appendix A) specifies Perl ExifTool 12.70 as the reference version. You SHOULD add a check in the test suite to verify the ExifTool version and warn if it's significantly different, as tag extraction behavior can vary between versions.
 
-*   **Warning:** When testing packages, BE CAREFUL not to conflict with existing exiftool installations. The binary is named `exiftool-rs` (with hyphen) specifically to avoid conflicts with Perl ExifTool's `exiftool` binary. Make sure all package configurations preserve this naming.
+---
 
-*   **Note:** The project version is currently 0.1.0 (pre-release). While the task mentions v1.0 release preparation, for THIS specific task (I5.T8), you should use the current version 0.1.0 in all package configurations. Version bumping will happen in I5.T11.
+## 4. Additional Strategic Guidance
 
-*   **Note:** The project uses GPL-3.0 license. This MUST be reflected in all package metadata. Some packaging tools require specific license identifiers - use "GPL-3.0" or "GPL-3.0-only" depending on the tool's requirements.
+### Test Development Workflow
 
-*   **Recommendation:** For package testing, create a simple shell script in `scripts/test-packages.sh` that automates the install/run/uninstall cycle for each package type. This will help verify the acceptance criteria and provide a repeatable test process.
+1. **Phase 1 - Infrastructure:** Extend CI to install ExifTool and run comparison tests (low-hanging fruit, immediate value)
+2. **Phase 2 - Corpus Expansion:** Create directory structure and acquire initial test corpus (20-30 images) covering all formats
+3. **Phase 3 - Test Coverage:** Add tests for write, copy, rename, date shift operations (reuse existing comparison framework)
+4. **Phase 4 - Scale to 100+:** Expand corpus to meet 100+ image requirement, ensure Git LFS is configured
+5. **Phase 5 - CI Polish:** Add badges, reporting, and documentation
 
-### Package-Specific Technical Requirements
+### Potential Challenges
 
-**Debian Package (.deb):**
-- Tool: cargo-deb (https://crates.io/crates/cargo-deb)
-- Install: `cargo install cargo-deb`
-- Build: `cargo deb`
-- Output: `target/debian/exiftool-rs_0.1.0_amd64.deb` (or similar)
-- Must specify architecture (likely amd64 or arm64 depending on build target)
-- Should include copyright file (/usr/share/doc/exiftool-rs/copyright)
+1. **Git LFS Setup:** If you haven't used Git LFS before, pay special attention to the integration test plan Section 5.1 which provides detailed setup instructions. The `.gitattributes` file is critical.
 
-**RPM Package (.rpm):**
-- Tool: cargo-generate-rpm (https://crates.io/crates/cargo-generate-rpm)
-- Install: `cargo install cargo-generate-rpm`
-- Build: `cargo build --release && cargo generate-rpm`
-- Output: `target/generate-rpm/exiftool-rs-0.1.0-1.x86_64.rpm` (or similar)
-- Requires release binary to already be built
-- Should specify release number (typically "1" for first build of a version)
+2. **Cross-Platform CI:** ExifTool installation differs across platforms (apt-get, brew, choco). The CI workflow should handle this gracefully (see plan Section 5.2 for example workflow).
 
-**Homebrew Formula:**
-- Language: Ruby DSL
-- Location: `packaging/homebrew/exiftool-rs.rb`
-- Reference: https://docs.brew.sh/Formula-Cookbook
-- Must include: desc, homepage, url, sha256, license, install method, test block
-- Test block should minimally verify `--version` works
+3. **Match Rate Variations:** Real-world images may have tags that ExifTool-RS doesn't yet support (especially maker notes, GPS). The plan allows for documented discrepancies in `tests/integration/KNOWN_DISCREPANCIES.md`. You SHOULD create this file to track acceptable mismatches.
 
-### Expected Workflow
+4. **Test Fixture Licensing:** Be careful about image licensing. Unsplash is CC0 (safe), Exiv2 is GPL-compatible (safe), but random internet images may have copyright issues. Always document image sources in `tests/fixtures/manifest.json` (see plan Section 2.4).
 
-1. Install packaging tools (cargo-deb, cargo-generate-rpm)
-2. Add `[package.metadata.deb]` section to Cargo.toml
-3. Add `[package.metadata.generate-rpm]` section to Cargo.toml
-4. Create `packaging/homebrew/exiftool-rs.rb` with Homebrew formula
-5. Build packages: `cargo deb` and `cargo build --release && cargo generate-rpm`
-6. Test each package type (install, run, uninstall)
-7. Update README.md with installation instructions for all three package types
-8. Document the packaging process (in comments or a PACKAGING.md file)
+### Success Metrics
+
+According to the task acceptance criteria, you've succeeded when:
+- ✅ Test corpus contains 100+ diverse images across all formats
+- ✅ Tests cover all 5 formats (JPEG, TIFF, PNG, PDF, MP4)
+- ✅ Tests cover all 5 operations (read, write, copy, rename, date shift)
+- ✅ Match rate ≥ 98% for read operations
+- ✅ Round-trip tests pass (write → read → verify)
+- ✅ CI runs tests on every commit with ExifTool installed
+- ✅ README shows test results badge
+
+The integration test plan adds additional success criteria:
+- ✅ Git LFS configured for test fixtures
+- ✅ Test corpus documented in manifest.json
+- ✅ CI completes in <30 minutes (per platform)
+- ✅ Known discrepancies documented
+
+Good luck with the implementation! The existing comparison test framework is well-designed, so you're building on a solid foundation.

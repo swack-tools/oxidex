@@ -15,18 +15,40 @@
 //! cargo test
 //! ```
 //!
-//! ## Test Corpus Status
+//! ## Test Corpus Status (I5.T9)
 //!
-//! Currently testing with available fixtures:
-//! - 2 JPEG files (with EXIF, with EXIF+XMP)
-//! - 1 TIFF file
+//! **Current**: 5 test images across 4 formats (JPEG, TIFF, PDF, MP4)
+//! **Target**: 100+ images across 5 formats (JPEG, PNG, TIFF, PDF, MP4)
+//! **Progress**: 5%
 //!
-//! TODO: Expand test corpus to meet 10+ diverse images requirement:
-//! - PNG with text chunks
-//! - PNG with eXIf chunk
-//! - Additional TIFF variants (multi-page, big-endian)
-//! - JPEG with GPS metadata
-//! - Files with maker notes
+//! ### Current Coverage
+//! - ✅ JPEG: 2 files (simple EXIF, EXIF+XMP)
+//! - ✅ TIFF: 1 file (basic TIFF)
+//! - ✅ PDF: 1 file (Info dictionary)
+//! - ✅ MP4: 1 file (QuickTime metadata)
+//! - ⏳ PNG: 0 files (planned)
+//!
+//! ### Expansion Plan
+//! See `tests/fixtures/ACQUISITION_GUIDE.md` for detailed acquisition strategy:
+//! - Phase 1: Public test suites (Exiv2, ExifTool samples) - 40-50 images
+//! - Phase 2: Public domain images (Unsplash, Wikimedia) - 20-30 images
+//! - Phase 3: Synthetic test images (edge cases) - 20-30 images
+//! - Phase 4: Format-specific tests (PNG, multi-page TIFF) - 10-20 images
+//!
+//! ## Match Rate Thresholds
+//!
+//! Per integration test plan and task I5.T9 requirements:
+//! - **Simple files**: 99% (well-formed with standard metadata)
+//! - **Complex files**: 99% (EXIF+XMP+IPTC+GPS)
+//! - **Edge cases**: 95% (unusual encodings, large files)
+//! - **Malformed files**: 90% (best-effort extraction)
+//! - **Overall target**: 98%+ for read operations
+//!
+//! ## Known Discrepancies
+//!
+//! See `tests/integration/KNOWN_DISCREPANCIES.md` for documented differences
+//! between ExifTool-RS and Perl ExifTool (e.g., maker notes, TagValue enum
+//! serialization, floating-point tolerances)
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -346,10 +368,10 @@ fn test_comparison_jpeg_with_exif() {
         println!("\nPerfect match! All tags identical.");
     }
 
-    // Assert 95% match rate threshold
+    // Assert 98% match rate threshold (I5.T9 requirement)
     assert!(
-        report.match_rate >= 95.0,
-        "Match rate {:.2}% below 95% threshold. {} mismatches out of {} tags.",
+        report.match_rate >= 98.0,
+        "Match rate {:.2}% below 98% threshold. {} mismatches out of {} tags.",
         report.match_rate,
         report.mismatches.len(),
         report.total_tags
@@ -397,8 +419,8 @@ fn test_comparison_jpeg_with_exif_xmp() {
     }
 
     assert!(
-        report.match_rate >= 95.0,
-        "Match rate {:.2}% below 95% threshold. {} mismatches out of {} tags.",
+        report.match_rate >= 98.0,
+        "Match rate {:.2}% below 98% threshold. {} mismatches out of {} tags.",
         report.match_rate,
         report.mismatches.len(),
         report.total_tags
@@ -446,8 +468,106 @@ fn test_comparison_tiff() {
     }
 
     assert!(
-        report.match_rate >= 95.0,
-        "Match rate {:.2}% below 95% threshold. {} mismatches out of {} tags.",
+        report.match_rate >= 98.0,
+        "Match rate {:.2}% below 98% threshold. {} mismatches out of {} tags.",
+        report.match_rate,
+        report.mismatches.len(),
+        report.total_tags
+    );
+}
+
+#[test]
+#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
+fn test_comparison_pdf() {
+    if !is_exiftool_available() {
+        eprintln!("Skipping test: Perl ExifTool not found in PATH");
+        return;
+    }
+
+    let test_file = Path::new("tests/fixtures/pdf/simple/sample.pdf");
+    assert!(
+        test_file.exists(),
+        "Test fixture not found: {:?}",
+        test_file
+    );
+
+    let perl_json =
+        get_perl_exiftool_output(test_file).expect("Failed to get Perl ExifTool output");
+    let rust_json = get_exiftool_rs_output(test_file).expect("Failed to get ExifTool-RS output");
+
+    let report =
+        compare_json_outputs(&perl_json, &rust_json).expect("Failed to compare JSON outputs");
+
+    println!("\n=== PDF Comparison Results ===");
+    println!("Match rate: {:.2}%", report.match_rate);
+    println!(
+        "Matched: {}/{} tags",
+        report.matched_tags, report.total_tags
+    );
+
+    if !report.mismatches.is_empty() {
+        println!("\nMismatches ({}):", report.mismatches.len());
+        for mismatch in &report.mismatches {
+            println!("  {}", mismatch.tag_name);
+            println!("    Perl:  {}", mismatch.perl_value);
+            println!("    Rust:  {}", mismatch.rust_value);
+        }
+    } else {
+        println!("\nPerfect match! All tags identical.");
+    }
+
+    assert!(
+        report.match_rate >= 98.0,
+        "Match rate {:.2}% below 98% threshold. {} mismatches out of {} tags.",
+        report.match_rate,
+        report.mismatches.len(),
+        report.total_tags
+    );
+}
+
+#[test]
+#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
+fn test_comparison_mp4() {
+    if !is_exiftool_available() {
+        eprintln!("Skipping test: Perl ExifTool not found in PATH");
+        return;
+    }
+
+    let test_file = Path::new("tests/fixtures/mp4/simple/sample.mp4");
+    assert!(
+        test_file.exists(),
+        "Test fixture not found: {:?}",
+        test_file
+    );
+
+    let perl_json =
+        get_perl_exiftool_output(test_file).expect("Failed to get Perl ExifTool output");
+    let rust_json = get_exiftool_rs_output(test_file).expect("Failed to get ExifTool-RS output");
+
+    let report =
+        compare_json_outputs(&perl_json, &rust_json).expect("Failed to compare JSON outputs");
+
+    println!("\n=== MP4 Comparison Results ===");
+    println!("Match rate: {:.2}%", report.match_rate);
+    println!(
+        "Matched: {}/{} tags",
+        report.matched_tags, report.total_tags
+    );
+
+    if !report.mismatches.is_empty() {
+        println!("\nMismatches ({}):", report.mismatches.len());
+        for mismatch in &report.mismatches {
+            println!("  {}", mismatch.tag_name);
+            println!("    Perl:  {}", mismatch.perl_value);
+            println!("    Rust:  {}", mismatch.rust_value);
+        }
+    } else {
+        println!("\nPerfect match! All tags identical.");
+    }
+
+    assert!(
+        report.match_rate >= 98.0,
+        "Match rate {:.2}% below 98% threshold. {} mismatches out of {} tags.",
         report.match_rate,
         report.mismatches.len(),
         report.total_tags
@@ -455,30 +575,83 @@ fn test_comparison_tiff() {
 }
 
 // ============================================================================
-// Additional Test Cases - To Be Implemented When Fixtures Available
+// Write Round-Trip Tests
+// ============================================================================
+//
+// These tests validate write operations by:
+// 1. Reading original metadata
+// 2. Writing modified metadata
+// 3. Reading back and verifying changes
+// 4. Comparing against Perl ExifTool's write behavior
+
+// TODO: Implement when write functionality is complete (I4.T4)
+// #[test]
+// #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
+// fn test_write_roundtrip_jpeg_artist() {
+//     // Modify Artist tag → write → read → verify change
+// }
+
+// TODO: Implement when copy metadata is supported (I4.T6)
+// #[test]
+// #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
+// fn test_copy_metadata_jpeg_to_jpeg() {
+//     // Copy tags from source to destination
+//     // Compare results with Perl ExifTool's -TagsFromFile
+// }
+
+// TODO: Implement when rename functionality is supported (I4.T7)
+// #[test]
+// #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
+// fn test_rename_file_pattern() {
+//     // Rename file based on DateTimeOriginal
+//     // Compare with Perl ExifTool's -FileName pattern
+// }
+
+// TODO: Implement when date shift is supported (I4.T8)
+// #[test]
+// #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
+// fn test_date_shift_all_dates() {
+//     // Shift all date/time tags by offset
+//     // Compare with Perl ExifTool's -AllDates+= operation
+// }
+
+// ============================================================================
+// Additional Format Tests - To Be Implemented When Fixtures Available
 // ============================================================================
 
 // TODO: Implement when PNG fixtures with text chunks are available
 // #[test]
 // #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
-// fn test_comparison_png_with_text() { ... }
+// fn test_comparison_png_with_text() {
+//     // Test PNG with tEXt, zTXt, iTXt chunks
+// }
 
 // TODO: Implement when PNG fixtures with eXIf chunk are available
 // #[test]
 // #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
-// fn test_comparison_png_with_exif() { ... }
+// fn test_comparison_png_with_exif() {
+//     // Test PNG with eXIf chunk (EXIF in PNG)
+// }
 
 // TODO: Implement when multi-page TIFF fixtures are available
 // #[test]
 // #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
-// fn test_comparison_tiff_multipage() { ... }
+// fn test_comparison_tiff_multipage() {
+//     // Test multi-page TIFF with multiple IFDs
+// }
 
 // TODO: Implement when JPEG with GPS metadata is available
 // #[test]
 // #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
-// fn test_comparison_jpeg_with_gps() { ... }
+// fn test_comparison_jpeg_with_gps() {
+//     // Test JPEG with GPS coordinates
+//     // Validate GPS coordinate tolerance (±0.0001°)
+// }
 
 // TODO: Implement when files with maker notes are available
 // #[test]
 // #[cfg_attr(not(feature = "exiftool-comparison"), ignore)]
-// fn test_comparison_jpeg_with_maker_notes() { ... }
+// fn test_comparison_jpeg_with_maker_notes() {
+//     // Test JPEG from Canon, Nikon, Sony cameras
+//     // Document known discrepancies in maker note decoding
+// }
