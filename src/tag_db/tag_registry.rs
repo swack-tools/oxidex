@@ -6811,7 +6811,32 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
 /// assert!(unknown.is_none());
 /// ```
 pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
-    TAG_REGISTRY.get(name)
+    // Try direct lookup first
+    if let Some(descriptor) = TAG_REGISTRY.get(name) {
+        return Some(descriptor);
+    }
+
+    // Handle IFD prefix mapping for validation
+    // When reading metadata, parsers output "IFD0:Make" but registry has "EXIF:Make"
+    // Need to normalize IFD0/IFD1/ExifIFD/GPS prefixes to EXIF/GPS for lookup
+    let normalized_name = if name.starts_with("IFD0:")
+        || name.starts_with("IFD1:")
+        || name.starts_with("ExifIFD:")
+        || name.starts_with("InteropIFD:")
+    {
+        // Replace IFD prefix with "EXIF:" prefix
+        if let Some(colon_pos) = name.find(':') {
+            let tag_base_name = &name[colon_pos + 1..];
+            format!("EXIF:{}", tag_base_name)
+        } else {
+            return None;
+        }
+    } else {
+        // GPS and other families stay as-is
+        return None;
+    };
+
+    TAG_REGISTRY.get(normalized_name.as_str())
 }
 
 /// Returns the total number of tags in the registry.

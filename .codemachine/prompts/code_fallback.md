@@ -19,121 +19,167 @@ Complete all 55 development tasks across 5 iterations for the ExifTool-RS projec
 
 ## Issues Detected
 
-The verification revealed **70 failing integration tests** across multiple test modules. While all 387 library unit tests pass successfully, the integration tests are failing due to the following critical issues:
+The verification shows good progress (34 remaining failures, down from 70). All 387 unit tests pass and no linting errors exist. However, **34 integration tests are still failing** due to the following issues:
 
-### **Critical Issue #1: TIFF Writer Tag Prefix Mismatch**
+### **Issue #1: MP4 Tag Family Naming Inconsistency**
 
-*   **Root Cause:** The TIFF IFD serializer in `src/writers/tiff_writer.rs` line 275 filters tags using `tag_name.starts_with("EXIF:")`, but the TIFF/JPEG parsers and all integration tests use the "IFD0:" prefix for main IFD tags.
-*   **Impact:** ALL write operations fail silently because no tags are actually written to files. Written metadata cannot be read back.
-*   **Affected Tests:** All write operation tests (70 tests) including:
-    - `write_operations_tests::test_write_metadata_successful_jpeg_write`
-    - `write_operations_tests::test_write_metadata_atomic_operation`
-    - `write_operations_tests::test_write_metadata_with_integer_tags`
-    - `write_operations_tests::test_modify_tag_single_tag_modification`
-    - `jpeg_write_tests::test_modify_exif_tag_in_jpeg`
-    - All TIFF, PNG, PDF write tests
-    - All copy metadata tests
-    - All date shift tests
-    - All rename tests
-
-### **Critical Issue #2: Missing Test Fixture Files**
-
-*   **Root Cause:** Integration tests expect specific "sample" files (e.g., `tests/fixtures/tiff/sample.tif`, `tests/fixtures/pdf/sample.pdf`, `tests/fixtures/mp4/sample.mp4`) that don't exist in the fixtures directory.
-*   **Impact:** Tests fail immediately when trying to open these non-existent files.
-*   **Affected Files:**
-    - `tests/fixtures/tiff/sample.tif` (expected by tiff_tests.rs)
-    - `tests/fixtures/pdf/sample.pdf` (expected by pdf_tests.rs)
-    - `tests/fixtures/mp4/sample.mp4` (expected by mp4_tests.rs)
-    - `tests/fixtures/png/sample.png` (expected by png_tests.rs)
-    - `tests/fixtures/jpeg/sample_with_exif_xmp.jpg` (expected by jpeg_tests.rs)
-*   **Note:** The manifest.json references these files, but they don't exist. Only synthetic generated files are present (e.g., synthetic_001.tif, synthetic_gps_002.mp4, etc.)
-
-### **Critical Issue #3: Validation Not Enforcing Type Constraints**
-
-*   **Test Failure:** `write_operations_tests::test_write_metadata_validation_fails_for_invalid_type` expects validation to reject an Integer value for the "IFD0:Make" tag (which should be String type).
-*   **Root Cause:** The validation in `src/core/validation.rs` is not properly enforcing type constraints. The test expects an `InvalidTagValue` error, but the write operation is not failing as expected.
-*   **Expected Behavior:** Writing `TagValue::new_integer(42)` to "IFD0:Make" should return an error.
+*   **Root Cause:** The MP4 parser in `src/parsers/mp4_parser.rs` outputs tags with "ItemList:" prefix (e.g., "ItemList:Title", "ItemList:Artist"), but integration tests expect "iTunes:" prefix (e.g., "iTunes:Title", "iTunes:Artist").
+*   **Impact:** All MP4 integration tests fail because expected tag names don't match actual parsed tag names.
 *   **Affected Tests:**
-    - `test_write_metadata_validation_fails_for_invalid_type`
-    - `test_write_metadata_validation_fails_for_rational_zero_denominator`
+    - `mp4_tests::test_parse_sample_mp4_metadata`
+    - `mp4_tests::test_parse_mp4_extracts_multiple_tags`
+    - `mp4_tests::test_parse_mp4_copyright_tag`
+    - `mp4_tests::test_parse_mp4_genre_tag`
+    - `mp4_tests::test_parse_mp4_with_quicktime_user_data`
+    - `mp4_tests::test_mp4_both_itunes_and_quicktime_metadata`
+*   **Evidence:** Test output shows `ItemList:Title: String("Test Video 1")` but test expects `metadata.contains_key("iTunes:Title")`.
+
+### **Issue #2: PNG EXIF Write/Read Tag Name Mismatch**
+
+*   **Root Cause:** When writing PNG metadata, tags are provided with human-readable names (e.g., "IFD0:Make", "IFD0:Model"), but the PNG parser reads EXIF data back as hex tag IDs (e.g., "EXIF:0x010F", "EXIF:0x0110").
+*   **Impact:** PNG write tests fail because tags cannot be read back with the same names they were written with.
+*   **Affected Tests:**
+    - `png_write_tests::test_write_exif_chunk` (expects "EXIF:0x010F" for Make, got None)
+    - `png_write_tests::test_mixed_metadata_types` (expects "TestMake", got None)
+*   **Evidence:** Test comment at line 263 says "PNG parser returns EXIF tags with hex notation (EXIF:0x010F) not names (EXIF:Make)".
+
+### **Issue #3: TIFF/JPEG Write Not Persisting ExifIFD Tags**
+
+*   **Root Cause:** The TIFF writer's tag filtering logic (line 277-283 in `src/writers/tiff_writer.rs`) now accepts IFD0/IFD1/ExifIFD/GPS tags, but there may be an issue with how ExifIFD tags are being serialized or written to the file structure.
+*   **Impact:** Tags written with "ExifIFD:" prefix (e.g., "ExifIFD:ISO", "ExifIFD:DateTimeOriginal") are not being read back after write operations.
+*   **Affected Tests:**
+    - `write_operations_tests::test_write_metadata_with_integer_tags` (writes "ExifIFD:ISO", reads back None)
+    - All rename_tests (depend on "ExifIFD:DateTimeOriginal" being present)
+    - All date_shift_tests (depend on ExifIFD date/time tags)
+*   **Evidence:** Test writes `metadata.insert("ExifIFD:ISO", TagValue::new_integer(400))` but `assert_eq!(updated_metadata.get_integer("ExifIFD:ISO"), Some(400))` fails with `left: None, right: Some(400)`.
+
+### **Issue #4: PDF Sample Fixture Data Issues**
+
+*   **Root Cause:** The `tests/fixtures/pdf/sample.pdf` file may not contain the expected metadata fields that tests are looking for.
+*   **Impact:** PDF integration tests fail when trying to read or verify metadata.
+*   **Affected Tests:**
+    - `pdf_tests::test_parse_sample_pdf_metadata`
+    - `pdf_write_tests::test_write_to_sample_fixture`
+    - `pdf_write_tests::test_write_multiple_field_modifications`
+    - `pdf_write_tests::test_write_with_long_values`
+
+### **Issue #5: PNG Sample Fixture Data Issues**
+
+*   **Root Cause:** The `tests/fixtures/png/sample.png` file may be missing expected metadata chunks.
+*   **Impact:** PNG tests fail when expecting metadata that doesn't exist in the fixture.
+*   **Affected Tests:**
+    - `png_tests::test_png_with_text_chunks`
+    - `png_tests::test_png_with_exif_chunk`
+    - `png_tests::test_png_with_mixed_metadata`
+    - `png_tests::test_png_empty_metadata`
 
 ---
 
 ## Best Approach to Fix
 
-You MUST fix these issues in the following order:
+You MUST address these issues in the following order:
 
-### **Step 1: Fix TIFF Writer Tag Prefix Handling**
+### **Step 1: Fix MP4 Tag Family Names (CRITICAL)**
 
-**File:** `src/writers/tiff_writer.rs` (line 274-277)
+**File:** `src/parsers/mp4_parser.rs`
 
-**Current problematic code:**
+**Problem:** Parser outputs "ItemList:Title" but should output "iTunes:Title" for compatibility with ExifTool naming conventions.
+
+**Required fix:**
+- Locate the code that adds ItemList metadata tags (likely around handling `ilst` atom)
+- Change the tag family prefix from "ItemList:" to "iTunes:" for all iTunes metadata tags
+- Common iTunes tags: Title, Artist, Album, Year, Comment, Genre, Encoder, Copyright
+
+**Example:**
 ```rust
-for (tag_name, tag_value) in metadata.iter() {
-    // Only process EXIF tags
-    if !tag_name.starts_with("EXIF:") {
-        continue;
-    }
+// Change from:
+metadata.insert("ItemList:Title", value);
+// To:
+metadata.insert("iTunes:Title", value);
 ```
 
-**Required fix:**
-Change the tag filtering logic to accept BOTH "EXIF:" and "IFD0:" prefixes (and other IFD prefixes like "ExifIFD:", "GPS:", etc.). The code should process all tags that can be written to TIFF IFD structures, not just those starting with "EXIF:".
+### **Step 2: Fix PNG EXIF Tag Naming Consistency**
 
-**Recommended approach:**
-- Accept tags starting with "IFD0:", "IFD1:", "ExifIFD:", "GPS:", "EXIF:", or any other valid IFD/EXIF family prefix
-- Only skip tags that are definitively NOT TIFF-writable (e.g., "QuickTime:", "PDF:", "XMP:" top-level)
-- Consider checking if the tag has a numeric tag ID instead of filtering by prefix
+**File:** `src/parsers/png_parser.rs`
 
-### **Step 2: Create Missing Test Fixture Files**
-
-**Required files to create:**
-
-1. **`tests/fixtures/tiff/sample.tif`** - A basic single-page TIFF with standard EXIF tags (ImageWidth, ImageHeight, Make, Model, etc.)
-2. **`tests/fixtures/pdf/sample.pdf`** - A simple PDF with Info dictionary metadata (Title, Author, Creator, etc.)
-3. **`tests/fixtures/mp4/sample.mp4`** - A basic MP4 with QuickTime metadata (CreateDate, Duration, etc.)
-4. **`tests/fixtures/png/sample.png`** - A PNG with text chunks or eXIf chunk
-5. **`tests/fixtures/jpeg/sample_with_exif_xmp.jpg`** - A JPEG with both EXIF and XMP metadata
-
-**Recommended approach:**
-- Use the existing `tests/fixtures/create_synthetic_fixtures.sh` script
-- OR copy and rename one of the existing synthetic files to match the expected names (e.g., `cp tests/fixtures/tiff/simple/synthetic_001.tif tests/fixtures/tiff/sample.tif`)
-- Ensure the created files have appropriate metadata that matches what the tests expect
-
-### **Step 3: Fix Tag Validation Enforcement**
-
-**File:** `src/core/validation.rs`
-
-**Issue:** The `validate_tag_value()` function is not properly rejecting type mismatches. When a tag descriptor specifies `value_type: ValueType::String`, but the provided TagValue is `TagValue::Integer`, it should return an `InvalidTagValue` error.
+**Problem:** PNG parser returns hex tag IDs ("EXIF:0x010F") instead of human-readable names ("IFD0:Make").
 
 **Required fix:**
-- Ensure the validation function checks the TagValue variant against the descriptor's value_type
-- Return `ExifToolError::InvalidTagValue` with a clear "Type mismatch" message when types don't match
-- Handle special case: Rational values with zero denominator should also return an error
+- When parsing EXIF data from PNG eXIf chunks, use the tag registry to resolve tag IDs to human-readable names
+- Instead of formatting tags as "EXIF:0x{:04X}", look up the tag descriptor and use its canonical name
+- If tag ID is 0x010F (271 decimal), output "IFD0:Make" not "EXIF:0x010F"
+- Apply this to all EXIF tags parsed from PNG files
 
 **Recommended approach:**
-- Review the matching logic in `validate_tag_value()`
-- Add explicit checks for Integer vs String type mismatches
-- Add validation for Rational denominators (must be non-zero)
+```rust
+// After reading tag ID from EXIF data:
+if let Some(descriptor) = get_tag_descriptor_by_id(tag_id) {
+    let tag_name = descriptor.name(); // Returns "IFD0:Make"
+    metadata.insert(tag_name, value);
+} else {
+    // Fallback to hex notation for unknown tags
+    metadata.insert(&format!("EXIF:0x{:04X}", tag_id), value);
+}
+```
 
-### **Step 4: Re-run Tests and Verify**
+### **Step 3: Fix TIFF Writer ExifIFD Serialization**
+
+**File:** `src/writers/tiff_writer.rs`
+
+**Problem:** Tags with "ExifIFD:" prefix are not being written to EXIF IFD structure properly.
+
+**Analysis needed:**
+1. Check if the `serialize_ifd()` function is being called separately for IFD0 and ExifIFD
+2. Verify that tags starting with "ExifIFD:" are being separated from "IFD0:" tags
+3. Ensure the EXIF IFD pointer (tag 0x8769) is being added to IFD0 with the correct offset
+4. Confirm ExifIFD tags are being written to a separate IFD structure
+
+**Required fix:**
+- The TIFF writer needs to build TWO IFD structures: one for IFD0 tags and one for ExifIFD tags
+- Tags starting with "IFD0:" go into the main IFD0
+- Tags starting with "ExifIFD:" go into a separate EXIF IFD
+- IFD0 must contain tag 0x8769 (ExifOffset) pointing to the location of the EXIF IFD
+- Same logic applies for GPS IFD (tag 0x8825) if GPS tags are present
+
+### **Step 4: Regenerate/Verify PDF and PNG Sample Fixtures**
+
+**Required actions:**
+
+1. **For PDF sample fixture:**
+   - Use a tool to add Info dictionary metadata to `tests/fixtures/pdf/sample.pdf`
+   - Required fields: Title, Author, Subject, Creator, Producer, CreationDate, ModDate
+   - Example using exiftool: `exiftool -Title="Test PDF" -Author="Test Author" -Subject="Test Subject" tests/fixtures/pdf/sample.pdf`
+
+2. **For PNG sample fixture:**
+   - Ensure `tests/fixtures/png/sample.png` has appropriate metadata chunks
+   - Add tEXt chunks: Title, Author, Description
+   - OR add eXIf chunk with basic EXIF data (Make, Model, etc.)
+   - You can create this programmatically or use a tool
+
+3. **Verify fixture contents:**
+   - After creating/modifying fixtures, read them with the parser and print all tags
+   - Ensure the tags match what the tests expect
+
+### **Step 5: Re-run Tests and Verify**
 
 After making the above fixes:
 
-1. Run `cargo clippy --all-targets --all-features -- -D warnings` to ensure no linting errors
-2. Run `cargo test --lib --all-features` to verify all 387 unit tests still pass
+1. Run `cargo clippy --all-targets --all-features -- -D warnings` (should still pass with no warnings)
+2. Run `cargo test --lib --all-features` (should still show 387 passing)
 3. Run `cargo test --test integration --all-features` to verify all integration tests now pass
-4. Fix any remaining test failures iteratively
+4. If any tests still fail, analyze the specific failure and iterate
 
 ---
 
 ## Expected Outcome
 
 After completing all fixes:
-- ✅ All 387 unit tests should pass (currently passing)
-- ✅ All 70+ integration tests should pass (currently failing)
-- ✅ No linting errors (currently clean)
-- ✅ Write operations should successfully persist metadata that can be read back
-- ✅ Validation should properly reject invalid tag values
-- ✅ All test fixtures should exist and be readable
+- ✅ All 387 unit tests pass (currently passing)
+- ✅ All 122 integration tests pass (currently 88 passing, 34 failing)
+- ✅ No linting errors (currently passing)
+- ✅ MP4 tests pass with correct "iTunes:" tag family
+- ✅ PNG write/read roundtrip works with consistent tag names
+- ✅ TIFF/JPEG writes correctly persist ExifIFD tags
+- ✅ PDF and PNG sample fixtures contain expected metadata
 
-**Priority:** The tag prefix fix (Step 1) is the MOST CRITICAL as it blocks all write functionality. Focus on this first.
+**Priority:** Focus on Steps 1-3 first as they fix code issues. Step 4 (fixtures) can be done in parallel or after if fixture data is genuinely missing.

@@ -81,8 +81,26 @@ pub fn validate_tag_value(
     descriptor: &TagDescriptor,
     value: &TagValue,
 ) -> Result<(), ExifToolError> {
+    validate_tag_value_with_name(descriptor.name(), descriptor, value)
+}
+
+/// Validates a tag value with an explicit tag name for error messages.
+///
+/// This function is useful when the tag name used in the metadata differs from
+/// the canonical name in the descriptor (e.g., "IFD0:Make" vs "EXIF:Make").
+/// Validation errors will report the provided tag_name rather than descriptor.name().
+///
+/// # Arguments
+///
+/// * `tag_name` - The tag name to use in error messages (e.g., "IFD0:Make")
+/// * `descriptor` - The tag descriptor containing type information
+/// * `value` - The tag value to validate
+pub fn validate_tag_value_with_name(
+    tag_name: &str,
+    descriptor: &TagDescriptor,
+    value: &TagValue,
+) -> Result<(), ExifToolError> {
     let expected_type = descriptor.value_type();
-    let tag_name = descriptor.name();
 
     match value {
         TagValue::String(_) => {
