@@ -1,0 +1,39 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612ate (D:20240115143000+00'00')
+/ModDate ((PDF Metadata Extraction Test)
+/Keywords (exiftool, rust, pdf, metadata, test)
+/Creator (ExifTool-RS PDF Parser Test Generator)
+/Producer (Minimal PDF Generator v1.0)
+/0'00')
+/M0240115150000+00'00')
+>>
+endobj
+5 0 obj
+<< /Length 4
+stream
+BT
+/F1 12 Tf
+100 700 Td
+(Test PDF) Tj
+ET
+atalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+mal PDF Generator v1.0)
+/CreationDate (D:20240115railer
+<< /Size 6 /Root 1 0 R /Info 3 0 R >>
+startxref
+629
+%%EOF

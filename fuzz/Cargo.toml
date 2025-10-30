@@ -1,0 +1,30 @@
+[package]
+name = "exiftool-rs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.exiftool-rs]
+path = ".."
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_pdf"
+path = "fuzz_targets/fuzz_pdf.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_mp4"
+path = "fuzz_targets/fuzz_mp4.rs"
+test = false
+doc = false

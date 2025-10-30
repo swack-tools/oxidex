@@ -31,8 +31,8 @@ Thumbs.db
 # Since this is both, we keep Cargo.lock
 # Cargo.lock
 
-# Fuzzing corpus
-fuzz/corpus/
+# Fuzzing artifacts (keep corpus seed files, exclude generated artifacts and target)
+fuzz/target/
 fuzz/artifacts/
 
 # Benchmark outputs
