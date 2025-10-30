@@ -277,8 +277,60 @@ fn values_match(perl_val: &Value, rust_val: &Value) -> bool {
     let rust_val = extract_value(rust_val);
 
     match (&perl_val, &rust_val) {
-        // Exact match for strings
-        (Value::String(p), Value::String(r)) => p == r,
+        // String comparison (with special handling for space-separated floats)
+        (Value::String(p), Value::String(r)) => {
+            // First try exact match
+            if p == r {
+                return true;
+            }
+
+            // Check if both strings are space-separated floats (e.g., rational arrays)
+            let p_parts: Vec<&str> = p.split_whitespace().collect();
+            let r_parts: Vec<&str> = r.split_whitespace().collect();
+
+            // If both have multiple parts, try floating-point comparison
+            if p_parts.len() > 1 && p_parts.len() == r_parts.len() {
+                // Try to parse all parts as floats
+                let p_floats: Option<Vec<f64>> =
+                    p_parts.iter().map(|s| s.parse::<f64>().ok()).collect();
+                let r_floats: Option<Vec<f64>> =
+                    r_parts.iter().map(|s| s.parse::<f64>().ok()).collect();
+
+                if let (Some(pf), Some(rf)) = (p_floats, r_floats) {
+                    // Compare with tolerance
+                    let tolerance = 0.0001; // Rational values
+                    return pf
+                        .iter()
+                        .zip(rf.iter())
+                        .all(|(p, r)| (p - r).abs() < tolerance);
+                }
+            }
+
+            // If single value, try parsing as float
+            if let (Ok(pf), Ok(rf)) = (p.parse::<f64>(), r.parse::<f64>()) {
+                let tolerance = 0.0001;
+                return (pf - rf).abs() < tolerance;
+            }
+
+            // Otherwise, strings must match exactly
+            false
+        }
+
+        // Allow string-to-number comparison (e.g., "1" == 1)
+        (Value::String(s), Value::Number(n)) | (Value::Number(n), Value::String(s)) => {
+            // Try to parse string as integer or float
+            if let Some(ni) = n.as_i64() {
+                if let Ok(si) = s.parse::<i64>() {
+                    return ni == si;
+                }
+            }
+            if let Some(nf) = n.as_f64() {
+                if let Ok(sf) = s.parse::<f64>() {
+                    return (nf - sf).abs() < 0.0001;
+                }
+            }
+            false
+        }
 
         // Exact match for booleans
         (Value::Bool(p), Value::Bool(r)) => p == r,

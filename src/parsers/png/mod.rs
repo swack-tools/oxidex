@@ -351,7 +351,13 @@ fn parse_and_insert_exif_tags(exif_data: &[u8], metadata: &mut MetadataMap) -> R
                 }
             };
             exif_ifd_offset = Some(offset as u64);
-            continue; // Don't add the pointer tag to metadata
+
+            // Perl ExifTool outputs ExifOffset in PNG:Exif namespace
+            metadata.insert(
+                "PNG:ExifExifOffset".to_string(),
+                TagValue::new_integer(offset as i64),
+            );
+            continue; // Don't add to IFD0: namespace
         }
 
         // Check for GPS Sub-IFD pointer (tag 0x8825)
@@ -368,24 +374,47 @@ fn parse_and_insert_exif_tags(exif_data: &[u8], metadata: &mut MetadataMap) -> R
             continue; // Don't add the pointer tag to metadata
         }
 
-        // Convert tag ID to tag name (IFD0 for main PNG EXIF)
-        let tag_name = lookup_tag_name(*tag_id, "IFD0");
+        // Convert tag ID to tag name
+        let base_tag_name = lookup_tag_name(*tag_id, "IFD0");
 
         // Convert raw bytes to TagValue using the same logic as JPEG
         let tag_value =
             raw_bytes_to_tag_value(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
 
-        metadata.insert(tag_name, tag_value);
+        // Perl ExifTool outputs PNG eXIf tags in BOTH "IFD0:" AND "PNG:Exif" namespaces
+        // Add the IFD0: version (with enum interpretation)
+        metadata.insert(base_tag_name.clone(), tag_value);
+
+        // Also add the PNG:Exif version (WITHOUT enum interpretation, raw values only)
+        if let Some(stripped) = base_tag_name.strip_prefix("IFD0:") {
+            let raw_value = raw_bytes_to_tag_value_no_enum(
+                raw_bytes,
+                *field_type,
+                *value_count,
+                byte_order,
+            );
+            metadata.insert(format!("PNG:Exif{}", stripped), raw_value);
+        }
     }
 
     // Parse EXIF Sub-IFD if present
     if let Some(offset) = exif_ifd_offset {
         if let Ok(exif_tags) = parse_ifd(&exif_reader, offset, byte_order) {
             for (tag_id, field_type, value_count, raw_bytes) in exif_tags {
-                let tag_name = lookup_tag_name(tag_id, "ExifIFD");
+                let base_tag_name = lookup_tag_name(tag_id, "ExifIFD");
                 let tag_value =
                     raw_bytes_to_tag_value(&raw_bytes, field_type, value_count, tag_id, byte_order);
-                metadata.insert(tag_name, tag_value);
+
+                // Perl ExifTool outputs PNG eXIf tags in BOTH "ExifIFD:" AND "PNG:Exif" namespaces
+                // Add the ExifIFD: version (with enum interpretation)
+                metadata.insert(base_tag_name.clone(), tag_value);
+
+                // Also add the PNG:Exif version (WITHOUT enum interpretation, raw values only)
+                if let Some(stripped) = base_tag_name.strip_prefix("ExifIFD:") {
+                    let raw_value =
+                        raw_bytes_to_tag_value_no_enum(&raw_bytes, field_type, value_count, byte_order);
+                    metadata.insert(format!("PNG:Exif{}", stripped), raw_value);
+                }
             }
         }
     }
@@ -394,6 +423,7 @@ fn parse_and_insert_exif_tags(exif_data: &[u8], metadata: &mut MetadataMap) -> R
     if let Some(offset) = gps_ifd_offset {
         if let Ok(gps_tags) = parse_ifd(&exif_reader, offset, byte_order) {
             for (tag_id, field_type, value_count, raw_bytes) in gps_tags {
+                // GPS tags keep their "GPS:" prefix even in PNG eXIf chunks
                 let tag_name = lookup_tag_name(tag_id, "GPS");
                 let tag_value =
                     raw_bytes_to_tag_value(&raw_bytes, field_type, value_count, tag_id, byte_order);
@@ -403,6 +433,65 @@ fn parse_and_insert_exif_tags(exif_data: &[u8], metadata: &mut MetadataMap) -> R
     }
 
     Ok(())
+}
+
+/// Converts raw bytes from IFD to a TagValue WITHOUT enum interpretation.
+///
+/// This version is used for PNG:Exif tags where Perl ExifTool outputs raw values.
+fn raw_bytes_to_tag_value_no_enum(
+    bytes: &[u8],
+    field_type: u16,
+    _value_count: u32,
+    byte_order: crate::parsers::tiff::ifd_parser::ByteOrder,
+) -> TagValue {
+    use crate::parsers::common::exif_types::ExifType;
+    use crate::parsers::tiff::ifd_parser::ByteOrder;
+
+    if let Some(exif_type) = ExifType::from_u16(field_type) {
+        match exif_type {
+            // SHORT (type 3): 16-bit unsigned integer
+            ExifType::Short if bytes.len() >= 2 => {
+                let value = match byte_order {
+                    ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
+                    ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
+                };
+                return TagValue::new_integer(value as i64);
+            }
+
+            // LONG (type 4): 32-bit unsigned integer
+            ExifType::Long if bytes.len() >= 4 => {
+                let value = match byte_order {
+                    ByteOrder::LittleEndian => {
+                        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                    }
+                    ByteOrder::BigEndian => {
+                        u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                    }
+                };
+                return TagValue::new_integer(value as i64);
+            }
+
+            // ASCII (type 2): null-terminated string
+            ExifType::Ascii => {
+                let text = String::from_utf8_lossy(bytes);
+                let trimmed = text.trim_end_matches('\0');
+                return TagValue::new_string(trimmed);
+            }
+
+            // UNDEFINED (type 7): Return as binary or special string
+            ExifType::Undefined => {
+                // Perl ExifTool shows UNDEFINED bytes as "..." in PNG:Exif namespace
+                return TagValue::new_string("...");
+            }
+
+            _ => {
+                // Fallback
+            }
+        }
+    }
+
+    // Fallback: store as binary
+    TagValue::new_binary(bytes.to_vec())
 }
 
 /// Converts raw bytes from IFD to a TagValue.
@@ -500,6 +589,31 @@ fn raw_bytes_to_tag_value(
 
             // SHORT (type 3): 16-bit unsigned integer
             ExifType::Short if bytes.len() >= 2 => {
+                // Handle array of SHORT values
+                if value_count > 1 && bytes.len() >= (value_count as usize * 2) {
+                    let mut values = Vec::new();
+                    for i in 0..value_count as usize {
+                        let offset = i * 2;
+                        let value = match byte_order {
+                            ByteOrder::LittleEndian => {
+                                u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+                            }
+                            ByteOrder::BigEndian => {
+                                u16::from_be_bytes([bytes[offset], bytes[offset + 1]])
+                            }
+                        };
+                        values.push(value as i64);
+                    }
+                    // Return as space-separated string for arrays
+                    return TagValue::new_string(
+                        values
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    );
+                }
+
                 let value = match byte_order {
                     ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
                     ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
@@ -515,6 +629,37 @@ fn raw_bytes_to_tag_value(
 
             // LONG (type 4): 32-bit unsigned integer
             ExifType::Long if bytes.len() >= 4 => {
+                // Handle array of LONG values
+                if value_count > 1 && bytes.len() >= (value_count as usize * 4) {
+                    let mut values = Vec::new();
+                    for i in 0..value_count as usize {
+                        let offset = i * 4;
+                        let value = match byte_order {
+                            ByteOrder::LittleEndian => u32::from_le_bytes([
+                                bytes[offset],
+                                bytes[offset + 1],
+                                bytes[offset + 2],
+                                bytes[offset + 3],
+                            ]),
+                            ByteOrder::BigEndian => u32::from_be_bytes([
+                                bytes[offset],
+                                bytes[offset + 1],
+                                bytes[offset + 2],
+                                bytes[offset + 3],
+                            ]),
+                        };
+                        values.push(value as i64);
+                    }
+                    // Return as space-separated string for arrays
+                    return TagValue::new_string(
+                        values
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    );
+                }
+
                 let value = match byte_order {
                     ByteOrder::LittleEndian => {
                         u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
