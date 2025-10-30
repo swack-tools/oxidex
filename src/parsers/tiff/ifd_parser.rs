@@ -27,6 +27,11 @@
 //! - If `(type_size × count) ≤ 4 bytes`: value stored inline in Value/Offset field
 //! - Otherwise: Value/Offset contains absolute file offset to value data
 //!
+//! # Type Aliases
+//!
+//! - `IfdEntry`: Tuple representing a single IFD entry (tag, type, count, data)
+//! - `IfdEntries`: Vector of IFD entries
+//!
 //! # Example
 //!
 //! ```no_run
@@ -56,6 +61,12 @@ use nom::{
     number::complete::{be_u16, be_u32, le_u16, le_u32},
     IResult,
 };
+
+/// Type alias for IFD entry tuples: (tag, type, count, data)
+pub type IfdEntryTuple = (u16, u16, u32, Vec<u8>);
+
+/// Type alias for vector of IFD entries
+pub type IfdEntries = Vec<IfdEntryTuple>;
 
 /// Byte order (endianness) for TIFF data.
 ///
@@ -137,7 +148,7 @@ pub fn parse_ifd(
     reader: &dyn FileReader,
     ifd_offset: u64,
     byte_order: ByteOrder,
-) -> Result<Vec<(u16, u16, u32, Vec<u8>)>> {
+) -> Result<IfdEntries> {
     let file_size = reader.size();
 
     // Validate IFD offset

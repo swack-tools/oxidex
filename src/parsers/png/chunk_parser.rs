@@ -23,7 +23,7 @@
 
 use crate::core::FileReader;
 use crate::error::{ExifToolError, Result};
-use crate::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};
+use crate::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder, IfdEntries};
 use nom::{
     bytes::complete::{tag, take},
     number::complete::be_u32,
@@ -524,9 +524,9 @@ pub fn parse_time_chunk(data: &[u8]) -> Result<String> {
 ///
 /// # Returns
 ///
-/// - `Ok(Vec<(tag_id, raw_bytes)>)`: Parsed EXIF tags
+/// - `Ok(IfdEntries)`: Parsed EXIF tags
 /// - `Err`: Parse error
-pub fn parse_exif_chunk(data: &[u8]) -> Result<Vec<(u16, u16, u32, Vec<u8>)>> {
+pub fn parse_exif_chunk(data: &[u8]) -> Result<IfdEntries> {
     // Minimum TIFF header size: 2 (byte order) + 2 (magic) + 4 (offset) = 8 bytes
     if data.len() < 8 {
         return Err(ExifToolError::parse_error(

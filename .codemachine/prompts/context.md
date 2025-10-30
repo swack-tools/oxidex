@@ -10,26 +10,24 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I5.T9",
+  "task_id": "I5.T10",
   "iteration_id": "I5",
   "iteration_goal": "Implement C FFI bindings for cross-language integration, automate tag database generation from ExifTool specs, set up cross-compilation and release builds, create comprehensive documentation, and polish for v1.0 release.",
-  "description": "Expand integration test suite from I3.T10 to cover all supported formats and operations. Test corpus: 100+ images across JPEG (various EXIF/XMP combinations), TIFF (multi-page, big/little-endian), PNG (text, eXIf), PDF (Info, XMP), MP4 (iTunes, keys/ilst). Test operations: read, write, copy, rename, date shift. Compare against ExifTool for all operations. Acceptance threshold: 98%+ tag value match for reads, successful round-trip for writes. Run as part of CI on every commit (with feature flag). Document test results in CI badge.",
+  "description": "Expand benchmark suite from I2.T11 to compare performance against Perl ExifTool. Benchmark scenarios: (1) Single file extraction (JPEG with EXIF), (2) Batch processing (1000 JPEGs), (3) Write operation (modify EXIF tag), (4) Format detection overhead. Run both ExifTool and ExifTool-RS, measure wall-clock time and memory usage. Use hyperfine for CLI benchmarking, criterion for library benchmarking. Document results in README with comparison table. Target: demonstrate 2-5x speedup for typical operations.",
   "agent_type_hint": "BackendAgent",
-  "inputs": "I3.T10 comparison test framework, all implemented features",
+  "inputs": "I2.T11 benchmark suite, all implemented features",
   "target_files": [
-    "tests/integration/exiftool_comparison_tests.rs",
-    "tests/fixtures/",
-    ".github/workflows/ci.yml",
+    "benches/parse_benchmarks.rs",
+    "benches/exiftool_comparison.sh",
     "README.md"
   ],
   "input_files": [
-    "tests/integration/exiftool_comparison_tests.rs",
-    "tests/fixtures/"
+    "benches/parse_benchmarks.rs"
   ],
-  "deliverables": "Comprehensive test suite (100+ images), CI integration, test results reporting",
-  "acceptance_criteria": "Test corpus contains 100+ diverse images, tests cover all supported formats (JPEG, TIFF, PNG, PDF, MP4), tests cover all operations (read, write, copy, rename, date shift), 98%+ tag match rate achieved for reads, round-trip tests pass (write → read → verify), CI runs tests on every commit (with ExifTool installed in CI environment), README shows test results badge (pass/fail)",
+  "deliverables": "Comparative benchmarks, performance documentation",
+  "acceptance_criteria": "Benchmarks compare ExifTool-RS vs. Perl ExifTool on same machine, at least 4 benchmark scenarios (single read, batch read, write, detection), results show wall-clock time and memory usage, ExifTool-RS achieves 2x+ speedup for at least 2 scenarios, results documented in README with table, benchmarks reproducible (documented setup, test corpus)",
   "dependencies": [],
-  "parallelizable": false,
+  "parallelizable": true,
   "done": false
 }
 ```
@@ -40,76 +38,34 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: testing-levels (from .codemachine/artifacts/plan/03_Verification_and_Glossary.md)
+### Context: nfr-performance (from 01_Context_and_Drivers.md)
 
 ```markdown
-### 5.1. Testing Levels
-
-The project employs a comprehensive testing pyramid to ensure correctness and reliability:
-
-#### Unit Tests (70% of test suite)
-*   **Scope:** Individual functions and modules
-*   **Location:** Inline in source files (`#[cfg(test)] mod tests`) and `tests/` directory
-*   **Tools:** `cargo test`, standard Rust test framework
-*   **Coverage Requirements:**
-    *   All parser functions (format detection, segment parsing, IFD parsing, tag extraction)
-    *   Data model operations (metadata map accessors, tag value conversions)
-    *   Validation logic (tag value type checking, constraint validation)
-    *   Error handling paths (parse errors, I/O errors, validation failures)
-*   **Acceptance Criteria:** 80%+ line coverage (measured with `cargo-tarpaulin` or `cargo-llvm-cov`)
+#### Performance
+- **Target**: 2-5x faster than Perl ExifTool for typical operations
+- **Justification**: Rust's zero-cost abstractions, elimination of interpreter overhead, and potential for SIMD optimization
+- **Measurement**: Benchmark suite comparing against ExifTool on 1000-file corpus
+- **Design Impact**: Zero-copy parsing strategies, memory-mapped I/O for large files, parallel batch processing
 ```
 
-### Context: integration-tests (from .codemachine/artifacts/plan/03_Verification_and_Glossary.md)
+### Context: benchmarking (from 03_Verification_and_Glossary.md)
 
 ```markdown
-#### Integration Tests (10% of test suite)
-*   **Scope:** End-to-end workflows and CLI operations
-*   **Location:** `tests/integration/`
-*   **Tools:** `cargo test`, filesystem fixtures in `tests/fixtures/`
-*   **Coverage Requirements:**
-    *   Full read workflow: file → metadata extraction → output
-    *   Full write workflow: read → modify → write → verify
-    *   CLI argument parsing and execution
-    *   Batch processing with multiple files
-    *   Error scenarios (missing file, corrupted metadata, permission denied)
-*   **ExifTool Comparison Tests:** Special integration tests comparing output against Perl ExifTool
-    *   Run both tools on same test corpus (100+ images)
-    *   Compare JSON output for tag value parity
-    *   Acceptance threshold: 98%+ match rate
-    *   Conditional on ExifTool availability (`#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]`)
+#### Benchmarking (Regression Detection)
+*   **Scope:** Performance validation and regression detection
+*   **Location:** `benches/`
+*   **Tools:** `criterion` (statistical benchmarking), `hyperfine` (CLI benchmarking)
+*   **Benchmarks:**
+    *   Format detection (1000 iterations)
+    *   JPEG EXIF extraction (single file, 1000x)
+    *   Batch processing (1000 files)
+    *   Write operation (modify + rewrite)
+    *   Comparison vs. Perl ExifTool (wall-clock time, memory usage)
+*   **Regression Detection:** CI fails if performance degrades >10% vs. baseline
+*   **Reporting:** `criterion` generates HTML reports in `target/criterion/`
 ```
 
-### Context: ci-cd-pipeline (from .codemachine/artifacts/plan/03_Verification_and_Glossary.md)
-
-```markdown
-### 5.2. CI/CD Pipeline
-
-#### Continuous Integration (GitHub Actions)
-
-**Workflow: `.github/workflows/ci.yml`**
-*   **Triggers:** Every push, every pull request
-*   **Matrix:**
-    *   OS: `ubuntu-latest`, `macos-latest`, `windows-latest`
-    *   Rust version: `stable`, `beta` (optional: `nightly` for feature preview)
-*   **Steps:**
-    1. **Checkout:** Clone repository
-    2. **Setup Rust:** Install Rust toolchain via `dtolnay/rust-toolchain`
-    3. **Cache:** Cache Cargo registry and build artifacts (`Swatinem/rust-cache`)
-    4. **Build:** `cargo build --all-features --verbose`
-    5. **Test:** `cargo test --all-features`
-    6. **Clippy:** `cargo clippy --all-features -- -D warnings` (fail on warnings)
-    7. **Format:** `cargo fmt --all -- --check` (fail on formatting issues)
-    8. **Audit:** `cargo audit` (check dependency vulnerabilities)
-    9. **Coverage:** `cargo tarpaulin --out Xml` (upload to Codecov.io)
-    10. **Comparison Tests:** `cargo test --features exiftool-comparison` (if ExifTool installed)
-    11. **Benchmark Regression:** `cargo bench --bench parse_benchmarks` (compare vs. baseline)
-*   **Badges:** Add to README.md:
-    *   Build status (passing/failing)
-    *   Code coverage percentage
-    *   Dependency status (up-to-date/outdated)
-```
-
-### Context: release-criteria (from .codemachine/artifacts/plan/03_Verification_and_Glossary.md)
+### Context: release-criteria (from 03_Verification_and_Glossary.md)
 
 ```markdown
 ### 5.5. Release Criteria (v1.0)
@@ -128,61 +84,25 @@ The v1.0 release is approved when all of the following are met:
 2. **Quality Metrics:**
    *   ✅ 80%+ code coverage
    *   ✅ 98%+ tag parity with ExifTool (comparison tests)
-   *   ✅ 2x+ performance vs. ExifTool (benchmark validation)
+   *   ✅ 2x+ performance vs. ExifTool (benchmark validation) ← THIS TASK
    *   ✅ Zero crashes in 24-hour fuzz testing
    *   ✅ Zero clippy warnings
    *   ✅ Zero critical/high severity vulnerabilities (cargo audit)
-
-3. **Documentation:**
-   *   ✅ User guide published to GitHub Pages
-   *   ✅ API documentation complete (rustdoc)
-   *   ✅ README with installation, quick start, examples
-   *   ✅ CHANGELOG with all features and fixes
-   *   ✅ Migration guide from Perl ExifTool
-
-4. **Distribution:**
-   *   ✅ Binaries for Linux, macOS, Windows (x86_64 and ARM)
-   *   ✅ Crate published to crates.io
-   *   ✅ Packages: .deb, .rpm, Homebrew formula
-   *   ✅ Docker image (optional)
-
-5. **Testing:**
-   *   ✅ All unit tests passing
-   *   ✅ All integration tests passing
-   *   ✅ Property-based tests passing (10,000+ cases)
-   *   ✅ Comparison tests passing (100+ images)
-   *   ✅ Manual testing on all target platforms
 ```
 
-### Context: task-i5-t9 (from .codemachine/artifacts/plan/02_Iteration_I5.md)
+### Context: glossary-performance-tools (from 03_Verification_and_Glossary.md)
 
 ```markdown
-*   **Task 5.9: Comprehensive Integration Testing Against ExifTool**
-    *   **Task ID:** `I5.T9`
-    *   **Description:** Expand integration test suite from I3.T10 to cover all supported formats and operations. Test corpus: 100+ images across JPEG (various EXIF/XMP combinations), TIFF (multi-page, big/little-endian), PNG (text, eXIf), PDF (Info, XMP), MP4 (iTunes, keys/ilst). Test operations: read, write, copy, rename, date shift. Compare against ExifTool for all operations. Acceptance threshold: 98%+ tag value match for reads, successful round-trip for writes. Run as part of CI on every commit (with feature flag). Document test results in CI badge.
-    *   **Agent Type Hint:** `BackendAgent`
-    *   **Inputs:** I3.T10 comparison test framework, all implemented features
-    *   **Input Files:** [`tests/integration/exiftool_comparison_tests.rs`, `tests/fixtures/`]
-    *   **Target Files:**
-        *   `tests/integration/exiftool_comparison_tests.rs` (expand to 100+ test cases)
-        *   `tests/fixtures/` (add diverse test images)
-        *   `.github/workflows/ci.yml` (enable comparison tests)
-        *   `README.md` (add test results badge)
-    *   **Deliverables:**
-        *   Comprehensive test suite (100+ images)
-        *   CI integration
-        *   Test results reporting
-    *   **Acceptance Criteria:**
-        *   Test corpus contains 100+ diverse images
-        *   Tests cover all supported formats (JPEG, TIFF, PNG, PDF, MP4)
-        *   Tests cover all operations (read, write, copy, rename, date shift)
-        *   98%+ tag match rate achieved for reads
-        *   Round-trip tests pass (write → read → verify)
-        *   CI runs tests on every commit (with ExifTool installed in CI environment)
-        *   README shows test results badge (pass/fail)
-    *   **Dependencies:** All I1-I4 features (needs complete implementation)
-    *   **Parallelizable:** No (comprehensive test of all features)
+| **Corpus** | Collection of test inputs for fuzzing or regression testing. Seed corpus: known-good inputs. Crash corpus: inputs that triggered bugs. |
+| **Coverage-Guided Fuzzing** | Fuzzing technique that uses code coverage feedback to guide input mutation. Prioritizes inputs that explore new code paths. libFuzzer and AFL use this approach. |
 ```
+
+**Note on hyperfine**: The planning documents reference hyperfine as the CLI benchmarking tool. Hyperfine is a command-line benchmarking tool that:
+- Measures wall-clock time with statistical significance
+- Performs warmup runs
+- Supports multiple runs for accurate results
+- Outputs in various formats (markdown, JSON, etc.)
+- Can compare multiple commands side-by-side
 
 ---
 
@@ -192,192 +112,235 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `tests/integration/exiftool_comparison_tests.rs`
-    *   **Summary:** This is the existing comparison test framework that compares ExifTool-RS output against Perl ExifTool. It currently has 1275 lines and implements 14 test functions covering all required formats and operations.
-    *   **Recommendation:** **DO NOT START FROM SCRATCH.** This file already implements the complete testing framework including: JSON comparison logic (`compare_json_outputs`), value matching with floating-point tolerance (`values_match`), tag filtering (`should_skip_tag`), and proper test structure with `#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]`. Your task is to VERIFY this existing framework works correctly, not replace it.
-    *   **Current Status According to Code Comments (lines 18-36):** The file header states **"Progress: 100% ✅"** with the following breakdown:
-        - ✅ 102+ test images across 5 formats
-        - ✅ JPEG: 30 files (simple, complex, edge cases, malformed)
-        - ✅ PNG: 33 files (text chunks, eXIf chunks, complex)
-        - ✅ TIFF: 20 files (simple, multipage, big-endian, complex)
-        - ✅ PDF: 10 files (Info dictionary, XMP)
-        - ✅ MP4: 9 files (QuickTime metadata, iTunes tags)
-        - ✅ All 5 operations covered: read (10 test functions), write, copy, rename, date shift
-    *   **Test Functions Implemented (14 total):**
-        - **Read Operations (10 tests):** `test_comparison_jpeg_with_exif`, `test_comparison_jpeg_with_exif_xmp`, `test_comparison_tiff`, `test_comparison_pdf`, `test_comparison_mp4`, `test_comparison_png_with_text`, `test_comparison_png_with_exif`, `test_comparison_tiff_multipage`, `test_comparison_jpeg_with_gps`, `test_comparison_tiff_big_endian`
-        - **Write Operations (4 tests):** `test_write_roundtrip_jpeg_artist`, `test_copy_metadata_jpeg_to_jpeg`, `test_rename_file_pattern`, `test_date_shift_all_dates`
-    *   **Action Required:** Your PRIMARY task is to RUN the tests and VERIFY that they pass with the required match rates. The implementation is already complete.
+*   **File:** `benches/parse_benchmarks.rs`
+    *   **Summary:** This file contains the existing Criterion-based benchmark suite created in I2.T11. It includes 4 benchmark functions:
+        1. `bench_format_detection` - Benchmarks magic byte detection using JPEG fixture
+        2. `bench_jpeg_segment_parsing` - Benchmarks JPEG segment structure parsing
+        3. `bench_tiff_ifd_parsing` - Benchmarks TIFF IFD parsing (extracts IFD from JPEG EXIF)
+        4. `bench_full_read_metadata` - End-to-end metadata extraction benchmark
+    *   **Recommendation:** You MUST extend this file to add comparative benchmarks. Consider adding a new function `bench_exiftool_comparison()` that runs both tools and collects timing data. However, note that Criterion is designed for micro-benchmarks, not CLI tool comparison. You SHOULD create a separate shell script for CLI comparisons using hyperfine.
+    *   **Key Details:**
+        - Uses `criterion::black_box()` to prevent compiler optimizations
+        - Uses test fixture at `tests/fixtures/jpeg/sample_with_exif.jpg`
+        - Includes helper `TiffSubReader` struct for offset-adjusted reading
+        - Configured in Cargo.toml with `harness = false`
 
-*   **File:** `.github/workflows/ci.yml`
-    *   **Summary:** The CI workflow is already configured with a dedicated `integration-tests` job (lines 104-167) that installs Perl ExifTool on all three platforms (Ubuntu, macOS, Windows), builds ExifTool-RS in release mode, and runs `cargo test --release --features exiftool-comparison`.
-    *   **Key Implementation Details:**
-        - Matrix strategy tests on ubuntu-latest, macos-latest, windows-latest
-        - Platform-specific ExifTool installation (apt-get, brew, choco)
-        - Verifies ExifTool installation with `exiftool -ver`
-        - Runs tests with `--nocapture` flag to show detailed output
-        - Generates comparison reports and uploads as artifacts with 90-day retention
-    *   **Recommendation:** The CI integration is **ALREADY COMPLETE** per task requirements. The workflow runs on every push/PR, installs ExifTool on all platforms, and runs the comparison tests with the feature flag. You SHOULD NOT need to modify this file unless test results reveal issues.
-    *   **Note:** The job timeout is set to 30 minutes which is appropriate for 100+ image tests.
+*   **File:** `tests/fixtures/`
+    *   **Summary:** Test corpus directory containing 102+ test files across 5 formats (JPEG: 30, PNG: 33, TIFF: 20, PDF: 10, MP4: 9). This is the result of I5.T9 implementation.
+    *   **Recommendation:** You MUST use this test corpus for batch benchmarking. The fixtures are organized by format and complexity (simple/complex/edge_cases). For the "1000 JPEGs" batch benchmark scenario, you may need to either:
+        1. Create a script that replicates the JPEG fixtures to reach 1000 files, OR
+        2. Adjust the benchmark description to use the actual corpus size (30 JPEGs) and extrapolate
+    *   **Key Details:**
+        - Fixtures tracked by Git LFS (see `.gitattributes`)
+        - Manifest at `tests/fixtures/manifest.json` documents metadata
+        - Script `tests/fixtures/create_synthetic_fixtures.sh` shows how fixtures were generated
+        - Most fixtures are synthetic (95%) with known metadata
 
-*   **File:** `tests/fixtures/` (directory)
-    *   **Summary:** The test corpus currently contains **104 image files** (verified via `find` command showing 104 files).
-    *   **Directory Structure:**
-        - `jpeg/` with subdirectories: `complex/`, `edge_cases/`, `malformed/`, `simple/`
-        - `png/` with similar structure
-        - `tiff/` with `simple/` and `complex/` subdirectories
-        - `pdf/` with `simple/` and `complex/` subdirectories
-        - `mp4/` with `simple/` and `complex/` subdirectories
-    *   **Auxiliary Files Present:**
-        - `create_synthetic_fixtures.sh` - script for generating test images
-        - `validate_corpus.sh` - validation script
-        - `ACQUISITION_GUIDE.md` - documentation on acquisition strategy
-        - `COMPLETION_REPORT.md` - status report
-        - `manifest.json` - corpus metadata
-    *   **Recommendation:** The test corpus **EXCEEDS the 100+ image requirement** specified in the task. The files appear to be organized by format and complexity. You MUST verify that these images cover the required diversity (EXIF+XMP combinations, multi-page TIFF, big-endian, GPS data, etc.).
+*   **File:** `Cargo.toml`
+    *   **Summary:** Project configuration file. Already includes `criterion = "0.5"` in `[dev-dependencies]` and has `[[bench]]` configuration for `parse_benchmarks`.
+    *   **Recommendation:** You DO NOT need to add Criterion as it's already configured. However, you SHOULD document that hyperfine needs to be installed separately: `cargo install hyperfine` or via system package manager.
+    *   **Key Details:**
+        - Release profile has aggressive optimizations: `opt-level = 3`, `lto = true`, `codegen-units = 1`
+        - Binary name is `exiftool-rs` (from `[[bin]]` section)
+        - Feature flag `exiftool-comparison` exists for integration tests
+
+*   **File:** `src/core/operations.rs`
+    *   **Summary:** Core operations module providing `read_metadata()`, `write_metadata()`, and related functions. This is what the benchmarks will be measuring.
+    *   **Recommendation:** You SHOULD benchmark both `read_metadata()` (via Criterion for library-level benchmarking) and the CLI tool `exiftool-rs` (via hyperfine for CLI benchmarking). The CLI overhead should be measured separately.
+    *   **Key Functions:**
+        - `read_metadata(path: &Path) -> Result<MetadataMap>` - Main read function
+        - `write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()>` - Main write function
+        - Format-specific internal functions: `parse_jpeg_metadata()`, `parse_tiff_metadata()`, etc.
 
 *   **File:** `README.md`
-    *   **Summary:** The project README already contains a CI badge at line 4: `[![Integration Tests](https://github.com/exiftool-rs/exiftool-rs/workflows/Integration%20Tests%20(ExifTool%20Comparison)/badge.svg)]`
-    *   **Recommendation:** The "README shows test results badge" acceptance criterion is **ALREADY MET**. No modifications needed unless you want to improve the formatting or add additional information.
+    *   **Summary:** Project README with installation, usage, and status information. Currently has placeholders for features and no performance documentation.
+    *   **Recommendation:** You MUST add a new section (e.g., "## Performance Benchmarks") documenting the comparative results. Include:
+        1. A comparison table showing ExifTool-RS vs Perl ExifTool timings
+        2. System specs where benchmarks were run
+        3. Instructions for reproducing the benchmarks
+        4. Interpretation of results (speedup factors)
+    *   **Current Sections:** Project Vision, Key Features, Architecture, Current Status, Installation (multiple methods), Usage, Contributing
+
+*   **File:** `.github/workflows/ci.yml`
+    *   **Summary:** GitHub Actions CI workflow. Already has test, audit, coverage, and integration-tests jobs. Does NOT have benchmark regression detection yet.
+    *   **Recommendation:** Based on the planning doc requirement "CI fails if performance degrades >10% vs. baseline", you SHOULD consider adding a benchmark job to the CI workflow. However, this may be out of scope for I5.T10 if the task focuses only on establishing baseline benchmarks. You can document this as a future enhancement.
+    *   **Note:** The planning doc mentions benchmark regression detection in CI, but implementing this requires:
+        1. Storing baseline results (e.g., in git or GitHub Pages)
+        2. Running benchmarks on every PR
+        3. Comparing against baseline with tolerance threshold
+        4. This is complex and may warrant a separate task post-v1.0
 
 ### Implementation Tips & Notes
 
-*   **Tip:** The comparison test framework has sophisticated JSON comparison logic that handles:
-    - **TagValue enum unwrapping** (lines 164-186): Extracts actual values from `{"String": "Canon"}` structures that may be output by your JSON serializer
-    - **Floating-point tolerance** (lines 242-261): GPS coordinates have ±0.0001° tolerance (~11 meters precision), other values ±0.01
-    - **Tag filtering** (lines 198-226): Skips System:, File:, ExifTool:, Composite: pseudo-tags that Perl ExifTool adds but aren't actual image metadata
-    - You MUST understand and preserve this logic. It's correct and necessary for accurate comparison.
+*   **Tip: hyperfine Installation**
+    - hyperfine is NOT currently installed on the development system (confirmed via `which hyperfine`)
+    - You SHOULD document installation instructions in the benchmark script:
+        - macOS: `brew install hyperfine`
+        - Ubuntu: `cargo install hyperfine` or `sudo apt install hyperfine` (if available)
+        - Windows: `cargo install hyperfine` or `choco install hyperfine`
+    - The benchmark script SHOULD check if hyperfine is installed and provide helpful error message if not
 
-*   **Tip:** The existing tests use tiered threshold assertions that are INTENTIONALLY different:
-    - **Simple read tests:** `assert!(report.match_rate >= 98.0, ...)` (line 420)
-    - **Write round-trip tests:** `assert!(report.match_rate >= 98.0, ...)` (line 733)
-    - **Copy metadata tests:** `assert!(report.match_rate >= 20.0, ...)` (line 829) - **Lower threshold is intentional** because copy tests validate interoperability (can we read files after Perl ExifTool writes?), not exact output match
-    - **Rename/date-shift tests:** `assert!(report.match_rate >= 85.0, ...)` (lines 937, 1037) - **Lower threshold is intentional** for same reason as copy tests
-    - These thresholds are documented in code comments (lines 816-827, 935-941, 1035-1041) and based on the integration test plan. DO NOT change them without justification.
+*   **Tip: Perl ExifTool Availability**
+    - Perl ExifTool IS installed on the current system (`/opt/homebrew/bin/exiftool`, version 13.36)
+    - Your benchmark script SHOULD check for ExifTool availability: `which exiftool`
+    - You SHOULD capture the ExifTool version in the benchmark report for reproducibility
 
-*   **Note:** The CI workflow installs Perl ExifTool using platform-specific package managers:
-    - Ubuntu: `apt-get install libimage-exiftool-perl`
-    - macOS: `brew install exiftool`
-    - Windows: `choco install exiftool`
-    - This ensures tests run on all three platforms in parallel (matrix strategy defined at line 111).
+*   **Tip: Benchmark Scenarios**
+    The task description specifies 4 scenarios. Here's how to implement each:
+    1. **Single file extraction (JPEG with EXIF)**
+        - Use hyperfine to compare: `exiftool sample.jpg` vs `exiftool-rs sample.jpg`
+        - Use a representative JPEG from `tests/fixtures/jpeg/simple/`
+    2. **Batch processing (1000 JPEGs)**
+        - Challenge: We only have 30 JPEG fixtures
+        - Solution: Create a temporary directory with replicated fixtures (copy fixtures 34 times to get 1020 files)
+        - Compare: `exiftool -r temp_dir/` vs `exiftool-rs -r temp_dir/`
+    3. **Write operation (modify EXIF tag)**
+        - Compare: `exiftool -Artist="Test" copy.jpg` vs `exiftool-rs -EXIF:Artist=Test copy.jpg`
+        - Use a temporary copy of a fixture to avoid modifying originals
+    4. **Format detection overhead**
+        - This is library-level, use Criterion (already exists in parse_benchmarks.rs as `bench_format_detection`)
+        - For CLI comparison, you could measure time to just detect format without extracting all tags (if such a mode exists)
 
-*   **Warning:** The task description says `"done": false` but the **actual code comments indicate the task is complete** (lines 18-36 of the test file show "Progress: 100% ✅"). You MUST reconcile this discrepancy by:
-    1. Running the tests to verify they pass: `cargo test --features exiftool-comparison`
-    2. Checking the test corpus count is accurate (should be 102+ files per comments, verified as 104 by `find`)
-    3. Verifying all 14 test functions (10 read + 4 operations) execute successfully
-    4. Confirming CI integration is working (check recent GitHub Actions runs)
-    5. If everything passes with required match rates, document the completion status and prepare to mark the task as done
+*   **Tip: Memory Usage Measurement**
+    - hyperfine doesn't measure memory usage by default
+    - On Unix systems, you can use `/usr/bin/time -v` for memory stats
+    - On macOS, use `/usr/bin/time -l` (different format than GNU time)
+    - Consider creating a wrapper script that captures both time and memory
+    - Alternatively, document memory measurement as a manual step using `htop` or Activity Monitor
 
-*   **Critical:** Test execution uses `env!("CARGO_BIN_EXE_exiftool-rs")` (line 147) to locate the compiled binary. This means:
-    - You MUST run `cargo build --release` before running comparison tests
-    - The binary must be built with all features enabled
-    - The test will fail if the binary is not found or not executable
+*   **Note: Build Requirements for Fair Comparison**
+    - You MUST build ExifTool-RS in release mode before benchmarking: `cargo build --release`
+    - The binary will be at `target/release/exiftool-rs`
+    - Ensure the build uses the optimized profile defined in Cargo.toml (LTO enabled)
 
-### Verification Checklist for Task Completion
+*   **Note: Benchmark Result Variability**
+    - hyperfine performs multiple runs and warmup automatically
+    - Criterion uses statistical methods to detect outliers
+    - Results can vary based on: CPU frequency scaling, background processes, disk cache state
+    - You SHOULD document system state recommendations (close other apps, ensure CPU is not thermal throttling, etc.)
 
-Your immediate action items:
+*   **Note: README Documentation Format**
+    - The README.md currently uses markdown tables and has a clear section structure
+    - You SHOULD add the benchmark results as a new section after "## Current Status"
+    - Use a markdown table format like this:
+      ```markdown
+      ## Performance Benchmarks
 
-1. **Build the ExifTool-RS binary**:
-   ```bash
-   cargo build --release --all-features
-   ```
+      | Scenario | ExifTool (Perl) | ExifTool-RS (Rust) | Speedup |
+      |----------|-----------------|--------------------|---------|
+      | Single JPEG read | 45ms | 18ms | 2.5x faster |
+      | ... | ... | ... | ... |
+      ```
+    - Include a footnote with system specs: CPU, RAM, OS, ExifTool version, ExifTool-RS version
 
-2. **Install Perl ExifTool** (if not already installed):
-   - Ubuntu/Debian: `sudo apt-get install libimage-exiftool-perl`
-   - macOS: `brew install exiftool`
-   - Windows: `choco install exiftool`
-   - Verify: `exiftool -ver`
+*   **Warning: Batch Processing Implementation Status**
+    - The task depends on "all implemented features", including batch processing (I4.T3)
+    - Confirmed: Batch processor exists at `src/cli/batch_processor.rs`
+    - Confirmed: `-r` flag for recursive processing is implemented (checked integration tests)
+    - You CAN proceed with batch benchmarking
 
-3. **Run the comparison tests locally**:
-   ```bash
-   cargo test --features exiftool-comparison --test exiftool_comparison_tests -- --nocapture
-   ```
+*   **Warning: Write Operation Implementation Status**
+    - Write operations were implemented in I3 (I3.T4: write_metadata)
+    - CLI write support added in I3.T5 (`-TAG=VALUE` syntax)
+    - You CAN proceed with write operation benchmarking
+    - Sample command: `exiftool-rs -EXIF:Artist=TestArtist photo.jpg`
 
-4. **Verify test corpus count and diversity**:
-   - Confirm 100+ images exist: `find tests/fixtures -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.tif" -o -name "*.pdf" -o -name "*.mp4" \) | wc -l`
-   - Expected result: 104 files (verified in analysis)
-   - Check that JPEG tests include EXIF-only, EXIF+XMP, GPS variations
-   - Check that TIFF tests include little-endian, big-endian, multi-page
-   - Check that PNG tests include tEXt chunks and eXIf chunks
-   - Check that PDF tests include Info dictionary and XMP metadata
-   - Check that MP4 tests include QuickTime and iTunes metadata
+### Project Conventions & Standards
 
-5. **Verify test coverage** (expected: 14 test functions):
-   - Read operations: 10 test functions (lines 374-1274)
-   - Write round-trip: 1 test (lines 642-740)
-   - Copy metadata: 1 test (lines 744-844)
-   - Rename file: 1 test (lines 848-947)
-   - Date shift: 1 test (lines 951-1044)
+*   **Shell Script Location:** Based on project structure, shell scripts typically go in a `scripts/` or `benches/` directory. The task specifies `benches/exiftool_comparison.sh`, which is appropriate.
 
-6. **Verify CI integration**:
-   - Check that integration-tests job exists in `.github/workflows/ci.yml` (lines 104-167)
-   - Confirm it installs Perl ExifTool on all platforms
-   - Confirm it runs with `--features exiftool-comparison`
-   - Check recent GitHub Actions runs to see if tests are passing
-   - URL pattern: `https://github.com/<owner>/exiftool-rs/actions`
+*   **Documentation Style:** The project uses comprehensive inline documentation (see existing code). Your benchmark script SHOULD include:
+    - Header comment explaining purpose
+    - Usage instructions
+    - Prerequisites (hyperfine, ExifTool installed)
+    - Example output
 
-7. **Verify match rates meet thresholds**:
-   - Read operations should achieve 98%+ match rate
-   - Write round-trip should achieve 98%+ match rate
-   - Copy operations can be as low as 20% (intentionally lenient)
-   - Rename/date-shift operations should be 85%+ (moderate threshold)
+*   **Error Handling:** Shell scripts in the project (e.g., `tests/fixtures/create_synthetic_fixtures.sh`) use `set -euo pipefail` for strict error handling. You SHOULD follow this convention.
 
-8. **Document any gaps** and create test functions to fill them if needed. However, based on the code analysis, no gaps are expected.
+*   **Output Formats:** hyperfine supports multiple output formats. You SHOULD:
+    - Use markdown output for including in documentation: `--export-markdown results.md`
+    - Consider JSON output for programmatic processing: `--export-json results.json`
 
-9. **If all verification passes**, update task status documentation and prepare completion report. The task should be marked as `done: true`.
+### Performance Target Interpretation
 
-### Known Limitations and Design Decisions
+The task states "Target: demonstrate 2-5x speedup for typical operations." Based on the architecture requirements:
+- **Minimum acceptable:** 2x speedup for at least 2 scenarios (per acceptance criteria)
+- **Target range:** 2-5x speedup for typical operations (from NFR)
+- **Realistic expectations:**
+    - Single file reads: Likely 2-3x speedup (Rust's zero-cost abstractions vs Perl interpreter overhead)
+    - Batch processing: Likely 3-5x speedup (parallel processing with rayon)
+    - Write operations: Likely 2-3x speedup (similar parsing overhead, atomic file operations)
+    - Format detection: Likely 5-10x speedup (very simple operation, minimal interpreter overhead)
 
-*   **Lower match rates for operations tests** (copy: 20%, rename/date-shift: 85%) are **INTENTIONAL** per code comments (lines 816-827, 935-941, 1035-1041). These tests validate that ExifTool-RS can READ files after Perl ExifTool performs operations, not that our WRITE implementation is complete. This is a pragmatic approach to testing interoperability.
+If results don't meet the 2x target, you SHOULD:
+1. Document actual results honestly
+2. Investigate profiling results to identify bottlenecks
+3. Add notes about potential optimizations
+4. Do NOT artificially inflate results or cherry-pick favorable scenarios
 
-*   **Tag filtering logic** (lines 198-226) skips several tag categories that Perl ExifTool adds but are not actual image metadata:
-    - **System:** tags (filesystem metadata like FileSize, FileModifyDate, FilePermissions)
-    - **File:** tags (format metadata like FileType, MIMEType, ExifByteOrder)
-    - **ExifTool:** tags (tool metadata like ExifToolVersion)
-    - **Composite:** tags (derived/calculated values like Megapixels, GPSPosition, ImageSize)
-    - **SourceFile:** the input file path
-    - This filtering is **correct and necessary** because ExifTool-RS only extracts actual embedded metadata from files, not filesystem info or derived calculations.
+---
 
-*   **The test corpus strategy** (documented in lines 38-43) follows a four-phase acquisition plan:
-    1. Public test suites (Exiv2, ExifTool samples) - 40-50 images
-    2. Public domain images (Unsplash, Wikimedia) - 20-30 images
-    3. Synthetic test images for edge cases - 20-30 images
-    4. Format-specific tests (PNG, multi-page TIFF) - 10-20 images
-    - The corpus includes a `create_synthetic_fixtures.sh` script for generating test images programmatically, ensuring reproducibility and coverage of specific edge cases.
+## 4. Recommended Implementation Approach
 
-*   **Test fixture requirements** mentioned in comments but files may be synthetic or renamed:
-    - The test functions reference files like `tests/fixtures/jpeg/sample_with_exif.jpg`
-    - Some may be in `simple/` subdirectories instead of root
-    - Synthetic files follow pattern `synthetic_NNN.jpg` with specific metadata combinations
-    - The test suite is designed to work with either original ExifTool test files or synthetic equivalents
+Based on my analysis, here is the recommended step-by-step approach:
 
-### Final Recommendation
+### Step 1: Create the Shell Script (benches/exiftool_comparison.sh)
+1. Add prerequisite checks (hyperfine, exiftool, exiftool-rs binary)
+2. Create a temporary directory with replicated JPEG fixtures for batch testing
+3. Define 4 hyperfine benchmark commands matching the scenarios
+4. Export results to markdown format
+5. Clean up temporary files
+6. Make script executable: `chmod +x benches/exiftool_comparison.sh`
 
-**YOUR PRIMARY TASK IS VERIFICATION, NOT IMPLEMENTATION**
+### Step 2: Extend Criterion Benchmarks (benches/parse_benchmarks.rs)
+1. Add additional Criterion benchmarks for write operations if not already present
+2. Consider adding batch processing benchmarks (measuring library-level performance)
+3. Ensure all benchmarks use realistic fixtures from tests/fixtures/
+4. Update documentation comments
 
-The integration test suite appears to be **95-100% complete** based on:
-- Test file header states "Progress: 100% ✅"
-- 104 images exceeds 100+ requirement
-- 14 test functions cover all 5 formats and all 5 operations
-- CI workflow fully implemented with platform-specific ExifTool installation
-- README badge already present
+### Step 3: Run Benchmarks and Capture Results
+1. Build release binary: `cargo build --release`
+2. Run Criterion benchmarks: `cargo bench`
+3. Run shell script: `./benches/exiftool_comparison.sh`
+4. Review results, ensure 2x+ speedup achieved in at least 2 scenarios
+5. If results are below target, profile and document findings
 
-**You MUST run the tests to verify they pass before claiming task completion.**
+### Step 4: Document in README.md
+1. Add "## Performance Benchmarks" section after "## Current Status"
+2. Create comparison table with 4 scenarios
+3. Add system specifications footnote
+4. Add instructions for reproducing benchmarks
+5. Add interpretation/commentary on results
 
-Execute this verification workflow:
+### Step 5: Verify Acceptance Criteria
+- [x] Benchmarks compare ExifTool-RS vs. Perl ExifTool on same machine
+- [x] At least 4 benchmark scenarios (single read, batch read, write, detection)
+- [x] Results show wall-clock time and memory usage
+- [ ] ExifTool-RS achieves 2x+ speedup for at least 2 scenarios (verify after running)
+- [x] Results documented in README with table
+- [x] Benchmarks reproducible (documented setup, test corpus)
 
-1. Build: `cargo build --release --all-features`
-2. Install Perl ExifTool if needed
-3. Run tests: `cargo test --features exiftool-comparison -- --nocapture`
-4. Check match rates in output
-5. Verify CI runs successfully
-6. If all passes, mark task as done
+---
 
-**DO NOT rewrite the test framework** - it's comprehensive, well-documented, and follows best practices. Focus on verification, validation, and documentation of completion status.
+## 5. Key Files Summary
 
-If tests fail, review failure output carefully:
-- Match rate too low? Review mismatches to determine if parser bugs or acceptable differences
-- Missing fixtures? Check file paths and ensure corpus is complete
-- Binary not found? Verify build succeeded and `CARGO_BIN_EXE_exiftool-rs` env var is set correctly
-- ExifTool not found? Install Perl ExifTool and retry
+**Files you MUST create:**
+- `benches/exiftool_comparison.sh` - Shell script for CLI benchmarking with hyperfine
 
-Make MINIMAL targeted fixes if needed rather than reimplementing the entire suite.
+**Files you MUST modify:**
+- `README.md` - Add performance benchmarks section with comparison table
+- `benches/parse_benchmarks.rs` - (Optional) Extend with additional benchmarks
+
+**Files you SHOULD reference:**
+- `tests/fixtures/jpeg/simple/` - Source of test images for benchmarking
+- `tests/fixtures/manifest.json` - Metadata about test fixtures
+- `Cargo.toml` - Verify benchmark configuration
+- `target/release/exiftool-rs` - Binary to benchmark (ensure built first)
+
+**Files you can IGNORE for this task:**
+- `.github/workflows/ci.yml` - CI benchmark integration is out of scope (document as future work)
+- Test files in `tests/integration/` - Not needed for performance benchmarking
+
+---
+
+**End of Task Briefing Package**

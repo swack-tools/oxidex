@@ -41,8 +41,7 @@ pub mod chunk_parser;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use chunk_parser::{
-    parse_bkgd_chunk, parse_chrm_chunk, parse_chunk, parse_exif_chunk, parse_ihdr_chunk,
-    parse_itxt_chunk, parse_phys_chunk, parse_png_signature, parse_text_chunk, parse_time_chunk,
+    parse_chunk, parse_exif_chunk, parse_itxt_chunk, parse_png_signature, parse_text_chunk,
     PNG_SIGNATURE,
 };
 
@@ -107,11 +106,6 @@ pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     // Start parsing chunks after signature
     let mut offset = PNG_SIGNATURE.len() as u64;
 
-    // Track image properties for ModifyDate computation
-    let mut width: Option<u32> = None;
-    let mut height: Option<u32> = None;
-    let mut date_modify: Option<String> = None;
-
     // Parse chunks until we reach the end or find IEND
     while offset < file_size {
         // Parse chunk at current offset
@@ -124,154 +118,11 @@ pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 
         // Process metadata chunks
         match &chunk.chunk_type {
-            b"IHDR" => {
-                // Parse IHDR chunk (Image Header)
-                if let Ok((w, h, bit_depth, color_type, compression, filter, interlace)) =
-                    parse_ihdr_chunk(&chunk.data)
-                {
-                    width = Some(w);
-                    height = Some(h);
-
-                    metadata.insert("PNG:ImageWidth".to_string(), TagValue::new_integer(w as i64));
-                    metadata.insert("PNG:ImageHeight".to_string(), TagValue::new_integer(h as i64));
-                    metadata.insert("PNG:BitDepth".to_string(), TagValue::new_integer(bit_depth as i64));
-
-                    // Format color type as string
-                    let color_type_str = match color_type {
-                        0 => "Grayscale",
-                        2 => "RGB",
-                        3 => "Palette",
-                        4 => "Grayscale with Alpha",
-                        6 => "RGB with Alpha",
-                        _ => "Unknown",
-                    };
-                    metadata.insert(
-                        "PNG:ColorType".to_string(),
-                        TagValue::new_string(color_type_str),
-                    );
-
-                    // Format compression
-                    let compression_str = if compression == 0 {
-                        "Deflate/Inflate"
-                    } else {
-                        "Unknown"
-                    };
-                    metadata.insert(
-                        "PNG:Compression".to_string(),
-                        TagValue::new_string(compression_str),
-                    );
-
-                    // Format filter
-                    let filter_str = if filter == 0 { "Adaptive" } else { "Unknown" };
-                    metadata.insert("PNG:Filter".to_string(), TagValue::new_string(filter_str));
-
-                    // Format interlace
-                    let interlace_str = if interlace == 0 {
-                        "Noninterlaced"
-                    } else if interlace == 1 {
-                        "Adam7 Interlace"
-                    } else {
-                        "Unknown"
-                    };
-                    metadata.insert(
-                        "PNG:Interlace".to_string(),
-                        TagValue::new_string(interlace_str),
-                    );
-                }
-            }
-
-            b"cHRM" => {
-                // Parse cHRM chunk (Primary Chromaticities)
-                if let Ok((white_x, white_y, red_x, red_y, green_x, green_y, blue_x, blue_y)) =
-                    parse_chrm_chunk(&chunk.data)
-                {
-                    metadata.insert("PNG:WhitePointX".to_string(), TagValue::new_float(white_x));
-                    metadata.insert("PNG:WhitePointY".to_string(), TagValue::new_float(white_y));
-                    metadata.insert("PNG:RedX".to_string(), TagValue::new_float(red_x));
-                    metadata.insert("PNG:RedY".to_string(), TagValue::new_float(red_y));
-                    metadata.insert("PNG:GreenX".to_string(), TagValue::new_float(green_x));
-                    metadata.insert("PNG:GreenY".to_string(), TagValue::new_float(green_y));
-                    metadata.insert("PNG:BlueX".to_string(), TagValue::new_float(blue_x));
-                    metadata.insert("PNG:BlueY".to_string(), TagValue::new_float(blue_y));
-                }
-            }
-
-            b"pHYs" => {
-                // Parse pHYs chunk (Physical Pixel Dimensions)
-                if let Ok((pixels_x, pixels_y, unit)) = parse_phys_chunk(&chunk.data) {
-                    metadata.insert(
-                        "PNG-pHYs:PixelsPerUnitX".to_string(),
-                        TagValue::new_integer(pixels_x as i64),
-                    );
-                    metadata.insert(
-                        "PNG-pHYs:PixelsPerUnitY".to_string(),
-                        TagValue::new_integer(pixels_y as i64),
-                    );
-
-                    let unit_str = match unit {
-                        0 => "Unknown",
-                        1 => "meters",
-                        _ => "Unknown",
-                    };
-                    metadata.insert(
-                        "PNG-pHYs:PixelUnits".to_string(),
-                        TagValue::new_string(unit_str),
-                    );
-                }
-            }
-
-            b"bKGD" => {
-                // Parse bKGD chunk (Background Color)
-                if let Ok(bg_color) = parse_bkgd_chunk(&chunk.data) {
-                    metadata.insert(
-                        "PNG:BackgroundColor".to_string(),
-                        TagValue::new_integer(bg_color as i64),
-                    );
-                }
-            }
-
-            b"PLTE" => {
-                // Parse PLTE chunk (Palette)
-                // Store as binary data descriptor matching Perl ExifTool format
-                let descriptor = format!(
-                    "(Binary data {} bytes, use -b option to extract)",
-                    chunk.data.len()
-                );
-                metadata.insert("PNG:Palette".to_string(), TagValue::new_string(descriptor));
-            }
-
-            b"tIME" => {
-                // Parse tIME chunk (Modification Time)
-                if let Ok(time_str) = parse_time_chunk(&chunk.data) {
-                    date_modify = Some(time_str.clone());
-                    metadata.insert("PNG:ModifyDate".to_string(), TagValue::new_string(time_str));
-                }
-            }
-
             b"tEXt" => {
                 // Parse tEXt chunk
                 if let Ok((keyword, text)) = parse_text_chunk(&chunk.data) {
-                    // Check for special date keywords
-                    if keyword == "date:modify" || keyword == "date:timestamp" || keyword == "date:create" {
-                        // Format as PNG tag names (Perl ExifTool style)
-                        let tag_name = if keyword == "date:create" {
-                            "PNG:Datecreate"
-                        } else if keyword == "date:modify" {
-                            if date_modify.is_none() {
-                                // Extract ModifyDate from date:modify if tIME chunk not present
-                                date_modify = Some(text.clone());
-                            }
-                            "PNG:Datemodify"
-                        } else {
-                            "PNG:Datetimestamp"
-                        };
-                        metadata.insert(tag_name.to_string(), TagValue::new_string(text));
-                    } else {
-                        // Standard text keywords (Title, Author, Description, etc.)
-                        // Use PNG: prefix without tEXt: to match Perl ExifTool
-                        let tag_name = format!("PNG:{}", keyword);
-                        metadata.insert(tag_name, TagValue::new_string(text));
-                    }
+                    let tag_name = format!("PNG:tEXt:{}", keyword);
+                    metadata.insert(tag_name, TagValue::new_string(text));
                 }
                 // Silently skip malformed tEXt chunks to continue parsing
             }
@@ -330,24 +181,6 @@ pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 
         // Move to next chunk
         offset = next_offset;
-    }
-
-    // Add composite tags
-    if let (Some(w), Some(h)) = (width, height) {
-        // Composite:ImageSize = "WIDTHxHEIGHT"
-        metadata.insert(
-            "Composite:ImageSize".to_string(),
-            TagValue::new_string(format!("{}x{}", w, h)),
-        );
-
-        // Composite:Megapixels = width × height ÷ 1,000,000
-        // Round to 3 decimal places to match Perl ExifTool
-        let megapixels = (w as f64 * h as f64) / 1_000_000.0;
-        let megapixels_rounded = (megapixels * 1000.0).round() / 1000.0;
-        metadata.insert(
-            "Composite:Megapixels".to_string(),
-            TagValue::new_float(megapixels_rounded),
-        );
     }
 
     Ok(metadata)

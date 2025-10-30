@@ -122,19 +122,6 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
                     metadata.insert("PDF:ModifyDate".to_string(), TagValue::new_string(formatted_date));
                 }
             }
-            "Keywords" => {
-                // Split Keywords by comma if it's a comma-separated string
-                if value.contains(',') {
-                    // Split into array
-                    let keywords: Vec<TagValue> = value
-                        .split(',')
-                        .map(|s| TagValue::new_string(s.trim()))
-                        .collect();
-                    metadata.insert(format!("PDF:{}", key), TagValue::new_array(keywords));
-                } else {
-                    metadata.insert(format!("PDF:{}", key), TagValue::new_string(value));
-                }
-            }
             _ => {
                 metadata.insert(format!("PDF:{}", key), TagValue::new_string(value));
             }
