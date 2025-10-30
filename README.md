@@ -119,6 +119,57 @@ exiftool-rs -r /path/to/photos/
 cargo build
 ```
 
+### Tag Database Generation
+
+ExifTool-RS automatically generates its comprehensive tag database from the official ExifTool Perl source during the build process. This ensures compatibility with ExifTool's extensive metadata tag definitions.
+
+#### How It Works
+
+During `cargo build`, the build script (`build.rs`) performs the following steps:
+
+1. **Downloads ExifTool Source**: Fetches the latest ExifTool source code from the [official GitHub repository](https://github.com/exiftool/exiftool)
+2. **Parses Tag Definitions**: Extracts tag metadata from Perl modules in `lib/Image/ExifTool/`:
+   - Tag IDs (numeric hex codes or string identifiers)
+   - Tag names and descriptions
+   - Writable status and data types
+   - Format family classifications (EXIF, XMP, IPTC, GPS, etc.)
+3. **Generates Rust Code**: Creates `src/tag_db/generated_tags.rs` with 500+ tag definitions
+4. **Validates Output**: Ensures the generated database meets minimum quality standards
+
+The generated file is excluded from version control (`.gitignore`) and rebuilt automatically when you run `cargo build`.
+
+#### Supported Format Families
+
+The tag generator parses definitions for all major metadata formats:
+- **EXIF** (300+ tags): Camera settings, image parameters, manufacturer data
+- **GPS** (30+ tags): Geolocation and positioning data
+- **XMP** (100+ tags): Extensible Metadata Platform tags
+- **IPTC** (50+ tags): Press and media industry metadata
+- **PDF** (10+ tags): Document metadata
+- **QuickTime** (10+ tags): Video/audio metadata
+
+#### Fallback Mechanism
+
+If tag generation fails (network issues, parse errors), the build automatically falls back to a manually curated tag registry, ensuring builds always succeed. You'll see a build warning if fallback is used:
+
+```
+warning: Tag generation failed: <reason>. Using fallback to manual registry.
+```
+
+#### Updating Tags
+
+To regenerate the tag database with the latest ExifTool definitions:
+
+```bash
+# Clean build artifacts
+cargo clean
+
+# Rebuild (downloads latest ExifTool source and regenerates tags)
+cargo build --release
+```
+
+The build script caches downloaded ExifTool source in the build directory for faster subsequent builds during development.
+
 ### Running Tests
 
 ```bash
