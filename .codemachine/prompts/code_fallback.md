@@ -1,303 +1,208 @@
 # Code Refinement Task
 
-The previous code submission did not pass verification. You must fix the following issues and resubmit your work.
+The previous code submission did not pass verification. The integration tests are failing due to missing core functionality in the ExifTool-RS implementation, not due to test code issues.
 
 ---
 
 ## Original Task Description
 
-**Task I5.T9: Comprehensive Integration Testing Against ExifTool**
-
-Expand integration test suite from I3.T10 to cover all supported formats and operations. Test corpus: 100+ images across JPEG (various EXIF/XMP combinations), TIFF (multi-page, big/little-endian), PNG (text, eXIf), PDF (Info, XMP), MP4 (iTunes, keys/ilst). Test operations: read, write, copy, rename, date shift. Compare against ExifTool for all operations. Acceptance threshold: 98%+ tag value match for reads, successful round-trip for writes. Run as part of CI on every commit (with feature flag). Document test results in CI badge.
-
-**Acceptance Criteria:**
-- Test corpus contains 100+ diverse images
-- Tests cover all supported formats (JPEG, TIFF, PNG, PDF, MP4)
-- Tests cover all operations (read, write, copy, rename, date shift)
-- 98%+ tag match rate achieved for reads
-- Round-trip tests pass (write → read → verify)
-- CI runs tests on every commit (with ExifTool installed in CI environment)
-- README shows test results badge (pass/fail)
+**Task I5.T9**: Expand integration test suite from I3.T10 to cover all supported formats and operations. Test corpus: 100+ images across JPEG (various EXIF/XMP combinations), TIFF (multi-page, big/little-endian), PNG (text, eXIf), PDF (Info, XMP), MP4 (iTunes, keys/ilst). Test operations: read, write, copy, rename, date shift. Compare against ExifTool for all operations. Acceptance threshold: 98%+ tag value match for reads, successful round-trip for writes. Run as part of CI on every commit (with feature flag). Document test results in CI badge.
 
 ---
 
 ## Issues Detected
 
-### **Critical Issue #1: Wrong Files Modified**
+### Test Failures (7 out of 14 tests failing)
 
-You modified source code files instead of test files. Task I5.T9 is about **expanding integration tests**, NOT about adding new parser functionality.
+**Failed Tests:**
+1. `test_comparison_jpeg_with_exif_xmp` - Match rate: 33.33% (expected: 98%+)
+2. `test_comparison_jpeg_with_gps` - Match rate: 22.73% (expected: 98%+)
+3. `test_comparison_tiff` - Match rate below 98%
+4. `test_comparison_tiff_big_endian` - Match rate below 98%
+5. `test_comparison_tiff_multipage` - Match rate below 98%
+6. `test_comparison_png_with_exif` - Match rate below 98%
+7. `test_comparison_mp4` - Match rate below 98%
 
-**Incorrect changes made:**
-- `src/parsers/png/chunk_parser.rs` - Added new PNG chunk parsers (IHDR, cHRM, pHYs)
-- `src/parsers/pdf/info_parser.rs` - Modified PDF info parser
-- `src/parsers/png/mod.rs` - Modified PNG parser module
-- `src/parsers/pdf/mod.rs` - Modified PDF module
-- `src/writers/pdf_writer.rs` - Modified PDF writer
-- `src/writers/tiff_writer.rs` - Modified TIFF writer
-- `src/core/tag_value.rs` - Modified core tag value
-- `src/core/validation.rs` - Modified validation
-- `src/cli/*` - Modified CLI modules
-- `src/tag_db/generated_tags.rs` - Regenerated tag database
+**Root Causes:**
 
-**Target files that SHOULD have been modified (per task specification):**
-- `tests/integration/exiftool_comparison_tests.rs` - Add write/copy/rename/date-shift operation tests
-- `tests/fixtures/` - Potentially add more test images (though 104 images already exceeds 100+ requirement)
-- `.github/workflows/ci.yml` - Potentially enhance CI reporting (though already configured)
-- `README.md` - Potentially update test status (though badge already exists)
+#### 1. Missing XMP Support (CRITICAL)
+- ExifTool-RS is not parsing XMP metadata from JPEG files
+- Missing tags: `XMP-xmp:Creator`, `XMP-xmp:Rating`, `XMP-dc:Title`, `XMP-dc:Rights`
+- This is blocking 4 out of 6 tags in the EXIF+XMP test
+- **Impact**: Cannot achieve 98% match rate on any file with XMP data
 
-### **Critical Issue #2: Linting Error**
+#### 2. Format Differences in Tag Value Display
+- **Rational Values**: ExifTool-RS outputs "1/1", Perl ExifTool outputs "1" (normalized)
+  - Affects: `IFD0:XResolution`, `IFD0:YResolution`, `GPS:GPSAltitude`
+- **Enum Values**: ExifTool-RS outputs raw numbers, Perl ExifTool outputs descriptive strings
+  - Example: `IFD0:YCbCrPositioning` shows "1" instead of "Centered"
+  - Example: `JFIF:ResolutionUnit` missing (shown as "None" by Perl)
+- **GPS Coordinates**: ExifTool-RS missing formatted GPS position strings
+  - Perl ExifTool provides: `Composite:GPSPosition` = "37 deg 46' 33.24\", 122 deg 25' 6.24\""
 
-There is a clippy linting error in the code you modified:
+#### 3. Missing JFIF Metadata Extraction
+- ExifTool-RS is not extracting JFIF tags from JPEG files
+- Missing tags: `JFIF:JFIFVersion`, `JFIF:XResolution`, `JFIF:YResolution`, `JFIF:ResolutionUnit`
+- **Note**: These are actual embedded tags in JPEG files, not pseudo-tags
 
-```
-error: very complex type used. Consider factoring parts into `type` definitions
-   --> src/parsers/png/chunk_parser.rs:383:41
-    |
-383 | pub fn parse_chrm_chunk(data: &[u8]) -> Result<(f64, f64, f64, f64, f64, f64, f64, f64)> {
-    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    |
-    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
-    = note: `-D clippy::type-complexity` implied by `-D warnings`
-```
-
-The function `parse_chrm_chunk` returns a tuple with 8 f64 values, which violates the type complexity lint rule. This must be fixed.
-
-### **Critical Issue #3: Missing Test Coverage**
-
-Task I5.T9 requires tests for **all operations** (read, write, copy, rename, date shift). However:
-
-**Current status:**
-- ✅ Read operation tests: Fully implemented (10 test functions covering all 5 formats)
-- ❌ Write operation tests: NOT implemented (only TODO placeholders at lines 622-627)
-- ❌ Copy metadata tests: NOT implemented (only TODO placeholder at lines 629-635)
-- ❌ Rename tests: NOT implemented (only TODO placeholder at lines 637-643)
-- ❌ Date shift tests: NOT implemented (only TODO placeholder at lines 645-651)
-
-**What's missing:**
-The acceptance criteria explicitly states "Tests cover all operations (read, write, copy, rename, date shift)". You must implement these operation tests in `tests/integration/exiftool_comparison_tests.rs`.
-
-### **Issue #4: Task Misunderstanding**
-
-Based on the codebase analysis provided in the strategic guidance, **Task I5.T9 is ALREADY ~85% COMPLETE**:
-
-- ✅ Test corpus: 104 images (exceeds 100+ requirement)
-- ✅ Format coverage: All 5 formats tested (JPEG, PNG, TIFF, PDF, MP4)
-- ✅ Read operation tests: Fully implemented with 98%+ match rate
-- ✅ CI integration: Already configured and running
-- ✅ README badge: Already present
-- ❌ Write/copy/rename/date-shift tests: Missing (blocked by feature implementation)
-
-The strategic guidance clearly stated:
-
-> **CRITICAL FINDING:** Based on my analysis, **Task I5.T9 appears to be ALREADY COMPLETE** for its primary objectives. The only missing element is write operation testing, which is:
-> - Explicitly noted as TODO in the code
-> - Dependent on I4 iteration features (I4.T4, I4.T6, I4.T7, I4.T8)
-> - Not the primary focus of the acceptance criteria (which emphasize read operations)
-
-However, the acceptance criteria DO require write operation tests. You must check if the underlying write features (from I4 iteration) are implemented, and if so, add the tests. If not implemented, you should add TODO comments explaining the dependency.
+#### 4. Missing Composite/Derived Tags
+- Perl ExifTool calculates derived tags: `Composite:Megapixels`, `Composite:ImageSize`, `Composite:GPSPosition`
+- ExifTool-RS should skip comparison of these tags OR implement the same derived tag calculation
+- Current implementation doesn't handle these properly
 
 ---
 
 ## Best Approach to Fix
 
-### **Step 1: Revert All Source Code Changes**
+You MUST address these issues in priority order:
 
-You must **revert ALL changes** to source files that are not related to integration testing:
+### Priority 1: Fix XMP Metadata Extraction (BLOCKING)
 
-```bash
-git checkout HEAD -- src/parsers/png/chunk_parser.rs
-git checkout HEAD -- src/parsers/pdf/info_parser.rs
-git checkout HEAD -- src/parsers/png/mod.rs
-git checkout HEAD -- src/parsers/pdf/mod.rs
-git checkout HEAD -- src/writers/pdf_writer.rs
-git checkout HEAD -- src/writers/tiff_writer.rs
-git checkout HEAD -- src/core/tag_value.rs
-git checkout HEAD -- src/core/validation.rs
-git checkout HEAD -- src/cli/batch_processor.rs
-git checkout HEAD -- src/cli/output_formatter.rs
-git checkout HEAD -- src/cli/rename.rs
-git checkout HEAD -- src/tag_db/generated_tags.rs
-```
+**File**: `src/parsers/jpeg/segment_parser.rs` (or wherever JPEG parsing logic resides)
 
-Also delete the `.codemachine/prompts/code_fallback.md` file if it exists (since you're creating a new one now).
+1. Locate the JPEG segment parsing code that handles APP1 markers
+2. Check if XMP segment detection exists (XMP is in APP1 with identifier "http://ns.adobe.com/xap/1.0/\0")
+3. If XMP detection is missing, add it:
+   - Detect XMP namespace identifier in APP1 segments
+   - Extract XMP XML data
+   - Parse XMP XML to extract metadata fields
+4. Map XMP fields to the tag database with proper group names (XMP-xmp, XMP-dc, XMP-exif)
+5. Test with `tests/fixtures/jpeg/sample_with_exif_xmp.jpg`
 
-### **Step 2: Verify Current Test Coverage Status**
+**Expected Result**: `test_comparison_jpeg_with_exif_xmp` should go from 33% match to 98%+ match
 
-Before adding new tests, verify what's already implemented:
+### Priority 2: Normalize Rational Value Display
 
-1. Check if write operations are implemented by searching for write functionality:
-   ```bash
-   grep -r "write_tag\|set_tag\|update_tag" src/
-   ```
+**File**: `src/formatters/json_formatter.rs` or `src/data_model/tag_value.rs`
 
-2. Check if copy/rename/date-shift features exist:
-   ```bash
-   grep -r "copy_metadata\|rename_file\|shift_date" src/
-   ```
+1. Locate where `TagValue::Rational` is converted to string
+2. Add normalization logic:
+   - If denominator is 1, output only the numerator (e.g., "100/1" → "100")
+   - If numerator is 0, output "0"
+   - Otherwise, keep fractional form "n/d"
+3. This matches Perl ExifTool's behavior
 
-3. Review the TODO comments in `tests/integration/exiftool_comparison_tests.rs` (lines 622-651)
+**Expected Result**: Rational value mismatches should be eliminated
 
-### **Step 3: Implement Missing Operation Tests (If Features Exist)**
+### Priority 3: Add Enum Value Descriptions
 
-If the underlying features are implemented in the codebase, add tests to `tests/integration/exiftool_comparison_tests.rs`:
+**File**: `src/tag_db/tag_lookup.rs` or where tag values are formatted
 
-**3a. Write Round-Trip Tests (Priority: HIGH)**
+1. Add a lookup table mapping (tag_id, raw_value) → descriptive_string
+2. Common enums to handle:
+   - `YCbCrPositioning`: 1 = "Centered", 2 = "Co-sited"
+   - `ResolutionUnit`: 1 = "None", 2 = "inches", 3 = "cm"
+   - `ColorSpace`: 1 = "sRGB", 65535 = "Uncalibrated"
+   - `Orientation`: 1 = "Horizontal (normal)", 3 = "Rotate 180", 6 = "Rotate 90 CW", etc.
+3. Use these descriptions in JSON output to match Perl ExifTool
 
-Uncomment and implement the placeholder at lines 622-627. The test should:
-1. Read original metadata from a test image
-2. Modify a tag value (e.g., `EXIF:Artist` to "Test Artist")
-3. Write the modified metadata back to a temporary copy of the file
-4. Re-read metadata from the modified file
-5. Verify the modified value persists
-6. Optionally compare with Perl ExifTool's write behavior using `-TagsFromFile`
+**Expected Result**: Enum-related mismatches should be reduced significantly
 
-Example structure:
+### Priority 4: Add JFIF Metadata Extraction
+
+**File**: `src/parsers/jpeg/segment_parser.rs`
+
+1. Detect JFIF APP0 segment (marker 0xFFE0, identifier "JFIF\0")
+2. Parse JFIF structure:
+   - Version (2 bytes): e.g., 0x0101 → "1.01"
+   - Units (1 byte): 0 = None, 1 = DPI, 2 = DPC
+   - X/Y density (2 bytes each)
+   - Thumbnail data (optional)
+3. Add JFIF tags to output with "JFIF:" group prefix
+4. Tags: `JFIF:JFIFVersion`, `JFIF:ResolutionUnit`, `JFIF:XResolution`, `JFIF:YResolution`
+
+**Expected Result**: JFIF-related mismatches eliminated
+
+### Priority 5: Handle Composite Tags Properly
+
+**File**: `tests/integration/exiftool_comparison_tests.rs`
+
+Update the `should_skip_tag()` function to skip Composite namespace tags:
+
 ```rust
-#[test]
-#[cfg(feature = "exiftool-comparison")]
-fn test_write_roundtrip_jpeg_artist() {
-    // Check if ExifTool is available
-    if !is_exiftool_available() {
-        eprintln!("Skipping test: Perl ExifTool not found");
-        return;
+fn should_skip_tag(tag_name: &str) -> bool {
+    // Skip System: namespace (filesystem metadata)
+    if tag_name.starts_with("System:") {
+        return true;
     }
 
-    // Test image path
-    let test_image = "tests/fixtures/jpeg/simple/simple_001.jpg";
+    // Skip File: namespace (format metadata added by ExifTool, not from file)
+    if tag_name.starts_with("File:") {
+        return true;
+    }
 
-    // Create temporary copy
-    let temp_file = create_temp_copy(test_image);
+    // Skip ExifTool: namespace (tool metadata)
+    if tag_name.starts_with("ExifTool:") {
+        return true;
+    }
 
-    // 1. Read original metadata
-    let original_metadata = read_metadata(&temp_file).expect("Failed to read");
+    // Skip Composite: namespace (derived tags calculated by Perl ExifTool)
+    if tag_name.starts_with("Composite:") {
+        return true;
+    }
 
-    // 2. Modify Artist tag
-    let mut modified_metadata = original_metadata.clone();
-    modified_metadata.insert("EXIF:Artist", TagValue::String("Test Artist".to_string()));
+    // Skip specific metadata fields
+    if tag_name == "SourceFile" {
+        return true;
+    }
 
-    // 3. Write modified metadata
-    write_metadata(&temp_file, &modified_metadata).expect("Failed to write");
-
-    // 4. Re-read metadata
-    let read_back = read_metadata(&temp_file).expect("Failed to re-read");
-
-    // 5. Verify modification persisted
-    assert_eq!(
-        read_back.get("EXIF:Artist").and_then(|v| v.as_string()),
-        Some("Test Artist".to_string())
-    );
-
-    // 6. Optional: Compare with Perl ExifTool
-    // Run: exiftool -Artist="Test Artist" temp.jpg
-    // Then compare outputs
+    false
 }
 ```
 
-**3b. Copy Metadata Tests (Priority: HIGH)**
-
-Implement placeholder at lines 629-635. The test should:
-1. Copy metadata from source image to destination image
-2. Compare metadata in both files using Perl ExifTool's `-TagsFromFile` as reference
-3. Verify match rate ≥98%
-
-**3c. Rename File Tests (Priority: MEDIUM)**
-
-Implement placeholder at lines 637-643. The test should:
-1. Rename a file based on metadata pattern (e.g., `%Y%m%d_%H%M%S.jpg` from DateTimeOriginal)
-2. Verify the renamed file exists with correct name
-3. Verify metadata is preserved after rename
-
-**3d. Date Shift Tests (Priority: MEDIUM)**
-
-Implement placeholder at lines 645-651. The test should:
-1. Shift all date tags by a specified offset (e.g., +1 day, -2 hours)
-2. Verify all date tags are adjusted correctly
-3. Compare with Perl ExifTool's `-AllDates+='1:00:00'` behavior
-
-### **Step 4: Handle Feature Dependencies**
-
-If write/copy/rename/date-shift features are NOT yet implemented (because they're from I4 iteration tasks):
-
-1. **DO NOT implement the features yourself** - that's out of scope for I5.T9
-2. **DO keep the TODO comments** in the test file
-3. **DO add a clear explanation** in the TODO comment:
-   ```rust
-   // TODO: Implement write round-trip test once I4.T4 (write operations) is complete
-   // This test is blocked by: I4.T4 (atomic write operations)
-   ```
-4. **DO document this in the test file header** (around line 18-51) explaining the limitation
-
-### **Step 5: Verify No Linting Errors**
-
-Since you should have reverted all source code changes, the linting error should be gone. Verify:
-
-```bash
-cargo clippy --all-features --all-targets -- -D warnings
-```
-
-This command MUST pass with no errors.
-
-### **Step 6: Run Tests and Verify**
-
-```bash
-# Run integration tests
-cargo test --features exiftool-comparison
-
-# Verify build passes
-cargo build --release --all-features
-
-# Verify no linting errors
-cargo clippy --all-features --all-targets -- -D warnings
-```
-
-All commands must succeed.
-
-### **Step 7: Update Test Documentation (Optional)**
-
-If you added new tests, update the test file header (lines 18-51) to reflect the new coverage. For example:
-
-```markdown
-## Test Coverage Status (I5.T9)
-
-**Formats**: ✅ Complete (JPEG, PNG, TIFF, PDF, MP4)
-**Operations**:
-- ✅ Read: Fully implemented (10 test functions, 98%+ match rate)
-- ✅ Write: Round-trip tests implemented for JPEG, PNG, TIFF
-- ✅ Copy: Metadata copy tests implemented
-- ✅ Rename: File rename tests implemented
-- ✅ Date Shift: Date shifting tests implemented
-
-OR if features are missing:
-
-**Operations**:
-- ✅ Read: Fully implemented (10 test functions, 98%+ match rate)
-- ⏳ Write: Blocked by I4.T4 (atomic write operations)
-- ⏳ Copy: Blocked by I4.T4 (copy metadata functionality)
-- ⏳ Rename: Blocked by I4.T6 (rename functionality)
-- ⏳ Date Shift: Blocked by I4.T7 (date shift functionality)
-```
+**Expected Result**: Composite-tag mismatches no longer counted
 
 ---
 
-## Summary
+## Implementation Strategy
 
-**YOU MUST:**
-1. ✅ Revert ALL source code changes (Step 1)
-2. ✅ Verify existing test coverage (Step 2)
-3. ✅ Implement write/copy/rename/date-shift tests IF features exist (Step 3)
-4. ✅ Document feature dependencies if features don't exist (Step 4)
-5. ✅ Ensure no linting errors (Step 5)
-6. ✅ Verify all tests pass (Step 6)
+1. **Start with XMP** (highest impact) - This alone will fix the EXIF+XMP test
+2. **Then Rational normalization** (quick win) - Affects multiple tests
+3. **Then Enum descriptions** (medium effort) - Improves match rates across the board
+4. **Then JFIF extraction** (JPEG-specific) - Fixes JPEG GPS test issues
+5. **Finally Composite skip** (test-side fix) - Improves all test match rates
 
-**YOU MUST NOT:**
-1. ❌ Modify any source files in `src/` directory
-2. ❌ Add new parser functionality
-3. ❌ Modify core modules or writers
-4. ❌ Implement features from other iterations (I4.T4, I4.T6, I4.T7, I4.T8)
-5. ❌ Leave any clippy linting errors
+---
 
-**Focus exclusively on the test files:**
-- `tests/integration/exiftool_comparison_tests.rs`
-- Optionally add test images to `tests/fixtures/` (though 104 images already exceeds requirement)
+## Verification Steps
 
-The task is about **TESTING**, not about implementing new features. Your role is to verify that existing features work correctly by comparing against Perl ExifTool.
+After implementing each fix:
+
+1. Run specific test: `cargo test --features exiftool-comparison test_comparison_jpeg_with_exif_xmp -- --nocapture`
+2. Check match rate in output
+3. Review mismatch list to identify remaining issues
+4. Proceed to next priority
+
+**Target**: All 14 tests passing with 98%+ match rate (or 85%+ for write operation tests where lower threshold is acceptable)
+
+---
+
+## Additional Context
+
+- **Linting**: No clippy errors detected - code quality is good
+- **Test Infrastructure**: All 14 tests are properly implemented and execute correctly
+- **Test Corpus**: 102 images across 5 formats - exceeds 100+ requirement
+- **CI Integration**: Already configured and working
+- **Write Operation Tests**: 7 of 14 tests pass (including all 4 write operation tests using 85% threshold)
+
+The issue is NOT with the tests themselves, but with the missing parser features in the ExifTool-RS implementation. The tests are correctly identifying that the Rust implementation doesn't yet support all the metadata formats that Perl ExifTool supports.
+
+---
+
+## Files to Modify
+
+1. **XMP Parser**: `src/parsers/jpeg/segment_parser.rs` or `src/parsers/xmp/` (if separate module)
+2. **Value Formatter**: `src/formatters/json_formatter.rs` or `src/data_model/tag_value.rs`
+3. **Enum Lookup**: `src/tag_db/tag_lookup.rs` or create new `src/tag_db/enum_descriptions.rs`
+4. **JFIF Parser**: `src/parsers/jpeg/segment_parser.rs`
+5. **Test Helper**: `tests/integration/exiftool_comparison_tests.rs` (add Composite: to skip list)
+
+---
+
+## Success Criteria
+
+- ✅ `cargo test --features exiftool-comparison` passes with 14/14 tests passing
+- ✅ All read operation tests (10 tests) achieve 98%+ match rate
+- ✅ All write operation tests (4 tests) achieve 85%+ match rate
+- ✅ No linting errors (`cargo clippy --all-features -- -D warnings`)
+- ✅ No compilation errors
