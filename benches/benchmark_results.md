@@ -18,37 +18,37 @@ Comparative benchmarks between ExifTool-RS (Rust) and Perl ExifTool.
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `exiftool '/Users/allen/Documents/git/exiftools/tests/fixtures/jpeg/simple/sample_with_exif.jpg' > /dev/null` | 38.7 ± 0.5 | 37.8 | 40.2 | 14.32 ± 2.38 |
-| `'/Users/allen/Documents/git/exiftools/target/release/exiftool-rs' '/Users/allen/Documents/git/exiftools/tests/fixtures/jpeg/simple/sample_with_exif.jpg' > /dev/null` | 2.7 ± 0.4 | 2.2 | 4.2 | 1.00 |
+| `exiftool '/Users/allen/Documents/git/exiftools/tests/fixtures/jpeg/simple/sample_with_exif.jpg' > /dev/null` | 37.5 ± 0.5 | 36.6 | 39.1 | 16.07 ± 0.73 |
+| `'/Users/allen/Documents/git/exiftools/target/release/exiftool-rs' '/Users/allen/Documents/git/exiftools/tests/fixtures/jpeg/simple/sample_with_exif.jpg' > /dev/null` | 2.3 ± 0.1 | 2.1 | 2.6 | 1.00 |
 
-**Speedup**: 14.32x faster
+**Speedup**: 16.06x faster
 
 ### 2. Batch Processing (1000+ JPEG Files)
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `exiftool -r '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.VgPR0RBPEU/batch_test' > /dev/null 2>&1` | 929.5 ± 6.4 | 922.9 | 938.6 | 79.18 ± 1.23 |
-| `'/Users/allen/Documents/git/exiftools/target/release/exiftool-rs' -r '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.VgPR0RBPEU/batch_test' > /dev/null 2>&1` | 11.7 ± 0.2 | 11.6 | 12.0 | 1.00 |
+| `exiftool -r '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.ZKslmJGFc0/batch_test' > /dev/null 2>&1` | 916.4 ± 8.0 | 907.4 | 925.8 | 64.94 ± 1.56 |
+| `'/Users/allen/Documents/git/exiftools/target/release/exiftool-rs' -r '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.ZKslmJGFc0/batch_test' > /dev/null 2>&1` | 14.1 ± 0.3 | 13.7 | 14.5 | 1.00 |
 
-**Speedup**: 79.17x faster
+**Speedup**: 64.94x faster
 
 ### 3. Write Operation (Modify EXIF Tag)
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `exiftool -Artist='BenchmarkTest' -overwrite_original '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.VgPR0RBPEU/write_test/test_perl.jpg' > /dev/null 2>&1` | 98.2 ± 1.0 | 96.4 | 101.5 | 12.68 ± 0.64 |
-| `'/Users/allen/Documents/git/exiftools/target/release/exiftool-rs' -EXIF:Artist=BenchmarkTest '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.VgPR0RBPEU/write_test/test_rust.jpg' > /dev/null 2>&1` | 7.7 ± 0.4 | 6.8 | 8.6 | 1.00 |
+| `exiftool -Artist='BenchmarkTest' -overwrite_original '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.ZKslmJGFc0/write_test/test_perl.jpg' > /dev/null 2>&1` | 96.8 ± 1.3 | 95.0 | 101.3 | 13.32 ± 1.11 |
+| `'/Users/allen/Documents/git/exiftools/target/release/exiftool-rs' -EXIF:Artist=BenchmarkTest '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.ZKslmJGFc0/write_test/test_rust.jpg' > /dev/null 2>&1` | 7.3 ± 0.6 | 6.3 | 8.0 | 1.00 |
 
-**Speedup**: 12.68x faster
+**Speedup**: 13.32x faster
 
 ### 4. Format Detection
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `exiftool '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.VgPR0RBPEU/detection_test/test.jpg' > /dev/null` | 39.7 ± 0.4 | 38.8 | 41.0 | 15.05 ± 0.67 |
-| `'/Users/allen/Documents/git/exiftools/target/release/exiftool-rs' '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.VgPR0RBPEU/detection_test/test.jpg' > /dev/null` | 2.6 ± 0.1 | 2.4 | 3.0 | 1.00 |
+| `exiftool '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.ZKslmJGFc0/detection_test/test.jpg' > /dev/null` | 39.3 ± 0.4 | 38.6 | 40.7 | 14.21 ± 0.62 |
+| `'/Users/allen/Documents/git/exiftools/target/release/exiftool-rs' '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.ZKslmJGFc0/detection_test/test.jpg' > /dev/null` | 2.8 ± 0.1 | 2.3 | 3.1 | 1.00 |
 
-**Speedup**: 15.05x faster
+**Speedup**: 14.20x faster
 
 ## Interpretation
 
