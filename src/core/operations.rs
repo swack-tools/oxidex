@@ -117,15 +117,59 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     // Parse JPEG segment structure
     let segments = parse_segments(reader)?;
 
+    let mut metadata = MetadataMap::new();
+
+    // Process APP0 segments for JFIF metadata
+    for segment in segments.iter().filter(|s| s.marker == 0xFFE0) {
+        // Check if this is a JFIF segment (starts with "JFIF\0")
+        if segment.data.len() >= 14 && &segment.data[0..5] == b"JFIF\0" {
+            // JFIF structure after identifier:
+            // Bytes 5-6: Version (major.minor)
+            // Byte 7: Units (0=none, 1=inches, 2=cm)
+            // Bytes 8-9: X density (big-endian u16)
+            // Bytes 10-11: Y density (big-endian u16)
+            let version_major = segment.data[5];
+            let version_minor = segment.data[6];
+            let units = segment.data[7];
+            let x_density = u16::from_be_bytes([segment.data[8], segment.data[9]]);
+            let y_density = u16::from_be_bytes([segment.data[10], segment.data[11]]);
+
+            // Add JFIF tags to metadata
+            metadata.insert(
+                "JFIF:JFIFVersion".to_string(),
+                TagValue::Float(version_major as f64 + version_minor as f64 / 100.0),
+            );
+
+            let unit_string = match units {
+                0 => "None",
+                1 => "inches",
+                2 => "cm",
+                _ => "Unknown",
+            };
+            metadata.insert(
+                "JFIF:ResolutionUnit".to_string(),
+                TagValue::String(unit_string.to_string()),
+            );
+
+            metadata.insert(
+                "JFIF:XResolution".to_string(),
+                TagValue::Integer(x_density as i64),
+            );
+
+            metadata.insert(
+                "JFIF:YResolution".to_string(),
+                TagValue::Integer(y_density as i64),
+            );
+        }
+    }
+
     // Find all APP1 segments (EXIF/XMP)
     let app1_segments: Vec<_> = segments.iter().filter(|s| s.is_app1()).collect();
 
-    if app1_segments.is_empty() {
-        // No APP1 segments found - return empty metadata
+    if app1_segments.is_empty() && metadata.is_empty() {
+        // No APP1 or JFIF segments found - return empty metadata
         return Ok(MetadataMap::new());
     }
-
-    let mut metadata = MetadataMap::new();
 
     // Process each APP1 segment
     for segment in app1_segments {
@@ -506,6 +550,26 @@ fn parse_exif_datetime(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
     ))
 }
 
+/// Computes the Greatest Common Divisor (GCD) of two unsigned integers using Euclid's algorithm.
+///
+/// Used for simplifying fractions when displaying RATIONAL values.
+///
+/// # Arguments
+///
+/// * `a` - First number
+/// * `b` - Second number
+///
+/// # Returns
+///
+/// The GCD of a and b
+fn gcd(a: u32, b: u32) -> u32 {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}
+
 /// Converts raw bytes from IFD to a TagValue.
 ///
 /// This function interprets raw bytes according to the EXIF field type,
@@ -532,6 +596,29 @@ fn raw_bytes_to_tag_value(
     use crate::parsers::common::exif_types::ExifType;
     use crate::parsers::tiff::tiff_enums::tiff_enum_to_string;
 
+    // GPS-specific tag IDs
+    const GPS_LATITUDE: u16 = 0x0002;
+    const GPS_LONGITUDE: u16 = 0x0004;
+    const GPS_ALTITUDE: u16 = 0x0006;
+    const GPS_VERSION_ID: u16 = 0x0000;
+    const GPS_TIME_STAMP: u16 = 0x0007;
+    const GPS_DEST_LATITUDE: u16 = 0x0014;
+    const GPS_DEST_LONGITUDE: u16 = 0x0016;
+
+    // ExifVersion tag ID
+    const EXIF_VERSION: u16 = 0x9000;
+
+    // ComponentsConfiguration tag ID
+    const COMPONENTS_CONFIGURATION: u16 = 0x9101;
+
+    // Rational tags that should be formatted as fractions
+    const EXPOSURE_TIME: u16 = 0x829A;
+    const F_NUMBER: u16 = 0x829D;
+    const APERTURE_VALUE: u16 = 0x9202;
+    const SHUTTER_SPEED_VALUE: u16 = 0x9201;
+    const MAX_APERTURE_VALUE: u16 = 0x9205;
+    const FOCAL_LENGTH: u16 = 0x920A;
+
     // Try to convert field_type to ExifType
     if let Some(exif_type) = ExifType::from_u16(field_type) {
         match exif_type {
@@ -539,6 +626,54 @@ fn raw_bytes_to_tag_value(
             ExifType::Rational if bytes.len() >= 8 => {
                 // Check if this is an array of rationals (count > 1)
                 if value_count > 1 && bytes.len() >= (value_count as usize * 8) {
+                    // Special handling for GPS coordinates (3 rationals: degrees, minutes, seconds)
+                    if matches!(tag_id, GPS_LATITUDE | GPS_LONGITUDE | GPS_DEST_LATITUDE | GPS_DEST_LONGITUDE) && value_count == 3 {
+                        let mut dms = Vec::new();
+                        for i in 0..3 {
+                            let offset = i * 8;
+                            let numerator = match byte_order {
+                                ByteOrder::LittleEndian => u32::from_le_bytes([
+                                    bytes[offset],
+                                    bytes[offset + 1],
+                                    bytes[offset + 2],
+                                    bytes[offset + 3],
+                                ]),
+                                ByteOrder::BigEndian => u32::from_be_bytes([
+                                    bytes[offset],
+                                    bytes[offset + 1],
+                                    bytes[offset + 2],
+                                    bytes[offset + 3],
+                                ]),
+                            };
+                            let denominator = match byte_order {
+                                ByteOrder::LittleEndian => u32::from_le_bytes([
+                                    bytes[offset + 4],
+                                    bytes[offset + 5],
+                                    bytes[offset + 6],
+                                    bytes[offset + 7],
+                                ]),
+                                ByteOrder::BigEndian => u32::from_be_bytes([
+                                    bytes[offset + 4],
+                                    bytes[offset + 5],
+                                    bytes[offset + 6],
+                                    bytes[offset + 7],
+                                ]),
+                            };
+                            if denominator != 0 {
+                                dms.push(numerator as f64 / denominator as f64);
+                            } else {
+                                dms.push(numerator as f64);
+                            }
+                        }
+                        // Format as DMS: "37 deg 46' 33.24""
+                        let formatted = format!("{} deg {}' {:.2}\"",
+                            dms[0] as i32,
+                            dms[1] as i32,
+                            dms[2]
+                        );
+                        return TagValue::new_string(formatted);
+                    }
+
                     // Parse array of rationals and format as space-separated decimals
                     let mut values = Vec::new();
                     for i in 0..value_count as usize {
@@ -603,6 +738,30 @@ fn raw_bytes_to_tag_value(
                         u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]])
                     }
                 };
+
+                // Special handling for GPS Altitude
+                if tag_id == GPS_ALTITUDE && denominator != 0 {
+                    let value = numerator as f64 / denominator as f64;
+                    // Format without decimal point if it's a whole number
+                    if value.fract() == 0.0 {
+                        return TagValue::new_string(format!("{} m", value as i32));
+                    } else {
+                        return TagValue::new_string(format!("{:.1} m", value));
+                    }
+                }
+
+                // Special handling for ExposureTime - format as fraction string
+                if tag_id == EXPOSURE_TIME && denominator != 0 {
+                    // Simplify fraction using GCD
+                    let gcd = gcd(numerator, denominator);
+                    let simplified_num = numerator / gcd;
+                    let simplified_den = denominator / gcd;
+                    // Only format as fraction if denominator > 1
+                    if simplified_den > 1 {
+                        return TagValue::new_string(format!("{}/{}", simplified_num, simplified_den));
+                    }
+                }
+
                 return TagValue::new_rational(numerator as i32, denominator as i32);
             }
 
@@ -766,6 +925,40 @@ fn raw_bytes_to_tag_value(
                     return TagValue::new_string(s.to_string());
                 }
                 return TagValue::new_string(String::new());
+            }
+
+            // BYTE (type 1) and UNDEFINED (type 7): special handling for specific tags
+            ExifType::Byte | ExifType::Undefined => {
+                // GPS Version ID (4 bytes: major.minor.rev.0)
+                if tag_id == GPS_VERSION_ID && bytes.len() >= 4 {
+                    return TagValue::new_string(format!("{}.{}.{}.{}",
+                        bytes[0], bytes[1], bytes[2], bytes[3]
+                    ));
+                }
+
+                // Exif Version (4 bytes: ASCII "0232")
+                if tag_id == EXIF_VERSION && bytes.len() >= 4 {
+                    // ExifVersion is stored as ASCII bytes
+                    let version = String::from_utf8_lossy(&bytes[0..4]);
+                    return TagValue::new_string(version.to_string());
+                }
+
+                // ComponentsConfiguration (4 bytes with component IDs)
+                if tag_id == COMPONENTS_CONFIGURATION && bytes.len() >= 4 {
+                    let component_names = bytes.iter().take(4).map(|&b| match b {
+                        0 => "-",
+                        1 => "Y",
+                        2 => "Cb",
+                        3 => "Cr",
+                        4 => "R",
+                        5 => "G",
+                        6 => "B",
+                        _ => "?",
+                    }).collect::<Vec<_>>();
+                    return TagValue::new_string(component_names.join(", "));
+                }
+
+                // Fall through to heuristic conversion
             }
 
             _ => {

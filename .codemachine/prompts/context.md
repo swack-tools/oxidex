@@ -60,99 +60,26 @@ The following are the relevant sections from the architecture and plan documents
     *   Conditional on ExifTool availability (`#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]`)
 ```
 
-### Context: test-corpus-strategy (from docs/testing/integration_test_plan.md)
+### Context: testing-levels (from 03_Verification_and_Glossary.md)
 
 ```markdown
-### 2.1 Corpus Size & Diversity Requirements
+### 5.1. Testing Levels
 
-**Target**: 100+ images across all supported formats
+The project employs a comprehensive testing pyramid to ensure correctness and reliability:
 
-**Diversity Matrix**:
-
-| **Format** | **Simple** | **Complex** | **Edge Cases** | **Malformed** | **Total** |
-|------------|-----------|-------------|----------------|---------------|-----------|
-| JPEG       | 15        | 15          | 10             | 10            | 50        |
-| PNG        | 10        | 10          | 5              | 5             | 30        |
-| TIFF       | 8         | 8           | 4              | 5             | 25        |
-| WebP       | 5         | 5           | 3              | 2             | 15        |
-| HEIC       | 3         | 3           | 2              | 2             | 10        |
-| **Total**  | **41**    | **41**      | **24**        | **24**        | **130**   |
-
-**Complexity Definitions**:
-
-- **Simple**: Single IFD, basic EXIF tags (Make, Model, DateTime)
-- **Complex**: Multiple IFDs (EXIF, GPS, Interoperability), thumbnail images, maker notes
-- **Edge Cases**: Large maker notes (>64KB), deeply nested IFDs (>8 levels), unusual tag values
-- **Malformed**: Truncated files, invalid magic bytes, corrupted IFD chains, decompression bombs
+#### Unit Tests (70% of test suite)
+*   **Scope:** Individual functions and modules
+*   **Location:** Inline in source files (`#[cfg(test)] mod tests`) and `tests/` directory
+*   **Tools:** `cargo test`, standard Rust test framework
+*   **Coverage Requirements:**
+    *   All parser functions (format detection, segment parsing, IFD parsing, tag extraction)
+    *   Data model operations (metadata map accessors, tag value conversions)
+    *   Validation logic (tag value type checking, constraint validation)
+    *   Error handling paths (parse errors, I/O errors, validation failures)
+*   **Acceptance Criteria:** 80%+ line coverage (measured with `cargo-tarpaulin` or `cargo-llvm-cov`)
 ```
 
-### Context: validation-methodology (from docs/testing/integration_test_plan.md)
-
-```markdown
-### 3.1 Comparison Approach
-
-**Reference Implementation**: Perl ExifTool v12.70+ (latest stable)
-
-**Comparison Strategy**:
-1. Execute both tools on identical input files
-2. Export metadata to JSON format for structured comparison
-3. Parse JSON outputs and compute field-level match rate
-4. Generate human-readable diff reports for mismatches
-
-### 3.3 JSON Output Comparison
-
-**Comparison Script** at `tests/integration/compare_with_exiftool.rs`:
-
-The comparison logic must:
-- Parse JSON outputs from both tools
-- Skip pseudo-tags (SourceFile, ExifToolVersion, System:, File:, Composite:)
-- Match values with appropriate tolerance (GPS: ±0.0001°, other floats: ±0.01)
-- Calculate match rate: (Matched Tags / Total Tags) × 100
-- Generate mismatch report for debugging
-
-### 3.4 Match Rate Calculation
-
-**Formula**:
-
-```
-Match Rate (%) = (Matched Tags / Total Tags in Reference) × 100
-```
-
-**Where**:
-- **Matched Tags**: Tags where values are identical (or within tolerance)
-- **Total Tags**: All tags extracted by Perl ExifTool (baseline)
-- **Excluded**: Metadata fields (`SourceFile`, `ExifToolVersion`, `System:*`, `File:*`, `Composite:*`)
-```
-
-### Context: acceptance-thresholds (from docs/testing/integration_test_plan.md)
-
-```markdown
-### 4.1 Pass/Fail Criteria
-
-#### 4.1.1 Well-Formed Files
-
-**Primary Criterion**: **99% tag value match rate**
-
-For each image in `tests/fixtures/{format}/simple/` and `tests/fixtures/{format}/complex/`:
-
-```
-PASS: match_rate >= 99.0%
-FAIL: match_rate < 99.0%
-```
-
-**Allowed Discrepancies (1% tolerance)**:
-
-Valid reasons for mismatch (do not count as failures):
-
-1. **Vendor-Specific Decoding**: Maker notes proprietary formats where documentation is unavailable
-2. **Precision Differences**: Rational number representations (e.g., `1/125` vs `0.008`)
-3. **Tag Name Variations**: Group naming differences (document mapping)
-4. **Unsupported Tags**: Tags explicitly documented as "not yet implemented" in changelog
-
-**Overall Target**: 98%+ for read operations (allows 2% discrepancy budget across corpus)
-```
-
-### Context: ci-cd-integration (from 03_Verification_and_Glossary.md)
+### Context: continuous-integration (from 03_Verification_and_Glossary.md)
 
 ```markdown
 #### Continuous Integration (GitHub Actions)
@@ -173,11 +100,30 @@ Valid reasons for mismatch (do not count as failures):
     8. **Audit:** `cargo audit` (check dependency vulnerabilities)
     9. **Coverage:** `cargo tarpaulin --out Xml` (upload to Codecov.io)
     10. **Comparison Tests:** `cargo test --features exiftool-comparison` (if ExifTool installed)
-    11. **Benchmark Regression:** `cargo bench --bench parse_benchmarks` (compare vs. baseline)
-*   **Badges:** Add to README.md:
-    *   Build status (passing/failing)
-    *   Code coverage percentage
-    *   Dependency status (up-to-date/outdated)
+```
+
+### Context: security-considerations (from 05_Operational_Architecture.md)
+
+```markdown
+#### Security Considerations
+
+**Threat Model**:
+
+ExifTool-RS processes potentially malicious files from untrusted sources (e.g., user uploads, scraped images). Primary threats:
+
+1. **Memory Corruption**: Buffer overflows, use-after-free in parsers
+2. **Resource Exhaustion**: Zip bombs, billion laughs (XML), decompression bombs
+3. **Path Traversal**: Malicious filenames in archive processing
+4. **Code Injection**: Via scripting features (if added)
+
+**Mitigations**:
+
+| **Threat** | **Mitigation** | **Implementation** |
+|------------|---------------|-------------------|
+| Buffer overflows | Rust ownership system | Compile-time prevention via borrow checker |
+| Integer overflows | Checked arithmetic | `#![deny(overflowing_literals)]`, `checked_add()` in parsers |
+| Resource exhaustion | Size limits | Max allocation: 1GB per file, max parse depth: 64 levels (nested IFDs) |
+| Malicious input | Fuzzing | Continuous fuzzing with `cargo-fuzz`, OSS-Fuzz integration target |
 ```
 
 ---
@@ -186,188 +132,252 @@ Valid reasons for mismatch (do not count as failures):
 
 The following analysis is based on my direct review of the current codebase. Use these notes and tips to guide your implementation.
 
+### Current Task Status: 71.4% Complete
+
+**CRITICAL FINDING:** Task I5.T9 is **ALREADY 71.4% COMPLETE** (5/7 acceptance criteria met). The test infrastructure is production-ready. The remaining 28.6% gap is due to **incomplete parser implementations**, NOT missing test infrastructure.
+
+### Evidence Files Analyzed
+
+1. **tests/fixtures/I5T9_FINAL_SUMMARY.md** (376 lines)
+   - Comprehensive completion report dated 2025-10-30
+   - Documents test results: 7/14 tests passing (50%)
+   - 3/10 read tests passing (30%), but 4/4 operation tests passing (100%)
+   - Root cause analysis: Parser gaps, NOT test framework issues
+
+2. **tests/integration/exiftool_comparison_tests.rs** (1410 lines)
+   - Production-ready comparison framework
+   - 14 test functions (10 read + 4 operation)
+   - Sophisticated value matching with floating-point tolerance
+   - Tag namespace normalization
+
+3. **.github/workflows/ci.yml** (167 lines)
+   - Dedicated `integration-tests` job (lines 104-167)
+   - Matrix testing: Ubuntu, macOS, Windows
+   - Perl ExifTool installation on all platforms
+   - Feature-gated execution: `--features exiftool-comparison`
+
+4. **README.md**
+   - Integration test badge present at line 4
+   - CI badge present at line 3
+   - Both badges working and visible
+
+5. **Test Corpus Count:** 104 images (verified via file system scan)
+   - JPEG: 30 files
+   - PNG: 33 files
+   - TIFF: 20 files
+   - PDF: 10 files
+   - MP4: 9 files
+
+### Acceptance Criteria Assessment
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | Test corpus contains 100+ diverse images | ✅ PASS | 104 files verified |
+| 2 | Tests cover all supported formats (JPEG, TIFF, PNG, PDF, MP4) | ✅ PASS | 14 test functions cover all 5 formats |
+| 3 | Tests cover all operations (read, write, copy, rename, date shift) | ✅ PASS | 10 read + 4 operation tests |
+| 4 | 98%+ tag match rate achieved for reads | ❌ FAIL | Only 3/10 read tests passing (30%) |
+| 5 | Round-trip tests pass (write → read → verify) | ✅ PASS | `test_write_roundtrip_jpeg_artist` passing |
+| 6 | CI runs tests on every commit (with ExifTool installed in CI environment) | ✅ PASS | `.github/workflows/ci.yml` lines 104-167 |
+| 7 | README shows test results badge (pass/fail) | ✅ PASS | Badges at lines 3-4 of README.md |
+
+**Final Score:** **5/7 criteria met (71.4% complete)**
+
+### Why Criterion #4 (98%+ Match Rate) is Failing
+
+**Root Cause:** Incomplete parser implementations, NOT test framework issues.
+
+#### Passing Tests (3/10 = 30%):
+- `test_comparison_jpeg_with_exif`: **100%** match
+- `test_comparison_jpeg_with_exif_xmp`: **100%** match
+- `test_comparison_png_with_text`: **100%** match
+
+#### Failing Tests (7/10 = 70%):
+| Test | Match Rate | Gap to 98% | Root Cause |
+|------|------------|------------|------------|
+| `test_comparison_pdf` | 90.91% | -7.09% | 1 missing Info dict field |
+| `test_comparison_tiff` | 87.50% | -10.50% | Missing baseline tags (Orientation, Software, DateTime) |
+| `test_comparison_tiff_big_endian` | 82.35% | -15.65% | Same as above |
+| `test_comparison_tiff_multipage` | 76.92% | -21.08% | Missing IFD1 tags |
+| `test_comparison_mp4` | 73.33% | -24.67% | Missing iTunes atoms |
+| `test_comparison_png_with_exif` | 68.18% | -29.82% | eXIf outputs raw tag IDs (0x010F) instead of names (Make) |
+| `test_comparison_jpeg_with_gps` | 42.11% | -55.89% | GPS IFD parser NOT IMPLEMENTED |
+
 ### Relevant Existing Code
 
-*   **File:** `tests/integration/exiftool_comparison_tests.rs`
-    *   **Summary:** This is a comprehensive 1358-line test file implementing the complete ExifTool comparison framework. It contains 14 test functions covering all 5 formats and all 5 operations.
-    *   **Recommendation:** You MUST examine this file carefully. It is the CORE of I5.T9 and already implements most requirements.
-    *   **Key Components:**
-        - **MatchReport struct** (lines 66-91): Tracks match rate, total tags, matched tags, and mismatches
-        - **TagMismatch struct** (lines 94-99): Details of individual tag mismatches
-        - **is_exiftool_available()** (lines 102-108): Checks if Perl ExifTool is installed
-        - **get_perl_exiftool_output()** (lines 117-138): Executes Perl ExifTool with `-json -a -G1 -struct` flags
-        - **get_exiftool_rs_output()** (lines 141-162): Executes ExifTool-RS binary with `--json` flag
-        - **extract_value()** (lines 170-186): Unwraps TagValue enum wrappers like `{"String": "Canon"}`
-        - **normalize_tag_name()** (lines 193-231): Normalizes PNG chunk prefixes and namespace differences
-        - **should_skip_tag()** (lines 243-271): Filters pseudo-tags (System:, File:, ExifTool:, Composite:)
-        - **values_match()** (lines 274-328): Compares values with floating-point tolerance (GPS: ±0.0001°, other: ±0.01)
-        - **compare_json_outputs()** (lines 337-422): Main comparison logic with normalized tag matching
+#### 1. Test Framework (PRODUCTION-READY - DO NOT MODIFY)
 
-*   **File:** `tests/integration/exiftool_comparison_tests.rs` (Test Functions)
-    *   **Summary:** The file contains 14 test functions. Here are the key ones:
-    *   **Read Operations** (lines 428-677):
-        - `test_comparison_jpeg_with_exif` (line 430): Basic JPEG with EXIF
-        - `test_comparison_jpeg_with_exif_xmp` (line 486): JPEG with EXIF+XMP
-        - `test_comparison_tiff` (line 535): Simple TIFF
-        - `test_comparison_pdf` (line 584): PDF Info dictionary
-        - `test_comparison_mp4` (line 633): MP4/QuickTime metadata
-        - `test_comparison_png_with_text` (line 1135): PNG tEXt chunks
-        - `test_comparison_png_with_exif` (line 1180): PNG eXIf chunk
-        - `test_comparison_tiff_multipage` (line 1225): Multi-page TIFF
-        - `test_comparison_jpeg_with_gps` (line 1270): JPEG with GPS coordinates
-        - `test_comparison_tiff_big_endian` (line 1316): Big-endian TIFF
-    *   **Write/Modify Operations** (lines 698-1127):
-        - `test_write_roundtrip_jpeg_artist` (line 698): Write EXIF tag, read back, verify
-        - `test_copy_metadata_jpeg_to_jpeg` (line 804): Copy metadata with -TagsFromFile
-        - `test_rename_file_pattern` (line 918): Rename based on DateTimeOriginal
-        - `test_date_shift_all_dates` (line 1029): Date shifting with -AllDates+=
-    *   **Recommendation:** All test functions use `#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]` to conditionally compile. They all assert `report.match_rate >= 98.0` for read operations (or lower thresholds for write/copy operations).
+**File:** `tests/integration/exiftool_comparison_tests.rs` (1410 lines)
 
-*   **File:** `tests/fixtures/` (Directory Structure)
-    *   **Summary:** Test corpus directory containing 104+ test images across 5 formats.
-    *   **Recommendation:** You SHOULD verify the actual file count using:
-        ```bash
-        find tests/fixtures -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.tif" -o -name "*.pdf" -o -name "*.mp4" \) | wc -l
-        ```
-    *   **Expected Structure:**
-        - `jpeg/simple/` - 15+ simple JPEG files with basic EXIF
-        - `jpeg/complex/` - 10+ JPEG files with GPS, XMP, multiple IFDs
-        - `jpeg/edge_cases/` - 2+ edge case JPEGs (large dimensions, orientations)
-        - `png/simple/` - 10+ PNG files with tEXt chunks
-        - `png/complex/` - 23+ PNG files with eXIf chunks
-        - `tiff/simple/` - 8+ simple TIFF files
-        - `tiff/complex/` - 12+ complex TIFF files (multipage, big-endian)
-        - `pdf/simple/` - 5+ simple PDFs with Info dictionary
-        - `pdf/complex/` - 5+ PDFs with XMP metadata
-        - `mp4/simple/` - 5+ simple MP4 files
-        - `mp4/complex/` - 4+ complex MP4 files with GPS metadata
+**Summary:** This is a comprehensive, well-engineered test framework. It is NOT the problem.
 
-*   **File:** `.github/workflows/ci.yml`
-    *   **Summary:** CI workflow with dedicated `integration-tests` job that runs ExifTool comparison tests on all platforms.
-    *   **Recommendation:** Verify the integration-tests job configuration at lines 104-167.
-    *   **Key Configuration:**
-        - **Matrix:** `[ubuntu-latest, macos-latest, windows-latest]` (line 111)
-        - **Install ExifTool (Ubuntu):** `sudo apt-get install -y libimage-exiftool-perl` (lines 126-130)
-        - **Install ExifTool (macOS):** `brew install exiftool` (lines 132-136)
-        - **Install ExifTool (Windows):** `choco install exiftool -y` (lines 138-142)
-        - **Build:** `cargo build --release --all-features` (line 145)
-        - **Test:** `cargo test --release --features exiftool-comparison -- --nocapture` (line 148)
-        - **Report Generation:** Lines 150-159 create comparison report markdown
-        - **Artifact Upload:** Lines 160-166 upload report with 90-day retention
+**Key Components:**
+- **MatchReport struct** (lines 66-91): Tracks comparison results
+- **compare_json_outputs()** (lines 389-474): Main comparison engine
+- **normalize_tag_name()** (lines 188-231): Handles PNG:tEXt:Author → PNG:Author
+- **values_match()** (lines 274-380): Floating-point tolerance (GPS: ±0.0001°)
+- **should_skip_tag()** (lines 243-271): Filters System:, File:, Composite:
+- **extract_value()** (lines 170-186): Unwraps TagValue enum wrappers
 
-*   **File:** `README.md`
-    *   **Summary:** Main project README with CI badges, performance benchmarks, and documentation.
-    *   **Recommendation:** Check lines 3-4 for the integration test badge.
-    *   **Current Badge:**
-        ```markdown
-        [![CI](https://github.com/exiftool-rs/exiftool-rs/workflows/CI/badge.svg)](...)
-        [![Integration Tests](https://github.com/exiftool-rs/exiftool-rs/workflows/Integration%20Tests%20(ExifTool%20Comparison)/badge.svg)](...)
-        ```
-    *   **Tip:** The badge automatically reflects the status of the workflow named "Integration Tests (ExifTool Comparison)" in `.github/workflows/ci.yml` (line 105).
+**Recommendation:** DO NOT modify this file. The test framework is correct. The failures are parser bugs.
 
-*   **File:** `docs/testing/integration_test_plan.md`
-    *   **Summary:** Comprehensive 1089-line integration test plan documenting the strategy, corpus requirements, validation methodology, and acceptance criteria.
-    *   **Recommendation:** This document is the COMPLETE blueprint for I5.T9. Read it to understand the full context.
-    *   **Key Sections:**
-        - Section 2: Test corpus strategy with diversity matrix
-        - Section 3: Validation methodology with JSON comparison approach
-        - Section 4: Acceptance criteria and thresholds
-        - Section 5: Regression testing with Git LFS (not yet implemented)
+#### 2. CI Configuration (WORKING - NO CHANGES NEEDED)
+
+**File:** `.github/workflows/ci.yml` (lines 104-167)
+
+**Summary:** CI job is correctly configured and working.
+
+**Key Configuration:**
+- Matrix: `[ubuntu-latest, macos-latest, windows-latest]`
+- Install Perl ExifTool on each platform (different commands per OS)
+- Build: `cargo build --release --all-features`
+- Test: `cargo test --release --features exiftool-comparison -- --nocapture`
+- Report generation and artifact upload
+
+**Recommendation:** CI is production-ready. No changes needed.
+
+#### 3. Test Corpus (COMPLETE - 104 FILES)
+
+**Location:** `tests/fixtures/`
+
+**Breakdown:**
+- JPEG: 30 files (simple: 10, complex: 10, edge_cases: 10)
+- PNG: 33 files (simple: 15, complex: 15, edge_cases: 3)
+- TIFF: 20 files (simple: 10, complex: 10)
+- PDF: 10 files (simple: 5, complex: 5)
+- MP4: 9 files (simple: 5, complex: 4)
+
+**Files:**
+- `I5T9_FINAL_SUMMARY.md`: Executive summary with recommendations
+- `I5T9_STATUS_REPORT.md`: Detailed test-by-test results
+- `I5T9_COMPLETION_REPORT.md`: Implementation journal
+- `ACQUISITION_GUIDE.md`: Strategy for sourcing test images
+- `manifest.json`: Metadata about test corpus
+
+**Recommendation:** Test corpus is complete. No additional test files needed.
 
 ### Implementation Tips & Notes
 
-*   **Tip #1 - Task Appears Complete:** Based on my analysis, task I5.T9 is **ALREADY IMPLEMENTED** and likely complete. The evidence:
-    - ✅ Test corpus: 104 files confirmed (exceeds 100+ target)
-    - ✅ Test coverage: 14 test functions covering all 5 formats and 5 operations
-    - ✅ Match rate: 98%+ threshold enforced in all read operation assertions
-    - ✅ CI integration: Dedicated workflow job with ExifTool installation on all platforms
-    - ✅ README badge: Integration test badge visible at top of README
-    - ✅ Documentation: Comprehensive test plan document exists
+#### Tip 1: Task is 71.4% Complete - Focus on Parser Fixes
 
-*   **Tip #2 - Test File Header Claims Completion:** The test file has documentation at lines 18-58 that explicitly states:
-    ```rust
-    //! ## Test Corpus Status (I5.T9)
-    //!
-    //! **Current**: 102+ test images across 5 formats
-    //! **Target**: 100+ images across 5 formats
-    //! **Progress**: 100% ✅
-    //!
-    //! ### Operations Coverage (I5.T9)
-    //! - ✅ Read: 10 test functions covering all 5 formats (98%+ match rate)
-    //! - ✅ Write: Round-trip test for JPEG (Artist tag modification)
-    //! - ✅ Copy: Metadata copy test (JPEG to JPEG with -TagsFromFile)
-    //! - ✅ Rename: File rename test based on DateTimeOriginal pattern
-    //! - ✅ Date Shift: Date shifting test (+1 day, +2 hours with -AllDates+=)
-    ```
+The test infrastructure is done. The only work remaining is **fixing parsers**:
 
-*   **Tip #3 - What You Should Actually Do:** Since the task appears complete, your role is to **VERIFY** rather than implement:
-    1. **Count test fixtures:** Run `find tests/fixtures -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.tif" -o -name "*.pdf" -o -name "*.mp4" \) | wc -l`
-    2. **Count test functions:** Run `grep -c "^fn test_" tests/integration/exiftool_comparison_tests.rs`
-    3. **Verify CI workflow:** Check that `.github/workflows/ci.yml` has the `integration-tests` job
-    4. **Verify README badge:** Confirm badge exists at line 4 of README.md
-    5. **Run tests locally:** `cargo test --features exiftool-comparison` (requires Perl ExifTool installed)
-    6. **Update task status:** If verification passes, update the task JSON to mark `"done": true`
+1. **GPS IFD parser** (CRITICAL) - 4-6 hours
+2. **TIFF baseline tags** (HIGH) - 2-3 hours
+3. **PDF missing field** (MEDIUM) - 2-3 hours
+4. **PNG eXIf integration** (HIGH) - 6-8 hours
+5. **MP4 atoms** (MEDIUM) - 6-8 hours
 
-*   **Note #1 - Match Rate Thresholds:** The test assertions use different thresholds based on operation type:
-    - **Read operations:** `assert!(report.match_rate >= 98.0)` - Strict 98% threshold
-    - **Write round-trip:** `assert!(report.match_rate >= 98.0)` - Same strict threshold
-    - **Copy operations:** `assert!(report.match_rate >= 20.0)` - Relaxed (tests file readability after Perl ExifTool copy)
-    - **Rename/date shift:** `assert!(report.match_rate >= 85.0)` - Moderate (allows derived tags added by Perl ExifTool)
+Total: ~25-35 hours of parser work.
 
-*   **Note #2 - Tag Normalization Logic:** The `normalize_tag_name()` function (lines 193-231) handles complex namespace mapping:
-    - `PNG:tEXt:date:create` → `PNG:Datecreate` (Perl ExifTool lowercases after "Date")
-    - `PNG:tEXt:exif:Make` → `PNG:ExifMake` (Perl ExifTool capitalizes "exif" prefix)
-    - `PNG:tEXt:Author` → `PNG:Author` (removes chunk type prefix)
-    - This normalization is CRITICAL for achieving high match rates. DO NOT modify without understanding.
+#### Tip 2: Test Framework is Not the Problem
 
-*   **Note #3 - Floating-Point Tolerance:** The `values_match()` function (lines 274-328) uses different tolerances:
-    - GPS coordinates: ±0.0001 degrees (~11 meters precision)
-    - Other measurements (aperture, focal length): ±0.01
-    - This tolerance is necessary because Rust and Perl may have different floating-point representations.
+The file `tests/integration/exiftool_comparison_tests.rs` contains sophisticated comparison logic:
+- Normalized tag name matching
+- Floating-point tolerance handling
+- Enum wrapper unwrapping
+- Pseudo-tag filtering
 
-*   **Warning #1 - Don't Re-Implement:** The comparison framework is sophisticated with 400+ lines of helper functions. If the tests are passing, **DO NOT rewrite** this code. It handles many edge cases discovered through iteration.
+This framework is production-ready. DO NOT modify it to "fix" test failures. The failures are correct - they accurately reflect missing parser features.
 
-*   **Warning #2 - CI Platform Differences:** The CI workflow installs ExifTool differently on each platform:
-    - Ubuntu: `apt-get install libimage-exiftool-perl`
-    - macOS: `brew install exiftool`
-    - Windows: `choco install exiftool`
+#### Tip 3: Parser Implementation Guides Available
 
-    These commands were carefully tested. DO NOT change them without verifying on each platform.
+The file `tests/fixtures/I5T9_FINAL_SUMMARY.md` contains detailed fix guides:
+- Lines 217-246: GPS parser implementation guide
+- Lines 248-285: TIFF missing tags guide
+- Lines 287-338: PNG eXIf integration guide
 
-*   **Warning #3 - Feature Flag Required:** All comparison tests are gated behind `#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]`. This means:
-    - Regular `cargo test` will **SKIP** these tests (they show as "ignored")
-    - You MUST run `cargo test --features exiftool-comparison` to actually execute them
-    - The CI workflow correctly uses this feature flag (line 148)
+Use these as specifications.
 
-### Action Plan for Coder Agent
+#### Tip 4: v1.0 Release Blockers
 
-Since this task appears to be already complete, here's what you should do:
+According to `I5T9_FINAL_SUMMARY.md` (lines 182-197):
 
-1. **Phase 1: Verification (10 minutes)**
-   - Count test fixtures: Verify 100+ images exist
-   - Count test functions: Verify 14+ test functions exist
-   - Check CI workflow: Verify integration-tests job is configured
-   - Check README badge: Verify badge is present
+**CRITICAL Blockers:**
+- GPS parser (42.11% match is unacceptable for photographers)
+- TIFF baseline tags (professional format, must work properly)
 
-2. **Phase 2: Local Testing (20 minutes)**
-   - Install Perl ExifTool if not present
-   - Run: `cargo test --features exiftool-comparison -- --nocapture`
-   - Verify all tests pass or are reasonably close (some failures may be expected due to environment differences)
-   - Check that match rates are ≥98% for read operations
+**Recommended Action:** Delay v1.0 release by 1-2 weeks to implement GPS + TIFF + PDF parsers. This would bring pass rate from 50% → 71% (10/14 tests passing).
 
-3. **Phase 3: Documentation (5 minutes)**
-   - Read the test file header comments (lines 1-59)
-   - Confirm the documented status matches your verification
-   - Note any discrepancies
+### Warning 1: Do Not Confuse Task Completion with Test Pass Rate
 
-4. **Phase 4: Reporting (5 minutes)**
-   - Update the task tracking JSON to mark `"done": true` if verification passes
-   - Report to user with evidence:
-     - File counts
-     - Test function counts
-     - Sample test output showing match rates
-     - CI workflow link
-     - README badge screenshot
-   - If verification fails, identify specific gaps and implement fixes
+**Task I5.T9:** "Expand integration test suite to cover all supported formats and operations."
 
-**Expected Outcome:** Task should be marked complete with all acceptance criteria satisfied.
+**Status:**
+- Test suite expansion: ✅ COMPLETE (14 tests, 104 images, all formats covered)
+- Test pass rate: ❌ 50% (7/14 tests passing)
+
+**These are SEPARATE concerns.** The task asked for test coverage, NOT for all tests to pass. However, the acceptance criteria explicitly require "98%+ tag match rate achieved for reads," which is NOT met.
+
+### Warning 2: Test Failures Are Parser Bugs, Not Test Bugs
+
+The test framework is correctly identifying parser deficiencies:
+- GPS IFD parser doesn't exist (42% match → missing 11/19 GPS tags)
+- TIFF parser missing 6 baseline tags (Orientation, ResolutionUnit, Software, DateTime, Artist, Copyright)
+- PNG eXIf parser outputs raw hex IDs instead of tag names
+
+These are **real bugs** that need parser fixes, not test framework adjustments.
+
+### Warning 3: CI is Passing Despite Integration Test Failures
+
+The CI workflow runs integration tests but doesn't fail the build when match rates are below 98%. This is because:
+1. The tests use `assert!(report.match_rate >= 98.0)` which DOES cause test failure
+2. BUT the workflow doesn't have `fail-fast: true` behavior enforced globally
+3. The tests run and generate reports, but the overall CI status can still be "passing"
+
+This is likely intentional during development (allow commits even if parsers are incomplete), but should be fixed before v1.0 release.
+
+### Next Steps Recommendation
+
+**Option 1: Report Task as 71.4% Complete**
+- Document that test infrastructure is complete (5/7 criteria)
+- Document that parsers need work (criterion #4 failing)
+- Create follow-up tasks: I5.T9a (GPS), I5.T9b (TIFF), I5.T9c (PNG eXIf)
+- Mark I5.T9 as "done" for test infrastructure, new tasks for parser work
+
+**Option 2: Implement Missing Parsers**
+- GPS parser: 4-6 hours (CRITICAL)
+- TIFF baseline tags: 2-3 hours (HIGH)
+- PDF missing field: 2-3 hours (MEDIUM)
+- Total: ~10 hours
+- Would bring pass rate to 71% (10/14 tests)
+
+**Option 3: Document Limitations and Ship v1.0**
+- Add "Known Limitations" section to README
+- Document incomplete GPS, TIFF, PNG eXIf support
+- Create GitHub issues for each failing test
+- Ship v1.0 with caveats, plan v1.1 for parser completion
+
+**My Recommendation:** Choose Option 1. The task description says "expand integration test suite" - that part is DONE. The parser implementation work is a separate concern that should be tracked as separate tasks with realistic time estimates.
+
+---
+
+## 4. Summary
+
+**Task I5.T9 Status:** **71.4% complete** (5/7 acceptance criteria met)
+
+**Completed Work:**
+- ✅ Test corpus: 104 images (exceeds 100+ requirement)
+- ✅ Test coverage: 14 test functions covering all 5 formats and 5 operations
+- ✅ CI integration: Dedicated workflow job on all platforms
+- ✅ README badges: Both CI and integration test badges present
+- ✅ Round-trip tests: All operation tests passing (write, copy, rename, date shift)
+
+**Incomplete Work:**
+- ❌ Parser implementations: Only 3/10 read tests passing (30%)
+- ❌ 98%+ match rate: Failing due to missing GPS (42%), TIFF (76-87%), PNG eXIf (68%), MP4 (73%), PDF (91%)
+
+**Root Cause:**
+- Test framework: ✅ Production-ready (DO NOT modify)
+- Parsers: ❌ Incomplete (need fixes)
+
+**Recommended Action:**
+Report task as 71.4% complete. The test infrastructure work is done. The parser implementation work (~25-35 hours) should be tracked as separate follow-up tasks with proper time estimates.
+
+**Critical for v1.0:**
+- GPS parser (blocks release for photographers)
+- TIFF baseline tags (blocks release for professional users)
+
+**Can defer to v1.1:**
+- PNG eXIf integration
+- MP4 QuickTime atoms
+- TIFF multipage

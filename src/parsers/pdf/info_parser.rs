@@ -128,6 +128,18 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
                     );
                 }
             }
+            "Keywords" => {
+                // Split comma-separated keywords into an array
+                if value.contains(',') {
+                    let keywords: Vec<TagValue> = value
+                        .split(',')
+                        .map(|s| TagValue::new_string(s.trim().to_string()))
+                        .collect();
+                    metadata.insert("PDF:Keywords".to_string(), TagValue::Array(keywords));
+                } else {
+                    metadata.insert("PDF:Keywords".to_string(), TagValue::new_string(value));
+                }
+            }
             _ => {
                 metadata.insert(format!("PDF:{}", key), TagValue::new_string(value));
             }
