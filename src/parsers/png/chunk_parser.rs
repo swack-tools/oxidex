@@ -34,6 +34,10 @@ use std::io;
 /// PNG file signature (8 bytes)
 pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
+/// Type alias for cHRM chunk chromaticity values
+/// (white_x, white_y, red_x, red_y, green_x, green_y, blue_x, blue_y)
+pub type ChromaticityValues = (f64, f64, f64, f64, f64, f64, f64, f64);
+
 /// Represents a parsed PNG chunk
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PngChunk {
@@ -377,10 +381,10 @@ pub fn parse_ihdr_chunk(data: &[u8]) -> Result<(u32, u32, u8, u8, u8, u8, u8)> {
 ///
 /// # Returns
 ///
-/// - `Ok((white_x, white_y, red_x, red_y, green_x, green_y, blue_x, blue_y))`
+/// - `Ok(ChromaticityValues)` - tuple of 8 f64 values (white_x, white_y, red_x, red_y, green_x, green_y, blue_x, blue_y)
 ///   where each value is a float between 0 and 1
 /// - `Err`: Parse error
-pub fn parse_chrm_chunk(data: &[u8]) -> Result<(f64, f64, f64, f64, f64, f64, f64, f64)> {
+pub fn parse_chrm_chunk(data: &[u8]) -> Result<ChromaticityValues> {
     if data.len() != 32 {
         return Err(ExifToolError::parse_error(format!(
             "cHRM chunk must be 32 bytes, got {}",
