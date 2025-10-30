@@ -10,24 +10,27 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I5.T10",
+  "task_id": "I5.T11",
   "iteration_id": "I5",
   "iteration_goal": "Implement C FFI bindings for cross-language integration, automate tag database generation from ExifTool specs, set up cross-compilation and release builds, create comprehensive documentation, and polish for v1.0 release.",
-  "description": "Expand benchmark suite from I2.T11 to compare performance against Perl ExifTool. Benchmark scenarios: (1) Single file extraction (JPEG with EXIF), (2) Batch processing (1000 JPEGs), (3) Write operation (modify EXIF tag), (4) Format detection overhead. Run both ExifTool and ExifTool-RS, measure wall-clock time and memory usage. Use hyperfine for CLI benchmarking, criterion for library benchmarking. Document results in README with comparison table. Target: demonstrate 2-5x speedup for typical operations.",
-  "agent_type_hint": "BackendAgent",
-  "inputs": "I2.T11 benchmark suite, all implemented features",
+  "description": "Prepare for v1.0 release: (1) Audit all TODOs and FIXMEs in code (resolve or document), (2) Review all documentation (README, API docs, user guide) for completeness and accuracy, (3) Update CHANGELOG.md with all features and fixes, (4) Bump version to 1.0.0 in Cargo.toml, (5) Create git tag v1.0.0, (6) Trigger release workflow to build and publish binaries, (7) Publish Rust crate to crates.io (cargo publish), (8) Write release announcement (blog post, README update) highlighting features, performance, and migration guide from Perl ExifTool, (9) Submit to Rust community forums (r/rust, This Week in Rust), (10) Create GitHub Release with binaries and release notes.",
+  "agent_type_hint": "SetupAgent",
+  "inputs": "All completed features, I5.T7 user guide, I5.T10 performance benchmarks",
   "target_files": [
-    "benches/parse_benchmarks.rs",
-    "benches/exiftool_comparison.sh",
+    "Cargo.toml",
+    "CHANGELOG.md",
     "README.md"
   ],
   "input_files": [
-    "benches/parse_benchmarks.rs"
+    "Cargo.toml",
+    "README.md",
+    "CHANGELOG.md",
+    "docs/book/"
   ],
-  "deliverables": "Comparative benchmarks, performance documentation",
-  "acceptance_criteria": "Benchmarks compare ExifTool-RS vs. Perl ExifTool on same machine, at least 4 benchmark scenarios (single read, batch read, write, detection), results show wall-clock time and memory usage, ExifTool-RS achieves 2x+ speedup for at least 2 scenarios, results documented in README with table, benchmarks reproducible (documented setup, test corpus)",
+  "deliverables": "Version bump to 1.0.0, complete CHANGELOG, release announcement, published binaries and crate",
+  "acceptance_criteria": "All TODOs resolved or documented as future work, documentation reviewed and updated, CHANGELOG.md lists all features and changes, version is 1.0.0 in Cargo.toml, git tag v1.0.0 created and pushed, release workflow builds all binaries successfully, binaries uploaded to GitHub Releases, crate published to crates.io (verify cargo install exiftool-rs works), release announcement posted (README, blog, forums), GitHub Release has complete release notes",
   "dependencies": [],
-  "parallelizable": true,
+  "parallelizable": false,
   "done": false
 }
 ```
@@ -38,41 +41,110 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
+### Context: potential-evolution (from 06_Rationale_and_Future.md)
+
+```markdown
+### 5.1. Potential Evolution
+
+**Phase 1 (v1.0 - v1.5): Foundation & Adoption**
+- Core 50+ format support (JPEG, PNG, TIFF, PDF, MP4, RAW formats)
+- CLI feature parity for common use cases (90% of ExifTool workflows)
+- Rust library API stabilization
+- Binary distribution for Linux, macOS, Windows
+- Test coverage >80%, continuous fuzzing
+
+**Phase 2 (v2.0 - v2.5): Expansion & Performance**
+- Expand to 150+ formats (add obscure formats, camera maker notes)
+- SIMD optimizations for bulk operations (UTF-8 validation, checksums)
+- WebAssembly build for browser-based metadata extraction
+- Profile-guided optimization (PGO) builds
+- Incremental metadata updates (avoid full file rewrite)
+
+**Phase 3 (v3.0+): Ecosystem & Intelligence**
+- **Machine Learning Integration**: Tag suggestion, auto-correction of malformed metadata
+- **Cloud Integration**: Native S3/Azure Blob support (async I/O becomes relevant)
+- **Metadata Analytics**: Batch analysis tools (e.g., "find all photos from camera X with GPS but missing timestamps")
+- **GUI (Optional)**: Lightweight cross-platform UI (egui framework)
+- **Streaming API**: Process video streams in real-time (e.g., live metadata overlay)
+- **Distributed Processing**: Cluster mode for processing million-file archives (Kubernetes operator)
+
+**Backward Compatibility Promise**:
+- Library API: Semantic versioning (breaking changes only in major versions)
+- CLI: Argument compatibility maintained for "common subset" (flagged arguments may change)
+```
+
+### Context: task-i5-t11 (from 02_Iteration_I5.md)
+
+```markdown
+*   **Task 5.11: v1.0 Release Preparation and Announcement**
+    *   **Task ID:** `I5.T11`
+    *   **Description:** Prepare for v1.0 release: (1) Audit all TODOs and FIXMEs in code (resolve or document), (2) Review all documentation (README, API docs, user guide) for completeness and accuracy, (3) Update CHANGELOG.md with all features and fixes, (4) Bump version to 1.0.0 in Cargo.toml, (5) Create git tag v1.0.0, (6) Trigger release workflow to build and publish binaries, (7) Publish Rust crate to crates.io (`cargo publish`), (8) Write release announcement (blog post, README update) highlighting features, performance, and migration guide from Perl ExifTool, (9) Submit to Rust community forums (r/rust, This Week in Rust), (10) Create GitHub Release with binaries and release notes.
+    *   **Agent Type Hint:** `SetupAgent` or `DocumentationAgent`
+    *   **Inputs:** All completed features, I5.T7 user guide, I5.T10 performance benchmarks
+    *   **Input Files:** [`Cargo.toml`, `README.md`, `CHANGELOG.md`, `docs/book/`]
+    *   **Target Files:**
+        *   `Cargo.toml` (version = "1.0.0")
+        *   `CHANGELOG.md` (v1.0.0 section)
+        *   `README.md` (v1.0 announcement)
+        *   Git tag: `v1.0.0`
+        *   GitHub Release
+    *   **Deliverables:**
+        *   Version bump to 1.0.0
+        *   Complete CHANGELOG
+        *   Release announcement
+        *   Published binaries and crate
+    *   **Acceptance Criteria:**
+        *   All TODOs resolved or documented as future work
+        *   Documentation reviewed and updated
+        *   CHANGELOG.md lists all features and changes
+        *   Version is 1.0.0 in Cargo.toml
+        *   Git tag v1.0.0 created and pushed
+        *   Release workflow builds all binaries successfully
+        *   Binaries uploaded to GitHub Releases
+        *   Crate published to crates.io (verify `cargo install exiftool-rs` works)
+        *   Release announcement posted (README, blog, forums)
+        *   GitHub Release has complete release notes
+    *   **Dependencies:** All I5 tasks (requires complete, tested, documented system)
+    *   **Parallelizable:** No (final release task)
+```
+
 ### Context: nfr-performance (from 01_Context_and_Drivers.md)
 
 ```markdown
 #### Performance
-- **Target**: 2-5x faster than Perl ExifTool for typical operations
-- **Justification**: Rust's zero-cost abstractions, elimination of interpreter overhead, and potential for SIMD optimization
-- **Measurement**: Benchmark suite comparing against ExifTool on 1000-file corpus
-- **Design Impact**: Zero-copy parsing strategies, memory-mapped I/O for large files, parallel batch processing
+
+**Target**: Process metadata 2-5x faster than Perl ExifTool for common operations.
+
+**Justification**:
+- **Zero-Copy Parsing**: Rust enables efficient in-place parsing without unnecessary allocations
+- **Compiled Code**: Native machine code eliminates interpreter overhead
+- **SIMD Potential**: Rust's explicit control allows vectorization for batch operations
+- **Data Parallelism**: Rayon library enables trivial parallelization for batch processing
+- **Memory Efficiency**: Stack allocation and explicit lifetimes reduce GC pressure
+
+**Measured By**:
+- Benchmark suite comparing ExifTool-RS vs. Perl ExifTool on standardized workloads
+- Test scenarios: single file read, batch processing (1000 files), metadata write, format detection
+- Performance regression tests in CI pipeline
 ```
 
-### Context: task-i5-t10 (from 02_Iteration_I5.md)
+### Context: nfr-usability (from 01_Context_and_Drivers.md)
 
 ```markdown
-*   **Task 5.10: Performance Benchmarking Against ExifTool**
-    *   **Task ID:** `I5.T10`
-    *   **Description:** Expand benchmark suite from I2.T11 to compare performance against Perl ExifTool. Benchmark scenarios: (1) Single file extraction (JPEG with EXIF), (2) Batch processing (1000 JPEGs), (3) Write operation (modify EXIF tag), (4) Format detection overhead. Run both ExifTool and ExifTool-RS, measure wall-clock time and memory usage. Use `hyperfine` for CLI benchmarking, `criterion` for library benchmarking. Document results in README with comparison table. Target: demonstrate 2-5x speedup for typical operations.
-    *   **Agent Type Hint:** `BackendAgent`
-    *   **Inputs:** I2.T11 benchmark suite, all implemented features
-    *   **Input Files:** [`benches/parse_benchmarks.rs`]
-    *   **Target Files:**
-        *   `benches/parse_benchmarks.rs` (expand with comparison)
-        *   `benches/exiftool_comparison.sh` (shell script using hyperfine)
-        *   `README.md` (add performance comparison section)
-    *   **Deliverables:**
-        *   Comparative benchmarks
-        *   Performance documentation
-    *   **Acceptance Criteria:**
-        *   Benchmarks compare ExifTool-RS vs. Perl ExifTool on same machine
-        *   At least 4 benchmark scenarios (single read, batch read, write, detection)
-        *   Results show wall-clock time and memory usage
-        *   ExifTool-RS achieves 2x+ speedup for at least 2 scenarios
-        *   Results documented in README with table
-        *   Benchmarks reproducible (documented setup, test corpus)
-    *   **Dependencies:** All features (needs complete implementation for fair comparison)
-    *   **Parallelizable:** Yes (can be run after features are complete)
+#### Usability
+
+**Target**: CLI backward compatibility for 90% of common ExifTool usage patterns.
+
+**Justification**:
+- Minimize migration friction for existing users
+- Leverage existing documentation and community knowledge
+- Enable drop-in replacement for scripts and workflows
+- Ease adoption by users familiar with ExifTool syntax
+
+**Measured By**:
+- Coverage analysis of most common ExifTool arguments (via usage statistics, GitHub issues, Stack Overflow questions)
+- User acceptance testing with sample workflows
+- Migration guide documenting any incompatibilities
 ```
 
 ---
@@ -83,120 +155,127 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `benches/parse_benchmarks.rs`
-    *   **Summary:** This file contains criterion-based library benchmarks for core parsing operations: format detection, JPEG segment parsing, TIFF IFD parsing, and full metadata extraction. It uses black_box() to prevent compiler optimizations and includes detailed documentation for each benchmark.
-    *   **Recommendation:** This file already exists and provides the library-level benchmarking infrastructure. You DO NOT need to modify this file extensively. The criterion benchmarks are for internal performance tracking, not for ExifTool comparison. Your focus should be on the hyperfine-based CLI comparison script.
-
-*   **File:** `benches/exiftool_comparison.sh`
-    *   **Summary:** **CRITICAL FINDING**: This file ALREADY EXISTS and is a comprehensive, production-ready shell script that implements ALL FOUR required benchmark scenarios using hyperfine! It includes: single file extraction, batch processing (1000 files), write operations, and format detection. It automatically checks for prerequisites (hyperfine, perl exiftool), handles system info detection, creates temporary test directories, runs benchmarks with proper warmup and run counts, compiles results into markdown and JSON formats, and calculates speedup metrics.
-    *   **Recommendation:** **DO NOT REWRITE THIS FILE**. The script is complete, well-documented (463 lines with extensive comments), and follows best practices. It already handles all edge cases including temporary file cleanup, platform-specific system info detection (macOS/Linux), corpus generation for batch tests, and proper error handling.
-    *   **Status:** This file is DONE and functional. You can verify this by reviewing its comprehensive structure from lines 1-463.
-
-*   **File:** `benches/benchmark_results.md`
-    *   **Summary:** **CRITICAL FINDING**: This file ALREADY EXISTS and contains actual benchmark results that have been run on the current system! Results show: Single File (14.32x faster), Batch Processing (79.17x faster), Write Operation (12.68x faster), Format Detection (15.05x faster). All results are documented with system specs (Darwin 25.0.0, Apple M4, 10 cores, 32GB RAM, Perl ExifTool 13.36, ExifTool-RS 0.1.0).
-    *   **Recommendation:** These results already exist and demonstrate **EXCEPTIONAL** performance that far exceeds the 2-5x target requirement. The benchmarks have been successfully run and documented.
-
-*   **File:** `benches/benchmark_results.json`
-    *   **Summary:** Machine-readable JSON format of the benchmark results for programmatic analysis. Contains detailed timing statistics for all four benchmark scenarios.
-    *   **Status:** Already exists and is up-to-date with the markdown results.
+*   **File:** `Cargo.toml`
+    *   **Summary:** The main project manifest file currently has version "0.1.0", includes all necessary dependencies, has release profile optimizations configured, and includes package metadata for Debian and RPM packaging.
+    *   **Recommendation:** You MUST update the version field from "0.1.0" to "1.0.0" in the `[package]` section. The current crate type configuration already includes `["lib", "staticlib", "cdylib"]` which is correct for FFI bindings and library usage.
 
 *   **File:** `README.md`
-    *   **Summary:** **CRITICAL FINDING**: The README ALREADY CONTAINS a comprehensive "Performance Benchmarks" section (lines 57-113) with: system specifications table, benchmark results table showing all 4 scenarios with speedup metrics, key performance improvements section explaining why ExifTool-RS is faster, reproduction instructions, and notes about running both hyperfine CLI benchmarks and criterion library benchmarks.
-    *   **Recommendation:** The README already documents the performance results in excellent detail. The section includes a properly formatted markdown table, explanations of the performance gains, and clear instructions for reproducing the benchmarks.
+    *   **Summary:** The README is comprehensive with project vision, features, architecture overview, and performance benchmarks. It currently shows "Work in Progress" status and version 0.1.0, with detailed benchmark results showing 14-79x speedup over Perl ExifTool.
+    *   **Recommendation:** You SHOULD update the status section to reflect v1.0.0 release, update version numbers throughout, and add installation instructions for the published crate (`cargo install exiftool-rs`). The benchmark data is already complete and impressive - reuse this data in the release announcement.
 
-*   **File:** `Cargo.toml`
-    *   **Summary:** Project configuration already includes criterion in dev-dependencies, has a [[bench]] section for parse_benchmarks, and includes release optimizations (opt-level=3, lto=true, codegen-units=1, strip=true) for maximum performance.
-    *   **Status:** No changes needed.
+*   **File:** `CHANGELOG.md`
+    *   **Summary:** This file does NOT exist yet and needs to be created from scratch.
+    *   **Recommendation:** You MUST create `CHANGELOG.md` following the "Keep a Changelog" format (https://keepachangelog.com). Include sections for Added, Changed, Fixed, and list all features from iterations I1-I5.
+
+*   **File:** `.github/workflows/release.yml`
+    *   **Summary:** The release workflow is already configured to build cross-platform binaries (Linux x86_64/ARM64, macOS Intel/ARM, Windows x86_64) on tag push matching `v*`. It creates GitHub releases automatically and uploads archives with checksums.
+    *   **Recommendation:** This workflow is ready to use. When you create and push the `v1.0.0` tag, this workflow will automatically trigger and build all binaries. You DO NOT need to modify this file.
+
+*   **File:** `docs/book/src/intro.md`
+    *   **Summary:** The user guide intro is comprehensive and well-written, currently indicating v0.1.0 pre-alpha status with detailed feature lists and project vision.
+    *   **Recommendation:** You SHOULD update the version status to v1.0.0, change "Pre-alpha / Active Development" to "Stable Release", and update the "In Progress" section to reflect that v1.0 is now complete.
+
+*   **File:** `benches/benchmark_results.md`
+    *   **Summary:** Contains detailed performance benchmark results comparing ExifTool-RS vs Perl ExifTool, showing 13-65x speedup across 4 test scenarios with full methodology and system specs.
+    *   **Recommendation:** This data is complete and impressive. You SHOULD incorporate these exact benchmark numbers into the release announcement and ensure the README references this file. The benchmarks demonstrate exceptional performance gains (16x, 65x, 13x, 14x speedups).
 
 ### Implementation Tips & Notes
 
-*   **CRITICAL TIP**: **THE TASK IS ALREADY COMPLETE!** All three target files already exist with complete implementations:
-    1. ✅ `benches/exiftool_comparison.sh` - Complete 463-line shell script with all 4 scenarios
-    2. ✅ `benches/benchmark_results.md` - Full results documentation
-    3. ✅ `README.md` - Complete performance benchmarks section (lines 57-113)
+*   **Tip:** I found only 2 TODOs/FIXMEs in the codebase: one in `src/core/validation.rs` about adding ValueType::Array support, and one in `src/writers/tiff_writer.rs` about unsupported types. Both are minor and can be documented as "Known Limitations" or "Future Enhancements" rather than blocking issues.
 
-*   **Status Verification**: The benchmarks have been RUN and results are documented:
-    - Single File: 14.32x faster (exceeds 2-5x target)
-    - Batch: 79.17x faster (far exceeds target)
-    - Write: 12.68x faster (exceeds target)
-    - Detection: 15.05x faster (exceeds target)
-    - All 4 required scenarios are covered
-    - Results show wall-clock time with min/max/mean
-    - Documentation is in README with comparison table
-    - Benchmarks are reproducible (documented setup in README lines 87-112)
+*   **Note:** The project already has comprehensive infrastructure in place:
+    - Cross-compilation setup (Cross.toml)
+    - CI/CD with GitHub Actions (.github/workflows/ci.yml and release.yml)
+    - Packaging for .deb and .rpm (configured in Cargo.toml)
+    - C FFI bindings (src/ffi/)
+    - Python example bindings (bindings/python/)
+    - Comprehensive documentation (docs/book/)
+    - Performance benchmarks (benches/)
+    - Integration tests with ExifTool comparison
 
-*   **Acceptance Criteria Check**:
-    - ✅ Benchmarks compare ExifTool-RS vs. Perl ExifTool on same machine
-    - ✅ At least 4 benchmark scenarios (has exactly 4: single read, batch read, write, detection)
-    - ✅ Results show wall-clock time and memory usage
-    - ✅ ExifTool-RS achieves 2x+ speedup for at least 2 scenarios (achieves 12-79x for ALL scenarios)
-    - ✅ Results documented in README with table (lines 71-76)
-    - ✅ Benchmarks reproducible (documented setup lines 87-112)
+*   **Important:** The current git status shows only `.codemachine/template.json` as modified. This means the codebase is clean and ready for release. You SHOULD commit all your changes (CHANGELOG.md, version bumps, etc.) together, then create and push the v1.0.0 tag.
 
-*   **What You Should Do**:
-    1. **Verify the implementation** by reading the three key files to confirm completeness
-    2. **Test the benchmark script** by running `./benches/exiftool_comparison.sh` to ensure it still works
-    3. **Review the README** to ensure the performance section is clear and accurate
-    4. **Potentially update** the README to mention that results may vary by system (already there at line 112)
-    5. **Mark the task as DONE** after verification
+*   **Publishing Strategy:** For publishing to crates.io:
+    1. Ensure all files are committed and the git working directory is clean
+    2. Run `cargo publish --dry-run` first to verify the package builds correctly
+    3. Then run `cargo publish` to actually publish to crates.io
+    4. After successful publish, create the git tag and push it to trigger the binary release workflow
 
-*   **Warning**: DO NOT rewrite `exiftool_comparison.sh` from scratch. It is a sophisticated script with:
-    - Color-coded output for readability
-    - Comprehensive error handling and prerequisite checks
-    - Platform-specific system info detection (macOS vs Linux)
-    - Intelligent corpus generation for batch tests (replicates fixtures to reach 1000 files)
-    - Proper use of hyperfine's --warmup, --runs, --prepare, --export-markdown, --export-json flags
-    - Automatic speedup calculation using jq and bc
-    - Proper temporary directory cleanup with trap
-    - Detailed interpretation section in output
+*   **Warning:** Before creating the release, you MUST ensure the crate name "exiftool-rs" is available on crates.io or update it if needed. The current Cargo.toml uses "exiftool-rs" as the package name.
 
-*   **Potential Improvements** (optional, not required for task completion):
-    - Could add memory usage tracking with `/usr/bin/time -l` (macOS) or `/usr/bin/time -v` (Linux) if not already present
-    - Could add more test fixtures for different image formats (PNG, TIFF) in addition to JPEG
-    - Could add comparison visualization graphs using criterion's HTML output
+*   **Release Announcement Content:** Your release announcement should highlight:
+    - **Performance:** 14-79x speedup over Perl ExifTool (use exact numbers from benchmark_results.md)
+    - **Memory Safety:** Zero crashes from memory bugs thanks to Rust
+    - **Features:** 50+ formats, 700+ tags, full CLI, library API, C FFI bindings
+    - **Distribution:** Static binaries for Linux, macOS, Windows (no dependencies)
+    - **Migration:** Drop-in replacement for common ExifTool workflows
+    - **Architecture:** Hexagonal design with clean separation of concerns
 
-*   **Testing the Benchmarks**: To validate everything works:
-    ```bash
-    # Ensure ExifTool is installed
-    command -v exiftool || brew install exiftool
+*   **Milestone Achievement:** This v1.0 release completes Phase 1 (Foundation & Adoption) as defined in the architecture document. You SHOULD reference the phased roadmap (v1.0-v1.5, v2.0-v2.5, v3.0+) in the release notes to set expectations for future development.
 
-    # Ensure hyperfine is installed
-    command -v hyperfine || brew install hyperfine
+### Critical Checklist for Release
 
-    # Build in release mode
-    cargo build --release
+Before you mark this task as complete, verify:
 
-    # Run the comparison script
-    ./benches/exiftool_comparison.sh
+1. ✅ All TODOs/FIXMEs are resolved or documented (only 2 minor ones found, document as future work)
+2. ✅ Version bumped to 1.0.0 in Cargo.toml
+3. ✅ CHANGELOG.md created with comprehensive v1.0.0 entry
+4. ✅ README.md updated to reflect v1.0.0 status and include installation instructions
+5. ✅ docs/book/src/intro.md updated to reflect stable v1.0.0 release
+6. ✅ Git working directory clean (all changes committed)
+7. ✅ `cargo publish --dry-run` succeeds
+8. ✅ `cargo publish` succeeds (crate published to crates.io)
+9. ✅ Git tag v1.0.0 created and pushed
+10. ✅ GitHub Actions release workflow triggered and succeeded
+11. ✅ GitHub Release created with binaries and comprehensive release notes
+12. ✅ Release announcement drafted (for README, blog, forums)
 
-    # Verify results were generated
-    cat benches/benchmark_results.md
+### Documentation Files to Review and Update
 
-    # Run criterion benchmarks for library-level metrics
-    cargo bench
-    ```
+You MUST review and update these files for accuracy and completeness:
 
-*   **Key Architectural Alignment**: The benchmark results validate the architectural performance targets:
-    - Architecture required: 2-5x faster than Perl ExifTool
-    - Actual results: 12-79x faster (far exceeds requirements)
-    - This demonstrates successful implementation of zero-copy parsing, memory-mapped I/O, and parallel batch processing as specified in the architecture document
+1. **README.md** - Main project readme (update status, version, add install instructions)
+2. **docs/book/src/intro.md** - User guide introduction (update status to v1.0)
+3. **docs/book/src/installation.md** - Installation guide (verify instructions are current)
+4. **docs/book/src/cli_usage.md** - CLI usage guide (verify examples work)
+5. **docs/book/src/library_api.md** - Library API guide (verify examples compile)
+6. **docs/book/src/ffi.md** - FFI integration guide (verify C examples work)
+7. **docs/book/src/formats.md** - Supported formats list (verify accuracy)
+8. **docs/api/library_api.md** - Rust library API documentation (verify completeness)
+9. **docs/api/ffi_api.md** - C FFI API documentation (verify accuracy)
 
-*   **Documentation Quality**: The README performance section is professionally formatted with:
-    - Clear system specifications table
-    - Results table with proper markdown formatting
-    - Speedup metrics prominently displayed
-    - Explanations of WHY the performance is better (zero-cost abstractions, parallel processing, etc.)
-    - Reproduction instructions for other developers
-    - Links to additional benchmarking tools (criterion)
-    - Appropriate caveats about result variability
+### Format for CHANGELOG.md
 
-*   **Final Recommendation**: This task appears to be ALREADY COMPLETE and exceeds all acceptance criteria. Your primary job is to:
-    1. **VERIFY** that all files are present and functional
-    2. **RUN** the benchmark script to confirm it still works on the current system
-    3. **DOCUMENT** your verification in the task completion report
-    4. **MARK** the task as done (update the task's "done": true status)
+Use this structure for the new CHANGELOG.md file:
 
-**DO NOT attempt to reimplement what is already working perfectly.**
+```markdown
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.0.0] - YYYY-MM-DD
+
+### Added
+- [List all major features added in I1-I5]
+- [Format support, CLI features, library API, FFI bindings, etc.]
+
+### Changed
+- Initial stable release
+
+### Performance
+- [Include benchmark results showing 14-79x speedup]
+
+### Documentation
+- [List documentation deliverables]
+
+## [Unreleased]
+
+### Future Work
+- [Document the 2 TODOs as planned enhancements]
+```
 
 ---
 
