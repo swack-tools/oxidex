@@ -39,3 +39,6 @@ mod copy_metadata_tests;
 
 #[path = "integration/rename_tests.rs"]
 mod rename_tests;
+
+#[path = "integration/date_shift_tests.rs"]
+mod date_shift_tests;

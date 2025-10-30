@@ -6,6 +6,7 @@
 
 #![allow(dead_code)]
 
+pub mod date_shift;
 pub mod file_format;
 pub mod file_reader_trait;
 pub mod format_parser_trait;
