@@ -27,10 +27,10 @@ use tempfile::TempDir;
 ///
 /// This converts the Vec<(u16, u16, Vec<u8>)> format returned by parse_tiff_file
 /// into a MetadataMap with proper TagValue objects.
-fn tags_to_metadata_map(tags: Vec<(u16, u16, Vec<u8>)>) -> MetadataMap {
+fn tags_to_metadata_map(tags: Vec<(u16, u16, u32, Vec<u8>)>) -> MetadataMap {
     let mut metadata = MetadataMap::new();
 
-    for (tag_id, _field_type, value) in tags {
+    for (tag_id, _field_type, _value_count, value) in tags {
         // Map common tag IDs to tag names and create appropriate TagValue
         let (tag_name, tag_value) = match tag_id {
             0x010F => {
@@ -183,10 +183,10 @@ fn test_round_trip_tiff_modification() {
     println!("Re-read file has {} tags", new_tags.len());
 
     // Verify Make tag was modified
-    let make_tag = new_tags.iter().find(|(id, _, _)| *id == 0x010F);
+    let make_tag = new_tags.iter().find(|(id, _, _, _)| *id == 0x010F);
     assert!(make_tag.is_some(), "Make tag should be present in output");
 
-    let (_, _, make_value) = make_tag.unwrap();
+    let (_, _, _, make_value) = make_tag.unwrap();
     let make_str = String::from_utf8_lossy(make_value);
     assert!(
         make_str.contains("ModifiedMake"),
@@ -195,10 +195,10 @@ fn test_round_trip_tiff_modification() {
     );
 
     // Verify ISO tag was added
-    let iso_tag = new_tags.iter().find(|(id, _, _)| *id == 0x8827);
+    let iso_tag = new_tags.iter().find(|(id, _, _, _)| *id == 0x8827);
     assert!(iso_tag.is_some(), "ISO tag should be present in output");
 
-    if let Some((_, _, iso_value)) = iso_tag {
+    if let Some((_, _, _, iso_value)) = iso_tag {
         if iso_value.len() >= 2 {
             let iso = u16::from_le_bytes([iso_value[0], iso_value[1]]);
             assert_eq!(iso, 800, "ISO value should be 800");
@@ -208,7 +208,7 @@ fn test_round_trip_tiff_modification() {
     // Verify other tags remain unchanged
     // Check Model tag (should be unchanged if we didn't modify it)
     if metadata.get("IFD0:Model").is_some() {
-        let model_tag = new_tags.iter().find(|(id, _, _)| *id == 0x0110);
+        let model_tag = new_tags.iter().find(|(id, _, _, _)| *id == 0x0110);
         assert!(model_tag.is_some(), "Model tag should be preserved");
     }
 }
@@ -264,18 +264,18 @@ fn test_write_tiff_with_multiple_tag_types() {
     let tags = parse_tiff_file(&reader2).expect("Failed to parse output file");
 
     // Verify Make (string)
-    let make = tags.iter().find(|(id, _, _)| *id == 0x010F);
+    let make = tags.iter().find(|(id, _, _, _)| *id == 0x010F);
     assert!(make.is_some(), "Make tag should be present");
 
     // Verify ISO (integer)
-    let iso = tags.iter().find(|(id, _, _)| *id == 0x8827);
+    let iso = tags.iter().find(|(id, _, _, _)| *id == 0x8827);
     assert!(iso.is_some(), "ISO tag should be present");
 
     // Verify FNumber (rational)
-    let fnumber = tags.iter().find(|(id, _, _)| *id == 0x829D);
+    let fnumber = tags.iter().find(|(id, _, _, _)| *id == 0x829D);
     assert!(fnumber.is_some(), "FNumber tag should be present");
 
-    if let Some((_, _, fnumber_value)) = fnumber {
+    if let Some((_, _, _, fnumber_value)) = fnumber {
         assert_eq!(
             fnumber_value.len(),
             8,

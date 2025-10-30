@@ -429,7 +429,7 @@ fn test_jpeg_exif_extraction_end_to_end() {
     let mut model_value = String::new();
     let mut datetime_value = String::new();
 
-    for (tag_id, _field_type, value_bytes) in &tags {
+    for (tag_id, _field_type, _value_count, value_bytes) in &tags {
         match *tag_id {
             TAG_MAKE => {
                 make_value = String::from_utf8_lossy(value_bytes)

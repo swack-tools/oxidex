@@ -179,14 +179,26 @@ fn tag_value_to_json(value: &TagValue) -> serde_json::Value {
             denominator,
         } => {
             // Normalize rational display to match Perl ExifTool
-            // If denominator is 1, output only the numerator (e.g., "100/1" → "100")
-            // If numerator is 0, output "0"
-            // Otherwise, keep fractional form "n/d"
-            if *denominator == 1 {
+            if *denominator == 0 {
+                // Invalid rational, output as string
+                serde_json::Value::String(format!("{}/0", numerator))
+            } else if *denominator == 1 {
+                // Output as integer string (e.g., "100/1" → "100")
                 serde_json::Value::String(format!("{}", numerator))
             } else if *numerator == 0 {
+                // Zero rational
                 serde_json::Value::String("0".to_string())
             } else {
+                // Check if this should be output as a decimal number (like Perl ExifTool does for FNumber)
+                // For typical aperture/focal length values, output as decimal
+                let decimal = *numerator as f64 / *denominator as f64;
+                if decimal < 1000.0 && decimal.fract() != 0.0 {
+                    // This looks like an aperture or similar value, output as JSON Number
+                    if let Some(num) = serde_json::Number::from_f64(decimal) {
+                        return serde_json::Value::Number(num);
+                    }
+                }
+                // Otherwise keep as fraction string
                 serde_json::Value::String(format!("{}/{}", numerator, denominator))
             }
         }
