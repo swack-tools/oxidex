@@ -1,6 +1,7 @@
 # ExifTool-RS
 
 [![CI](https://github.com/exiftool-rs/exiftool-rs/workflows/CI/badge.svg)](https://github.com/exiftool-rs/exiftool-rs/actions)
+[![Integration Tests](https://github.com/exiftool-rs/exiftool-rs/workflows/Integration%20Tests%20(ExifTool%20Comparison)/badge.svg)](https://github.com/exiftool-rs/exiftool-rs/actions)
 
 A modern, high-performance Rust reimplementation of the industry-standard [ExifTool](https://exiftool.org/) metadata management library and command-line application.
 

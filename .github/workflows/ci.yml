@@ -100,3 +100,67 @@ jobs:
           files: ./cobertura.xml
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  integration-tests:
+    name: Integration Tests (ExifTool Comparison)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install Perl ExifTool (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libimage-exiftool-perl
+          exiftool -ver
+
+      - name: Install Perl ExifTool (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install exiftool
+          exiftool -ver
+
+      - name: Install Perl ExifTool (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install exiftool -y
+          exiftool -ver
+
+      - name: Build ExifTool-RS
+        run: cargo build --release --all-features
+
+      - name: Run integration tests with ExifTool comparison
+        run: cargo test --release --features exiftool-comparison -- --nocapture
+
+      - name: Generate comparison report
+        if: always()
+        run: |
+          echo "# ExifTool Comparison Test Results" > comparison_report.md
+          echo "" >> comparison_report.md
+          echo "**Platform:** ${{ matrix.os }}" >> comparison_report.md
+          echo "**Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> comparison_report.md
+          echo "" >> comparison_report.md
+          echo "See test output above for detailed match rates." >> comparison_report.md
+
+      - name: Upload comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comparison-report-${{ matrix.os }}
+          path: comparison_report.md
+          retention-days: 90
