@@ -287,7 +287,7 @@ fn extract_u32_from_tag_value(value: &[u8], byte_order: ByteOrder) -> Option<u32
 /// # Ok(())
 /// # }
 /// ```
-pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<Vec<(u16, Vec<u8>)>> {
+pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<Vec<(u16, u16, Vec<u8>)>> {
     // Parse header
     let header = parse_tiff_header(reader)?;
     let byte_order = header.byte_order;
@@ -331,7 +331,7 @@ pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<Vec<(u16, Vec<u8>)>> {
         let tags = parse_ifd(reader, current_offset, byte_order)?;
 
         // Check for sub-IFD pointers and recursively parse them
-        for (tag_id, value) in &tags {
+        for (tag_id, _field_type, value) in &tags {
             match *tag_id {
                 EXIF_IFD_POINTER | GPS_INFO_IFD_POINTER | INTEROPERABILITY_IFD_POINTER => {
                     if let Some(sub_ifd_offset) = extract_u32_from_tag_value(value, byte_order) {

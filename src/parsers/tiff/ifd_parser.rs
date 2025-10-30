@@ -100,7 +100,7 @@ pub struct IfdEntry {
 ///
 /// # Returns
 ///
-/// - `Ok(Vec<(u16, Vec<u8>)>)`: Vector of (tag_id, raw_value_bytes) pairs
+/// - `Ok(Vec<(u16, u16, Vec<u8>)>)`: Vector of (tag_id, field_type, raw_value_bytes) tuples
 /// - `Err(ExifToolError)`: Parse error or I/O error
 ///
 /// # Errors
@@ -137,7 +137,7 @@ pub fn parse_ifd(
     reader: &dyn FileReader,
     ifd_offset: u64,
     byte_order: ByteOrder,
-) -> Result<Vec<(u16, Vec<u8>)>> {
+) -> Result<Vec<(u16, u16, Vec<u8>)>> {
     let file_size = reader.size();
 
     // Validate IFD offset
@@ -230,7 +230,7 @@ pub fn parse_ifd(
             reader.read(value_offset, total_size)?.to_vec()
         };
 
-        result.push((entry.tag_id, value_bytes));
+        result.push((entry.tag_id, entry.field_type, value_bytes));
     }
 
     Ok(result)

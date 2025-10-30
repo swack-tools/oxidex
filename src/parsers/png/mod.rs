@@ -141,7 +141,7 @@ pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                 match parse_exif_chunk(&chunk.data) {
                     Ok(exif_tags) => {
                         // Convert EXIF tags to metadata entries
-                        for (tag_id, raw_bytes) in exif_tags {
+                        for (tag_id, _field_type, raw_bytes) in exif_tags {
                             // Format tag name as EXIF:0x<hex_id> for now
                             // In a full implementation, we'd look up the tag name from tag registry
                             let tag_name = format!("EXIF:0x{:04X}", tag_id);
