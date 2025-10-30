@@ -59,7 +59,7 @@
 
 use crate::core::FileReader;
 use crate::error::{ExifToolError, Result};
-use crate::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};
+use crate::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder, IfdEntries};
 use std::collections::HashSet;
 
 /// TIFF header structure
@@ -287,7 +287,7 @@ fn extract_u32_from_tag_value(value: &[u8], byte_order: ByteOrder) -> Option<u32
 /// # Ok(())
 /// # }
 /// ```
-pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<Vec<(u16, u16, u32, Vec<u8>)>> {
+pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<IfdEntries> {
     // Parse header
     let header = parse_tiff_header(reader)?;
     let byte_order = header.byte_order;

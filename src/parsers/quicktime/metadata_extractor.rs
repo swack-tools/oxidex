@@ -484,35 +484,27 @@ fn extract_user_data_atoms(udta: &Atom, metadata: &mut MetadataMap) -> Result<()
 
     for atom in children {
         let atom_bytes = atom.atom_type.as_bytes();
-        let atom_type_str = atom.atom_type.as_str();
 
         // QuickTime user data atoms start with © character (0xA9)
-        // These are direct udta children, so use UserData: prefix
         if atom_bytes[0] == 0xA9 {
             if let Some(value) = extract_string_value(atom.data) {
                 let tag_name = match atom_bytes {
-                    b"\xa9nam" => "UserData:Title",
-                    b"\xa9ART" => "UserData:Artist",
-                    b"\xa9alb" => "UserData:Album",
-                    b"\xa9day" => "UserData:Year",
-                    b"\xa9cmt" => "UserData:Comment",
-                    b"\xa9cpy" => "UserData:Copyright",
-                    b"\xa9gen" => "UserData:Genre",
-                    b"\xa9too" => "UserData:Encoder",
-                    b"\xa9des" => "UserData:Description",
-                    b"\xa9dir" => "UserData:Director",
-                    b"\xa9prd" => "UserData:Producer",
-                    b"\xa9prf" => "UserData:Performers",
+                    b"\xa9nam" => "QuickTime:Title",
+                    b"\xa9ART" => "QuickTime:Artist",
+                    b"\xa9alb" => "QuickTime:Album",
+                    b"\xa9day" => "QuickTime:Year",
+                    b"\xa9cmt" => "QuickTime:Comment",
+                    b"\xa9cpy" => "QuickTime:Copyright",
+                    b"\xa9gen" => "QuickTime:Genre",
+                    b"\xa9too" => "QuickTime:Encoder",
+                    b"\xa9des" => "QuickTime:Description",
+                    b"\xa9dir" => "QuickTime:Director",
+                    b"\xa9prd" => "QuickTime:Producer",
+                    b"\xa9prf" => "QuickTime:Performers",
                     _ => continue, // Skip unknown atoms
                 };
 
                 metadata.insert(tag_name.to_string(), TagValue::String(value));
-            }
-        } else if atom_type_str == "titl" {
-            // Some MP4 files have a direct "titl" atom in udta for UserData:Title
-            // This is different from ©nam
-            if let Some(value) = extract_userdata_text(atom.data) {
-                metadata.insert("UserData:Title".to_string(), TagValue::String(value));
             }
         }
     }
@@ -549,48 +541,28 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
             // Each item contains a data atom
             if let Some(data_atom) = item.find_child("data") {
                 if let Some(value) = extract_itunes_data_value(data_atom.data) {
-                    // Handle ©day specially - it can be ContentCreateDate (just year) or Year (full date)
-                    if atom_bytes == b"\xa9day" {
-                        // If it's just a 4-digit year (integer or string), use ContentCreateDate
-                        match &value {
-                            TagValue::Integer(year) if *year >= 1000 && *year <= 9999 => {
-                                metadata.insert("ItemList:ContentCreateDate".to_string(), value);
-                            }
-                            TagValue::String(s) if s.len() == 4 && s.parse::<i32>().is_ok() => {
-                                // Convert to integer for ContentCreateDate
-                                if let Ok(year) = s.parse::<i64>() {
-                                    metadata.insert("ItemList:ContentCreateDate".to_string(), TagValue::Integer(year));
-                                }
-                            }
-                            _ => {
-                                // Otherwise use Year
-                                metadata.insert("ItemList:Year".to_string(), value);
-                            }
-                        }
-                        continue;
-                    }
-
                     let tag_name = match atom_bytes {
-                        b"\xa9nam" => "ItemList:Title",
-                        b"\xa9ART" => "ItemList:Artist",
-                        b"\xa9alb" => "ItemList:Album",
-                        b"\xa9cmt" => "ItemList:Comment",
-                        b"\xa9gen" => "ItemList:Genre",
-                        b"\xa9too" => "ItemList:Encoder",
-                        b"aART" => "ItemList:AlbumArtist",
-                        b"\xa9wrt" => "ItemList:Composer",
-                        b"\xa9grp" => "ItemList:Grouping",
-                        b"trkn" => "ItemList:TrackNumber",
-                        b"disk" => "ItemList:DiscNumber",
-                        b"cprt" | b"\xa9cpy" => "ItemList:Copyright",
+                        b"\xa9nam" => "iTunes:Title",
+                        b"\xa9ART" => "iTunes:Artist",
+                        b"\xa9alb" => "iTunes:Album",
+                        b"\xa9day" => "iTunes:Year",
+                        b"\xa9cmt" => "iTunes:Comment",
+                        b"\xa9gen" => "iTunes:Genre",
+                        b"\xa9too" => "iTunes:Encoder",
+                        b"aART" => "iTunes:AlbumArtist",
+                        b"\xa9wrt" => "iTunes:Composer",
+                        b"\xa9grp" => "iTunes:Grouping",
+                        b"trkn" => "iTunes:TrackNumber",
+                        b"disk" => "iTunes:DiscNumber",
+                        b"cprt" | b"\xa9cpy" => "iTunes:Copyright",
                         _ => {
                             // Store unknown iTunes tags with their FourCC
                             // Try to convert to string, otherwise use hex representation
                             if let Ok(s) = std::str::from_utf8(atom_bytes) {
-                                &format!("ItemList:{}", s)
+                                &format!("iTunes:{}", s)
                             } else {
                                 &format!(
-                                    "ItemList:{:02X}{:02X}{:02X}{:02X}",
+                                    "iTunes:{:02X}{:02X}{:02X}{:02X}",
                                     atom_bytes[0], atom_bytes[1], atom_bytes[2], atom_bytes[3]
                                 )
                             }
