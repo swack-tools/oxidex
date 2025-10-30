@@ -161,6 +161,10 @@ pub fn validate_tag_value(
                     format!("Type mismatch: expected {:?} but got Struct", expected_type),
                 ));
             }
+        }
+        TagValue::Array(_) => {
+            // Arrays can contain any value type, skip type validation for now
+            // TODO: Add ValueType::Array to support array type validation
             // For this iteration, basic type matching is sufficient
             // Recursive validation of nested structure contents is out of scope
         }

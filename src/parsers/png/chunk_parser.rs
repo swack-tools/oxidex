@@ -314,6 +314,194 @@ pub fn parse_itxt_chunk(data: &[u8]) -> Result<(String, String)> {
     Ok((keyword, text))
 }
 
+/// Parses an IHDR chunk (Image Header).
+///
+/// # Format
+///
+/// ```text
+/// Width: 4 bytes (u32, big-endian)
+/// Height: 4 bytes (u32, big-endian)
+/// Bit depth: 1 byte (1, 2, 4, 8, 16)
+/// Color type: 1 byte (0=grayscale, 2=RGB, 3=palette, 4=grayscale+alpha, 6=RGBA)
+/// Compression: 1 byte (0=deflate)
+/// Filter: 1 byte (0=adaptive)
+/// Interlace: 1 byte (0=none, 1=Adam7)
+/// ```
+///
+/// # Parameters
+///
+/// - `data`: IHDR chunk data (13 bytes)
+///
+/// # Returns
+///
+/// - `Ok((width, height, bit_depth, color_type, compression, filter, interlace))`
+/// - `Err`: Parse error
+pub fn parse_ihdr_chunk(data: &[u8]) -> Result<(u32, u32, u8, u8, u8, u8, u8)> {
+    if data.len() != 13 {
+        return Err(ExifToolError::parse_error(format!(
+            "IHDR chunk must be 13 bytes, got {}",
+            data.len()
+        )));
+    }
+
+    let width = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+    let height = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+    let bit_depth = data[8];
+    let color_type = data[9];
+    let compression = data[10];
+    let filter = data[11];
+    let interlace = data[12];
+
+    Ok((width, height, bit_depth, color_type, compression, filter, interlace))
+}
+
+/// Parses a cHRM chunk (Primary Chromaticities).
+///
+/// # Format
+///
+/// Each value is a 4-byte unsigned integer representing the value × 100,000.
+/// ```text
+/// White Point X: 4 bytes (u32, big-endian)
+/// White Point Y: 4 bytes (u32, big-endian)
+/// Red X: 4 bytes (u32, big-endian)
+/// Red Y: 4 bytes (u32, big-endian)
+/// Green X: 4 bytes (u32, big-endian)
+/// Green Y: 4 bytes (u32, big-endian)
+/// Blue X: 4 bytes (u32, big-endian)
+/// Blue Y: 4 bytes (u32, big-endian)
+/// ```
+///
+/// # Parameters
+///
+/// - `data`: cHRM chunk data (32 bytes)
+///
+/// # Returns
+///
+/// - `Ok((white_x, white_y, red_x, red_y, green_x, green_y, blue_x, blue_y))`
+///   where each value is a float between 0 and 1
+/// - `Err`: Parse error
+pub fn parse_chrm_chunk(data: &[u8]) -> Result<(f64, f64, f64, f64, f64, f64, f64, f64)> {
+    if data.len() != 32 {
+        return Err(ExifToolError::parse_error(format!(
+            "cHRM chunk must be 32 bytes, got {}",
+            data.len()
+        )));
+    }
+
+    // Each value is stored as integer × 100,000
+    let white_x = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as f64 / 100000.0;
+    let white_y = u32::from_be_bytes([data[4], data[5], data[6], data[7]]) as f64 / 100000.0;
+    let red_x = u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as f64 / 100000.0;
+    let red_y = u32::from_be_bytes([data[12], data[13], data[14], data[15]]) as f64 / 100000.0;
+    let green_x = u32::from_be_bytes([data[16], data[17], data[18], data[19]]) as f64 / 100000.0;
+    let green_y = u32::from_be_bytes([data[20], data[21], data[22], data[23]]) as f64 / 100000.0;
+    let blue_x = u32::from_be_bytes([data[24], data[25], data[26], data[27]]) as f64 / 100000.0;
+    let blue_y = u32::from_be_bytes([data[28], data[29], data[30], data[31]]) as f64 / 100000.0;
+
+    Ok((white_x, white_y, red_x, red_y, green_x, green_y, blue_x, blue_y))
+}
+
+/// Parses a pHYs chunk (Physical Pixel Dimensions).
+///
+/// # Format
+///
+/// ```text
+/// Pixels per unit X: 4 bytes (u32, big-endian)
+/// Pixels per unit Y: 4 bytes (u32, big-endian)
+/// Unit: 1 byte (0=unknown, 1=meter)
+/// ```
+///
+/// # Parameters
+///
+/// - `data`: pHYs chunk data (9 bytes)
+///
+/// # Returns
+///
+/// - `Ok((pixels_x, pixels_y, unit))`
+/// - `Err`: Parse error
+pub fn parse_phys_chunk(data: &[u8]) -> Result<(u32, u32, u8)> {
+    if data.len() != 9 {
+        return Err(ExifToolError::parse_error(format!(
+            "pHYs chunk must be 9 bytes, got {}",
+            data.len()
+        )));
+    }
+
+    let pixels_x = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+    let pixels_y = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+    let unit = data[8];
+
+    Ok((pixels_x, pixels_y, unit))
+}
+
+/// Parses a bKGD chunk (Background Color).
+///
+/// Format depends on color type:
+/// - Grayscale (0, 4): 2 bytes (gray value)
+/// - RGB (2, 6): 6 bytes (red, green, blue)
+/// - Palette (3): 1 byte (palette index)
+///
+/// # Parameters
+///
+/// - `data`: bKGD chunk data (1, 2, or 6 bytes)
+///
+/// # Returns
+///
+/// - `Ok(palette_index)` for palette images (1 byte)
+/// - `Ok(gray_value)` for grayscale images (2 bytes)
+/// - Returns first value for RGB (simplified)
+/// - `Err`: Parse error
+pub fn parse_bkgd_chunk(data: &[u8]) -> Result<u16> {
+    match data.len() {
+        1 => Ok(data[0] as u16), // Palette index
+        2 => Ok(u16::from_be_bytes([data[0], data[1]])), // Gray value
+        6 => Ok(u16::from_be_bytes([data[0], data[1]])), // Red component (simplified)
+        _ => Err(ExifToolError::parse_error(format!(
+            "bKGD chunk has invalid length: {}",
+            data.len()
+        ))),
+    }
+}
+
+/// Parses a tIME chunk (Last Modification Time).
+///
+/// # Format
+///
+/// ```text
+/// Year: 2 bytes (u16, big-endian)
+/// Month: 1 byte (1-12)
+/// Day: 1 byte (1-31)
+/// Hour: 1 byte (0-23)
+/// Minute: 1 byte (0-59)
+/// Second: 1 byte (0-60, allowing for leap second)
+/// ```
+///
+/// # Parameters
+///
+/// - `data`: tIME chunk data (7 bytes)
+///
+/// # Returns
+///
+/// - `Ok(formatted_datetime)` as "YYYY:MM:DD HH:MM:SS" string
+/// - `Err`: Parse error
+pub fn parse_time_chunk(data: &[u8]) -> Result<String> {
+    if data.len() != 7 {
+        return Err(ExifToolError::parse_error(format!(
+            "tIME chunk must be 7 bytes, got {}",
+            data.len()
+        )));
+    }
+
+    let year = u16::from_be_bytes([data[0], data[1]]);
+    let month = data[2];
+    let day = data[3];
+    let hour = data[4];
+    let minute = data[5];
+    let second = data[6];
+
+    Ok(format!("{:04}:{:02}:{:02} {:02}:{:02}:{:02}", year, month, day, hour, minute, second))
+}
+
 /// Parses an eXIf chunk and extracts EXIF tags using the TIFF parser.
 ///
 /// # Format

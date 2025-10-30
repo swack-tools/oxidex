@@ -106,14 +106,222 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
     // Parse Info dictionary
     let info_dict = parse_info_object(info_data)?;
 
-    // Convert to MetadataMap with PDF: prefix
-    let mut metadata = MetadataMap::with_capacity(info_dict.len());
+    // Convert to MetadataMap with PDF: prefix and format dates
+    let mut metadata = MetadataMap::with_capacity(info_dict.len() + 1);
     for (key, value) in info_dict {
-        let tag_name = format!("PDF:{}", key);
-        metadata.insert(tag_name, TagValue::new_string(value));
+        match key.as_str() {
+            "CreationDate" => {
+                // Format PDF date to EXIF format
+                if let Some(formatted_date) = format_pdf_date(&value) {
+                    metadata.insert("PDF:CreateDate".to_string(), TagValue::new_string(formatted_date));
+                }
+            }
+            "ModDate" => {
+                // Format PDF date to EXIF format
+                if let Some(formatted_date) = format_pdf_date(&value) {
+                    metadata.insert("PDF:ModifyDate".to_string(), TagValue::new_string(formatted_date));
+                }
+            }
+            "Keywords" => {
+                // Split Keywords by comma if it's a comma-separated string
+                if value.contains(',') {
+                    // Split into array
+                    let keywords: Vec<TagValue> = value
+                        .split(',')
+                        .map(|s| TagValue::new_string(s.trim()))
+                        .collect();
+                    metadata.insert(format!("PDF:{}", key), TagValue::new_array(keywords));
+                } else {
+                    metadata.insert(format!("PDF:{}", key), TagValue::new_string(value));
+                }
+            }
+            _ => {
+                metadata.insert(format!("PDF:{}", key), TagValue::new_string(value));
+            }
+        }
+    }
+
+    // Try to extract page count from the document catalog
+    if let Ok(page_count) = extract_page_count(reader) {
+        metadata.insert("PDF:PageCount".to_string(), TagValue::new_integer(page_count as i64));
     }
 
     Ok(metadata)
+}
+
+/// Formats a PDF date string to EXIF format.
+///
+/// PDF date format: D:YYYYMMDDHHmmSSOHH'mm'
+/// EXIF format: YYYY:MM:DD HH:MM:SS+HH:mm
+///
+/// Examples:
+/// - D:20240115143000+00'00' → 2024:01:15 14:30:00+00:00
+/// - D:20240115143000Z → 2024:01:15 14:30:00+00:00
+/// - D:20240115 → 2024:01:15 00:00:00
+fn format_pdf_date(pdf_date: &str) -> Option<String> {
+    // Remove "D:" prefix if present
+    let date_str = pdf_date.strip_prefix("D:").unwrap_or(pdf_date);
+
+    // Minimum: YYYYMMDD (8 chars)
+    if date_str.len() < 8 {
+        return None;
+    }
+
+    let year = &date_str[0..4];
+    let month = &date_str[4..6];
+    let day = &date_str[6..8];
+
+    let hour = if date_str.len() >= 10 { &date_str[8..10] } else { "00" };
+    let minute = if date_str.len() >= 12 { &date_str[10..12] } else { "00" };
+    let second = if date_str.len() >= 14 { &date_str[12..14] } else { "00" };
+
+    // Parse timezone
+    let timezone = if date_str.len() > 14 {
+        let tz_part = &date_str[14..];
+        if tz_part.starts_with('Z') {
+            "+00:00".to_string()
+        } else if tz_part.starts_with('+') || tz_part.starts_with('-') {
+            // Format: +HH'mm' or -HH'mm'
+            let sign = &tz_part[0..1];
+            if tz_part.len() >= 3 {
+                let tz_hour = &tz_part[1..3];
+                let tz_min = if tz_part.len() >= 6 {
+                    &tz_part[4..6]
+                } else {
+                    "00"
+                };
+                format!("{}{}:{}", sign, tz_hour, tz_min)
+            } else {
+                "+00:00".to_string()
+            }
+        } else {
+            "+00:00".to_string()
+        }
+    } else {
+        "".to_string()
+    };
+
+    Some(format!("{}:{}:{} {}:{}:{}{}", year, month, day, hour, minute, second, timezone))
+}
+
+/// Extracts page count from PDF document catalog.
+///
+/// The page count is stored in the Pages object tree, which is referenced
+/// from the Root (Catalog) object in the trailer.
+fn extract_page_count(reader: &dyn FileReader) -> Result<u32> {
+    let file_size = reader.size();
+
+    // Read the last 1024 bytes to find trailer
+    let tail_size = std::cmp::min(1024, file_size as usize);
+    let tail_offset = file_size.saturating_sub(tail_size as u64);
+    let tail_data = reader.read(tail_offset, tail_size)?;
+
+    // Find startxref and get xref offset
+    let xref_offset = find_xref_offset(tail_data)?;
+
+    // Read xref table and trailer region
+    let xref_size = std::cmp::min(8192, file_size.saturating_sub(xref_offset) as usize);
+    let xref_data = reader.read(xref_offset, xref_size)?;
+
+    // Parse xref table
+    let xref_map = parse_xref_table(xref_data)?;
+
+    // Find /Root reference in trailer
+    let root_ref = find_root_reference(xref_data)?;
+
+    // Get Root object offset
+    let root_offset = xref_map.get(&root_ref.object_num).ok_or_else(|| {
+        ExifToolError::parse_error(format!(
+            "Root object {} not found in xref table",
+            root_ref.object_num
+        ))
+    })?;
+
+    // Read Root object
+    let root_size = std::cmp::min(4096, file_size.saturating_sub(*root_offset) as usize);
+    let root_data = reader.read(*root_offset, root_size)?;
+
+    // Find /Pages reference in Root object
+    let pages_ref = find_pages_reference(root_data)?;
+
+    // Get Pages object offset
+    let pages_offset = xref_map.get(&pages_ref.object_num).ok_or_else(|| {
+        ExifToolError::parse_error(format!(
+            "Pages object {} not found in xref table",
+            pages_ref.object_num
+        ))
+    })?;
+
+    // Read Pages object
+    let pages_size = std::cmp::min(4096, file_size.saturating_sub(*pages_offset) as usize);
+    let pages_data = reader.read(*pages_offset, pages_size)?;
+
+    // Extract /Count from Pages object
+    extract_count_from_pages(pages_data)
+}
+
+/// Finds the /Root reference from the trailer dictionary
+fn find_root_reference(xref_data: &[u8]) -> Result<ObjectRef> {
+    let xref_str = str::from_utf8(xref_data)
+        .map_err(|_| ExifToolError::parse_error("xref data contains invalid UTF-8"))?;
+
+    let trailer_pos = xref_str
+        .find("trailer")
+        .ok_or_else(|| ExifToolError::parse_error("trailer not found in PDF"))?;
+
+    let after_trailer = &xref_str[trailer_pos..];
+
+    // Find /Root reference
+    let (_, obj_ref) = parse_trailer_root_ref(after_trailer.as_bytes())
+        .map_err(|_| ExifToolError::parse_error("Could not parse /Root reference from trailer"))?;
+
+    Ok(obj_ref)
+}
+
+/// Parses the /Root reference from trailer dictionary
+fn parse_trailer_root_ref(input: &[u8]) -> IResult<&[u8], ObjectRef> {
+    let (input, _) = take_until("/Root")(input)?;
+    let (input, _) = tag(b"/Root")(input)?;
+    let (input, _) = multispace0(input)?;
+    parse_object_reference(input)
+}
+
+/// Finds the /Pages reference from the Root/Catalog object
+fn find_pages_reference(root_data: &[u8]) -> Result<ObjectRef> {
+    let root_str = str::from_utf8(root_data)
+        .map_err(|_| ExifToolError::parse_error("Root object contains invalid UTF-8"))?;
+
+    let (_, pages_ref) = parse_pages_ref(root_str.as_bytes())
+        .map_err(|_| ExifToolError::parse_error("Could not parse /Pages reference from Root"))?;
+
+    Ok(pages_ref)
+}
+
+/// Parses the /Pages reference from Root object
+fn parse_pages_ref(input: &[u8]) -> IResult<&[u8], ObjectRef> {
+    let (input, _) = take_until("/Pages")(input)?;
+    let (input, _) = tag(b"/Pages")(input)?;
+    let (input, _) = multispace0(input)?;
+    parse_object_reference(input)
+}
+
+/// Extracts /Count value from Pages object
+fn extract_count_from_pages(pages_data: &[u8]) -> Result<u32> {
+    let pages_str = str::from_utf8(pages_data)
+        .map_err(|_| ExifToolError::parse_error("Pages object contains invalid UTF-8"))?;
+
+    let (_, count) = parse_count(pages_str.as_bytes())
+        .map_err(|_| ExifToolError::parse_error("Could not parse /Count from Pages object"))?;
+
+    Ok(count as u32)
+}
+
+/// Parses the /Count value from Pages dictionary
+fn parse_count(input: &[u8]) -> IResult<&[u8], u64> {
+    let (input, _) = take_until("/Count")(input)?;
+    let (input, _) = tag(b"/Count")(input)?;
+    let (input, _) = multispace0(input)?;
+    parse_number(input)
 }
 
 /// Object reference structure (e.g., "4 0 R" means object 4, generation 0)

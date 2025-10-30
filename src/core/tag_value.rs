@@ -41,6 +41,9 @@ pub enum TagValue {
     /// Structured/nested data for complex XMP structures
     /// Boxed to prevent infinite size and allow recursion
     Struct(Box<HashMap<String, TagValue>>),
+
+    /// Array of values (for multi-value tags like Keywords, Subject, etc.)
+    Array(Vec<TagValue>),
 }
 
 impl TagValue {
@@ -82,6 +85,11 @@ impl TagValue {
         TagValue::Struct(Box::new(data))
     }
 
+    /// Creates a new Array variant
+    pub fn new_array(values: Vec<TagValue>) -> Self {
+        TagValue::Array(values)
+    }
+
     /// Returns true if this is a String variant
     pub fn is_string(&self) -> bool {
         matches!(self, TagValue::String(_))
@@ -115,6 +123,11 @@ impl TagValue {
     /// Returns true if this is a Struct variant
     pub fn is_struct(&self) -> bool {
         matches!(self, TagValue::Struct(_))
+    }
+
+    /// Returns true if this is an Array variant
+    pub fn is_array(&self) -> bool {
+        matches!(self, TagValue::Array(_))
     }
 
     /// Attempts to get the value as a string reference

@@ -183,6 +183,13 @@ fn format_tag_value(value: &TagValue, date_format: Option<&str>) -> Result<Strin
         TagValue::Struct(_) => Err(ExifToolError::parse_error(
             "Cannot use struct tag in filename",
         )),
+        TagValue::Array(values) => {
+            // For arrays, use the first value
+            values.first().map_or_else(
+                || Err(ExifToolError::parse_error("Empty array tag")),
+                |v| format_tag_value(v, date_format),
+            )
+        }
     }
 }
 

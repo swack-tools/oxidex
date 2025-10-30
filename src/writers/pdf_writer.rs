@@ -465,6 +465,22 @@ fn serialize_pdf_field(buffer: &mut Vec<u8>, field_name: &str, value: &TagValue)
             }
             buffer.extend_from_slice(b">");
         }
+        TagValue::Array(values) => {
+            // PDF arrays: [value1 value2 value3]
+            buffer.extend_from_slice(b"[");
+            for (i, v) in values.iter().enumerate() {
+                if i > 0 {
+                    buffer.extend_from_slice(b" ");
+                }
+                // Write each array element (simplified - only strings for now)
+                if let TagValue::String(s) = v {
+                    buffer.extend_from_slice(b"(");
+                    buffer.extend_from_slice(s.as_bytes());
+                    buffer.extend_from_slice(b")");
+                }
+            }
+            buffer.extend_from_slice(b"]");
+        }
         TagValue::Struct(_) => {
             // Structured data not supported in PDF Info dictionary
             // Write empty string
