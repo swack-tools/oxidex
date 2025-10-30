@@ -6,5 +6,6 @@
 
 pub mod atomic_writer;
 pub mod jpeg_writer;
+pub mod pdf_writer;
 pub mod png_writer;
 pub mod tiff_writer;
