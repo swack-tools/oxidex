@@ -334,7 +334,7 @@ pub fn parse_itxt_chunk(data: &[u8]) -> Result<(String, String)> {
 ///
 /// - `Ok(Vec<(tag_id, raw_bytes)>)`: Parsed EXIF tags
 /// - `Err`: Parse error
-pub fn parse_exif_chunk(data: &[u8]) -> Result<Vec<(u16, Vec<u8>)>> {
+pub fn parse_exif_chunk(data: &[u8]) -> Result<Vec<(u16, u16, Vec<u8>)>> {
     // Minimum TIFF header size: 2 (byte order) + 2 (magic) + 4 (offset) = 8 bytes
     if data.len() < 8 {
         return Err(ExifToolError::parse_error(

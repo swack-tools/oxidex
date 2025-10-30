@@ -40,27 +40,7 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: Integration Tests (from 03_Verification_and_Glossary.md)
-
-```markdown
-#### Integration Tests (10% of test suite)
-*   **Scope:** End-to-end workflows and CLI operations
-*   **Location:** `tests/integration/`
-*   **Tools:** `cargo test`, filesystem fixtures in `tests/fixtures/`
-*   **Coverage Requirements:**
-    *   Full read workflow: file → metadata extraction → output
-    *   Full write workflow: read → modify → write → verify
-    *   CLI argument parsing and execution
-    *   Batch processing with multiple files
-    *   Error scenarios (missing file, corrupted metadata, permission denied)
-*   **ExifTool Comparison Tests:** Special integration tests comparing output against Perl ExifTool
-    *   Run both tools on same test corpus (100+ images)
-    *   Compare JSON output for tag value parity
-    *   Acceptance threshold: 98%+ match rate
-    *   Conditional on ExifTool availability (`#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]`)
-```
-
-### Context: Task I5.T9 Specification (from 02_Iteration_I5.md)
+### Context: task-i5-t9 (from 02_Iteration_I5.md)
 
 ```markdown
 *   **Task 5.9: Comprehensive Integration Testing Against ExifTool**
@@ -90,117 +70,92 @@ The following are the relevant sections from the architecture and plan documents
     *   **Parallelizable:** No (comprehensive test of all features)
 ```
 
-### Context: Integration Test Plan - Test Corpus Strategy (from docs/testing/integration_test_plan.md)
+### Context: integration-tests (from 03_Verification_and_Glossary.md)
 
 ```markdown
-### 2.1 Corpus Size & Diversity Requirements
-
-**Target**: 100+ images across all supported formats
-
-**Diversity Matrix**:
-
-| **Format** | **Simple** | **Complex** | **Edge Cases** | **Malformed** | **Total** |
-|------------|-----------|-------------|----------------|---------------|-----------|
-| JPEG       | 15        | 15          | 10             | 10            | 50        |
-| PNG        | 10        | 10          | 5              | 5             | 30        |
-| TIFF       | 8         | 8           | 4              | 5             | 25        |
-| WebP       | 5         | 5           | 3              | 2             | 15        |
-| HEIC       | 3         | 3           | 2              | 2             | 10        |
-| **Total**  | **41**    | **41**      | **24**        | **24**        | **130**   |
-
-**Complexity Definitions**:
-
-- **Simple**: Single IFD, basic EXIF tags (Make, Model, DateTime)
-- **Complex**: Multiple IFDs (EXIF, GPS, Interoperability), thumbnail images, maker notes
-- **Edge Cases**: Large maker notes (>64KB), deeply nested IFDs (>8 levels), unusual tag values (empty strings, extreme GPS coordinates)
-- **Malformed**: Truncated files, invalid magic bytes, corrupted IFD chains, decompression bombs
+#### Integration Tests (10% of test suite)
+*   **Scope:** End-to-end workflows and CLI operations
+*   **Location:** `tests/integration/`
+*   **Tools:** `cargo test`, filesystem fixtures in `tests/fixtures/`
+*   **Coverage Requirements:**
+    *   Full read workflow: file → metadata extraction → output
+    *   Full write workflow: read → modify → write → verify
+    *   CLI argument parsing and execution
+    *   Batch processing with multiple files
+    *   Error scenarios (missing file, corrupted metadata, permission denied)
+*   **ExifTool Comparison Tests:** Special integration tests comparing output against Perl ExifTool
+    *   Run both tools on same test corpus (100+ images)
+    *   Compare JSON output for tag value parity
+    *   Acceptance threshold: 98%+ match rate
+    *   Conditional on ExifTool availability (`#[cfg_attr(not(feature = "exiftool-comparison"), ignore)]`)
 ```
 
-### Context: Validation Methodology (from docs/testing/integration_test_plan.md)
+### Context: integration-tests job (from ci.yml)
 
-```markdown
-### 3.1 Comparison Approach
+```yaml
+  integration-tests:
+    name: Integration Tests (ExifTool Comparison)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
-**Reference Implementation**: Perl ExifTool v12.70+ (latest stable)
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-**Comparison Strategy**:
-1. Execute both tools on identical input files
-2. Export metadata to JSON format for structured comparison
-3. Parse JSON outputs and compute field-level match rate
-4. Generate human-readable diff reports for mismatches
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-#### 3.2.1 Perl ExifTool Command
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
-```bash
-exiftool -json -a -G1 -struct tests/fixtures/jpeg/simple/canon_eos_5d.jpg > perl_output.json
-```
+      - name: Install Perl ExifTool (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libimage-exiftool-perl
+          exiftool -ver
 
-**Flags Explained**:
-- `-json`: Output in JSON format
-- `-a`: Extract duplicate tags (some formats allow tag repetition)
-- `-G1`: Include group names (EXIF, GPS, IPTC, etc.)
-- `-struct`: Preserve structure for nested tags (XMP, maker notes)
+      - name: Install Perl ExifTool (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install exiftool
+          exiftool -ver
 
-### 3.4 Match Rate Calculation
+      - name: Install Perl ExifTool (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install exiftool -y
+          exiftool -ver
 
-**Formula**:
+      - name: Build ExifTool-RS
+        run: cargo build --release --all-features
 
-```
-Match Rate (%) = (Matched Tags / Total Tags in Reference) × 100
-```
+      - name: Run integration tests with ExifTool comparison
+        run: cargo test --release --features exiftool-comparison -- --nocapture
 
-**Where**:
-- **Matched Tags**: Tags where values are identical (or within tolerance)
-- **Total Tags**: All tags extracted by Perl ExifTool (baseline)
-- **Excluded**: Metadata fields (`SourceFile`, `ExifToolVersion`)
-```
+      - name: Generate comparison report
+        if: always()
+        run: |
+          echo "# ExifTool Comparison Test Results" > comparison_report.md
+          echo "" >> comparison_report.md
+          echo "**Platform:** ${{ matrix.os }}" >> comparison_report.md
+          echo "**Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> comparison_report.md
+          echo "" >> comparison_report.md
+          echo "See test output above for detailed match rates." >> comparison_report.md
 
-### Context: Acceptance Criteria & Thresholds (from docs/testing/integration_test_plan.md)
-
-```markdown
-#### 4.1.1 Well-Formed Files
-
-**Primary Criterion**: **99% tag value match rate**
-
-For each image in `tests/fixtures/{format}/simple/` and `tests/fixtures/{format}/complex/`:
-
-```
-PASS: match_rate >= 99.0%
-FAIL: match_rate < 99.0%
-```
-
-**Allowed Discrepancies (1% tolerance)**:
-
-Valid reasons for mismatch (do not count as failures):
-
-1. **Vendor-Specific Decoding**: Maker notes proprietary formats where documentation is unavailable
-2. **Precision Differences**: Rational number representations (e.g., `1/125` vs `0.008`)
-3. **Tag Name Variations**: Group naming differences (document mapping)
-4. **Unsupported Tags**: Tags explicitly documented as "not yet implemented" in changelog
-
-**Tiered Thresholds**:
-
-| **Test Category** | **Minimum Match Rate** | **Target Match Rate** | **Action if Below Target** |
-|-------------------|------------------------|----------------------|---------------------------|
-| Simple files      | 99%                    | 100%                 | Investigate immediately, block merge |
-| Complex files     | 99%                    | 99.5%                | Document discrepancy, issue tracker |
-| Edge cases        | 95%                    | 98%                  | Best-effort improvement |
-| Malformed files   | N/A                    | N/A                  | Graceful error only |
-```
-
-### Context: CI/CD Integration (from docs/testing/integration_test_plan.md)
-
-```markdown
-**GitHub Actions Workflow**: `.github/workflows/integration_tests.yml`
-
-**Key Features**:
-
-1. **LFS Checkout**: `lfs: true` in `actions/checkout` downloads binary files
-2. **Cross-Platform**: Tests on Linux, macOS, Windows
-3. **Caching**: LFS files cached to avoid re-download on every run
-4. **Dependency Installation**: Perl ExifTool installed via package manager
-5. **Failure Reporting**: Comparison report uploaded even if tests fail
-6. **Threshold Enforcement**: CI fails if match rate < 99%
+      - name: Upload comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comparison-report-${{ matrix.os }}
+          path: comparison_report.md
+          retention-days: 90
 ```
 
 ---
@@ -209,100 +164,83 @@ Valid reasons for mismatch (do not count as failures):
 
 The following analysis is based on my direct review of the current codebase. Use these notes and tips to guide your implementation.
 
-### Current Status Analysis
-
-**CRITICAL FINDING**: Task I5.T9 appears to be **ALREADY COMPLETE** based on my codebase investigation!
-
 ### Relevant Existing Code
 
 *   **File:** `tests/integration/exiftool_comparison_tests.rs`
-    *   **Summary:** This file contains a comprehensive test framework with 10 test functions comparing ExifTool-RS against Perl ExifTool. It includes comparison logic, value matching with floating-point tolerance, and proper error reporting.
-    *   **Status:** ✅ **ALREADY COMPLETE** - Contains all required test functions:
-        *   5 baseline tests (JPEG EXIF, JPEG EXIF+XMP, TIFF, PDF, MP4)
-        *   5 new tests added for I5.T9 (PNG text, PNG eXIf, TIFF multipage, JPEG GPS, TIFF big-endian)
-    *   **Key Features:**
-        *   98% match rate threshold enforced with assertions (line 372-378)
-        *   Handles TagValue enum unwrapping (extract_value function)
-        *   Floating-point tolerance for GPS coordinates (±0.0001°)
-        *   Cross-platform path handling
-        *   Conditional compilation with `exiftool-comparison` feature flag
+    *   **Summary:** This file contains the comprehensive comparison testing framework with 10 test functions comparing ExifTool-RS output against Perl ExifTool. It includes helper functions for running both tools, comparing JSON outputs with appropriate tolerances, and reporting mismatches. The framework is feature-gated with `exiftool-comparison` and gracefully handles ExifTool availability.
+    *   **Key Components:**
+        *   `MatchReport` struct for tracking comparison results
+        *   `is_exiftool_available()` checks for Perl ExifTool in PATH
+        *   `get_perl_exiftool_output()` and `get_exiftool_rs_output()` execute the tools
+        *   `compare_json_outputs()` performs tag-by-tag comparison with floating-point tolerance
+        *   `should_skip_tag()` filters out pseudo-tags (System:, File:, ExifTool:)
+        *   `values_match()` handles different value types with appropriate comparison logic
+        *   10 test functions covering JPEG, PNG, TIFF, PDF, MP4 formats
+    *   **Test Coverage:** Tests currently verify JPEG (with EXIF, EXIF+XMP, GPS), PNG (text chunks, eXIf), TIFF (simple, multipage, big-endian), PDF (Info dictionary), and MP4 (QuickTime metadata)
+    *   **Recommendation:** The framework is ALREADY COMPREHENSIVE. According to the completion reports, this task has already been completed with 102 images and all necessary test functions. You SHOULD verify the current state and potentially just validate/document completion.
+
+*   **File:** `tests/fixtures/manifest.json`
+    *   **Summary:** Metadata tracking file documenting the test corpus with 102 images across 5 formats (JPEG: 30, PNG: 33, TIFF: 20, PDF: 10, MP4: 9).
+    *   **Recommendation:** Review this file to confirm the corpus count and categories match the acceptance criteria.
 
 *   **File:** `tests/fixtures/COMPLETION_REPORT.md`
-    *   **Summary:** Official completion report documenting that I5.T9 was finished on 2025-10-30.
-    *   **Key Stats:**
+    *   **Summary:** Comprehensive completion report indicating that I5.T9 has been marked as COMPLETE with all primary acceptance criteria met (6/7 PASS, 1 pending I4 write features).
+    *   **Current Status:**
         *   ✅ 102 test images (exceeds 100+ requirement)
-        *   ✅ 10 test functions implemented
-        *   ✅ All 5 formats covered (JPEG: 30, PNG: 33, TIFF: 20, PDF: 10, MP4: 9)
-        *   ✅ CI integration complete
-        *   ✅ README badge added (line 4)
-    *   **Acceptance:** 6/7 criteria PASS (1 pending I4 write operations)
+        *   ✅ All 5 formats covered
+        *   ✅ 10 comparison test functions
+        *   ✅ CI integration on all platforms
+        *   ✅ 98% match rate threshold enforced
+        *   ✅ Complete documentation
+        *   🟡 Write operations (roundtrip, copy, rename, date shift) are placeholders pending I4 features
+    *   **Recommendation:** This report indicates the task is essentially complete except for write operation tests which depend on I4 tasks that may not be implemented yet.
+
+*   **File:** `tests/fixtures/I5_T9_IMPLEMENTATION_SUMMARY.md`
+    *   **Summary:** Detailed implementation summary tracking the expansion from 5 baseline images to 102 images, with breakdown by format and category.
+    *   **Recommendation:** Use this as reference for understanding what's been accomplished.
 
 *   **File:** `.github/workflows/ci.yml`
-    *   **Summary:** CI workflow with dedicated `integration-tests` job that installs Perl ExifTool and runs comparison tests.
-    *   **Status:** ✅ **COMPLETE** (lines 104-167)
-    *   **Configuration:**
-        *   Runs on Ubuntu, macOS, Windows
-        *   Installs Perl ExifTool via package managers
-        *   Executes: `cargo test --release --features exiftool-comparison`
-        *   Uploads comparison reports as artifacts
-        *   30-minute timeout
+    *   **Summary:** CI pipeline configuration with dedicated `integration-tests` job that installs Perl ExifTool on Ubuntu, macOS, and Windows, builds ExifTool-RS, and runs comparison tests.
+    *   **Recommendation:** CI is already configured. Verify it's working correctly.
 
-*   **File:** `README.md`
-    *   **Summary:** Project README with CI status badges.
-    *   **Status:** ✅ Integration test badge already present (line 4)
-
-*   **Directory:** `tests/fixtures/`
-    *   **Summary:** Test corpus with 102 images organized by format and complexity.
-    *   **Structure:**
-        *   `jpeg/` (30 images): simple/, complex/, edge_cases/, malformed/
-        *   `png/` (33 images): simple/, complex/, edge_cases/
-        *   `tiff/` (20 images): simple/, complex/, edge_cases/
-        *   `pdf/` (10 images): simple/, complex/
-        *   `mp4/` (9 images): simple/, complex/
-    *   **Documentation:**
-        *   `ACQUISITION_GUIDE.md` - Instructions for expanding corpus
-        *   `COMPLETION_REPORT.md` - Full completion documentation
-        *   `create_synthetic_fixtures.sh` - Image generation script
+*   **File:** `.gitattributes`
+    *   **Summary:** Git LFS configuration tracking all media formats (JPG, JPEG, TIF, TIFF, PNG, PDF, MP4, etc.) to prevent repository bloat.
+    *   **Recommendation:** Git LFS is already configured properly.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** The task is ALREADY COMPLETE. Review the completion report at `tests/fixtures/COMPLETION_REPORT.md` for full details.
-*   **Note:** All 7 acceptance criteria are met EXCEPT write operation tests (criteria #3 and #5), which depend on I4 iteration features. Placeholder TODOs exist in the test file (lines 587-616) ready for implementation when I4.T4-I4.T8 are complete.
-*   **Tip:** To verify completion, run: `cargo test --features exiftool-comparison --release`
-*   **Note:** The test corpus uses synthetic images generated with ImageMagick and ffmpeg, which are GPL-3.0 licensed and fully under project control. No external dependencies on licensed images.
-*   **Warning:** The task description mentions "write, copy, rename, date shift" operations, but these are NOT YET IMPLEMENTED in the codebase (I4 iteration incomplete). The completion report explicitly notes this as "PARTIAL" status for criteria #3 and #5.
-*   **Tip:** If you need to verify the test corpus count: `find tests/fixtures -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.tif" -o -name "*.pdf" -o -name "*.mp4" \) | wc -l` returns 104 (102 images + 2 markdown files match the pattern).
+*   **CRITICAL NOTE:** According to the completion reports and implementation summary, **I5.T9 appears to be ALREADY COMPLETE**. The task was marked as complete on 2025-10-30 with:
+    *   102 test images (exceeding the 100+ requirement)
+    *   All 5 formats covered with appropriate diversity
+    *   10 test functions implemented and passing
+    *   CI fully integrated on all 3 platforms
+    *   98% match rate threshold enforced in all assertions
+    *   Complete documentation
 
-### Strategic Recommendation
+*   **What's Actually Missing:** The only items marked as "pending" are write operation tests (roundtrip, copy, rename, date shift), which are explicitly noted as dependent on I4 iteration features. These have placeholder functions in the code but cannot be implemented until the underlying write operations are completed in other tasks.
 
-**RECOMMENDATION:** Task I5.T9 should be marked as **DONE: true** in the task manifest.
+*   **Your Action:** You should:
+    1. **VERIFY** the current state by running the tests: `cargo test --features exiftool-comparison`
+    2. **REVIEW** the test corpus to confirm 100+ images exist
+    3. **CHECK** the CI pipeline to ensure it's running correctly
+    4. **UPDATE** the task JSON to mark `done: true` if all primary acceptance criteria are met
+    5. **DOCUMENT** any gaps or issues found during verification
 
-**Evidence:**
-1. ✅ Test corpus: 102 images (exceeds 100+ requirement by 2%)
-2. ✅ Format coverage: All 5 formats represented with good distribution
-3. ✅ Test functions: 10 comprehensive comparison tests implemented
-4. ✅ CI integration: Complete workflow on 3 platforms
-5. ✅ Documentation: README badge, completion report, acquisition guide
-6. ✅ 98%+ match rate threshold: Enforced in all test assertions
+*   **Testing Strategy:** The existing framework uses:
+    *   Synthetic image generation (97 of 102 images) for reproducible, known-metadata testing
+    *   Comprehensive format coverage across simple/complex/edge case categories
+    *   Proper floating-point tolerance for GPS coordinates (±0.0001°) and other measurements (±0.01)
+    *   Tag filtering to exclude Perl ExifTool's pseudo-tags (System:, File:, ExifTool:)
+    *   TagValue enum unwrapping to handle ExifTool-RS's Rust serialization format
 
-**Pending work** (2 criteria marked as PARTIAL):
-- Write operation tests (depend on I4.T4-I4.T8)
-- Round-trip validation (depends on write implementation)
+*   **Known Discrepancies:** See `tests/integration/KNOWN_DISCREPANCIES.md` for documented differences between ExifTool-RS and Perl ExifTool that are acceptable (e.g., maker notes, TagValue enum serialization, floating-point precision).
 
-These are **explicitly documented as I4 dependencies** in the completion report and do NOT block I5.T9 acceptance. The infrastructure and placeholder tests are ready for immediate activation when I4 features become available.
+*   **Write Operations Note:** The placeholder tests for write operations are correctly stubbed out with TODO comments and await:
+    *   I4.T4: Write/modify metadata operations
+    *   I4.T6: Copy metadata between files
+    *   I4.T7: Rename files based on metadata patterns
+    *   I4.T8: Date shifting operations
 
-**Next Steps if you disagree with completion status:**
-1. Review `tests/fixtures/COMPLETION_REPORT.md` for detailed evidence
-2. Run comparison tests: `cargo test --features exiftool-comparison --release`
-3. Verify CI workflow in `.github/workflows/ci.yml` lines 104-167
-4. Check test corpus size: `find tests/fixtures -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.tif" -o -name "*.pdf" -o -name "*.mp4" \) | wc -l`
-5. Inspect test functions in `tests/integration/exiftool_comparison_tests.rs` (10 total: lines 325-846)
+*   **Performance:** Current test suite (102 images) takes approximately 3-8 minutes on CI, well within the 30-minute timeout. This is acceptable for comprehensive integration testing.
 
-**If you determine the task IS complete:**
-- Update the task manifest JSON file to set `"done": true` for I5.T9
-- Inform the user that the task was already completed on 2025-10-30
-
-**If you determine additional work is needed:**
-- Clearly identify what specific acceptance criteria are not yet met
-- Propose concrete implementation steps
-- Reference the completion report's documented limitations
+*   **Final Recommendation:** This task appears to be ALREADY DONE. Your job is to verify completion by running the tests, reviewing the corpus, and confirming all acceptance criteria are met. If verification passes, update the task status to `done: true` in the task tracking system.

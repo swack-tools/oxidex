@@ -6,153 +6,155 @@ The previous code submission did not pass verification. You must fix the followi
 
 ## Original Task Description
 
-**Task ID**: I5.T9
-**Description**: Expand integration test suite from I3.T10 to cover all supported formats and operations. Test corpus: 100+ images across JPEG (various EXIF/XMP combinations), TIFF (multi-page, big/little-endian), PNG (text, eXIf), PDF (Info, XMP), MP4 (iTunes, keys/ilst). Test operations: read, write, copy, rename, date shift. Compare against ExifTool for all operations. Acceptance threshold: 98%+ tag value match for reads, successful round-trip for writes. Run as part of CI on every commit (with feature flag). Document test results in CI badge.
+**Task I5.T9: Comprehensive Integration Testing Against ExifTool**
 
-**Acceptance Criteria**:
-1. Test corpus contains 100+ diverse images ✅ **PASS** (102 images found)
-2. Tests cover all supported formats (JPEG, TIFF, PNG, PDF, MP4) ✅ **PASS**
-3. Tests cover all operations (read, write, copy, rename, date shift) 🟡 **PARTIAL** (only read implemented)
-4. 98%+ tag match rate achieved for reads ❌ **FAIL** (9 out of 10 tests failing)
-5. Round-trip tests pass (write → read → verify) 🟡 **PENDING** (depends on I4)
-6. CI runs tests on every commit (with ExifTool installed in CI environment) ✅ **PASS**
-7. README shows test results badge (pass/fail) ✅ **PASS**
+Expand integration test suite from I3.T10 to cover all supported formats and operations. Test corpus: 100+ images across JPEG (various EXIF/XMP combinations), TIFF (multi-page, big/little-endian), PNG (text, eXIf), PDF (Info, XMP), MP4 (iTunes, keys/ilst). Test operations: read, write, copy, rename, date shift. Compare against ExifTool for all operations. Acceptance threshold: 98%+ tag value match for reads, successful round-trip for writes. Run as part of CI on every commit (with feature flag). Document test results in CI badge.
+
+**Acceptance Criteria:**
+- Test corpus contains 100+ diverse images
+- Tests cover all supported formats (JPEG, TIFF, PNG, PDF, MP4)
+- Tests cover all operations (read, write, copy, rename, date shift)
+- 98%+ tag match rate achieved for reads
+- Round-trip tests pass (write → read → verify)
+- CI runs tests on every commit (with ExifTool installed in CI environment)
+- README shows test results badge (pass/fail)
 
 ---
 
 ## Issues Detected
 
-### **Critical: 9 out of 10 Integration Tests Failing**
+### 1. **Compilation Errors**: Multiple type mismatches in test files
 
-The test run with `cargo test --features exiftool-comparison --release` shows:
-- **PASS**: 1 test (`test_comparison_jpeg_with_exif`)
-- **FAIL**: 9 tests (all other comparison tests)
+The `parse_ifd()` function signature was changed from returning `Vec<(u16, Vec<u8>)>` to `Vec<(u16, u16, Vec<u8>)>` (adding field_type as the middle element), but the following test files were NOT updated to match this change:
 
-**Root Cause**: The ExifTool-RS implementation is returning **MISSING** for most tags that Perl ExifTool extracts. This results in match rates well below the 98% threshold.
+*   **tests/integration/jpeg_tests.rs:432** - Tuple destructuring expects 2 elements, got 3:
+    ```rust
+    for (tag_id, value_bytes) in &tags {  // WRONG: should be (tag_id, field_type, value_bytes)
+    ```
 
-#### Specific Test Failures:
+*   **tests/integration/jpeg_write_tests.rs:128** - Return type mismatch:
+    ```rust
+    Ok(tags)  // WRONG: returns Vec<(u16, u16, Vec<u8>)>, expected Vec<(u16, Vec<u8>)>
+    ```
 
-1. **`test_comparison_jpeg_with_exif_xmp`** - Failed: Tags from XMP metadata are missing
-2. **`test_comparison_jpeg_with_gps`** - Failed: GPS coordinate tags are missing
-3. **`test_comparison_mp4`** - Failed: QuickTime/iTunes metadata tags are missing
-4. **`test_comparison_pdf`** - Failed: PDF Info/XMP tags are missing
-5. **`test_comparison_png_with_exif`** - Failed: PNG eXIf chunk tags are missing
-6. **`test_comparison_png_with_text`** - Failed: PNG text chunk tags are missing
-7. **`test_comparison_tiff`** - Failed: TIFF IFD tags are missing
-8. **`test_comparison_tiff_big_endian`** - Failed: Big-endian TIFF tags are missing
-9. **`test_comparison_tiff_multipage`** - Failed (match rate 1.85%): Multi-page TIFF tags across IFD0, IFD1, IFD2 are all missing
+*   **tests/integration/tiff_tests.rs** - Multiple tuple destructuring errors (lines 65, 84, 87, 90, 93, 106, 110, 129, 135, 151, 163):
+    ```rust
+    for (tag_id, value) in &tags {  // WRONG: should be (tag_id, field_type, value)
+    let has_width = tags.iter().any(|(id, _)| *id == 0x0100);  // WRONG: should be (id, _, _)
+    ```
 
-**Example from `test_comparison_tiff_multipage` output**:
-```
-Match rate: 1.85%
-Matched: 1/54 tags
+All tuple destructuring patterns in these test files must include the `field_type` parameter even if it's not used (use `_` for unused parameters).
 
-Mismatches (53):
-  IFD0:Orientation
-    Perl:  String("Horizontal (normal)")
-    Rust:  MISSING
-  IFD0:BitsPerSample
-    Perl:  String("16 16 16 16")
-    Rust:  MISSING
-  IFD0:Compression
-    Perl:  String("Uncompressed")
-    Rust:  MISSING
-  [... 50+ more tags all MISSING ...]
+### 2. **Linting Warnings**: Unnecessary type casts in `src/core/operations.rs:511`
+
+Two clippy warnings for unnecessary casts:
+```rust
+return TagValue::new_rational(numerator as i32, denominator as i32);
+// Both casts are unnecessary since numerator and denominator are already i32
 ```
 
-### **No Linting Errors**
-- Cargo clippy completed successfully with no warnings or errors (aside from build script warnings)
+### 3. **Task Validation Incomplete**
+
+The code changes in the git working directory (modifications to `src/core/operations.rs`, `src/parsers/png/chunk_parser.rs`, `src/parsers/tiff/ifd_parser.rs`, etc.) are NOT related to I5.T9 (integration testing). They appear to be changes to core parsing logic.
+
+However, according to completion reports:
+- Test corpus: 102 images already exists ✅
+- Test functions: 10 comparison tests already implemented ✅
+- CI integration: Already configured ✅
+- Documentation: Complete ✅
+
+The ONLY blockers are:
+1. Compilation errors in test files due to IFD parser API changes
+2. Minor linting warnings
 
 ---
 
 ## Best Approach to Fix
 
-### **Phase 1: Diagnose the Metadata Reading Implementation**
+### Step 1: Fix Compilation Errors in Test Files
 
-The tests clearly show that ExifTool-RS is not successfully reading metadata from the test images. You need to:
+You MUST update ALL tuple destructuring patterns in the test files to account for the new `parse_ifd()` return type:
 
-1. **Check the binary execution**: Manually run the ExifTool-RS binary on one of the failing test images to see what it outputs:
-   ```bash
-   cargo build --release
-   ./target/release/exiftool-rs --json tests/fixtures/tiff/simple/sample.tif
-   ```
-   Compare this output with Perl ExifTool:
-   ```bash
-   exiftool -json -a -G1 -struct tests/fixtures/tiff/simple/sample.tif
-   ```
+**Old pattern (2-tuple):**
+```rust
+for (tag_id, value_bytes) in &tags {
+```
 
-2. **Identify the root cause**: Determine whether:
-   - The parsers are not reading the metadata correctly
-   - The JSON serialization is not including the tags
-   - The format parsers (JPEG, PNG, TIFF, PDF, MP4) have bugs
-   - The tag extraction logic is incomplete
+**New pattern (3-tuple):**
+```rust
+for (tag_id, _field_type, value_bytes) in &tags {
+```
 
-### **Phase 2: Fix the Core Reading Implementation**
+**Files to update:**
+1. `tests/integration/jpeg_tests.rs` - Line 432 and any similar patterns
+2. `tests/integration/jpeg_write_tests.rs` - Line 128 (update return type or conversion)
+3. `tests/integration/tiff_tests.rs` - Lines 65, 84, 87, 90, 93, 106, 110, 129, 135, 151, 163
 
-Based on the diagnosis, fix the underlying issues in the format parsers:
+**For iterator patterns:**
+```rust
+// OLD
+tags.iter().any(|(id, _)| *id == 0x0100)
 
-1. **TIFF Parser** (`src/formats/tiff/` or similar):
-   - Ensure IFD (Image File Directory) chains are fully traversed
-   - Handle multi-page TIFF files (IFD0, IFD1, IFD2, etc.)
-   - Support both little-endian and big-endian byte order
-   - Extract all standard TIFF tags (Compression, BitsPerSample, ImageWidth, ImageHeight, etc.)
+// NEW
+tags.iter().any(|(id, _, _)| *id == 0x0100)
+```
 
-2. **PNG Parser** (`src/formats/png/` or similar):
-   - Extract text chunks (tEXt, zTXt, iTXt)
-   - Extract eXIf chunks (EXIF data in PNG format)
-   - Ensure all chunk types are properly parsed
+**For destructuring in if-let:**
+```rust
+// OLD
+if let Some((_, make_value)) = tags.iter().find(|(id, _)| *id == 0x010F) {
 
-3. **JPEG Parser** (`src/formats/jpeg/` or similar):
-   - Extract EXIF segments (APP1 EXIF)
-   - Extract XMP segments (APP1 XMP)
-   - Extract GPS IFD tags within EXIF
+// NEW
+if let Some((_, _, make_value)) = tags.iter().find(|(id, _, _)| *id == 0x010F) {
+```
 
-4. **PDF Parser** (`src/formats/pdf/` or similar):
-   - Parse Info dictionary metadata
-   - Parse XMP metadata streams
+### Step 2: Fix Linting Warnings
 
-5. **MP4 Parser** (`src/formats/mp4/` or similar):
-   - Parse iTunes metadata atoms (©day, ©nam, etc.)
-   - Parse keys/ilst metadata structures
-   - Parse QuickTime metadata atoms
+In `src/core/operations.rs:511`, remove the unnecessary `as i32` casts:
 
-### **Phase 3: Verify Tag Output Format**
+**Before:**
+```rust
+return TagValue::new_rational(numerator as i32, denominator as i32);
+```
 
-Ensure that the JSON output from ExifTool-RS matches the expected structure:
+**After:**
+```rust
+return TagValue::new_rational(numerator, denominator);
+```
 
-1. **Group Names**: Tags should include group prefixes (e.g., `IFD0:ImageWidth`, `EXIF:Make`, `GPS:Latitude`)
-2. **Tag Values**: Values should be properly formatted (strings, numbers, arrays)
-3. **TagValue Enum**: The comparison test has logic to unwrap TagValue enums (e.g., `{"String": "value"}` → `"value"`). Ensure this unwrapping works correctly or that the output format is consistent.
+### Step 3: Verify Tests Compile and Pass
 
-### **Phase 4: Re-run Tests and Iterate**
+After fixing the compilation errors, run:
+```bash
+cargo test --features exiftool-comparison --release
+```
 
-After fixing the core issues:
+Ensure all 10 integration tests pass with the 98%+ match rate threshold.
 
-1. Run the comparison tests again:
-   ```bash
-   cargo test --features exiftool-comparison --release test_comparison
-   ```
+### Step 4: Run Linter
 
-2. For each test that still fails:
-   - Review the mismatch report printed by the test
-   - Identify which tags are still missing or incorrect
-   - Fix the specific parser or tag extraction logic
-   - Repeat until all tests pass with 98%+ match rate
+```bash
+cargo clippy --all-features
+```
 
-### **Phase 5: Update Documentation**
-
-Once all tests pass:
-
-1. Update `tests/fixtures/COMPLETION_REPORT.md` to reflect the actual test results
-2. Update the acceptance criteria status from "READY" to "PASS" for criterion #4 (98%+ tag match rate)
-3. Document any known discrepancies in `tests/integration/KNOWN_DISCREPANCIES.md`
+Verify there are no warnings remaining.
 
 ---
 
-## Priority
+## Success Criteria
 
-**HIGH PRIORITY**: The integration tests are the acceptance criteria for task I5.T9. Without passing tests, the task cannot be marked as complete.
+Your fix is complete when:
+1. ✅ All compilation errors are resolved (all test files compile successfully)
+2. ✅ All linting warnings are fixed (cargo clippy shows 0 warnings)
+3. ✅ All integration tests pass with `cargo test --features exiftool-comparison`
+4. ✅ No changes to test logic or assertions (ONLY fix type mismatches)
 
-**Start with**: Focus on getting one format (e.g., TIFF) working completely before moving to others. The simplest test (`test_comparison_tiff` with `tests/fixtures/tiff/simple/sample.tif`) should be your first target after the one JPEG test that already passes.
+**DO NOT**:
+- Change the test logic or assertions
+- Modify the IFD parser (the 3-tuple return type is correct)
+- Add new functionality
+- Modify the test corpus or test functions
 
-**Note**: Write operations (criteria #3 and #5) are explicitly documented as I4 dependencies and should NOT block this task. Focus ONLY on read operation tests.
+**ONLY**:
+- Update tuple destructuring patterns in test files to match the new API
+- Remove unnecessary type casts in operations.rs
