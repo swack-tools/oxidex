@@ -136,12 +136,14 @@ impl OutputFormatter for JsonFormatter {
             metadata.clone()
         };
 
-        // Serialize to pretty JSON
-        match serde_json::to_string_pretty(&metadata_to_serialize) {
+        // Serialize to pretty JSON wrapped in an array for Perl ExifTool compatibility
+        // Perl ExifTool outputs: [{...}] (array with one object per file)
+        // This allows processing multiple files with consistent JSON structure
+        match serde_json::to_string_pretty(&vec![metadata_to_serialize]) {
             Ok(json) => json,
             Err(e) => {
                 // Fallback error message if serialization fails
-                format!("{{\"error\": \"Failed to serialize metadata: {}\"}}", e)
+                format!("[{{\"error\": \"Failed to serialize metadata: {}\"}}]", e)
             }
         }
     }
@@ -347,10 +349,12 @@ mod tests {
         let formatter = JsonFormatter;
         let output = formatter.format(&metadata, None);
 
-        // Should be valid JSON representing an empty object
+        // Should be valid JSON array (Perl ExifTool compatibility)
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
-        assert!(parsed.is_object());
-        assert_eq!(parsed.as_object().unwrap().len(), 0);
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 1);
+        assert!(parsed[0].is_object());
+        assert_eq!(parsed[0].as_object().unwrap().len(), 0);
     }
 
     #[test]
@@ -362,12 +366,13 @@ mod tests {
         let formatter = JsonFormatter;
         let output = formatter.format(&metadata, None);
 
-        // Verify it's valid JSON
+        // Verify it's valid JSON array
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
-        assert!(parsed.is_object());
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 1);
 
         // Verify content (note: TagValue serializes with type/value structure)
-        let obj = parsed.as_object().unwrap();
+        let obj = parsed[0].as_object().unwrap();
         assert!(obj.contains_key("EXIF:Make"));
         assert!(obj.contains_key("EXIF:ISO"));
     }
@@ -388,8 +393,9 @@ mod tests {
         assert!(result.is_ok(), "JSON should be valid and parseable");
 
         let parsed = result.unwrap();
-        assert!(parsed.is_object());
-        assert_eq!(parsed.as_object().unwrap().len(), 4);
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 1);
+        assert_eq!(parsed[0].as_object().unwrap().len(), 4);
     }
 
     #[test]
@@ -405,7 +411,8 @@ mod tests {
 
         // Verify only filtered tag is in JSON
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
-        let obj = parsed.as_object().unwrap();
+        assert!(parsed.is_array());
+        let obj = parsed[0].as_object().unwrap();
         assert_eq!(obj.len(), 1);
         assert!(obj.contains_key("EXIF:Make"));
         assert!(!obj.contains_key("EXIF:Model"));
@@ -421,10 +428,11 @@ mod tests {
         let filter = vec!["EXIF:NonExistent".to_string()];
         let output = formatter.format(&metadata, Some(&filter));
 
-        // Should be valid JSON with empty object
+        // Should be valid JSON array with empty object
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
-        assert!(parsed.is_object());
-        assert_eq!(parsed.as_object().unwrap().len(), 0);
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 1);
+        assert_eq!(parsed[0].as_object().unwrap().len(), 0);
     }
 
     #[test]
