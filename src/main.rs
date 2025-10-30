@@ -6,6 +6,7 @@ use clap::Parser;
 use exiftool_rs::cli::args::CliArgs;
 use exiftool_rs::cli::batch_processor;
 use exiftool_rs::cli::output_formatter::{HumanReadableFormatter, JsonFormatter, OutputFormatter};
+use exiftool_rs::cli::rename;
 use exiftool_rs::core::operations::{copy_metadata, modify_tag, read_metadata};
 use exiftool_rs::core::tag_value::TagValue;
 use std::process;
@@ -29,8 +30,11 @@ fn main() {
         }
     };
 
-    // Check if this is a copy operation (-TagsFromFile)
-    if args.tags_from_file.is_some() {
+    // Check if this is a rename operation (-FileName<pattern>)
+    if let Some(pattern) = args.filename_pattern() {
+        // Rename mode
+        handle_rename_operation(&file, &pattern, &args);
+    } else if args.tags_from_file.is_some() {
         // Copy metadata mode
         handle_copy_operation(&file, &args);
     } else if file.is_dir() || args.recursive {
@@ -325,5 +329,39 @@ fn handle_copy_operation(dest_file: &std::path::Path, args: &CliArgs) {
         );
     } else {
         println!("    1 image files updated");
+    }
+}
+
+/// Handles rename operations (renaming files based on metadata)
+fn handle_rename_operation(file: &std::path::Path, pattern: &str, args: &CliArgs) {
+    // Verify file exists
+    if !file.exists() {
+        eprintln!("Error: File not found: {}", file.display());
+        process::exit(1);
+    }
+
+    // If it's a directory, we could support batch rename in the future
+    // For now, only support single files
+    if file.is_dir() {
+        eprintln!("Error: Directory renaming not yet supported");
+        eprintln!("Please specify a single file for renaming");
+        process::exit(1);
+    }
+
+    // Extract date format if provided
+    let date_format = args.date_format.as_deref();
+
+    // Perform rename
+    match rename::rename_file(file, pattern, date_format, args.dry_run) {
+        Ok(_new_path) => {
+            if !args.dry_run {
+                // Print success message
+                println!("    1 image files renamed");
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: Failed to rename file '{}': {}", file.display(), e);
+            process::exit(1);
+        }
     }
 }

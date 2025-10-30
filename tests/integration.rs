@@ -36,3 +36,6 @@ mod mp4_tests;
 
 #[path = "integration/copy_metadata_tests.rs"]
 mod copy_metadata_tests;
+
+#[path = "integration/rename_tests.rs"]
+mod rename_tests;
