@@ -228,16 +228,16 @@ mod tests {
             result.len()
         );
 
-        // Check for specific tags
+        // Check for specific tags with namespace-specific prefixes
         let has_creator = result
             .iter()
-            .any(|(name, value)| name == "XMP:Creator" && value == "John Doe");
-        assert!(has_creator, "Missing XMP:Creator tag");
+            .any(|(name, value)| name == "XMP-xmp:Creator" && value == "John Doe");
+        assert!(has_creator, "Missing XMP-xmp:Creator tag");
 
         let has_rating = result
             .iter()
-            .any(|(name, value)| name == "XMP:Rating" && value == "5");
-        assert!(has_rating, "Missing XMP:Rating tag");
+            .any(|(name, value)| name == "XMP-xmp:Rating" && value == "5");
+        assert!(has_rating, "Missing XMP-xmp:Rating tag");
     }
 
     #[test]
@@ -308,20 +308,20 @@ mod tests {
         let tag_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
 
         assert!(
-            tag_names.iter().any(|n| n == "XMP:Creator"),
-            "Missing XMP:Creator"
+            tag_names.iter().any(|n| n == "XMP-xmp:Creator"),
+            "Missing XMP-xmp:Creator"
         );
         assert!(
-            tag_names.iter().any(|n| n == "XMP:title"),
-            "Missing XMP:title"
+            tag_names.iter().any(|n| n == "XMP-dc:Title"),
+            "Missing XMP-dc:Title"
         );
         assert!(
-            tag_names.iter().any(|n| n == "XMP:rights"),
-            "Missing XMP:rights"
+            tag_names.iter().any(|n| n == "XMP-dc:Rights"),
+            "Missing XMP-dc:Rights"
         );
         assert!(
-            tag_names.iter().any(|n| n == "XMP:Make"),
-            "Missing XMP:Make"
+            tag_names.iter().any(|n| n == "XMP-exif:Make"),
+            "Missing XMP-exif:Make"
         );
     }
 
@@ -358,8 +358,8 @@ mod tests {
         // Should have tags from both segments
         assert!(result.len() >= 2, "Expected tags from both XMP segments");
 
-        let has_creator = result.iter().any(|(name, _)| name == "XMP:Creator");
-        let has_title = result.iter().any(|(name, _)| name == "XMP:title");
+        let has_creator = result.iter().any(|(name, _)| name == "XMP-xmp:Creator");
+        let has_title = result.iter().any(|(name, _)| name == "XMP-dc:Title");
 
         assert!(has_creator, "Missing tag from first XMP segment");
         assert!(has_title, "Missing tag from second XMP segment");

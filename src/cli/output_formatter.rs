@@ -177,7 +177,19 @@ fn tag_value_to_json(value: &TagValue) -> serde_json::Value {
         TagValue::Rational {
             numerator,
             denominator,
-        } => serde_json::Value::String(format!("{}/{}", numerator, denominator)),
+        } => {
+            // Normalize rational display to match Perl ExifTool
+            // If denominator is 1, output only the numerator (e.g., "100/1" → "100")
+            // If numerator is 0, output "0"
+            // Otherwise, keep fractional form "n/d"
+            if *denominator == 1 {
+                serde_json::Value::String(format!("{}", numerator))
+            } else if *numerator == 0 {
+                serde_json::Value::String("0".to_string())
+            } else {
+                serde_json::Value::String(format!("{}/{}", numerator, denominator))
+            }
+        }
         TagValue::Binary(bytes) => {
             serde_json::Value::String(format!("(Binary, {} bytes)", bytes.len()))
         }
