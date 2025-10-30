@@ -146,6 +146,12 @@ fn parse_exiftool_tags(source_dir: &Path) -> Result<Vec<TagDefinition>> {
         ("Photoshop.pm", "Photoshop"),
         ("PNG.pm", "PNG"),
         ("JFIF.pm", "JFIF"),
+        ("JPEG.pm", "JPEG"),
+        ("TIFF.pm", "TIFF"),
+        ("ICC_Profile.pm", "ICC_Profile"),
+        ("PostScript.pm", "PostScript"),
+        ("RIFF.pm", "RIFF"),
+        ("MakerNotes.pm", "MakerNotes"),
     ];
 
     for (module_file, format_family) in modules {
@@ -181,7 +187,8 @@ fn parse_perl_module(module_path: &Path, format_family: &str) -> Result<Vec<TagD
     let mut current_tag_data: HashMap<String, String> = HashMap::new();
 
     // Regex patterns for parsing Perl hash structures
-    let tag_id_regex = Regex::new(r"^\s*(0x[0-9A-Fa-f]+|'[^']+')?\s*=>\s*\{?\s*$")?;
+    // Updated to handle: hex IDs (0x010F), quoted strings ('Name'), integers (1, 2, 3)
+    let tag_id_regex = Regex::new(r"^\s*(0x[0-9A-Fa-f]+|'[^']+'|\d+)\s*=>\s*\{?\s*$")?;
     let name_regex = Regex::new(r#"^\s*Name\s*=>\s*'([^']+)'"#)?;
     let writable_regex = Regex::new(r#"^\s*Writable\s*=>\s*'?([^',\s]+)"#)?;
     let desc_regex = Regex::new(r#"^\s*Description\s*=>\s*'([^']+)'"#)?;
@@ -270,15 +277,23 @@ fn create_tag_definition(
 
     // Parse tag ID
     let tag_id = if tag_id_str.starts_with("0x") {
-        // Numeric hex ID
+        // Hex ID (e.g., 0x010F)
         let hex_str = tag_id_str.trim_start_matches("0x").trim_end_matches(',');
         if let Ok(num) = u16::from_str_radix(hex_str, 16) {
             TagId::Numeric(num)
         } else {
             return None;
         }
+    } else if tag_id_str.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        // Integer ID (e.g., 1, 2, 3)
+        let num_str = tag_id_str.trim_end_matches(',').trim();
+        if let Ok(num) = num_str.parse::<u16>() {
+            TagId::Numeric(num)
+        } else {
+            return None;
+        }
     } else {
-        // String ID (remove quotes)
+        // String ID (remove quotes, e.g., 'Creator', "Title")
         TagId::Named(tag_id_str.trim_matches('\'').trim_matches('"').to_string())
     };
 
@@ -353,7 +368,7 @@ fn generate_rust_code(tags: &[TagDefinition]) -> Result<()> {
     let mut tags_by_family: HashMap<String, Vec<&TagDefinition>> = HashMap::new();
     for tag in tags {
         tags_by_family.entry(tag.format_family.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(tag);
     }
 

@@ -129,11 +129,11 @@ During `cargo build`, the build script (`build.rs`) performs the following steps
 
 1. **Downloads ExifTool Source**: Fetches the latest ExifTool source code from the [official GitHub repository](https://github.com/exiftool/exiftool)
 2. **Parses Tag Definitions**: Extracts tag metadata from Perl modules in `lib/Image/ExifTool/`:
-   - Tag IDs (numeric hex codes or string identifiers)
+   - Tag IDs (numeric hex codes, integers, or string identifiers)
    - Tag names and descriptions
    - Writable status and data types
-   - Format family classifications (EXIF, XMP, IPTC, GPS, etc.)
-3. **Generates Rust Code**: Creates `src/tag_db/generated_tags.rs` with 500+ tag definitions
+   - Format family classifications (EXIF, XMP, IPTC, GPS, QuickTime, RIFF, etc.)
+3. **Generates Rust Code**: Creates `src/tag_db/generated_tags.rs` with 700+ tag definitions (731 in current version)
 4. **Validates Output**: Ensures the generated database meets minimum quality standards
 
 The generated file is excluded from version control (`.gitignore`) and rebuilt automatically when you run `cargo build`.
@@ -141,12 +141,17 @@ The generated file is excluded from version control (`.gitignore`) and rebuilt a
 #### Supported Format Families
 
 The tag generator parses definitions for all major metadata formats:
-- **EXIF** (300+ tags): Camera settings, image parameters, manufacturer data
-- **GPS** (30+ tags): Geolocation and positioning data
-- **XMP** (100+ tags): Extensible Metadata Platform tags
-- **IPTC** (50+ tags): Press and media industry metadata
-- **PDF** (10+ tags): Document metadata
-- **QuickTime** (10+ tags): Video/audio metadata
+- **EXIF** (244 tags): Camera settings, image parameters, manufacturer data
+- **GPS** (32 tags): Geolocation and positioning data
+- **IPTC** (122 tags): Press and media industry metadata
+- **QuickTime** (143 tags): Video/audio metadata
+- **RIFF** (46 tags): Resource Interchange File Format metadata
+- **ICC_Profile** (42 tags): Color management metadata
+- **Photoshop** (35 tags): Adobe Photoshop metadata
+- **PNG** (30 tags): Portable Network Graphics metadata
+- **JPEG** (30 tags): JPEG-specific metadata
+- **XMP** (7 tags): Extensible Metadata Platform tags (base module)
+- Additional formats: TIFF, JFIF, PDF, PostScript, MakerNotes
 
 #### Fallback Mechanism
 

@@ -61,12 +61,20 @@ pub enum FormatFamily {
     MakerNotes,
     /// JFIF (JPEG File Interchange Format) metadata
     JFIF,
+    /// JPEG (Joint Photographic Experts Group) metadata
+    JPEG,
     /// PNG (Portable Network Graphics) metadata
     PNG,
     /// PDF (Portable Document Format) metadata
     PDF,
     /// QuickTime/MOV metadata
     QuickTime,
+    /// TIFF (Tagged Image File Format) metadata
+    TIFF,
+    /// RIFF (Resource Interchange File Format) metadata
+    RIFF,
+    /// PostScript metadata
+    PostScript,
 }
 
 /// Value type enumeration corresponding to TagValue variants
@@ -246,11 +254,15 @@ mod tests {
             FormatFamily::Photoshop,
             FormatFamily::MakerNotes,
             FormatFamily::JFIF,
+            FormatFamily::JPEG,
             FormatFamily::PNG,
             FormatFamily::PDF,
             FormatFamily::QuickTime,
+            FormatFamily::TIFF,
+            FormatFamily::RIFF,
+            FormatFamily::PostScript,
         ];
-        assert_eq!(families.len(), 11);
+        assert_eq!(families.len(), 15);
     }
 
     #[test]
