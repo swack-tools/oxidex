@@ -958,6 +958,12 @@ fn raw_bytes_to_tag_value(
                     return TagValue::new_string(component_names.join(", "));
                 }
 
+                // For UNDEFINED type, if no specific handler matched, return binary
+                // (BYTE type continues to heuristic conversion)
+                if field_type == 7 {
+                    return TagValue::new_binary(bytes.to_vec());
+                }
+
                 // Fall through to heuristic conversion
             }
 
@@ -1393,7 +1399,8 @@ mod tests {
     fn test_raw_bytes_to_tag_value_binary() {
         use crate::parsers::tiff::ifd_parser::ByteOrder;
         let bytes = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x10, 0x20]; // Non-ASCII bytes
-        let value = raw_bytes_to_tag_value(&bytes, 7, 1, 0, ByteOrder::LittleEndian); // Type 7 = UNDEFINED
+        // Use tag_id=0xFFFF which doesn't match any special handlers
+        let value = raw_bytes_to_tag_value(&bytes, 7, 1, 0xFFFF, ByteOrder::LittleEndian); // Type 7 = UNDEFINED
         assert!(value.is_binary());
     }
 
