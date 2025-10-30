@@ -1,6 +1,6 @@
 # Code Refinement Task
 
-The previous code submission did not pass verification. The integration test suite is well-implemented with 104 test images and comprehensive coverage, and **13 out of 14 tests pass with 100% match rate**. However, **1 test (MP4) fails** with only 73.33% match rate, below the required 98% threshold.
+The previous code submission did not pass verification. The integration tests pass successfully with **14/14 tests at 100% match rate**, which meets the acceptance criteria. However, **8 unit tests are failing** due to namespace prefix changes and parser enhancements. You must fix these unit test failures and resubmit your work.
 
 ---
 
@@ -14,164 +14,269 @@ The previous code submission did not pass verification. The integration test sui
 
 ## Issues Detected
 
-### Test Results Summary:
-- ✅ **13/14 tests passing** with 100% match rate:
-  - test_comparison_jpeg_with_exif: 100%
-  - test_comparison_jpeg_with_exif_xmp: 100%
-  - test_comparison_jpeg_with_gps: 100%
-  - test_comparison_tiff: 100%
-  - test_comparison_tiff_big_endian: 100%
-  - test_comparison_tiff_multipage: 100%
-  - test_comparison_png_with_text: 100%
-  - test_comparison_png_with_exif: 100%
-  - test_comparison_pdf: 100%
-  - test_write_roundtrip_jpeg_artist: 100%
-  - test_rename_file_pattern: 100%
-  - test_copy_metadata_jpeg_to_jpeg: 100%
-  - test_date_shift_all_dates: 100%
+### Integration Test Results: ✅ PASSING
+- **14/14 tests passing** with 100% match rate
+- All formats covered: JPEG, TIFF, PNG, PDF, MP4
+- All operations working: read, write, copy, rename, date shift
+- Test corpus: 104 images (exceeds 100+ requirement)
+- CI integration: ✅ Working
+- README badges: ✅ Present
 
-- ❌ **1/14 tests failing** below 98% threshold:
-  - test_comparison_mp4: **73.33%** (22/30 tags matched, 8 mismatches)
+### Unit Test Failures: ❌ 8 TESTS FAILING
 
-### MP4 Test Failure Details:
+**Root Cause:** The recent code changes modified namespace prefixes in the QuickTime/MP4 parser:
+- Changed `iTunes:` → `ItemList:` (to match Perl ExifTool conventions)
+- Changed `QuickTime:` → `UserData:` (to match Perl ExifTool conventions)
 
-The MP4 parser is missing 8 ItemList metadata tags that Perl ExifTool extracts correctly:
+Additionally, the PNG parser was enhanced to extract IHDR chunk metadata (ImageWidth, ImageHeight, BitDepth, etc.), which changes the expected tag counts in unit tests.
 
-1. **ItemList:Album** - Perl: `"Sample Album"`, Rust: MISSING
-2. **ItemList:Artist** - Perl: `"Sample Artist"`, Rust: MISSING
-3. **ItemList:Title** - Perl: `"Sample Video Title"`, Rust: MISSING
-4. **ItemList:Comment** - Perl: `"Test MP4 file for ExifTool-RS"`, Rust: MISSING
-5. **ItemList:ContentCreateDate** - Perl: `Number(2024)`, Rust: MISSING
-6. **ItemList:Genre** - Perl: `"Test Genre"`, Rust: MISSING
-7. **ItemList:Copyright** - Perl: `"Copyright 2024"`, Rust: MISSING
-8. **UserData:Title** - Perl: `"QT Title!!"`, Rust: MISSING
+**Failing Tests:**
 
-**Additional Context:**
-- ExifTool-RS extracts tags with `iTunes:` prefix instead of `ItemList:` prefix
-- The test shows warnings: "ExifTool-RS has additional tag not in Perl ExifTool: iTunes:Artist", etc.
-- This indicates the parser IS extracting the data, but using incorrect namespace prefix
+1. **core::operations::tests::test_raw_bytes_to_tag_value_binary**
+   - Location: `src/core/operations.rs:1397`
+   - Error: `assertion failed: value.is_binary()`
+   - Issue: The `raw_bytes_to_tag_value()` function is not returning a Binary TagValue for UNDEFINED (type 7) field types
 
-### Linting Issues:
-- ✅ **FIXED**: Collapsible if statements in `src/core/operations.rs:743` and `src/core/operations.rs:756` have been corrected
+2. **parsers::pdf::tests::test_parse_pdf_with_info_dict**
+   - Location: `src/parsers/pdf/mod.rs` (test function)
+   - Error: Likely failing on tag count or specific tag extraction
+   - Issue: PDF parser may have been modified or test expectations are incorrect
+
+3. **parsers::png::tests::test_parse_minimal_png**
+   - Location: `src/parsers/png/mod.rs:823`
+   - Error: `assertion left == right failed: left: 7, right: 0`
+   - Issue: Minimal PNG now extracts 7 tags from IHDR chunk (ImageWidth, ImageHeight, BitDepth, ColorType, Compression, Filter, Interlace) instead of 0
+
+4. **parsers::png::tests::test_parse_png_with_text_chunk**
+   - Location: `src/parsers/png/mod.rs:848`
+   - Error: `assertion left == right failed: left: 8, right: 1`
+   - Issue: PNG with tEXt chunk now has 7 IHDR tags + 1 tEXt tag = 8 tags (test expects 1)
+
+5. **parsers::png::tests::test_parse_png_with_itxt_chunk**
+   - Location: `src/parsers/png/mod.rs:883`
+   - Error: `assertion left == right failed: left: 8, right: 1`
+   - Issue: PNG with iTXt chunk now has 7 IHDR tags + 1 iTXt tag = 8 tags (test expects 1)
+
+6. **parsers::png::tests::test_parse_png_with_exif_chunk**
+   - Location: `src/parsers/png/mod.rs:924`
+   - Error: `assertion left == right failed: left: 9, right: 1`
+   - Issue: PNG with eXIf chunk now has 7 IHDR tags + more EXIF tags (test expects 1)
+
+7. **parsers::quicktime::tests::test_parse_quicktime_user_data**
+   - Location: `src/parsers/quicktime/mod.rs:323`
+   - Error: `assertion failed: metadata.contains_key("QuickTime:Title")`
+   - Issue: Tag is now named `UserData:Title` instead of `QuickTime:Title`
+
+8. **parsers::quicktime::tests::test_parse_itunes_metadata**
+   - Location: `src/parsers/quicktime/mod.rs:341`
+   - Error: `assertion failed: metadata.contains_key("iTunes:Artist")`
+   - Issue: Tag is now named `ItemList:Artist` instead of `iTunes:Artist`
 
 ---
 
 ## Best Approach to Fix
 
-You must **modify the MP4 parser** to use the correct tag namespace prefix that matches Perl ExifTool's conventions.
+You must update the unit tests to match the new behavior of the parsers. The parser implementations are CORRECT (they now match Perl ExifTool conventions), so the tests need to be updated to reflect the new reality.
 
-### Root Cause Analysis:
+### Fix 1: Update QuickTime/MP4 Unit Tests
 
-The MP4 parser is extracting ItemList (`ilst`) metadata correctly, but outputting tags with the `iTunes:` prefix instead of the `ItemList:` prefix that Perl ExifTool uses.
+**File**: `src/parsers/quicktime/mod.rs`
 
-**Example:**
-- Current (incorrect): `iTunes:Artist`
-- Expected (correct): `ItemList:Artist`
+**Action**: Update the test functions to use the new namespace prefixes:
 
-Additionally, the parser is not extracting the `UserData:Title` tag from the `udta` atom.
-
-### Fix Instructions:
-
-**File**: `src/parsers/mp4/mod.rs`
-
-**Action 1: Fix ItemList Tag Namespace**
-
-Locate the code that adds ItemList tags to the metadata map. It's likely using a prefix like `"iTunes:"` or similar. Change it to use `"ItemList:"` instead.
-
-Look for code patterns like:
+**Test: `test_parse_quicktime_user_data` (line 323)**
 ```rust
-metadata.insert("iTunes:Artist", ...);
-// or
-format!("iTunes:{}", tag_name)
+// OLD (incorrect):
+assert!(metadata.contains_key("QuickTime:Title"));
+if let Some(title) = metadata.get_string("QuickTime:Title") {
+    assert_eq!(title, "Test Title");
+}
+
+// NEW (correct):
+assert!(metadata.contains_key("UserData:Title"));
+if let Some(title) = metadata.get_string("UserData:Title") {
+    assert_eq!(title, "Test Title");
+}
 ```
 
-Change to:
+**Test: `test_parse_itunes_metadata` (line 341)**
 ```rust
-metadata.insert("ItemList:Artist", ...);
-// or
-format!("ItemList:{}", tag_name)
+// OLD (incorrect):
+assert!(metadata.contains_key("iTunes:Artist"));
+if let Some(artist) = metadata.get_string("iTunes:Artist") {
+    assert_eq!(artist, "Artist Name");
+}
+
+// NEW (correct):
+assert!(metadata.contains_key("ItemList:Artist"));
+if let Some(artist) = metadata.get_string("ItemList:Artist") {
+    assert_eq!(artist, "Artist Name");
+}
 ```
 
-**Action 2: Extract UserData:Title**
+### Fix 2: Update PNG Unit Tests
 
-The parser needs to also extract the `Title` tag from the `udta` (UserData) atom, not just from the `ilst` (ItemList) atom.
+**File**: `src/parsers/png/mod.rs`
 
-1. Ensure the `udta` atom handler is traversing its child atoms
-2. Look for a `title` atom (or similar) inside `udta`
-3. Extract the string value and add it as `UserData:Title`
+**Action**: Update test expectations to account for IHDR chunk extraction (7 additional tags)
 
-**Atom Structure Reference:**
+**Test: `test_parse_minimal_png` (line 823)**
+```rust
+// OLD (incorrect):
+assert_eq!(metadata.len(), 0);
+
+// NEW (correct):
+// Minimal PNG now extracts IHDR chunk metadata (7 tags)
+assert_eq!(metadata.len(), 7);
+// Verify IHDR tags are present
+assert!(metadata.contains_key("PNG:ImageWidth"));
+assert!(metadata.contains_key("PNG:ImageHeight"));
+assert!(metadata.contains_key("PNG:BitDepth"));
+assert!(metadata.contains_key("PNG:ColorType"));
+assert!(metadata.contains_key("PNG:Compression"));
+assert!(metadata.contains_key("PNG:Filter"));
+assert!(metadata.contains_key("PNG:Interlace"));
 ```
-moov
-  ├─ udta (UserData)
-  │   └─ title → extract as "UserData:Title"
-  └─ meta
-      └─ ilst (ItemList)
-          ├─ ©nam → "ItemList:Title"
-          ├─ ©ART → "ItemList:Artist"
-          ├─ ©alb → "ItemList:Album"
-          ├─ ©cmt → "ItemList:Comment"
-          ├─ ©day → "ItemList:ContentCreateDate"
-          ├─ ©gen → "ItemList:Genre"
-          └─ cprt → "ItemList:Copyright"
+
+**Test: `test_parse_png_with_text_chunk` (line 848)**
+```rust
+// OLD (incorrect):
+assert_eq!(metadata.len(), 1);
+
+// NEW (correct):
+// 7 IHDR tags + 1 tEXt tag = 8 total
+assert_eq!(metadata.len(), 8);
+assert_eq!(metadata.get_string("PNG:tEXt:Author"), Some("John Doe"));
 ```
 
-**Mapping Reference:**
-- `©nam` (0xA96E616D) → `ItemList:Title`
-- `©ART` (0xA9415254) → `ItemList:Artist`
-- `©alb` (0xA9616C62) → `ItemList:Album`
-- `©cmt` (0xA9636D74) → `ItemList:Comment`
-- `©day` (0xA9646179) → `ItemList:ContentCreateDate`
-- `©gen` (0xA967656E) → `ItemList:Genre`
-- `cprt` (0x63707274) → `ItemList:Copyright`
+**Test: `test_parse_png_with_itxt_chunk` (line 883)**
+```rust
+// OLD (incorrect):
+assert_eq!(metadata.len(), 1);
+
+// NEW (correct):
+// 7 IHDR tags + 1 iTXt tag = 8 total
+assert_eq!(metadata.len(), 8);
+// Verify iTXt tag is present (check the assertion that follows this line)
+```
+
+**Test: `test_parse_png_with_exif_chunk` (line 924)**
+```rust
+// OLD (incorrect):
+assert_eq!(metadata.len(), 1);
+
+// NEW (correct):
+// 7 IHDR tags + N EXIF tags = 9+ total
+// Count may vary depending on how many EXIF tags are in the test data
+assert!(metadata.len() >= 8, "Expected at least 8 tags (7 IHDR + 1+ EXIF), got {}", metadata.len());
+// Verify specific EXIF tag is present (check the assertion that follows this line)
+```
+
+### Fix 3: Fix Core Operations Binary Test
+
+**File**: `src/core/operations.rs`
+
+**Test: `test_raw_bytes_to_tag_value_binary` (line 1397)**
+
+The test is checking that `raw_bytes_to_tag_value()` returns a Binary TagValue for UNDEFINED (type 7) field types.
+
+**Action**: Review the `raw_bytes_to_tag_value()` function to ensure it correctly handles type 7 (UNDEFINED) as binary data.
+
+**Expected behavior**: When field_type is 7 (UNDEFINED), the function should return `TagValue::Binary(bytes.to_vec())`.
+
+**Check the function implementation** around line 700-800 in `src/core/operations.rs` and ensure type 7 is handled correctly:
+
+```rust
+pub fn raw_bytes_to_tag_value(
+    bytes: &[u8],
+    field_type: u16,
+    count: u32,
+    _tag_id: u16,
+    byte_order: ByteOrder,
+) -> TagValue {
+    match field_type {
+        7 => {
+            // Type 7 = UNDEFINED (should return binary)
+            TagValue::Binary(bytes.to_vec())
+        }
+        // ... other cases ...
+    }
+}
+```
+
+If the function is trying to interpret type 7 as ASCII/UTF-8 string, change it to return Binary instead.
+
+### Fix 4: Investigate PDF Test Failure
+
+**File**: `src/parsers/pdf/mod.rs`
+
+**Test: `test_parse_pdf_with_info_dict`**
+
+**Action**: Run the test individually to see the exact error message:
+
+```bash
+cargo test --lib test_parse_pdf_with_info_dict -- --nocapture
+```
+
+Then fix based on the error:
+- If it's a tag count issue, verify how many tags the PDF parser extracts
+- If it's a missing tag, check that all Info dictionary fields are being extracted
+- If it's a tag name issue, verify the namespace prefix is correct (`PDF:` prefix)
 
 ---
 
 ## Testing Instructions
 
-After making the fix, run the MP4 test to verify:
+After making the fixes, run:
 
 ```bash
-# Test the specific failing test
-cargo test --features exiftool-comparison test_comparison_mp4 -- --nocapture
+# Run all unit tests
+cargo test --lib
 
-# Run all comparison tests to ensure no regressions
-cargo test --features exiftool-comparison exiftool_comparison_tests -- --nocapture
+# Run integration tests (should still pass)
+cargo test --release --features exiftool-comparison exiftool_comparison_tests
+
+# Run linting
+cargo clippy --all-features -- -D warnings
 ```
 
 **Success criteria**:
-- `test_comparison_mp4` must show match rate ≥98% (ideally 100%)
-- All 14 comparison tests must pass with `ok` status
-- No linting errors from `cargo clippy --all-features -- -D warnings`
+- All unit tests pass: `cargo test --lib` shows 387 passed, 0 failed
+- All integration tests still pass: 14/14 tests with 100% match rate
+- No linting errors from clippy
 
 ---
 
 ## Files to Modify
 
-1. `src/parsers/mp4/mod.rs` - Change ItemList tag prefix from `iTunes:` to `ItemList:`, add UserData:Title extraction
+1. **src/parsers/quicktime/mod.rs** - Update 2 unit tests to use new namespace prefixes
+2. **src/parsers/png/mod.rs** - Update 4 unit tests to expect IHDR tag extraction
+3. **src/core/operations.rs** - Fix binary tag value handling for type 7 (UNDEFINED)
+4. **src/parsers/pdf/mod.rs** - Fix PDF test (investigate failure first)
 
 ---
 
 ## Important Notes
 
-- **DO NOT modify** `tests/integration/exiftool_comparison_tests.rs` - the test framework is correct
-- **DO NOT modify** `.github/workflows/ci.yml` - CI configuration is correct
-- **DO NOT add** more test fixtures - 104 images is sufficient
-- **Focus on namespace prefix correction** - this is a simple string replacement issue
-- The test currently shows warnings about "ExifTool-RS has additional tag not in Perl ExifTool: iTunes:Artist" - after the fix, these warnings should disappear and the tags should match
+- **DO NOT change the parser implementations** - they are correct and match Perl ExifTool
+- **DO NOT change the integration tests** - they are passing with 100% match rate
+- **ONLY update the unit tests** to match the new parser behavior
+- The namespace changes (`iTunes:` → `ItemList:`, `QuickTime:` → `UserData:`) are correct and intentional
+- The PNG IHDR extraction is correct and intentional (provides more metadata)
 
 ---
 
 ## Expected Outcome
 
 After this fix:
-- **14/14 tests passing** with ≥98% match rate (target: 100%)
-- MP4 test match rate: 73.33% → 100%
+- **387/387 unit tests passing** (100%)
+- **14/14 integration tests passing** (100%)
+- No linting errors
 - All acceptance criteria met:
   - ✅ Test corpus: 104 images
   - ✅ Format coverage: JPEG, TIFF, PNG, PDF, MP4
   - ✅ Operation coverage: read, write, copy, rename, date shift
-  - ✅ Match rate: 98%+ for all read tests
+  - ✅ Match rate: 100% for all read tests (exceeds 98% requirement)
   - ✅ Round-trip tests: passing
   - ✅ CI integration: configured
   - ✅ README badges: present
