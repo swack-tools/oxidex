@@ -10,26 +10,23 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I4.T8",
+  "task_id": "I4.T10",
   "iteration_id": "I4",
   "iteration_goal": "Add support for PDF and MP4/QuickTime formats, implement batch processing with recursive directory traversal and parallel execution, add metadata copying between files, and expand tag registry.",
-  "description": "Implement CSV output formatter in src/cli/output_formatter.rs. Add CsvFormatter implementing OutputFormatter trait. Support -csv CLI flag. Output format: header row with tag names, data row(s) with values. Support batch mode: multiple files produce multiple rows with SourceFile column. Use csv crate for generation. Add unit tests.",
+  "description": "Create fuzzing harnesses in fuzz/fuzz_targets/ for PDF and MP4 parsers. Set up continuous fuzzing: (1) Create fuzz_pdf.rs calling PDF parser with fuzzer-generated input, (2) Create fuzz_mp4.rs calling MP4 parser, (3) Seed corpus with sample valid files, (4) Configure cargo-fuzz to run both targets, (5) Document fuzzing process in README. Optionally submit to OSS-Fuzz for continuous fuzzing infrastructure.",
   "agent_type_hint": "BackendAgent",
-  "inputs": "I2.T9 output formatter trait",
+  "inputs": "I4.T1 PDF parser, I4.T2 MP4 parser, cargo-fuzz documentation",
+  "input_files": ["src/parsers/pdf/mod.rs", "src/parsers/quicktime/mod.rs"],
   "target_files": [
-    "src/cli/output_formatter.rs",
-    "src/cli/args.rs",
-    "src/main.rs",
-    "Cargo.toml"
+    "fuzz/fuzz_targets/fuzz_pdf.rs",
+    "fuzz/fuzz_targets/fuzz_mp4.rs",
+    "fuzz/corpus/pdf/",
+    "fuzz/corpus/mp4/",
+    "README.md"
   ],
-  "input_files": [
-    "src/cli/output_formatter.rs"
-  ],
-  "deliverables": "CSV output formatter, batch mode support, unit tests",
-  "acceptance_criteria": "-csv flag outputs valid CSV format, header row contains tag names, data rows contain tag values (one row per file in batch mode), CSV is parseable by standard tools (Excel, pandas), unit tests verify CSV generation, cargo test output_formatter passes",
-  "dependencies": [
-    "I2.T9"
-  ],
+  "deliverables": "Fuzzing targets for PDF and MP4, seed corpus, documentation",
+  "acceptance_criteria": "cargo fuzz run fuzz_pdf executes without errors, cargo fuzz run fuzz_mp4 executes without errors, corpus contains at least 3 valid samples each, fuzzing runs for at least 1 minute without crashes (manual verification), README documents how to run fuzzing",
+  "dependencies": ["I4.T1", "I4.T2"],
   "parallelizable": true,
   "done": false
 }
@@ -41,22 +38,130 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: API Style and Communication Patterns (from 04_Behavior_and_Communication.md)
+### Context: security-considerations (from 05_Operational_Architecture.md)
 
-The CLI follows POSIX-style arguments mimicking ExifTool:
-- `exiftool-rs -json -r /photos/` for recursive JSON output
-- Output formatters follow a consistent trait-based pattern
+```markdown
+#### Security Considerations
 
-### Context: Task I4.T8 Requirements (from 02_Iteration_I4.md)
+**Threat Model**:
 
-**Task 4.8: Add CSV Output Format**
-- Implement CSV output formatter in `src/cli/output_formatter.rs`
-- Add `CsvFormatter` implementing `OutputFormatter` trait
-- Support `-csv` CLI flag
-- Output format: header row with tag names, data row(s) with values
-- Support batch mode: multiple files produce multiple rows with SourceFile column
-- Use `csv` crate for generation
-- CSV must be parseable by standard tools (Excel, pandas)
+ExifTool-RS processes potentially malicious files from untrusted sources (e.g., user uploads, scraped images). Primary threats:
+
+1. **Memory Corruption**: Buffer overflows, use-after-free in parsers
+2. **Resource Exhaustion**: Zip bombs, billion laughs (XML), decompression bombs
+3. **Path Traversal**: Malicious filenames in archive processing
+4. **Code Injection**: Via scripting features (if added)
+
+**Mitigations**:
+
+| **Threat** | **Mitigation** | **Implementation** |
+|------------|---------------|-------------------|
+| Buffer overflows | Rust ownership system | Compile-time prevention via borrow checker |
+| Integer overflows | Checked arithmetic | `#![deny(overflowing_literals)]`, `checked_add()` in parsers |
+| Resource exhaustion | Size limits | Max allocation: 1GB per file, max parse depth: 64 levels (nested IFDs) |
+| Zip bombs | Decompression ratio check | Reject if uncompressed > 100x compressed size |
+| XXE attacks (XML) | Disable external entities | `quick-xml` configured to reject DOCTYPE, external entities |
+| Path traversal | Path sanitization | `canonicalize()` + jail to working directory for batch operations |
+| Dependency vulnerabilities | Automated scanning | `cargo-audit` in CI, Dependabot alerts, minimal dependency tree |
+| Malicious input | Fuzzing | Continuous fuzzing with `cargo-fuzz`, OSS-Fuzz integration target |
+
+**Input Validation**:
+
+All parsers follow defensive pattern:
+```rust
+fn read_u32_at(data: &[u8], offset: usize) -> Result<u32> {
+    let bytes = data.get(offset..offset+4)
+        .ok_or(ParseError::UnexpectedEof)?;  // Bounds check
+    Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
+}
+```
+
+**Secure Defaults**:
+
+- No script execution (unlike Perl ExifTool's `-execute` feature)
+- No network access by default (geolocation requires opt-in `--geolocation` flag)
+- Read-only mode available via `--readonly` flag (prevents accidental writes)
+```
+
+### Context: reliability-availability (from 05_Operational_Architecture.md)
+
+```markdown
+#### Reliability & Availability
+
+**Reliability Strategy**:
+
+1. **Fault Tolerance**:
+   - **Graceful Degradation**: On parser error, return partial metadata rather than failing entirely
+   - **Error Recovery**: Malformed EXIF segment logs warning but continues parsing other segments (IPTC, XMP)
+   - **Atomic Writes**: Temporary file + rename prevents corruption on crash mid-write
+
+2. **Testing Pyramid**:
+   ```
+          /\
+         /E2E\        <- Integration tests (10%): Full workflows
+        /------\
+       /  Unit  \      <- Unit tests (70%): Parser functions, tag validation
+      /----------\
+     / Property   \    <- Property-based (20%): Round-trip serialization, invariants
+    /--------------\
+   ```
+
+   - **Unit Tests**: Every parser function has success/failure test cases
+   - **Property-Based**: `proptest` for round-trip (write then read equals original)
+     ```rust
+     proptest! {
+         fn roundtrip_exif_date(dt: DateTime<Utc>) {
+             let serialized = serialize_exif_datetime(dt);
+             let deserialized = parse_exif_datetime(serialized)?;
+             assert_eq!(dt, deserialized);
+         }
+     }
+     ```
+   - **Integration Tests**: CLI invocations against reference ExifTool output
+   - **Fuzzing**: Continuous fuzzing via OSS-Fuzz (targets all parsers)
+
+3. **Crash Resistance**:
+   - No `unwrap()` in production code (enforced via clippy lint)
+   - All `unsafe` blocks documented with safety invariants and minimized
+   - Stack overflow protection: Limit recursion depth (nested IFDs, XML depth)
+```
+
+### Context: deeper-dive-fuzzing (from 06_Rationale_and_Future.md)
+
+```markdown
+#### 6. Comprehensive Fuzzing Strategy
+
+**Current State**: Conceptual (use `cargo-fuzz`).
+
+**Needs**:
+- Fuzzing harnesses for each format parser
+- Corpus seeding (known-good and known-malicious files)
+- Continuous fuzzing infrastructure (OSS-Fuzz integration)
+- Crash triage and fix workflow
+
+**Key Questions**:
+- How to measure coverage (format code paths, not just line coverage)?
+- How to prioritize fuzz findings (crash vs. hang vs. incorrect output)?
+```
+
+### Context: fuzzing (from 03_Verification_and_Glossary.md)
+
+```markdown
+#### Fuzzing (Continuous)
+*   **Scope:** Crash and hang detection in parsers
+*   **Location:** `fuzz/fuzz_targets/`
+*   **Tools:** `cargo-fuzz` (libFuzzer), OSS-Fuzz integration
+*   **Targets:**
+    *   `fuzz_jpeg` - JPEG segment parser
+    *   `fuzz_tiff` - TIFF IFD parser
+    *   `fuzz_png` - PNG chunk parser
+    *   `fuzz_pdf` - PDF structure parser
+    *   `fuzz_mp4` - QuickTime atom parser
+*   **Corpus:** Seed with valid samples + malformed files
+*   **Coverage:** Aim for 80%+ code coverage via fuzzing (measured with `cargo fuzz coverage`)
+*   **Integration:** OSS-Fuzz for continuous fuzzing, GitHub Actions for PR fuzzing (short runs)
+*   **Triage:** All crashes investigated within 48 hours, fixes prioritized by severity
+```
 
 ---
 
@@ -66,110 +171,172 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `src/cli/output_formatter.rs` (397 lines)
-    *   **Summary:** This file contains the existing OutputFormatter trait and two implementations (HumanReadableFormatter and JsonFormatter). The trait defines a single method `format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String` that takes metadata and optional tag filters and returns a formatted string.
-    *   **Recommendation:** You MUST implement a new struct `CsvFormatter` in this file that implements the `OutputFormatter` trait. Follow the same pattern as `HumanReadableFormatter` and `JsonFormatter`. The existing formatters provide excellent examples of how to filter tags and handle empty metadata.
-    *   **Key Pattern:** Both existing formatters check for empty metadata first (line 74, 125), apply tag filtering if provided, and return a formatted string. Your CSV formatter should follow this exact pattern.
-    *   **Recommendation:** You SHOULD use the existing helper function `format_tag_value()` (lines 149-166) to convert TagValue enum variants to human-readable strings for CSV cells. This ensures consistency across all formatters.
+*   **File:** `src/parsers/pdf/mod.rs`
+    *   **Summary:** Main PDF parser module that provides `parse_pdf_metadata()` function. This is the entry point you should fuzz. It takes a `&dyn FileReader` and returns a `Result<MetadataMap>`. The parser validates PDF signature, extracts Info dictionary metadata, and XMP metadata. It handles errors gracefully with warnings.
+    *   **Recommendation:** Your fuzzing harness MUST call `parse_pdf_metadata()` with fuzzer-generated data wrapped in a test FileReader. The parser expects PDF-formatted input starting with `%PDF-` signature.
+    *   **Key Functions to Fuzz:**
+        - `parse_pdf_metadata(reader: &dyn FileReader)` - Main entry point
+        - Internally uses `info_parser::parse_info_dict()` and `xmp_extractor::extract_xmp_metadata()`
+    *   **Error Handling:** The parser uses graceful degradation - it catches errors from sub-parsers and continues. This is GOOD for fuzzing as it won't crash on the first malformed element.
 
-*   **File:** `src/cli/args.rs` (200+ lines)
-    *   **Summary:** This file defines the CliArgs struct using clap's derive API. It already has a `json: bool` flag (line 14-15) for JSON output.
-    *   **Recommendation:** You MUST add a new `csv: bool` field to the CliArgs struct, following the exact same pattern as the `json` field. Use `#[arg(long)]` to avoid conflicts and match ExifTool conventions (not short flag).
-    *   **Example to Follow:**
-    ```rust
-    /// Output in JSON format
-    #[arg(short, long)]
-    pub json: bool,
-    ```
+*   **File:** `src/parsers/quicktime/mod.rs`
+    *   **Summary:** QuickTime/MP4 parser providing `parse_quicktime_metadata()` function. Takes a `&dyn FileReader` and returns `Result<MetadataMap, String>`. Validates file signature by checking for `ftyp`, `moov`, `mdat`, `wide`, `free`, or `skip` atoms. Reads up to 10MB of file data for parsing.
+    *   **Recommendation:** Your fuzzing harness MUST call `parse_quicktime_metadata()` with fuzzer-generated data. The parser expects QuickTime/MP4 atom structure.
+    *   **Key Functions to Fuzz:**
+        - `parse_quicktime_metadata(reader: &dyn FileReader)` - Main entry point
+        - Internally uses `atom_parser::parse_atoms()` and `metadata_extractor::extract_metadata()`
+    *   **Critical Detail:** Parser reads up to 10MB (`max_read_size = 10 * 1024 * 1024`). Your fuzzer should be aware that very large inputs may consume significant memory.
 
-*   **File:** `src/main.rs` (350+ lines)
-    *   **Summary:** This is the CLI entry point. The `handle_read_operation()` function (lines 159-196) currently checks `json_output: bool` to decide between JsonFormatter and HumanReadableFormatter.
-    *   **Recommendation:** You MUST modify `handle_read_operation()` signature to accept `&CliArgs` instead of just `json_output: bool`. This allows checking both json and csv flags.
-    *   **Critical Pattern:** Lines 170-184 show the formatter selection logic - you MUST extend this to handle three cases: CSV first, then JSON, then human-readable (default).
-    *   **Recommendation:** You SHOULD NOT need to modify `handle_batch_processing()` significantly - the batch_processor already collects metadata, you just need to ensure CSV output works there too.
+*   **File:** `tests/integration/pdf_tests.rs`
+    *   **Summary:** Contains helper `TestReader` struct that implements `FileReader` trait for in-memory testing. This is the EXACT pattern you should use in your fuzzing harness.
+    *   **Recommendation:** You MUST copy the `TestReader` implementation pattern to your fuzzing harnesses. See lines 162-190 of `src/parsers/pdf/mod.rs` for the complete implementation.
+    *   **Example Code:**
+        ```rust
+        struct TestReader { data: Vec<u8> }
+        impl FileReader for TestReader {
+            fn read(&self, offset: u64, length: usize) -> io::Result<&[u8]> {
+                let start = offset as usize;
+                let end = start + length;
+                if end > self.data.len() {
+                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "read beyond end"));
+                }
+                Ok(&self.data[start..end])
+            }
+            fn size(&self) -> u64 { self.data.len() as u64 }
+        }
+        ```
 
-*   **File:** `src/cli/batch_processor.rs` (200+ lines)
-    *   **Summary:** This file handles batch processing of multiple files using rayon for parallelism. It collects results and prints statistics.
-    *   **Recommendation:** For batch CSV output, the current architecture already supports it - the batch_processor processes files and could output CSV format. The single-file CSV case is priority.
-    *   **Note:** The "SourceFile" column requirement for batch mode can be deferred or implemented as a second pass. Focus first on getting single-file CSV working correctly.
+*   **File:** `tests/integration/mp4_tests.rs`
+    *   **Summary:** Contains similar `TestReader` implementation for MP4 testing. Also shows how to create minimal valid test files.
+    *   **Recommendation:** Reference this file for MP4-specific testing patterns.
 
-*   **File:** `Cargo.toml` (86 lines)
-    *   **Summary:** The dependencies section already includes many crates including `serde_json = "1.0"` for JSON output.
-    *   **Recommendation:** You MUST add `csv = "1.3"` to the `[dependencies]` section. The csv crate is the de-facto standard for CSV generation in Rust and handles RFC 4180 escaping automatically.
+*   **File:** `tests/fixtures/pdf/sample.pdf`
+    *   **Summary:** Existing valid PDF file that should be used to seed the fuzzing corpus.
+    *   **Recommendation:** You MUST copy this file to `fuzz/corpus/pdf/sample.pdf` as one of the 3+ seed files.
+
+*   **File:** `tests/fixtures/mp4/sample.mp4`
+    *   **Summary:** Existing valid MP4 file that should be used to seed the fuzzing corpus.
+    *   **Recommendation:** You MUST copy this file to `fuzz/corpus/mp4/sample.mp4` as one of the 3+ seed files.
+
+*   **File:** `Cargo.toml`
+    *   **Summary:** Main project Cargo manifest. Currently does NOT have cargo-fuzz configuration.
+    *   **Recommendation:** You will need to set up cargo-fuzz separately. cargo-fuzz typically creates its own `fuzz/Cargo.toml` file when initialized with `cargo fuzz init`.
 
 ### Implementation Tips & Notes
 
-*   **Tip:** The `csv` crate provides a `Writer` that writes to any `Write` implementation. For our use case, write to a `Vec<u8>` buffer and then convert to String:
-```rust
-use csv::Writer;
+*   **Tip: Use cargo-fuzz init** - Run `cargo fuzz init` in the project root to automatically create the `fuzz/Cargo.toml` and basic directory structure. This sets up the fuzzing workspace correctly.
 
-let mut wtr = Writer::from_writer(vec![]);
-wtr.write_record(&["Tag", "Value"])?;  // Header
-wtr.write_record(&["EXIF:Make", "Canon"])?;  // Data row
-let data = wtr.into_inner().map_err(|_| "CSV writer error")?;
-let csv_string = String::from_utf8(data).expect("Valid UTF-8");
-```
+*   **Tip: Fuzzing Harness Pattern** - Each fuzzing target should follow this pattern:
+    ```rust
+    #![no_main]
+    use libfuzzer_sys::fuzz_target;
+    use exiftool_rs::parsers::pdf::parse_pdf_metadata;
+    use exiftool_rs::core::FileReader;
+    use std::io;
 
-*   **Tip:** For single-file CSV output, use a two-column format: "Tag" and "Value" headers, with one row per metadata tag. This is simpler than trying to create a wide table with one column per tag.
+    struct FuzzReader { data: Vec<u8> }
+    impl FileReader for FuzzReader {
+        fn read(&self, offset: u64, length: usize) -> io::Result<&[u8]> {
+            let start = offset as usize;
+            let end = start.saturating_add(length).min(self.data.len());
+            if start >= self.data.len() { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "eof")); }
+            Ok(&self.data[start..end])
+        }
+        fn size(&self) -> u64 { self.data.len() as u64 }
+    }
 
-*   **Note:** The existing tests in `src/cli/output_formatter.rs` (lines 168-396) provide excellent examples of test structure. You SHOULD add similar comprehensive tests for CsvFormatter:
-    - Test empty metadata
-    - Test single tag
-    - Test multiple tags
-    - Test all value types (String, Integer, Float, Rational, Binary, DateTime, Struct)
-    - Test with filter
-    - Test that output is valid CSV (parseable by csv crate's Reader)
+    fuzz_target!(|data: &[u8]| {
+        let reader = FuzzReader { data: data.to_vec() };
+        let _ = parse_pdf_metadata(&reader);
+    });
+    ```
 
-*   **Warning:** CSV formatting requires proper escaping of special characters (commas, quotes, newlines in values). The `csv` crate handles this automatically with RFC 4180 compliance - DO NOT manually escape. Just use `Writer::write_record()`.
+*   **Tip: Saturating Arithmetic in Fuzz Reader** - Use `saturating_add()` instead of regular addition in your fuzzing FileReader implementation to prevent integer overflow panics. Example: `start.saturating_add(length).min(self.data.len())`.
 
-*   **Tip:** To verify CSV validity in tests, parse the output string back with `csv::Reader`:
-```rust
-let mut rdr = csv::Reader::from_reader(output.as_bytes());
-let records: Vec<_> = rdr.records().collect();
-assert_eq!(records.len(), expected_rows);
-```
+*   **Tip: Corpus Seeding Strategy** - For BEST fuzzing effectiveness, seed the corpus with:
+    1. **Valid samples**: Copy from `tests/fixtures/pdf/sample.pdf` and `tests/fixtures/mp4/sample.mp4`
+    2. **Minimal files**: Create the smallest possible valid file (see test helper functions in parser mod.rs files)
+    3. **Edge cases**: Files with special characters, empty fields, maximum sizes
 
-*   **Critical Decision:** The OutputFormatter trait's `format()` method only takes a single MetadataMap. For single-file CSV, this is fine - just output a two-column CSV (Tag, Value). For batch mode with SourceFile column, you have two options:
-    1. Keep it simple: single-file CSV for now (meets acceptance criteria)
-    2. Add a separate `format_batch_csv(files: &[(PathBuf, MetadataMap)]) -> String` function later
+*   **Warning: Memory Limits** - The MP4 parser reads up to 10MB into memory. Set appropriate memory limits for fuzzing to prevent OOM: `cargo fuzz run fuzz_mp4 -- -max_len=10485760` (10MB).
 
-    **Recommendation:** Implement option 1 first (two-column CSV: Tag, Value). This satisfies the core requirement and all tests can pass. Batch mode with SourceFile column can be a follow-up enhancement.
+*   **Note: Fuzzing Commands** - Document these commands in the README:
+    ```bash
+    # Install cargo-fuzz
+    cargo install cargo-fuzz
 
-*   **Pattern Consistency:** Look at how main.rs imports formatters (line 8). You MUST add CsvFormatter to the use statement: `use exiftool_rs::cli::output_formatter::{HumanReadableFormatter, JsonFormatter, CsvFormatter, OutputFormatter};`
+    # Run PDF fuzzer
+    cargo fuzz run fuzz_pdf
 
-### Summary of Changes Required
+    # Run MP4 fuzzer
+    cargo fuzz run fuzz_mp4 -- -max_len=10485760
 
-1. **Cargo.toml**: Add `csv = "1.3"` to `[dependencies]` section (after line 64)
-2. **src/cli/args.rs**: Add `pub csv: bool` field with `#[arg(long)]` (after line 15)
-3. **src/cli/output_formatter.rs**:
-   - Add `use csv::Writer;` at top
-   - Implement `pub struct CsvFormatter;`
-   - Implement `impl OutputFormatter for CsvFormatter`
-   - Format as two-column CSV: "Tag", "Value" headers, one row per metadata entry
-   - Add 6-8 unit tests following existing test patterns
-4. **src/main.rs**:
-   - Update `handle_read_operation()` signature: change from `json_output: bool` to `args: &CliArgs`
-   - Add CsvFormatter to imports (line 8)
-   - Update formatter selection to check `args.csv` first, then `args.json`, then default
-   - Update call site at line 57: change `handle_read_operation(&file, args.json)` to `handle_read_operation(&file, &args)`
+    # Run with time limit (1 minute for acceptance criteria)
+    cargo fuzz run fuzz_pdf -- -max_total_time=60
 
-### File-by-File Execution Order
+    # Check coverage
+    cargo fuzz coverage fuzz_pdf
+    ```
 
-1. **Cargo.toml** - add the csv dependency
-2. **src/cli/args.rs** - add the CLI flag
-3. **src/cli/output_formatter.rs** - implement CsvFormatter + tests (this is the core work)
-4. **src/main.rs** - integrate into CLI (small changes)
+*   **Tip: Fuzz Target Template** - Each fuzz target file should be ~30 lines total:
+    - `#![no_main]` directive
+    - Import statements (libfuzzer_sys, parser module, FileReader)
+    - FuzzReader struct implementation
+    - `fuzz_target!` macro with parser call
 
-This order ensures each piece builds on the previous and you can test incrementally with `cargo test` and `cargo build`.
+*   **Critical: Error Handling in Fuzz Targets** - Your fuzz targets should DISCARD all errors with `let _ = parse_*()`. You're looking for PANICS and CRASHES, not Result errors. Errors are expected and normal for malformed input.
 
-### Expected CSV Output Format
+*   **Note: Directory Structure** - After setup, your fuzz directory should look like:
+    ```
+    fuzz/
+    ├── Cargo.toml (auto-generated by cargo fuzz init)
+    ├── fuzz_targets/
+    │   ├── fuzz_pdf.rs
+    │   └── fuzz_mp4.rs
+    └── corpus/
+        ├── pdf/
+        │   ├── sample.pdf (copy from tests/fixtures)
+        │   ├── minimal.pdf (create programmatically)
+        │   └── special_chars.pdf (create programmatically)
+        └── mp4/
+            ├── sample.mp4 (copy from tests/fixtures)
+            ├── minimal.mp4 (create programmatically)
+            └── itunes.mp4 (create programmatically)
+    ```
 
-For a file with metadata:
-```
-Tag,Value
-EXIF:Make,Canon
-EXIF:Model,EOS 5D
-EXIF:ISO,400
-```
+*   **Recommendation: Create Corpus Files** - For the "at least 3 valid samples each" requirement:
+    - **PDF corpus**: Copy `sample.pdf` + create two minimal PDFs using the test helper functions from `src/parsers/pdf/mod.rs::tests::create_test_pdf_with_info()`
+    - **MP4 corpus**: Copy `sample.mp4` + create two minimal MP4s using test helpers from `src/parsers/quicktime/mod.rs::tests::create_test_quicktime_file()` and `create_test_itunes_file()`
 
-This simple two-column format is clean, parseable by Excel/pandas, and easy to implement.
+*   **Tip: README Documentation Section** - Add a new "## Fuzzing" section to README.md with:
+    1. Prerequisites (cargo-fuzz installation)
+    2. Running fuzz targets (commands for each target)
+    3. Corpus management (where files are, how to add)
+    4. Coverage measurement
+    5. CI integration (future: mention OSS-Fuzz)
+
+*   **Critical: Test Acceptance Criteria** - You MUST verify:
+    1. `cargo fuzz build fuzz_pdf` compiles successfully
+    2. `cargo fuzz build fuzz_mp4` compiles successfully
+    3. `cargo fuzz run fuzz_pdf -- -max_total_time=60` runs for 1 minute without crashing
+    4. `cargo fuzz run fuzz_mp4 -- -max_total_time=60 -max_len=10485760` runs for 1 minute without crashing
+    5. Corpus directories contain 3+ files each (verify with `ls -l fuzz/corpus/pdf/ fuzz/corpus/mp4/`)
+
+*   **Note: OSS-Fuzz Integration** - The task says "optionally submit to OSS-Fuzz". This is FUTURE WORK - document it as a TODO in the README but DO NOT implement it now. Focus on getting local fuzzing working first.
+
+*   **Warning: Do Not Commit Fuzzer Artifacts** - Add these lines to `.gitignore`:
+    ```
+    fuzz/target/
+    fuzz/artifacts/
+    ```
+    The fuzz/corpus/ files SHOULD be committed (they're seed files), but artifacts (crashes) should not be.
+
+*   **Tip: Minimal Corpus File Creation** - Create a script or document the process for generating minimal corpus files:
+    ```rust
+    // In a temporary test or build script
+    use std::fs;
+    let minimal_pdf = create_test_pdf_with_info(); // from tests
+    fs::write("fuzz/corpus/pdf/minimal.pdf", minimal_pdf)?;
+    ```
+
+*   **Recommendation: Start with fuzz_pdf First** - PDF parsing is simpler than MP4, so implement and test `fuzz_pdf.rs` completely before moving to `fuzz_mp4.rs`. This allows you to debug the fuzzing setup with a simpler target.

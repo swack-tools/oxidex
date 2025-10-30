@@ -172,6 +172,72 @@ cargo fmt
 cargo fmt -- --check
 ```
 
+### Fuzzing
+
+ExifTool-RS includes continuous fuzzing targets for security-critical parsers to detect crashes, hangs, and memory safety issues.
+
+#### Prerequisites
+
+Install cargo-fuzz (requires nightly Rust):
+
+```bash
+cargo install cargo-fuzz
+```
+
+#### Running Fuzzing Targets
+
+Run PDF parser fuzzer:
+```bash
+cargo fuzz run fuzz_pdf
+
+# Run with time limit (e.g., 60 seconds)
+cargo fuzz run fuzz_pdf -- -max_total_time=60
+```
+
+Run MP4/QuickTime parser fuzzer:
+```bash
+cargo fuzz run fuzz_mp4
+
+# Run with memory limit to prevent OOM (MP4 parser reads up to 10MB)
+cargo fuzz run fuzz_mp4 -- -max_len=10485760 -max_total_time=60
+```
+
+#### Corpus Management
+
+Fuzzing seed corpus files are located in:
+- `fuzz/corpus/fuzz_pdf/` - PDF test files (3+ seed files)
+- `fuzz/corpus/fuzz_mp4/` - MP4/QuickTime test files (3+ seed files)
+
+To add new seed files:
+```bash
+# Copy valid sample files to the corpus
+cp my_test.pdf fuzz/corpus/fuzz_pdf/
+cp my_test.mp4 fuzz/corpus/fuzz_mp4/
+```
+
+#### Coverage Measurement
+
+Check fuzzing coverage:
+```bash
+cargo fuzz coverage fuzz_pdf
+cargo fuzz coverage fuzz_mp4
+```
+
+#### CI Integration
+
+Fuzzing targets are available for:
+- **Local development**: Run fuzzers before committing parser changes
+- **PR validation**: Short fuzzing runs in GitHub Actions (planned)
+- **Continuous fuzzing**: OSS-Fuzz integration (planned)
+
+#### Crash Triage
+
+If fuzzing discovers a crash:
+1. Crash inputs are saved to `fuzz/artifacts/fuzz_<target>/`
+2. Reproduce with: `cargo fuzz run fuzz_<target> fuzz/artifacts/fuzz_<target>/<crash_file>`
+3. Debug with: `cargo fuzz run -D fuzz_<target> fuzz/artifacts/fuzz_<target>/<crash_file>`
+4. Fix the parser and verify: `cargo fuzz run fuzz_<target> fuzz/artifacts/fuzz_<target>/<crash_file>` should not crash
+
 ## Contributing
 
 Contributions are welcome! This project is in its early stages and there are many opportunities to contribute.

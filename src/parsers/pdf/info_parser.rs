@@ -82,7 +82,7 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
     let xref_offset = find_xref_offset(tail_data)?;
 
     // Read xref table and trailer region (up to 8KB should be enough)
-    let xref_size = std::cmp::min(8192, (file_size - xref_offset) as usize);
+    let xref_size = std::cmp::min(8192, file_size.saturating_sub(xref_offset) as usize);
     let xref_data = reader.read(xref_offset, xref_size)?;
 
     // Parse trailer to find Info reference
@@ -99,7 +99,7 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
         )))?;
 
     // Read Info object (up to 4KB should be enough for metadata)
-    let info_size = std::cmp::min(4096, (file_size - info_offset) as usize);
+    let info_size = std::cmp::min(4096, file_size.saturating_sub(*info_offset) as usize);
     let info_data = reader.read(*info_offset, info_size)?;
 
     // Parse Info dictionary
