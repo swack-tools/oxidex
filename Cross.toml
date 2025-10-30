@@ -1,0 +1,34 @@
+# Cross-compilation configuration for exiftool-rs
+# See: https://github.com/cross-rs/cross
+
+# Linux x86_64 with musl (static linking, no glibc dependency)
+[target.x86_64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl:latest"
+
+# Linux ARM64 with musl (static linking)
+[target.aarch64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl:latest"
+
+# macOS Intel
+[target.x86_64-apple-darwin]
+image = "ghcr.io/cross-rs/x86_64-apple-darwin:latest"
+
+# macOS Apple Silicon
+[target.aarch64-apple-darwin]
+image = "ghcr.io/cross-rs/aarch64-apple-darwin:latest"
+
+# Windows x86_64 with GNU toolchain
+[target.x86_64-pc-windows-gnu]
+image = "ghcr.io/cross-rs/x86_64-pc-windows-gnu:latest"
+
+# Build settings
+[build]
+# Use pre-built cross Docker images
+pre-build = []
+
+# Environment variables for all targets
+[build.env]
+passthrough = [
+    "CARGO_TERM_COLOR",
+    "RUST_BACKTRACE",
+]

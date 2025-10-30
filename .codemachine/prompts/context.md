@@ -10,28 +10,17 @@ This is the full specification of the task you must complete.
 
 ```json
 {
-  "task_id": "I5.T5",
+  "task_id": "I5.T6",
   "iteration_id": "I5",
   "iteration_goal": "Implement C FFI bindings for cross-language integration, automate tag database generation from ExifTool specs, set up cross-compilation and release builds, create comprehensive documentation, and polish for v1.0 release.",
-  "description": "Implement build.rs to auto-generate tag database from ExifTool source. Strategy: (1) Download/clone ExifTool Perl source from GitHub during build (or use vendored copy), (2) Parse ExifTool tag definition files (lib/Image/ExifTool/*.pm) to extract tag metadata (ID, name, type, writable, description), (3) Generate Rust code (src/tag_db/generated_tags.rs) with const definitions or lazy_static HashMap initialization, (4) Write generated file during build. Handle build failures gracefully (fallback to manually curated tags if parsing fails). Add documentation in README about tag database generation.",
-  "agent_type_hint": "BackendAgent",
-  "inputs": "ExifTool Perl source structure, I2.T2 tag registry format, I1.T5 tag schema",
-  "target_files": [
-    "build.rs",
-    "src/tag_db/generated_tags.rs",
-    ".gitignore",
-    "README.md"
-  ],
-  "input_files": [
-    "src/tag_db/tag_registry.rs",
-    "api/tag_database_schema.json"
-  ],
-  "deliverables": "build.rs with tag parsing and code generation, generated tag database, documentation",
-  "acceptance_criteria": "build.rs downloads/parses ExifTool source during cargo build, generates valid Rust code with tag definitions, generated file contains 500+ tags (matching I4.T5 manual registry), build succeeds on clean checkout (downloads ExifTool automatically), fallback mechanism if generation fails (use manually curated subset), README documents tag generation process, cargo build completes successfully",
-  "dependencies": [
-    "I2.T2",
-    "I4.T5"
-  ],
+  "description": "Configure cross-compilation for Linux, macOS, Windows, and ARM targets using cross tool. Create Cross.toml configuration. Set up GitHub Actions release workflow in .github/workflows/release.yml to build binaries for: (1) x86_64-unknown-linux-musl (static Linux), (2) x86_64-apple-darwin (macOS Intel), (3) aarch64-apple-darwin (macOS ARM), (4) x86_64-pc-windows-gnu (Windows), (5) aarch64-unknown-linux-musl (Linux ARM). Apply optimizations: LTO, strip symbols, UPX compression (optional). Upload artifacts to GitHub Releases on git tag push.",
+  "agent_type_hint": "SetupAgent",
+  "inputs": "cross tool documentation, GitHub Actions best practices",
+  "target_files": ["Cross.toml", ".github/workflows/release.yml", "Cargo.toml"],
+  "input_files": ["Cargo.toml"],
+  "deliverables": "Cross-compilation configuration, GitHub Actions release workflow, optimized release binaries",
+  "acceptance_criteria": "Cross.toml exists with target configurations, release workflow builds for all 5 targets, binaries are statically linked (no external dependencies), release profile has: lto = true, codegen-units = 1, opt-level = z (size) or 3 (speed), binaries stripped of debug symbols, workflow uploads binaries to GitHub Releases on tag push (test with manual tag), binary sizes: Linux ~8MB, Windows ~9MB, macOS ~10MB (approximate)",
+  "dependencies": [],
   "parallelizable": true,
   "done": false
 }
@@ -43,149 +32,119 @@ This is the full specification of the task you must complete.
 
 The following are the relevant sections from the architecture and plan documents, which I found by analyzing the task description.
 
-### Context: deeper-dive-tag-generation (from 06_Rationale_and_Future.md)
+### Context: deployment-view (from 05_Operational_Architecture.md)
 
 ```markdown
-<!-- anchor: deeper-dive-tag-generation -->
-#### 1. Tag Database Code Generation
+### 3.9. Deployment View
 
-**Current State**: Conceptual (assumed possible).
+#### Target Environment
 
-**Needs**:
-- Parser for ExifTool's tag documentation HTML/source
-- Code generator producing Rust const structs (`TagDescriptor` instances)
-- Build script integration (`build.rs`)
-- Versioning strategy (align with ExifTool releases)
+**Primary**: **Local developer machines and CI/CD pipelines**
 
-**Key Questions**:
-- How to handle tag definition updates (automated pull from ExifTool repo)?
-- How to represent conditional tags (e.g., MakerNote tags that depend on camera model)?
+**Supported Platforms**:
+
+| **OS** | **Architecture** | **Distribution Method** |
+|--------|-----------------|------------------------|
+| Linux | x86_64, aarch64 | Static binary, `.deb`/`.rpm` packages, cargo install |
+| macOS | x86_64 (Intel), aarch64 (Apple Silicon) | Homebrew formula, static binary |
+| Windows | x86_64 | `.exe` installer, `scoop`/`chocolatey` packages, static binary |
+| FreeBSD | x86_64 | Cargo install, ports tree |
+| WebAssembly | wasm32-unknown-unknown | NPM package (`@exiftool-rs/wasm`) |
+
+**Secondary**: **Embedded in larger applications** (via Rust crate or FFI bindings)
 ```
 
-### Context: technology-stack-summary (from 02_Architecture_Overview.md)
+### Context: deployment-strategy (from 05_Operational_Architecture.md)
 
 ```markdown
-<!-- anchor: technology-stack-summary -->
-### 3.2. Technology Stack Summary
+#### Deployment Strategy
 
-| **Category** | **Technology Choice** | **Justification** |
-|--------------|----------------------|-------------------|
-| **Core Language** | Rust 1.75+ (2021 Edition) | Memory safety, zero-cost abstractions, excellent concurrency primitives, cross-platform support |
-| **CLI Framework** | `clap` v4 (derive API) | Industry standard, excellent help generation, argument validation, backward compatibility via value parsers |
-| **Binary Parsing** | `nom` v7 + `binrw` | `nom` for complex formats (TIFF, QuickTime), `binrw` for simple struct-based formats (BMP, WAV) |
-| **XML Parsing (XMP)** | `quick-xml` | Streaming parser, low memory footprint, namespace support for XMP |
-| **JSON Output** | `serde_json` | De facto standard, excellent performance, integration with domain models via derives |
-| **Date/Time** | `chrono` | Comprehensive timezone support, EXIF date format parsing |
-| **String Encoding** | `encoding_rs` (WHATWG standard) | Handles legacy encodings in IPTC/EXIF (Latin1, UTF-8, UTF-16) |
-| **Image I/O** | `memmap2` (memory-mapped files) | Efficient large file access without loading entire file into memory |
-| **Concurrency** | `rayon` (data parallelism) | Transparent batch processing parallelization, work-stealing scheduler |
-| **Testing** | `cargo test` + `proptest` (property-based) | Unit tests for parsers, property-based testing for round-trip serialization |
-| **Fuzzing** | `cargo-fuzz` (libFuzzer) | Continuous fuzzing of format parsers to discover crash/hang bugs |
-| **C FFI** | `cbindgen` (header generation) | Automated C header generation from Rust API |
-| **Documentation** | `rustdoc` + `mdBook` (user guide) | API docs from source comments, separate user guide for CLI |
-| **Build System** | `cargo` + `cross` (cross-compilation) | Standard Rust tooling, `cross` for ARM/Windows builds from Linux |
-| **CI/CD** | GitHub Actions | Free for open source, matrix builds across OS/architecture |
-| **Code Quality** | `clippy`, `rustfmt`, `cargo-audit` | Linting, formatting, dependency vulnerability scanning |
-| **Benchmarking** | `criterion` | Statistical benchmarking framework, regression detection |
+**Distribution Models**:
 
-**Key Libraries Detail**:
+1. **Standalone Binary** (Primary):
+   - Single static executable with no dependencies
+   - Cross-compiled via `cross` tool for all platforms
+   - Distributed via GitHub Releases with checksums
+   - Size: ~8MB (stripped, LTO, compressed with UPX)
 
-- **`nom` v7**: Parser combinator library for binary formats. Example: TIFF IFD parsing uses `nom::number::complete::le_u16` for little-endian u16, chained with `nom::multi::count` for tag array parsing.
+2. **Rust Crate** (Library):
+   - Published to crates.io as `exiftool-rs`
+   - Applications add `exiftool-rs = "1.0"` to `Cargo.toml`
+   - Compiled into consuming application's binary
 
-- **`binrw`**: Declarative binary read/write via derive macros. Example: BMP header as `#[derive(BinRead, BinWrite)] struct BmpHeader { magic: [u8; 2], size: u32, ... }`.
+3. **C FFI Shared Library**:
+   - `libexiftool_rs.so` (Linux), `.dylib` (macOS), `.dll` (Windows)
+   - Header file generated via `cbindgen`
+   - Used by Python (`ctypes`), Node.js (`ffi-napi`), Go (`cgo`)
 
-- **`serde`**: Serialization framework. Domain metadata models derive `Serialize`/`Deserialize` for JSON/CSV output.
+4. **Container Image** (Optional):
+   - Minimal Alpine Linux image with static binary
+   - Size: ~15MB total
+   - Example: `docker run exiftool-rs/exiftool:latest photo.jpg`
 
-- **`rayon`**: Parallel iterators. Batch processing: `files.par_iter().map(|f| extract_metadata(f))` automatically distributes work across CPU cores.
+**Build Process**:
 
-- **`memmap2`**: Memory-mapped files via `Mmap::map(&file)`. Enables zero-copy parsing for formats with known offsets (JPEG EXIF segment, PNG chunks).
+```yaml
+# GitHub Actions workflow
+name: Release Build
 
-**Dependency Philosophy**:
-- **Minimize Count**: Target < 50 direct dependencies to reduce supply chain risk
-- **Prefer `no_std` Compatible**: Where possible (e.g., `nom`, `binrw`) to enable future embedded/WASM use
-- **Audit Regularly**: `cargo-audit` in CI pipeline to catch vulnerabilities in transitive dependencies
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-matrix:
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+          - x86_64-pc-windows-gnu
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: cross-rs/cross@v1
+
+      - run: cross build --release --target ${{ matrix.target }}
+      - run: strip target/${{ matrix.target }}/release/exiftool-rs  # Reduce size
+      - run: upx target/${{ matrix.target }}/release/exiftool-rs    # Compress
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: exiftool-rs-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/exiftool-rs
+```
 ```
 
-### Context: task-i5-t5 (from 02_Iteration_I5.md)
+### Context: task-i5-t6 (from 02_Iteration_I5.md)
 
 ```markdown
-<!-- anchor: task-i5-t5 -->
-*   **Task 5.5: Automate Tag Database Generation (Build Script)**
-    *   **Task ID:** `I5.T5`
-    *   **Description:** Implement build.rs to auto-generate tag database from ExifTool source. Strategy: (1) Download/clone ExifTool Perl source from GitHub during build (or use vendored copy), (2) Parse ExifTool tag definition files (lib/Image/ExifTool/*.pm) to extract tag metadata (ID, name, type, writable, description), (3) Generate Rust code (`src/tag_db/generated_tags.rs`) with const definitions or lazy_static HashMap initialization, (4) Write generated file during build. Handle build failures gracefully (fallback to manually curated tags if parsing fails). Add documentation in README about tag database generation.
-    *   **Agent Type Hint:** `BackendAgent`
-    *   **Inputs:** ExifTool Perl source structure, I2.T2 tag registry format, I1.T5 tag schema
-    *   **Input Files:** [`src/tag_db/tag_registry.rs`, `api/tag_database_schema.json`]
+*   **Task 5.6: Set Up Cross-Compilation with cross**
+    *   **Task ID:** `I5.T6`
+    *   **Description:** Configure cross-compilation for Linux, macOS, Windows, and ARM targets using `cross` tool. Create `Cross.toml` configuration. Set up GitHub Actions release workflow in `.github/workflows/release.yml` to build binaries for: (1) x86_64-unknown-linux-musl (static Linux), (2) x86_64-apple-darwin (macOS Intel), (3) aarch64-apple-darwin (macOS ARM), (4) x86_64-pc-windows-gnu (Windows), (5) aarch64-unknown-linux-musl (Linux ARM). Apply optimizations: LTO, strip symbols, UPX compression (optional). Upload artifacts to GitHub Releases on git tag push.
+    *   **Agent Type Hint:** `SetupAgent`
+    *   **Inputs:** `cross` tool documentation, GitHub Actions best practices
+    *   **Input Files:** [`Cargo.toml`]
     *   **Target Files:**
-        *   `build.rs` (add tag generation logic)
-        *   `src/tag_db/generated_tags.rs` (generated, git-ignored)
-        *   `.gitignore` (add generated_tags.rs)
-        *   `README.md` (document tag generation)
+        *   `Cross.toml`
+        *   `.github/workflows/release.yml`
+        *   `Cargo.toml` (add release profile optimizations: lto, codegen-units)
     *   **Deliverables:**
-        *   build.rs with tag parsing and code generation
-        *   Generated tag database
-        *   Documentation
+        *   Cross-compilation configuration
+        *   GitHub Actions release workflow
+        *   Optimized release binaries
     *   **Acceptance Criteria:**
-        *   build.rs downloads/parses ExifTool source during `cargo build`
-        *   Generates valid Rust code with tag definitions
-        *   Generated file contains 500+ tags (matching I4.T5 manual registry)
-        *   Build succeeds on clean checkout (downloads ExifTool automatically)
-        *   Fallback mechanism if generation fails (use manually curated subset)
-        *   README documents tag generation process
-        *   `cargo build` completes successfully
-    *   **Dependencies:** `I2.T2` (tag registry structure), `I4.T5` (expanded tag set)
-    *   **Parallelizable:** Yes (can be developed in parallel with I5.T1-T4)
-```
-
-### Context: task-i1-t5 (from 02_Iteration_I1.md)
-
-```markdown
-<!-- anchor: task-i1-t5 -->
-*   **Task 1.5: Define Tag Database Schema**
-    *   **Task ID:** `I1.T5`
-    *   **Description:** Create JSON Schema defining the structure for TagDescriptor objects that will be code-generated from ExifTool documentation. Schema should define: tag_id (string or number), tag_name (string), format_family (enum: EXIF, XMP, IPTC, GPS, etc.), writable (boolean), value_type (enum: String, Integer, Rational, Binary, etc.), description (string), example_values (array of strings). Save to `api/tag_database_schema.json`. Validate against JSON Schema Draft 7 specification.
-    *   **Agent Type Hint:** `BackendAgent` or `DocumentationAgent`
-    *   **Inputs:** Section 2 (Data Model Overview), Section 2.1 (Key Architectural Artifacts)
-    *   **Input Files:** []
-    *   **Target Files:**
-        *   `api/tag_database_schema.json`
-    *   **Deliverables:**
-        *   Valid JSON Schema file
-    *   **Acceptance Criteria:**
-        *   JSON Schema validates against Draft 7 spec (use online validator or `ajv` CLI)
-        *   Schema includes all fields mentioned in task description
-        *   Schema has appropriate constraints (e.g., tag_name is required, writable is boolean)
-        *   Example valid TagDescriptor object passes schema validation
-    *   **Dependencies:** `I1.T1`
-    *   **Parallelizable:** Yes (can run concurrently with T2, T3, T4, T6 after T1 completes)
-```
-
-### Context: task-i2-t2 (from 02_Iteration_I2.md)
-
-```markdown
-<!-- anchor: task-i2-t2 -->
-*   **Task 2.2: Generate Initial Tag Registry (100 Common Tags)**
-    *   **Task ID:** `I2.T2`
-    *   **Description:** Create initial tag registry in `src/tag_db/tag_registry.rs` with 100 most common EXIF, GPS, and XMP tags manually (build.rs automation comes later). Implement as `lazy_static! HashMap<&'static str, TagDescriptor>` or const array. Include tags: EXIF:Make, EXIF:Model, EXIF:DateTime, EXIF:ExposureTime, EXIF:FNumber, EXIF:ISO, GPS:Latitude, GPS:Longitude, XMP:Creator, XMP:Rights, etc. Use TagDescriptor struct from I1.T6. Add lookup function `get_tag_descriptor(name: &str) -> Option<&TagDescriptor>`. Create unit tests verifying lookup.
-    *   **Agent Type Hint:** `BackendAgent`
-    *   **Inputs:** I1.T5 tag schema, I1.T6 TagDescriptor struct, ExifTool tag documentation (https://exiftool.org/TagNames/EXIF.html, GPS.html, XMP.html)
-    *   **Input Files:** [`src/core/tag_descriptor.rs`, `api/tag_database_schema.json`]
-    *   **Target Files:**
-        *   `src/tag_db/tag_registry.rs`
-        *   `src/tag_db/mod.rs`
-    *   **Deliverables:**
-        *   Tag registry with 100 tags
-        *   Lookup function
-        *   Unit tests
-    *   **Acceptance Criteria:**
-        *   Registry contains exactly 100 TagDescriptor entries
-        *   Tags cover EXIF (60+), GPS (20+), XMP (20+)
-        *   Lookup function returns Some for registered tags, None for unregistered
-        *   All tags have valid type information (String, Integer, Rational, etc.)
-        *   Unit tests verify at least 10 tag lookups
-        *   `cargo test tag_registry` passes
-    *   **Dependencies:** `I1.T6` (needs TagDescriptor)
-    *   **Parallelizable:** Yes (can be developed in parallel with other I2 tasks)
+        *   Cross.toml exists with target configurations
+        *   Release workflow builds for all 5 targets
+        *   Binaries are statically linked (no external dependencies)
+        *   Release profile has: `lto = true`, `codegen-units = 1`, `opt-level = "z"` (size) or `"3"` (speed)
+        *   Binaries stripped of debug symbols
+        *   Workflow uploads binaries to GitHub Releases on tag push (test with manual tag)
+        *   Binary sizes: Linux ~8MB, Windows ~9MB, macOS ~10MB (approximate)
+    *   **Dependencies:** `I1` (project setup)
+    *   **Parallelizable:** Yes (can be set up anytime)
 ```
 
 ---
@@ -196,203 +155,97 @@ The following analysis is based on my direct review of the current codebase. Use
 
 ### Relevant Existing Code
 
-*   **File:** `build.rs` (549 lines)
-    *   **Summary:** This file ALREADY contains a comprehensive implementation of the tag database generation system. It downloads ExifTool source from GitHub, parses Perl modules using regex, extracts tag definitions, generates Rust code, and implements a fallback mechanism.
-    *   **Recommendation:** **CRITICAL - This task appears to be ALREADY COMPLETE!** The build.rs file contains:
-        - Download logic using `ureq` HTTP client (lines 74-127)
-        - Perl module parsing with regex patterns (lines 174-260)
-        - Tag definition extraction (lines 262-310)
-        - Rust code generation with Lazy HashMap (lines 326-417)
-        - Fallback mechanism creating delegation to manual registry (lines 489-517)
-        - Error handling and minimum tag count validation (MIN_TAG_COUNT = 500)
-    *   **Status:** The implementation is complete and matches all acceptance criteria from the task specification.
+*   **File:** `Cargo.toml`
+    *   **Summary:** This is the main Cargo manifest for the exiftool-rs project. It defines package metadata, library/binary configuration, dependencies, build dependencies, dev dependencies, and profiles.
+    *   **Current Release Profile:** The `[profile.release]` section ALREADY has excellent optimization settings: `opt-level = 3`, `lto = true`, `codegen-units = 1`, `strip = true`. You DO NOT need to modify these settings - they already meet the acceptance criteria.
+    *   **Crate Types:** The library is configured with `crate-type = ["lib", "staticlib", "cdylib"]`, which supports both static and dynamic linking for FFI use cases.
+    *   **Recommendation:** You SHOULD keep the existing release profile as-is. It already satisfies the requirement for LTO, codegen-units, and stripping.
 
-*   **File:** `src/tag_db/generated_tags.rs` (20 lines)
-    *   **Summary:** This is the currently generated fallback file. It contains a minimal fallback implementation that delegates to the manual registry. This is the expected state when tag generation fails (which appears to be the current situation).
-    *   **Recommendation:** This file will be automatically regenerated when `cargo build` runs successfully. It's already git-ignored per `.gitignore` line 31.
+*   **File:** `.github/workflows/ci.yml`
+    *   **Summary:** This is the existing CI workflow that runs tests, clippy, formatting checks, cbindgen verification, security audit, and code coverage on all platforms (ubuntu-latest, macos-latest, windows-latest).
+    *   **Structure:** The workflow is well-organized with separate jobs for `test`, `audit`, and `coverage`. It uses modern GitHub Actions patterns including `actions/checkout@v4`, `dtolnay/rust-toolchain@stable`, and caching with `Swatinem/rust-cache@v2`.
+    *   **Recommendation:** You SHOULD create a separate `release.yml` workflow file rather than modifying the CI workflow. This keeps concerns separated - CI for continuous validation, release for artifact distribution.
 
-*   **File:** `src/tag_db/tag_registry.rs` (150+ lines shown, 211KB total)
-    *   **Summary:** This file contains the manually curated tag registry with 500+ tags covering EXIF (300+), GPS (30+), XMP (100+), IPTC (50+), PDF (10+), and QuickTime (10+) formats. It uses the same structure (Lazy HashMap, TagDescriptor) that the generated code will produce.
-    *   **Recommendation:** This serves as the fallback and as the template for the generated code structure. The build.rs code generation mirrors this exact pattern.
-
-*   **File:** `api/tag_database_schema.json` (117 lines)
-    *   **Summary:** JSON Schema defining the TagDescriptor structure. Specifies required fields (tag_id, tag_name, format_family, writable, value_type, description, example_values) and validation rules.
-    *   **Recommendation:** The build.rs implementation already generates code that conforms to this schema. The TagDescriptor struct in the generated code matches these specifications.
-
-*   **File:** `Cargo.toml` (99 lines)
-    *   **Summary:** Project manifest with all necessary dependencies already configured. Build dependencies section (lines 70-76) includes `ureq`, `regex`, and `anyhow` needed for tag generation.
-    *   **Recommendation:** All required build dependencies are already present. No changes needed.
-
-*   **File:** `.gitignore` (72 lines)
-    *   **Summary:** Git ignore rules with `src/tag_db/generated_tags.rs` already listed on line 31.
-    *   **Recommendation:** The gitignore configuration is already correct. No changes needed.
-
-*   **File:** `src/tag_db/mod.rs` (12 lines)
-    *   **Summary:** Module file that exports both `generated_tags` and `tag_registry` modules, with public re-exports of `get_tag_descriptor` and `tag_count` functions.
-    *   **Recommendation:** The module structure is already set up correctly to support both generated and manual registries.
+*   **File:** `README.md`
+    *   **Summary:** Comprehensive project documentation covering vision, features, architecture, status, installation, usage, development, tag database generation, testing, benchmarking, fuzzing, and licensing.
+    *   **Current Status:** Shows the project is in "Iteration 5" based on the completed features (FFI bindings, tag database automation) described in the README.
+    *   **Recommendation:** After completing the cross-compilation setup, you SHOULD update the README to document the release process and available binary downloads.
 
 ### Implementation Tips & Notes
 
-*   **CRITICAL NOTE:** **This task appears to be ALREADY IMPLEMENTED AND COMPLETE.** The build.rs file contains a full, production-ready implementation that matches all the acceptance criteria:
-    ✅ Downloads ExifTool source from GitHub during build
-    ✅ Parses tag definitions from Perl modules using regex
-    ✅ Generates valid Rust code with TagDescriptor definitions
-    ✅ Target: 500+ tags (MIN_TAG_COUNT constant enforces this)
-    ✅ Fallback mechanism creates delegation to manual registry
-    ✅ Error handling with graceful degradation
+*   **Tip 1: Cross.toml Configuration:**
+    *   The `cross` tool uses `Cross.toml` to configure build environment overrides for cross-compilation targets.
+    *   You MUST specify each target platform in the configuration.
+    *   For targets that require special setup (like macOS cross-compilation from Linux), the cross project provides pre-built Docker images with the necessary toolchains.
+    *   The configuration file should be minimal - cross handles most complexity automatically.
 
-*   **Current Build Status:** The generated_tags.rs file currently contains the fallback implementation, which suggests that either:
-    1. The tag generation is failing (network issues, parsing errors)
-    2. The build hasn't been run recently with network access
-    3. The unzip command is not available in the build environment
+*   **Tip 2: GitHub Actions Release Workflow:**
+    *   You MUST trigger the workflow only on git tag pushes matching `v*` pattern (e.g., `v1.0.0`).
+    *   Use a build matrix to parallelize compilation across all 5 target platforms for efficiency.
+    *   The workflow SHOULD use `cross-rs/cross` action or install cross manually via `cargo install cross`.
+    *   Binary names will differ by platform: no extension (Linux/macOS), `.exe` (Windows).
+    *   You SHOULD use conditional logic to handle platform-specific file extensions when uploading artifacts.
 
-*   **Testing Recommendation:** To verify the implementation works:
-    ```bash
-    # Clean build to force regeneration
-    cargo clean
-    # Run build (requires network access and unzip command)
-    cargo build
-    # Check if generation succeeded
-    grep "Auto-generated tag database" src/tag_db/generated_tags.rs
-    ```
+*   **Tip 3: UPX Compression:**
+    *   UPX (Ultimate Packer for eXecutables) can reduce binary sizes by 50-70%, but it's OPTIONAL per the acceptance criteria.
+    *   UPX may trigger false positives in antivirus software on Windows.
+    *   If you implement UPX compression, make it conditional or provide both compressed and uncompressed binaries.
+    *   UPX is not available on all platforms by default in CI environments - you may need to install it as a separate step.
 
-*   **README Documentation Status:** The README.md already mentions tag database generation in the "Development" section: "ExifTool-RS automatically generates its comprehensive tag database from the official ExifTool Perl source during the build process."
+*   **Tip 4: GitHub Releases Upload:**
+    *   You SHOULD use the `softprops/action-gh-release@v1` action to create GitHub Releases and upload artifacts.
+    *   Provide checksums (SHA256) for all binaries to allow users to verify downloads.
+    *   Include release notes in the workflow, potentially auto-generated from commit messages or CHANGELOG.md.
 
-*   **Potential Enhancement:** The current implementation uses the `unzip` system command (line 103-109 in build.rs). If you want to make it more portable, you could replace this with a Rust zip library. However, this is optional and the current implementation works on most systems.
+*   **Tip 5: Testing the Workflow:**
+    *   The acceptance criteria requires testing with a manual tag push.
+    *   You can test locally by creating a test tag: `git tag v0.1.0-test && git push origin v0.1.0-test`
+    *   IMPORTANT: Test on a branch first or be prepared to delete test releases and tags.
+    *   You SHOULD add a condition to distinguish pre-release tags (alpha, beta, rc) from stable releases.
 
-*   **Design Pattern Note:** The code uses excellent Rust patterns:
-    - `once_cell::Lazy` for lazy static initialization
-    - Regex for robust Perl parsing
-    - Proper error handling with `anyhow::Result`
-    - Comprehensive code generation with proper escaping
-    - Graceful fallback to ensure builds never fail
+*   **Note: Build Times:**
+    *   Cross-compilation for 5 targets in GitHub Actions will take 15-30 minutes per build.
+    *   Each target builds independently in the matrix, so total wall-clock time is limited by the slowest build (usually macOS or Windows).
+    *   You SHOULD add caching for Cargo registry and build artifacts to speed up subsequent builds.
 
-*   **Tip:** The ExifTool Perl source is hosted at https://github.com/exiftool/exiftool. Tag definitions are in `lib/Image/ExifTool/*.pm` files. The structure uses Perl hashes like:
-    ```perl
-    0x010F => {
-        Name => 'Make',
-        Writable => 'string',
-        Groups => { 2 => 'Camera' },
-        PrintConv => ...
-    }
-    ```
-    Your parser needs to extract: tag ID (hash key), Name, Writable status, and potentially Description from comments or other fields.
+*   **Note: Static Linking:**
+    *   The `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` targets produce fully static binaries with no libc dependencies.
+    *   The Windows `x86_64-pc-windows-gnu` target produces binaries that depend only on system DLLs (kernel32, msvcrt).
+    *   The macOS targets (`x86_64-apple-darwin`, `aarch64-apple-darwin`) link against system libraries but are generally portable across macOS versions.
+    *   You DO NOT need special configuration for static linking on musl targets - it's automatic.
 
-*   **Tip:** Based on web research, ExifTool has 191 Perl modules in `lib/Image/ExifTool/`. Key modules to prioritize: `EXIF.pm`, `GPS.pm`, `XMP.pm`, `IPTC.pm`, `PDF.pm`, `QuickTime.pm` to match the 500+ tag target across all format families.
+*   **Warning: macOS Cross-Compilation Constraints:**
+    *   Cross-compiling for macOS from Linux requires the osxcross toolchain, which `cross` provides via Docker.
+    *   Apple's licensing restricts where macOS binaries can be built, but CI/CD usage is generally acceptable.
+    *   If macOS cross-compilation fails in CI, you may need to use `macos-latest` runners for those specific targets instead of `cross`.
+    *   Consider splitting the workflow: Linux/ARM builds use `cross` on ubuntu-latest, macOS builds use native runners.
 
-*   **Warning:** Parsing Perl is complex. Consider these strategies:
-    1. **Regex-based parsing**: Use regular expressions to extract tag definitions from Perl hash structures. This is fragile but may be sufficient for well-structured modules.
-    2. **HTML tag table parsing**: ExifTool.org provides HTML tag tables (e.g., https://exiftool.org/TagNames/EXIF.html). These may be easier to parse than Perl source.
-    3. **Hybrid approach**: Download Perl source for versioning reference, but parse the HTML documentation for actual tag extraction.
+*   **Warning: Binary Size Targets:**
+    *   The acceptance criteria specifies approximate sizes: Linux ~8MB, Windows ~9MB, macOS ~10MB.
+    *   These are APPROXIMATE targets. Actual sizes will vary based on dependencies and Rust version.
+    *   With the current dependencies (clap, nom, serde, etc.) and existing optimizations, expect 5-10MB stripped binaries.
+    *   The sizes will meet the acceptance criteria - don't over-optimize for exact sizes.
 
-*   **Tip:** The acceptance criteria requires 500+ tags. The manual registry in `tag_registry.rs` already has this. Your generated code should produce AT LEAST this many. You can validate by checking the `tag_count()` function returns >= 500.
+### Project Structure Notes
 
-*   **Warning:** The task requires a fallback mechanism. If tag generation fails during build.rs, the build MUST NOT fail. Instead:
-    1. Print a warning to stderr
-    2. Generate a minimal `generated_tags.rs` file that references the manual registry
-    3. OR use conditional compilation to fall back to the manual registry if generation fails
+*   The project follows a hexagonal architecture with clear separation between `src/core/`, `src/parsers/`, `src/writers/`, `src/ffi/`, and `src/cli/`.
+*   The `cbindgen.toml` file already exists, indicating FFI bindings are in place (confirmed by tasks I5.T1-I5.T5 being marked as done).
+*   The `build.rs` file exists and handles tag database generation from ExifTool source.
+*   No existing `Cross.toml` file was found, so you're creating it from scratch.
+*   No existing `release.yml` workflow file was found in `.github/workflows/`, so you're creating it from scratch.
 
-    The current `src/tag_db/mod.rs` shows it imports both `tag_registry` and `generated_tags` - this suggests they may be designed to work together or as alternatives.
+### Success Criteria Summary
 
-*   **Tip:** For downloading ExifTool source during build, consider using `ureq` with minimal features for a simple HTTP GET. Download to a temporary directory in `OUT_DIR` (provided by cargo). Consider caching the download across builds (check if file already exists) to avoid repeated network calls during development.
+To complete this task successfully, you MUST deliver:
 
-*   **Tip:** Your generated code should start with auto-generation warnings:
-    ```rust
-    // THIS FILE IS AUTO-GENERATED BY build.rs
-    // DO NOT EDIT MANUALLY - CHANGES WILL BE OVERWRITTEN
-    // Generated from ExifTool source: <version/commit hash>
-    ```
+1. **Cross.toml** file with configuration for all 5 target platforms
+2. **.github/workflows/release.yml** workflow that:
+   - Triggers on `v*` tags
+   - Builds for all 5 targets using `cross`
+   - Strips symbols (handled by Cargo.toml profile)
+   - Optionally compresses with UPX
+   - Uploads binaries to GitHub Releases with checksums
+3. **No changes needed to Cargo.toml** - release profile already optimal
+4. **Verification:** Test with a manual tag push to confirm artifacts are uploaded correctly
 
-*   **Note:** The `src/tag_db/mod.rs` currently has `#![allow(dead_code)]` which suggests some generated code may not be immediately used. Carry this forward to your generated file to avoid compiler warnings.
-
-*   **Best Practice:** Write your build.rs in clear sections:
-    1. **Download/Locate Source**: Get ExifTool source (download or vendored)
-    2. **Parse Tag Definitions**: Extract tag metadata from .pm files or HTML
-    3. **Validate Against Schema**: Ensure data matches the JSON schema structure
-    4. **Generate Rust Code**: Write the `generated_tags.rs` file
-    5. **Handle Errors**: Implement fallback if any step fails
-
-*   **Critical:** The task says "Write generated file during build". In Rust build.rs, you should write to a path in the source tree (`src/tag_db/generated_tags.rs`), NOT to `OUT_DIR`. This is because the main crate needs to `mod generated_tags;` from a fixed location. However, be aware this is somewhat unconventional - typically build.rs writes to OUT_DIR and uses `include!()` macro. Study the project's needs carefully.
-
-*   **Testing Strategy:** After implementing:
-    1. Run `cargo clean` to ensure fresh build
-    2. Run `cargo build` and verify no errors
-    3. Check that `src/tag_db/generated_tags.rs` was created
-    4. Run `cargo test tag_registry` to ensure tests still pass
-    5. Test the fallback: temporarily break the download/parse to ensure build still succeeds with warnings
-
-### ExifTool Source Structure (From Research)
-
-Based on my web research, here's what you need to know about ExifTool's Perl source:
-
-*   **Repository:** https://github.com/exiftool/exiftool
-*   **Tag Modules:** `lib/Image/ExifTool/*.pm` (191 modules total)
-*   **Key Modules for 500+ tags:**
-    - `EXIF.pm` - Core EXIF tags (~300 tags)
-    - `GPS.pm` - GPS tags (~30 tags)
-    - `XMP.pm` - XMP tags (~100 tags)
-    - `IPTC.pm` - IPTC tags (~50 tags)
-    - `PDF.pm` - PDF metadata tags (~10 tags)
-    - `QuickTime.pm` - QuickTime/MP4 tags (~10 tags)
-
-*   **Tag Definition Pattern in Perl:**
-    ```perl
-    %Image::ExifTool::EXIF::Main = (
-        GROUPS => { 0 => 'EXIF', 1 => 'IFD0', 2 => 'Image' },
-        0x010F => {
-            Name => 'Make',
-            Writable => 'string',
-            PrintConv => ...
-        },
-        0x0110 => {
-            Name => 'Model',
-            Writable => 'string',
-        },
-        # ... more tags
-    );
-    ```
-
-*   **Mapping Perl to Rust:**
-    - Tag ID: The hash key (e.g., `0x010F`) → `TagId::new_numeric(0x010F)`
-    - Name: `Name` field → tag_name with format prefix (e.g., "EXIF:Make")
-    - Writable: `Writable` field presence/value → boolean writable flag
-    - Type: `Writable` type (e.g., 'string', 'int16u') → map to ValueType enum
-    - Description: May need to extract from comments or use Name as fallback
-    - Format Family: Determined by module (EXIF.pm → FormatFamily::EXIF)
-
-*   **Alternative: HTML Tag Tables**
-    - URL pattern: `https://exiftool.org/TagNames/EXIF.html`
-    - Provides cleaner tabular data
-    - May be easier to parse than Perl source
-    - Consider using HTML parsing with `scraper` crate (lightweight) or `select` crate
-
-### **RECOMMENDATION FOR CODER AGENT:**
-
-**This task (I5.T5) appears to be ALREADY COMPLETE.** Before making any changes:
-
-1. **Verify the current state** by running:
-   ```bash
-   cargo clean && cargo build 2>&1 | grep -i "tag"
-   ```
-
-2. **Check the acceptance criteria** - All items are already satisfied in the existing build.rs:
-   - ✅ build.rs downloads/parses ExifTool source
-   - ✅ Generates valid Rust code
-   - ✅ MIN_TAG_COUNT = 500 enforces target count
-   - ✅ Build succeeds (fallback ensures this)
-   - ✅ Fallback mechanism exists
-   - ✅ README has documentation
-
-3. **If the task is truly complete**, you should:
-   - Run `cargo build` to test the existing implementation
-   - Document any issues found during testing
-   - Update the task status to `"done": true`
-   - Report completion to the user
-
-4. **If there are issues**, identify what's failing:
-   - Check network connectivity for ExifTool download
-   - Verify `unzip` command is available
-   - Review build output for parse errors
-   - Only fix actual bugs, don't reimplement working code
-
-**DO NOT reimplement code that already exists and works correctly.**
+Good luck! This is a DevOps/infrastructure task focused on release automation and binary distribution.
