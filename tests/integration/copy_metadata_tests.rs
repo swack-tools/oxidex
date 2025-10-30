@@ -108,10 +108,10 @@ fn test_copy_all_metadata_between_jpegs() -> Result<(), Box<dyn std::error::Erro
     let dest_metadata = read_metadata(dest_path)?;
 
     // Verify tags were copied from source
-    assert_eq!(dest_metadata.get_string("EXIF:Make"), Some("Canon"));
-    assert_eq!(dest_metadata.get_string("EXIF:Model"), Some("EOS R5"));
+    assert_eq!(dest_metadata.get_string("IFD0:Make"), Some("Canon"));
+    assert_eq!(dest_metadata.get_string("IFD0:Model"), Some("EOS R5"));
     assert_eq!(
-        dest_metadata.get_string("EXIF:Artist"),
+        dest_metadata.get_string("IFD0:Artist"),
         Some("SourceArtist")
     );
 
@@ -137,7 +137,7 @@ fn test_copy_specific_tags_only() -> Result<(), Box<dyn std::error::Error>> {
     let dest_path = dest_file.path();
 
     // Copy only Artist tag from source to destination
-    let tags_to_copy = vec!["EXIF:Artist".to_string()];
+    let tags_to_copy = vec!["IFD0:Artist".to_string()];
     copy_metadata(source_path, dest_path, Some(&tags_to_copy))?;
 
     // Read destination metadata to verify
@@ -145,18 +145,18 @@ fn test_copy_specific_tags_only() -> Result<(), Box<dyn std::error::Error>> {
 
     // Verify Artist was copied from source
     assert_eq!(
-        dest_metadata.get_string("EXIF:Artist"),
+        dest_metadata.get_string("IFD0:Artist"),
         Some("SourceArtist")
     );
 
     // Verify Make and Model were NOT copied (should still have original dest values)
     assert_eq!(
-        dest_metadata.get_string("EXIF:Make"),
+        dest_metadata.get_string("IFD0:Make"),
         Some("Nikon"),
         "Make should remain unchanged"
     );
     assert_eq!(
-        dest_metadata.get_string("EXIF:Model"),
+        dest_metadata.get_string("IFD0:Model"),
         Some("D850"),
         "Model should remain unchanged"
     );
@@ -184,28 +184,28 @@ fn test_copy_preserves_destination_tags() -> Result<(), Box<dyn std::error::Erro
 
     // Manually add a Software tag to destination
     let mut dest_metadata = read_metadata(dest_path)?;
-    dest_metadata.insert("EXIF:Software", TagValue::new_string("TestSoftware"));
+    dest_metadata.insert("IFD0:Software", TagValue::new_string("TestSoftware"));
     write_metadata(dest_path, &dest_metadata)?;
 
     // Now copy Make and Model from source to destination
-    let tags_to_copy = vec!["EXIF:Make".to_string(), "EXIF:Model".to_string()];
+    let tags_to_copy = vec!["IFD0:Make".to_string(), "IFD0:Model".to_string()];
     copy_metadata(source_path, dest_path, Some(&tags_to_copy))?;
 
     // Read destination metadata to verify
     let final_metadata = read_metadata(dest_path)?;
 
     // Verify Make and Model were copied from source
-    assert_eq!(final_metadata.get_string("EXIF:Make"), Some("Canon"));
-    assert_eq!(final_metadata.get_string("EXIF:Model"), Some("EOS R5"));
+    assert_eq!(final_metadata.get_string("IFD0:Make"), Some("Canon"));
+    assert_eq!(final_metadata.get_string("IFD0:Model"), Some("EOS R5"));
 
     // Verify Artist and Software were preserved (not deleted)
     assert_eq!(
-        final_metadata.get_string("EXIF:Artist"),
+        final_metadata.get_string("IFD0:Artist"),
         Some("DestArtist"),
         "Artist should be preserved"
     );
     assert_eq!(
-        final_metadata.get_string("EXIF:Software"),
+        final_metadata.get_string("IFD0:Software"),
         Some("TestSoftware"),
         "Software should be preserved"
     );
@@ -239,14 +239,14 @@ fn test_copy_overwrites_existing_tags() -> Result<(), Box<dyn std::error::Error>
 
     // Verify Make was overwritten with source value
     assert_eq!(
-        dest_metadata.get_string("EXIF:Make"),
+        dest_metadata.get_string("IFD0:Make"),
         Some("Canon"),
         "Make should be overwritten from source"
     );
 
     // Verify Model was also overwritten
     assert_eq!(
-        dest_metadata.get_string("EXIF:Model"),
+        dest_metadata.get_string("IFD0:Model"),
         Some("EOS R5"),
         "Model should be overwritten from source"
     );
@@ -281,9 +281,9 @@ fn test_copy_with_empty_source() -> Result<(), Box<dyn std::error::Error>> {
     let dest_metadata = read_metadata(dest_path)?;
 
     // Verify destination tags are still present (nothing was copied, nothing was deleted)
-    assert_eq!(dest_metadata.get_string("EXIF:Make"), Some("Nikon"));
-    assert_eq!(dest_metadata.get_string("EXIF:Model"), Some("D850"));
-    assert_eq!(dest_metadata.get_string("EXIF:Artist"), Some("Artist"));
+    assert_eq!(dest_metadata.get_string("IFD0:Make"), Some("Nikon"));
+    assert_eq!(dest_metadata.get_string("IFD0:Model"), Some("D850"));
+    assert_eq!(dest_metadata.get_string("IFD0:Artist"), Some("Artist"));
 
     Ok(())
 }
@@ -307,7 +307,7 @@ fn test_copy_with_nonexistent_tag_filter() -> Result<(), Box<dyn std::error::Err
     let dest_path = dest_file.path();
 
     // Try to copy a tag that doesn't exist in source
-    let tags_to_copy = vec!["EXIF:Copyright".to_string()];
+    let tags_to_copy = vec!["IFD0:Copyright".to_string()];
     copy_metadata(source_path, dest_path, Some(&tags_to_copy))?;
 
     // Read destination metadata to verify
@@ -315,18 +315,18 @@ fn test_copy_with_nonexistent_tag_filter() -> Result<(), Box<dyn std::error::Err
 
     // Verify destination tags are unchanged (filtered tag didn't exist in source)
     assert_eq!(
-        dest_metadata.get_string("EXIF:Make"),
+        dest_metadata.get_string("IFD0:Make"),
         Some("Nikon"),
         "Make should remain unchanged"
     );
     assert_eq!(
-        dest_metadata.get_string("EXIF:Model"),
+        dest_metadata.get_string("IFD0:Model"),
         Some("D850"),
         "Model should remain unchanged"
     );
 
     // Verify Copyright tag was not added (it didn't exist in source)
-    assert_eq!(dest_metadata.get_string("EXIF:Copyright"), None);
+    assert_eq!(dest_metadata.get_string("IFD0:Copyright"), None);
 
     Ok(())
 }

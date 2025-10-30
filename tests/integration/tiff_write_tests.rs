@@ -36,18 +36,18 @@ fn tags_to_metadata_map(tags: Vec<(u16, Vec<u8>)>) -> MetadataMap {
             0x010F => {
                 // Make - ASCII string
                 let s = String::from_utf8_lossy(&value);
-                ("EXIF:Make", TagValue::new_string(s.trim_end_matches('\0')))
+                ("IFD0:Make", TagValue::new_string(s.trim_end_matches('\0')))
             }
             0x0110 => {
                 // Model - ASCII string
                 let s = String::from_utf8_lossy(&value);
-                ("EXIF:Model", TagValue::new_string(s.trim_end_matches('\0')))
+                ("IFD0:Model", TagValue::new_string(s.trim_end_matches('\0')))
             }
             0x0100 => {
                 // ImageWidth - SHORT (u16)
                 if value.len() >= 2 {
                     let width = u16::from_le_bytes([value[0], value[1]]);
-                    ("EXIF:ImageWidth", TagValue::new_integer(width as i64))
+                    ("IFD0:ImageWidth", TagValue::new_integer(width as i64))
                 } else {
                     continue;
                 }
@@ -56,7 +56,7 @@ fn tags_to_metadata_map(tags: Vec<(u16, Vec<u8>)>) -> MetadataMap {
                 // ImageHeight (also called ImageLength) - SHORT (u16)
                 if value.len() >= 2 {
                     let length = u16::from_le_bytes([value[0], value[1]]);
-                    ("EXIF:ImageHeight", TagValue::new_integer(length as i64))
+                    ("IFD0:ImageHeight", TagValue::new_integer(length as i64))
                 } else {
                     continue;
                 }
@@ -65,7 +65,7 @@ fn tags_to_metadata_map(tags: Vec<(u16, Vec<u8>)>) -> MetadataMap {
                 // ISO - SHORT (u16)
                 if value.len() >= 2 {
                     let iso = u16::from_le_bytes([value[0], value[1]]);
-                    ("EXIF:ISO", TagValue::new_integer(iso as i64))
+                    ("ExifIFD:ISO", TagValue::new_integer(iso as i64))
                 } else {
                     continue;
                 }
@@ -76,7 +76,7 @@ fn tags_to_metadata_map(tags: Vec<(u16, Vec<u8>)>) -> MetadataMap {
                     let numerator = u32::from_le_bytes([value[0], value[1], value[2], value[3]]);
                     let denominator = u32::from_le_bytes([value[4], value[5], value[6], value[7]]);
                     (
-                        "EXIF:ExposureTime",
+                        "ExifIFD:ExposureTime",
                         TagValue::new_rational(numerator as i32, denominator as i32),
                     )
                 } else {
@@ -89,7 +89,7 @@ fn tags_to_metadata_map(tags: Vec<(u16, Vec<u8>)>) -> MetadataMap {
                     let numerator = u32::from_le_bytes([value[0], value[1], value[2], value[3]]);
                     let denominator = u32::from_le_bytes([value[4], value[5], value[6], value[7]]);
                     (
-                        "EXIF:FNumber",
+                        "ExifIFD:FNumber",
                         TagValue::new_rational(numerator as i32, denominator as i32),
                     )
                 } else {
@@ -114,8 +114,8 @@ fn test_write_tiff_file_basic() {
 
     // Create simple metadata
     let mut metadata = MetadataMap::new();
-    metadata.insert("EXIF:Make", TagValue::new_string("TestMake"));
-    metadata.insert("EXIF:Model", TagValue::new_string("TestModel"));
+    metadata.insert("IFD0:Make", TagValue::new_string("TestMake"));
+    metadata.insert("IFD0:Model", TagValue::new_string("TestModel"));
 
     // We need an original reader even for a new file - use the test fixture
     let fixture_path = Path::new("tests/fixtures/tiff/sample.tif");
@@ -161,10 +161,10 @@ fn test_round_trip_tiff_modification() {
     let mut metadata = tags_to_metadata_map(original_tags.clone());
 
     // Modify Make tag
-    metadata.insert("EXIF:Make", TagValue::new_string("ModifiedMake"));
+    metadata.insert("IFD0:Make", TagValue::new_string("ModifiedMake"));
 
     // Add a new tag
-    metadata.insert("EXIF:ISO", TagValue::new_integer(800));
+    metadata.insert("ExifIFD:ISO", TagValue::new_integer(800));
 
     println!("Modified metadata has {} entries", metadata.len());
 
@@ -207,7 +207,7 @@ fn test_round_trip_tiff_modification() {
 
     // Verify other tags remain unchanged
     // Check Model tag (should be unchanged if we didn't modify it)
-    if metadata.get("EXIF:Model").is_some() {
+    if metadata.get("IFD0:Model").is_some() {
         let model_tag = new_tags.iter().find(|(id, _)| *id == 0x0110);
         assert!(model_tag.is_some(), "Model tag should be preserved");
     }
@@ -227,7 +227,7 @@ fn test_write_tiff_preserves_byte_order() {
 
     // Write file with simple metadata
     let mut metadata = MetadataMap::new();
-    metadata.insert("EXIF:Make", TagValue::new_string("Test"));
+    metadata.insert("IFD0:Make", TagValue::new_string("Test"));
 
     write_tiff_file(&output_path, &reader, &metadata).expect("Failed to write file");
 
@@ -252,10 +252,10 @@ fn test_write_tiff_with_multiple_tag_types() {
 
     // Create metadata with different value types
     let mut metadata = MetadataMap::new();
-    metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
-    metadata.insert("EXIF:Model", TagValue::new_string("EOS R5"));
-    metadata.insert("EXIF:ISO", TagValue::new_integer(400));
-    metadata.insert("EXIF:FNumber", TagValue::new_rational(28, 10)); // f/2.8
+    metadata.insert("IFD0:Make", TagValue::new_string("Canon"));
+    metadata.insert("IFD0:Model", TagValue::new_string("EOS R5"));
+    metadata.insert("ExifIFD:ISO", TagValue::new_integer(400));
+    metadata.insert("ExifIFD:FNumber", TagValue::new_rational(28, 10)); // f/2.8
 
     write_tiff_file(&output_path, &reader, &metadata).expect("Failed to write file");
 

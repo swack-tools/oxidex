@@ -19,491 +19,6 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
     let mut registry = HashMap::with_capacity(731);
 
     // =============================
-    // GPS TAGS (32 total)
-    // =============================
-
-    registry.insert(
-        "GPS:GPSVersionID",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "GPS:GPSVersionID".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Integer,
-            "GPSVersionID tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSLatitudeRef",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0001),
-            "GPS:GPSLatitudeRef".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSLatitudeRef tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSLatitude",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "GPS:GPSLatitude".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Rational,
-            "GPSLatitude tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSLongitudeRef",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0003),
-            "GPS:GPSLongitudeRef".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSLongitudeRef tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSLongitude",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "GPS:GPSLongitude".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Rational,
-            "GPSLongitude tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSAltitudeRef",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0005),
-            "GPS:GPSAltitudeRef".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Integer,
-            "GPSAltitudeRef tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSAltitude",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "GPS:GPSAltitude".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Rational,
-            "GPSAltitude tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSTimeStamp",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0007),
-            "GPS:GPSTimeStamp".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Rational,
-            "GPSTimeStamp tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSSatellites",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "GPS:GPSSatellites".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSSatellites tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSStatus",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0009),
-            "GPS:GPSStatus".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSStatus tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSMeasureMode",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000A),
-            "GPS:GPSMeasureMode".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSMeasureMode tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSDOP",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000B),
-            "GPS:GPSDOP".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Rational,
-            "GPS Dilution Of Precision".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSSpeedRef",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000C),
-            "GPS:GPSSpeedRef".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSSpeedRef tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSSpeed",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000D),
-            "GPS:GPSSpeed".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Rational,
-            "GPSSpeed tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSTrackRef",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000E),
-            "GPS:GPSTrackRef".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSTrackRef tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSTrack",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000F),
-            "GPS:GPSTrack".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Rational,
-            "GPSTrack tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSImgDirectionRef",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0010),
-            "GPS:GPSImgDirectionRef".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSImgDirectionRef tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSImgDirection",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0011),
-            "GPS:GPSImgDirection".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Rational,
-            "GPSImgDirection tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSMapDatum",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0012),
-            "GPS:GPSMapDatum".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSMapDatum tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSDestLatitudeRef",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0013),
-            "GPS:GPSDestLatitudeRef".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSDestLatitudeRef tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSDestLatitude",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0014),
-            "GPS:GPSDestLatitude".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Rational,
-            "GPSDestLatitude tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSDestLongitudeRef",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0015),
-            "GPS:GPSDestLongitudeRef".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSDestLongitudeRef tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSDestLongitude",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0016),
-            "GPS:GPSDestLongitude".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Rational,
-            "GPSDestLongitude tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSDestBearingRef",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0017),
-            "GPS:GPSDestBearingRef".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSDestBearingRef tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSDestBearing",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0018),
-            "GPS:GPSDestBearing".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Rational,
-            "GPSDestBearing tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSDestDistanceRef",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0019),
-            "GPS:GPSDestDistanceRef".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSDestDistanceRef tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSDestDistance",
-        TagDescriptor::new(
-            TagId::new_numeric(0x001A),
-            "GPS:GPSDestDistance".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Rational,
-            "GPSDestDistance tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSProcessingMethod",
-        TagDescriptor::new(
-            TagId::new_numeric(0x001B),
-            "GPS:GPSProcessingMethod".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Binary,
-            "GPSProcessingMethod tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSAreaInformation",
-        TagDescriptor::new(
-            TagId::new_numeric(0x001C),
-            "GPS:GPSAreaInformation".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Binary,
-            "GPSAreaInformation tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSDateStamp",
-        TagDescriptor::new(
-            TagId::new_numeric(0x001D),
-            "GPS:GPSDateStamp".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::String,
-            "GPSDateStamp tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSDifferential",
-        TagDescriptor::new(
-            TagId::new_numeric(0x001E),
-            "GPS:GPSDifferential".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Integer,
-            "GPSDifferential tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "GPS:GPSHPositioningError",
-        TagDescriptor::new(
-            TagId::new_numeric(0x001F),
-            "GPS:GPSHPositioningError".to_string(),
-            FormatFamily::GPS,
-            true,
-            ValueType::Rational,
-            "GPS Horizontal Positioning Error".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-
-    // =============================
     // PNG TAGS (30 total)
     // =============================
 
@@ -516,9 +31,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             true,
             ValueType::String,
             "ProfileName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -531,9 +44,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ImageWidth tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -546,9 +57,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ImageHeight tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -561,9 +70,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ColorType tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -576,9 +83,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Compression tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -591,9 +96,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Filter tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -606,9 +109,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Interlace tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -621,9 +122,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "PixelsPerUnitX tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -636,9 +135,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "PixelsPerUnitY tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -651,9 +148,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "PixelUnits tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -666,9 +161,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ColorPrimaries tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -681,9 +174,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "TransferCharacteristics tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -696,9 +187,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "MatrixCoefficients tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -711,9 +200,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "SubjectUnits tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -726,9 +213,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "SubjectPixelWidth tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -741,9 +226,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "SubjectPixelHeight tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -756,9 +239,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "VirtualPageUnits tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -771,9 +252,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "StereoMode tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -786,9 +265,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "CreationTime tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -801,9 +278,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "CreateDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -816,9 +291,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ModDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -831,9 +304,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "XMP tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -846,9 +317,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "EXIF_Profile tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -861,9 +330,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ICC_Profile tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -876,9 +343,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ICC_Profile tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -891,9 +356,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "IPTC_Profile tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -906,9 +369,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "XMP_Profile tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -921,9 +382,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Photoshop_Profile tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -936,9 +395,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "AnimationFrames tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -951,7719 +408,428 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "AnimationPlays tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
 
     // =============================
-    // ICC_Profile TAGS (42 total)
+    // GPS TAGS (32 total)
     // =============================
 
     registry.insert(
-        "ICC_Profile:UCRBG",
-        TagDescriptor::new(
-            TagId::new_named("bfd ".to_string()),
-            "ICC_Profile:UCRBG".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "Under Color Removal and Black Gen.".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ProfileCMMType",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "ICC_Profile:ProfileCMMType".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ProfileCMMType tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ProfileVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "ICC_Profile:ProfileVersion".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::Integer,
-            "ProfileVersion tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ProfileClass",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000C),
-            "ICC_Profile:ProfileClass".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ProfileClass tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ColorSpaceData",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0010),
-            "ICC_Profile:ColorSpaceData".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ColorSpaceData tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ProfileConnectionSpace",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0014),
-            "ICC_Profile:ProfileConnectionSpace".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ProfileConnectionSpace tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ProfileDateTime",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0018),
-            "ICC_Profile:ProfileDateTime".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ProfileDateTime tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ProfileFileSignature",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0024),
-            "ICC_Profile:ProfileFileSignature".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ProfileFileSignature tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:PrimaryPlatform",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0028),
-            "ICC_Profile:PrimaryPlatform".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "PrimaryPlatform tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:CMMFlags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x002C),
-            "ICC_Profile:CMMFlags".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::Integer,
-            "CMMFlags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:DeviceManufacturer",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0030),
-            "ICC_Profile:DeviceManufacturer".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "DeviceManufacturer tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:DeviceModel",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0034),
-            "ICC_Profile:DeviceModel".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "DeviceModel tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:DeviceAttributes",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0038),
-            "ICC_Profile:DeviceAttributes".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "DeviceAttributes tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:RenderingIntent",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0040),
-            "ICC_Profile:RenderingIntent".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::Integer,
-            "RenderingIntent tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ConnectionSpaceIlluminant",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0044),
-            "ICC_Profile:ConnectionSpaceIlluminant".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ConnectionSpaceIlluminant tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ProfileCreator",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0050),
-            "ICC_Profile:ProfileCreator".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ProfileCreator tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ProfileID",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0054),
-            "ICC_Profile:ProfileID".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ProfileID tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ColorPrimaries",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "ICC_Profile:ColorPrimaries".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ColorPrimaries tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:TransferCharacteristics",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0009),
-            "ICC_Profile:TransferCharacteristics".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "TransferCharacteristics tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:MatrixCoefficients",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000A),
-            "ICC_Profile:MatrixCoefficients".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "MatrixCoefficients tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:VideoFullRangeFlag",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000B),
-            "ICC_Profile:VideoFullRangeFlag".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "VideoFullRangeFlag tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ViewingCondIlluminant",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "ICC_Profile:ViewingCondIlluminant".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ViewingCondIlluminant tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ViewingCondSurround",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0014),
-            "ICC_Profile:ViewingCondSurround".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ViewingCondSurround tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ViewingCondIlluminantType",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0020),
-            "ICC_Profile:ViewingCondIlluminantType".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::Integer,
-            "ViewingCondIlluminantType tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:MeasurementObserver",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "ICC_Profile:MeasurementObserver".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::Integer,
-            "MeasurementObserver tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:MeasurementBacking",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000C),
-            "ICC_Profile:MeasurementBacking".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "MeasurementBacking tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:MeasurementGeometry",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0018),
-            "ICC_Profile:MeasurementGeometry".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::Integer,
-            "MeasurementGeometry tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:MeasurementFlare",
-        TagDescriptor::new(
-            TagId::new_numeric(0x001C),
-            "ICC_Profile:MeasurementFlare".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "MeasurementFlare tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:MeasurementIlluminant",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0020),
-            "ICC_Profile:MeasurementIlluminant".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::Integer,
-            "MeasurementIlluminant tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ChromaticityChannels",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "ICC_Profile:ChromaticityChannels".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::Integer,
-            "ChromaticityChannels tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ChromaticityColorant",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000A),
-            "ICC_Profile:ChromaticityColorant".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::Integer,
-            "ChromaticityColorant tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ChromaticityChannel1",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000C),
-            "ICC_Profile:ChromaticityChannel1".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ChromaticityChannel1 tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ChromaticityChannel2",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0014),
-            "ICC_Profile:ChromaticityChannel2".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ChromaticityChannel2 tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ChromaticityChannel3",
-        TagDescriptor::new(
-            TagId::new_numeric(0x001C),
-            "ICC_Profile:ChromaticityChannel3".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ChromaticityChannel3 tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ChromaticityChannel4",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0024),
-            "ICC_Profile:ChromaticityChannel4".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "ChromaticityChannel4 tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:ColorantCount",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "ICC_Profile:ColorantCount".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::Integer,
-            "ColorantCount tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:Colorant1Name",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000C),
-            "ICC_Profile:Colorant1Name".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "Colorant1Name tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:Colorant1Coordinates",
-        TagDescriptor::new(
-            TagId::new_numeric(0x002C),
-            "ICC_Profile:Colorant1Coordinates".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "Colorant1Coordinates tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:Colorant2Name",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0032),
-            "ICC_Profile:Colorant2Name".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "Colorant2Name tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:Colorant2Coordinates",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0052),
-            "ICC_Profile:Colorant2Coordinates".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "Colorant2Coordinates tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:Colorant3Name",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0058),
-            "ICC_Profile:Colorant3Name".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "Colorant3Name tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "ICC_Profile:Colorant3Coordinates",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0078),
-            "ICC_Profile:Colorant3Coordinates".to_string(),
-            FormatFamily::ICCProfile,
-            false,
-            ValueType::String,
-            "Colorant3Coordinates tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-
-    // =============================
-    // RIFF TAGS (46 total)
-    // =============================
-
-    registry.insert(
-        "RIFF:AudioFormat",
-        TagDescriptor::new(
-            TagId::new_named("fmt ".to_string()),
-            "RIFF:AudioFormat".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "AudioFormat tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:BroadcastExtension",
-        TagDescriptor::new(
-            TagId::new_named("bext".to_string()),
-            "RIFF:BroadcastExtension".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "BroadcastExtension tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:CuePoints",
-        TagDescriptor::new(
-            TagId::new_named("cue ".to_string()),
-            "RIFF:CuePoints".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "CuePoints tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:ID3",
-        TagDescriptor::new(
-            TagId::new_named("id3 ".to_string()),
-            "RIFF:ID3".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "ID3 tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:Encoding",
+        "GPS:GPSVersionID",
         TagDescriptor::new(
             TagId::new_numeric(0x0000),
-            "RIFF:Encoding".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "Encoding tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            "GPS:GPSVersionID".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::Integer,
+            "GPSVersionID tag".to_string(),
+            vec!["100".to_string()],
         ),
     );
 
     registry.insert(
-        "RIFF:SampleRate",
+        "GPS:GPSLatitudeRef",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0001),
+            "GPS:GPSLatitudeRef".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::String,
+            "GPSLatitudeRef tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "GPS:GPSLatitude",
         TagDescriptor::new(
             TagId::new_numeric(0x0002),
-            "RIFF:SampleRate".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "SampleRate tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:AvgBytesPerSec",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "RIFF:AvgBytesPerSec".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "AvgBytesPerSec tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:Description",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "RIFF:Description".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "Description tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:Originator",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0100),
-            "RIFF:Originator".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "Originator tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:OriginatorReference",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0120),
-            "RIFF:OriginatorReference".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "OriginatorReference tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:DateTimeOriginal",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0140),
-            "RIFF:DateTimeOriginal".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "Date/Time Original".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:TimeReference",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0152),
-            "RIFF:TimeReference".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "TimeReference tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:BWFVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0x015A),
-            "RIFF:BWFVersion".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "BWFVersion tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:BWF_UMID",
-        TagDescriptor::new(
-            TagId::new_numeric(0x015C),
-            "RIFF:BWF_UMID".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "BWF_UMID tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:CodingHistory",
-        TagDescriptor::new(
-            TagId::new_numeric(0x025A),
-            "RIFF:CodingHistory".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "CodingHistory tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:RIFFSize64",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "RIFF:RIFFSize64".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "RIFFSize64 tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:DataSize64",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0001),
-            "RIFF:DataSize64".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "DataSize64 tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:SMPTEFormat",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0005),
-            "RIFF:SMPTEFormat".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "SMPTEFormat tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:SMPTEOffset",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "RIFF:SMPTEOffset".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "SMPTEOffset tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:CodePage",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "RIFF:CodePage".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "CodePage tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:FrameRate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "RIFF:FrameRate".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "FrameRate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:MaxDataRate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0001),
-            "RIFF:MaxDataRate".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "MaxDataRate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:StreamType",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "RIFF:StreamType".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "StreamType tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:Quality",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000A),
-            "RIFF:Quality".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "Quality tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:SampleSize",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000B),
-            "RIFF:SampleSize".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "SampleSize tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:VP8Version",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "RIFF:VP8Version".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "VP8Version tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:ImageWidth",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "RIFF:ImageWidth".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "ImageWidth tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:ImageHeight",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "RIFF:ImageHeight".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "ImageHeight tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:ImageWidth",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0001),
-            "RIFF:ImageWidth".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "ImageWidth tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:ImageHeight",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "RIFF:ImageHeight".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "ImageHeight tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:AlphaIsUsed",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "RIFF:AlphaIsUsed".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "AlphaIsUsed tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:WebP_Flags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "RIFF:WebP_Flags".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "WebP Flags".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:ImageWidth",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "RIFF:ImageWidth".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "ImageWidth tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:ImageHeight",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "RIFF:ImageHeight".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "ImageHeight tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:BackgroundColor",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "RIFF:BackgroundColor".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "BackgroundColor tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:AnimationLoopCount",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "RIFF:AnimationLoopCount".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "AnimationLoopCount tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:Duration",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000C),
-            "RIFF:Duration".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "Duration tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:GPSLatitude",
-        TagDescriptor::new(
-            TagId::new_numeric(0x003C),
-            "RIFF:GPSLatitude".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Float,
+            "GPS:GPSLatitude".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::Rational,
             "GPSLatitude tag".to_string(),
-            vec![
-                "1.5".to_string(),
-            ],
+            vec!["1/100".to_string()],
         ),
     );
 
     registry.insert(
-        "RIFF:GPSLongitude",
+        "GPS:GPSLongitudeRef",
         TagDescriptor::new(
-            TagId::new_numeric(0x0040),
-            "RIFF:GPSLongitude".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Float,
+            TagId::new_numeric(0x0003),
+            "GPS:GPSLongitudeRef".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::String,
+            "GPSLongitudeRef tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "GPS:GPSLongitude",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "GPS:GPSLongitude".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::Rational,
             "GPSLongitude tag".to_string(),
-            vec![
-                "1.5".to_string(),
-            ],
+            vec!["1/100".to_string()],
         ),
     );
 
     registry.insert(
-        "RIFF:GPSDateTime",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0044),
-            "RIFF:GPSDateTime".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "GPS Date/Time".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:AlphaPreprocessing",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "RIFF:AlphaPreprocessing".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "AlphaPreprocessing tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:AcidizerFlags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "RIFF:AcidizerFlags".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "AcidizerFlags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:RootNote",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "RIFF:RootNote".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "RootNote tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:Beats",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000C),
-            "RIFF:Beats".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Integer,
-            "Beats tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:Meter",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0010),
-            "RIFF:Meter".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::String,
-            "Meter tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "RIFF:Tempo",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0014),
-            "RIFF:Tempo".to_string(),
-            FormatFamily::RIFF,
-            false,
-            ValueType::Float,
-            "Tempo tag".to_string(),
-            vec![
-                "1.5".to_string(),
-            ],
-        ),
-    );
-
-
-    // =============================
-    // JPEG TAGS (30 total)
-    // =============================
-
-    registry.insert(
-        "JPEG:HDRGainCurveSize",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "JPEG:HDRGainCurveSize".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::Integer,
-            "HDRGainCurveSize tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:HDRGainCurve",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000A),
-            "JPEG:HDRGainCurve".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "HDRGainCurve tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:JPSSeparation",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000A),
-            "JPEG:JPSSeparation".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::Integer,
-            "JPSSeparation tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:HdrLength",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "JPEG:HdrLength".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::Integer,
-            "HdrLength tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:JPSFlags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000B),
-            "JPEG:JPSFlags".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "JPSFlags tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:JPSType",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000D),
-            "JPEG:JPSType".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "JPSType tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:JPSComment",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0010),
-            "JPEG:JPSComment".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "JPSComment tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:PrintIM",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC4A5),
-            "JPEG:PrintIM".to_string(),
-            FormatFamily::JPEG,
-            true,
-            ValueType::Binary,
-            "Print Image Matching".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:SPIFFVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "JPEG:SPIFFVersion".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "SPIFFVersion tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:ProfileID",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "JPEG:ProfileID".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "ProfileID tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:ImageHeight",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "JPEG:ImageHeight".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "ImageHeight tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:ImageWidth",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000A),
-            "JPEG:ImageWidth".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::Integer,
-            "ImageWidth tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:ColorSpace",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000E),
-            "JPEG:ColorSpace".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "ColorSpace tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:Compression",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0010),
-            "JPEG:Compression".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "Compression tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:ResolutionUnit",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0011),
-            "JPEG:ResolutionUnit".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "ResolutionUnit tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:YResolution",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0012),
-            "JPEG:YResolution".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::Integer,
-            "YResolution tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:XResolution",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0016),
-            "JPEG:XResolution".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::Integer,
-            "XResolution tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:APP14Flags0",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0001),
-            "JPEG:APP14Flags0".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "APP14Flags0 tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:APP14Flags1",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "JPEG:APP14Flags1".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "APP14Flags1 tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:ColorTransform",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0003),
-            "JPEG:ColorTransform".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::Integer,
-            "ColorTransform tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:InterleavedField",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "JPEG:InterleavedField".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "InterleavedField tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:NITFVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "JPEG:NITFVersion".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "NITFVersion tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:ImageFormat",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "JPEG:ImageFormat".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "ImageFormat tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:BlocksPerRow",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0003),
-            "JPEG:BlocksPerRow".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::Integer,
-            "BlocksPerRow tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:BlocksPerColumn",
+        "GPS:GPSAltitudeRef",
         TagDescriptor::new(
             TagId::new_numeric(0x0005),
-            "JPEG:BlocksPerColumn".to_string(),
-            FormatFamily::JPEG,
-            false,
+            "GPS:GPSAltitudeRef".to_string(),
+            FormatFamily::GPS,
+            true,
             ValueType::Integer,
-            "BlocksPerColumn tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            "GPSAltitudeRef tag".to_string(),
+            vec!["100".to_string()],
         ),
     );
 
     registry.insert(
-        "JPEG:ImageColor",
+        "GPS:GPSAltitude",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "GPS:GPSAltitude".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::Rational,
+            "GPSAltitude tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "GPS:GPSTimeStamp",
         TagDescriptor::new(
             TagId::new_numeric(0x0007),
-            "JPEG:ImageColor".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "ImageColor tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            "GPS:GPSTimeStamp".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::Rational,
+            "GPSTimeStamp tag".to_string(),
+            vec!["1/100".to_string()],
         ),
     );
 
     registry.insert(
-        "JPEG:ImageClass",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0009),
-            "JPEG:ImageClass".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "ImageClass tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:JPEGProcess",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000A),
-            "JPEG:JPEGProcess".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "JPEGProcess tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:StreamColor",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000C),
-            "JPEG:StreamColor".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::String,
-            "StreamColor tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "JPEG:Flags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000E),
-            "JPEG:Flags".to_string(),
-            FormatFamily::JPEG,
-            false,
-            ValueType::Integer,
-            "Flags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-
-    // =============================
-    // XMP TAGS (7 total)
-    // =============================
-
-    registry.insert(
-        "XMP:x",
-        TagDescriptor::new(
-            TagId::new_named("x".to_string()),
-            "XMP:x".to_string(),
-            FormatFamily::XMP,
-            false,
-            ValueType::String,
-            "x tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "XMP:acdsee-rs",
-        TagDescriptor::new(
-            TagId::new_named("acdsee-rs".to_string()),
-            "XMP:acdsee-rs".to_string(),
-            FormatFamily::XMP,
-            false,
-            ValueType::String,
-            "acdsee-rs tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "XMP:mwg-rs",
-        TagDescriptor::new(
-            TagId::new_named("mwg-rs".to_string()),
-            "XMP:mwg-rs".to_string(),
-            FormatFamily::XMP,
-            false,
-            ValueType::String,
-            "mwg-rs tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "XMP:mwg-kw",
-        TagDescriptor::new(
-            TagId::new_named("mwg-kw".to_string()),
-            "XMP:mwg-kw".to_string(),
-            FormatFamily::XMP,
-            false,
-            ValueType::String,
-            "mwg-kw tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "XMP:mwg-coll",
-        TagDescriptor::new(
-            TagId::new_named("mwg-coll".to_string()),
-            "XMP:mwg-coll".to_string(),
-            FormatFamily::XMP,
-            false,
-            ValueType::String,
-            "mwg-coll tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "XMP:apple-fi",
-        TagDescriptor::new(
-            TagId::new_named("apple-fi".to_string()),
-            "XMP:apple-fi".to_string(),
-            FormatFamily::XMP,
-            false,
-            ValueType::String,
-            "apple-fi tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "XMP:drone-dji",
-        TagDescriptor::new(
-            TagId::new_named("drone-dji".to_string()),
-            "XMP:drone-dji".to_string(),
-            FormatFamily::XMP,
-            false,
-            ValueType::String,
-            "drone-dji tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-
-    // =============================
-    // QuickTime TAGS (143 total)
-    // =============================
-
-    registry.insert(
-        "QuickTime:MediaDataSize",
-        TagDescriptor::new(
-            TagId::new_named("mdat-size".to_string()),
-            "QuickTime:MediaDataSize".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "MediaDataSize tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MediaDataOffset",
-        TagDescriptor::new(
-            TagId::new_named("mdat-offset".to_string()),
-            "QuickTime:MediaDataOffset".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "MediaDataOffset tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MajorBrand",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "QuickTime:MajorBrand".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "MajorBrand tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MinorVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0001),
-            "QuickTime:MinorVersion".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "MinorVersion tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:CompatibleBrands",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "QuickTime:CompatibleBrands".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "CompatibleBrands tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:PreviewDate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "QuickTime:PreviewDate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "PreviewDate tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:PreviewAtomType",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0003),
-            "QuickTime:PreviewAtomType".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "PreviewAtomType tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MovieHeaderVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "QuickTime:MovieHeaderVersion".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "MovieHeaderVersion tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:CreateDate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0001),
-            "QuickTime:CreateDate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "CreateDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:ModifyDate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "QuickTime:ModifyDate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "ModifyDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TimeScale",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0003),
-            "QuickTime:TimeScale".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "TimeScale tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Duration",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "QuickTime:Duration".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "Duration tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:PreferredRate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0005),
-            "QuickTime:PreferredRate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "PreferredRate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:PreferredVolume",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "QuickTime:PreferredVolume".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "PreferredVolume tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MatrixStructure",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0009),
-            "QuickTime:MatrixStructure".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "MatrixStructure tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TrackHeaderVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "QuickTime:TrackHeaderVersion".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "TrackHeaderVersion tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TrackCreateDate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0001),
-            "QuickTime:TrackCreateDate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "TrackCreateDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TrackModifyDate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "QuickTime:TrackModifyDate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "TrackModifyDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TrackID",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0003),
-            "QuickTime:TrackID".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "TrackID tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TrackDuration",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0005),
-            "QuickTime:TrackDuration".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "TrackDuration tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TrackLayer",
+        "GPS:GPSSatellites",
         TagDescriptor::new(
             TagId::new_numeric(0x0008),
-            "QuickTime:TrackLayer".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "TrackLayer tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            "GPS:GPSSatellites".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::String,
+            "GPSSatellites tag".to_string(),
+            vec!["Example".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:TrackVolume",
+        "GPS:GPSStatus",
         TagDescriptor::new(
             TagId::new_numeric(0x0009),
-            "QuickTime:TrackVolume".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "TrackVolume tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MatrixStructure",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000A),
-            "QuickTime:MatrixStructure".to_string(),
-            FormatFamily::QuickTime,
+            "GPS:GPSStatus".to_string(),
+            FormatFamily::GPS,
             true,
             ValueType::String,
-            "MatrixStructure tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            "GPSStatus tag".to_string(),
+            vec!["Example".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:ImageWidth",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0013),
-            "QuickTime:ImageWidth".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "ImageWidth tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:ImageHeight",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0014),
-            "QuickTime:ImageHeight".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "ImageHeight tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:PrintToVideo",
-        TagDescriptor::new(
-            TagId::new_named("ptv ".to_string()),
-            "QuickTime:PrintToVideo".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "PrintToVideo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:ContentCreateDate",
-        TagDescriptor::new(
-            TagId::new_named("@day".to_string()),
-            "QuickTime:ContentCreateDate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "ContentCreateDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TimeStamp",
-        TagDescriptor::new(
-            TagId::new_named("time".to_string()),
-            "QuickTime:TimeStamp".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "TimeStamp tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:ProductionDate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0003),
-            "QuickTime:ProductionDate".to_string(),
-            FormatFamily::QuickTime,
-            true,
-            ValueType::String,
-            "ProductionDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TrackProperty",
+        "GPS:GPSMeasureMode",
         TagDescriptor::new(
             TagId::new_numeric(0x000A),
-            "QuickTime:TrackProperty".to_string(),
-            FormatFamily::QuickTime,
-            false,
+            "GPS:GPSMeasureMode".to_string(),
+            FormatFamily::GPS,
+            true,
             ValueType::String,
-            "TrackProperty tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            "GPSMeasureMode tag".to_string(),
+            vec!["Example".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:TimeZone",
+        "GPS:GPSDOP",
         TagDescriptor::new(
             TagId::new_numeric(0x000B),
-            "QuickTime:TimeZone".to_string(),
-            FormatFamily::QuickTime,
+            "GPS:GPSDOP".to_string(),
+            FormatFamily::GPS,
             true,
-            ValueType::String,
-            "TimeZone tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            ValueType::Rational,
+            "GPS Dilution Of Precision".to_string(),
+            vec!["1/100".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:ModifyDate",
+        "GPS:GPSSpeedRef",
         TagDescriptor::new(
             TagId::new_numeric(0x000C),
-            "QuickTime:ModifyDate".to_string(),
-            FormatFamily::QuickTime,
+            "GPS:GPSSpeedRef".to_string(),
+            FormatFamily::GPS,
             true,
             ValueType::String,
-            "ModifyDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            "GPSSpeedRef tag".to_string(),
+            vec!["Example".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:FileFunctionFlags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0001),
-            "QuickTime:FileFunctionFlags".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "FileFunctionFlags tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:AudioCodec",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "QuickTime:AudioCodec".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "AudioCodec tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:AudioCodecInfo",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0003),
-            "QuickTime:AudioCodecInfo".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "AudioCodecInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:AudioAttributes",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "QuickTime:AudioAttributes".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "AudioAttributes tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:AudioAvgBitrate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0005),
-            "QuickTime:AudioAvgBitrate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "AudioAvgBitrate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:AudioMaxBitrate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "QuickTime:AudioMaxBitrate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "AudioMaxBitrate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:VideoCodec",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "QuickTime:VideoCodec".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "VideoCodec tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:VideoCodecInfo",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0003),
-            "QuickTime:VideoCodecInfo".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "VideoCodecInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:VideoAttributes",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "QuickTime:VideoAttributes".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "VideoAttributes tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:VideoAvgBitrate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0005),
-            "QuickTime:VideoAvgBitrate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "VideoAvgBitrate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:VideoMaxBitrate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "QuickTime:VideoMaxBitrate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "VideoMaxBitrate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:VideoAvgFrameRate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0007),
-            "QuickTime:VideoAvgFrameRate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "VideoAvgFrameRate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:VideoMaxFrameRate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "QuickTime:VideoMaxFrameRate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "VideoMaxFrameRate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:VideoSize",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0009),
-            "QuickTime:VideoSize".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "VideoSize tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:PixelAspectRatio",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000A),
-            "QuickTime:PixelAspectRatio".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "PixelAspectRatio tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:XML",
-        TagDescriptor::new(
-            TagId::new_named("xml ".to_string()),
-            "QuickTime:XML".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "XML tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:ColorPrimaries",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "QuickTime:ColorPrimaries".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "ColorPrimaries tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TransferCharacteristics",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "QuickTime:TransferCharacteristics".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "TransferCharacteristics tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MatrixCoefficients",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "QuickTime:MatrixCoefficients".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "MatrixCoefficients tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:VideoFullRangeFlag",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000A),
-            "QuickTime:VideoFullRangeFlag".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "VideoFullRangeFlag tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:GeneralProfileSpace",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0001),
-            "QuickTime:GeneralProfileSpace".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "GeneralProfileSpace tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:GenProfileCompatibilityFlags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "QuickTime:GenProfileCompatibilityFlags".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "GenProfileCompatibilityFlags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:ConstraintIndicatorFlags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "QuickTime:ConstraintIndicatorFlags".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "ConstraintIndicatorFlags tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:GeneralLevelIDC",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000C),
-            "QuickTime:GeneralLevelIDC".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "GeneralLevelIDC tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MinSpatialSegmentationIDC",
+        "GPS:GPSSpeed",
         TagDescriptor::new(
             TagId::new_numeric(0x000D),
-            "QuickTime:MinSpatialSegmentationIDC".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "MinSpatialSegmentationIDC tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            "GPS:GPSSpeed".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::Rational,
+            "GPSSpeed tag".to_string(),
+            vec!["1/100".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:ParallelismType",
+        "GPS:GPSTrackRef",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000E),
+            "GPS:GPSTrackRef".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::String,
+            "GPSTrackRef tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "GPS:GPSTrack",
         TagDescriptor::new(
             TagId::new_numeric(0x000F),
-            "QuickTime:ParallelismType".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "ParallelismType tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            "GPS:GPSTrack".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::Rational,
+            "GPSTrack tag".to_string(),
+            vec!["1/100".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:ChromaFormat",
+        "GPS:GPSImgDirectionRef",
         TagDescriptor::new(
             TagId::new_numeric(0x0010),
-            "QuickTime:ChromaFormat".to_string(),
-            FormatFamily::QuickTime,
-            false,
+            "GPS:GPSImgDirectionRef".to_string(),
+            FormatFamily::GPS,
+            true,
             ValueType::String,
-            "ChromaFormat tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            "GPSImgDirectionRef tag".to_string(),
+            vec!["Example".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:BitDepthLuma",
+        "GPS:GPSImgDirection",
         TagDescriptor::new(
             TagId::new_numeric(0x0011),
-            "QuickTime:BitDepthLuma".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "BitDepthLuma tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            "GPS:GPSImgDirection".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::Rational,
+            "GPSImgDirection tag".to_string(),
+            vec!["1/100".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:BitDepthChroma",
+        "GPS:GPSMapDatum",
         TagDescriptor::new(
             TagId::new_numeric(0x0012),
-            "QuickTime:BitDepthChroma".to_string(),
-            FormatFamily::QuickTime,
-            false,
+            "GPS:GPSMapDatum".to_string(),
+            FormatFamily::GPS,
+            true,
             ValueType::String,
-            "BitDepthChroma tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            "GPSMapDatum tag".to_string(),
+            vec!["Example".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:AverageFrameRate",
+        "GPS:GPSDestLatitudeRef",
         TagDescriptor::new(
             TagId::new_numeric(0x0013),
-            "QuickTime:AverageFrameRate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "AverageFrameRate tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:ConstantFrameRate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0015),
-            "QuickTime:ConstantFrameRate".to_string(),
-            FormatFamily::QuickTime,
-            false,
+            "GPS:GPSDestLatitudeRef".to_string(),
+            FormatFamily::GPS,
+            true,
             ValueType::String,
-            "ConstantFrameRate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            "GPSDestLatitudeRef tag".to_string(),
+            vec!["Example".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:AV1ConfigurationVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "QuickTime:AV1ConfigurationVersion".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "AV1ConfigurationVersion tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:InitialDelaySamples",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0003),
-            "QuickTime:InitialDelaySamples".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "InitialDelaySamples tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:iTunesInfo",
-        TagDescriptor::new(
-            TagId::new_named("----".to_string()),
-            "QuickTime:iTunesInfo".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "iTunesInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:GPSCoordinates",
-        TagDescriptor::new(
-            TagId::new_named("location.ISO6709".to_string()),
-            "QuickTime:GPSCoordinates".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "GPSCoordinates tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:LocationRole",
-        TagDescriptor::new(
-            TagId::new_named("location.role".to_string()),
-            "QuickTime:LocationRole".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "LocationRole tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:LocationDate",
-        TagDescriptor::new(
-            TagId::new_named("location.date".to_string()),
-            "QuickTime:LocationDate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "LocationDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Mute",
-        TagDescriptor::new(
-            TagId::new_named("player.movie.audio.mute".to_string()),
-            "QuickTime:Mute".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Mute tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:VideoOrientation",
-        TagDescriptor::new(
-            TagId::new_named("video-orientation".to_string()),
-            "QuickTime:VideoOrientation".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "VideoOrientation tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:LivePhotoInfo",
-        TagDescriptor::new(
-            TagId::new_named("live-photo-info".to_string()),
-            "QuickTime:LivePhotoInfo".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "LivePhotoInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:FaceInfo",
-        TagDescriptor::new(
-            TagId::new_named("detected-face".to_string()),
-            "QuickTime:FaceInfo".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "FaceInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:DetectedFaceBounds",
-        TagDescriptor::new(
-            TagId::new_named("detected-face.bounds".to_string()),
-            "QuickTime:DetectedFaceBounds".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "DetectedFaceBounds tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:SceneIlluminance",
-        TagDescriptor::new(
-            TagId::new_named("scene-illuminance".to_string()),
-            "QuickTime:SceneIlluminance".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "SceneIlluminance tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Mute",
-        TagDescriptor::new(
-            TagId::new_named("player.movie.audio.mute".to_string()),
-            "QuickTime:Mute".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Mute tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:FrameReadoutTime",
-        TagDescriptor::new(
-            TagId::new_named("camera.framereadouttimeinmicroseconds".to_string()),
-            "QuickTime:FrameReadoutTime".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "FrameReadoutTime tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:iTunMOVI",
-        TagDescriptor::new(
-            TagId::new_named("iTunMOVI".to_string()),
-            "QuickTime:iTunMOVI".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "iTunMOVI tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:iTunTool",
-        TagDescriptor::new(
-            TagId::new_named("tool".to_string()),
-            "QuickTime:iTunTool".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "iTunTool".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:ContentRating",
-        TagDescriptor::new(
-            TagId::new_named("iTunEXTC".to_string()),
-            "QuickTime:ContentRating".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "ContentRating tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:VolumeNormalization",
-        TagDescriptor::new(
-            TagId::new_named("iTunNORM".to_string()),
-            "QuickTime:VolumeNormalization".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "VolumeNormalization tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:iTunSMPB",
-        TagDescriptor::new(
-            TagId::new_named("iTunSMPB".to_string()),
-            "QuickTime:iTunSMPB".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "iTunSMPB".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:EncodingParams",
-        TagDescriptor::new(
-            TagId::new_named("Encoding Params".to_string()),
-            "QuickTime:EncodingParams".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "EncodingParams tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:DisplaySize",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "QuickTime:DisplaySize".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "DisplaySize tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:SlideShow",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "QuickTime:SlideShow".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "SlideShow tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:RealtimeStreamingProtocol",
-        TagDescriptor::new(
-            TagId::new_named("rtp ".to_string()),
-            "QuickTime:RealtimeStreamingProtocol".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "RealtimeStreamingProtocol tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MediaHeaderVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "QuickTime:MediaHeaderVersion".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "MediaHeaderVersion tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MediaCreateDate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0001),
-            "QuickTime:MediaCreateDate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "MediaCreateDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MediaModifyDate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "QuickTime:MediaModifyDate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "MediaModifyDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MediaTimeScale",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0003),
-            "QuickTime:MediaTimeScale".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "MediaTimeScale tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MediaDuration",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "QuickTime:MediaDuration".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "MediaDuration tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MediaLanguageCode",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0005),
-            "QuickTime:MediaLanguageCode".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "MediaLanguageCode tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:GraphicsMode",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "QuickTime:GraphicsMode".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "GraphicsMode tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:AudioFormat",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "QuickTime:AudioFormat".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "AudioFormat tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:CompressorID",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0002),
-            "QuickTime:CompressorID".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "CompressorID tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:VendorID",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000A),
-            "QuickTime:VendorID".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "VendorID tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:CompressorName",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0019),
-            "QuickTime:CompressorName".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "CompressorName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:MetaFormat",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "QuickTime:MetaFormat".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "MetaFormat tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:OtherFormat",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "QuickTime:OtherFormat".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "OtherFormat tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:PlaybackFrameRate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0018),
-            "QuickTime:PlaybackFrameRate".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Rational,
-            "PlaybackFrameRate tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:EncoderVendor",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0000),
-            "QuickTime:EncoderVendor".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "EncoderVendor tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:LayoutFlags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "QuickTime:LayoutFlags".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "LayoutFlags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:AudioChannels",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "QuickTime:AudioChannels".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "AudioChannels tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:AudioChannelTypes",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "QuickTime:AudioChannelTypes".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "AudioChannelTypes tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:NumChannelDescriptions",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000C),
-            "QuickTime:NumChannelDescriptions".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "NumChannelDescriptions tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel1Label",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0010),
-            "QuickTime:Channel1Label".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel1Label tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel1Flags",
+        "GPS:GPSDestLatitude",
         TagDescriptor::new(
             TagId::new_numeric(0x0014),
-            "QuickTime:Channel1Flags".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel1Flags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            "GPS:GPSDestLatitude".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::Rational,
+            "GPSDestLatitude tag".to_string(),
+            vec!["1/100".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:Channel1Coordinates",
+        "GPS:GPSDestLongitudeRef",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0015),
+            "GPS:GPSDestLongitudeRef".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::String,
+            "GPSDestLongitudeRef tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "GPS:GPSDestLongitude",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0016),
+            "GPS:GPSDestLongitude".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::Rational,
+            "GPSDestLongitude tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "GPS:GPSDestBearingRef",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0017),
+            "GPS:GPSDestBearingRef".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::String,
+            "GPSDestBearingRef tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "GPS:GPSDestBearing",
         TagDescriptor::new(
             TagId::new_numeric(0x0018),
-            "QuickTime:Channel1Coordinates".to_string(),
-            FormatFamily::QuickTime,
-            false,
+            "GPS:GPSDestBearing".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::Rational,
+            "GPSDestBearing tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "GPS:GPSDestDistanceRef",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0019),
+            "GPS:GPSDestDistanceRef".to_string(),
+            FormatFamily::GPS,
+            true,
             ValueType::String,
-            "Channel1Coordinates tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            "GPSDestDistanceRef tag".to_string(),
+            vec!["Example".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:Channel2Label",
+        "GPS:GPSDestDistance",
         TagDescriptor::new(
-            TagId::new_numeric(0x0024),
-            "QuickTime:Channel2Label".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel2Label tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            TagId::new_numeric(0x001A),
+            "GPS:GPSDestDistance".to_string(),
+            FormatFamily::GPS,
+            true,
+            ValueType::Rational,
+            "GPSDestDistance tag".to_string(),
+            vec!["1/100".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:Channel2Flags",
+        "GPS:GPSProcessingMethod",
         TagDescriptor::new(
-            TagId::new_numeric(0x0028),
-            "QuickTime:Channel2Flags".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel2Flags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel2Coordinates",
-        TagDescriptor::new(
-            TagId::new_numeric(0x002C),
-            "QuickTime:Channel2Coordinates".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "Channel2Coordinates tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel3Label",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0038),
-            "QuickTime:Channel3Label".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel3Label tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel3Flags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x003C),
-            "QuickTime:Channel3Flags".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel3Flags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel3Coordinates",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0040),
-            "QuickTime:Channel3Coordinates".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "Channel3Coordinates tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel4Label",
-        TagDescriptor::new(
-            TagId::new_numeric(0x004C),
-            "QuickTime:Channel4Label".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel4Label tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel4Flags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0050),
-            "QuickTime:Channel4Flags".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel4Flags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel4Coordinates",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0054),
-            "QuickTime:Channel4Coordinates".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "Channel4Coordinates tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel5Label",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0060),
-            "QuickTime:Channel5Label".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel5Label tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel5Flags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0064),
-            "QuickTime:Channel5Flags".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel5Flags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel5Coordinates",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0068),
-            "QuickTime:Channel5Coordinates".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "Channel5Coordinates tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel6Label",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0074),
-            "QuickTime:Channel6Label".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel6Label tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel6Flags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0078),
-            "QuickTime:Channel6Flags".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel6Flags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel6Coordinates",
-        TagDescriptor::new(
-            TagId::new_numeric(0x007C),
-            "QuickTime:Channel6Coordinates".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "Channel6Coordinates tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel7Label",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0088),
-            "QuickTime:Channel7Label".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel7Label tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel7Flags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x008C),
-            "QuickTime:Channel7Flags".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel7Flags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel7Coordinates",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0090),
-            "QuickTime:Channel7Coordinates".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "Channel7Coordinates tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel8Label",
-        TagDescriptor::new(
-            TagId::new_numeric(0x009C),
-            "QuickTime:Channel8Label".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel8Label tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel8Flags",
-        TagDescriptor::new(
-            TagId::new_numeric(0x00A0),
-            "QuickTime:Channel8Flags".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "Channel8Flags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:Channel8Coordinates",
-        TagDescriptor::new(
-            TagId::new_numeric(0x00A4),
-            "QuickTime:Channel8Coordinates".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "Channel8Coordinates tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:KeyID",
-        TagDescriptor::new(
-            TagId::new_named("key ".to_string()),
-            "QuickTime:KeyID".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "KeyID tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TextFont",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0004),
-            "QuickTime:TextFont".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "TextFont tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TextFace",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0006),
-            "QuickTime:TextFace".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "TextFace tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TextSize",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "QuickTime:TextSize".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Integer,
-            "TextSize tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:TextColor",
-        TagDescriptor::new(
-            TagId::new_numeric(0x000C),
-            "QuickTime:TextColor".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "TextColor tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:BackgroundColor",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0012),
-            "QuickTime:BackgroundColor".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "BackgroundColor tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:FontName",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0018),
-            "QuickTime:FontName".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "FontName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:URL",
-        TagDescriptor::new(
-            TagId::new_named("url ".to_string()),
-            "QuickTime:URL".to_string(),
-            FormatFamily::QuickTime,
-            false,
+            TagId::new_numeric(0x001B),
+            "GPS:GPSProcessingMethod".to_string(),
+            FormatFamily::GPS,
+            true,
             ValueType::Binary,
-            "URL tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
+            "GPSProcessingMethod tag".to_string(),
+            vec!["Value".to_string()],
         ),
     );
 
     registry.insert(
-        "QuickTime:URN",
-        TagDescriptor::new(
-            TagId::new_named("urn ".to_string()),
-            "QuickTime:URN".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::Binary,
-            "URN tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:HandlerType",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0008),
-            "QuickTime:HandlerType".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "HandlerType tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:HandlerDescription",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0018),
-            "QuickTime:HandlerDescription".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "HandlerDescription tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:PreviewImage",
+        "GPS:GPSAreaInformation",
         TagDescriptor::new(
             TagId::new_numeric(0x001C),
-            "QuickTime:PreviewImage".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "PreviewImage tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:GPSLog",
-        TagDescriptor::new(
-            TagId::new_named("gps ".to_string()),
-            "QuickTime:GPSLog".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "GPSLog tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "QuickTime:AccelData",
-        TagDescriptor::new(
-            TagId::new_named("3gf ".to_string()),
-            "QuickTime:AccelData".to_string(),
-            FormatFamily::QuickTime,
-            false,
-            ValueType::String,
-            "AccelData tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-
-    // =============================
-    // EXIF TAGS (244 total)
-    // =============================
-
-    registry.insert(
-        "EXIF:InteropIndex",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0001),
-            "EXIF:InteropIndex".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Interoperability Index".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SubfileType",
-        TagDescriptor::new(
-            TagId::new_numeric(0x00FE),
-            "EXIF:SubfileType".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "SubfileType tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:OldSubfileType",
-        TagDescriptor::new(
-            TagId::new_numeric(0x00FF),
-            "EXIF:OldSubfileType".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "OldSubfileType tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ImageWidth",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0100),
-            "EXIF:ImageWidth".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ImageWidth tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ImageHeight",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0101),
-            "EXIF:ImageHeight".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ImageHeight tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:BitsPerSample",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0102),
-            "EXIF:BitsPerSample".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "BitsPerSample tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Compression",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0103),
-            "EXIF:Compression".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "Compression tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PhotometricInterpretation",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0106),
-            "EXIF:PhotometricInterpretation".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "PhotometricInterpretation tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Thresholding",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0107),
-            "EXIF:Thresholding".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "Thresholding tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CellWidth",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0108),
-            "EXIF:CellWidth".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "CellWidth tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CellLength",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0109),
-            "EXIF:CellLength".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "CellLength tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:FillOrder",
-        TagDescriptor::new(
-            TagId::new_numeric(0x010A),
-            "EXIF:FillOrder".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "FillOrder tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:DocumentName",
-        TagDescriptor::new(
-            TagId::new_numeric(0x010D),
-            "EXIF:DocumentName".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "DocumentName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ImageDescription",
-        TagDescriptor::new(
-            TagId::new_numeric(0x010E),
-            "EXIF:ImageDescription".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "ImageDescription tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Make",
-        TagDescriptor::new(
-            TagId::new_numeric(0x010F),
-            "EXIF:Make".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Make tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Model",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0110),
-            "EXIF:Model".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Camera Model Name".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Orientation",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0112),
-            "EXIF:Orientation".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "Orientation tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SamplesPerPixel",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0115),
-            "EXIF:SamplesPerPixel".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "SamplesPerPixel tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:RowsPerStrip",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0116),
-            "EXIF:RowsPerStrip".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "RowsPerStrip tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:MinSampleValue",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0118),
-            "EXIF:MinSampleValue".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "MinSampleValue tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:MaxSampleValue",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0119),
-            "EXIF:MaxSampleValue".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "MaxSampleValue tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:XResolution",
-        TagDescriptor::new(
-            TagId::new_numeric(0x011A),
-            "EXIF:XResolution".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "XResolution tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:YResolution",
-        TagDescriptor::new(
-            TagId::new_numeric(0x011B),
-            "EXIF:YResolution".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "YResolution tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PlanarConfiguration",
-        TagDescriptor::new(
-            TagId::new_numeric(0x011C),
-            "EXIF:PlanarConfiguration".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "PlanarConfiguration tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PageName",
-        TagDescriptor::new(
-            TagId::new_numeric(0x011D),
-            "EXIF:PageName".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "PageName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:XPosition",
-        TagDescriptor::new(
-            TagId::new_numeric(0x011E),
-            "EXIF:XPosition".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "XPosition tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:YPosition",
-        TagDescriptor::new(
-            TagId::new_numeric(0x011F),
-            "EXIF:YPosition".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "YPosition tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:FreeOffsets",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0120),
-            "EXIF:FreeOffsets".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "FreeOffsets tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:FreeByteCounts",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0121),
-            "EXIF:FreeByteCounts".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "FreeByteCounts tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:GrayResponseUnit",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0122),
-            "EXIF:GrayResponseUnit".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "GrayResponseUnit tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:GrayResponseCurve",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0123),
-            "EXIF:GrayResponseCurve".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "GrayResponseCurve tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:T4Options",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0124),
-            "EXIF:T4Options".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "T4Options tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:T6Options",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0125),
-            "EXIF:T6Options".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "T6Options tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ResolutionUnit",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0128),
-            "EXIF:ResolutionUnit".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ResolutionUnit tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PageNumber",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0129),
-            "EXIF:PageNumber".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "PageNumber tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:TransferFunction",
-        TagDescriptor::new(
-            TagId::new_numeric(0x012D),
-            "EXIF:TransferFunction".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "TransferFunction tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Software",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0131),
-            "EXIF:Software".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Software tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ModifyDate",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0132),
-            "EXIF:ModifyDate".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "ModifyDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Artist",
-        TagDescriptor::new(
-            TagId::new_numeric(0x013B),
-            "EXIF:Artist".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Artist tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:HostComputer",
-        TagDescriptor::new(
-            TagId::new_numeric(0x013C),
-            "EXIF:HostComputer".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "HostComputer tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Predictor",
-        TagDescriptor::new(
-            TagId::new_numeric(0x013D),
-            "EXIF:Predictor".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "Predictor tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:WhitePoint",
-        TagDescriptor::new(
-            TagId::new_numeric(0x013E),
-            "EXIF:WhitePoint".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "WhitePoint tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PrimaryChromaticities",
-        TagDescriptor::new(
-            TagId::new_numeric(0x013F),
-            "EXIF:PrimaryChromaticities".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "PrimaryChromaticities tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ColorMap",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0140),
-            "EXIF:ColorMap".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::Binary,
-            "ColorMap tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:HalftoneHints",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0141),
-            "EXIF:HalftoneHints".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "HalftoneHints tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:TileWidth",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0142),
-            "EXIF:TileWidth".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "TileWidth tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:TileLength",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0143),
-            "EXIF:TileLength".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "TileLength tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:TileOffsets",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0144),
-            "EXIF:TileOffsets".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "TileOffsets tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:TileByteCounts",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0145),
-            "EXIF:TileByteCounts".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "TileByteCounts tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:InkSet",
-        TagDescriptor::new(
-            TagId::new_numeric(0x014C),
-            "EXIF:InkSet".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "InkSet tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:TargetPrinter",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0151),
-            "EXIF:TargetPrinter".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "TargetPrinter tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ExtraSamples",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0152),
-            "EXIF:ExtraSamples".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "ExtraSamples tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SampleFormat",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0153),
-            "EXIF:SampleFormat".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "SampleFormat tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:JPEGTables",
-        TagDescriptor::new(
-            TagId::new_numeric(0x015B),
-            "EXIF:JPEGTables".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "JPEGTables tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:JPEGProc",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0200),
-            "EXIF:JPEGProc".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "JPEGProc tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:JPEGQTables",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0207),
-            "EXIF:JPEGQTables".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "JPEGQTables tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:JPEGDCTables",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0208),
-            "EXIF:JPEGDCTables".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "JPEGDCTables tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:JPEGACTables",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0209),
-            "EXIF:JPEGACTables".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "JPEGACTables tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:YCbCrCoefficients",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0211),
-            "EXIF:YCbCrCoefficients".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "YCbCrCoefficients tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:YCbCrSubSampling",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0212),
-            "EXIF:YCbCrSubSampling".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "YCbCrSubSampling tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:YCbCrPositioning",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0213),
-            "EXIF:YCbCrPositioning".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "YCbCrPositioning tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ReferenceBlackWhite",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0214),
-            "EXIF:ReferenceBlackWhite".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "ReferenceBlackWhite tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ApplicationNotes",
-        TagDescriptor::new(
-            TagId::new_numeric(0x02BC),
-            "EXIF:ApplicationNotes".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ApplicationNotes tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:StitchInfo",
-        TagDescriptor::new(
-            TagId::new_numeric(0x4748),
-            "EXIF:StitchInfo".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "StitchInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:VignettingCorrection",
-        TagDescriptor::new(
-            TagId::new_numeric(0x7031),
-            "EXIF:VignettingCorrection".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "VignettingCorrection tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:VignettingCorrParams",
-        TagDescriptor::new(
-            TagId::new_numeric(0x7032),
-            "EXIF:VignettingCorrParams".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "VignettingCorrParams tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ChromaticAberrationCorrection",
-        TagDescriptor::new(
-            TagId::new_numeric(0x7034),
-            "EXIF:ChromaticAberrationCorrection".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ChromaticAberrationCorrection tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ChromaticAberrationCorrParams",
-        TagDescriptor::new(
-            TagId::new_numeric(0x7035),
-            "EXIF:ChromaticAberrationCorrParams".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ChromaticAberrationCorrParams tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:DistortionCorrection",
-        TagDescriptor::new(
-            TagId::new_numeric(0x7036),
-            "EXIF:DistortionCorrection".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "DistortionCorrection tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:DistortionCorrParams",
-        TagDescriptor::new(
-            TagId::new_numeric(0x7037),
-            "EXIF:DistortionCorrParams".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "DistortionCorrParams tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CFAPattern2",
-        TagDescriptor::new(
-            TagId::new_numeric(0x828E),
-            "EXIF:CFAPattern2".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "CFAPattern2 tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:KodakIFD",
-        TagDescriptor::new(
-            TagId::new_numeric(0x8290),
-            "EXIF:KodakIFD".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "KodakIFD tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Copyright",
-        TagDescriptor::new(
-            TagId::new_numeric(0x8298),
-            "EXIF:Copyright".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Copyright tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ExposureTime",
-        TagDescriptor::new(
-            TagId::new_numeric(0x829A),
-            "EXIF:ExposureTime".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "ExposureTime tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:FNumber",
-        TagDescriptor::new(
-            TagId::new_numeric(0x829D),
-            "EXIF:FNumber".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "FNumber tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:AFCP_IPTC",
-        TagDescriptor::new(
-            TagId::new_numeric(0x8568),
-            "EXIF:AFCP_IPTC".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "AFCP_IPTC tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:LeafData",
-        TagDescriptor::new(
-            TagId::new_numeric(0x8606),
-            "EXIF:LeafData".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::Binary,
-            "LeafData tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ExifOffset",
-        TagDescriptor::new(
-            TagId::new_numeric(0x8769),
-            "EXIF:ExifOffset".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "ExifOffset tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ICC_Profile",
-        TagDescriptor::new(
-            TagId::new_numeric(0x8773),
-            "EXIF:ICC_Profile".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "ICC_Profile tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ExposureProgram",
-        TagDescriptor::new(
-            TagId::new_numeric(0x8822),
-            "EXIF:ExposureProgram".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ExposureProgram tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SpectralSensitivity",
-        TagDescriptor::new(
-            TagId::new_numeric(0x8824),
-            "EXIF:SpectralSensitivity".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "SpectralSensitivity tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:GPSInfo",
-        TagDescriptor::new(
-            TagId::new_numeric(0x8825),
-            "EXIF:GPSInfo".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "GPSInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ISO",
-        TagDescriptor::new(
-            TagId::new_numeric(0x8827),
-            "EXIF:ISO".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "ISO tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Opto-ElectricConvFactor",
-        TagDescriptor::new(
-            TagId::new_numeric(0x8828),
-            "EXIF:Opto-ElectricConvFactor".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "Opto-ElectricConvFactor tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ExifVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9000),
-            "EXIF:ExifVersion".to_string(),
-            FormatFamily::EXIF,
+            "GPS:GPSAreaInformation".to_string(),
+            FormatFamily::GPS,
             true,
             ValueType::Binary,
-            "ExifVersion tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
+            "GPSAreaInformation tag".to_string(),
+            vec!["Value".to_string()],
         ),
     );
 
     registry.insert(
-        "EXIF:DateTimeOriginal",
+        "GPS:GPSDateStamp",
         TagDescriptor::new(
-            TagId::new_numeric(0x9003),
-            "EXIF:DateTimeOriginal".to_string(),
-            FormatFamily::EXIF,
+            TagId::new_numeric(0x001D),
+            "GPS:GPSDateStamp".to_string(),
+            FormatFamily::GPS,
             true,
             ValueType::String,
-            "Date/Time Original".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            "GPSDateStamp tag".to_string(),
+            vec!["Example".to_string()],
         ),
     );
 
     registry.insert(
-        "EXIF:CreateDate",
+        "GPS:GPSDifferential",
         TagDescriptor::new(
-            TagId::new_numeric(0x9004),
-            "EXIF:CreateDate".to_string(),
-            FormatFamily::EXIF,
+            TagId::new_numeric(0x001E),
+            "GPS:GPSDifferential".to_string(),
+            FormatFamily::GPS,
             true,
-            ValueType::String,
-            "CreateDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            ValueType::Integer,
+            "GPSDifferential tag".to_string(),
+            vec!["100".to_string()],
         ),
     );
 
     registry.insert(
-        "EXIF:OffsetTime",
+        "GPS:GPSHPositioningError",
         TagDescriptor::new(
-            TagId::new_numeric(0x9010),
-            "EXIF:OffsetTime".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "OffsetTime tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:OffsetTimeOriginal",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9011),
-            "EXIF:OffsetTimeOriginal".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "OffsetTimeOriginal tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:OffsetTimeDigitized",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9012),
-            "EXIF:OffsetTimeDigitized".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "OffsetTimeDigitized tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ComponentsConfiguration",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9101),
-            "EXIF:ComponentsConfiguration".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Binary,
-            "ComponentsConfiguration tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CompressedBitsPerPixel",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9102),
-            "EXIF:CompressedBitsPerPixel".to_string(),
-            FormatFamily::EXIF,
+            TagId::new_numeric(0x001F),
+            "GPS:GPSHPositioningError".to_string(),
+            FormatFamily::GPS,
             true,
             ValueType::Rational,
-            "CompressedBitsPerPixel tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ShutterSpeedValue",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9201),
-            "EXIF:ShutterSpeedValue".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "ShutterSpeedValue tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ApertureValue",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9202),
-            "EXIF:ApertureValue".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "ApertureValue tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:BrightnessValue",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9203),
-            "EXIF:BrightnessValue".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "BrightnessValue tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ExposureCompensation",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9204),
-            "EXIF:ExposureCompensation".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "ExposureCompensation tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:MaxApertureValue",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9205),
-            "EXIF:MaxApertureValue".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "MaxApertureValue tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SubjectDistance",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9206),
-            "EXIF:SubjectDistance".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "SubjectDistance tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:MeteringMode",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9207),
-            "EXIF:MeteringMode".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "MeteringMode tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:LightSource",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9208),
-            "EXIF:LightSource".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "LightSource tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Flash",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9209),
-            "EXIF:Flash".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "Flash tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:FocalLength",
-        TagDescriptor::new(
-            TagId::new_numeric(0x920A),
-            "EXIF:FocalLength".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "FocalLength tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SubjectArea",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9214),
-            "EXIF:SubjectArea".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "SubjectArea tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:UserComment",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9286),
-            "EXIF:UserComment".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Binary,
-            "UserComment tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SubSecTime",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9290),
-            "EXIF:SubSecTime".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "SubSecTime tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SubSecTimeOriginal",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9291),
-            "EXIF:SubSecTimeOriginal".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "SubSecTimeOriginal tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SubSecTimeDigitized",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9292),
-            "EXIF:SubSecTimeDigitized".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "SubSecTimeDigitized tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:MSPropertySetStorage",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9330),
-            "EXIF:MSPropertySetStorage".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "MSPropertySetStorage tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:MSDocumentTextPosition",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9331),
-            "EXIF:MSDocumentTextPosition".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "MSDocumentTextPosition tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:AmbientTemperature",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9400),
-            "EXIF:AmbientTemperature".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "AmbientTemperature tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Humidity",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9401),
-            "EXIF:Humidity".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "Humidity tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Pressure",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9402),
-            "EXIF:Pressure".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "Pressure tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:WaterDepth",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9403),
-            "EXIF:WaterDepth".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "WaterDepth tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Acceleration",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9404),
-            "EXIF:Acceleration".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "Acceleration tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CameraElevationAngle",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9405),
-            "EXIF:CameraElevationAngle".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "CameraElevationAngle tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:XiaomiModel",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9A00),
-            "EXIF:XiaomiModel".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "XiaomiModel tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:XPTitle",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9C9B),
-            "EXIF:XPTitle".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "XPTitle tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:XPComment",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9C9C),
-            "EXIF:XPComment".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "XPComment tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:XPAuthor",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9C9D),
-            "EXIF:XPAuthor".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "XPAuthor tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:XPKeywords",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9C9E),
-            "EXIF:XPKeywords".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "XPKeywords tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:XPSubject",
-        TagDescriptor::new(
-            TagId::new_numeric(0x9C9F),
-            "EXIF:XPSubject".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "XPSubject tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:FlashpixVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA000),
-            "EXIF:FlashpixVersion".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Binary,
-            "FlashpixVersion tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ColorSpace",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA001),
-            "EXIF:ColorSpace".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "ColorSpace tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ExifImageWidth",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA002),
-            "EXIF:ExifImageWidth".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ExifImageWidth tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ExifImageHeight",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA003),
-            "EXIF:ExifImageHeight".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ExifImageHeight tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:RelatedSoundFile",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA004),
-            "EXIF:RelatedSoundFile".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "RelatedSoundFile tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:InteropOffset",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA005),
-            "EXIF:InteropOffset".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "Interoperability Offset".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SamsungRawPointersOffset",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA010),
-            "EXIF:SamsungRawPointersOffset".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "SamsungRawPointersOffset tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SamsungRawPointersLength",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA011),
-            "EXIF:SamsungRawPointersLength".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "SamsungRawPointersLength tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SamsungRawByteOrder",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA101),
-            "EXIF:SamsungRawByteOrder".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::Binary,
-            "SamsungRawByteOrder tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SamsungRawUnknown",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA102),
-            "EXIF:SamsungRawUnknown".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "SamsungRawUnknown tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:FlashEnergy",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA20B),
-            "EXIF:FlashEnergy".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "FlashEnergy tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SpatialFrequencyResponse",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA20C),
-            "EXIF:SpatialFrequencyResponse".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "SpatialFrequencyResponse tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:FocalPlaneXResolution",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA20E),
-            "EXIF:FocalPlaneXResolution".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "FocalPlaneXResolution tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:FocalPlaneYResolution",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA20F),
-            "EXIF:FocalPlaneYResolution".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "FocalPlaneYResolution tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:FocalPlaneResolutionUnit",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA210),
-            "EXIF:FocalPlaneResolutionUnit".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "FocalPlaneResolutionUnit tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SubjectLocation",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA214),
-            "EXIF:SubjectLocation".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "SubjectLocation tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SensingMethod",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA217),
-            "EXIF:SensingMethod".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "SensingMethod tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:FileSource",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA300),
-            "EXIF:FileSource".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Binary,
-            "FileSource tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SceneType",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA301),
-            "EXIF:SceneType".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Binary,
-            "SceneType tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CFAPattern",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA302),
-            "EXIF:CFAPattern".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Binary,
-            "CFAPattern tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CustomRendered",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA401),
-            "EXIF:CustomRendered".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "CustomRendered tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ExposureMode",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA402),
-            "EXIF:ExposureMode".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ExposureMode tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:WhiteBalance",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA403),
-            "EXIF:WhiteBalance".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "WhiteBalance tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:DigitalZoomRatio",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA404),
-            "EXIF:DigitalZoomRatio".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "DigitalZoomRatio tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:FocalLengthIn35mmFormat",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA405),
-            "EXIF:FocalLengthIn35mmFormat".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "FocalLengthIn35mmFormat tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SceneCaptureType",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA406),
-            "EXIF:SceneCaptureType".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "SceneCaptureType tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:GainControl",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA407),
-            "EXIF:GainControl".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "GainControl tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Contrast",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA408),
-            "EXIF:Contrast".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "Contrast tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Saturation",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA409),
-            "EXIF:Saturation".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "Saturation tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Sharpness",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA40A),
-            "EXIF:Sharpness".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "Sharpness tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:DeviceSettingDescription",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA40B),
-            "EXIF:DeviceSettingDescription".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "DeviceSettingDescription tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SubjectDistanceRange",
-        TagDescriptor::new(
-            TagId::new_numeric(0xA40C),
-            "EXIF:SubjectDistanceRange".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "SubjectDistanceRange tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PrintIM",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC4A5),
-            "EXIF:PrintIM".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Binary,
-            "Print Image Matching".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:DNGVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC612),
-            "EXIF:DNGVersion".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "DNGVersion tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:DNGBackwardVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC613),
-            "EXIF:DNGBackwardVersion".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "DNGBackwardVersion tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:UniqueCameraModel",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC614),
-            "EXIF:UniqueCameraModel".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "UniqueCameraModel tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:LocalizedCameraModel",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC615),
-            "EXIF:LocalizedCameraModel".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "LocalizedCameraModel tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CFAPlaneColor",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC616),
-            "EXIF:CFAPlaneColor".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "CFAPlaneColor tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CFALayout",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC617),
-            "EXIF:CFALayout".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "CFALayout tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:LinearizationTable",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC618),
-            "EXIF:LinearizationTable".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "LinearizationTable tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:BlackLevelRepeatDim",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC619),
-            "EXIF:BlackLevelRepeatDim".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "BlackLevelRepeatDim tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:BlackLevel",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC61A),
-            "EXIF:BlackLevel".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "BlackLevel tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:BlackLevelDeltaH",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC61B),
-            "EXIF:BlackLevelDeltaH".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "BlackLevelDeltaH tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:BlackLevelDeltaV",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC61C),
-            "EXIF:BlackLevelDeltaV".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "BlackLevelDeltaV tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:WhiteLevel",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC61D),
-            "EXIF:WhiteLevel".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "WhiteLevel tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:DefaultScale",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC61E),
-            "EXIF:DefaultScale".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "DefaultScale tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:DefaultCropOrigin",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC61F),
-            "EXIF:DefaultCropOrigin".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "DefaultCropOrigin tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:DefaultCropSize",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC620),
-            "EXIF:DefaultCropSize".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "DefaultCropSize tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ColorMatrix1",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC621),
-            "EXIF:ColorMatrix1".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "ColorMatrix1 tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ColorMatrix2",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC622),
-            "EXIF:ColorMatrix2".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "ColorMatrix2 tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CameraCalibration1",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC623),
-            "EXIF:CameraCalibration1".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "CameraCalibration1 tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CameraCalibration2",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC624),
-            "EXIF:CameraCalibration2".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "CameraCalibration2 tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ReductionMatrix1",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC625),
-            "EXIF:ReductionMatrix1".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "ReductionMatrix1 tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ReductionMatrix2",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC626),
-            "EXIF:ReductionMatrix2".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "ReductionMatrix2 tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:AnalogBalance",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC627),
-            "EXIF:AnalogBalance".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "AnalogBalance tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:AsShotNeutral",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC628),
-            "EXIF:AsShotNeutral".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "AsShotNeutral tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:AsShotWhiteXY",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC629),
-            "EXIF:AsShotWhiteXY".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "AsShotWhiteXY tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:BaselineExposure",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC62A),
-            "EXIF:BaselineExposure".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "BaselineExposure tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:BaselineNoise",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC62B),
-            "EXIF:BaselineNoise".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "BaselineNoise tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:BaselineSharpness",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC62C),
-            "EXIF:BaselineSharpness".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "BaselineSharpness tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:BayerGreenSplit",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC62D),
-            "EXIF:BayerGreenSplit".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "BayerGreenSplit tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:LinearResponseLimit",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC62E),
-            "EXIF:LinearResponseLimit".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "LinearResponseLimit tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CameraSerialNumber",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC62F),
-            "EXIF:CameraSerialNumber".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "CameraSerialNumber tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:DNGLensInfo",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC630),
-            "EXIF:DNGLensInfo".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "DNGLensInfo tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ChromaBlurRadius",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC631),
-            "EXIF:ChromaBlurRadius".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "ChromaBlurRadius tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:AntiAliasStrength",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC632),
-            "EXIF:AntiAliasStrength".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "AntiAliasStrength tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ShadowScale",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC633),
-            "EXIF:ShadowScale".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "ShadowScale tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:MakerNoteSafety",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC635),
-            "EXIF:MakerNoteSafety".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "MakerNoteSafety tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CalibrationIlluminant1",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC65A),
-            "EXIF:CalibrationIlluminant1".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "CalibrationIlluminant1 tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CalibrationIlluminant2",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC65B),
-            "EXIF:CalibrationIlluminant2".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "CalibrationIlluminant2 tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:BestQualityScale",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC65C),
-            "EXIF:BestQualityScale".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "BestQualityScale tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:RawDataUniqueID",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC65D),
-            "EXIF:RawDataUniqueID".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "RawDataUniqueID tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:OriginalRawFileName",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC68B),
-            "EXIF:OriginalRawFileName".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "OriginalRawFileName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:OriginalRawFileData",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC68C),
-            "EXIF:OriginalRawFileData".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Binary,
-            "OriginalRawFileData tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ActiveArea",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC68D),
-            "EXIF:ActiveArea".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ActiveArea tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:MaskedAreas",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC68E),
-            "EXIF:MaskedAreas".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "MaskedAreas tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:AsShotICCProfile",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC68F),
-            "EXIF:AsShotICCProfile".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Binary,
-            "AsShotICCProfile tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:AsShotPreProfileMatrix",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC690),
-            "EXIF:AsShotPreProfileMatrix".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "AsShotPreProfileMatrix tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CurrentICCProfile",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC691),
-            "EXIF:CurrentICCProfile".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Binary,
-            "CurrentICCProfile tag".to_string(),
-            vec![
-                "Value".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CurrentPreProfileMatrix",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC692),
-            "EXIF:CurrentPreProfileMatrix".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "CurrentPreProfileMatrix tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ColorimetricReference",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC6BF),
-            "EXIF:ColorimetricReference".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ColorimetricReference tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:CameraCalibrationSig",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC6F3),
-            "EXIF:CameraCalibrationSig".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "CameraCalibrationSig tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ProfileCalibrationSig",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC6F4),
-            "EXIF:ProfileCalibrationSig".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "ProfileCalibrationSig tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ProfileIFD",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC6F5),
-            "EXIF:ProfileIFD".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "ProfileIFD tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:AsShotProfileName",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC6F6),
-            "EXIF:AsShotProfileName".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "AsShotProfileName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:NoiseReductionApplied",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC6F7),
-            "EXIF:NoiseReductionApplied".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "NoiseReductionApplied tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ProfileName",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC6F8),
-            "EXIF:ProfileName".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "ProfileName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ProfileHueSatMapDims",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC6F9),
-            "EXIF:ProfileHueSatMapDims".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ProfileHueSatMapDims tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ProfileHueSatMapData1",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC6FA),
-            "EXIF:ProfileHueSatMapData1".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Float,
-            "ProfileHueSatMapData1 tag".to_string(),
-            vec![
-                "1.5".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ProfileHueSatMapData2",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC6FB),
-            "EXIF:ProfileHueSatMapData2".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Float,
-            "ProfileHueSatMapData2 tag".to_string(),
-            vec![
-                "1.5".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ProfileToneCurve",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC6FC),
-            "EXIF:ProfileToneCurve".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Float,
-            "ProfileToneCurve tag".to_string(),
-            vec![
-                "1.5".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ProfileEmbedPolicy",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC6FD),
-            "EXIF:ProfileEmbedPolicy".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ProfileEmbedPolicy tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ProfileCopyright",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC6FE),
-            "EXIF:ProfileCopyright".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "ProfileCopyright tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ForwardMatrix1",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC714),
-            "EXIF:ForwardMatrix1".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "ForwardMatrix1 tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ForwardMatrix2",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC715),
-            "EXIF:ForwardMatrix2".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "ForwardMatrix2 tag".to_string(),
-            vec![
-                "1/100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PreviewApplicationName",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC716),
-            "EXIF:PreviewApplicationName".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "PreviewApplicationName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PreviewApplicationVersion",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC717),
-            "EXIF:PreviewApplicationVersion".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "PreviewApplicationVersion tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PreviewSettingsName",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC718),
-            "EXIF:PreviewSettingsName".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "PreviewSettingsName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PreviewSettingsDigest",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC719),
-            "EXIF:PreviewSettingsDigest".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "PreviewSettingsDigest tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PreviewColorSpace",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC71A),
-            "EXIF:PreviewColorSpace".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "PreviewColorSpace tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PreviewDateTime",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC71B),
-            "EXIF:PreviewDateTime".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "PreviewDateTime tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:RawImageDigest",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC71C),
-            "EXIF:RawImageDigest".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "RawImageDigest tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:OriginalRawFileDigest",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC71D),
-            "EXIF:OriginalRawFileDigest".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "OriginalRawFileDigest tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ProfileLookTableDims",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC725),
-            "EXIF:ProfileLookTableDims".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "ProfileLookTableDims tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:ProfileLookTableData",
-        TagDescriptor::new(
-            TagId::new_numeric(0xC726),
-            "EXIF:ProfileLookTableData".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Float,
-            "ProfileLookTableData tag".to_string(),
-            vec![
-                "1.5".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:JUMBF",
-        TagDescriptor::new(
-            TagId::new_numeric(0xCD41),
-            "EXIF:JUMBF".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "JUMBF tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SEAL",
-        TagDescriptor::new(
-            TagId::new_numeric(0xCEA1),
-            "EXIF:SEAL".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "SEAL tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:OffsetSchema",
-        TagDescriptor::new(
-            TagId::new_numeric(0xEA1D),
-            "EXIF:OffsetSchema".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "OffsetSchema tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:OwnerName",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFDE8),
-            "EXIF:OwnerName".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "OwnerName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SerialNumber",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFDE9),
-            "EXIF:SerialNumber".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "SerialNumber tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Lens",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFDEA),
-            "EXIF:Lens".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Lens tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:RawFile",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFE4C),
-            "EXIF:RawFile".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "RawFile tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Converter",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFE4D),
-            "EXIF:Converter".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Converter tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:WhiteBalance",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFE4E),
-            "EXIF:WhiteBalance".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "WhiteBalance tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Exposure",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFE51),
-            "EXIF:Exposure".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Exposure tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Shadows",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFE52),
-            "EXIF:Shadows".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Shadows tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Brightness",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFE53),
-            "EXIF:Brightness".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Brightness tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Contrast",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFE54),
-            "EXIF:Contrast".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Contrast tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Saturation",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFE55),
-            "EXIF:Saturation".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Saturation tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Sharpness",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFE56),
-            "EXIF:Sharpness".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Sharpness tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:Smoothness",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFE57),
-            "EXIF:Smoothness".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Smoothness tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:MoireFilter",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFE58),
-            "EXIF:MoireFilter".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "MoireFilter tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:KDC_IFD",
-        TagDescriptor::new(
-            TagId::new_numeric(0xFE00),
-            "EXIF:KDC_IFD".to_string(),
-            FormatFamily::EXIF,
-            false,
-            ValueType::String,
-            "KDC_IFD tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            "GPS Horizontal Positioning Error".to_string(),
+            vec!["1/100".to_string()],
         ),
     );
 
@@ -8681,9 +847,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "IPTCEnvelope tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8696,9 +860,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "IPTCApplication tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8711,9 +873,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "IPTCNewsPhoto tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8726,9 +886,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "IPTCPreObjectData tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8741,9 +899,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "IPTCObjectData tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8756,9 +912,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "IPTCPostObjectData tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8771,9 +925,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "IPTCFotoStation tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8786,9 +938,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "EnvelopeRecordVersion tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -8801,9 +951,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Destination tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8816,9 +964,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "FileFormat tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -8831,9 +977,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "FileVersion tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -8846,9 +990,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ServiceIdentifier tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8861,9 +1003,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "EnvelopeNumber tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8876,9 +1016,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ProductID tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8891,9 +1029,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "EnvelopePriority tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8906,9 +1042,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "DateSent tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8921,9 +1055,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "TimeSent tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8936,9 +1068,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "CodedCharacterSet tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8951,9 +1081,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "UniqueObjectName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -8966,9 +1094,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ARMIdentifier tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -8981,9 +1107,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ARMVersion tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -8996,9 +1120,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ApplicationRecordVersion tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -9011,9 +1133,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ObjectTypeReference tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9026,9 +1146,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ObjectAttributeReference tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9041,9 +1159,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ObjectName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9056,9 +1172,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "EditStatus tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9071,9 +1185,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "EditorialUpdate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9086,9 +1198,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Urgency tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9101,9 +1211,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "SubjectReference tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9116,9 +1224,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Category tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9131,9 +1237,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "SupplementalCategories tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9146,9 +1250,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "FixtureIdentifier tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9161,9 +1263,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Keywords tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9176,9 +1276,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ContentLocationCode tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9191,9 +1289,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ContentLocationName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9206,9 +1302,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ReleaseDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9221,9 +1315,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ReleaseTime tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9236,9 +1328,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ExpirationDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9251,9 +1341,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ExpirationTime tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9266,9 +1354,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "SpecialInstructions tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9281,9 +1367,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ActionAdvised tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9296,9 +1380,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ReferenceService tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9311,9 +1393,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ReferenceDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9326,9 +1406,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ReferenceNumber tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9341,9 +1419,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "DateCreated tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9356,9 +1432,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "TimeCreated tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9371,9 +1445,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "DigitalCreationDate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9386,9 +1458,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "DigitalCreationTime tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9401,9 +1471,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "OriginatingProgram tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9416,9 +1484,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ProgramVersion tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9431,9 +1497,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ObjectCycle tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9446,9 +1510,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "By-line tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9461,9 +1523,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "By-lineTitle tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9476,9 +1536,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "City tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9491,9 +1549,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Sub-location tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9506,9 +1562,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Province-State tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9521,9 +1575,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Country-PrimaryLocationCode tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9536,9 +1588,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Country-PrimaryLocationName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9551,9 +1601,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "OriginalTransmissionReference tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9566,9 +1614,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Headline tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9581,9 +1627,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Credit tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9596,9 +1640,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Source tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9611,9 +1653,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "CopyrightNotice tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9626,9 +1666,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Contact tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9641,9 +1679,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Caption-Abstract tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9656,9 +1692,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "LocalCaption tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9671,9 +1705,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Writer-Editor tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9686,9 +1718,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "RasterizedCaption tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9701,9 +1731,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ImageType tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9716,9 +1744,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ImageOrientation tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9731,9 +1757,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "LanguageIdentifier tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9746,9 +1770,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "AudioType tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9761,9 +1783,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "AudioSamplingRate tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9776,9 +1796,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "AudioSamplingResolution tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9791,9 +1809,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "AudioDuration tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9806,9 +1822,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "AudioOutcue tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9821,9 +1835,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "JobID tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9836,9 +1848,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "MasterDocumentID tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9851,9 +1861,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ShortDocumentID tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9866,9 +1874,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "UniqueDocumentID tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9881,9 +1887,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "OwnerID tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9896,9 +1900,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ObjectPreviewFileFormat tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -9911,9 +1913,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ObjectPreviewFileVersion tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -9926,9 +1926,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ObjectPreviewData tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9941,9 +1939,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "Prefs tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9956,9 +1952,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ClassifyState tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9971,9 +1965,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "SimilarityIndex tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -9986,9 +1978,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "DocumentNotes tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10001,9 +1991,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "DocumentHistory tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10016,9 +2004,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ExifCameraInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10031,9 +2017,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "NewsPhotoVersion tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10046,9 +2030,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "IPTCPictureNumber tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10061,9 +2043,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "IPTCImageWidth tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10076,9 +2056,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "IPTCImageHeight tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10091,9 +2069,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "IPTCPixelWidth tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10106,9 +2082,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "IPTCPixelHeight tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10121,9 +2095,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "SupplementalType tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10136,9 +2108,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ColorRepresentation tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10151,9 +2121,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "InterchangeColorSpace tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10166,9 +2134,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ColorSequence tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10181,9 +2147,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ICC_Profile tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10196,9 +2160,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ColorCalibrationMatrix tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10211,9 +2173,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "LookupTable tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10226,9 +2186,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "NumIndexEntries tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10241,9 +2199,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ColorPalette tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10256,9 +2212,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "IPTCBitsPerSample tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10271,9 +2225,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "SampleStructure tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10286,9 +2238,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ScanningDirection tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10301,9 +2251,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "IPTCImageRotation tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10316,9 +2264,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "DataCompressionMethod tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10331,9 +2277,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "QuantizationMethod tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10346,9 +2290,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "EndPoints tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10361,9 +2303,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ExcursionTolerance tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10376,9 +2316,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "BitsPerComponent tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10391,9 +2329,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "MaximumDensityRange tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10406,9 +2342,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "GammaCompensatedValue tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10421,9 +2355,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "SizeMode tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10436,9 +2368,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "MaxSubfileSize tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10451,9 +2381,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ObjectSizeAnnounced tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10466,9 +2394,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "MaximumObjectSize tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10481,9 +2407,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "SubFile tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10496,9 +2420,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ConfirmedObjectSize tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10516,9 +2438,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ResolutionInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10531,9 +2451,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "AlphaChannelsNames tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10546,9 +2464,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "PrintFlags tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10561,9 +2477,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "IPTCData tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10576,9 +2490,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "PhotoshopBGRThumbnail tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10591,9 +2503,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             true,
             ValueType::Integer,
             "CopyrightFlag tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10606,9 +2516,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             true,
             ValueType::String,
             "URL tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10621,9 +2529,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "PhotoshopThumbnail tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10636,9 +2542,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             true,
             ValueType::Integer,
             "GlobalAngle tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10651,9 +2555,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ICC_Profile tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10666,9 +2568,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             true,
             ValueType::Integer,
             "GlobalAltitude tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10681,9 +2581,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "SliceInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10696,9 +2594,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             true,
             ValueType::String,
             "URL_List tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10711,9 +2607,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "VersionInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10726,9 +2620,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "EXIFInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10741,9 +2633,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "XMP tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10756,9 +2646,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             true,
             ValueType::String,
             "IPTCDigest tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10771,9 +2659,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "PrintScaleInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10786,9 +2672,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "PixelInfo tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10801,9 +2685,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ChannelOptions tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10816,9 +2698,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ClippingPathName tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10831,9 +2711,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "ChannelColorSpace tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10846,9 +2724,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ChannelColorData tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10861,9 +2737,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ChannelOpacity tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10876,9 +2750,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ChannelColorIndicates tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10891,9 +2763,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             true,
             ValueType::String,
             "PhotoshopQuality tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10906,9 +2776,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "PhotoshopFormat tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10921,9 +2789,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ProgressiveScans tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10936,9 +2802,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "XResolution tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10951,9 +2815,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "DisplayedUnitsX tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10966,9 +2828,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "YResolution tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -10981,9 +2841,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "DisplayedUnitsY tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -10996,9 +2854,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "PrintStyle tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
         ),
     );
 
@@ -11011,9 +2867,7 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::String,
             "ColorMode tag".to_string(),
-            vec![
-                "Example".to_string(),
-            ],
+            vec!["Example".to_string()],
         ),
     );
 
@@ -11026,9 +2880,6693 @@ pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = 
             false,
             ValueType::Integer,
             "Compression tag".to_string(),
-            vec![
-                "100".to_string(),
-            ],
+            vec!["100".to_string()],
+        ),
+    );
+
+
+    // =============================
+    // EXIF TAGS (244 total)
+    // =============================
+
+    registry.insert(
+        "EXIF:InteropIndex",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0001),
+            "EXIF:InteropIndex".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Interoperability Index".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SubfileType",
+        TagDescriptor::new(
+            TagId::new_numeric(0x00FE),
+            "EXIF:SubfileType".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "SubfileType tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:OldSubfileType",
+        TagDescriptor::new(
+            TagId::new_numeric(0x00FF),
+            "EXIF:OldSubfileType".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "OldSubfileType tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ImageWidth",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0100),
+            "EXIF:ImageWidth".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ImageWidth tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ImageHeight",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0101),
+            "EXIF:ImageHeight".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ImageHeight tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:BitsPerSample",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0102),
+            "EXIF:BitsPerSample".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "BitsPerSample tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Compression",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0103),
+            "EXIF:Compression".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "Compression tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:PhotometricInterpretation",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0106),
+            "EXIF:PhotometricInterpretation".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "PhotometricInterpretation tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Thresholding",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0107),
+            "EXIF:Thresholding".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "Thresholding tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CellWidth",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0108),
+            "EXIF:CellWidth".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "CellWidth tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CellLength",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0109),
+            "EXIF:CellLength".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "CellLength tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:FillOrder",
+        TagDescriptor::new(
+            TagId::new_numeric(0x010A),
+            "EXIF:FillOrder".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "FillOrder tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:DocumentName",
+        TagDescriptor::new(
+            TagId::new_numeric(0x010D),
+            "EXIF:DocumentName".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "DocumentName tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ImageDescription",
+        TagDescriptor::new(
+            TagId::new_numeric(0x010E),
+            "EXIF:ImageDescription".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "ImageDescription tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Make",
+        TagDescriptor::new(
+            TagId::new_numeric(0x010F),
+            "EXIF:Make".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Make tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Model",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0110),
+            "EXIF:Model".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Camera Model Name".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Orientation",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0112),
+            "EXIF:Orientation".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "Orientation tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SamplesPerPixel",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0115),
+            "EXIF:SamplesPerPixel".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "SamplesPerPixel tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:RowsPerStrip",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0116),
+            "EXIF:RowsPerStrip".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "RowsPerStrip tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:MinSampleValue",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0118),
+            "EXIF:MinSampleValue".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "MinSampleValue tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:MaxSampleValue",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0119),
+            "EXIF:MaxSampleValue".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "MaxSampleValue tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:XResolution",
+        TagDescriptor::new(
+            TagId::new_numeric(0x011A),
+            "EXIF:XResolution".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "XResolution tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:YResolution",
+        TagDescriptor::new(
+            TagId::new_numeric(0x011B),
+            "EXIF:YResolution".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "YResolution tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:PlanarConfiguration",
+        TagDescriptor::new(
+            TagId::new_numeric(0x011C),
+            "EXIF:PlanarConfiguration".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "PlanarConfiguration tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:PageName",
+        TagDescriptor::new(
+            TagId::new_numeric(0x011D),
+            "EXIF:PageName".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "PageName tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:XPosition",
+        TagDescriptor::new(
+            TagId::new_numeric(0x011E),
+            "EXIF:XPosition".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "XPosition tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:YPosition",
+        TagDescriptor::new(
+            TagId::new_numeric(0x011F),
+            "EXIF:YPosition".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "YPosition tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:FreeOffsets",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0120),
+            "EXIF:FreeOffsets".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "FreeOffsets tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:FreeByteCounts",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0121),
+            "EXIF:FreeByteCounts".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "FreeByteCounts tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:GrayResponseUnit",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0122),
+            "EXIF:GrayResponseUnit".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "GrayResponseUnit tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:GrayResponseCurve",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0123),
+            "EXIF:GrayResponseCurve".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "GrayResponseCurve tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:T4Options",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0124),
+            "EXIF:T4Options".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "T4Options tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:T6Options",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0125),
+            "EXIF:T6Options".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "T6Options tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ResolutionUnit",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0128),
+            "EXIF:ResolutionUnit".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ResolutionUnit tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:PageNumber",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0129),
+            "EXIF:PageNumber".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "PageNumber tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:TransferFunction",
+        TagDescriptor::new(
+            TagId::new_numeric(0x012D),
+            "EXIF:TransferFunction".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "TransferFunction tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Software",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0131),
+            "EXIF:Software".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Software tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ModifyDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0132),
+            "EXIF:ModifyDate".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "ModifyDate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Artist",
+        TagDescriptor::new(
+            TagId::new_numeric(0x013B),
+            "EXIF:Artist".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Artist tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:HostComputer",
+        TagDescriptor::new(
+            TagId::new_numeric(0x013C),
+            "EXIF:HostComputer".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "HostComputer tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Predictor",
+        TagDescriptor::new(
+            TagId::new_numeric(0x013D),
+            "EXIF:Predictor".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "Predictor tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:WhitePoint",
+        TagDescriptor::new(
+            TagId::new_numeric(0x013E),
+            "EXIF:WhitePoint".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "WhitePoint tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:PrimaryChromaticities",
+        TagDescriptor::new(
+            TagId::new_numeric(0x013F),
+            "EXIF:PrimaryChromaticities".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "PrimaryChromaticities tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ColorMap",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0140),
+            "EXIF:ColorMap".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::Binary,
+            "ColorMap tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:HalftoneHints",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0141),
+            "EXIF:HalftoneHints".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "HalftoneHints tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:TileWidth",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0142),
+            "EXIF:TileWidth".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "TileWidth tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:TileLength",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0143),
+            "EXIF:TileLength".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "TileLength tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:TileOffsets",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0144),
+            "EXIF:TileOffsets".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "TileOffsets tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:TileByteCounts",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0145),
+            "EXIF:TileByteCounts".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "TileByteCounts tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:InkSet",
+        TagDescriptor::new(
+            TagId::new_numeric(0x014C),
+            "EXIF:InkSet".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "InkSet tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:TargetPrinter",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0151),
+            "EXIF:TargetPrinter".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "TargetPrinter tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ExtraSamples",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0152),
+            "EXIF:ExtraSamples".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "ExtraSamples tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SampleFormat",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0153),
+            "EXIF:SampleFormat".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "SampleFormat tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:JPEGTables",
+        TagDescriptor::new(
+            TagId::new_numeric(0x015B),
+            "EXIF:JPEGTables".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "JPEGTables tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:JPEGProc",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0200),
+            "EXIF:JPEGProc".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "JPEGProc tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:JPEGQTables",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0207),
+            "EXIF:JPEGQTables".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "JPEGQTables tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:JPEGDCTables",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0208),
+            "EXIF:JPEGDCTables".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "JPEGDCTables tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:JPEGACTables",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0209),
+            "EXIF:JPEGACTables".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "JPEGACTables tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:YCbCrCoefficients",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0211),
+            "EXIF:YCbCrCoefficients".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "YCbCrCoefficients tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:YCbCrSubSampling",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0212),
+            "EXIF:YCbCrSubSampling".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "YCbCrSubSampling tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:YCbCrPositioning",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0213),
+            "EXIF:YCbCrPositioning".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "YCbCrPositioning tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ReferenceBlackWhite",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0214),
+            "EXIF:ReferenceBlackWhite".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "ReferenceBlackWhite tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ApplicationNotes",
+        TagDescriptor::new(
+            TagId::new_numeric(0x02BC),
+            "EXIF:ApplicationNotes".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ApplicationNotes tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:StitchInfo",
+        TagDescriptor::new(
+            TagId::new_numeric(0x4748),
+            "EXIF:StitchInfo".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "StitchInfo tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:VignettingCorrection",
+        TagDescriptor::new(
+            TagId::new_numeric(0x7031),
+            "EXIF:VignettingCorrection".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "VignettingCorrection tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:VignettingCorrParams",
+        TagDescriptor::new(
+            TagId::new_numeric(0x7032),
+            "EXIF:VignettingCorrParams".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "VignettingCorrParams tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ChromaticAberrationCorrection",
+        TagDescriptor::new(
+            TagId::new_numeric(0x7034),
+            "EXIF:ChromaticAberrationCorrection".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ChromaticAberrationCorrection tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ChromaticAberrationCorrParams",
+        TagDescriptor::new(
+            TagId::new_numeric(0x7035),
+            "EXIF:ChromaticAberrationCorrParams".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ChromaticAberrationCorrParams tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:DistortionCorrection",
+        TagDescriptor::new(
+            TagId::new_numeric(0x7036),
+            "EXIF:DistortionCorrection".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "DistortionCorrection tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:DistortionCorrParams",
+        TagDescriptor::new(
+            TagId::new_numeric(0x7037),
+            "EXIF:DistortionCorrParams".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "DistortionCorrParams tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CFAPattern2",
+        TagDescriptor::new(
+            TagId::new_numeric(0x828E),
+            "EXIF:CFAPattern2".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "CFAPattern2 tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:KodakIFD",
+        TagDescriptor::new(
+            TagId::new_numeric(0x8290),
+            "EXIF:KodakIFD".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "KodakIFD tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Copyright",
+        TagDescriptor::new(
+            TagId::new_numeric(0x8298),
+            "EXIF:Copyright".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Copyright tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ExposureTime",
+        TagDescriptor::new(
+            TagId::new_numeric(0x829A),
+            "EXIF:ExposureTime".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "ExposureTime tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:FNumber",
+        TagDescriptor::new(
+            TagId::new_numeric(0x829D),
+            "EXIF:FNumber".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "FNumber tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:AFCP_IPTC",
+        TagDescriptor::new(
+            TagId::new_numeric(0x8568),
+            "EXIF:AFCP_IPTC".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "AFCP_IPTC tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:LeafData",
+        TagDescriptor::new(
+            TagId::new_numeric(0x8606),
+            "EXIF:LeafData".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::Binary,
+            "LeafData tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ExifOffset",
+        TagDescriptor::new(
+            TagId::new_numeric(0x8769),
+            "EXIF:ExifOffset".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "ExifOffset tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ICC_Profile",
+        TagDescriptor::new(
+            TagId::new_numeric(0x8773),
+            "EXIF:ICC_Profile".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "ICC_Profile tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ExposureProgram",
+        TagDescriptor::new(
+            TagId::new_numeric(0x8822),
+            "EXIF:ExposureProgram".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ExposureProgram tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SpectralSensitivity",
+        TagDescriptor::new(
+            TagId::new_numeric(0x8824),
+            "EXIF:SpectralSensitivity".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "SpectralSensitivity tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:GPSInfo",
+        TagDescriptor::new(
+            TagId::new_numeric(0x8825),
+            "EXIF:GPSInfo".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "GPSInfo tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ISO",
+        TagDescriptor::new(
+            TagId::new_numeric(0x8827),
+            "EXIF:ISO".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "ISO tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Opto-ElectricConvFactor",
+        TagDescriptor::new(
+            TagId::new_numeric(0x8828),
+            "EXIF:Opto-ElectricConvFactor".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "Opto-ElectricConvFactor tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ExifVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9000),
+            "EXIF:ExifVersion".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Binary,
+            "ExifVersion tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:DateTimeOriginal",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9003),
+            "EXIF:DateTimeOriginal".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Date/Time Original".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CreateDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9004),
+            "EXIF:CreateDate".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "CreateDate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:OffsetTime",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9010),
+            "EXIF:OffsetTime".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "OffsetTime tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:OffsetTimeOriginal",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9011),
+            "EXIF:OffsetTimeOriginal".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "OffsetTimeOriginal tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:OffsetTimeDigitized",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9012),
+            "EXIF:OffsetTimeDigitized".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "OffsetTimeDigitized tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ComponentsConfiguration",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9101),
+            "EXIF:ComponentsConfiguration".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Binary,
+            "ComponentsConfiguration tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CompressedBitsPerPixel",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9102),
+            "EXIF:CompressedBitsPerPixel".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "CompressedBitsPerPixel tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ShutterSpeedValue",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9201),
+            "EXIF:ShutterSpeedValue".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "ShutterSpeedValue tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ApertureValue",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9202),
+            "EXIF:ApertureValue".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "ApertureValue tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:BrightnessValue",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9203),
+            "EXIF:BrightnessValue".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "BrightnessValue tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ExposureCompensation",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9204),
+            "EXIF:ExposureCompensation".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "ExposureCompensation tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:MaxApertureValue",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9205),
+            "EXIF:MaxApertureValue".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "MaxApertureValue tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SubjectDistance",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9206),
+            "EXIF:SubjectDistance".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "SubjectDistance tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:MeteringMode",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9207),
+            "EXIF:MeteringMode".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "MeteringMode tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:LightSource",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9208),
+            "EXIF:LightSource".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "LightSource tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Flash",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9209),
+            "EXIF:Flash".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "Flash tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:FocalLength",
+        TagDescriptor::new(
+            TagId::new_numeric(0x920A),
+            "EXIF:FocalLength".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "FocalLength tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SubjectArea",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9214),
+            "EXIF:SubjectArea".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "SubjectArea tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:UserComment",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9286),
+            "EXIF:UserComment".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Binary,
+            "UserComment tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SubSecTime",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9290),
+            "EXIF:SubSecTime".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "SubSecTime tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SubSecTimeOriginal",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9291),
+            "EXIF:SubSecTimeOriginal".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "SubSecTimeOriginal tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SubSecTimeDigitized",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9292),
+            "EXIF:SubSecTimeDigitized".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "SubSecTimeDigitized tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:MSPropertySetStorage",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9330),
+            "EXIF:MSPropertySetStorage".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "MSPropertySetStorage tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:MSDocumentTextPosition",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9331),
+            "EXIF:MSDocumentTextPosition".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "MSDocumentTextPosition tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:AmbientTemperature",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9400),
+            "EXIF:AmbientTemperature".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "AmbientTemperature tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Humidity",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9401),
+            "EXIF:Humidity".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "Humidity tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Pressure",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9402),
+            "EXIF:Pressure".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "Pressure tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:WaterDepth",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9403),
+            "EXIF:WaterDepth".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "WaterDepth tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Acceleration",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9404),
+            "EXIF:Acceleration".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "Acceleration tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CameraElevationAngle",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9405),
+            "EXIF:CameraElevationAngle".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "CameraElevationAngle tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:XiaomiModel",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9A00),
+            "EXIF:XiaomiModel".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "XiaomiModel tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:XPTitle",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9C9B),
+            "EXIF:XPTitle".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "XPTitle tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:XPComment",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9C9C),
+            "EXIF:XPComment".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "XPComment tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:XPAuthor",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9C9D),
+            "EXIF:XPAuthor".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "XPAuthor tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:XPKeywords",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9C9E),
+            "EXIF:XPKeywords".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "XPKeywords tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:XPSubject",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9C9F),
+            "EXIF:XPSubject".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "XPSubject tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:FlashpixVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA000),
+            "EXIF:FlashpixVersion".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Binary,
+            "FlashpixVersion tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ColorSpace",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA001),
+            "EXIF:ColorSpace".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "ColorSpace tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ExifImageWidth",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA002),
+            "EXIF:ExifImageWidth".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ExifImageWidth tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ExifImageHeight",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA003),
+            "EXIF:ExifImageHeight".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ExifImageHeight tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:RelatedSoundFile",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA004),
+            "EXIF:RelatedSoundFile".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "RelatedSoundFile tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:InteropOffset",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA005),
+            "EXIF:InteropOffset".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "Interoperability Offset".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SamsungRawPointersOffset",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA010),
+            "EXIF:SamsungRawPointersOffset".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "SamsungRawPointersOffset tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SamsungRawPointersLength",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA011),
+            "EXIF:SamsungRawPointersLength".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "SamsungRawPointersLength tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SamsungRawByteOrder",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA101),
+            "EXIF:SamsungRawByteOrder".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::Binary,
+            "SamsungRawByteOrder tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SamsungRawUnknown",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA102),
+            "EXIF:SamsungRawUnknown".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "SamsungRawUnknown tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:FlashEnergy",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA20B),
+            "EXIF:FlashEnergy".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "FlashEnergy tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SpatialFrequencyResponse",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA20C),
+            "EXIF:SpatialFrequencyResponse".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "SpatialFrequencyResponse tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:FocalPlaneXResolution",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA20E),
+            "EXIF:FocalPlaneXResolution".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "FocalPlaneXResolution tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:FocalPlaneYResolution",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA20F),
+            "EXIF:FocalPlaneYResolution".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "FocalPlaneYResolution tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:FocalPlaneResolutionUnit",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA210),
+            "EXIF:FocalPlaneResolutionUnit".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "FocalPlaneResolutionUnit tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SubjectLocation",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA214),
+            "EXIF:SubjectLocation".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "SubjectLocation tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SensingMethod",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA217),
+            "EXIF:SensingMethod".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "SensingMethod tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:FileSource",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA300),
+            "EXIF:FileSource".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Binary,
+            "FileSource tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SceneType",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA301),
+            "EXIF:SceneType".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Binary,
+            "SceneType tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CFAPattern",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA302),
+            "EXIF:CFAPattern".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Binary,
+            "CFAPattern tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CustomRendered",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA401),
+            "EXIF:CustomRendered".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "CustomRendered tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ExposureMode",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA402),
+            "EXIF:ExposureMode".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ExposureMode tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:WhiteBalance",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA403),
+            "EXIF:WhiteBalance".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "WhiteBalance tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:DigitalZoomRatio",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA404),
+            "EXIF:DigitalZoomRatio".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "DigitalZoomRatio tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:FocalLengthIn35mmFormat",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA405),
+            "EXIF:FocalLengthIn35mmFormat".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "FocalLengthIn35mmFormat tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SceneCaptureType",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA406),
+            "EXIF:SceneCaptureType".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "SceneCaptureType tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:GainControl",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA407),
+            "EXIF:GainControl".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "GainControl tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Contrast",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA408),
+            "EXIF:Contrast".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "Contrast tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Saturation",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA409),
+            "EXIF:Saturation".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "Saturation tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Sharpness",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA40A),
+            "EXIF:Sharpness".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "Sharpness tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:DeviceSettingDescription",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA40B),
+            "EXIF:DeviceSettingDescription".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "DeviceSettingDescription tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SubjectDistanceRange",
+        TagDescriptor::new(
+            TagId::new_numeric(0xA40C),
+            "EXIF:SubjectDistanceRange".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "SubjectDistanceRange tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:PrintIM",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC4A5),
+            "EXIF:PrintIM".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Binary,
+            "Print Image Matching".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:DNGVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC612),
+            "EXIF:DNGVersion".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "DNGVersion tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:DNGBackwardVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC613),
+            "EXIF:DNGBackwardVersion".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "DNGBackwardVersion tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:UniqueCameraModel",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC614),
+            "EXIF:UniqueCameraModel".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "UniqueCameraModel tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:LocalizedCameraModel",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC615),
+            "EXIF:LocalizedCameraModel".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "LocalizedCameraModel tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CFAPlaneColor",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC616),
+            "EXIF:CFAPlaneColor".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "CFAPlaneColor tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CFALayout",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC617),
+            "EXIF:CFALayout".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "CFALayout tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:LinearizationTable",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC618),
+            "EXIF:LinearizationTable".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "LinearizationTable tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:BlackLevelRepeatDim",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC619),
+            "EXIF:BlackLevelRepeatDim".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "BlackLevelRepeatDim tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:BlackLevel",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC61A),
+            "EXIF:BlackLevel".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "BlackLevel tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:BlackLevelDeltaH",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC61B),
+            "EXIF:BlackLevelDeltaH".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "BlackLevelDeltaH tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:BlackLevelDeltaV",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC61C),
+            "EXIF:BlackLevelDeltaV".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "BlackLevelDeltaV tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:WhiteLevel",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC61D),
+            "EXIF:WhiteLevel".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "WhiteLevel tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:DefaultScale",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC61E),
+            "EXIF:DefaultScale".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "DefaultScale tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:DefaultCropOrigin",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC61F),
+            "EXIF:DefaultCropOrigin".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "DefaultCropOrigin tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:DefaultCropSize",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC620),
+            "EXIF:DefaultCropSize".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "DefaultCropSize tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ColorMatrix1",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC621),
+            "EXIF:ColorMatrix1".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "ColorMatrix1 tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ColorMatrix2",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC622),
+            "EXIF:ColorMatrix2".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "ColorMatrix2 tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CameraCalibration1",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC623),
+            "EXIF:CameraCalibration1".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "CameraCalibration1 tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CameraCalibration2",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC624),
+            "EXIF:CameraCalibration2".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "CameraCalibration2 tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ReductionMatrix1",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC625),
+            "EXIF:ReductionMatrix1".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "ReductionMatrix1 tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ReductionMatrix2",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC626),
+            "EXIF:ReductionMatrix2".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "ReductionMatrix2 tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:AnalogBalance",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC627),
+            "EXIF:AnalogBalance".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "AnalogBalance tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:AsShotNeutral",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC628),
+            "EXIF:AsShotNeutral".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "AsShotNeutral tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:AsShotWhiteXY",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC629),
+            "EXIF:AsShotWhiteXY".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "AsShotWhiteXY tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:BaselineExposure",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC62A),
+            "EXIF:BaselineExposure".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "BaselineExposure tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:BaselineNoise",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC62B),
+            "EXIF:BaselineNoise".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "BaselineNoise tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:BaselineSharpness",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC62C),
+            "EXIF:BaselineSharpness".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "BaselineSharpness tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:BayerGreenSplit",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC62D),
+            "EXIF:BayerGreenSplit".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "BayerGreenSplit tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:LinearResponseLimit",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC62E),
+            "EXIF:LinearResponseLimit".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "LinearResponseLimit tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CameraSerialNumber",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC62F),
+            "EXIF:CameraSerialNumber".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "CameraSerialNumber tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:DNGLensInfo",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC630),
+            "EXIF:DNGLensInfo".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "DNGLensInfo tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ChromaBlurRadius",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC631),
+            "EXIF:ChromaBlurRadius".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "ChromaBlurRadius tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:AntiAliasStrength",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC632),
+            "EXIF:AntiAliasStrength".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "AntiAliasStrength tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ShadowScale",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC633),
+            "EXIF:ShadowScale".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "ShadowScale tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:MakerNoteSafety",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC635),
+            "EXIF:MakerNoteSafety".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "MakerNoteSafety tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CalibrationIlluminant1",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC65A),
+            "EXIF:CalibrationIlluminant1".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "CalibrationIlluminant1 tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CalibrationIlluminant2",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC65B),
+            "EXIF:CalibrationIlluminant2".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "CalibrationIlluminant2 tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:BestQualityScale",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC65C),
+            "EXIF:BestQualityScale".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "BestQualityScale tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:RawDataUniqueID",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC65D),
+            "EXIF:RawDataUniqueID".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "RawDataUniqueID tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:OriginalRawFileName",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC68B),
+            "EXIF:OriginalRawFileName".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "OriginalRawFileName tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:OriginalRawFileData",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC68C),
+            "EXIF:OriginalRawFileData".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Binary,
+            "OriginalRawFileData tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ActiveArea",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC68D),
+            "EXIF:ActiveArea".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ActiveArea tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:MaskedAreas",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC68E),
+            "EXIF:MaskedAreas".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "MaskedAreas tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:AsShotICCProfile",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC68F),
+            "EXIF:AsShotICCProfile".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Binary,
+            "AsShotICCProfile tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:AsShotPreProfileMatrix",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC690),
+            "EXIF:AsShotPreProfileMatrix".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "AsShotPreProfileMatrix tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CurrentICCProfile",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC691),
+            "EXIF:CurrentICCProfile".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Binary,
+            "CurrentICCProfile tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CurrentPreProfileMatrix",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC692),
+            "EXIF:CurrentPreProfileMatrix".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "CurrentPreProfileMatrix tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ColorimetricReference",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC6BF),
+            "EXIF:ColorimetricReference".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ColorimetricReference tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:CameraCalibrationSig",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC6F3),
+            "EXIF:CameraCalibrationSig".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "CameraCalibrationSig tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ProfileCalibrationSig",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC6F4),
+            "EXIF:ProfileCalibrationSig".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "ProfileCalibrationSig tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ProfileIFD",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC6F5),
+            "EXIF:ProfileIFD".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "ProfileIFD tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:AsShotProfileName",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC6F6),
+            "EXIF:AsShotProfileName".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "AsShotProfileName tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:NoiseReductionApplied",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC6F7),
+            "EXIF:NoiseReductionApplied".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "NoiseReductionApplied tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ProfileName",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC6F8),
+            "EXIF:ProfileName".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "ProfileName tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ProfileHueSatMapDims",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC6F9),
+            "EXIF:ProfileHueSatMapDims".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ProfileHueSatMapDims tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ProfileHueSatMapData1",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC6FA),
+            "EXIF:ProfileHueSatMapData1".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Float,
+            "ProfileHueSatMapData1 tag".to_string(),
+            vec!["1.5".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ProfileHueSatMapData2",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC6FB),
+            "EXIF:ProfileHueSatMapData2".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Float,
+            "ProfileHueSatMapData2 tag".to_string(),
+            vec!["1.5".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ProfileToneCurve",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC6FC),
+            "EXIF:ProfileToneCurve".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Float,
+            "ProfileToneCurve tag".to_string(),
+            vec!["1.5".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ProfileEmbedPolicy",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC6FD),
+            "EXIF:ProfileEmbedPolicy".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ProfileEmbedPolicy tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ProfileCopyright",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC6FE),
+            "EXIF:ProfileCopyright".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "ProfileCopyright tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ForwardMatrix1",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC714),
+            "EXIF:ForwardMatrix1".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "ForwardMatrix1 tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ForwardMatrix2",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC715),
+            "EXIF:ForwardMatrix2".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Rational,
+            "ForwardMatrix2 tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:PreviewApplicationName",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC716),
+            "EXIF:PreviewApplicationName".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "PreviewApplicationName tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:PreviewApplicationVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC717),
+            "EXIF:PreviewApplicationVersion".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "PreviewApplicationVersion tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:PreviewSettingsName",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC718),
+            "EXIF:PreviewSettingsName".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "PreviewSettingsName tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:PreviewSettingsDigest",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC719),
+            "EXIF:PreviewSettingsDigest".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "PreviewSettingsDigest tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:PreviewColorSpace",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC71A),
+            "EXIF:PreviewColorSpace".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "PreviewColorSpace tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:PreviewDateTime",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC71B),
+            "EXIF:PreviewDateTime".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "PreviewDateTime tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:RawImageDigest",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC71C),
+            "EXIF:RawImageDigest".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "RawImageDigest tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:OriginalRawFileDigest",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC71D),
+            "EXIF:OriginalRawFileDigest".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "OriginalRawFileDigest tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ProfileLookTableDims",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC725),
+            "EXIF:ProfileLookTableDims".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "ProfileLookTableDims tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:ProfileLookTableData",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC726),
+            "EXIF:ProfileLookTableData".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Float,
+            "ProfileLookTableData tag".to_string(),
+            vec!["1.5".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:JUMBF",
+        TagDescriptor::new(
+            TagId::new_numeric(0xCD41),
+            "EXIF:JUMBF".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "JUMBF tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SEAL",
+        TagDescriptor::new(
+            TagId::new_numeric(0xCEA1),
+            "EXIF:SEAL".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "SEAL tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:OffsetSchema",
+        TagDescriptor::new(
+            TagId::new_numeric(0xEA1D),
+            "EXIF:OffsetSchema".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "OffsetSchema tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:OwnerName",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFDE8),
+            "EXIF:OwnerName".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "OwnerName tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:SerialNumber",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFDE9),
+            "EXIF:SerialNumber".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "SerialNumber tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Lens",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFDEA),
+            "EXIF:Lens".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Lens tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:RawFile",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFE4C),
+            "EXIF:RawFile".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "RawFile tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Converter",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFE4D),
+            "EXIF:Converter".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Converter tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:WhiteBalance",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFE4E),
+            "EXIF:WhiteBalance".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "WhiteBalance tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Exposure",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFE51),
+            "EXIF:Exposure".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Exposure tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Shadows",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFE52),
+            "EXIF:Shadows".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Shadows tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Brightness",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFE53),
+            "EXIF:Brightness".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Brightness tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Contrast",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFE54),
+            "EXIF:Contrast".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Contrast tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Saturation",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFE55),
+            "EXIF:Saturation".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Saturation tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Sharpness",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFE56),
+            "EXIF:Sharpness".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Sharpness tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:Smoothness",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFE57),
+            "EXIF:Smoothness".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "Smoothness tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:MoireFilter",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFE58),
+            "EXIF:MoireFilter".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::String,
+            "MoireFilter tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "EXIF:KDC_IFD",
+        TagDescriptor::new(
+            TagId::new_numeric(0xFE00),
+            "EXIF:KDC_IFD".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "KDC_IFD tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+
+    // =============================
+    // QuickTime TAGS (143 total)
+    // =============================
+
+    registry.insert(
+        "QuickTime:MediaDataSize",
+        TagDescriptor::new(
+            TagId::new_named("mdat-size".to_string()),
+            "QuickTime:MediaDataSize".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "MediaDataSize tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MediaDataOffset",
+        TagDescriptor::new(
+            TagId::new_named("mdat-offset".to_string()),
+            "QuickTime:MediaDataOffset".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "MediaDataOffset tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MajorBrand",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "QuickTime:MajorBrand".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "MajorBrand tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MinorVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0001),
+            "QuickTime:MinorVersion".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "MinorVersion tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:CompatibleBrands",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "QuickTime:CompatibleBrands".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "CompatibleBrands tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:PreviewDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "QuickTime:PreviewDate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "PreviewDate tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:PreviewAtomType",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0003),
+            "QuickTime:PreviewAtomType".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "PreviewAtomType tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MovieHeaderVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "QuickTime:MovieHeaderVersion".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "MovieHeaderVersion tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:CreateDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0001),
+            "QuickTime:CreateDate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "CreateDate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:ModifyDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "QuickTime:ModifyDate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "ModifyDate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TimeScale",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0003),
+            "QuickTime:TimeScale".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "TimeScale tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Duration",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "QuickTime:Duration".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "Duration tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:PreferredRate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0005),
+            "QuickTime:PreferredRate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "PreferredRate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:PreferredVolume",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "QuickTime:PreferredVolume".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "PreferredVolume tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MatrixStructure",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0009),
+            "QuickTime:MatrixStructure".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "MatrixStructure tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TrackHeaderVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "QuickTime:TrackHeaderVersion".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "TrackHeaderVersion tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TrackCreateDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0001),
+            "QuickTime:TrackCreateDate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "TrackCreateDate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TrackModifyDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "QuickTime:TrackModifyDate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "TrackModifyDate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TrackID",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0003),
+            "QuickTime:TrackID".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "TrackID tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TrackDuration",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0005),
+            "QuickTime:TrackDuration".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "TrackDuration tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TrackLayer",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "QuickTime:TrackLayer".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "TrackLayer tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TrackVolume",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0009),
+            "QuickTime:TrackVolume".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "TrackVolume tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MatrixStructure",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000A),
+            "QuickTime:MatrixStructure".to_string(),
+            FormatFamily::QuickTime,
+            true,
+            ValueType::String,
+            "MatrixStructure tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:ImageWidth",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0013),
+            "QuickTime:ImageWidth".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "ImageWidth tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:ImageHeight",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0014),
+            "QuickTime:ImageHeight".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "ImageHeight tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:PrintToVideo",
+        TagDescriptor::new(
+            TagId::new_named("ptv ".to_string()),
+            "QuickTime:PrintToVideo".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "PrintToVideo tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:ContentCreateDate",
+        TagDescriptor::new(
+            TagId::new_named("@day".to_string()),
+            "QuickTime:ContentCreateDate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "ContentCreateDate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TimeStamp",
+        TagDescriptor::new(
+            TagId::new_named("time".to_string()),
+            "QuickTime:TimeStamp".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "TimeStamp tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:ProductionDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0003),
+            "QuickTime:ProductionDate".to_string(),
+            FormatFamily::QuickTime,
+            true,
+            ValueType::String,
+            "ProductionDate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TrackProperty",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000A),
+            "QuickTime:TrackProperty".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "TrackProperty tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TimeZone",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000B),
+            "QuickTime:TimeZone".to_string(),
+            FormatFamily::QuickTime,
+            true,
+            ValueType::String,
+            "TimeZone tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:ModifyDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000C),
+            "QuickTime:ModifyDate".to_string(),
+            FormatFamily::QuickTime,
+            true,
+            ValueType::String,
+            "ModifyDate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:FileFunctionFlags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0001),
+            "QuickTime:FileFunctionFlags".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "FileFunctionFlags tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:AudioCodec",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "QuickTime:AudioCodec".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "AudioCodec tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:AudioCodecInfo",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0003),
+            "QuickTime:AudioCodecInfo".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "AudioCodecInfo tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:AudioAttributes",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "QuickTime:AudioAttributes".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "AudioAttributes tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:AudioAvgBitrate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0005),
+            "QuickTime:AudioAvgBitrate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "AudioAvgBitrate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:AudioMaxBitrate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "QuickTime:AudioMaxBitrate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "AudioMaxBitrate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:VideoCodec",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "QuickTime:VideoCodec".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "VideoCodec tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:VideoCodecInfo",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0003),
+            "QuickTime:VideoCodecInfo".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "VideoCodecInfo tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:VideoAttributes",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "QuickTime:VideoAttributes".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "VideoAttributes tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:VideoAvgBitrate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0005),
+            "QuickTime:VideoAvgBitrate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "VideoAvgBitrate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:VideoMaxBitrate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "QuickTime:VideoMaxBitrate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "VideoMaxBitrate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:VideoAvgFrameRate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0007),
+            "QuickTime:VideoAvgFrameRate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "VideoAvgFrameRate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:VideoMaxFrameRate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "QuickTime:VideoMaxFrameRate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "VideoMaxFrameRate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:VideoSize",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0009),
+            "QuickTime:VideoSize".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "VideoSize tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:PixelAspectRatio",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000A),
+            "QuickTime:PixelAspectRatio".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "PixelAspectRatio tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:XML",
+        TagDescriptor::new(
+            TagId::new_named("xml ".to_string()),
+            "QuickTime:XML".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "XML tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:ColorPrimaries",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "QuickTime:ColorPrimaries".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "ColorPrimaries tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TransferCharacteristics",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "QuickTime:TransferCharacteristics".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "TransferCharacteristics tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MatrixCoefficients",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "QuickTime:MatrixCoefficients".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "MatrixCoefficients tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:VideoFullRangeFlag",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000A),
+            "QuickTime:VideoFullRangeFlag".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "VideoFullRangeFlag tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:GeneralProfileSpace",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0001),
+            "QuickTime:GeneralProfileSpace".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "GeneralProfileSpace tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:GenProfileCompatibilityFlags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "QuickTime:GenProfileCompatibilityFlags".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "GenProfileCompatibilityFlags tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:ConstraintIndicatorFlags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "QuickTime:ConstraintIndicatorFlags".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "ConstraintIndicatorFlags tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:GeneralLevelIDC",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000C),
+            "QuickTime:GeneralLevelIDC".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "GeneralLevelIDC tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MinSpatialSegmentationIDC",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000D),
+            "QuickTime:MinSpatialSegmentationIDC".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "MinSpatialSegmentationIDC tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:ParallelismType",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000F),
+            "QuickTime:ParallelismType".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "ParallelismType tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:ChromaFormat",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0010),
+            "QuickTime:ChromaFormat".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "ChromaFormat tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:BitDepthLuma",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0011),
+            "QuickTime:BitDepthLuma".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "BitDepthLuma tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:BitDepthChroma",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0012),
+            "QuickTime:BitDepthChroma".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "BitDepthChroma tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:AverageFrameRate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0013),
+            "QuickTime:AverageFrameRate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "AverageFrameRate tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:ConstantFrameRate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0015),
+            "QuickTime:ConstantFrameRate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "ConstantFrameRate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:AV1ConfigurationVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "QuickTime:AV1ConfigurationVersion".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "AV1ConfigurationVersion tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:InitialDelaySamples",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0003),
+            "QuickTime:InitialDelaySamples".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "InitialDelaySamples tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:iTunesInfo",
+        TagDescriptor::new(
+            TagId::new_named("----".to_string()),
+            "QuickTime:iTunesInfo".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "iTunesInfo tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:GPSCoordinates",
+        TagDescriptor::new(
+            TagId::new_named("location.ISO6709".to_string()),
+            "QuickTime:GPSCoordinates".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "GPSCoordinates tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:LocationRole",
+        TagDescriptor::new(
+            TagId::new_named("location.role".to_string()),
+            "QuickTime:LocationRole".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "LocationRole tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:LocationDate",
+        TagDescriptor::new(
+            TagId::new_named("location.date".to_string()),
+            "QuickTime:LocationDate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "LocationDate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Mute",
+        TagDescriptor::new(
+            TagId::new_named("player.movie.audio.mute".to_string()),
+            "QuickTime:Mute".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Mute tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:VideoOrientation",
+        TagDescriptor::new(
+            TagId::new_named("video-orientation".to_string()),
+            "QuickTime:VideoOrientation".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "VideoOrientation tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:LivePhotoInfo",
+        TagDescriptor::new(
+            TagId::new_named("live-photo-info".to_string()),
+            "QuickTime:LivePhotoInfo".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "LivePhotoInfo tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:FaceInfo",
+        TagDescriptor::new(
+            TagId::new_named("detected-face".to_string()),
+            "QuickTime:FaceInfo".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "FaceInfo tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:DetectedFaceBounds",
+        TagDescriptor::new(
+            TagId::new_named("detected-face.bounds".to_string()),
+            "QuickTime:DetectedFaceBounds".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "DetectedFaceBounds tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:SceneIlluminance",
+        TagDescriptor::new(
+            TagId::new_named("scene-illuminance".to_string()),
+            "QuickTime:SceneIlluminance".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "SceneIlluminance tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Mute",
+        TagDescriptor::new(
+            TagId::new_named("player.movie.audio.mute".to_string()),
+            "QuickTime:Mute".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Mute tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:FrameReadoutTime",
+        TagDescriptor::new(
+            TagId::new_named("camera.framereadouttimeinmicroseconds".to_string()),
+            "QuickTime:FrameReadoutTime".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "FrameReadoutTime tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:iTunMOVI",
+        TagDescriptor::new(
+            TagId::new_named("iTunMOVI".to_string()),
+            "QuickTime:iTunMOVI".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "iTunMOVI tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:iTunTool",
+        TagDescriptor::new(
+            TagId::new_named("tool".to_string()),
+            "QuickTime:iTunTool".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "iTunTool".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:ContentRating",
+        TagDescriptor::new(
+            TagId::new_named("iTunEXTC".to_string()),
+            "QuickTime:ContentRating".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "ContentRating tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:VolumeNormalization",
+        TagDescriptor::new(
+            TagId::new_named("iTunNORM".to_string()),
+            "QuickTime:VolumeNormalization".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "VolumeNormalization tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:iTunSMPB",
+        TagDescriptor::new(
+            TagId::new_named("iTunSMPB".to_string()),
+            "QuickTime:iTunSMPB".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "iTunSMPB".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:EncodingParams",
+        TagDescriptor::new(
+            TagId::new_named("Encoding Params".to_string()),
+            "QuickTime:EncodingParams".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "EncodingParams tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:DisplaySize",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "QuickTime:DisplaySize".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "DisplaySize tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:SlideShow",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "QuickTime:SlideShow".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "SlideShow tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:RealtimeStreamingProtocol",
+        TagDescriptor::new(
+            TagId::new_named("rtp ".to_string()),
+            "QuickTime:RealtimeStreamingProtocol".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "RealtimeStreamingProtocol tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MediaHeaderVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "QuickTime:MediaHeaderVersion".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "MediaHeaderVersion tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MediaCreateDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0001),
+            "QuickTime:MediaCreateDate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "MediaCreateDate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MediaModifyDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "QuickTime:MediaModifyDate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "MediaModifyDate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MediaTimeScale",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0003),
+            "QuickTime:MediaTimeScale".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "MediaTimeScale tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MediaDuration",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "QuickTime:MediaDuration".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "MediaDuration tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MediaLanguageCode",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0005),
+            "QuickTime:MediaLanguageCode".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "MediaLanguageCode tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:GraphicsMode",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "QuickTime:GraphicsMode".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "GraphicsMode tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:AudioFormat",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "QuickTime:AudioFormat".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "AudioFormat tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:CompressorID",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "QuickTime:CompressorID".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "CompressorID tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:VendorID",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000A),
+            "QuickTime:VendorID".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "VendorID tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:CompressorName",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0019),
+            "QuickTime:CompressorName".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "CompressorName tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:MetaFormat",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "QuickTime:MetaFormat".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "MetaFormat tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:OtherFormat",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "QuickTime:OtherFormat".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "OtherFormat tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:PlaybackFrameRate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0018),
+            "QuickTime:PlaybackFrameRate".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Rational,
+            "PlaybackFrameRate tag".to_string(),
+            vec!["1/100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:EncoderVendor",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "QuickTime:EncoderVendor".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "EncoderVendor tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:LayoutFlags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "QuickTime:LayoutFlags".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "LayoutFlags tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:AudioChannels",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "QuickTime:AudioChannels".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "AudioChannels tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:AudioChannelTypes",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "QuickTime:AudioChannelTypes".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "AudioChannelTypes tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:NumChannelDescriptions",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000C),
+            "QuickTime:NumChannelDescriptions".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "NumChannelDescriptions tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel1Label",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0010),
+            "QuickTime:Channel1Label".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel1Label tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel1Flags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0014),
+            "QuickTime:Channel1Flags".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel1Flags tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel1Coordinates",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0018),
+            "QuickTime:Channel1Coordinates".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "Channel1Coordinates tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel2Label",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0024),
+            "QuickTime:Channel2Label".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel2Label tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel2Flags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0028),
+            "QuickTime:Channel2Flags".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel2Flags tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel2Coordinates",
+        TagDescriptor::new(
+            TagId::new_numeric(0x002C),
+            "QuickTime:Channel2Coordinates".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "Channel2Coordinates tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel3Label",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0038),
+            "QuickTime:Channel3Label".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel3Label tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel3Flags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x003C),
+            "QuickTime:Channel3Flags".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel3Flags tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel3Coordinates",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0040),
+            "QuickTime:Channel3Coordinates".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "Channel3Coordinates tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel4Label",
+        TagDescriptor::new(
+            TagId::new_numeric(0x004C),
+            "QuickTime:Channel4Label".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel4Label tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel4Flags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0050),
+            "QuickTime:Channel4Flags".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel4Flags tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel4Coordinates",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0054),
+            "QuickTime:Channel4Coordinates".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "Channel4Coordinates tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel5Label",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0060),
+            "QuickTime:Channel5Label".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel5Label tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel5Flags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0064),
+            "QuickTime:Channel5Flags".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel5Flags tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel5Coordinates",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0068),
+            "QuickTime:Channel5Coordinates".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "Channel5Coordinates tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel6Label",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0074),
+            "QuickTime:Channel6Label".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel6Label tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel6Flags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0078),
+            "QuickTime:Channel6Flags".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel6Flags tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel6Coordinates",
+        TagDescriptor::new(
+            TagId::new_numeric(0x007C),
+            "QuickTime:Channel6Coordinates".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "Channel6Coordinates tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel7Label",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0088),
+            "QuickTime:Channel7Label".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel7Label tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel7Flags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x008C),
+            "QuickTime:Channel7Flags".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel7Flags tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel7Coordinates",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0090),
+            "QuickTime:Channel7Coordinates".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "Channel7Coordinates tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel8Label",
+        TagDescriptor::new(
+            TagId::new_numeric(0x009C),
+            "QuickTime:Channel8Label".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel8Label tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel8Flags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x00A0),
+            "QuickTime:Channel8Flags".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "Channel8Flags tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:Channel8Coordinates",
+        TagDescriptor::new(
+            TagId::new_numeric(0x00A4),
+            "QuickTime:Channel8Coordinates".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "Channel8Coordinates tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:KeyID",
+        TagDescriptor::new(
+            TagId::new_named("key ".to_string()),
+            "QuickTime:KeyID".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "KeyID tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TextFont",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "QuickTime:TextFont".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "TextFont tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TextFace",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "QuickTime:TextFace".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "TextFace tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TextSize",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "QuickTime:TextSize".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Integer,
+            "TextSize tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:TextColor",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000C),
+            "QuickTime:TextColor".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "TextColor tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:BackgroundColor",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0012),
+            "QuickTime:BackgroundColor".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "BackgroundColor tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:FontName",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0018),
+            "QuickTime:FontName".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "FontName tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:URL",
+        TagDescriptor::new(
+            TagId::new_named("url ".to_string()),
+            "QuickTime:URL".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Binary,
+            "URL tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:URN",
+        TagDescriptor::new(
+            TagId::new_named("urn ".to_string()),
+            "QuickTime:URN".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::Binary,
+            "URN tag".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:HandlerType",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "QuickTime:HandlerType".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "HandlerType tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:HandlerDescription",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0018),
+            "QuickTime:HandlerDescription".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "HandlerDescription tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:PreviewImage",
+        TagDescriptor::new(
+            TagId::new_numeric(0x001C),
+            "QuickTime:PreviewImage".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "PreviewImage tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:GPSLog",
+        TagDescriptor::new(
+            TagId::new_named("gps ".to_string()),
+            "QuickTime:GPSLog".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "GPSLog tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "QuickTime:AccelData",
+        TagDescriptor::new(
+            TagId::new_named("3gf ".to_string()),
+            "QuickTime:AccelData".to_string(),
+            FormatFamily::QuickTime,
+            false,
+            ValueType::String,
+            "AccelData tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+
+    // =============================
+    // JPEG TAGS (30 total)
+    // =============================
+
+    registry.insert(
+        "JPEG:HDRGainCurveSize",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "JPEG:HDRGainCurveSize".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::Integer,
+            "HDRGainCurveSize tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:HDRGainCurve",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000A),
+            "JPEG:HDRGainCurve".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "HDRGainCurve tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:JPSSeparation",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000A),
+            "JPEG:JPSSeparation".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::Integer,
+            "JPSSeparation tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:HdrLength",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "JPEG:HdrLength".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::Integer,
+            "HdrLength tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:JPSFlags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000B),
+            "JPEG:JPSFlags".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "JPSFlags tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:JPSType",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000D),
+            "JPEG:JPSType".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "JPSType tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:JPSComment",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0010),
+            "JPEG:JPSComment".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "JPSComment tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:PrintIM",
+        TagDescriptor::new(
+            TagId::new_numeric(0xC4A5),
+            "JPEG:PrintIM".to_string(),
+            FormatFamily::JPEG,
+            true,
+            ValueType::Binary,
+            "Print Image Matching".to_string(),
+            vec!["Value".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:SPIFFVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "JPEG:SPIFFVersion".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "SPIFFVersion tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:ProfileID",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "JPEG:ProfileID".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "ProfileID tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:ImageHeight",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "JPEG:ImageHeight".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "ImageHeight tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:ImageWidth",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000A),
+            "JPEG:ImageWidth".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::Integer,
+            "ImageWidth tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:ColorSpace",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000E),
+            "JPEG:ColorSpace".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "ColorSpace tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:Compression",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0010),
+            "JPEG:Compression".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "Compression tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:ResolutionUnit",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0011),
+            "JPEG:ResolutionUnit".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "ResolutionUnit tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:YResolution",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0012),
+            "JPEG:YResolution".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::Integer,
+            "YResolution tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:XResolution",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0016),
+            "JPEG:XResolution".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::Integer,
+            "XResolution tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:APP14Flags0",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0001),
+            "JPEG:APP14Flags0".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "APP14Flags0 tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:APP14Flags1",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "JPEG:APP14Flags1".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "APP14Flags1 tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:ColorTransform",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0003),
+            "JPEG:ColorTransform".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::Integer,
+            "ColorTransform tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:InterleavedField",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "JPEG:InterleavedField".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "InterleavedField tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:NITFVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "JPEG:NITFVersion".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "NITFVersion tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:ImageFormat",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "JPEG:ImageFormat".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "ImageFormat tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:BlocksPerRow",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0003),
+            "JPEG:BlocksPerRow".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::Integer,
+            "BlocksPerRow tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:BlocksPerColumn",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0005),
+            "JPEG:BlocksPerColumn".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::Integer,
+            "BlocksPerColumn tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:ImageColor",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0007),
+            "JPEG:ImageColor".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "ImageColor tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:ImageClass",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0009),
+            "JPEG:ImageClass".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "ImageClass tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:JPEGProcess",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000A),
+            "JPEG:JPEGProcess".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "JPEGProcess tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:StreamColor",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000C),
+            "JPEG:StreamColor".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::String,
+            "StreamColor tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "JPEG:Flags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000E),
+            "JPEG:Flags".to_string(),
+            FormatFamily::JPEG,
+            false,
+            ValueType::Integer,
+            "Flags tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+
+    // =============================
+    // XMP TAGS (7 total)
+    // =============================
+
+    registry.insert(
+        "XMP:x",
+        TagDescriptor::new(
+            TagId::new_named("x".to_string()),
+            "XMP:x".to_string(),
+            FormatFamily::XMP,
+            false,
+            ValueType::String,
+            "x tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "XMP:acdsee-rs",
+        TagDescriptor::new(
+            TagId::new_named("acdsee-rs".to_string()),
+            "XMP:acdsee-rs".to_string(),
+            FormatFamily::XMP,
+            false,
+            ValueType::String,
+            "acdsee-rs tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "XMP:mwg-rs",
+        TagDescriptor::new(
+            TagId::new_named("mwg-rs".to_string()),
+            "XMP:mwg-rs".to_string(),
+            FormatFamily::XMP,
+            false,
+            ValueType::String,
+            "mwg-rs tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "XMP:mwg-kw",
+        TagDescriptor::new(
+            TagId::new_named("mwg-kw".to_string()),
+            "XMP:mwg-kw".to_string(),
+            FormatFamily::XMP,
+            false,
+            ValueType::String,
+            "mwg-kw tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "XMP:mwg-coll",
+        TagDescriptor::new(
+            TagId::new_named("mwg-coll".to_string()),
+            "XMP:mwg-coll".to_string(),
+            FormatFamily::XMP,
+            false,
+            ValueType::String,
+            "mwg-coll tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "XMP:apple-fi",
+        TagDescriptor::new(
+            TagId::new_named("apple-fi".to_string()),
+            "XMP:apple-fi".to_string(),
+            FormatFamily::XMP,
+            false,
+            ValueType::String,
+            "apple-fi tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "XMP:drone-dji",
+        TagDescriptor::new(
+            TagId::new_named("drone-dji".to_string()),
+            "XMP:drone-dji".to_string(),
+            FormatFamily::XMP,
+            false,
+            ValueType::String,
+            "drone-dji tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+
+    // =============================
+    // ICC_Profile TAGS (42 total)
+    // =============================
+
+    registry.insert(
+        "ICC_Profile:UCRBG",
+        TagDescriptor::new(
+            TagId::new_named("bfd ".to_string()),
+            "ICC_Profile:UCRBG".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "Under Color Removal and Black Gen.".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ProfileCMMType",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "ICC_Profile:ProfileCMMType".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ProfileCMMType tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ProfileVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "ICC_Profile:ProfileVersion".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::Integer,
+            "ProfileVersion tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ProfileClass",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000C),
+            "ICC_Profile:ProfileClass".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ProfileClass tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ColorSpaceData",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0010),
+            "ICC_Profile:ColorSpaceData".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ColorSpaceData tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ProfileConnectionSpace",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0014),
+            "ICC_Profile:ProfileConnectionSpace".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ProfileConnectionSpace tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ProfileDateTime",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0018),
+            "ICC_Profile:ProfileDateTime".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ProfileDateTime tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ProfileFileSignature",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0024),
+            "ICC_Profile:ProfileFileSignature".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ProfileFileSignature tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:PrimaryPlatform",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0028),
+            "ICC_Profile:PrimaryPlatform".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "PrimaryPlatform tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:CMMFlags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x002C),
+            "ICC_Profile:CMMFlags".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::Integer,
+            "CMMFlags tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:DeviceManufacturer",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0030),
+            "ICC_Profile:DeviceManufacturer".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "DeviceManufacturer tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:DeviceModel",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0034),
+            "ICC_Profile:DeviceModel".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "DeviceModel tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:DeviceAttributes",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0038),
+            "ICC_Profile:DeviceAttributes".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "DeviceAttributes tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:RenderingIntent",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0040),
+            "ICC_Profile:RenderingIntent".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::Integer,
+            "RenderingIntent tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ConnectionSpaceIlluminant",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0044),
+            "ICC_Profile:ConnectionSpaceIlluminant".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ConnectionSpaceIlluminant tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ProfileCreator",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0050),
+            "ICC_Profile:ProfileCreator".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ProfileCreator tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ProfileID",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0054),
+            "ICC_Profile:ProfileID".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ProfileID tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ColorPrimaries",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "ICC_Profile:ColorPrimaries".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ColorPrimaries tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:TransferCharacteristics",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0009),
+            "ICC_Profile:TransferCharacteristics".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "TransferCharacteristics tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:MatrixCoefficients",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000A),
+            "ICC_Profile:MatrixCoefficients".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "MatrixCoefficients tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:VideoFullRangeFlag",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000B),
+            "ICC_Profile:VideoFullRangeFlag".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "VideoFullRangeFlag tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ViewingCondIlluminant",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "ICC_Profile:ViewingCondIlluminant".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ViewingCondIlluminant tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ViewingCondSurround",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0014),
+            "ICC_Profile:ViewingCondSurround".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ViewingCondSurround tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ViewingCondIlluminantType",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0020),
+            "ICC_Profile:ViewingCondIlluminantType".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::Integer,
+            "ViewingCondIlluminantType tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:MeasurementObserver",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "ICC_Profile:MeasurementObserver".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::Integer,
+            "MeasurementObserver tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:MeasurementBacking",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000C),
+            "ICC_Profile:MeasurementBacking".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "MeasurementBacking tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:MeasurementGeometry",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0018),
+            "ICC_Profile:MeasurementGeometry".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::Integer,
+            "MeasurementGeometry tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:MeasurementFlare",
+        TagDescriptor::new(
+            TagId::new_numeric(0x001C),
+            "ICC_Profile:MeasurementFlare".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "MeasurementFlare tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:MeasurementIlluminant",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0020),
+            "ICC_Profile:MeasurementIlluminant".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::Integer,
+            "MeasurementIlluminant tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ChromaticityChannels",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "ICC_Profile:ChromaticityChannels".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::Integer,
+            "ChromaticityChannels tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ChromaticityColorant",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000A),
+            "ICC_Profile:ChromaticityColorant".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::Integer,
+            "ChromaticityColorant tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ChromaticityChannel1",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000C),
+            "ICC_Profile:ChromaticityChannel1".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ChromaticityChannel1 tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ChromaticityChannel2",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0014),
+            "ICC_Profile:ChromaticityChannel2".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ChromaticityChannel2 tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ChromaticityChannel3",
+        TagDescriptor::new(
+            TagId::new_numeric(0x001C),
+            "ICC_Profile:ChromaticityChannel3".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ChromaticityChannel3 tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ChromaticityChannel4",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0024),
+            "ICC_Profile:ChromaticityChannel4".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "ChromaticityChannel4 tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:ColorantCount",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "ICC_Profile:ColorantCount".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::Integer,
+            "ColorantCount tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:Colorant1Name",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000C),
+            "ICC_Profile:Colorant1Name".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "Colorant1Name tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:Colorant1Coordinates",
+        TagDescriptor::new(
+            TagId::new_numeric(0x002C),
+            "ICC_Profile:Colorant1Coordinates".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "Colorant1Coordinates tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:Colorant2Name",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0032),
+            "ICC_Profile:Colorant2Name".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "Colorant2Name tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:Colorant2Coordinates",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0052),
+            "ICC_Profile:Colorant2Coordinates".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "Colorant2Coordinates tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:Colorant3Name",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0058),
+            "ICC_Profile:Colorant3Name".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "Colorant3Name tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "ICC_Profile:Colorant3Coordinates",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0078),
+            "ICC_Profile:Colorant3Coordinates".to_string(),
+            FormatFamily::ICCProfile,
+            false,
+            ValueType::String,
+            "Colorant3Coordinates tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+
+    // =============================
+    // RIFF TAGS (46 total)
+    // =============================
+
+    registry.insert(
+        "RIFF:AudioFormat",
+        TagDescriptor::new(
+            TagId::new_named("fmt ".to_string()),
+            "RIFF:AudioFormat".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "AudioFormat tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:BroadcastExtension",
+        TagDescriptor::new(
+            TagId::new_named("bext".to_string()),
+            "RIFF:BroadcastExtension".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "BroadcastExtension tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:CuePoints",
+        TagDescriptor::new(
+            TagId::new_named("cue ".to_string()),
+            "RIFF:CuePoints".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "CuePoints tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:ID3",
+        TagDescriptor::new(
+            TagId::new_named("id3 ".to_string()),
+            "RIFF:ID3".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "ID3 tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:Encoding",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "RIFF:Encoding".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "Encoding tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:SampleRate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "RIFF:SampleRate".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "SampleRate tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:AvgBytesPerSec",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "RIFF:AvgBytesPerSec".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "AvgBytesPerSec tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:Description",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "RIFF:Description".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "Description tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:Originator",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0100),
+            "RIFF:Originator".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "Originator tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:OriginatorReference",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0120),
+            "RIFF:OriginatorReference".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "OriginatorReference tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:DateTimeOriginal",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0140),
+            "RIFF:DateTimeOriginal".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "Date/Time Original".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:TimeReference",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0152),
+            "RIFF:TimeReference".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "TimeReference tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:BWFVersion",
+        TagDescriptor::new(
+            TagId::new_numeric(0x015A),
+            "RIFF:BWFVersion".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "BWFVersion tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:BWF_UMID",
+        TagDescriptor::new(
+            TagId::new_numeric(0x015C),
+            "RIFF:BWF_UMID".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "BWF_UMID tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:CodingHistory",
+        TagDescriptor::new(
+            TagId::new_numeric(0x025A),
+            "RIFF:CodingHistory".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "CodingHistory tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:RIFFSize64",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "RIFF:RIFFSize64".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "RIFFSize64 tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:DataSize64",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0001),
+            "RIFF:DataSize64".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "DataSize64 tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:SMPTEFormat",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0005),
+            "RIFF:SMPTEFormat".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "SMPTEFormat tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:SMPTEOffset",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "RIFF:SMPTEOffset".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "SMPTEOffset tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:CodePage",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "RIFF:CodePage".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "CodePage tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:FrameRate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "RIFF:FrameRate".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "FrameRate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:MaxDataRate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0001),
+            "RIFF:MaxDataRate".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "MaxDataRate tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:StreamType",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "RIFF:StreamType".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "StreamType tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:Quality",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000A),
+            "RIFF:Quality".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "Quality tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:SampleSize",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000B),
+            "RIFF:SampleSize".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "SampleSize tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:VP8Version",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "RIFF:VP8Version".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "VP8Version tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:ImageWidth",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "RIFF:ImageWidth".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "ImageWidth tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:ImageHeight",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0008),
+            "RIFF:ImageHeight".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "ImageHeight tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:ImageWidth",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0001),
+            "RIFF:ImageWidth".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "ImageWidth tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:ImageHeight",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0002),
+            "RIFF:ImageHeight".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "ImageHeight tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:AlphaIsUsed",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "RIFF:AlphaIsUsed".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "AlphaIsUsed tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:WebP_Flags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "RIFF:WebP_Flags".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "WebP Flags".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:ImageWidth",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "RIFF:ImageWidth".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "ImageWidth tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:ImageHeight",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0006),
+            "RIFF:ImageHeight".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "ImageHeight tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:BackgroundColor",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "RIFF:BackgroundColor".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "BackgroundColor tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:AnimationLoopCount",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "RIFF:AnimationLoopCount".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "AnimationLoopCount tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:Duration",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000C),
+            "RIFF:Duration".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "Duration tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:GPSLatitude",
+        TagDescriptor::new(
+            TagId::new_numeric(0x003C),
+            "RIFF:GPSLatitude".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Float,
+            "GPSLatitude tag".to_string(),
+            vec!["1.5".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:GPSLongitude",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0040),
+            "RIFF:GPSLongitude".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Float,
+            "GPSLongitude tag".to_string(),
+            vec!["1.5".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:GPSDateTime",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0044),
+            "RIFF:GPSDateTime".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "GPS Date/Time".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:AlphaPreprocessing",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "RIFF:AlphaPreprocessing".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "AlphaPreprocessing tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:AcidizerFlags",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0000),
+            "RIFF:AcidizerFlags".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "AcidizerFlags tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:RootNote",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0004),
+            "RIFF:RootNote".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "RootNote tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:Beats",
+        TagDescriptor::new(
+            TagId::new_numeric(0x000C),
+            "RIFF:Beats".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Integer,
+            "Beats tag".to_string(),
+            vec!["100".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:Meter",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0010),
+            "RIFF:Meter".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::String,
+            "Meter tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    );
+
+    registry.insert(
+        "RIFF:Tempo",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0014),
+            "RIFF:Tempo".to_string(),
+            FormatFamily::RIFF,
+            false,
+            ValueType::Float,
+            "Tempo tag".to_string(),
+            vec!["1.5".to_string()],
         ),
     );
 

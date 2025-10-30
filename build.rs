@@ -548,28 +548,16 @@ fn generate_tag_insertion(file: &mut File, tag: &TagDefinition) -> Result<()> {
     )?;
 
     // Example values (generate some based on type)
-    writeln!(file, "            vec![")?;
-    match tag.value_type {
-        ValueType::String => {
-            writeln!(file, "                \"Example\".to_string(),")?;
-        }
-        ValueType::Integer => {
-            writeln!(file, "                \"100\".to_string(),")?;
-        }
-        ValueType::Float => {
-            writeln!(file, "                \"1.5\".to_string(),")?;
-        }
-        ValueType::Rational => {
-            writeln!(file, "                \"1/100\".to_string(),")?;
-        }
-        ValueType::DateTime => {
-            writeln!(file, "                \"2024:01:01 12:00:00\".to_string(),")?;
-        }
-        _ => {
-            writeln!(file, "                \"Value\".to_string(),")?;
-        }
-    }
-    writeln!(file, "            ],")?;
+    // Use single-line vec for single elements to match rustfmt formatting
+    let example_value = match tag.value_type {
+        ValueType::String => "\"Example\".to_string()",
+        ValueType::Integer => "\"100\".to_string()",
+        ValueType::Float => "\"1.5\".to_string()",
+        ValueType::Rational => "\"1/100\".to_string()",
+        ValueType::DateTime => "\"2024:01:01 12:00:00\".to_string()",
+        _ => "\"Value\".to_string()",
+    };
+    writeln!(file, "            vec![{}],", example_value)?;
     writeln!(file, "        ),")?;
     writeln!(file, "    );")?;
     writeln!(file)?;

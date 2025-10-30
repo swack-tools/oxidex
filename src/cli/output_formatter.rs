@@ -125,7 +125,7 @@ pub struct JsonFormatter;
 impl OutputFormatter for JsonFormatter {
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
         // If filter is specified, create a new filtered metadata map
-        let metadata_to_serialize = if let Some(filter) = filter_tags {
+        let metadata_to_filter = if let Some(filter) = filter_tags {
             let filtered: MetadataMap = metadata
                 .iter()
                 .filter(|(name, _)| filter.contains(name))
@@ -136,15 +136,62 @@ impl OutputFormatter for JsonFormatter {
             metadata.clone()
         };
 
+        // Convert MetadataMap to a simple HashMap for Perl ExifTool-compatible JSON output
+        // Unwrap TagValue enum to produce flat values like {"EXIF:Make": "Canon"}
+        // instead of {"EXIF:Make": {"type": "String", "value": "Canon"}}
+        let mut json_map = serde_json::Map::new();
+
+        for (tag_name, tag_value) in metadata_to_filter.iter() {
+            let json_value = tag_value_to_json(tag_value);
+            json_map.insert(tag_name.clone(), json_value);
+        }
+
         // Serialize to pretty JSON wrapped in an array for Perl ExifTool compatibility
         // Perl ExifTool outputs: [{...}] (array with one object per file)
         // This allows processing multiple files with consistent JSON structure
-        match serde_json::to_string_pretty(&vec![metadata_to_serialize]) {
+        match serde_json::to_string_pretty(&vec![json_map]) {
             Ok(json) => json,
             Err(e) => {
                 // Fallback error message if serialization fails
                 format!("[{{\"error\": \"Failed to serialize metadata: {}\"}}]", e)
             }
+        }
+    }
+}
+
+/// Converts a TagValue to a serde_json::Value for Perl ExifTool-compatible output
+///
+/// This unwraps the TagValue enum and produces simple JSON values:
+/// - String → JSON string
+/// - Integer → JSON number
+/// - Float → JSON number
+/// - Rational → JSON string "numerator/denominator"
+/// - Binary → JSON string "(Binary, N bytes)"
+/// - DateTime → JSON string (EXIF format: "YYYY:MM:DD HH:MM:SS")
+/// - Struct → JSON object (recursive)
+fn tag_value_to_json(value: &TagValue) -> serde_json::Value {
+    match value {
+        TagValue::String(s) => serde_json::Value::String(s.clone()),
+        TagValue::Integer(i) => serde_json::json!(*i),
+        TagValue::Float(f) => serde_json::json!(*f),
+        TagValue::Rational {
+            numerator,
+            denominator,
+        } => serde_json::Value::String(format!("{}/{}", numerator, denominator)),
+        TagValue::Binary(bytes) => {
+            serde_json::Value::String(format!("(Binary, {} bytes)", bytes.len()))
+        }
+        TagValue::DateTime(dt) => {
+            // Format as EXIF DateTime: "YYYY:MM:DD HH:MM:SS"
+            // This matches Perl ExifTool's output format
+            serde_json::Value::String(dt.format("%Y:%m:%d %H:%M:%S").to_string())
+        }
+        TagValue::Struct(map) => {
+            let mut obj = serde_json::Map::new();
+            for (key, val) in map.iter() {
+                obj.insert(key.clone(), tag_value_to_json(val));
+            }
+            serde_json::Value::Object(obj)
         }
     }
 }

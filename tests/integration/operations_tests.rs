@@ -77,13 +77,13 @@ fn test_read_jpeg_with_exif_verify_common_tags() {
 
     // Count how many common tags we found
     let common_tags = [
-        "EXIF:Make",
-        "EXIF:Model",
-        "EXIF:DateTime",
-        "EXIF:Software",
-        "EXIF:Orientation",
-        "EXIF:Artist",
-        "EXIF:Copyright",
+        "IFD0:Make",
+        "IFD0:Model",
+        "IFD0:ModifyDate",
+        "IFD0:Software",
+        "IFD0:Orientation",
+        "IFD0:Artist",
+        "IFD0:Copyright",
     ];
 
     let mut found_count = 0;
@@ -147,13 +147,13 @@ fn test_get_nonexistent_tag_returns_none() {
     let metadata = read_metadata(path).expect("Failed to read metadata");
 
     // Try to get a tag that definitely doesn't exist
-    let result = metadata.get_string("EXIF:NonExistentTag");
+    let result = metadata.get_string("IFD0:NonExistentTag");
     assert!(result.is_none(), "Expected None for nonexistent tag");
 
-    let result = metadata.get_integer("EXIF:AnotherNonExistentTag");
+    let result = metadata.get_integer("IFD0:AnotherNonExistentTag");
     assert!(result.is_none(), "Expected None for nonexistent tag");
 
-    let result = metadata.get_float("EXIF:YetAnotherNonExistentTag");
+    let result = metadata.get_float("IFD0:YetAnotherNonExistentTag");
     assert!(result.is_none(), "Expected None for nonexistent tag");
 }
 
