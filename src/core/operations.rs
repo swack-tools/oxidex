@@ -5,7 +5,7 @@
 //! following the hexagonal architecture pattern.
 
 use super::{FileFormat, FileReader, MetadataMap, TagValue};
-use crate::core::validation::validate_tag_value;
+use crate::core::validation::validate_tag_value_with_name;
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
 use crate::parsers::format_detector::detect_format;
@@ -1139,7 +1139,8 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
         // Look up tag descriptor in registry
         if let Some(descriptor) = get_tag_descriptor(tag_name) {
             // Validate that the tag value matches the expected type
-            validate_tag_value(descriptor, tag_value)?;
+            // Pass the original tag_name (e.g., "IFD0:Make") for error messages
+            validate_tag_value_with_name(tag_name, descriptor, tag_value)?;
         }
         // If tag is not in registry, skip validation (allows custom/rare tags)
     }

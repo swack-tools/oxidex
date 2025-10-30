@@ -271,8 +271,18 @@ pub fn serialize_ifd(
     let mut entries: Vec<IfdEntryData> = Vec::new();
 
     for (tag_name, tag_value) in metadata.iter() {
-        // Only process EXIF tags
-        if !tag_name.starts_with("EXIF:") {
+        // Only process tags that belong to TIFF/EXIF IFD families
+        // Accept: IFD0, IFD1, ExifIFD, GPS, EXIF, InteropIFD, MakerNotes (TIFF-writable families)
+        // Skip: QuickTime, PDF, XMP, PNG, IPTC, etc. (non-TIFF families)
+        let is_tiff_writable = tag_name.starts_with("IFD0:")
+            || tag_name.starts_with("IFD1:")
+            || tag_name.starts_with("ExifIFD:")
+            || tag_name.starts_with("GPS:")
+            || tag_name.starts_with("EXIF:")
+            || tag_name.starts_with("InteropIFD:")
+            || tag_name.starts_with("MakerNotes:");
+
+        if !is_tiff_writable {
             continue;
         }
 
