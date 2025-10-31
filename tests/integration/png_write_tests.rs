@@ -260,14 +260,13 @@ fn test_write_exif_chunk() {
     write_png_metadata(&output_path, &reader, &metadata).unwrap();
 
     // Read back and verify
-    // Note: PNG parser returns EXIF tags with hex notation (EXIF:0x010F) not names (EXIF:Make)
+    // PNG parser returns EXIF tags with human-readable names (IFD0:Make)
     let output_reader = BufferedReader::new(&output_path).unwrap();
     let parsed_metadata = parse_png_metadata(&output_reader).unwrap();
 
-    // EXIF:Make has tag ID 0x010F
-    assert_eq!(parsed_metadata.get_string("EXIF:0x010F"), Some("Canon"));
-    // EXIF:Model has tag ID 0x0110
-    assert_eq!(parsed_metadata.get_string("EXIF:0x0110"), Some("EOS R5"));
+    // Verify tags are present with IFD0: prefix
+    assert_eq!(parsed_metadata.get_string("IFD0:Make"), Some("Canon"));
+    assert_eq!(parsed_metadata.get_string("IFD0:Model"), Some("EOS R5"));
 }
 
 #[test]
@@ -410,8 +409,8 @@ fn test_mixed_metadata_types() {
         parsed_metadata.get_string("PNG:iTXt:Description"),
         Some("Test 测试")
     );
-    // EXIF:Make has tag ID 0x010F (PNG parser returns hex notation)
-    assert_eq!(parsed_metadata.get_string("EXIF:0x010F"), Some("TestMake"));
+    // EXIF tags are returned with IFD0: prefix
+    assert_eq!(parsed_metadata.get_string("IFD0:Make"), Some("TestMake"));
 }
 
 #[test]

@@ -141,26 +141,81 @@ fn reconstruct_tiff_structure(
     // Write TIFF header (8 bytes)
     write_tiff_header(&mut output, byte_order);
 
-    // For simplicity in initial implementation, we'll write a single IFD
-    // containing all EXIF tags. A more sophisticated implementation would
-    // properly separate tags into IFD0, IFD1, EXIF sub-IFD, etc.
+    // Separate metadata into IFD0 tags and ExifIFD tags
+    let mut ifd0_metadata = MetadataMap::new();
+    let mut exif_ifd_metadata = MetadataMap::new();
+    let mut gps_ifd_metadata = MetadataMap::new();
 
+    for (tag_name, tag_value) in modified_metadata.iter() {
+        if tag_name.starts_with("ExifIFD:") {
+            exif_ifd_metadata.insert(tag_name.clone(), tag_value.clone());
+        } else if tag_name.starts_with("GPS:") {
+            gps_ifd_metadata.insert(tag_name.clone(), tag_value.clone());
+        } else if tag_name.starts_with("IFD0:") || tag_name.starts_with("EXIF:") || tag_name.starts_with("IFD1:") {
+            ifd0_metadata.insert(tag_name.clone(), tag_value.clone());
+        }
+    }
+
+    // Calculate offsets for IFDs
     // Header is 8 bytes, so IFD0 starts at offset 8
-    let ifd_start_offset = 8u64;
+    let ifd0_start_offset = 8u64;
 
-    // Serialize the IFD using the existing serialize_ifd function
-    let ifd_bytes = serialize_ifd(modified_metadata, byte_order, ifd_start_offset)?;
+    // First, serialize IFD0 (without ExifIFD pointer yet)
+    let mut ifd0_bytes = serialize_ifd(&ifd0_metadata, byte_order, ifd0_start_offset)?;
 
-    // Append IFD to output
-    output.extend_from_slice(&ifd_bytes);
+    // If we have ExifIFD or GPS tags, we need to add pointer tags to IFD0 and create sub-IFDs
+    let has_exif_ifd = !exif_ifd_metadata.is_empty();
+    let has_gps_ifd = !gps_ifd_metadata.is_empty();
 
-    // Note: For a complete implementation, we would also:
-    // 1. Extract and copy image strip/tile data from original file
-    // 2. Update strip/tile offsets to point to correct locations
-    // 3. Handle multiple IFDs (IFD0, IFD1, sub-IFDs)
-    //
-    // For now, this basic implementation handles metadata-only TIFF files
-    // which is sufficient for the test fixture (which has no actual image data)
+    if has_exif_ifd || has_gps_ifd {
+        // Calculate where ExifIFD will be located (after IFD0)
+        // But we need to account for the additional pointer entries we'll add
+        let additional_entries = if has_exif_ifd { 1 } else { 0 } + if has_gps_ifd { 1 } else { 0 };
+        let ifd0_with_pointers_size = ifd0_bytes.len() + (additional_entries * 12); // 12 bytes per entry
+
+        let exif_ifd_offset = ifd0_start_offset + ifd0_with_pointers_size as u64;
+
+        // Calculate where GPS IFD will be located
+        let gps_ifd_offset = if has_exif_ifd {
+            // After ExifIFD
+            let exif_ifd_bytes = serialize_ifd(&exif_ifd_metadata, byte_order, exif_ifd_offset)?;
+            exif_ifd_offset + exif_ifd_bytes.len() as u64
+        } else {
+            exif_ifd_offset
+        };
+
+        // Now serialize IFD0 with manual pointer entries
+        let pointer_entries = if has_exif_ifd && has_gps_ifd {
+            vec![
+                (EXIF_IFD_POINTER, exif_ifd_offset as u32),
+                (GPS_INFO_IFD_POINTER, gps_ifd_offset as u32),
+            ]
+        } else if has_exif_ifd {
+            vec![(EXIF_IFD_POINTER, exif_ifd_offset as u32)]
+        } else {
+            vec![(GPS_INFO_IFD_POINTER, gps_ifd_offset as u32)]
+        };
+
+        ifd0_bytes = serialize_ifd_with_pointers(&ifd0_metadata, byte_order, ifd0_start_offset, &pointer_entries)?;
+
+        // Append IFD0 to output
+        output.extend_from_slice(&ifd0_bytes);
+
+        // Serialize and append ExifIFD
+        if has_exif_ifd {
+            let exif_ifd_bytes = serialize_ifd(&exif_ifd_metadata, byte_order, exif_ifd_offset)?;
+            output.extend_from_slice(&exif_ifd_bytes);
+        }
+
+        // Serialize and append GPS IFD
+        if has_gps_ifd {
+            let gps_ifd_bytes = serialize_ifd(&gps_ifd_metadata, byte_order, gps_ifd_offset)?;
+            output.extend_from_slice(&gps_ifd_bytes);
+        }
+    } else {
+        // No sub-IFDs, just append IFD0
+        output.extend_from_slice(&ifd0_bytes);
+    }
 
     Ok(output)
 }
@@ -346,6 +401,109 @@ pub fn serialize_ifd(
     write_u32(&mut result, 0, byte_order);
 
     // Append value area data
+    result.extend_from_slice(&value_area_data);
+
+    Ok(result)
+}
+
+/// Serializes EXIF tags with additional pointer entries (ExifOffset, GPSInfo).
+///
+/// This is a specialized version of serialize_ifd that allows adding manual pointer
+/// entries for sub-IFDs without requiring them to be in the tag registry.
+///
+/// # Parameters
+///
+/// - `metadata`: MetadataMap containing tags to serialize
+/// - `byte_order`: Endianness for serialization
+/// - `ifd_start_offset`: Byte offset where this IFD will be written
+/// - `pointer_entries`: Vec of (tag_id, offset) tuples for sub-IFD pointers
+///
+/// # Returns
+///
+/// Complete IFD structure as bytes with pointer entries included
+fn serialize_ifd_with_pointers(
+    metadata: &MetadataMap,
+    byte_order: ByteOrder,
+    ifd_start_offset: u64,
+    pointer_entries: &[(u16, u32)],
+) -> Result<Vec<u8>> {
+    // Step 1: Filter and convert EXIF tags to IFD entries (same as serialize_ifd)
+    let mut entries: Vec<IfdEntryData> = Vec::new();
+
+    for (tag_name, tag_value) in metadata.iter() {
+        let is_tiff_writable = tag_name.starts_with("IFD0:")
+            || tag_name.starts_with("IFD1:")
+            || tag_name.starts_with("ExifIFD:")
+            || tag_name.starts_with("GPS:")
+            || tag_name.starts_with("EXIF:")
+            || tag_name.starts_with("InteropIFD:")
+            || tag_name.starts_with("MakerNotes:");
+
+        if !is_tiff_writable {
+            continue;
+        }
+
+        let tag_descriptor = tag_registry::get_tag_descriptor(tag_name).ok_or_else(|| {
+            ExifToolError::unsupported_format(format!("Unknown tag: {}", tag_name))
+        })?;
+
+        let tag_id = match &tag_descriptor.tag_id {
+            TagId::Numeric(id) => *id,
+            TagId::Named(_) => {
+                return Err(ExifToolError::unsupported_format(format!(
+                    "Tag {} has non-numeric ID (not supported for TIFF serialization)",
+                    tag_name
+                )))
+            }
+        };
+
+        if let Some(entry) = convert_tag_value_to_entry(tag_id, tag_value, byte_order)? {
+            entries.push(entry);
+        }
+    }
+
+    // Step 2: Add pointer entries manually
+    for &(tag_id, offset) in pointer_entries {
+        // Encode offset as u32 in appropriate byte order
+        let offset_bytes = match byte_order {
+            ByteOrder::LittleEndian => offset.to_le_bytes().to_vec(),
+            ByteOrder::BigEndian => offset.to_be_bytes().to_vec(),
+        };
+
+        entries.push(IfdEntryData {
+            tag_id,
+            field_type: ExifType::Long, // LONG type for offsets
+            value_count: 1,
+            value_bytes: offset_bytes,
+        });
+    }
+
+    // Step 3: Sort entries by tag ID (required by TIFF spec)
+    entries.sort_by_key(|e| e.tag_id);
+
+    // Step 4: Calculate offsets
+    let entry_count = entries.len() as u16;
+    let ifd_header_size = 2 + (entry_count as usize * 12) + 4;
+    let value_area_start = ifd_start_offset + ifd_header_size as u64;
+
+    // Step 5: Build the IFD bytes
+    let mut result = Vec::new();
+    write_u16(&mut result, entry_count, byte_order);
+
+    let mut current_value_offset = value_area_start;
+    let mut value_area_data = Vec::new();
+
+    for entry in &entries {
+        write_ifd_entry(
+            &mut result,
+            entry,
+            &mut current_value_offset,
+            &mut value_area_data,
+            byte_order,
+        )?;
+    }
+
+    write_u32(&mut result, 0, byte_order);
     result.extend_from_slice(&value_area_data);
 
     Ok(result)

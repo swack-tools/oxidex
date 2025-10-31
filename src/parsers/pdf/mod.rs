@@ -186,7 +186,6 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::tag_value::TagValue;
     use std::io;
 
     /// Simple in-memory FileReader for testing
@@ -275,16 +274,11 @@ startxref
         assert_eq!(metadata.get_string("PDF:Title"), Some("Test PDF Document"));
         assert_eq!(metadata.get_string("PDF:Author"), Some("John Doe"));
         assert_eq!(metadata.get_string("PDF:Subject"), Some("Testing"));
-        // Keywords is split into an array (matching ExifTool behavior)
-        assert!(metadata.contains_key("PDF:Keywords"));
-        if let Some(TagValue::Array(keywords)) = metadata.get("PDF:Keywords") {
-            assert_eq!(keywords.len(), 3);
-            assert_eq!(keywords[0].as_string(), Some("test"));
-            assert_eq!(keywords[1].as_string(), Some("pdf"));
-            assert_eq!(keywords[2].as_string(), Some("metadata"));
-        } else {
-            panic!("Expected PDF:Keywords to be an array");
-        }
+        // Keywords is kept as a string (matching ExifTool behavior)
+        assert_eq!(
+            metadata.get_string("PDF:Keywords"),
+            Some("test, pdf, metadata")
+        );
         assert_eq!(metadata.get_string("PDF:Creator"), Some("ExifTool-RS Test"));
         assert_eq!(
             metadata.get_string("PDF:Producer"),

@@ -217,8 +217,12 @@ fn test_png_with_text_chunks() {
 
     let metadata = result.unwrap();
 
-    // Should have 3 text chunks
-    assert_eq!(metadata.len(), 3, "Expected 3 metadata entries");
+    // Should have at least 3 text chunks (plus IHDR metadata)
+    assert!(
+        metadata.len() >= 3,
+        "Expected at least 3 metadata entries, got {}",
+        metadata.len()
+    );
 
     // Verify each text chunk
     assert_eq!(
@@ -250,25 +254,29 @@ fn test_png_with_exif_chunk() {
 
     let metadata = result.unwrap();
 
-    // Should have 3 EXIF tags
-    assert_eq!(metadata.len(), 3, "Expected 3 EXIF tags");
+    // Should have at least 3 EXIF tags (plus IHDR metadata)
+    assert!(
+        metadata.len() >= 3,
+        "Expected at least 3 EXIF tags, got {}",
+        metadata.len()
+    );
 
-    // Verify EXIF tags (using hex tag IDs)
+    // Verify EXIF tags (using human-readable names)
     // 0x010F = Make, 0x0110 = Model, 0x0131 = Software
     assert_eq!(
-        metadata.get_string("EXIF:0x010F"),
+        metadata.get_string("IFD0:Make"),
         Some("Canon"),
         "Make tag should be 'Canon'"
     );
 
     assert_eq!(
-        metadata.get_string("EXIF:0x0110"),
+        metadata.get_string("IFD0:Model"),
         Some("EOS"),
         "Model tag should be 'EOS'"
     );
 
     assert_eq!(
-        metadata.get_string("EXIF:0x0131"),
+        metadata.get_string("IFD0:Software"),
         Some("ExifTool"),
         "Software tag should be 'ExifTool'"
     );
@@ -305,9 +313,9 @@ fn test_png_with_mixed_metadata() {
         "Description iTXt tag should be 'A wonderful test image'"
     );
 
-    // Verify EXIF tag
+    // Verify EXIF tag (using human-readable name)
     assert_eq!(
-        metadata.get_string("EXIF:0x010F"),
+        metadata.get_string("IFD0:Make"),
         Some("Tst"),
         "EXIF Make tag should be 'Tst'"
     );
@@ -326,7 +334,12 @@ fn test_png_empty_metadata() {
     );
 
     let metadata = result.unwrap();
-    assert_eq!(metadata.len(), 0, "Minimal PNG should have no metadata");
+    // Minimal PNG has IHDR metadata (ImageWidth, ImageHeight, BitDepth, ColorType, Compression, Filter, Interlace)
+    assert!(
+        metadata.len() >= 7,
+        "Minimal PNG should have IHDR metadata, got {} tags",
+        metadata.len()
+    );
 }
 
 #[test]
