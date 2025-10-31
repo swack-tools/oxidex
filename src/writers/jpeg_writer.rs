@@ -47,7 +47,7 @@ use crate::core::FileReader;
 use crate::error::{ExifToolError, Result};
 use crate::parsers::jpeg::{parse_segments, Segment};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
-use crate::writers::tiff_writer::serialize_ifd;
+use crate::writers::tiff_writer::reconstruct_tiff_structure;
 
 /// EXIF identifier that appears at the start of EXIF APP1 segment data
 const EXIF_IDENTIFIER: &[u8] = b"Exif\0\0";
@@ -177,23 +177,25 @@ fn build_exif_segment(metadata: &MetadataMap) -> Result<Vec<u8>> {
     // Use little-endian byte order (more common in modern systems)
     let byte_order = ByteOrder::LittleEndian;
 
-    // Serialize EXIF tags to TIFF IFD
-    // IFD offset is 8 because the TIFF header is 8 bytes
-    let ifd_bytes = serialize_ifd(metadata, byte_order, 8)?;
+    // Create a dummy FileReader (not used by reconstruct_tiff_structure currently)
+    struct DummyReader;
+    impl FileReader for DummyReader {
+        fn read(&self, _offset: u64, _length: usize) -> std::io::Result<&[u8]> {
+            Ok(&[])
+        }
+        fn size(&self) -> u64 {
+            0
+        }
+    }
+    let dummy_reader = DummyReader;
 
-    // Build TIFF header (8 bytes, little-endian)
-    let tiff_header: Vec<u8> = vec![
-        0x49, 0x49, // Little-endian byte order marker (II)
-        0x2A, 0x00, // TIFF magic number (42)
-        0x08, 0x00, 0x00, 0x00, // Offset to first IFD (8 bytes)
-    ];
+    // Build complete TIFF structure with header, IFD0, and sub-IFDs (ExifIFD, GPS)
+    let tiff_data = reconstruct_tiff_structure(&dummy_reader, byte_order, metadata)?;
 
-    // Combine: EXIF identifier + TIFF header + IFD data
-    let mut segment_data =
-        Vec::with_capacity(EXIF_IDENTIFIER.len() + tiff_header.len() + ifd_bytes.len());
+    // Combine: EXIF identifier + TIFF structure
+    let mut segment_data = Vec::with_capacity(EXIF_IDENTIFIER.len() + tiff_data.len());
     segment_data.extend_from_slice(EXIF_IDENTIFIER);
-    segment_data.extend_from_slice(&tiff_header);
-    segment_data.extend_from_slice(&ifd_bytes);
+    segment_data.extend_from_slice(&tiff_data);
 
     Ok(segment_data)
 }

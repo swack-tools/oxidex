@@ -114,7 +114,7 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
                 // Format PDF date to EXIF format
                 if let Some(formatted_date) = format_pdf_date(&value) {
                     metadata.insert(
-                        "PDF:CreateDate".to_string(),
+                        "PDF:CreationDate".to_string(),
                         TagValue::new_string(formatted_date),
                     );
                 }
@@ -123,7 +123,7 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
                 // Format PDF date to EXIF format
                 if let Some(formatted_date) = format_pdf_date(&value) {
                     metadata.insert(
-                        "PDF:ModifyDate".to_string(),
+                        "PDF:ModDate".to_string(),
                         TagValue::new_string(formatted_date),
                     );
                 }
