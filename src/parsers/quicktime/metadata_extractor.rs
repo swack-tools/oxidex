@@ -540,27 +540,27 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
             if let Some(data_atom) = item.find_child("data") {
                 if let Some(value) = extract_itunes_data_value(data_atom.data) {
                     let tag_name = match atom_bytes {
-                        b"\xa9nam" => "ItemList:Title",
-                        b"\xa9ART" => "ItemList:Artist",
-                        b"\xa9alb" => "ItemList:Album",
-                        b"\xa9day" => "ItemList:ContentCreateDate",
-                        b"\xa9cmt" => "ItemList:Comment",
-                        b"\xa9gen" => "ItemList:Genre",
-                        b"\xa9too" => "ItemList:Encoder",
-                        b"aART" => "ItemList:AlbumArtist",
-                        b"\xa9wrt" => "ItemList:Composer",
-                        b"\xa9grp" => "ItemList:Grouping",
-                        b"trkn" => "ItemList:TrackNumber",
-                        b"disk" => "ItemList:DiscNumber",
-                        b"cprt" | b"\xa9cpy" => "ItemList:Copyright",
+                        b"\xa9nam" => "iTunes:Title",
+                        b"\xa9ART" => "iTunes:Artist",
+                        b"\xa9alb" => "iTunes:Album",
+                        b"\xa9day" => "iTunes:ContentCreateDate",
+                        b"\xa9cmt" => "iTunes:Comment",
+                        b"\xa9gen" => "iTunes:Genre",
+                        b"\xa9too" => "iTunes:Encoder",
+                        b"aART" => "iTunes:AlbumArtist",
+                        b"\xa9wrt" => "iTunes:Composer",
+                        b"\xa9grp" => "iTunes:Grouping",
+                        b"trkn" => "iTunes:TrackNumber",
+                        b"disk" => "iTunes:DiscNumber",
+                        b"cprt" | b"\xa9cpy" => "iTunes:Copyright",
                         _ => {
-                            // Store unknown ItemList tags with their FourCC
+                            // Store unknown iTunes tags with their FourCC
                             // Try to convert to string, otherwise use hex representation
                             if let Ok(s) = std::str::from_utf8(atom_bytes) {
-                                &format!("ItemList:{}", s)
+                                &format!("iTunes:{}", s)
                             } else {
                                 &format!(
-                                    "ItemList:{:02X}{:02X}{:02X}{:02X}",
+                                    "iTunes:{:02X}{:02X}{:02X}{:02X}",
                                     atom_bytes[0], atom_bytes[1], atom_bytes[2], atom_bytes[3]
                                 )
                             }
