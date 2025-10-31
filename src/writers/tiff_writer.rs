@@ -124,14 +124,14 @@ pub fn write_tiff_file(
 ///
 /// # Parameters
 ///
-/// - `original_reader`: FileReader for the original TIFF file
+/// - `original_reader`: FileReader for the original TIFF file (currently unused)
 /// - `byte_order`: Endianness for the output file
 /// - `modified_metadata`: MetadataMap containing all tags to write
 ///
 /// # Returns
 ///
 /// Complete TIFF file as bytes, ready to write to disk
-fn reconstruct_tiff_structure(
+pub fn reconstruct_tiff_structure(
     _original_reader: &dyn FileReader,
     byte_order: ByteOrder,
     modified_metadata: &MetadataMap,
@@ -168,12 +168,27 @@ fn reconstruct_tiff_structure(
     let has_gps_ifd = !gps_ifd_metadata.is_empty();
 
     if has_exif_ifd || has_gps_ifd {
-        // Calculate where ExifIFD will be located (after IFD0)
-        // But we need to account for the additional pointer entries we'll add
-        let additional_entries = if has_exif_ifd { 1 } else { 0 } + if has_gps_ifd { 1 } else { 0 };
-        let ifd0_with_pointers_size = ifd0_bytes.len() + (additional_entries * 12); // 12 bytes per entry
+        // First, serialize IFD0 WITH the pointer entries to get the correct size
+        // We'll do a two-pass approach: first with placeholder offsets, then recalculate
 
-        let exif_ifd_offset = ifd0_start_offset + ifd0_with_pointers_size as u64;
+        // Build pointer entries with placeholder offsets (we'll update these)
+        let pointer_entries = if has_exif_ifd && has_gps_ifd {
+            vec![
+                (EXIF_IFD_POINTER, 0), // Placeholder
+                (GPS_INFO_IFD_POINTER, 0), // Placeholder
+            ]
+        } else if has_exif_ifd {
+            vec![(EXIF_IFD_POINTER, 0)] // Placeholder
+        } else {
+            vec![(GPS_INFO_IFD_POINTER, 0)] // Placeholder
+        };
+
+        // Serialize IFD0 with placeholder pointers to get the actual size
+        let ifd0_temp = serialize_ifd_with_pointers(&ifd0_metadata, byte_order, ifd0_start_offset, &pointer_entries)?;
+        let ifd0_size = ifd0_temp.len() as u64;
+
+        // Now calculate the correct offsets
+        let exif_ifd_offset = ifd0_start_offset + ifd0_size;
 
         // Calculate where GPS IFD will be located
         let gps_ifd_offset = if has_exif_ifd {
@@ -184,7 +199,7 @@ fn reconstruct_tiff_structure(
             exif_ifd_offset
         };
 
-        // Now serialize IFD0 with manual pointer entries
+        // Now serialize IFD0 again with the CORRECT pointer offsets
         let pointer_entries = if has_exif_ifd && has_gps_ifd {
             vec![
                 (EXIF_IFD_POINTER, exif_ifd_offset as u32),

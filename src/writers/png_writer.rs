@@ -137,10 +137,19 @@ fn serialize_itxt_chunk(keyword: &str, text: &str) -> Vec<u8> {
 ///
 /// Serialized eXIf chunk data (TIFF format), or error if serialization fails
 fn serialize_exif_chunk(metadata: &MetadataMap) -> Result<Vec<u8>> {
-    // Filter only EXIF tags
+    // Filter only TIFF-writable EXIF tags
     let mut exif_metadata = MetadataMap::new();
     for (tag_name, tag_value) in metadata.iter() {
-        if tag_name.starts_with("EXIF:") {
+        // Accept all TIFF-compatible prefixes
+        let is_tiff_writable = tag_name.starts_with("IFD0:")
+            || tag_name.starts_with("IFD1:")
+            || tag_name.starts_with("ExifIFD:")
+            || tag_name.starts_with("GPS:")
+            || tag_name.starts_with("EXIF:")
+            || tag_name.starts_with("InteropIFD:")
+            || tag_name.starts_with("MakerNotes:");
+
+        if is_tiff_writable {
             exif_metadata.insert(tag_name, tag_value.clone());
         }
     }
