@@ -76,3 +76,10 @@ __pycache__/
 # macOS metadata files
 .DS_Store
 **/.DS_Store
+
+
+# Ignore vscode AI rules
+.github/instructions/codacy.instructions.md
+
+# Codacy CLI
+.codacy/
