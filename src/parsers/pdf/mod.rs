@@ -186,6 +186,7 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::tag_value::TagValue;
     use std::io;
 
     /// Simple in-memory FileReader for testing
@@ -274,15 +275,25 @@ startxref
         assert_eq!(metadata.get_string("PDF:Title"), Some("Test PDF Document"));
         assert_eq!(metadata.get_string("PDF:Author"), Some("John Doe"));
         assert_eq!(metadata.get_string("PDF:Subject"), Some("Testing"));
-        // Keywords is kept as a string (matching ExifTool behavior)
-        assert_eq!(
-            metadata.get_string("PDF:Keywords"),
-            Some("test, pdf, metadata")
-        );
+        if let Some(TagValue::Array(values)) = metadata.get("PDF:Keywords") {
+            let keywords: Vec<&str> = values.iter().filter_map(|v| v.as_string()).collect();
+            assert_eq!(keywords, vec!["test", "pdf", "metadata"]);
+        } else {
+            panic!("Expected PDF:Keywords as array");
+        }
         assert_eq!(metadata.get_string("PDF:Creator"), Some("ExifTool-RS Test"));
         assert_eq!(
             metadata.get_string("PDF:Producer"),
             Some("PDF Generator 1.0")
+        );
+
+        assert_eq!(
+            metadata.get_string("PDF:CreateDate"),
+            Some("2024:01:15 12:00:00+00:00")
+        );
+        assert_eq!(
+            metadata.get_string("PDF:ModifyDate"),
+            Some("2024:01:15 12:00:00+00:00")
         );
 
         // Should have at least 5 metadata fields as per acceptance criteria

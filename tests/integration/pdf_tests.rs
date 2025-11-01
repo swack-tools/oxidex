@@ -3,6 +3,7 @@
 //! These tests verify the PDF parser's ability to extract metadata from
 //! real PDF files, including Info dictionary fields and XMP packets.
 
+use exiftool_rs::core::tag_value::TagValue;
 use exiftool_rs::io::buffered_reader::BufferedReader;
 use exiftool_rs::parsers::pdf::parse_pdf_metadata;
 use std::path::PathBuf;
@@ -66,11 +67,17 @@ fn test_parse_sample_pdf_metadata() {
         "PDF:Subject not found or incorrect"
     );
 
-    assert_eq!(
-        metadata.get_string("PDF:Keywords"),
-        Some("exiftool, rust, pdf, metadata, test"),
-        "PDF:Keywords not found or incorrect"
-    );
+    match metadata.get("PDF:Keywords") {
+        Some(TagValue::Array(values)) => {
+            let actual: Vec<&str> = values.iter().filter_map(|v| v.as_string()).collect();
+            assert_eq!(
+                actual,
+                vec!["exiftool", "rust", "pdf", "metadata", "test"],
+                "PDF:Keywords not found or incorrect"
+            );
+        }
+        other => panic!("Expected PDF:Keywords as array, got {:?}", other),
+    }
 
     assert_eq!(
         metadata.get_string("PDF:Creator"),

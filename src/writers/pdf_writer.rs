@@ -42,7 +42,7 @@ use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::writers::atomic_writer::write_atomic;
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, Timelike, Utc};
-use std::collections::HashMap;
+use std::collections::{btree_map::Entry, BTreeMap, HashMap};
 use std::path::Path;
 use std::str;
 
@@ -147,6 +147,28 @@ const PDF_INFO_FIELDS: &[&str] = &[
     "CreationDate",
     "ModDate",
 ];
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum FieldSource {
+    Canonical,
+    Alias,
+}
+
+fn canonicalize_pdf_field(field: &str) -> Option<(String, FieldSource)> {
+    match field {
+        "CreateDate" => Some(("CreationDate".to_string(), FieldSource::Alias)),
+        "CreationDate" => Some(("CreationDate".to_string(), FieldSource::Canonical)),
+        "ModifyDate" => Some(("ModDate".to_string(), FieldSource::Alias)),
+        "ModDate" => Some(("ModDate".to_string(), FieldSource::Canonical)),
+        other => {
+            if PDF_INFO_FIELDS.contains(&other) {
+                Some((other.to_string(), FieldSource::Canonical))
+            } else {
+                None
+            }
+        }
+    }
+}
 
 /// Parses PDF structure to extract xref table and Info object location
 fn parse_pdf_structure(reader: &dyn FileReader) -> Result<PdfStructure> {
@@ -401,24 +423,27 @@ fn write_info_object(
     // Write dictionary start
     buffer.extend_from_slice(b"<<\n");
 
-    // Collect and sort allowed PDF Info fields for deterministic output
-    let mut entries: Vec<(&str, &TagValue)> = metadata
-        .iter()
-        .filter_map(|(key, value)| {
-            key.strip_prefix("PDF:").and_then(|field| {
-                if PDF_INFO_FIELDS.contains(&field) {
-                    Some((field, value))
-                } else {
-                    None
+    let mut entries: BTreeMap<String, (&TagValue, FieldSource)> = BTreeMap::new();
+
+    for (key, value) in metadata.iter() {
+        if let Some(field) = key.strip_prefix("PDF:") {
+            if let Some((canonical, source)) = canonicalize_pdf_field(field) {
+                match entries.entry(canonical) {
+                    Entry::Vacant(entry) => {
+                        entry.insert((value, source));
+                    }
+                    Entry::Occupied(mut entry) => {
+                        if matches!(source, FieldSource::Canonical) {
+                            entry.insert((value, source));
+                        }
+                    }
                 }
-            })
-        })
-        .collect();
+            }
+        }
+    }
 
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-
-    for (field_name, value) in entries {
-        serialize_pdf_field(buffer, field_name, value)?;
+    for (field_name, (value, _)) in entries {
+        serialize_pdf_field(buffer, &field_name, value)?;
     }
 
     // Write dictionary end and object trailer
@@ -445,19 +470,7 @@ fn serialize_pdf_field(buffer: &mut Vec<u8>, field_name: &str, value: &TagValue)
                     return Ok(());
                 }
             }
-
-            // Check if string contains non-ASCII characters
-            if s.chars()
-                .all(|c| c.is_ascii() && c != '(' && c != ')' && c != '\\')
-            {
-                // Use string literal for ASCII
-                buffer.extend_from_slice(b"(");
-                buffer.extend_from_slice(s.as_bytes());
-                buffer.extend_from_slice(b")");
-            } else {
-                // Use hex string with UTF-16BE encoding for non-ASCII
-                serialize_hex_string(buffer, s);
-            }
+            serialize_pdf_text_string(buffer, s);
         }
         TagValue::Integer(i) => {
             buffer.extend_from_slice(i.to_string().as_bytes());
@@ -491,20 +504,18 @@ fn serialize_pdf_field(buffer: &mut Vec<u8>, field_name: &str, value: &TagValue)
             buffer.extend_from_slice(b">");
         }
         TagValue::Array(values) => {
-            // PDF arrays: [value1 value2 value3]
-            buffer.extend_from_slice(b"[");
-            for (i, v) in values.iter().enumerate() {
-                if i > 0 {
-                    buffer.extend_from_slice(b" ");
-                }
-                // Write each array element (simplified - only strings for now)
-                if let TagValue::String(s) = v {
-                    buffer.extend_from_slice(b"(");
-                    buffer.extend_from_slice(s.as_bytes());
-                    buffer.extend_from_slice(b")");
+            let mut keyword_strings: Vec<String> = Vec::new();
+            for value in values {
+                if let TagValue::String(s) = value {
+                    let trimmed = s.trim();
+                    if !trimmed.is_empty() {
+                        keyword_strings.push(trimmed.to_string());
+                    }
                 }
             }
-            buffer.extend_from_slice(b"]");
+
+            let joined = keyword_strings.join(", ");
+            serialize_pdf_text_string(buffer, &joined);
         }
         TagValue::Struct(_) => {
             // Structured data not supported in PDF Info dictionary
@@ -515,6 +526,18 @@ fn serialize_pdf_field(buffer: &mut Vec<u8>, field_name: &str, value: &TagValue)
 
     buffer.extend_from_slice(b"\n");
     Ok(())
+}
+
+fn serialize_pdf_text_string(buffer: &mut Vec<u8>, s: &str) {
+    if s.chars()
+        .all(|c| c.is_ascii() && c != '(' && c != ')' && c != '\\')
+    {
+        buffer.extend_from_slice(b"(");
+        buffer.extend_from_slice(s.as_bytes());
+        buffer.extend_from_slice(b")");
+    } else {
+        serialize_hex_string(buffer, s);
+    }
 }
 
 /// Serializes a string as a PDF hex string with UTF-16BE encoding

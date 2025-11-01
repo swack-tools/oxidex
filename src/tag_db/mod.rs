@@ -55,7 +55,7 @@ static TAG_ID_TO_NAME_INDEX: Lazy<HashMap<(u16, FormatFamily), &'static str>> = 
 ///
 /// assert_eq!(lookup_tag_name(0x010F, "IFD0"), "IFD0:Make");
 /// assert_eq!(lookup_tag_name(0x829A, "ExifIFD"), "ExifIFD:ExposureTime");
-/// assert_eq!(lookup_tag_name(0x0002, "GPS"), "GPS:Latitude");
+/// assert_eq!(lookup_tag_name(0x0002, "GPS"), "GPS:GPSLatitude");
 /// assert_eq!(lookup_tag_name(0xFFFF, "IFD0"), "IFD0:0xFFFF");
 /// ```
 pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {

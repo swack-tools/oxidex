@@ -108,12 +108,7 @@ pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, St
             ExifToolError::parse_error(format!("Failed to parse XMP segment: {}", e))
         })?;
 
-        // Canonicalize tag names to the "XMP:Property" format expected by integration tests
-        all_xmp_tags.extend(
-            xmp_tags
-                .into_iter()
-                .map(|(name, value)| (canonicalize_xmp_tag_name(&name), value)),
-        );
+        all_xmp_tags.extend(xmp_tags);
     }
 
     Ok(all_xmp_tags)
@@ -155,22 +150,6 @@ pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, St
 /// ```
 pub fn is_xmp_segment(segment: &Segment) -> bool {
     segment.is_app1() && segment.data.starts_with(XMP_IDENTIFIER)
-}
-
-/// Normalizes XMP tag names to "XMP:Property" form by removing namespace prefixes.
-fn canonicalize_xmp_tag_name(name: &str) -> String {
-    if let Some(stripped) = name.strip_prefix("XMP-") {
-        if let Some((prefix, local)) = stripped.split_once(':') {
-            let canonical_local = if prefix.eq_ignore_ascii_case("dc") {
-                local.to_lowercase()
-            } else {
-                local.to_string()
-            };
-            return format!("XMP:{}", canonical_local);
-        }
-    }
-
-    name.to_string()
 }
 
 #[cfg(test)]
@@ -251,13 +230,13 @@ mod tests {
         // Check for specific tags with namespace-specific prefixes
         let has_creator = result
             .iter()
-            .any(|(name, value)| name == "XMP:Creator" && value == "John Doe");
-        assert!(has_creator, "Missing XMP:Creator tag");
+            .any(|(name, value)| name == "XMP-xmp:Creator" && value == "John Doe");
+        assert!(has_creator, "Missing XMP-xmp:Creator tag");
 
         let has_rating = result
             .iter()
-            .any(|(name, value)| name == "XMP:Rating" && value == "5");
-        assert!(has_rating, "Missing XMP:Rating tag");
+            .any(|(name, value)| name == "XMP-xmp:Rating" && value == "5");
+        assert!(has_rating, "Missing XMP-xmp:Rating tag");
     }
 
     #[test]
@@ -328,20 +307,20 @@ mod tests {
         let tag_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
 
         assert!(
-            tag_names.iter().any(|n| n == "XMP:Creator"),
-            "Missing XMP:Creator"
+            tag_names.iter().any(|n| n == "XMP-xmp:Creator"),
+            "Missing XMP-xmp:Creator"
         );
         assert!(
-            tag_names.iter().any(|n| n == "XMP:title"),
-            "Missing XMP:title"
+            tag_names.iter().any(|n| n == "XMP-dc:Title"),
+            "Missing XMP-dc:Title"
         );
         assert!(
-            tag_names.iter().any(|n| n == "XMP:rights"),
-            "Missing XMP:rights"
+            tag_names.iter().any(|n| n == "XMP-dc:Rights"),
+            "Missing XMP-dc:Rights"
         );
         assert!(
-            tag_names.iter().any(|n| n == "XMP:Make"),
-            "Missing XMP:Make"
+            tag_names.iter().any(|n| n == "XMP-exif:Make"),
+            "Missing XMP-exif:Make"
         );
     }
 
@@ -378,8 +357,8 @@ mod tests {
         // Should have tags from both segments
         assert!(result.len() >= 2, "Expected tags from both XMP segments");
 
-        let has_creator = result.iter().any(|(name, _)| name == "XMP:Creator");
-        let has_title = result.iter().any(|(name, _)| name == "XMP:title");
+        let has_creator = result.iter().any(|(name, _)| name == "XMP-xmp:Creator");
+        let has_title = result.iter().any(|(name, _)| name == "XMP-dc:Title");
 
         assert!(has_creator, "Missing tag from first XMP segment");
         assert!(has_title, "Missing tag from second XMP segment");

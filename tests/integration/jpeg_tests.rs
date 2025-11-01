@@ -574,59 +574,63 @@ fn test_jpeg_xmp_extraction_end_to_end() {
     // Check for Creator
     let creator_tags: Vec<_> = xmp_tags
         .iter()
-        .filter(|(name, _)| name == "XMP:Creator")
+        .filter(|(name, _)| name == "XMP-xmp:Creator")
         .collect();
     assert_eq!(
         creator_tags.len(),
         1,
-        "Should have exactly one XMP:Creator tag"
+        "Should have exactly one XMP-xmp:Creator tag"
     );
     assert_eq!(
         creator_tags[0].1, "John Doe",
-        "XMP:Creator should be 'John Doe'"
+        "XMP-xmp:Creator should be 'John Doe'"
     );
-    println!("  ✓ XMP:Creator: {}", creator_tags[0].1);
+    println!("  ✓ XMP-xmp:Creator: {}", creator_tags[0].1);
 
     // Check for Rating
     let rating_tags: Vec<_> = xmp_tags
         .iter()
-        .filter(|(name, _)| name == "XMP:Rating")
+        .filter(|(name, _)| name == "XMP-xmp:Rating")
         .collect();
     assert_eq!(
         rating_tags.len(),
         1,
-        "Should have exactly one XMP:Rating tag"
+        "Should have exactly one XMP-xmp:Rating tag"
     );
-    assert_eq!(rating_tags[0].1, "5", "XMP:Rating should be '5'");
-    println!("  ✓ XMP:Rating: {}", rating_tags[0].1);
+    assert_eq!(rating_tags[0].1, "5", "XMP-xmp:Rating should be '5'");
+    println!("  ✓ XMP-xmp:Rating: {}", rating_tags[0].1);
 
     // Check for title (dc:title)
     let title_tags: Vec<_> = xmp_tags
         .iter()
-        .filter(|(name, _)| name == "XMP:title")
+        .filter(|(name, _)| name == "XMP-dc:Title")
         .collect();
-    assert_eq!(title_tags.len(), 1, "Should have exactly one XMP:title tag");
+    assert_eq!(
+        title_tags.len(),
+        1,
+        "Should have exactly one XMP-dc:Title tag"
+    );
     assert_eq!(
         title_tags[0].1, "Sample Photo",
-        "XMP:title should be 'Sample Photo'"
+        "XMP-dc:Title should be 'Sample Photo'"
     );
-    println!("  ✓ XMP:title: {}", title_tags[0].1);
+    println!("  ✓ XMP-dc:Title: {}", title_tags[0].1);
 
     // Check for rights (dc:rights)
     let rights_tags: Vec<_> = xmp_tags
         .iter()
-        .filter(|(name, _)| name == "XMP:rights")
+        .filter(|(name, _)| name == "XMP-dc:Rights")
         .collect();
     assert_eq!(
         rights_tags.len(),
         1,
-        "Should have exactly one XMP:rights tag"
+        "Should have exactly one XMP-dc:Rights tag"
     );
     assert_eq!(
         rights_tags[0].1, "Copyright 2024",
-        "XMP:rights should be 'Copyright 2024'"
+        "XMP-dc:Rights should be 'Copyright 2024'"
     );
-    println!("  ✓ XMP:rights: {}", rights_tags[0].1);
+    println!("  ✓ XMP-dc:Rights: {}", rights_tags[0].1);
 
     // === Step 8: Verify both EXIF and XMP can coexist ===
     println!("\nStep 8: Verifying EXIF and XMP coexistence...");

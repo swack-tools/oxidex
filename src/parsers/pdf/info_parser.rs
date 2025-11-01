@@ -115,6 +115,10 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
                 if let Some(formatted_date) = format_pdf_date(&value) {
                     metadata.insert(
                         "PDF:CreationDate".to_string(),
+                        TagValue::new_string(formatted_date.clone()),
+                    );
+                    metadata.insert(
+                        "PDF:CreateDate".to_string(),
                         TagValue::new_string(formatted_date),
                     );
                 }
@@ -124,13 +128,36 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
                 if let Some(formatted_date) = format_pdf_date(&value) {
                     metadata.insert(
                         "PDF:ModDate".to_string(),
+                        TagValue::new_string(formatted_date.clone()),
+                    );
+                    metadata.insert(
+                        "PDF:ModifyDate".to_string(),
                         TagValue::new_string(formatted_date),
                     );
                 }
             }
             "Keywords" => {
-                // Keep Keywords as a string (matching Perl ExifTool behavior)
-                metadata.insert("PDF:Keywords".to_string(), TagValue::new_string(value));
+                let keyword_values: Vec<String> = value
+                    .split(',')
+                    .map(|keyword| keyword.trim())
+                    .filter(|keyword| !keyword.is_empty())
+                    .map(|keyword| keyword.to_string())
+                    .collect();
+
+                if keyword_values.len() > 1 {
+                    let tag_values = keyword_values
+                        .into_iter()
+                        .map(TagValue::new_string)
+                        .collect();
+                    metadata.insert("PDF:Keywords".to_string(), TagValue::new_array(tag_values));
+                } else if let Some(single) = keyword_values.first() {
+                    metadata.insert(
+                        "PDF:Keywords".to_string(),
+                        TagValue::new_string(single.clone()),
+                    );
+                } else {
+                    metadata.insert("PDF:Keywords".to_string(), TagValue::new_string(value));
+                }
             }
             _ => {
                 metadata.insert(format!("PDF:{}", key), TagValue::new_string(value));

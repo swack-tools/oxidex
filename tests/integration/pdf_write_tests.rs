@@ -170,10 +170,12 @@ fn test_write_multiple_field_modifications() {
     assert_eq!(parsed.get_string("PDF:Title"), Some("New Title"));
     assert_eq!(parsed.get_string("PDF:Author"), Some("New Author"));
     assert_eq!(parsed.get_string("PDF:Subject"), Some("New Subject"));
-    assert_eq!(
-        parsed.get_string("PDF:Keywords"),
-        Some("new, modified, test")
-    );
+    if let Some(TagValue::Array(values)) = parsed.get("PDF:Keywords") {
+        let keywords: Vec<&str> = values.iter().filter_map(|v| v.as_string()).collect();
+        assert_eq!(keywords, vec!["new", "modified", "test"]);
+    } else {
+        panic!("Expected PDF:Keywords as array");
+    }
     assert_eq!(parsed.get_string("PDF:Creator"), Some("Modified Creator"));
     assert_eq!(parsed.get_string("PDF:Producer"), Some("Modified Producer"));
 }
@@ -323,10 +325,16 @@ fn test_write_with_long_values() {
     let _ = std::fs::remove_file(&temp_path);
 
     assert_eq!(parsed.get_string("PDF:Title"), Some(long_title.as_str()));
-    assert_eq!(
-        parsed.get_string("PDF:Keywords"),
-        Some(long_keywords.as_str())
-    );
+    if let Some(TagValue::Array(values)) = parsed.get("PDF:Keywords") {
+        let keywords: Vec<&str> = values.iter().filter_map(|v| v.as_string()).collect();
+        let expected: Vec<String> = (0..50).map(|i| format!("keyword{}", i)).collect();
+        assert_eq!(
+            keywords,
+            expected.iter().map(|s| s.as_str()).collect::<Vec<_>>()
+        );
+    } else {
+        panic!("Expected PDF:Keywords as array for long values");
+    }
 }
 
 #[test]

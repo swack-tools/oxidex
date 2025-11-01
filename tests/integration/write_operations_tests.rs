@@ -327,7 +327,10 @@ fn test_write_metadata_with_integer_tags() {
     // Verify integer tags were written correctly
     let updated_metadata = read_metadata(temp_path).expect("Failed to read metadata");
     assert_eq!(updated_metadata.get_integer("ExifIFD:ISO"), Some(400));
-    assert_eq!(updated_metadata.get_integer("IFD0:Orientation"), Some(1));
+    assert_eq!(
+        updated_metadata.get_string("IFD0:Orientation"),
+        Some("Horizontal (normal)")
+    );
 }
 
 #[test]
