@@ -26,6 +26,7 @@
 
 use crate::core::metadata_map::MetadataMap;
 use crate::core::tag_value::TagValue;
+use crate::parsers::tiff::tiff_enums::tiff_enum_to_string;
 use csv::Writer;
 
 /// Trait for formatting metadata into different output formats
@@ -93,7 +94,7 @@ impl OutputFormatter for HumanReadableFormatter {
         // Format each tag as "Tag: Value\n"
         let mut output = String::new();
         for (tag_name, tag_value) in tags {
-            let formatted_value = format_tag_value(tag_value);
+            let formatted_value = format_tag_value(tag_name, tag_value);
             output.push_str(&format!("{}: {}\n", tag_name, formatted_value));
         }
 
@@ -142,7 +143,7 @@ impl OutputFormatter for JsonFormatter {
         let mut json_map = serde_json::Map::new();
 
         for (tag_name, tag_value) in metadata_to_filter.iter() {
-            let json_value = tag_value_to_json(tag_value);
+            let json_value = tag_value_to_json(Some(tag_name.as_str()), tag_value);
             json_map.insert(tag_name.clone(), json_value);
         }
 
@@ -169,7 +170,13 @@ impl OutputFormatter for JsonFormatter {
 /// - Binary → JSON string "(Binary, N bytes)"
 /// - DateTime → JSON string (EXIF format: "YYYY:MM:DD HH:MM:SS")
 /// - Struct → JSON object (recursive)
-fn tag_value_to_json(value: &TagValue) -> serde_json::Value {
+fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> serde_json::Value {
+    if let Some(name) = tag_name {
+        if let Some(label) = friendly_enum_name(name, value) {
+            return serde_json::Value::String(label);
+        }
+    }
+
     match value {
         TagValue::String(s) => serde_json::Value::String(s.clone()),
         TagValue::Integer(i) => serde_json::json!(*i),
@@ -213,12 +220,15 @@ fn tag_value_to_json(value: &TagValue) -> serde_json::Value {
         TagValue::Struct(map) => {
             let mut obj = serde_json::Map::new();
             for (key, val) in map.iter() {
-                obj.insert(key.clone(), tag_value_to_json(val));
+                obj.insert(key.clone(), tag_value_to_json(None, val));
             }
             serde_json::Value::Object(obj)
         }
         TagValue::Array(values) => {
-            let array: Vec<serde_json::Value> = values.iter().map(tag_value_to_json).collect();
+            let array: Vec<serde_json::Value> = values
+                .iter()
+                .map(|v| tag_value_to_json(tag_name, v))
+                .collect();
             serde_json::Value::Array(array)
         }
     }
@@ -280,7 +290,7 @@ impl OutputFormatter for CsvFormatter {
 
         // Write data rows
         for (tag_name, tag_value) in tags {
-            let formatted_value = format_tag_value(tag_value);
+            let formatted_value = format_tag_value(tag_name, tag_value);
             if wtr.write_record([tag_name, &formatted_value]).is_err() {
                 // Skip this record if write fails, but continue
                 continue;
@@ -306,7 +316,11 @@ impl OutputFormatter for CsvFormatter {
 ///
 /// Converts each TagValue variant into a clean string representation
 /// without the enum structure (e.g., "Canon" instead of "String(\"Canon\")").
-fn format_tag_value(value: &TagValue) -> String {
+fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
+    if let Some(label) = friendly_enum_name(tag_name, value) {
+        return label;
+    }
+
     match value {
         TagValue::String(s) => s.clone(),
         TagValue::Integer(i) => i.to_string(),
@@ -319,9 +333,69 @@ fn format_tag_value(value: &TagValue) -> String {
         TagValue::DateTime(dt) => dt.to_rfc3339(),
         TagValue::Struct(_) => "(Structured data)".to_string(),
         TagValue::Array(values) => {
-            let formatted: Vec<String> = values.iter().map(format_tag_value).collect();
+            let formatted: Vec<String> = values
+                .iter()
+                .map(|v| format_tag_value(tag_name, v))
+                .collect();
             format!("[{}]", formatted.join(", "))
         }
+    }
+}
+
+/// Resolves TIFF enumeration names while leaving raw numeric values intact.
+///
+/// This looks up the tag descriptor to retrieve the numeric tag ID and uses
+/// the TIFF enum table to translate well-known values (e.g., Orientation).
+fn friendly_enum_name(tag_name: &str, value: &TagValue) -> Option<String> {
+    let tag_id = lookup_tiff_enum_tag_id(tag_name)?;
+
+    match value {
+        TagValue::Integer(i) => tiff_enum_to_string(tag_id, *i),
+        _ => None,
+    }
+}
+
+/// Maps canonical tag names to their numeric TIFF tag IDs for enum resolution.
+fn lookup_tiff_enum_tag_id(tag_name: &str) -> Option<u16> {
+    match tag_name {
+        // Orientation (tag 0x0112)
+        "IFD0:Orientation" | "IFD1:Orientation" | "EXIF:Orientation" => Some(0x0112),
+
+        // Compression (tag 0x0103)
+        "IFD0:Compression" | "IFD1:Compression" | "EXIF:Compression" => Some(0x0103),
+
+        // PhotometricInterpretation (tag 0x0106)
+        "IFD0:PhotometricInterpretation"
+        | "IFD1:PhotometricInterpretation"
+        | "EXIF:PhotometricInterpretation" => Some(0x0106),
+
+        // PlanarConfiguration (tag 0x011C)
+        "IFD0:PlanarConfiguration" | "IFD1:PlanarConfiguration" | "EXIF:PlanarConfiguration" => {
+            Some(0x011C)
+        }
+
+        // ResolutionUnit (tag 0x0128)
+        "IFD0:ResolutionUnit" | "IFD1:ResolutionUnit" | "EXIF:ResolutionUnit" => Some(0x0128),
+
+        // FillOrder (tag 0x010A)
+        "IFD0:FillOrder" | "IFD1:FillOrder" | "EXIF:FillOrder" => Some(0x010A),
+
+        // SampleFormat (tag 0x0153)
+        "IFD0:SampleFormat" | "IFD1:SampleFormat" | "EXIF:SampleFormat" => Some(0x0153),
+
+        // YCbCrPositioning (tag 0x0213)
+        "IFD0:YCbCrPositioning" | "IFD1:YCbCrPositioning" | "EXIF:YCbCrPositioning" => Some(0x0213),
+
+        // ExtraSamples (tag 0x0152)
+        "IFD0:ExtraSamples" | "IFD1:ExtraSamples" | "EXIF:ExtraSamples" => Some(0x0152),
+
+        // SubfileType (tag 0x00FE)
+        "IFD0:SubfileType" | "IFD1:SubfileType" | "EXIF:SubfileType" => Some(0x00FE),
+
+        // ColorSpace (tag 0xA001)
+        "ExifIFD:ColorSpace" | "EXIF:ColorSpace" => Some(0xA001),
+
+        _ => None,
     }
 }
 
@@ -410,6 +484,17 @@ mod tests {
     }
 
     #[test]
+    fn test_human_readable_formatter_resolves_orientation_enum() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Orientation", TagValue::new_integer(6));
+
+        let formatter = HumanReadableFormatter;
+        let output = formatter.format(&metadata, None);
+
+        assert!(output.contains("IFD0:Orientation: Rotate 90 CW"));
+    }
+
+    #[test]
     fn test_human_readable_formatter_filter_nonexistent_tag() {
         let mut metadata = MetadataMap::new();
         metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
@@ -478,6 +563,23 @@ mod tests {
     }
 
     #[test]
+    fn test_json_formatter_applies_enum_print_conversion() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Orientation", TagValue::new_integer(1));
+
+        let formatter = JsonFormatter;
+        let output = formatter.format(&metadata, None);
+
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let value = parsed[0]
+            .as_object()
+            .and_then(|obj| obj.get("IFD0:Orientation"))
+            .and_then(|v| v.as_str());
+
+        assert_eq!(value, Some("Horizontal (normal)"));
+    }
+
+    #[test]
     fn test_json_formatter_with_filter() {
         let mut metadata = MetadataMap::new();
         metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
@@ -517,38 +619,53 @@ mod tests {
     #[test]
     fn test_format_tag_value_string() {
         let value = TagValue::new_string("Test String");
-        assert_eq!(format_tag_value(&value), "Test String");
+        assert_eq!(format_tag_value("EXIF:Make", &value), "Test String");
     }
 
     #[test]
     fn test_format_tag_value_integer() {
         let value = TagValue::new_integer(42);
-        assert_eq!(format_tag_value(&value), "42");
+        assert_eq!(format_tag_value("EXIF:ISO", &value), "42");
     }
 
     #[test]
     fn test_format_tag_value_float() {
         let value = TagValue::new_float(2.8);
-        assert_eq!(format_tag_value(&value), "2.8");
+        assert_eq!(format_tag_value("EXIF:FNumber", &value), "2.8");
     }
 
     #[test]
     fn test_format_tag_value_rational() {
         let value = TagValue::new_rational(1, 125);
-        assert_eq!(format_tag_value(&value), "1/125");
+        assert_eq!(format_tag_value("EXIF:ExposureTime", &value), "1/125");
     }
 
     #[test]
     fn test_format_tag_value_binary() {
         let value = TagValue::new_binary(vec![0x00, 0x01, 0x02, 0x03, 0x04]);
-        assert_eq!(format_tag_value(&value), "(Binary, 5 bytes)");
+        assert_eq!(
+            format_tag_value("EXIF:MakerNote", &value),
+            "(Binary, 5 bytes)"
+        );
+    }
+
+    #[test]
+    fn test_format_tag_value_orientation_enum() {
+        let value = TagValue::new_integer(1);
+        assert_eq!(
+            format_tag_value("IFD0:Orientation", &value),
+            "Horizontal (normal)"
+        );
     }
 
     #[test]
     fn test_format_tag_value_datetime() {
         let dt = Utc.with_ymd_and_hms(2023, 12, 25, 10, 30, 45).unwrap();
         let value = TagValue::new_datetime(dt);
-        assert_eq!(format_tag_value(&value), "2023-12-25T10:30:45+00:00");
+        assert_eq!(
+            format_tag_value("EXIF:DateTime", &value),
+            "2023-12-25T10:30:45+00:00"
+        );
     }
 
     #[test]
@@ -557,7 +674,10 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("key".to_string(), TagValue::new_string("value"));
         let value = TagValue::new_struct(map);
-        assert_eq!(format_tag_value(&value), "(Structured data)");
+        assert_eq!(
+            format_tag_value("XMP-dc:Subject", &value),
+            "(Structured data)"
+        );
     }
 
     // CSV Formatter Tests
@@ -612,6 +732,17 @@ mod tests {
         assert_eq!(records[1].get(1), Some("Canon"));
         assert_eq!(records[2].get(0), Some("EXIF:Model"));
         assert_eq!(records[2].get(1), Some("EOS 5D"));
+    }
+
+    #[test]
+    fn test_csv_formatter_resolves_orientation_enum() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Orientation", TagValue::new_integer(3));
+
+        let formatter = CsvFormatter;
+        let output = formatter.format(&metadata, None);
+
+        assert!(output.contains("IFD0:Orientation,Rotate 180"));
     }
 
     #[test]
