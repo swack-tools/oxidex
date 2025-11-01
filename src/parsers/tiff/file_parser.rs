@@ -281,7 +281,7 @@ fn extract_u32_from_tag_value(value: &[u8], byte_order: ByteOrder) -> Option<u32
 /// let all_tags = parse_tiff_file(&reader)?;
 ///
 /// // Process all tags from all IFDs
-/// for (tag_id, value) in all_tags {
+/// for (tag_id, _, _, value) in all_tags {
 ///     println!("Tag 0x{:04X}: {} bytes", tag_id, value.len());
 /// }
 /// # Ok(())

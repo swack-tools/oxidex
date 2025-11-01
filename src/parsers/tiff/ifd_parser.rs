@@ -43,7 +43,7 @@
 //! let reader = BufferedReader::new(Path::new("image.tif"))?;
 //! let tags = parse_ifd(&reader, 8, ByteOrder::LittleEndian)?;
 //!
-//! for (tag_id, value) in tags {
+//! for (tag_id, _, _, value) in tags {
 //!     println!("Tag 0x{:04X}: {} bytes", tag_id, value.len());
 //! }
 //! # Ok(())
@@ -135,7 +135,7 @@ pub struct IfdEntry {
 /// let tags = parse_ifd(&reader, 8, ByteOrder::LittleEndian)?;
 ///
 /// // Find Make tag (0x010F)
-/// for (tag_id, value) in &tags {
+/// for (tag_id, _, _, value) in &tags {
 ///     if *tag_id == 0x010F {
 ///         let make = String::from_utf8_lossy(value);
 ///         println!("Make: {}", make);

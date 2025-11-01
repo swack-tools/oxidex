@@ -618,8 +618,6 @@ fn raw_bytes_to_tag_value(
     const SHUTTER_SPEED_VALUE: u16 = 0x9201;
     const MAX_APERTURE_VALUE: u16 = 0x9205;
     const FOCAL_LENGTH: u16 = 0x920A;
-    const ORIENTATION_TAG: u16 = 0x0112;
-
     // Try to convert field_type to ExifType
     if let Some(exif_type) = ExifType::from_u16(field_type) {
         match exif_type {
@@ -866,9 +864,7 @@ fn raw_bytes_to_tag_value(
 
                 // Try to convert to enum string if applicable
                 if let Some(enum_str) = tiff_enum_to_string(tag_id, value) {
-                    if tag_id != ORIENTATION_TAG {
-                        return TagValue::new_string(enum_str);
-                    }
+                    return TagValue::new_string(enum_str);
                 }
 
                 return TagValue::new_integer(value);

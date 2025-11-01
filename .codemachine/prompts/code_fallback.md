@@ -6,20 +6,22 @@ The previous code submission did not pass verification. You must fix the followi
 
 ## Original Task Description
 
-_Not provided in verification context._
+Align the metadata output with Perl ExifTool by:
+- Preserving namespace-specific prefixes for XMP tags instead of collapsing them to the `XMP:` shorthand.
+- Exposing both canonical and alias PDF date tags (`CreationDate`/`CreateDate`, `ModDate`/`ModifyDate`) and treating `PDF:Keywords` as a multi-value tag that round-trips cleanly through the writer.
+- Surfacing user-friendly names for TIFF enumerations (e.g., Orientation) while keeping PDF writer behavior consistent with ExifTool.
 
 ---
 
 ## Issues Detected
 
-* **Test Failure:** `exiftool_comparison_tests::test_comparison_jpeg_with_exif_xmp` fails because the new XMP tag canonicalization in `src/parsers/jpeg/xmp_parser.rs:160` renames tags to `XMP:*`, so our JSON no longer matches Perl ExifTool's namespace-qualified tag names. Restore the original tag names or otherwise emit the same keys Perl produces.
-* **Test Failure:** `exiftool_comparison_tests::test_comparison_pdf` fails because `src/writers/pdf_writer.rs:140-149` filters Info dictionary keys to `CreationDate`/`ModDate`, dropping the `PDF:CreateDate` and `PDF:ModifyDate` entries Perl emits, and the keywords serialization now returns a single string instead of the expected list. Preserve the `CreateDate`/`ModifyDate` tags and make sure `PDF:Keywords` matches the Perl structure.
-* **Test Failure:** `exiftool_comparison_tests::test_comparison_tiff_big_endian` and `exiftool_comparison_tests::test_comparison_tiff_multipage` now report mismatches because `src/core/operations.rs:867-874` blocks enum string conversion for Orientation, returning numeric values instead of the human-readable strings Perl emits. Allow `tiff_enum_to_string` to format Orientation again so outputs match.
+* **Functional Regression:** Writing any JPEG that already contains an Orientation tag now fails validation because the reader stores `IFD0:Orientation` as a `String`, while the tag registry still declares it as an `Integer`.
+  * Reproduction: `cargo run -- -IFD0:Artist="Test" tests/fixtures/jpeg/edge_cases/orientation_1.jpg`
+  * Observed error: `Invalid value for tag 'IFD0:Orientation': Type mismatch: expected Integer but got String`
+  * Root cause: `raw_bytes_to_tag_value` now converts enumerated TIFF tags (including Orientation) to strings, but the write pipeline validates against the registry which still expects an integer for Orientation. Any attempt to modify metadata on files that carry Orientation will fail, blocking real-world edits.
 
 ---
 
 ## Best Approach to Fix
 
-1. Update the XMP parsing logic to stop canonicalizing tag names away from the original namespace-qualified form so that comparison tests continue to see keys like `XMP-xmp:Creator`, `XMP-dc:Title`, etc.
-2. Adjust the PDF writer to accept and emit both `CreateDate`/`ModifyDate` aliases (matching Perl's keys), and ensure `PDF:Keywords` is serialized in the same structure Perl ExifTool uses rather than a comma-joined string.
-3. Revert the Orientation-special casing in `raw_bytes_to_tag_value` so SHORT enum values—including Orientation—always return the enum string. Re-run `cargo clippy --all-targets --all-features` and `cargo test --all-features` to confirm the comparison suite passes.
+Restore compatibility between the reader output and the write validator for enumerated TIFF tags. The quickest path is to keep `IFD0:Orientation` stored as an integer (as before) so validation passes, while providing the human-readable label via a secondary mechanism (e.g., expose an additional helper/tag or defer string conversion to the presentation layer). Update the integration test expectations accordingly and verify `cargo run -- -IFD0:Artist="Test" tests/fixtures/jpeg/edge_cases/orientation_1.jpg` succeeds. Finish by rerunning `cargo test` and `cargo clippy -- -D warnings`.
