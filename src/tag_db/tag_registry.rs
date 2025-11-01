@@ -5,6 +5,7 @@
 //! This is a manual implementation that will later be replaced by automated tag
 //! generation in build.rs (task I5.T5).
 
+use super::generated_tags::GENERATED_TAG_REGISTRY;
 use crate::core::tag_descriptor::{FormatFamily, TagDescriptor, TagId, ValueType};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -6816,6 +6817,11 @@ pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
         return Some(descriptor);
     }
 
+    // Try generated registry direct match
+    if let Some(descriptor) = GENERATED_TAG_REGISTRY.get(name) {
+        return Some(descriptor);
+    }
+
     // Handle IFD prefix mapping for validation
     // When reading metadata, parsers output "IFD0:Make" but registry has "EXIF:Make"
     // Need to normalize IFD0/IFD1/ExifIFD/GPS prefixes to EXIF/GPS for lookup
@@ -6833,10 +6839,13 @@ pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
         }
     } else {
         // GPS and other families stay as-is
-        return None;
+        // Try generated registry before giving up
+        return GENERATED_TAG_REGISTRY.get(name);
     };
 
-    TAG_REGISTRY.get(normalized_name.as_str())
+    TAG_REGISTRY
+        .get(normalized_name.as_str())
+        .or_else(|| GENERATED_TAG_REGISTRY.get(normalized_name.as_str()))
 }
 
 /// Returns the total number of tags in the registry.

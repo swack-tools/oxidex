@@ -10,6 +10,7 @@ use exiftool_rs::parsers::jpeg::segment_parser::parse_segments;
 use exiftool_rs::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};
 use std::io::Write;
 use std::path::Path;
+use tempfile::NamedTempFile;
 
 /// Helper struct to wrap a slice of data and provide FileReader interface
 /// starting at a specific offset within the original data.
@@ -298,15 +299,22 @@ fn ensure_test_fixtures() -> std::io::Result<()> {
     // Create EXIF-only fixture
     let exif_fixture_path = fixture_dir.join("sample_with_exif.jpg");
     let jpeg_data = create_jpeg_with_exif();
-    let mut file = std::fs::File::create(&exif_fixture_path)?;
-    file.write_all(&jpeg_data)?;
+    write_fixture_atomically(&exif_fixture_path, &jpeg_data)?;
 
     // Create EXIF+XMP fixture
     let exif_xmp_fixture_path = fixture_dir.join("sample_with_exif_xmp.jpg");
     let jpeg_data_xmp = create_jpeg_with_exif_and_xmp();
-    let mut file = std::fs::File::create(&exif_xmp_fixture_path)?;
-    file.write_all(&jpeg_data_xmp)?;
+    write_fixture_atomically(&exif_xmp_fixture_path, &jpeg_data_xmp)?;
 
+    Ok(())
+}
+
+fn write_fixture_atomically(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp = NamedTempFile::new_in(parent)?;
+    temp.write_all(data)?;
+    temp.flush()?;
+    temp.persist(path).map_err(|e| e.error)?;
     Ok(())
 }
 

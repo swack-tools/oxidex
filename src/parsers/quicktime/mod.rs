@@ -338,12 +338,12 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        assert!(metadata.contains_key("iTunes:Artist"));
+        assert!(metadata.contains_key("ItemList:Artist"));
 
-        if let Some(artist) = metadata.get_string("iTunes:Artist") {
+        if let Some(artist) = metadata.get_string("ItemList:Artist") {
             assert_eq!(artist, "Artist Name");
         } else {
-            panic!("Expected iTunes:Artist to be a string");
+            panic!("Expected ItemList:Artist to be a string");
         }
     }
 

@@ -151,7 +151,10 @@ pub fn reconstruct_tiff_structure(
             exif_ifd_metadata.insert(tag_name.clone(), tag_value.clone());
         } else if tag_name.starts_with("GPS:") {
             gps_ifd_metadata.insert(tag_name.clone(), tag_value.clone());
-        } else if tag_name.starts_with("IFD0:") || tag_name.starts_with("EXIF:") || tag_name.starts_with("IFD1:") {
+        } else if tag_name.starts_with("IFD0:")
+            || tag_name.starts_with("EXIF:")
+            || tag_name.starts_with("IFD1:")
+        {
             ifd0_metadata.insert(tag_name.clone(), tag_value.clone());
         }
     }
@@ -174,7 +177,7 @@ pub fn reconstruct_tiff_structure(
         // Build pointer entries with placeholder offsets (we'll update these)
         let pointer_entries = if has_exif_ifd && has_gps_ifd {
             vec![
-                (EXIF_IFD_POINTER, 0), // Placeholder
+                (EXIF_IFD_POINTER, 0),     // Placeholder
                 (GPS_INFO_IFD_POINTER, 0), // Placeholder
             ]
         } else if has_exif_ifd {
@@ -184,7 +187,12 @@ pub fn reconstruct_tiff_structure(
         };
 
         // Serialize IFD0 with placeholder pointers to get the actual size
-        let ifd0_temp = serialize_ifd_with_pointers(&ifd0_metadata, byte_order, ifd0_start_offset, &pointer_entries)?;
+        let ifd0_temp = serialize_ifd_with_pointers(
+            &ifd0_metadata,
+            byte_order,
+            ifd0_start_offset,
+            &pointer_entries,
+        )?;
         let ifd0_size = ifd0_temp.len() as u64;
 
         // Now calculate the correct offsets
@@ -211,7 +219,12 @@ pub fn reconstruct_tiff_structure(
             vec![(GPS_INFO_IFD_POINTER, gps_ifd_offset as u32)]
         };
 
-        ifd0_bytes = serialize_ifd_with_pointers(&ifd0_metadata, byte_order, ifd0_start_offset, &pointer_entries)?;
+        ifd0_bytes = serialize_ifd_with_pointers(
+            &ifd0_metadata,
+            byte_order,
+            ifd0_start_offset,
+            &pointer_entries,
+        )?;
 
         // Append IFD0 to output
         output.extend_from_slice(&ifd0_bytes);

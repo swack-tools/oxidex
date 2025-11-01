@@ -10,6 +10,11 @@ use crate::core::tag_descriptor::{TagDescriptor, ValueType};
 use crate::core::tag_value::TagValue;
 use crate::error::ExifToolError;
 
+fn descriptor_allows_datetime(descriptor: &TagDescriptor) -> bool {
+    let name = descriptor.name();
+    name.contains("Date") || name.contains("Time")
+}
+
 /// Validates that a TagValue matches the expected type defined in its TagDescriptor.
 ///
 /// This function performs comprehensive type checking to ensure tag values conform to their
@@ -160,7 +165,11 @@ pub fn validate_tag_value_with_name(
             }
         }
         TagValue::DateTime(_) => {
-            if expected_type != ValueType::DateTime {
+            if expected_type == ValueType::DateTime {
+                // DateTime matches expected type
+            } else if expected_type == ValueType::String && descriptor_allows_datetime(descriptor) {
+                // Allow DateTime values for string-based descriptors that represent dates/times
+            } else {
                 return Err(ExifToolError::invalid_tag_value(
                     tag_name,
                     format!(
@@ -169,8 +178,6 @@ pub fn validate_tag_value_with_name(
                     ),
                 ));
             }
-            // DateTime is already validated by chrono::DateTime<Utc> type system
-            // If we have a DateTime variant, it's structurally valid
         }
         TagValue::Struct(_) => {
             if expected_type != ValueType::Struct {

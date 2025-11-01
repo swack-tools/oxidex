@@ -59,46 +59,46 @@ fn test_parse_sample_mp4_metadata() {
     // Verify specific iTunes metadata fields
     // The sample.mp4 file should contain these tags
     assert!(
-        metadata.contains_key("iTunes:Title"),
-        "iTunes:Title not found in metadata"
+        metadata.contains_key("ItemList:Title"),
+        "ItemList:Title not found in metadata"
     );
     assert!(
-        metadata.contains_key("iTunes:Artist"),
-        "iTunes:Artist not found in metadata"
+        metadata.contains_key("ItemList:Artist"),
+        "ItemList:Artist not found in metadata"
     );
     assert!(
-        metadata.contains_key("iTunes:Album"),
-        "iTunes:Album not found in metadata"
+        metadata.contains_key("ItemList:Album"),
+        "ItemList:Album not found in metadata"
     );
     assert!(
-        metadata.contains_key("iTunes:Year"),
-        "iTunes:Year not found in metadata"
+        metadata.contains_key("ItemList:Year"),
+        "ItemList:Year not found in metadata"
     );
     assert!(
-        metadata.contains_key("iTunes:Comment"),
-        "iTunes:Comment not found in metadata"
+        metadata.contains_key("ItemList:Comment"),
+        "ItemList:Comment not found in metadata"
     );
 
     // Verify expected values
     assert_eq!(
-        metadata.get_string("iTunes:Title"),
+        metadata.get_string("ItemList:Title"),
         Some("Sample Video Title"),
-        "iTunes:Title value incorrect"
+        "ItemList:Title value incorrect"
     );
     assert_eq!(
-        metadata.get_string("iTunes:Artist"),
+        metadata.get_string("ItemList:Artist"),
         Some("Sample Artist"),
-        "iTunes:Artist value incorrect"
+        "ItemList:Artist value incorrect"
     );
     assert_eq!(
-        metadata.get_string("iTunes:Album"),
+        metadata.get_string("ItemList:Album"),
         Some("Sample Album"),
-        "iTunes:Album value incorrect"
+        "ItemList:Album value incorrect"
     );
     assert_eq!(
-        metadata.get_string("iTunes:Year"),
+        metadata.get_string("ItemList:Year"),
         Some("2024"),
-        "iTunes:Year value incorrect"
+        "ItemList:Year value incorrect"
     );
 }
 
@@ -138,11 +138,11 @@ fn test_parse_mp4_extracts_multiple_tags() {
 
     // List of tags we expect to find
     let expected_tags = [
-        "iTunes:Title",
-        "iTunes:Artist",
-        "iTunes:Album",
-        "iTunes:Year",
-        "iTunes:Comment",
+        "ItemList:Title",
+        "ItemList:Artist",
+        "ItemList:Album",
+        "ItemList:Year",
+        "ItemList:Comment",
         "QuickTime:Title",
     ];
 
@@ -171,14 +171,14 @@ fn test_parse_mp4_copyright_tag() {
 
     // Verify copyright field
     assert!(
-        metadata.contains_key("iTunes:Copyright"),
-        "iTunes:Copyright not found"
+        metadata.contains_key("ItemList:Copyright"),
+        "ItemList:Copyright not found"
     );
 
     assert_eq!(
-        metadata.get_string("iTunes:Copyright"),
+        metadata.get_string("ItemList:Copyright"),
         Some("Copyright 2024"),
-        "iTunes:Copyright value incorrect"
+        "ItemList:Copyright value incorrect"
     );
 }
 
@@ -191,14 +191,14 @@ fn test_parse_mp4_genre_tag() {
 
     // Verify genre field
     assert!(
-        metadata.contains_key("iTunes:Genre"),
-        "iTunes:Genre not found"
+        metadata.contains_key("ItemList:Genre"),
+        "ItemList:Genre not found"
     );
 
     assert_eq!(
-        metadata.get_string("iTunes:Genre"),
+        metadata.get_string("ItemList:Genre"),
         Some("Test Genre"),
-        "iTunes:Genre value incorrect"
+        "ItemList:Genre value incorrect"
     );
 }
 
@@ -241,7 +241,7 @@ fn test_parse_mp4_atom_hierarchy() {
     // If we successfully extracted iTunes metadata, it means we navigated:
     // moov → udta → meta → ilst → ©nam → data
     assert!(
-        metadata.contains_key("iTunes:Title"),
+        metadata.contains_key("ItemList:Title"),
         "Failed to navigate atom hierarchy to extract iTunes metadata"
     );
 
@@ -288,7 +288,7 @@ fn test_mp4_both_itunes_and_quicktime_metadata() {
     // Count iTunes tags
     let itunes_count = metadata
         .iter()
-        .filter(|(k, _)| k.starts_with("iTunes:"))
+        .filter(|(k, _)| k.starts_with("ItemList:"))
         .count();
 
     // Count QuickTime tags
