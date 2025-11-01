@@ -359,38 +359,39 @@ fn friendly_enum_name(tag_name: &str, value: &TagValue) -> Option<String> {
 fn lookup_tiff_enum_tag_id(tag_name: &str) -> Option<u16> {
     match tag_name {
         // Orientation (tag 0x0112)
-        "IFD0:Orientation" | "IFD1:Orientation" | "EXIF:Orientation" => Some(0x0112),
+        "IFD0:Orientation" | "IFD1:Orientation" | "IFD2:Orientation" | "EXIF:Orientation" => Some(0x0112),
 
         // Compression (tag 0x0103)
-        "IFD0:Compression" | "IFD1:Compression" | "EXIF:Compression" => Some(0x0103),
+        "IFD0:Compression" | "IFD1:Compression" | "IFD2:Compression" | "EXIF:Compression" => Some(0x0103),
 
         // PhotometricInterpretation (tag 0x0106)
         "IFD0:PhotometricInterpretation"
         | "IFD1:PhotometricInterpretation"
+        | "IFD2:PhotometricInterpretation"
         | "EXIF:PhotometricInterpretation" => Some(0x0106),
 
         // PlanarConfiguration (tag 0x011C)
-        "IFD0:PlanarConfiguration" | "IFD1:PlanarConfiguration" | "EXIF:PlanarConfiguration" => {
+        "IFD0:PlanarConfiguration" | "IFD1:PlanarConfiguration" | "IFD2:PlanarConfiguration" | "EXIF:PlanarConfiguration" => {
             Some(0x011C)
         }
 
         // ResolutionUnit (tag 0x0128)
-        "IFD0:ResolutionUnit" | "IFD1:ResolutionUnit" | "EXIF:ResolutionUnit" => Some(0x0128),
+        "IFD0:ResolutionUnit" | "IFD1:ResolutionUnit" | "IFD2:ResolutionUnit" | "EXIF:ResolutionUnit" => Some(0x0128),
 
         // FillOrder (tag 0x010A)
-        "IFD0:FillOrder" | "IFD1:FillOrder" | "EXIF:FillOrder" => Some(0x010A),
+        "IFD0:FillOrder" | "IFD1:FillOrder" | "IFD2:FillOrder" | "EXIF:FillOrder" => Some(0x010A),
 
         // SampleFormat (tag 0x0153)
-        "IFD0:SampleFormat" | "IFD1:SampleFormat" | "EXIF:SampleFormat" => Some(0x0153),
+        "IFD0:SampleFormat" | "IFD1:SampleFormat" | "IFD2:SampleFormat" | "EXIF:SampleFormat" => Some(0x0153),
 
         // YCbCrPositioning (tag 0x0213)
-        "IFD0:YCbCrPositioning" | "IFD1:YCbCrPositioning" | "EXIF:YCbCrPositioning" => Some(0x0213),
+        "IFD0:YCbCrPositioning" | "IFD1:YCbCrPositioning" | "IFD2:YCbCrPositioning" | "EXIF:YCbCrPositioning" => Some(0x0213),
 
         // ExtraSamples (tag 0x0152)
-        "IFD0:ExtraSamples" | "IFD1:ExtraSamples" | "EXIF:ExtraSamples" => Some(0x0152),
+        "IFD0:ExtraSamples" | "IFD1:ExtraSamples" | "IFD2:ExtraSamples" | "EXIF:ExtraSamples" => Some(0x0152),
 
         // SubfileType (tag 0x00FE)
-        "IFD0:SubfileType" | "IFD1:SubfileType" | "EXIF:SubfileType" => Some(0x00FE),
+        "IFD0:SubfileType" | "IFD1:SubfileType" | "IFD2:SubfileType" | "EXIF:SubfileType" => Some(0x00FE),
 
         // ColorSpace (tag 0xA001)
         "ExifIFD:ColorSpace" | "EXIF:ColorSpace" => Some(0xA001),
