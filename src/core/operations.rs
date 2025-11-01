@@ -594,7 +594,6 @@ fn raw_bytes_to_tag_value(
     byte_order: ByteOrder,
 ) -> TagValue {
     use crate::parsers::common::exif_types::ExifType;
-    use crate::parsers::tiff::tiff_enums::tiff_enum_to_string;
 
     // GPS-specific tag IDs
     const GPS_LATITUDE: u16 = 0x0002;
@@ -862,11 +861,7 @@ fn raw_bytes_to_tag_value(
                     ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
                 } as i64;
 
-                // Try to convert to enum string if applicable
-                if let Some(enum_str) = tiff_enum_to_string(tag_id, value) {
-                    return TagValue::new_string(enum_str);
-                }
-
+                // Keep raw numeric value; friendly names are applied at presentation time.
                 return TagValue::new_integer(value);
             }
 
@@ -906,11 +901,7 @@ fn raw_bytes_to_tag_value(
                     }
                 } as i64;
 
-                // Try to convert to enum string if applicable
-                if let Some(enum_str) = tiff_enum_to_string(tag_id, value) {
-                    return TagValue::new_string(enum_str);
-                }
-
+                // Keep raw numeric value; friendly names are applied at presentation time.
                 return TagValue::new_integer(value);
             }
 
@@ -988,10 +979,6 @@ fn raw_bytes_to_tag_value(
             ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
             ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
         } as i64;
-        // Try to map to enum string
-        if let Some(enum_str) = tiff_enum_to_string(tag_id, value) {
-            return TagValue::new_string(enum_str);
-        }
         return TagValue::new_integer(value);
     } else if bytes.len() == 4 {
         // Check if it looks like a string (4-character ASCII string like "EOS\0")
@@ -1020,10 +1007,6 @@ fn raw_bytes_to_tag_value(
             ByteOrder::LittleEndian => u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
             ByteOrder::BigEndian => u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
         } as i64;
-        // Try to map to enum string
-        if let Some(enum_str) = tiff_enum_to_string(tag_id, value) {
-            return TagValue::new_string(enum_str);
-        }
         return TagValue::new_integer(value);
     }
 
