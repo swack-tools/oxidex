@@ -522,7 +522,6 @@ fn raw_bytes_to_tag_value(
 ) -> TagValue {
     use crate::parsers::common::exif_types::ExifType;
     use crate::parsers::tiff::ifd_parser::ByteOrder;
-    use crate::parsers::tiff::tiff_enums::tiff_enum_to_string;
 
     // Try to convert field_type to ExifType
     if let Some(exif_type) = ExifType::from_u16(field_type) {
@@ -634,11 +633,7 @@ fn raw_bytes_to_tag_value(
                     ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
                 };
 
-                // Try to convert to enum string if applicable
-                if let Some(enum_str) = tiff_enum_to_string(tag_id, value as i64) {
-                    return TagValue::new_string(enum_str);
-                }
-
+                // Preserve raw numeric value; presentation later resolves friendly name.
                 return TagValue::new_integer(value as i64);
             }
 
@@ -684,11 +679,7 @@ fn raw_bytes_to_tag_value(
                     }
                 };
 
-                // Try to convert to enum string if applicable
-                if let Some(enum_str) = tiff_enum_to_string(tag_id, value as i64) {
-                    return TagValue::new_string(enum_str);
-                }
-
+                // Preserve raw numeric value; presentation later resolves friendly name.
                 return TagValue::new_integer(value as i64);
             }
 
