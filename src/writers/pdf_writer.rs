@@ -41,6 +41,7 @@
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::writers::atomic_writer::write_atomic;
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, Timelike, Utc};
 use std::collections::HashMap;
 use std::path::Path;
 use std::str;
@@ -134,6 +135,18 @@ struct ObjectRef {
     object_num: u32,
     generation: u16,
 }
+
+/// Allowed fields in the PDF Info dictionary
+const PDF_INFO_FIELDS: &[&str] = &[
+    "Title",
+    "Author",
+    "Subject",
+    "Keywords",
+    "Creator",
+    "Producer",
+    "CreationDate",
+    "ModDate",
+];
 
 /// Parses PDF structure to extract xref table and Info object location
 fn parse_pdf_structure(reader: &dyn FileReader) -> Result<PdfStructure> {
@@ -388,17 +401,23 @@ fn write_info_object(
     // Write dictionary start
     buffer.extend_from_slice(b"<<\n");
 
-    // Write metadata fields
-    for (key, value) in metadata.iter() {
-        // Only process PDF: tags
-        if !key.starts_with("PDF:") {
-            continue;
-        }
+    // Collect and sort allowed PDF Info fields for deterministic output
+    let mut entries: Vec<(&str, &TagValue)> = metadata
+        .iter()
+        .filter_map(|(key, value)| {
+            key.strip_prefix("PDF:").and_then(|field| {
+                if PDF_INFO_FIELDS.contains(&field) {
+                    Some((field, value))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
 
-        // Extract field name (remove "PDF:" prefix)
-        let field_name = &key[4..];
+    entries.sort_by(|a, b| a.0.cmp(b.0));
 
-        // Serialize the field
+    for (field_name, value) in entries {
         serialize_pdf_field(buffer, field_name, value)?;
     }
 
@@ -418,6 +437,15 @@ fn serialize_pdf_field(buffer: &mut Vec<u8>, field_name: &str, value: &TagValue)
     // Write field value based on type
     match value {
         TagValue::String(s) => {
+            if matches!(field_name, "CreationDate" | "ModDate") {
+                if let Some(pdf_date) = convert_exif_string_to_pdf_date(s) {
+                    buffer.extend_from_slice(b"(D:");
+                    buffer.extend_from_slice(pdf_date.as_bytes());
+                    buffer.extend_from_slice(b")\n");
+                    return Ok(());
+                }
+            }
+
             // Check if string contains non-ASCII characters
             if s.chars()
                 .all(|c| c.is_ascii() && c != '(' && c != ')' && c != '\\')
@@ -436,13 +464,10 @@ fn serialize_pdf_field(buffer: &mut Vec<u8>, field_name: &str, value: &TagValue)
         }
         TagValue::DateTime(dt) => {
             // Format as PDF date string: (D:YYYYMMDDHHmmSS+HH'mm')
-            use crate::core::date_shift::format_exif_datetime;
-            let datetime_str = format_exif_datetime(dt);
+            let datetime_str = format_pdf_datetime(dt);
             buffer.extend_from_slice(b"(D:");
-            // Convert YYYY:MM:DD HH:MM:SS to YYYYMMDDHHMMSS
-            let pdf_date = datetime_str.replace(":", "").replace(" ", "");
-            buffer.extend_from_slice(pdf_date.as_bytes());
-            buffer.extend_from_slice(b"+00'00')");
+            buffer.extend_from_slice(datetime_str.as_bytes());
+            buffer.extend_from_slice(b")");
         }
         TagValue::Float(f) => {
             buffer.extend_from_slice(f.to_string().as_bytes());
@@ -505,6 +530,60 @@ fn serialize_hex_string(buffer: &mut Vec<u8>, s: &str) {
     }
 
     buffer.extend_from_slice(b">");
+}
+
+/// Formats a chrono DateTime<Utc> into PDF date string components
+fn format_pdf_datetime(dt: &DateTime<Utc>) -> String {
+    let fixed = dt.with_timezone(&FixedOffset::east_opt(0).unwrap());
+    format_fixed_offset_pdf_date(fixed)
+}
+
+/// Converts an EXIF-style string (YYYY:MM:DD HH:MM:SS[+HH:MM]) to PDF date format
+fn convert_exif_string_to_pdf_date(value: &str) -> Option<String> {
+    if let Ok(dt) = DateTime::parse_from_str(value, "%Y:%m:%d %H:%M:%S%:z") {
+        return Some(format_fixed_offset_pdf_date(dt));
+    }
+
+    if let Ok(dt) = DateTime::parse_from_str(value, "%Y:%m:%d %H:%M:%S%.f%:z") {
+        return Some(format_fixed_offset_pdf_date(dt));
+    }
+
+    if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y:%m:%d %H:%M:%S") {
+        let utc_dt = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc);
+        let fixed = utc_dt.with_timezone(&FixedOffset::east_opt(0).unwrap());
+        return Some(format_fixed_offset_pdf_date(fixed));
+    }
+
+    if let Ok(date_only) = NaiveDate::parse_from_str(value, "%Y:%m:%d") {
+        let naive = date_only.and_hms_opt(0, 0, 0)?;
+        let utc_dt = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc);
+        let fixed = utc_dt.with_timezone(&FixedOffset::east_opt(0).unwrap());
+        return Some(format_fixed_offset_pdf_date(fixed));
+    }
+
+    None
+}
+
+/// Formats a fixed-offset DateTime into PDF Info date string body (without leading "D:")
+fn format_fixed_offset_pdf_date(dt: DateTime<FixedOffset>) -> String {
+    let offset_seconds = dt.offset().local_minus_utc();
+    let sign = if offset_seconds >= 0 { '+' } else { '-' };
+    let abs_offset = offset_seconds.abs();
+    let hours = abs_offset / 3600;
+    let minutes = (abs_offset % 3600) / 60;
+
+    format!(
+        "{:04}{:02}{:02}{:02}{:02}{:02}{}{:02}'{:02}'",
+        dt.year(),
+        dt.month(),
+        dt.day(),
+        dt.hour(),
+        dt.minute(),
+        dt.second(),
+        sign,
+        hours,
+        minutes
+    )
 }
 
 /// Copies an object from the original file to the buffer

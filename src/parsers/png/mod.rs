@@ -412,8 +412,13 @@ fn parse_and_insert_exif_tags(exif_data: &[u8], metadata: &mut MetadataMap) -> R
 
                 // Also add the PNG:Exif version (WITHOUT enum interpretation, raw values only)
                 if let Some(stripped) = base_tag_name.strip_prefix("ExifIFD:") {
-                    let raw_value =
-                        raw_bytes_to_tag_value_no_enum(&raw_bytes, field_type, value_count, tag_id, byte_order);
+                    let raw_value = raw_bytes_to_tag_value_no_enum(
+                        &raw_bytes,
+                        field_type,
+                        value_count,
+                        tag_id,
+                        byte_order,
+                    );
                     metadata.insert(format!("PNG:Exif{}", stripped), raw_value);
                 }
             }
@@ -932,7 +937,11 @@ mod tests {
 
         let metadata = result.unwrap();
         // 7 IHDR tags + EXIF tags (at least 1) = 8+ total
-        assert!(metadata.len() >= 8, "Expected at least 8 tags (7 IHDR + 1+ EXIF), got {}", metadata.len());
+        assert!(
+            metadata.len() >= 8,
+            "Expected at least 8 tags (7 IHDR + 1+ EXIF), got {}",
+            metadata.len()
+        );
         // Tag 0x010F is Make - parser now uses "IFD0:Make" instead of "EXIF:0x010F"
         assert_eq!(metadata.get_string("IFD0:Make"), Some("Tst"));
     }

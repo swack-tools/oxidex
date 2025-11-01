@@ -618,6 +618,7 @@ fn raw_bytes_to_tag_value(
     const SHUTTER_SPEED_VALUE: u16 = 0x9201;
     const MAX_APERTURE_VALUE: u16 = 0x9205;
     const FOCAL_LENGTH: u16 = 0x920A;
+    const ORIENTATION_TAG: u16 = 0x0112;
 
     // Try to convert field_type to ExifType
     if let Some(exif_type) = ExifType::from_u16(field_type) {
@@ -627,7 +628,11 @@ fn raw_bytes_to_tag_value(
                 // Check if this is an array of rationals (count > 1)
                 if value_count > 1 && bytes.len() >= (value_count as usize * 8) {
                     // Special handling for GPS coordinates (3 rationals: degrees, minutes, seconds)
-                    if matches!(tag_id, GPS_LATITUDE | GPS_LONGITUDE | GPS_DEST_LATITUDE | GPS_DEST_LONGITUDE) && value_count == 3 {
+                    if matches!(
+                        tag_id,
+                        GPS_LATITUDE | GPS_LONGITUDE | GPS_DEST_LATITUDE | GPS_DEST_LONGITUDE
+                    ) && value_count == 3
+                    {
                         let mut dms = Vec::new();
                         for i in 0..3 {
                             let offset = i * 8;
@@ -666,11 +671,8 @@ fn raw_bytes_to_tag_value(
                             }
                         }
                         // Format as DMS: "37 deg 46' 33.24""
-                        let formatted = format!("{} deg {}' {:.2}\"",
-                            dms[0] as i32,
-                            dms[1] as i32,
-                            dms[2]
-                        );
+                        let formatted =
+                            format!("{} deg {}' {:.2}\"", dms[0] as i32, dms[1] as i32, dms[2]);
                         return TagValue::new_string(formatted);
                     }
 
@@ -758,7 +760,10 @@ fn raw_bytes_to_tag_value(
                     let simplified_den = denominator / gcd;
                     // Only format as fraction if denominator > 1
                     if simplified_den > 1 {
-                        return TagValue::new_string(format!("{}/{}", simplified_num, simplified_den));
+                        return TagValue::new_string(format!(
+                            "{}/{}",
+                            simplified_num, simplified_den
+                        ));
                     }
                 }
 
@@ -861,7 +866,9 @@ fn raw_bytes_to_tag_value(
 
                 // Try to convert to enum string if applicable
                 if let Some(enum_str) = tiff_enum_to_string(tag_id, value) {
-                    return TagValue::new_string(enum_str);
+                    if tag_id != ORIENTATION_TAG {
+                        return TagValue::new_string(enum_str);
+                    }
                 }
 
                 return TagValue::new_integer(value);
@@ -931,7 +938,8 @@ fn raw_bytes_to_tag_value(
             ExifType::Byte | ExifType::Undefined => {
                 // GPS Version ID (4 bytes: major.minor.rev.0)
                 if tag_id == GPS_VERSION_ID && bytes.len() >= 4 {
-                    return TagValue::new_string(format!("{}.{}.{}.{}",
+                    return TagValue::new_string(format!(
+                        "{}.{}.{}.{}",
                         bytes[0], bytes[1], bytes[2], bytes[3]
                     ));
                 }
@@ -945,16 +953,20 @@ fn raw_bytes_to_tag_value(
 
                 // ComponentsConfiguration (4 bytes with component IDs)
                 if tag_id == COMPONENTS_CONFIGURATION && bytes.len() >= 4 {
-                    let component_names = bytes.iter().take(4).map(|&b| match b {
-                        0 => "-",
-                        1 => "Y",
-                        2 => "Cb",
-                        3 => "Cr",
-                        4 => "R",
-                        5 => "G",
-                        6 => "B",
-                        _ => "?",
-                    }).collect::<Vec<_>>();
+                    let component_names = bytes
+                        .iter()
+                        .take(4)
+                        .map(|&b| match b {
+                            0 => "-",
+                            1 => "Y",
+                            2 => "Cb",
+                            3 => "Cr",
+                            4 => "R",
+                            5 => "G",
+                            6 => "B",
+                            _ => "?",
+                        })
+                        .collect::<Vec<_>>();
                     return TagValue::new_string(component_names.join(", "));
                 }
 
@@ -1400,7 +1412,7 @@ mod tests {
     fn test_raw_bytes_to_tag_value_binary() {
         use crate::parsers::tiff::ifd_parser::ByteOrder;
         let bytes = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x10, 0x20]; // Non-ASCII bytes
-        // Use tag_id=0xFFFF which doesn't match any special handlers
+                                                              // Use tag_id=0xFFFF which doesn't match any special handlers
         let value = raw_bytes_to_tag_value(&bytes, 7, 1, 0xFFFF, ByteOrder::LittleEndian); // Type 7 = UNDEFINED
         assert!(value.is_binary());
     }

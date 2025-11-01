@@ -138,10 +138,32 @@ fn resolve_tag<'a>(metadata: &'a crate::core::MetadataMap, tag_name: &str) -> Op
         return Some(value);
     }
 
-    // If tag doesn't have a family prefix, try adding "EXIF:"
-    if !tag_name.contains(':') {
-        let qualified_name = format!("EXIF:{}", tag_name);
-        if let Some(value) = metadata.get(&qualified_name) {
+    let mut candidates: Vec<String> = Vec::new();
+
+    if let Some((prefix, suffix)) = tag_name.split_once(':') {
+        match prefix {
+            "EXIF" => {
+                candidates.push(format!("IFD0:{}", suffix));
+                candidates.push(format!("ExifIFD:{}", suffix));
+            }
+            "ExifIFD" => {
+                candidates.push(format!("EXIF:{}", suffix));
+                candidates.push(format!("IFD0:{}", suffix));
+            }
+            "IFD0" | "IFD1" | "IFD2" | "IFD3" | "InteropIFD" => {
+                candidates.push(format!("EXIF:{}", suffix));
+                candidates.push(format!("ExifIFD:{}", suffix));
+            }
+            _ => {}
+        }
+    } else {
+        candidates.push(format!("EXIF:{}", tag_name));
+        candidates.push(format!("IFD0:{}", tag_name));
+        candidates.push(format!("ExifIFD:{}", tag_name));
+    }
+
+    for candidate in candidates {
+        if let Some(value) = metadata.get(&candidate) {
             return Some(value);
         }
     }

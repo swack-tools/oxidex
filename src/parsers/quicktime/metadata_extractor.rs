@@ -8,6 +8,7 @@
 
 use super::atom_parser::Atom;
 use crate::core::{MetadataMap, TagValue};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Extract all metadata from QuickTime/MP4 atoms
@@ -486,23 +487,29 @@ fn extract_user_data_atoms(udta: &Atom, metadata: &mut MetadataMap) -> Result<()
         // QuickTime user data atoms start with © character (0xA9)
         if atom_bytes[0] == 0xA9 {
             if let Some(value) = extract_string_value(atom.data) {
-                let tag_name = match atom_bytes {
-                    b"\xa9nam" => "UserData:Title",
-                    b"\xa9ART" => "UserData:Artist",
-                    b"\xa9alb" => "UserData:Album",
-                    b"\xa9day" => "UserData:Year",
-                    b"\xa9cmt" => "UserData:Comment",
-                    b"\xa9cpy" => "UserData:Copyright",
-                    b"\xa9gen" => "UserData:Genre",
-                    b"\xa9too" => "UserData:Encoder",
-                    b"\xa9des" => "UserData:Description",
-                    b"\xa9dir" => "UserData:Director",
-                    b"\xa9prd" => "UserData:Producer",
-                    b"\xa9prf" => "UserData:Performers",
-                    _ => continue, // Skip unknown atoms
+                let suffix = match atom_bytes {
+                    b"\xa9nam" => Some("Title"),
+                    b"\xa9ART" => Some("Artist"),
+                    b"\xa9alb" => Some("Album"),
+                    b"\xa9day" => Some("Year"),
+                    b"\xa9cmt" => Some("Comment"),
+                    b"\xa9cpy" => Some("Copyright"),
+                    b"\xa9gen" => Some("Genre"),
+                    b"\xa9too" => Some("Encoder"),
+                    b"\xa9des" => Some("Description"),
+                    b"\xa9dir" => Some("Director"),
+                    b"\xa9prd" => Some("Producer"),
+                    b"\xa9prf" => Some("Performers"),
+                    _ => None,
                 };
 
-                metadata.insert(tag_name.to_string(), TagValue::String(value));
+                if let Some(suffix) = suffix {
+                    metadata.insert(
+                        format!("QuickTime:{}", suffix),
+                        TagValue::new_string(value.clone()),
+                    );
+                    metadata.insert(format!("UserData:{}", suffix), TagValue::new_string(value));
+                }
             }
         }
     }
@@ -539,35 +546,49 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
             // Each item contains a data atom
             if let Some(data_atom) = item.find_child("data") {
                 if let Some(value) = extract_itunes_data_value(data_atom.data) {
-                    let tag_name = match atom_bytes {
-                        b"\xa9nam" => "iTunes:Title",
-                        b"\xa9ART" => "iTunes:Artist",
-                        b"\xa9alb" => "iTunes:Album",
-                        b"\xa9day" => "iTunes:ContentCreateDate",
-                        b"\xa9cmt" => "iTunes:Comment",
-                        b"\xa9gen" => "iTunes:Genre",
-                        b"\xa9too" => "iTunes:Encoder",
-                        b"aART" => "iTunes:AlbumArtist",
-                        b"\xa9wrt" => "iTunes:Composer",
-                        b"\xa9grp" => "iTunes:Grouping",
-                        b"trkn" => "iTunes:TrackNumber",
-                        b"disk" => "iTunes:DiscNumber",
-                        b"cprt" | b"\xa9cpy" => "iTunes:Copyright",
+                    let mut add_year_tag = false;
+                    let tag_name: Cow<'static, str> = match atom_bytes {
+                        b"\xa9nam" => Cow::Borrowed("ItemList:Title"),
+                        b"\xa9ART" => Cow::Borrowed("ItemList:Artist"),
+                        b"\xa9alb" => Cow::Borrowed("ItemList:Album"),
+                        b"\xa9day" => {
+                            add_year_tag = true;
+                            Cow::Borrowed("ItemList:ContentCreateDate")
+                        }
+                        b"\xa9cmt" => Cow::Borrowed("ItemList:Comment"),
+                        b"\xa9gen" => Cow::Borrowed("ItemList:Genre"),
+                        b"\xa9too" => Cow::Borrowed("ItemList:Encoder"),
+                        b"aART" => Cow::Borrowed("ItemList:AlbumArtist"),
+                        b"\xa9wrt" => Cow::Borrowed("ItemList:Composer"),
+                        b"\xa9grp" => Cow::Borrowed("ItemList:Grouping"),
+                        b"trkn" => Cow::Borrowed("ItemList:TrackNumber"),
+                        b"disk" => Cow::Borrowed("ItemList:DiscNumber"),
+                        b"cprt" | b"\xa9cpy" => Cow::Borrowed("ItemList:Copyright"),
                         _ => {
-                            // Store unknown iTunes tags with their FourCC
-                            // Try to convert to string, otherwise use hex representation
                             if let Ok(s) = std::str::from_utf8(atom_bytes) {
-                                &format!("iTunes:{}", s)
+                                Cow::Owned(format!("ItemList:{}", s))
                             } else {
-                                &format!(
-                                    "iTunes:{:02X}{:02X}{:02X}{:02X}",
+                                Cow::Owned(format!(
+                                    "ItemList:{:02X}{:02X}{:02X}{:02X}",
                                     atom_bytes[0], atom_bytes[1], atom_bytes[2], atom_bytes[3]
-                                )
+                                ))
                             }
                         }
                     };
 
-                    metadata.insert(tag_name.to_string(), value);
+                    metadata.insert(tag_name.into_owned(), value.clone());
+
+                    if add_year_tag {
+                        if let TagValue::String(ref text) = value {
+                            if text.len() >= 4 {
+                                let year = text.chars().take(4).collect::<String>();
+                                metadata.insert(
+                                    "ItemList:Year".to_string(),
+                                    TagValue::new_string(year),
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
