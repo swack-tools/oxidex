@@ -139,6 +139,36 @@ fn download_exiftool_source() -> Result<PathBuf> {
     }
 }
 
+/// Discovers all .pm Perl modules in ExifTool source
+fn discover_all_modules(lib_dir: &Path) -> Result<Vec<(PathBuf, String)>> {
+    let mut modules = Vec::new();
+
+    // Recursively walk the lib directory
+    fn visit_dirs(dir: &Path, modules: &mut Vec<(PathBuf, String)>) -> Result<()> {
+        if dir.is_dir() {
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                let path = entry.path();
+
+                if path.is_dir() {
+                    visit_dirs(&path, modules)?;
+                } else if path.extension().and_then(|s| s.to_str()) == Some("pm") {
+                    // Extract module name from file path
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        modules.push((path.clone(), stem.to_string()));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    visit_dirs(lib_dir, &mut modules)?;
+
+    println!("cargo:warning=Discovered {} Perl modules", modules.len());
+    Ok(modules)
+}
+
 /// Parses tag definitions from ExifTool Perl modules
 fn parse_exiftool_tags(source_dir: &Path) -> Result<Vec<TagDefinition>> {
     let lib_dir = source_dir.join("lib/Image/ExifTool");
@@ -148,43 +178,33 @@ fn parse_exiftool_tags(source_dir: &Path) -> Result<Vec<TagDefinition>> {
 
     let mut all_tags = Vec::new();
 
-    // Parse key modules for different format families
-    let modules = vec![
-        ("EXIF.pm", "EXIF"),
-        ("GPS.pm", "GPS"),
-        ("XMP.pm", "XMP"),
-        ("IPTC.pm", "IPTC"),
-        ("PDF.pm", "PDF"),
-        ("QuickTime.pm", "QuickTime"),
-        ("Photoshop.pm", "Photoshop"),
-        ("PNG.pm", "PNG"),
-        ("JFIF.pm", "JFIF"),
-        ("JPEG.pm", "JPEG"),
-        ("TIFF.pm", "TIFF"),
-        ("ICC_Profile.pm", "ICC_Profile"),
-        ("PostScript.pm", "PostScript"),
-        ("RIFF.pm", "RIFF"),
-        ("MakerNotes.pm", "MakerNotes"),
-    ];
+    // Discover all modules
+    let modules = discover_all_modules(&lib_dir)
+        .context("Failed to discover ExifTool modules")?;
 
-    for (module_file, format_family) in modules {
-        let module_path = lib_dir.join(module_file);
-        if module_path.exists() {
-            match parse_perl_module(&module_path, format_family) {
-                Ok(mut tags) => {
+    println!("cargo:warning=Parsing {} modules for tag definitions...", modules.len());
+
+    // Parse each module
+    for (module_path, module_name) in modules {
+        match parse_perl_module(&module_path, &module_name) {
+            Ok(mut tags) => {
+                if !tags.is_empty() {
                     println!(
-                        "cargo:warning=Parsed {} tags from {}",
-                        tags.len(),
-                        module_file
+                        "cargo:warning=  {:30} -> {:5} tags",
+                        module_name,
+                        tags.len()
                     );
                     all_tags.append(&mut tags);
                 }
-                Err(e) => {
-                    eprintln!("cargo:warning=Failed to parse {}: {}", module_file, e);
-                }
+            }
+            Err(e) => {
+                // Don't fail on individual module parse errors
+                eprintln!("cargo:warning=  {:30} -> ERROR: {}", module_name, e);
             }
         }
     }
+
+    println!("cargo:warning=Total tags parsed: {}", all_tags.len());
 
     if all_tags.is_empty() {
         anyhow::bail!("No tags parsed from ExifTool source");
@@ -533,10 +553,36 @@ fn generate_tag_insertion(file: &mut File, tag: &TagDefinition) -> Result<()> {
         escape_string(&tag.tag_name)
     )?;
 
-    // Format family
+    // Format family - map to known FormatFamily enum variants
     let family_variant = match tag.format_family.as_str() {
         "ICC_Profile" => "ICCProfile",
-        other => other,
+        "EXIF" => "EXIF",
+        "XMP" => "XMP",
+        "IPTC" => "IPTC",
+        "GPS" => "GPS",
+        "Photoshop" => "Photoshop",
+        "MakerNotes" => "MakerNotes",
+        "JFIF" => "JFIF",
+        "JPEG" => "JPEG",
+        "PNG" => "PNG",
+        "PDF" => "PDF",
+        "QuickTime" => "QuickTime",
+        "TIFF" => "TIFF",
+        "RIFF" => "RIFF",
+        "PostScript" => "PostScript",
+        // Map all maker note modules to MakerNotes family
+        "Canon" | "Nikon" | "Sony" | "Olympus" | "Panasonic" | "Pentax" | "FujiFilm"
+        | "Samsung" | "Minolta" | "Kodak" | "Casio" | "Ricoh" | "Sanyo"
+        | "CanonCustom" | "NikonCapture" | "KyoceraRaw" | "MinoltaRaw"
+        | "SigmaRaw" | "Leaf" | "PhaseOne" => "MakerNotes",
+        // Map video/audio formats to QuickTime for now
+        "Matroska" | "Flash" | "ASF" | "MPEG" | "H264" | "FLAC" | "Ogg"
+        | "Vorbis" | "AAC" | "APE" => "QuickTime",
+        // Map other formats to appropriate families
+        "GIF" | "BMP" | "PSD" | "DjVu" | "MNG" | "BPG" | "FLIF" | "ICO" => "PNG",
+        "HTML" | "XML" | "SVG" => "PDF",
+        // Default: unknown formats map to MakerNotes as a catch-all
+        _ => "MakerNotes",
     };
     writeln!(file, "            FormatFamily::{},", family_variant)?;
 
