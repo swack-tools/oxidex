@@ -10,6 +10,10 @@ tests/fixtures/**/*.png filter=lfs diff=lfs merge=lfs -text
 tests/fixtures/**/*.webp filter=lfs diff=lfs merge=lfs -text
 tests/fixtures/**/*.heic filter=lfs diff=lfs merge=lfs -text
 tests/fixtures/**/*.heif filter=lfs diff=lfs merge=lfs -text
+tests/fixtures/**/*.avif filter=lfs diff=lfs merge=lfs -text
+
+# Test output binaries
+tests/fixtures/**/*.bin filter=lfs diff=lfs merge=lfs -text
 
 # Video files in test fixtures
 tests/fixtures/**/*.mp4 filter=lfs diff=lfs merge=lfs -text
