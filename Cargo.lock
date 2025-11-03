@@ -429,6 +429,7 @@ dependencies = [
  "anyhow",
  "once_cell",
  "regex",
+ "serde",
  "ureq",
 ]
 

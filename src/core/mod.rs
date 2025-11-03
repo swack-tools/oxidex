@@ -12,9 +12,11 @@ pub mod file_reader_trait;
 pub mod format_parser_trait;
 pub mod metadata_map;
 pub mod operations;
-pub mod tag_descriptor;
 pub mod tag_value;
 pub mod validation;
+
+// Re-export tag descriptor types from exiftool-tags crate
+pub use exiftool_tags::{FormatFamily, TagDescriptor, TagId, ValueType};
 
 // Re-export commonly used types for convenience
 pub use file_format::FileFormat;
@@ -22,6 +24,5 @@ pub use file_reader_trait::FileReader;
 pub use format_parser_trait::FormatParser;
 pub use metadata_map::MetadataMap;
 pub use operations::{modify_tag, read_metadata, write_metadata};
-pub use tag_descriptor::{FormatFamily, TagDescriptor, TagId, ValueType};
 pub use tag_value::TagValue;
 pub use validation::validate_tag_value;
