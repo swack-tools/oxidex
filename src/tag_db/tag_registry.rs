@@ -6,7 +6,7 @@
 //! generation in build.rs (task I5.T5).
 
 use super::generated_tags::GENERATED_TAG_REGISTRY;
-use crate::core::tag_descriptor::{FormatFamily, TagDescriptor, TagId, ValueType};
+use crate::core::{FormatFamily, TagDescriptor, TagId, ValueType};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 

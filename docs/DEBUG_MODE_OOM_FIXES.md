@@ -245,5 +245,58 @@ cargo build --release
 
 ---
 
+## Pull Request
+
+**PR #1:** https://github.com/swackhamer/exiftool-rs/pull/1
+**Title:** feat: Comprehensive tag database expansion and debug build OOM fix
+**Branch:** `more-exifdata`
+**Status:** Ready for review
+
+**Changes Summary:**
+- 269 files changed (+75,628, -9,906)
+- 10 commits total
+- Final commit: `53cbccd`
+
+---
+
+## Verified Testing Results
+
+### Debug Build Memory Usage (Observed)
+
+**Test Environment:** macOS (Darwin 25.0.0)
+
+**Before Workspace Solution:**
+- Memory: 100GB+ (OOM/SIGKILL)
+- Status: ❌ Build fails
+
+**After Workspace Solution:**
+- Memory: **11.62 GB peak** (measured during compilation)
+- Status: ✅ Build completes successfully
+- Time: ~15-20 minutes for clean build
+- Process: No SIGKILL, no swap thrashing
+
+**Verification Command:**
+```bash
+ps aux | grep rustc | grep exiftool | awk '{sum+=$6} END {printf "%.2f GB\n", sum/1024/1024}'
+# Output: 11.62 GB
+```
+
+### Build Commands Verified
+
+```bash
+# Clean debug build (tested successfully)
+cargo clean && cargo build
+
+# Tag generation verified
+cargo build 2>&1 | grep "Successfully generated tag database"
+# Output: Successfully generated tag database with 32677 tags
+
+# Memory monitoring during build
+watch -n 10 'ps aux | grep rustc | grep -v grep | awk "{sum+=\$6} END {printf \"Memory: %.2f GB\\n\", sum/1024/1024}"'
+```
+
+---
+
 **Session End:** November 3, 2025
-**Status:** ✅ Solution 2 successfully implemented and tested!
+**Status:** ✅ Solution 2 successfully implemented, tested, documented, and committed
+**Final Commit:** `53cbccd` - "fix: resolve debug build OOM by moving tag database to separate workspace crate"

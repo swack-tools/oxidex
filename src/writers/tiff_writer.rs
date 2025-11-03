@@ -37,7 +37,7 @@
 #![allow(dead_code)]
 
 use crate::core::metadata_map::MetadataMap;
-use crate::core::tag_descriptor::TagId;
+use crate::core::TagId;
 use crate::core::tag_value::TagValue;
 use crate::core::FileReader;
 use crate::error::{ExifToolError, Result};
