@@ -1,14 +1,14 @@
 //! Generated tag database
 //!
-//! Contains the tag registry and generated tag definitions from ExifTool specifications.
+//! Re-exports tag definitions from the exiftool-tags crate
 
 #![allow(dead_code)]
 
-pub mod generated_tags;
 pub mod tag_registry;
 
-use crate::core::tag_descriptor::{FormatFamily, TagId};
-use generated_tags::GENERATED_TAG_REGISTRY;
+// Re-export everything from exiftool-tags crate
+pub use exiftool_tags::*;
+
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
