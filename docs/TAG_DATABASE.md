@@ -14,7 +14,10 @@ The tag database is automatically generated during build from Perl ExifTool sour
 2. **Discover** - Finds all 140+ .pm Perl modules recursively
 3. **Parse** - Extracts tag definitions using comprehensive regex patterns
 4. **Resolve** - Follows subdirectory references for nested tables
-5. **Generate** - Creates optimized Rust code with Lazy Vec + HashMap lookup
+5. **Generate** - Creates 124 separate module files (one per format family) + main lookup module
+   - Each family module: `src/tag_db/generated/tags_<family>.rs` (100-3,500 tags each)
+   - Main module: `src/tag_db/generated_tags.rs` (792 lines)
+   - Total: ~35,000 lines across 125 files (vs 425,000 lines in single file)
 
 ## Performance
 
@@ -77,13 +80,47 @@ The build script will:
 
 ## Implementation Details
 
-### Code Generation Strategy
+### Code Generation Strategy - Split-File Architecture
 
-Due to the large number of tags (32,677), the code uses:
-- `Lazy<Vec<TagDescriptor>>` for the tag array (allows heap allocation)
-- `Lazy<HashMap<String, TagDescriptor>>` for O(1) lookup
-- Compact single-line tag entries to minimize generated code size
-- Lazy initialization to avoid static allocation constraints
+To handle 32,677 tags without overwhelming the Rust compiler:
+
+**File Organization:**
+- 124 format family modules in `src/tag_db/generated/tags_*.rs`
+- 1 main module `src/tag_db/generated_tags.rs` with lookup logic
+- Total: ~35,000 lines across 125 files (vs 425,000 in a single file)
+
+**Each Family Module Contains:**
+```rust
+static TAGS: Lazy<Vec<TagDescriptor>> = Lazy::new(|| vec![...]);
+
+pub fn get_tags() -> &'static HashMap<String, TagDescriptor> {
+    static MAP: Lazy<HashMap<String, TagDescriptor>> = Lazy::new(|| {
+        let mut map = HashMap::with_capacity(TAGS.len());
+        for tag in TAGS.iter() {
+            map.insert(tag.tag_name.clone(), tag.clone());
+        }
+        map
+    });
+    &MAP
+}
+```
+
+**Main Module Lookup (Sequential Search):**
+```rust
+pub fn get_generated_tag_descriptor(name: &str) -> Option<&'static TagDescriptor> {
+    // Query each family registry in sequence
+    if let Some(desc) = tags_exif::get_tags().get(name) { return Some(desc); }
+    if let Some(desc) = tags_canon::get_tags().get(name) { return Some(desc); }
+    // ... 124 total families
+    None
+}
+```
+
+**Benefits:**
+- Each module compiles independently, reducing peak memory usage per module
+- Main file is tiny (792 lines), mostly just module declarations
+- Lazy initialization happens at runtime, not compile-time
+- Compiler can optimize each family module separately
 
 ### Parser Features
 
@@ -104,6 +141,11 @@ The Perl tag definition parser handles:
 
 ### Build Memory Requirements
 
-- **With optimization (default)**: 2-5GB RAM
-- **Without optimization**: 20-100GB RAM (will OOM on most systems)
-- **Recommended**: Use the provided Cargo.toml configuration which automatically optimizes the generated module
+With the split-file architecture (124 modules instead of 1 massive file):
+
+- **Release builds** (`cargo build --release`): ~5GB RAM, 8-10 minutes
+- **Debug builds** (`cargo build`): Not recommended - will OOM (>32GB) despite file splitting
+- **Testing**: Use `cargo test --release` to avoid OOM
+- **Recommended**: Always use `--release` flag for builds and tests
+
+The split-file approach reduced the main generated file from 425,000 lines to 792 lines, with the remaining code distributed across 124 family-specific modules averaging 283 lines each. However, even with splitting, debug mode compilation of the combined codebase exceeds reasonable memory limits on most development machines.
