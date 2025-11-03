@@ -406,6 +406,7 @@ dependencies = [
  "criterion",
  "csv",
  "encoding_rs",
+ "exiftool-tags",
  "indicatif",
  "memmap2",
  "nom",
@@ -419,6 +420,16 @@ dependencies = [
  "tempfile",
  "ureq",
  "walkdir",
+]
+
+[[package]]
+name = "exiftool-tags"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "once_cell",
+ "regex",
+ "ureq",
 ]
 
 [[package]]

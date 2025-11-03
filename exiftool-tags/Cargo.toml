@@ -1,0 +1,22 @@
+[package]
+name = "exiftool-tags"
+version = "1.0.0"
+edition = "2021"
+authors = ["ExifTool-RS Contributors"]
+description = "Generated tag database for exiftool-rs (always compiled with optimizations)"
+license = "GPL-3.0"
+
+[lib]
+name = "exiftool_tags"
+path = "src/lib.rs"
+
+[dependencies]
+once_cell = "1.19"
+
+[build-dependencies]
+ureq = { version = "2.9", default-features = false, features = ["tls"] }
+regex = "1.10"
+anyhow = "1.0"
+
+# NOTE: Profile settings are configured in workspace root Cargo.toml
+# See [profile.dev.package.exiftool-tags] for optimization settings
