@@ -213,167 +213,232 @@ fn parse_exiftool_tags(source_dir: &Path) -> Result<Vec<TagDefinition>> {
     Ok(all_tags)
 }
 
+/// Comprehensive regex patterns for parsing Perl tag definitions
+struct TagPatterns {
+    /// Matches: %Image::ExifTool::ModuleName::TableName = (
+    table_declaration: Regex,
+
+    /// Matches: 0x0100 => { Name => 'ImageWidth', ... }
+    hash_tag_def: Regex,
+
+    /// Matches: 0x0100 => 'ImageWidth',
+    simple_tag_def: Regex,
+
+    /// Matches: Name => 'ImageWidth',
+    name_field: Regex,
+
+    /// Matches: Writable => 'int16u',
+    writable_field: Regex,
+
+    /// Matches: Description => 'Image Width',
+    description_field: Regex,
+
+    /// Matches: Format => 'int16u',
+    format_field: Regex,
+}
+
+impl TagPatterns {
+    fn new() -> Result<Self> {
+        Ok(TagPatterns {
+            table_declaration: Regex::new(
+                r"%Image::ExifTool::(\w+(?:::\w+)*)\s*=\s*\("
+            )?,
+            hash_tag_def: Regex::new(
+                r"^\s*(0x[0-9a-fA-F]+|'[^']*'|\d+)\s*=>\s*\{"
+            )?,
+            simple_tag_def: Regex::new(
+                r#"^\s*(0x[0-9a-fA-F]+|\d+)\s*=>\s*'([^']+)'[\s,]*$"#
+            )?,
+            name_field: Regex::new(
+                r#"Name\s*=>\s*'([^']+)'"#
+            )?,
+            writable_field: Regex::new(
+                r#"Writable\s*=>\s*'?([^',}\s]+)"#
+            )?,
+            description_field: Regex::new(
+                r#"Description\s*=>\s*'([^']+)'"#
+            )?,
+            format_field: Regex::new(
+                r#"Format\s*=>\s*'([^']+)'"#
+            )?,
+        })
+    }
+}
+
 /// Parses a single Perl module file for tag definitions
 fn parse_perl_module(module_path: &Path, format_family: &str) -> Result<Vec<TagDefinition>> {
     let file = File::open(module_path)?;
     let reader = BufReader::new(file);
+    let patterns = TagPatterns::new()?;
 
     let mut tags = Vec::new();
-    let mut in_tag_table = false;
-    let mut current_tag_id: Option<String> = None;
-    let mut current_tag_data: HashMap<String, String> = HashMap::new();
-
-    // Regex patterns for parsing Perl hash structures
-    // Updated to handle: hex IDs (0x010F), quoted strings ('Name'), integers (1, 2, 3)
-    let tag_id_regex = Regex::new(r"^\s*(0x[0-9A-Fa-f]+|'[^']+'|\d+)\s*=>\s*\{?\s*$")?;
-    let name_regex = Regex::new(r#"^\s*Name\s*=>\s*'([^']+)'"#)?;
-    let writable_regex = Regex::new(r#"^\s*Writable\s*=>\s*'?([^',\s]+)"#)?;
-    let desc_regex = Regex::new(r#"^\s*Description\s*=>\s*'([^']+)'"#)?;
-    let format_regex = Regex::new(r#"^\s*Format\s*=>\s*'([^']+)'"#)?;
-    let table_start_regex = Regex::new(r"%Image::ExifTool::\w+::\w+\s*=\s*\(")?;
+    let mut in_table = false;
+    let mut current_table_name = String::new();
+    let mut brace_depth = 0;
+    let mut current_tag_def = String::new();
 
     for line in reader.lines() {
         let line = line?;
+        let trimmed = line.trim();
 
-        // Detect tag table start
-        if table_start_regex.is_match(&line) {
-            in_tag_table = true;
+        // Skip comments
+        if trimmed.starts_with('#') {
             continue;
         }
 
-        // Detect tag table end
-        if in_tag_table && line.trim() == ");" {
-            in_tag_table = false;
-            // Save any pending tag
-            if let Some(tag_id) = current_tag_id.take() {
-                if let Some(tag) = create_tag_definition(&tag_id, &current_tag_data, format_family)
-                {
-                    tags.push(tag);
-                }
-                current_tag_data.clear();
-            }
+        // Detect table declaration
+        if let Some(captures) = patterns.table_declaration.captures(&line) {
+            current_table_name = captures[1].to_string();
+            in_table = true;
+            brace_depth = 0;
             continue;
         }
 
-        if !in_tag_table {
+        if !in_table {
             continue;
         }
 
-        // Parse tag ID line (e.g., "0x010F => {" or "'Creator' => {")
-        if let Some(_caps) = tag_id_regex.captures(&line) {
-            // Save previous tag if exists
-            if let Some(tag_id) = current_tag_id.take() {
-                if let Some(tag) = create_tag_definition(&tag_id, &current_tag_data, format_family)
-                {
-                    tags.push(tag);
-                }
-                current_tag_data.clear();
-            }
+        // Track brace depth to know when table ends
+        brace_depth += line.matches('(').count() as i32;
+        brace_depth += line.matches('{').count() as i32;
+        brace_depth -= line.matches(')').count() as i32;
+        brace_depth -= line.matches('}').count() as i32;
 
-            // Extract tag ID
-            let id_str = line.split("=>").next().unwrap_or("").trim();
-            if !id_str.is_empty() && id_str != "GROUPS" {
-                current_tag_id = Some(id_str.to_string());
-            }
+        if brace_depth < 0 {
+            in_table = false;
             continue;
         }
 
-        // Parse tag properties
-        if current_tag_id.is_some() {
-            if let Some(caps) = name_regex.captures(&line) {
-                current_tag_data.insert("Name".to_string(), caps[1].to_string());
-            } else if let Some(caps) = writable_regex.captures(&line) {
-                current_tag_data.insert("Writable".to_string(), caps[1].to_string());
-            } else if let Some(caps) = desc_regex.captures(&line) {
-                current_tag_data.insert("Description".to_string(), caps[1].to_string());
-            } else if let Some(caps) = format_regex.captures(&line) {
-                current_tag_data.insert("Format".to_string(), caps[1].to_string());
-            }
+        // Accumulate multi-line tag definitions
+        current_tag_def.push_str(&line);
+        current_tag_def.push('\n');
 
-            // Check for closing brace (end of tag definition)
-            if line.trim() == "}," || line.trim() == "}" {
-                if let Some(tag_id) = current_tag_id.take() {
-                    if let Some(tag) =
-                        create_tag_definition(&tag_id, &current_tag_data, format_family)
-                    {
-                        tags.push(tag);
-                    }
-                    current_tag_data.clear();
-                }
-            }
+        // Check if we have a complete tag definition
+        if let Some(tag) = try_parse_tag_definition(
+            &current_tag_def,
+            format_family,
+            &current_table_name,
+            &patterns,
+        )? {
+            tags.push(tag);
+            current_tag_def.clear();
+        }
+
+        // Clear if line ends with comma or closing brace (definition complete)
+        if trimmed.ends_with(',') || (trimmed.ends_with('}') && brace_depth >= 0) {
+            current_tag_def.clear();
         }
     }
 
     Ok(tags)
 }
 
-/// Creates a TagDefinition from parsed Perl data
-fn create_tag_definition(
-    tag_id_str: &str,
-    data: &HashMap<String, String>,
+/// Attempts to parse a complete tag definition from accumulated text
+fn try_parse_tag_definition(
+    def: &str,
     format_family: &str,
-) -> Option<TagDefinition> {
-    // Get tag name (required)
-    let name = data.get("Name")?;
+    table_name: &str,
+    patterns: &TagPatterns,
+) -> Result<Option<TagDefinition>> {
+    // Try simple definition first: 0x0100 => 'ImageWidth',
+    if let Some(captures) = patterns.simple_tag_def.captures(def) {
+        let tag_id = parse_tag_id(&captures[1])?;
+        let tag_name = captures[2].to_string();
 
-    // Parse tag ID
-    let tag_id = if tag_id_str.starts_with("0x") {
-        // Hex ID (e.g., 0x010F)
-        let hex_str = tag_id_str.trim_start_matches("0x").trim_end_matches(',');
-        if let Ok(num) = u16::from_str_radix(hex_str, 16) {
-            TagId::Numeric(num)
-        } else {
-            return None;
+        return Ok(Some(TagDefinition {
+            tag_id: TagId::Numeric(tag_id as u16),
+            tag_name: format!("{}:{}", format_family, tag_name),
+            format_family: format_family.to_string(),
+            table_name: table_name.to_string(),
+            writable: false,
+            writable_type: None,
+            value_type: ValueType::String,
+            description: format!("{} tag", tag_name),
+        }));
+    }
+
+    // Try hash-based definition: 0x0100 => { Name => 'ImageWidth', ... }
+    if let Some(captures) = patterns.hash_tag_def.captures(def) {
+        let tag_id_str = &captures[1];
+
+        // Extract tag ID (hex or decimal)
+        let tag_id = parse_tag_id(tag_id_str)?;
+
+        // Extract Name field
+        if let Some(name_cap) = patterns.name_field.captures(def) {
+            let tag_name = name_cap[1].to_string();
+
+            // Extract optional Writable field
+            let writable_type = patterns
+                .writable_field
+                .captures(def)
+                .map(|c| c[1].to_string());
+
+            // Extract optional Description field
+            let description = patterns
+                .description_field
+                .captures(def)
+                .map(|c| c[1].to_string())
+                .unwrap_or_else(|| format!("{} tag", tag_name));
+
+            // Extract optional Format field
+            let format = patterns
+                .format_field
+                .captures(def)
+                .map(|c| c[1].to_string());
+
+            // Determine if writable
+            let writable = writable_type
+                .as_ref()
+                .map(|w| w != "no" && w != "0")
+                .unwrap_or(false);
+
+            // Determine value type from Writable or Format field
+            let value_type = writable_type
+                .as_ref()
+                .or(format.as_ref())
+                .map(|t| map_perl_type_to_value_type(t))
+                .unwrap_or(ValueType::String);
+
+            return Ok(Some(TagDefinition {
+                tag_id: TagId::Numeric(tag_id as u16),
+                tag_name: format!("{}:{}", format_family, tag_name),
+                format_family: format_family.to_string(),
+                table_name: table_name.to_string(),
+                writable,
+                writable_type,
+                value_type,
+                description,
+            }));
         }
-    } else if tag_id_str
-        .chars()
-        .next()
-        .map(|c| c.is_ascii_digit())
-        .unwrap_or(false)
-    {
-        // Integer ID (e.g., 1, 2, 3)
-        let num_str = tag_id_str.trim_end_matches(',').trim();
-        if let Ok(num) = num_str.parse::<u16>() {
-            TagId::Numeric(num)
-        } else {
-            return None;
-        }
+    }
+
+    Ok(None)
+}
+
+/// Parses tag ID from string (hex, decimal, or string)
+fn parse_tag_id(id_str: &str) -> Result<u32> {
+    let id_str = id_str.trim().trim_matches('\'').trim_matches('"');
+
+    if let Some(hex_str) = id_str.strip_prefix("0x") {
+        u32::from_str_radix(hex_str, 16)
+            .with_context(|| format!("Failed to parse hex tag ID: {}", id_str))
+    } else if let Ok(num) = id_str.parse::<u32>() {
+        Ok(num)
     } else {
-        // String ID (remove quotes, e.g., 'Creator', "Title")
-        TagId::Named(tag_id_str.trim_matches('\'').trim_matches('"').to_string())
-    };
+        // String-based tag ID - hash the string to get a numeric ID
+        Ok(hash_string_tag_id(id_str))
+    }
+}
 
-    // Determine if writable
-    let writable = data
-        .get("Writable")
-        .map(|w| w != "no" && w != "0")
-        .unwrap_or(false);
-
-    // Determine value type from Writable field
-    let value_type = data
-        .get("Writable")
-        .or_else(|| data.get("Format"))
-        .map(|w| map_perl_type_to_value_type(w))
-        .unwrap_or(ValueType::String);
-
-    // Get description (use name as fallback)
-    let description = data
-        .get("Description")
-        .cloned()
-        .unwrap_or_else(|| format!("{} tag", name));
-
-    // Create full tag name with family prefix
-    let full_name = format!("{}:{}", format_family, name);
-
-    Some(TagDefinition {
-        tag_id,
-        tag_name: full_name,
-        format_family: format_family.to_string(),
-        writable,
-        value_type,
-        description,
+/// Hashes string tag IDs to numeric values for consistent mapping
+fn hash_string_tag_id(s: &str) -> u32 {
+    // Simple hash function for string tag IDs
+    s.bytes().fold(0u32, |acc, b| {
+        acc.wrapping_mul(31).wrapping_add(b as u32)
     })
 }
+
 
 /// Maps Perl type strings to ValueType enum
 fn map_perl_type_to_value_type(perl_type: &str) -> ValueType {
@@ -390,7 +455,7 @@ fn map_perl_type_to_value_type(perl_type: &str) -> ValueType {
     }
 }
 
-/// Generates Rust source code from tag definitions
+/// Generates Rust source code from tag definitions using optimized static array approach
 fn generate_rust_code(tags: &[TagDefinition]) -> Result<()> {
     let output_path = Path::new(GENERATED_TAGS_PATH);
     let mut file = File::create(output_path)?;
@@ -420,6 +485,21 @@ fn generate_rust_code(tags: &[TagDefinition]) -> Result<()> {
     writeln!(file, "use once_cell::sync::Lazy;")?;
     writeln!(file, "use std::collections::HashMap;")?;
     writeln!(file)?;
+
+    // Generate lazy tag array (allows heap allocations)
+    writeln!(file, "/// Lazily initialized array of all generated tags")?;
+    writeln!(file, "static TAG_ARRAY: Lazy<Vec<TagDescriptor>> = Lazy::new(|| {{")?;
+    writeln!(file, "    vec![")?;
+
+    for tag in tags {
+        generate_tag_array_entry(&mut file, tag)?;
+    }
+
+    writeln!(file, "    ]")?;
+    writeln!(file, "}});")?;
+    writeln!(file)?;
+
+    // Generate HashMap for O(1) lookup
     writeln!(
         file,
         "/// Auto-generated tag registry from ExifTool source."
@@ -432,37 +512,15 @@ fn generate_rust_code(tags: &[TagDefinition]) -> Result<()> {
         file,
         "/// ExifTool Perl modules and extracting tag metadata."
     )?;
-    writeln!(file, "pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {{")?;
+    writeln!(file, "pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<String, TagDescriptor>> = Lazy::new(|| {{")?;
     writeln!(
         file,
         "    let mut registry = HashMap::with_capacity({});",
         tags.len()
     )?;
-    writeln!(file)?;
-
-    // Group tags by format family for organized output
-    let mut tags_by_family: HashMap<String, Vec<&TagDefinition>> = HashMap::new();
-    for tag in tags {
-        tags_by_family
-            .entry(tag.format_family.clone())
-            .or_default()
-            .push(tag);
-    }
-
-    // Generate tag insertions grouped by family
-    for (family, family_tags) in tags_by_family.iter() {
-        writeln!(file, "    // =============================")?;
-        writeln!(file, "    // {} TAGS ({} total)", family, family_tags.len())?;
-        writeln!(file, "    // =============================")?;
-        writeln!(file)?;
-
-        for tag in family_tags {
-            generate_tag_insertion(&mut file, tag)?;
-        }
-
-        writeln!(file)?;
-    }
-
+    writeln!(file, "    for tag in TAG_ARRAY.iter() {{")?;
+    writeln!(file, "        registry.insert(tag.tag_name.clone(), tag.clone());")?;
+    writeln!(file, "    }}")?;
     writeln!(file, "    registry")?;
     writeln!(file, "}});")?;
     writeln!(file)?;
@@ -496,7 +554,7 @@ fn generate_rust_code(tags: &[TagDefinition]) -> Result<()> {
         "/// Returns the total number of registered tags in the generated registry."
     )?;
     writeln!(file, "pub fn generated_tag_count() -> usize {{")?;
-    writeln!(file, "    GENERATED_TAG_REGISTRY.len()")?;
+    writeln!(file, "    TAG_ARRAY.len()")?;
     writeln!(file, "}}")?;
     writeln!(file)?;
 
@@ -530,29 +588,8 @@ fn generate_rust_code(tags: &[TagDefinition]) -> Result<()> {
     Ok(())
 }
 
-/// Generates a single tag insertion statement
-fn generate_tag_insertion(file: &mut File, tag: &TagDefinition) -> Result<()> {
-    writeln!(file, "    registry.insert(")?;
-    writeln!(file, "        \"{}\",", tag.tag_name)?;
-    writeln!(file, "        TagDescriptor::new(")?;
-
-    // Tag ID
-    match &tag.tag_id {
-        TagId::Numeric(n) => writeln!(file, "            TagId::new_numeric(0x{:04X}),", n)?,
-        TagId::Named(s) => writeln!(
-            file,
-            "            TagId::new_named(\"{}\".to_string()),",
-            escape_string(s)
-        )?,
-    }
-
-    // Tag name
-    writeln!(
-        file,
-        "            \"{}\".to_string(),",
-        escape_string(&tag.tag_name)
-    )?;
-
+/// Generates a compact tag array entry (single line for efficiency)
+fn generate_tag_array_entry(file: &mut File, tag: &TagDefinition) -> Result<()> {
     // Format family - map to known FormatFamily enum variants
     let family_variant = match tag.format_family.as_str() {
         "ICC_Profile" => "ICCProfile",
@@ -584,23 +621,8 @@ fn generate_tag_insertion(file: &mut File, tag: &TagDefinition) -> Result<()> {
         // Default: unknown formats map to MakerNotes as a catch-all
         _ => "MakerNotes",
     };
-    writeln!(file, "            FormatFamily::{},", family_variant)?;
 
-    // Writable
-    writeln!(file, "            {},", tag.writable)?;
-
-    // Value type
-    writeln!(file, "            ValueType::{:?},", tag.value_type)?;
-
-    // Description
-    writeln!(
-        file,
-        "            \"{}\".to_string(),",
-        escape_string(&tag.description)
-    )?;
-
-    // Example values (generate some based on type)
-    // Use single-line vec for single elements to match rustfmt formatting
+    // Example value based on type
     let example_value = match tag.value_type {
         ValueType::String => "\"Example\".to_string()",
         ValueType::Integer => "\"100\".to_string()",
@@ -609,10 +631,36 @@ fn generate_tag_insertion(file: &mut File, tag: &TagDefinition) -> Result<()> {
         ValueType::DateTime => "\"2024:01:01 12:00:00\".to_string()",
         _ => "\"Value\".to_string()",
     };
-    writeln!(file, "            vec![{}],", example_value)?;
-    writeln!(file, "        ),")?;
-    writeln!(file, "    );")?;
-    writeln!(file)?;
+
+    // Generate compact single-line entry
+    match &tag.tag_id {
+        TagId::Numeric(n) => {
+            writeln!(
+                file,
+                "    TagDescriptor::new(TagId::new_numeric(0x{:04X}), \"{}\".to_string(), FormatFamily::{}, {}, ValueType::{:?}, \"{}\".to_string(), vec![{}]),",
+                n,
+                escape_string(&tag.tag_name),
+                family_variant,
+                tag.writable,
+                tag.value_type,
+                escape_string(&tag.description),
+                example_value
+            )?;
+        }
+        TagId::Named(s) => {
+            writeln!(
+                file,
+                "    TagDescriptor::new(TagId::new_named(\"{}\".to_string()), \"{}\".to_string(), FormatFamily::{}, {}, ValueType::{:?}, \"{}\".to_string(), vec![{}]),",
+                escape_string(s),
+                escape_string(&tag.tag_name),
+                family_variant,
+                tag.writable,
+                tag.value_type,
+                escape_string(&tag.description),
+                example_value
+            )?;
+        }
+    }
 
     Ok(())
 }
@@ -683,7 +731,9 @@ struct TagDefinition {
     tag_id: TagId,
     tag_name: String,
     format_family: String,
+    table_name: String,        // NEW: track which table this tag came from
     writable: bool,
+    writable_type: Option<String>, // NEW: track writable type (int16u, string, etc)
     value_type: ValueType,
     description: String,
 }
