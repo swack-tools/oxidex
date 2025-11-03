@@ -98,6 +98,12 @@ The Perl tag definition parser handles:
 
 ### Known Limitations
 
-- Debug builds may fail with OOM due to large generated file (use `--release`)
-- Some ExifTool composite tags are excluded (calculated values)
+- **Memory usage during compilation**: The 32K tag file can cause rustc to use significant memory (20-100GB) without optimizations. The Cargo.toml includes a profile override (`[profile.dev.package.exiftool-rs]`) to compile this module with opt-level=2 even in debug builds, which reduces memory usage to ~2-5GB.
+- Some ExifTool composite tags are excluded (calculated values, not stored in files)
 - Shortcut tags are excluded (aliases to other tags)
+
+### Build Memory Requirements
+
+- **With optimization (default)**: 2-5GB RAM
+- **Without optimization**: 20-100GB RAM (will OOM on most systems)
+- **Recommended**: Use the provided Cargo.toml configuration which automatically optimizes the generated module

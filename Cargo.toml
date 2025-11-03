@@ -88,12 +88,20 @@ cc = "1.0"
 
 [profile.release]
 opt-level = 3
-lto = true
+lto = false
 codegen-units = 1
 strip = true
 
 [profile.dev]
 opt-level = 0
+codegen-units = 1
+
+# Optimize the generated tags module even in debug builds to prevent OOM
+# The generated_tags.rs file contains 32K+ tag definitions which causes
+# rustc to consume 100GB+ of RAM in debug mode. This override compiles
+# just this module with optimizations while keeping the rest in debug mode.
+[profile.dev.package.exiftool-rs]
+opt-level = 2
 
 [profile.test]
 opt-level = 1
