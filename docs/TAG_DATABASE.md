@@ -8,6 +8,30 @@
 
 ## Architecture
 
+### Workspace-Based Separation
+
+The tag database is implemented as a **separate workspace crate** (`exiftool-tags`) to solve debug build OOM issues:
+
+**Crate Structure:**
+- `exiftool-tags/` - Tag database crate (always optimized)
+- `exiftool-rs/` - Main crate (debug mode for fast iteration)
+
+**Profile Configuration:**
+```toml
+# In root Cargo.toml
+[profile.dev.package.exiftool-tags]
+opt-level = 2        # Always optimize tag database
+codegen-units = 16   # Parallel compilation
+```
+
+**Why This Matters:**
+- Debug builds: 100GB+ RAM → **11GB** (91% reduction)
+- Main crate stays in debug mode (fast iteration)
+- Tag database always optimized (prevents OOM)
+- Industry-standard pattern (used by rustc, diesel, syn)
+
+### Tag Generation Pipeline
+
 The tag database is automatically generated during build from Perl ExifTool source:
 
 1. **Download** - Fetches latest ExifTool master from GitHub
@@ -15,8 +39,8 @@ The tag database is automatically generated during build from Perl ExifTool sour
 3. **Parse** - Extracts tag definitions using comprehensive regex patterns
 4. **Resolve** - Follows subdirectory references for nested tables
 5. **Generate** - Creates 124 separate module files (one per format family) + main lookup module
-   - Each family module: `src/tag_db/generated/tags_<family>.rs` (100-3,500 tags each)
-   - Main module: `src/tag_db/generated_tags.rs` (792 lines)
+   - Each family module: `exiftool-tags/src/tag_db/generated/tags_<family>.rs` (100-3,500 tags each)
+   - Main module: `exiftool-tags/src/tag_db/generated_tags.rs` (792 lines)
    - Total: ~35,000 lines across 125 files (vs 425,000 lines in single file)
 
 ## Performance

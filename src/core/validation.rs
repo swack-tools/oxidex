@@ -6,7 +6,7 @@
 
 #![allow(dead_code)]
 
-use crate::core::tag_descriptor::{TagDescriptor, ValueType};
+use crate::core::{TagDescriptor, ValueType};
 use crate::core::tag_value::TagValue;
 use crate::error::ExifToolError;
 
