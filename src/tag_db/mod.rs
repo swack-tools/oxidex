@@ -17,14 +17,14 @@ pub use tag_registry::{get_tag_descriptor, tag_count};
 
 /// Reverse lookup index: (numeric tag ID, format family) -> tag name
 /// Built lazily on first access from the generated tag registry
-static TAG_ID_TO_NAME_INDEX: Lazy<HashMap<(u16, FormatFamily), &'static str>> = Lazy::new(|| {
+static TAG_ID_TO_NAME_INDEX: Lazy<HashMap<(u16, FormatFamily), String>> = Lazy::new(|| {
     let mut index = HashMap::with_capacity(733);
 
     // Scan the generated tag registry and build reverse index
     // Store tags by (tag_id, format_family) to handle same IDs across different formats
     for (name, descriptor) in GENERATED_TAG_REGISTRY.iter() {
         if let TagId::Numeric(id) = descriptor.id() {
-            index.insert((*id, descriptor.format()), *name);
+            index.insert((*id, descriptor.format()), name.clone());
         }
     }
 
