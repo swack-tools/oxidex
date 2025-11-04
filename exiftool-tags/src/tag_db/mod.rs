@@ -8,7 +8,7 @@ pub mod generated_tags;
 
 // Re-export the generated tag API
 pub use generated_tags::{
-    get_generated_tag_descriptor, generated_tag_count, GENERATED_TAG_REGISTRY,
+    generated_tag_count, get_generated_tag_descriptor, GENERATED_TAG_REGISTRY,
 };
 
 /// Tag identifier (numeric or string-based)
