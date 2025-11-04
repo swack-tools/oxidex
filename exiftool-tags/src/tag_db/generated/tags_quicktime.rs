@@ -4,7 +4,8 @@ use crate::tag_db::{FormatFamily, TagDescriptor, TagId, ValueType};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
-static TAGS: Lazy<Vec<TagDescriptor>> = Lazy::new(|| vec![
+static TAGS: Lazy<Vec<TagDescriptor>> = Lazy::new(|| {
+    vec![
     TagDescriptor::new(TagId::new_numeric(0x67E4), "QuickTime:MediaDataSize".to_string(), FormatFamily::QuickTime, false, ValueType::String, "MediaDataSize tag".to_string(), vec!["Example".to_string()]),
     TagDescriptor::new(TagId::new_numeric(0x7FB6), "QuickTime:MediaDataOffset".to_string(), FormatFamily::QuickTime, false, ValueType::String, "MediaDataOffset tag".to_string(), vec!["Example".to_string()]),
     TagDescriptor::new(TagId::new_numeric(0x4EC7), "QuickTime:ThumbnailImage".to_string(), FormatFamily::QuickTime, false, ValueType::String, "ThumbnailImage tag".to_string(), vec!["Example".to_string()]),
@@ -3068,7 +3069,8 @@ static TAGS: Lazy<Vec<TagDescriptor>> = Lazy::new(|| vec![
     TagDescriptor::new(TagId::new_numeric(0x0001), "QuickTime:QuickTime::Duration".to_string(), FormatFamily::QuickTime, false, ValueType::String, "QuickTime::Duration tag".to_string(), vec!["Example".to_string()]),
     TagDescriptor::new(TagId::new_numeric(0x0001), "QuickTime:Below Sea Level".to_string(), FormatFamily::QuickTime, false, ValueType::String, "Below Sea Level tag".to_string(), vec!["Example".to_string()]),
     TagDescriptor::new(TagId::new_numeric(0x0001), "QuickTime:Below Sea Level".to_string(), FormatFamily::QuickTime, false, ValueType::String, "Below Sea Level tag".to_string(), vec!["Example".to_string()]),
-]);
+]
+});
 
 pub fn get_tags() -> &'static HashMap<String, TagDescriptor> {
     static MAP: Lazy<HashMap<String, TagDescriptor>> = Lazy::new(|| {

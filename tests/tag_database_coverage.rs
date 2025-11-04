@@ -23,7 +23,10 @@ fn test_tag_database_target_coverage() {
     let target = 28853;
     let coverage_percent = (count as f64 / target as f64) * 100.0;
 
-    println!("Tag coverage: {}/{} ({:.1}%)", count, target, coverage_percent);
+    println!(
+        "Tag coverage: {}/{} ({:.1}%)",
+        count, target, coverage_percent
+    );
 
     // For now, we expect at least 10% coverage (2886 tags)
     assert!(

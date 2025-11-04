@@ -28,10 +28,22 @@ fn bench_single_extraction(c: &mut Criterion) {
     let mut group = c.benchmark_group("single_extraction");
 
     let test_files = [
-        ("jpeg_simple", "tests/fixtures/jpeg/simple/sample_with_exif.jpg"),
-        ("jpeg_complex", "tests/fixtures/jpeg/complex/sample_with_exif_xmp.jpg"),
-        ("png_simple", "tests/fixtures/png/simple/synthetic_text_001.png"),
-        ("png_complex", "tests/fixtures/png/complex/synthetic_exif_001.png"),
+        (
+            "jpeg_simple",
+            "tests/fixtures/jpeg/simple/sample_with_exif.jpg",
+        ),
+        (
+            "jpeg_complex",
+            "tests/fixtures/jpeg/complex/sample_with_exif_xmp.jpg",
+        ),
+        (
+            "png_simple",
+            "tests/fixtures/png/simple/synthetic_text_001.png",
+        ),
+        (
+            "png_complex",
+            "tests/fixtures/png/complex/synthetic_exif_001.png",
+        ),
         ("tiff_simple", "tests/fixtures/tiff/simple/sample.tif"),
     ];
 
@@ -78,10 +90,7 @@ fn bench_batch_processing(c: &mut Criterion) {
             return;
         }
 
-        println!(
-            "Batch benchmark using {} JPEG files",
-            jpeg_files.len()
-        );
+        println!("Batch benchmark using {} JPEG files", jpeg_files.len());
 
         b.iter(|| {
             for file_path in &jpeg_files {
@@ -97,8 +106,14 @@ fn bench_batch_processing(c: &mut Criterion) {
 /// Tests performance with large files (multi-page TIFF, large dimensions)
 fn bench_large_file_handling(c: &mut Criterion) {
     let large_files = [
-        ("tiff_multipage", "tests/fixtures/tiff/complex/multipage.tif"),
-        ("jpeg_large_dimension", "tests/fixtures/jpeg/edge_cases/large_dimension.jpg"),
+        (
+            "tiff_multipage",
+            "tests/fixtures/tiff/complex/multipage.tif",
+        ),
+        (
+            "jpeg_large_dimension",
+            "tests/fixtures/jpeg/edge_cases/large_dimension.jpg",
+        ),
     ];
 
     let mut group = c.benchmark_group("large_file_handling");
@@ -163,10 +178,7 @@ fn bench_gps_extraction(c: &mut Criterion) {
     ];
 
     c.bench_function("gps_coordinate_extraction", |b| {
-        let valid_files: Vec<_> = gps_files
-            .iter()
-            .filter(|p| Path::new(p).exists())
-            .collect();
+        let valid_files: Vec<_> = gps_files.iter().filter(|p| Path::new(p).exists()).collect();
 
         if valid_files.is_empty() {
             eprintln!("Warning: No GPS test files found");
