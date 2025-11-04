@@ -6,8 +6,8 @@
 
 #![allow(dead_code)]
 
-use crate::core::{TagDescriptor, ValueType};
 use crate::core::tag_value::TagValue;
+use crate::core::{TagDescriptor, ValueType};
 use crate::error::ExifToolError;
 
 fn descriptor_allows_datetime(descriptor: &TagDescriptor) -> bool {

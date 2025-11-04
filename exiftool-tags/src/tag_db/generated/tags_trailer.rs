@@ -4,12 +4,46 @@ use crate::tag_db::{FormatFamily, TagDescriptor, TagId, ValueType};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
-static TAGS: Lazy<Vec<TagDescriptor>> = Lazy::new(|| vec![
-    TagDescriptor::new(TagId::new_numeric(0x2D24), "Trailer:OnePlusTrailerLen".to_string(), FormatFamily::MakerNotes, false, ValueType::String, "OnePlusTrailerLen tag".to_string(), vec!["Example".to_string()]),
-    TagDescriptor::new(TagId::new_numeric(0xE320), "Trailer:Device".to_string(), FormatFamily::MakerNotes, false, ValueType::String, "Device tag".to_string(), vec!["Example".to_string()]),
-    TagDescriptor::new(TagId::new_numeric(0x3759), "Trailer:DepthMapImage".to_string(), FormatFamily::MakerNotes, false, ValueType::String, "DepthMapImage tag".to_string(), vec!["Example".to_string()]),
-    TagDescriptor::new(TagId::new_numeric(0x0EF2), "Trailer:ConfidenceMapImage".to_string(), FormatFamily::MakerNotes, false, ValueType::String, "ConfidenceMapImage tag".to_string(), vec!["Example".to_string()]),
-]);
+static TAGS: Lazy<Vec<TagDescriptor>> = Lazy::new(|| {
+    vec![
+        TagDescriptor::new(
+            TagId::new_numeric(0x2D24),
+            "Trailer:OnePlusTrailerLen".to_string(),
+            FormatFamily::MakerNotes,
+            false,
+            ValueType::String,
+            "OnePlusTrailerLen tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+        TagDescriptor::new(
+            TagId::new_numeric(0xE320),
+            "Trailer:Device".to_string(),
+            FormatFamily::MakerNotes,
+            false,
+            ValueType::String,
+            "Device tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+        TagDescriptor::new(
+            TagId::new_numeric(0x3759),
+            "Trailer:DepthMapImage".to_string(),
+            FormatFamily::MakerNotes,
+            false,
+            ValueType::String,
+            "DepthMapImage tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+        TagDescriptor::new(
+            TagId::new_numeric(0x0EF2),
+            "Trailer:ConfidenceMapImage".to_string(),
+            FormatFamily::MakerNotes,
+            false,
+            ValueType::String,
+            "ConfidenceMapImage tag".to_string(),
+            vec!["Example".to_string()],
+        ),
+    ]
+});
 
 pub fn get_tags() -> &'static HashMap<String, TagDescriptor> {
     static MAP: Lazy<HashMap<String, TagDescriptor>> = Lazy::new(|| {

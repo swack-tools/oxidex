@@ -37,9 +37,9 @@
 #![allow(dead_code)]
 
 use crate::core::metadata_map::MetadataMap;
-use crate::core::TagId;
 use crate::core::tag_value::TagValue;
 use crate::core::FileReader;
+use crate::core::TagId;
 use crate::error::{ExifToolError, Result};
 use crate::parsers::common::exif_types::ExifType;
 use crate::parsers::tiff::file_parser::parse_tiff_header;

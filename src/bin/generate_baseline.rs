@@ -92,7 +92,10 @@ fn get_perl_exiftool_output(file_path: &Path) -> Result<String, String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Perl ExifTool failed on {:?}: {}", file_path, stderr));
+        return Err(format!(
+            "Perl ExifTool failed on {:?}: {}",
+            file_path, stderr
+        ));
     }
 
     String::from_utf8(output.stdout)
@@ -102,8 +105,8 @@ fn get_perl_exiftool_output(file_path: &Path) -> Result<String, String> {
 /// Executes ExifTool-RS and captures JSON output
 fn get_exiftool_rs_output(file_path: &Path) -> Result<String, String> {
     // Find the exiftool-rs binary in target directory
-    let cargo_target_dir = std::env::var("CARGO_TARGET_DIR")
-        .unwrap_or_else(|_| "target".to_string());
+    let cargo_target_dir =
+        std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
 
     let binary_path = PathBuf::from(&cargo_target_dir)
         .join("release")
@@ -132,12 +135,15 @@ fn get_exiftool_rs_output(file_path: &Path) -> Result<String, String> {
 }
 
 /// Compares two JSON outputs and calculates match rate
-fn compare_outputs(perl_json: &str, rust_json: &str) -> Result<(usize, usize, f64, Vec<Discrepancy>), String> {
-    let perl_data: Vec<HashMap<String, Value>> = serde_json::from_str(perl_json)
-        .map_err(|e| format!("Failed to parse Perl JSON: {}", e))?;
+fn compare_outputs(
+    perl_json: &str,
+    rust_json: &str,
+) -> Result<(usize, usize, f64, Vec<Discrepancy>), String> {
+    let perl_data: Vec<HashMap<String, Value>> =
+        serde_json::from_str(perl_json).map_err(|e| format!("Failed to parse Perl JSON: {}", e))?;
 
-    let rust_data: Vec<HashMap<String, Value>> = serde_json::from_str(rust_json)
-        .map_err(|e| format!("Failed to parse Rust JSON: {}", e))?;
+    let rust_data: Vec<HashMap<String, Value>> =
+        serde_json::from_str(rust_json).map_err(|e| format!("Failed to parse Rust JSON: {}", e))?;
 
     if perl_data.is_empty() || rust_data.is_empty() {
         return Ok((0, 0, 0.0, Vec::new()));
@@ -216,11 +222,17 @@ fn values_match(a: &Value, b: &Value) -> bool {
         }
         (Value::Bool(b1), Value::Bool(b2)) => b1 == b2,
         (Value::Array(a1), Value::Array(a2)) => {
-            a1.len() == a2.len() && a1.iter().zip(a2.iter()).all(|(v1, v2)| values_match(v1, v2))
+            a1.len() == a2.len()
+                && a1
+                    .iter()
+                    .zip(a2.iter())
+                    .all(|(v1, v2)| values_match(v1, v2))
         }
         (Value::Object(o1), Value::Object(o2)) => {
             o1.len() == o2.len()
-                && o1.iter().all(|(k, v1)| o2.get(k).map(|v2| values_match(v1, v2)).unwrap_or(false))
+                && o1
+                    .iter()
+                    .all(|(k, v1)| o2.get(k).map(|v2| values_match(v1, v2)).unwrap_or(false))
         }
         (Value::Null, Value::Null) => true,
         _ => false,
@@ -230,9 +242,15 @@ fn values_match(a: &Value, b: &Value) -> bool {
 /// Finds all test image files recursively
 fn find_test_images(dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut images = Vec::new();
-    let extensions = ["jpg", "jpeg", "png", "tif", "tiff", "pdf", "mp4", "webp", "heic", "heif", "avif"];
+    let extensions = [
+        "jpg", "jpeg", "png", "tif", "tiff", "pdf", "mp4", "webp", "heic", "heif", "avif",
+    ];
 
-    fn visit_dirs(dir: &Path, images: &mut Vec<PathBuf>, extensions: &[&str]) -> std::io::Result<()> {
+    fn visit_dirs(
+        dir: &Path,
+        images: &mut Vec<PathBuf>,
+        extensions: &[&str],
+    ) -> std::io::Result<()> {
         if dir.is_dir() {
             for entry in fs::read_dir(dir)? {
                 let entry = entry?;
@@ -260,7 +278,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Parse command line arguments
     let input_dir = if let Some(idx) = args.iter().position(|a| a == "--input") {
-        args.get(idx + 1).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("tests/fixtures"))
+        args.get(idx + 1)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("tests/fixtures"))
     } else if args.contains(&"--update".to_string()) {
         PathBuf::from("tests/fixtures")
     } else {
@@ -268,7 +288,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let output_dir = if let Some(idx) = args.iter().position(|a| a == "--output") {
-        args.get(idx + 1).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("tests/baselines"))
+        args.get(idx + 1)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("tests/baselines"))
     } else if args.contains(&"--update".to_string()) {
         PathBuf::from("tests/baselines")
     } else {
@@ -313,17 +335,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut total_match_rate = 0.0;
 
     for (idx, image_path) in test_images.iter().enumerate() {
-        let relative_path = image_path.strip_prefix(&input_dir)
+        let relative_path = image_path
+            .strip_prefix(&input_dir)
             .unwrap_or(image_path)
             .to_string_lossy()
             .to_string();
 
-        print!("[{}/{}] Processing: {} ... ", idx + 1, test_images.len(), relative_path);
+        print!(
+            "[{}/{}] Processing: {} ... ",
+            idx + 1,
+            test_images.len(),
+            relative_path
+        );
         std::io::stdout().flush()?;
 
         match process_image(image_path, &output_dir, &relative_path) {
             Ok((perl_tags, rust_tags, match_rate, discrepancies)) => {
-                println!("{:.1}% match ({}/{} tags)", match_rate, perl_tags - discrepancies.len(), perl_tags);
+                println!(
+                    "{:.1}% match ({}/{} tags)",
+                    match_rate,
+                    perl_tags - discrepancies.len(),
+                    perl_tags
+                );
 
                 total_match_rate += match_rate;
 
@@ -384,7 +417,8 @@ fn process_image(
     let rust_json = get_exiftool_rs_output(image_path)?;
 
     // Save outputs to baseline directory
-    let image_output_dir = output_dir.join(Path::new(relative_path).parent().unwrap_or(Path::new("")));
+    let image_output_dir =
+        output_dir.join(Path::new(relative_path).parent().unwrap_or(Path::new("")));
     fs::create_dir_all(&image_output_dir)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
 
