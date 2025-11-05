@@ -5,7 +5,7 @@
 //! This is a manual implementation that will later be replaced by automated tag
 //! generation in build.rs (task I5.T5).
 
-use super::generated_tags::GENERATED_TAG_REGISTRY;
+use exiftool_tags::GENERATED_TAG_REGISTRY;
 use crate::core::{FormatFamily, TagDescriptor, TagId, ValueType};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
