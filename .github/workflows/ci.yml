@@ -13,12 +13,8 @@ env:
 jobs:
   test:
     name: Test Suite
-    runs-on: ${{ matrix.os }}
+    runs-on: ubicloud-standard-2
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - name: Checkout repository
@@ -65,7 +61,7 @@ jobs:
 
   audit:
     name: Security Audit
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     timeout-minutes: 10
     steps:
       - name: Checkout repository
@@ -80,7 +76,7 @@ jobs:
 
   coverage:
     name: Code Coverage
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     timeout-minutes: 45
     steps:
       - name: Checkout repository
@@ -109,12 +105,8 @@ jobs:
 
   integration-tests:
     name: Integration Tests (ExifTool Comparison)
-    runs-on: ${{ matrix.os }}
+    runs-on: ubicloud-standard-2
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - name: Checkout repository
@@ -130,23 +122,10 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: Install Perl ExifTool (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install Perl ExifTool
         run: |
           sudo apt-get update
           sudo apt-get install -y libimage-exiftool-perl
-          exiftool -ver
-
-      - name: Install Perl ExifTool (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          brew install exiftool
-          exiftool -ver
-
-      - name: Install Perl ExifTool (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          choco install exiftool -y
           exiftool -ver
 
       - name: Build ExifTool-RS
@@ -160,7 +139,7 @@ jobs:
         run: |
           echo "# ExifTool Comparison Test Results" > comparison_report.md
           echo "" >> comparison_report.md
-          echo "**Platform:** ${{ matrix.os }}" >> comparison_report.md
+          echo "**Platform:** ubicloud-standard-2 (Ubuntu Linux)" >> comparison_report.md
           echo "**Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> comparison_report.md
           echo "" >> comparison_report.md
           echo "See test output above for detailed match rates." >> comparison_report.md
@@ -169,13 +148,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: comparison-report-${{ matrix.os }}
+          name: comparison-report
           path: comparison_report.md
           retention-days: 90
 
   benchmarks:
     name: Performance Benchmarks
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     timeout-minutes: 30
     steps:
       - name: Checkout repository
