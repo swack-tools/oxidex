@@ -154,7 +154,7 @@ jobs:
           cd target/${{ matrix.target }}/release
           tar czf ../../../${{ matrix.archive_name }} ${{ matrix.binary_name }}
           cd ../../..
-          sha256sum ${{ matrix.archive_name }} > ${{ matrix.archive_name }}.sha256
+          shasum -a 256 ${{ matrix.archive_name }} > ${{ matrix.archive_name }}.sha256
 
       - name: Create archive (Windows)
         if: contains(matrix.target, 'windows')
@@ -162,7 +162,7 @@ jobs:
           cd target/${{ matrix.target }}/release
           zip ../../../${{ matrix.archive_name }} ${{ matrix.binary_name }}
           cd ../../..
-          sha256sum ${{ matrix.archive_name }} > ${{ matrix.archive_name }}.sha256
+          shasum -a 256 ${{ matrix.archive_name }} > ${{ matrix.archive_name }}.sha256
 
       - name: Display binary size
         run: |
