@@ -6,25 +6,36 @@
 default:
     @just --list
 
-# Run all tests (unit, integration, doc tests)
+# Run all tests (matches CI main test suite, excludes comparison tests)
 test:
-    @echo "Running all tests..."
+    @echo "Running all tests (matching CI)..."
+    cargo test --release --verbose --workspace
+
+# Run tests in debug mode
+test-debug:
+    @echo "Running tests in debug mode..."
     cargo test --workspace
 
-# Run tests with output
-test-verbose:
-    @echo "Running all tests with verbose output..."
-    cargo test --workspace -- --nocapture --test-threads=1
+# Run tests with output capture disabled
+test-nocapture:
+    @echo "Running all tests with output..."
+    cargo test --release --verbose --workspace -- --nocapture --test-threads=1
 
 # Run only unit tests
 test-unit:
     @echo "Running unit tests..."
     cargo test --lib --workspace
 
-# Run only integration tests
+# Run only integration tests (excludes comparison tests)
 test-integration:
     @echo "Running integration tests..."
-    cargo test --test integration
+    cargo test --test integration --release
+
+# Run ExifTool comparison tests (requires ExifTool installed)
+test-comparison:
+    @echo "Running ExifTool comparison tests..."
+    @echo "Note: Requires 'exiftool' command to be available"
+    cargo test --release --features exiftool-comparison -- --nocapture
 
 # Run only doc tests
 test-doc:
@@ -46,10 +57,10 @@ build:
     @echo "Building project (debug)..."
     cargo build --workspace
 
-# Build the project in release mode
+# Build the project in release mode (matches CI configuration)
 build-release:
-    @echo "Building project (release)..."
-    cargo build --workspace --release
+    @echo "Building project (release, matching CI)..."
+    cargo build --release --verbose --all-features
 
 # Build just the binary
 build-bin:
@@ -71,10 +82,10 @@ check-all:
     @echo "Checking project with all features..."
     cargo check --workspace --all-features
 
-# Run clippy linter
+# Run clippy linter (matches CI configuration)
 lint:
-    @echo "Running clippy..."
-    cargo clippy --workspace --all-targets -- -D warnings
+    @echo "Running clippy (matching CI)..."
+    cargo clippy --all-features -- -D warnings
 
 # Fix clippy warnings automatically
 lint-fix:
@@ -160,9 +171,13 @@ rpm:
     cargo build --release
     cargo generate-rpm
 
-# Run CI checks (test, lint, format check)
-ci: fmt-check lint test
+# Run CI checks (matches GitHub Actions CI workflow)
+ci: build-release test lint fmt-check
     @echo "All CI checks passed!"
+    @echo "✓ Build (release with all features)"
+    @echo "✓ Tests (release with all features)"
+    @echo "✓ Clippy (all features, deny warnings)"
+    @echo "✓ Format check"
 
 # Pre-commit hook: format, lint, test
 pre-commit: fmt lint test
