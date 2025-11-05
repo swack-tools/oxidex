@@ -19,6 +19,8 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubicloud
+    permissions:
+      contents: write
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
