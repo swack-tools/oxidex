@@ -494,7 +494,7 @@ fn generate_rust_code(tags: &[TagDefinition]) -> Result<()> {
     writeln!(file)?;
     writeln!(file, "#![allow(dead_code)]")?;
     writeln!(file)?;
-    writeln!(file, "use crate::core::tag_descriptor::TagDescriptor;")?;
+    writeln!(file, "use crate::core::TagDescriptor;")?;
     writeln!(file, "use once_cell::sync::Lazy;")?;
     writeln!(file, "use std::collections::HashMap;")?;
     writeln!(file)?;
@@ -602,7 +602,7 @@ fn generate_family_module(path: &Path, family: &str, tags: &[&TagDefinition]) ->
     writeln!(file)?;
     writeln!(
         file,
-        "use crate::core::tag_descriptor::{{FormatFamily, TagDescriptor, TagId, ValueType}};"
+        "use crate::core::{{FormatFamily, TagDescriptor, TagId, ValueType}};"
     )?;
     writeln!(file, "use once_cell::sync::Lazy;")?;
     writeln!(file, "use std::collections::HashMap;")?;
@@ -764,7 +764,7 @@ fn create_fallback_generated_tags() -> Result<()> {
     writeln!(file)?;
     writeln!(file, "#![allow(dead_code)]")?;
     writeln!(file)?;
-    writeln!(file, "use crate::core::tag_descriptor::TagDescriptor;")?;
+    writeln!(file, "use crate::core::TagDescriptor;")?;
     writeln!(file)?;
     writeln!(
         file,
