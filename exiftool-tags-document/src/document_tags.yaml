@@ -1,0 +1,8 @@
+tables:
+  - name: PDF
+    tags:
+      - id: "0x0001"
+        name: Author
+        writable: true
+        type: string
+        description: "Document author name"
