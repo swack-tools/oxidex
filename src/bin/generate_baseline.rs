@@ -447,7 +447,7 @@ fn process_image(
     // Count rust tags
     let rust_data: Vec<HashMap<String, Value>> = serde_json::from_str(&rust_json)
         .map_err(|e| format!("Failed to parse Rust JSON: {}", e))?;
-    let rust_tags = rust_data.get(0).map(|m| m.len()).unwrap_or(0);
+    let rust_tags = rust_data.first().map(|m| m.len()).unwrap_or(0);
 
     Ok((perl_tags, rust_tags, match_rate, discrepancies))
 }
