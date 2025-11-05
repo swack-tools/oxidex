@@ -3,11 +3,11 @@ name: Release Build
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g., v1.0.0)'
+        description: "Tag to build (e.g., v1.0.0)"
         required: true
         type: string
 
@@ -18,7 +18,7 @@ env:
 jobs:
   create-release:
     name: Create GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: ubicloud
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
@@ -52,7 +52,7 @@ jobs:
   build-binaries:
     name: Build ${{ matrix.target }}
     needs: create-release
-    runs-on: ${{ matrix.os }}
+    runs-on: ubicloud
     strategy:
       fail-fast: false
       matrix:
@@ -179,7 +179,7 @@ jobs:
   verify-release:
     name: Verify Release
     needs: [create-release, build-binaries]
-    runs-on: ubuntu-latest
+    runs-on: ubicloud
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
