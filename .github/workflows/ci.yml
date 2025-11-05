@@ -13,7 +13,7 @@ env:
 jobs:
   test:
     name: Test Suite
-    runs-on: ubicloud-premium-30
+    runs-on: ubicloud-premium-8
     timeout-minutes: 30
 
     steps:
@@ -154,7 +154,7 @@ jobs:
 
   benchmarks:
     name: Performance Benchmarks
-    runs-on: ubicloud-premium-2s
+    runs-on: ubicloud-premium-2
     timeout-minutes: 30
     steps:
       - name: Checkout repository
