@@ -1,0 +1,8 @@
+tables:
+  - name: DICOM
+    tags:
+      - id: "0x0008,0x0005"
+        name: SpecificCharacterSet
+        writable: false
+        type: string
+        description: "Character Set that Expands or Replaces the Basic Graphic Set"
