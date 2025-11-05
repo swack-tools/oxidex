@@ -570,7 +570,9 @@ fn generate_domain_yaml(domain: &str, tags: &[TagDefinition]) -> Result<String> 
             } else {
                 &tag.tag_name
             };
-            yaml.push_str(&format!("        name: {}\n", tag_name));
+            // Quote the tag name to handle special YAML characters (colons, quotes, etc.)
+            let escaped_name = tag_name.replace('\\', "\\\\").replace('"', "\\\"");
+            yaml.push_str(&format!("        name: \"{}\"\n", escaped_name));
 
             // Writable flag
             yaml.push_str(&format!("        writable: {}\n", tag.writable));

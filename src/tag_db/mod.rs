@@ -17,15 +17,111 @@ use std::collections::HashMap;
 pub use tag_registry::{get_tag_descriptor, tag_count};
 
 /// Reverse lookup index: (numeric tag ID, format family) -> tag name
-/// Built lazily on first access from the generated tag registry
+/// Built lazily on first access from the YAML-based tag databases
 static TAG_ID_TO_NAME_INDEX: Lazy<HashMap<(u16, FormatFamily), String>> = Lazy::new(|| {
-    let mut index = HashMap::with_capacity(733);
+    let mut index = HashMap::with_capacity(10000);
 
-    // Scan the generated tag registry and build reverse index
-    // Store tags by (tag_id, format_family) to handle same IDs across different formats
-    for (name, descriptor) in GENERATED_TAG_REGISTRY.iter() {
-        if let TagId::Numeric(id) = descriptor.id() {
-            index.insert((*id, descriptor.format()), name.clone());
+    // Helper function to determine FormatFamily and prefix from table name
+    fn get_format_info(table_name: &str) -> Option<(FormatFamily, &'static str)> {
+        if table_name.starts_with("Exif::") {
+            Some((FormatFamily::EXIF, "EXIF"))
+        } else if table_name.starts_with("GPS::") {
+            Some((FormatFamily::GPS, "GPS"))
+        } else if table_name.starts_with("XMP::") {
+            Some((FormatFamily::XMP, "XMP"))
+        } else if table_name.starts_with("IPTC::") {
+            Some((FormatFamily::IPTC, "IPTC"))
+        } else if table_name.starts_with("ICC_Profile::") {
+            Some((FormatFamily::ICCProfile, "ICC_Profile"))
+        } else if table_name.starts_with("Photoshop::") {
+            Some((FormatFamily::Photoshop, "Photoshop"))
+        } else {
+            // Default to EXIF for other tables that might contain numeric tags
+            None
+        }
+    }
+
+    // Helper function to parse hex tag ID from string
+    fn parse_tag_id(id_str: &str) -> Option<u16> {
+        if let Some(hex_str) = id_str.strip_prefix("0x") {
+            u16::from_str_radix(hex_str, 16).ok()
+        } else {
+            id_str.parse::<u16>().ok()
+        }
+    }
+
+    // Scan all domain tag databases and build reverse index
+    // We iterate through: core, camera, media, image, document, specialty
+
+    // Core domain
+    for table in &core::CORE_TAGS.tables {
+        if let Some((format_family, prefix)) = get_format_info(&table.name) {
+            for tag in &table.tags {
+                if let Some(tag_id) = parse_tag_id(&tag.id) {
+                    let full_name = format!("{}:{}", prefix, tag.name);
+                    index.insert((tag_id, format_family), full_name);
+                }
+            }
+        }
+    }
+
+    // Camera domain
+    for table in &camera::CAMERA_TAGS.tables {
+        if let Some((format_family, prefix)) = get_format_info(&table.name) {
+            for tag in &table.tags {
+                if let Some(tag_id) = parse_tag_id(&tag.id) {
+                    let full_name = format!("{}:{}", prefix, tag.name);
+                    index.insert((tag_id, format_family), full_name);
+                }
+            }
+        }
+    }
+
+    // Media domain
+    for table in &media::MEDIA_TAGS.tables {
+        if let Some((format_family, prefix)) = get_format_info(&table.name) {
+            for tag in &table.tags {
+                if let Some(tag_id) = parse_tag_id(&tag.id) {
+                    let full_name = format!("{}:{}", prefix, tag.name);
+                    index.insert((tag_id, format_family), full_name);
+                }
+            }
+        }
+    }
+
+    // Image domain
+    for table in &image::IMAGE_TAGS.tables {
+        if let Some((format_family, prefix)) = get_format_info(&table.name) {
+            for tag in &table.tags {
+                if let Some(tag_id) = parse_tag_id(&tag.id) {
+                    let full_name = format!("{}:{}", prefix, tag.name);
+                    index.insert((tag_id, format_family), full_name);
+                }
+            }
+        }
+    }
+
+    // Document domain
+    for table in &document::DOCUMENT_TAGS.tables {
+        if let Some((format_family, prefix)) = get_format_info(&table.name) {
+            for tag in &table.tags {
+                if let Some(tag_id) = parse_tag_id(&tag.id) {
+                    let full_name = format!("{}:{}", prefix, tag.name);
+                    index.insert((tag_id, format_family), full_name);
+                }
+            }
+        }
+    }
+
+    // Specialty domain
+    for table in &specialty::SPECIALTY_TAGS.tables {
+        if let Some((format_family, prefix)) = get_format_info(&table.name) {
+            for tag in &table.tags {
+                if let Some(tag_id) = parse_tag_id(&tag.id) {
+                    let full_name = format!("{}:{}", prefix, tag.name);
+                    index.insert((tag_id, format_family), full_name);
+                }
+            }
         }
     }
 

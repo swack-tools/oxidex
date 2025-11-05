@@ -1358,8 +1358,9 @@ mod tests {
     #[test]
     fn test_lookup_tag_name_unknown_tags() {
         use crate::tag_db::lookup_tag_name;
-        assert_eq!(lookup_tag_name(0xFFFF, "IFD0"), "IFD0:0xFFFF");
-        assert_eq!(lookup_tag_name(0x1234, "GPS"), "GPS:0x1234");
+        // Use tag IDs from unused ranges in the database
+        assert_eq!(lookup_tag_name(0xF999, "IFD0"), "IFD0:0xF999");
+        assert_eq!(lookup_tag_name(0xF998, "GPS"), "GPS:0xF998");
     }
 
     #[test]
