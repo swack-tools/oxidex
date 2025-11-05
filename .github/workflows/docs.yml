@@ -5,8 +5,8 @@ on:
     branches:
       - main
     paths:
-      - 'docs/book/**'
-      - '.github/workflows/docs.yml'
+      - "docs/book/**"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:
@@ -22,7 +22,7 @@ concurrency:
 jobs:
   build:
     name: Build mdBook
-    runs-on: ubuntu-latest
+    runs-on: ubicloud
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -30,7 +30,7 @@ jobs:
       - name: Setup mdBook
         uses: peaceiris/actions-mdbook@v2
         with:
-          mdbook-version: 'latest'
+          mdbook-version: "latest"
 
       - name: Build book
         run: |
@@ -49,7 +49,7 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+    runs-on: ubicloud
     needs: build
     steps:
       - name: Deploy to GitHub Pages
