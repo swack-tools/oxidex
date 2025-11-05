@@ -110,6 +110,31 @@ codegen-units = 16
 opt-level = 2
 codegen-units = 16
 
+# Force optimization for ALL tag crates to prevent OOM
+[profile.dev.package.exiftool-tags-core]
+opt-level = 2
+codegen-units = 16
+
+[profile.dev.package.exiftool-tags-camera]
+opt-level = 2
+codegen-units = 16
+
+[profile.dev.package.exiftool-tags-media]
+opt-level = 2
+codegen-units = 16
+
+[profile.dev.package.exiftool-tags-image]
+opt-level = 2
+codegen-units = 16
+
+[profile.dev.package.exiftool-tags-document]
+opt-level = 2
+codegen-units = 16
+
+[profile.dev.package.exiftool-tags-specialty]
+opt-level = 2
+codegen-units = 16
+
 [profile.test]
 opt-level = 1
 

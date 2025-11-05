@@ -39,6 +39,27 @@ pub use exiftool_tags_specialty as specialty;
 // This maintains backward compatibility with code expecting types at the root
 pub use exiftool_tags_core::types::*;
 
+// Backward compatibility: stub implementation for old generated tag registry
+// The new YAML-based system doesn't use this, but old code may reference it
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+
+/// Stub for backward compatibility with old generated tag system
+/// In the new YAML-based system, this is empty as tags are accessed differently
+pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<String, TagDescriptor>> = Lazy::new(HashMap::new);
+
+/// Get the count of tags in the generated registry
+/// Returns 0 in the new YAML-based system (tags are counted differently)
+pub fn generated_tag_count() -> usize {
+    0
+}
+
+/// Get a tag descriptor by name from the generated registry
+/// Returns None in the new YAML-based system (use get_tag_table instead)
+pub fn get_generated_tag_descriptor(_name: &str) -> Option<&'static TagDescriptor> {
+    None
+}
+
 /// Get a tag table from any domain by name.
 ///
 /// This function performs a unified search across all domain-specific tag databases.
