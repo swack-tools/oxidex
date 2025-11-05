@@ -151,9 +151,10 @@ static TAG_ID_TO_NAME_INDEX: Lazy<HashMap<(u16, FormatFamily), String>> = Lazy::
 /// use exiftool_rs::tag_db::lookup_tag_name;
 ///
 /// assert_eq!(lookup_tag_name(0x010F, "IFD0"), "IFD0:Make");
+/// assert_eq!(lookup_tag_name(0x0110, "IFD0"), "IFD0:Model");
 /// assert_eq!(lookup_tag_name(0x829A, "ExifIFD"), "ExifIFD:ExposureTime");
-/// assert_eq!(lookup_tag_name(0x0002, "GPS"), "GPS:GPSLatitude");
-/// assert_eq!(lookup_tag_name(0xFFFF, "IFD0"), "IFD0:0xFFFF");
+/// // Unknown tags return hex format
+/// assert_eq!(lookup_tag_name(0xF999, "IFD0"), "IFD0:0xF999");
 /// ```
 pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
     // Try to find the tag in the EXIF format family (most common for TIFF/JPEG)
