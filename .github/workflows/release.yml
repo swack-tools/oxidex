@@ -138,10 +138,17 @@ jobs:
         run: |
           cargo build --release --target ${{ matrix.target }}
 
-      - name: Verify binary
+      - name: Verify binary (Unix)
+        if: "!contains(matrix.target, 'windows')"
         run: |
           ls -lh target/${{ matrix.target }}/release/${{ matrix.binary_name }}
           file target/${{ matrix.target }}/release/${{ matrix.binary_name }} || true
+
+      - name: Verify binary (Windows)
+        if: contains(matrix.target, 'windows')
+        shell: bash
+        run: |
+          ls -lh target/${{ matrix.target }}/release/${{ matrix.binary_name }}
 
       - name: Strip binary (non-Windows)
         if: "!contains(matrix.target, 'windows')"
@@ -158,13 +165,23 @@ jobs:
 
       - name: Create archive (Windows)
         if: contains(matrix.target, 'windows')
+        shell: bash
         run: |
           cd target/${{ matrix.target }}/release
-          zip ../../../${{ matrix.archive_name }} ${{ matrix.binary_name }}
+          7z a -tzip ../../../${{ matrix.archive_name }} ${{ matrix.binary_name }}
           cd ../../..
-          shasum -a 256 ${{ matrix.archive_name }} > ${{ matrix.archive_name }}.sha256
+          sha256sum ${{ matrix.archive_name }} > ${{ matrix.archive_name }}.sha256
 
-      - name: Display binary size
+      - name: Display binary size (Unix)
+        if: "!contains(matrix.target, 'windows')"
+        run: |
+          ls -lh ${{ matrix.archive_name }}
+          echo "SHA256:"
+          cat ${{ matrix.archive_name }}.sha256
+
+      - name: Display binary size (Windows)
+        if: contains(matrix.target, 'windows')
+        shell: bash
         run: |
           ls -lh ${{ matrix.archive_name }}
           echo "SHA256:"
