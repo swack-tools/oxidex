@@ -34,7 +34,11 @@ mod tests {
 
     #[test]
     fn test_get_tag_table() {
-        let exif = get_tag_table("EXIF");
-        assert!(exif.is_some());
+        // Test with actual table name from YAML
+        let exif = get_tag_table("Exif::Main");
+        assert!(exif.is_some(), "Should find Exif::Main table");
+
+        let gps = get_tag_table("GPS::Main");
+        assert!(gps.is_some(), "Should find GPS::Main table");
     }
 }
