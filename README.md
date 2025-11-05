@@ -298,6 +298,18 @@ For complete documentation, see the [User Guide](https://exiftool-rs.github.io/e
 cargo build
 ```
 
+### Build Performance
+
+The tag database uses a multi-crate architecture for fast parallel compilation.
+First build may take 2-3 minutes to download ExifTool source and generate YAML.
+Subsequent builds are much faster (~30-60 seconds on multi-core machines).
+
+For development, you can skip tag generation:
+```bash
+# Use pre-generated tags
+cargo build
+```
+
 ### Tag Database Generation
 
 ExifTool-RS automatically generates its comprehensive tag database from the official ExifTool Perl source during the build process. This ensures compatibility with ExifTool's extensive metadata tag definitions.
