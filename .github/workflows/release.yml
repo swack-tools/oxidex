@@ -54,42 +54,44 @@ jobs:
   build-binaries:
     name: Build ${{ matrix.target }}
     needs: create-release
-    runs-on: ubicloud
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
           # Linux x86_64 (static musl)
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubicloud
             use_cross: true
             binary_name: exiftool-rs
             archive_name: exiftool-rs-x86_64-linux-musl.tar.gz
 
           # Linux ARM64 (static musl)
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubicloud
             use_cross: true
             binary_name: exiftool-rs
             archive_name: exiftool-rs-aarch64-linux-musl.tar.gz
 
           # macOS Intel
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-13
             use_cross: false
             binary_name: exiftool-rs
             archive_name: exiftool-rs-x86_64-macos.tar.gz
 
           # macOS Apple Silicon
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-14
             use_cross: false
             binary_name: exiftool-rs
             archive_name: exiftool-rs-aarch64-macos.tar.gz
 
           # Windows x86_64
           - target: x86_64-pc-windows-gnu
-            os: ubuntu-latest
+            os: ubicloud
             use_cross: true
             binary_name: exiftool-rs.exe
             archive_name: exiftool-rs-x86_64-windows.zip
