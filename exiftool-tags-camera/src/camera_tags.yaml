@@ -1,1 +1,6 @@
-tables: []
+tables:
+  - name: Canon
+    tags:
+      - id: "0x0001"
+        name: PlaceholderTag
+        writable: false
