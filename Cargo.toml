@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "exiftool-tags-new", "exiftool-tags-core", "exiftool-tags-camera", "exiftool-tags-media", "exiftool-tags-image", "exiftool-tags-document", "exiftool-tags-specialty"]
+members = [".", "exiftool-tags", "exiftool-tags-core", "exiftool-tags-camera", "exiftool-tags-media", "exiftool-tags-image", "exiftool-tags-document", "exiftool-tags-specialty"]
 resolver = "2"
 
 [package]
@@ -33,7 +33,7 @@ harness = false
 
 [dependencies]
 # Tag database (separate crate, always optimized)
-exiftool-tags = { path = "exiftool-tags-new" }
+exiftool-tags = { path = "exiftool-tags" }
 
 # CLI Framework
 clap = { version = "4.5", features = ["derive", "cargo"] }

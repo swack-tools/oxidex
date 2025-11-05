@@ -3,7 +3,7 @@ name = "exiftool-tags"
 version = "1.0.0"
 edition = "2021"
 authors = ["ExifTool-RS Contributors"]
-description = "Generated tag database for exiftool-rs (always compiled with optimizations)"
+description = "Facade crate re-exporting all tag databases for exiftool-rs"
 license = "GPL-3.0"
 
 [lib]
@@ -11,13 +11,13 @@ name = "exiftool_tags"
 path = "src/lib.rs"
 
 [dependencies]
+exiftool-tags-core = { path = "../exiftool-tags-core" }
+exiftool-tags-camera = { path = "../exiftool-tags-camera" }
+exiftool-tags-media = { path = "../exiftool-tags-media" }
+exiftool-tags-image = { path = "../exiftool-tags-image" }
+exiftool-tags-document = { path = "../exiftool-tags-document" }
+exiftool-tags-specialty = { path = "../exiftool-tags-specialty" }
+
+# Re-export common dependencies
 once_cell = "1.19"
 serde = { version = "1.0", features = ["derive"] }
-
-[build-dependencies]
-ureq = { version = "2.9", default-features = false, features = ["tls"] }
-regex = "1.10"
-anyhow = "1.0"
-
-# NOTE: Profile settings are configured in workspace root Cargo.toml
-# See [profile.dev.package.exiftool-tags] for optimization settings
