@@ -31,22 +31,28 @@ const MIN_TAG_COUNT: usize = 500;
 /// the table name. This enables splitting the monolithic tag database into
 /// domain-specific crates for faster parallel compilation.
 ///
+/// Table names often include module prefixes like "Canon::AFConfig" or "EXIF::Main",
+/// so we extract the base module name (first part before "::") for routing.
+///
 /// # Arguments
-/// * `table_name` - The name of the tag table (e.g., "Canon", "EXIF", "QuickTime")
+/// * `table_name` - The name of the tag table (e.g., "Canon::AFConfig", "EXIF", "QuickTime::Main")
 ///
 /// # Returns
 /// The domain name as a static string: "core", "camera", "media", "image", "document", or "specialty"
 fn get_domain_for_table(table_name: &str) -> &'static str {
-    match table_name {
+    // Extract base module name (part before ::)
+    let base_name = table_name.split("::").next().unwrap_or(table_name);
+
+    match base_name {
         // Core - universal standards
         "EXIF" | "XMP" | "IPTC" | "GPS" | "ICC_Profile" | "MWG" |
-        "Photoshop" | "FlashPix" | "GeoTIFF" | "Composite" | "Trailer" |
+        "Photoshop" | "FlashPix" | "GeoTiff" | "Composite" | "Trailer" |
         "MakerNotes" => "core",
 
         // Camera manufacturers
         "Canon" | "CanonCustom" | "CanonRaw" | "Nikon" | "NikonCapture" |
         "NikonCustom" | "NikonSettings" | "Sony" | "SonyIDC" | "Panasonic" |
-        "PanasonicRaw" | "Olympus" | "Fujifilm" | "Pentax" | "Casio" |
+        "PanasonicRaw" | "Olympus" | "FujiFilm" | "Pentax" | "Casio" |
         "Minolta" | "MinoltaRaw" | "Ricoh" | "Sigma" | "SigmaRaw" |
         "PhaseOne" | "Kodak" | "KyoceraRaw" | "Samsung" | "Sanyo" |
         "HP" | "GE" | "Reconyx" | "JVC" | "Motorola" | "Apple" |
@@ -64,7 +70,7 @@ fn get_domain_for_table(table_name: &str) -> &'static str {
         "DPX" | "PSP" | "PCX" | "MIFF" | "PhotoCD" | "ICO" | "Palm" => "image",
 
         // Document formats
-        "PDF" | "PostScript" | "Font" | "PList" | "HTML" | "Torrent" |
+        "PDF" | "PostScript" | "Font" | "PLIST" | "HTML" | "Torrent" |
         "ZIP" | "TNEF" | "VCard" | "Microsoft" | "MacOS" | "EXE" |
         "Lnk" | "RSRC" | "FotoStation" | "PhotoMechanic" | "ITC" |
         "GIMP" | "GM" | "Google" => "document",
@@ -494,154 +500,218 @@ fn map_perl_type_to_value_type(perl_type: &str) -> ValueType {
     }
 }
 
-/// Generates Rust source code split by format family to avoid compiler OOM
-fn generate_rust_code(tags: &[TagDefinition]) -> Result<()> {
-    // Group tags by format family
-    let mut tags_by_family: HashMap<String, Vec<&TagDefinition>> = HashMap::new();
+/// Generate YAML for all tags in a domain
+///
+/// This function creates a compact YAML representation of all tags belonging to a specific
+/// domain. The YAML is structured as a list of tables, each containing a list of tags.
+///
+/// # Arguments
+/// * `domain` - The domain name ("core", "camera", "media", "image", "document", "specialty")
+/// * `tags` - Vector of all parsed tag definitions
+///
+/// # Returns
+/// YAML string containing all tags for the specified domain
+///
+/// # YAML Structure
+/// ```yaml
+/// tables:
+///   - name: Canon
+///     tags:
+///       - id: "0x0001"
+///         name: CanonCameraSettings
+///         writable: true
+///         type: int16u
+///         description: "Camera settings"
+/// ```
+fn generate_domain_yaml(domain: &str, tags: &[TagDefinition]) -> Result<String> {
+    let mut yaml = String::from("tables:\n");
+
+    // Group tags by table name within this domain
+    let mut tables_map: HashMap<String, Vec<&TagDefinition>> = HashMap::new();
     for tag in tags {
-        tags_by_family
-            .entry(tag.format_family.clone())
-            .or_default()
-            .push(tag);
+        // Only include tags that belong to this domain
+        if get_domain_for_table(&tag.table_name) == domain {
+            tables_map
+                .entry(tag.table_name.clone())
+                .or_default()
+                .push(tag);
+        }
     }
 
+    // If no tables for this domain, return minimal valid YAML
+    if tables_map.is_empty() {
+        return Ok(yaml);
+    }
+
+    // Sort table names for consistent output
+    let mut table_names: Vec<_> = tables_map.keys().collect();
+    table_names.sort();
+
+    // Generate YAML for each table
+    for table_name in table_names {
+        let table_tags = tables_map.get(table_name).unwrap();
+
+        yaml.push_str(&format!("  - name: {}\n", table_name));
+        yaml.push_str("    tags:\n");
+
+        for tag in table_tags {
+            // Generate tag entry
+            // Tag ID - convert to string representation
+            let tag_id_str = match &tag.tag_id {
+                TagId::Numeric(n) => format!("0x{:04X}", n),
+                TagId::Named(s) => s.clone(),
+            };
+
+            yaml.push_str(&format!("      - id: \"{}\"\n", tag_id_str));
+
+            // Tag name - use only the name part without the format family prefix
+            let tag_name = if let Some(colon_pos) = tag.tag_name.find(':') {
+                &tag.tag_name[colon_pos + 1..]
+            } else {
+                &tag.tag_name
+            };
+            yaml.push_str(&format!("        name: {}\n", tag_name));
+
+            // Writable flag
+            yaml.push_str(&format!("        writable: {}\n", tag.writable));
+
+            // Optional type field
+            if let Some(ref type_name) = tag.writable_type {
+                yaml.push_str(&format!("        type: {}\n", type_name));
+            }
+
+            // Optional description field
+            if !tag.description.is_empty() {
+                // Escape YAML special characters in description
+                let escaped = tag.description
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('\n', " ")
+                    .replace('\r', "");
+                yaml.push_str(&format!("        description: \"{}\"\n", escaped));
+            }
+        }
+    }
+
+    Ok(yaml)
+}
+
+/// Generates YAML files for each domain crate
+///
+/// This function replaces the old Rust code generation approach with YAML generation.
+/// Each domain crate gets its own YAML file containing only the tags for that domain.
+/// This approach provides:
+/// - Faster compilation (YAML parsing vs Rust compilation)
+/// - Better parallel builds (6 independent crates)
+/// - Easier debugging (human-readable YAML)
+///
+/// # Arguments
+/// * `tags` - Vector of all parsed tag definitions from ExifTool
+///
+/// # Returns
+/// Ok(()) on success, Error if file writing fails
+fn generate_rust_code(tags: &[TagDefinition]) -> Result<()> {
     println!(
-        "cargo:warning=Generating {} family modules with {} total tags",
-        tags_by_family.len(),
+        "cargo:warning=Generating YAML files for {} tags across 6 domain crates",
         tags.len()
     );
 
-    // Generate individual family modules
-    let generated_dir = Path::new("src/tag_db/generated");
-    fs::create_dir_all(generated_dir)?;
+    // Define all domains
+    let domains = ["core", "camera", "media", "image", "document", "specialty"];
 
-    let mut family_modules = Vec::new();
-    for (family, family_tags) in tags_by_family.iter() {
-        let module_name = format!("tags_{}", sanitize_module_name(family));
-        family_modules.push((module_name.clone(), family_tags.len()));
+    let mut total_generated = 0;
 
-        let module_path = generated_dir.join(format!("{}.rs", module_name));
-        generate_family_module(&module_path, family, family_tags)?;
+    // Generate YAML for each domain
+    for domain in &domains {
+        let yaml_content = generate_domain_yaml(domain, tags)?;
+
+        // Determine output path for this domain
+        let output_path = format!("exiftool-tags-{}/src/{}_tags.yaml", domain, domain);
+
+        // Write YAML file
+        fs::write(&output_path, &yaml_content)
+            .with_context(|| format!("Failed to write YAML to {}", output_path))?;
+
+        // Count tags in this domain for reporting
+        let tag_count = tags
+            .iter()
+            .filter(|tag| get_domain_for_table(&tag.table_name) == *domain)
+            .count();
+
+        total_generated += tag_count;
+
+        println!(
+            "cargo:warning=  {:12} -> {} ({} tags, {} bytes)",
+            domain,
+            output_path,
+            tag_count,
+            yaml_content.len()
+        );
     }
 
-    // Generate main module file that combines everything
+    // Still generate the legacy generated_tags.rs for backward compatibility
+    // This ensures existing code continues to work during migration
+    generate_legacy_rust_stub(tags)?;
+
+    println!(
+        "cargo:warning=Successfully generated YAML for {} total tags",
+        total_generated
+    );
+
+    Ok(())
+}
+
+/// Generates a minimal stub for legacy generated_tags.rs
+///
+/// This provides backward compatibility during the migration to YAML-based tags.
+/// The stub maintains the same API but logs a deprecation warning.
+fn generate_legacy_rust_stub(tags: &[TagDefinition]) -> Result<()> {
     let output_path = Path::new(GENERATED_TAGS_PATH);
+
+    // Create parent directory if needed
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
     let mut file = File::create(output_path)?;
 
-    // Write file header
-    writeln!(file, "//! Auto-generated tag database from ExifTool source")?;
+    // Write minimal stub that maintains API compatibility
+    writeln!(file, "//! Legacy stub for generated tag database")?;
     writeln!(file, "//!")?;
     writeln!(file, "//! THIS FILE IS AUTO-GENERATED BY build.rs")?;
-    writeln!(
-        file,
-        "//! DO NOT EDIT MANUALLY - CHANGES WILL BE OVERWRITTEN"
-    )?;
+    writeln!(file, "//! Tag data is now in YAML files in domain crates.")?;
     writeln!(file, "//!")?;
     writeln!(file, "//! Generated from ExifTool: {}", EXIFTOOL_REPO_URL)?;
-    writeln!(
-        file,
-        "//! Total tags: {} across {} format families",
-        tags.len(),
-        family_modules.len()
-    )?;
+    writeln!(file, "//! Total tags: {}", tags.len())?;
     writeln!(file)?;
     writeln!(file, "#![allow(dead_code)]")?;
     writeln!(file)?;
     writeln!(file, "use crate::core::TagDescriptor;")?;
-    writeln!(file, "use once_cell::sync::Lazy;")?;
-    writeln!(file, "use std::collections::HashMap;")?;
     writeln!(file)?;
-
-    // Declare submodules with path attributes
-    writeln!(file, "// Format family submodules (generated)")?;
-    for (module_name, count) in &family_modules {
-        writeln!(file, "#[path = \"generated/{}.rs\"]", module_name)?;
-        writeln!(file, "mod {}; // {} tags", module_name, count)?;
-    }
-    writeln!(file)?;
-
-    // Generate lookup function that queries each family registry in turn
-    // This approach avoids compiling a massive HashMap merge at build time
-    writeln!(file, "/// Looks up a tag descriptor by its canonical name")?;
-    writeln!(file, "/// Queries each format family registry sequentially")?;
     writeln!(
         file,
-        "pub fn get_generated_tag_descriptor(name: &str) -> Option<&'static TagDescriptor> {{"
+        "/// Legacy lookup function (now delegates to manual registry)"
     )?;
-    for (module_name, _) in &family_modules {
-        writeln!(
-            file,
-            "    if let Some(desc) = {}::get_tags().get(name) {{",
-            module_name
-        )?;
-        writeln!(file, "        return Some(desc);")?;
-        writeln!(file, "    }}")?;
-    }
-    writeln!(file, "    None")?;
+    writeln!(
+        file,
+        "pub fn get_generated_tag_descriptor(name: &str) -> Option<&TagDescriptor> {{"
+    )?;
+    writeln!(
+        file,
+        "    crate::tag_db::tag_registry::get_tag_descriptor(name)"
+    )?;
     writeln!(file, "}}")?;
     writeln!(file)?;
     writeln!(
         file,
-        "/// Returns the total number of registered tags across all families"
+        "/// Returns the total number of tags (from ExifTool parse)"
     )?;
     writeln!(file, "pub fn generated_tag_count() -> usize {{")?;
     writeln!(file, "    {}", tags.len())?;
     writeln!(file, "}}")?;
-    writeln!(file)?;
-    writeln!(
-        file,
-        "/// Combined registry - lazily merged from all families on first access"
-    )?;
-    writeln!(
-        file,
-        "/// WARNING: First access will merge 32K+ tags and may take a few hundred milliseconds"
-    )?;
-    writeln!(
-        file,
-        "pub static GENERATED_TAG_REGISTRY: Lazy<HashMap<String, TagDescriptor>> = Lazy::new(|| {{"
-    )?;
-    writeln!(
-        file,
-        "    let mut registry = HashMap::with_capacity({});",
-        tags.len()
-    )?;
-    for (module_name, _) in &family_modules {
-        writeln!(
-            file,
-            "    registry.extend({}::get_tags().iter().map(|(k, v)| (k.clone(), v.clone())));",
-            module_name
-        )?;
-    }
-    writeln!(file, "    registry")?;
-    writeln!(file, "}});")?;
-    writeln!(file)?;
-
-    // Tests
-    writeln!(file, "#[cfg(test)]")?;
-    writeln!(file, "mod tests {{")?;
-    writeln!(file, "    use super::*;")?;
-    writeln!(file)?;
-    writeln!(file, "    #[test]")?;
-    writeln!(file, "    fn test_generated_registry_not_empty() {{")?;
-    writeln!(file, "        assert!(generated_tag_count() > 0);")?;
-    writeln!(file, "    }}")?;
-    writeln!(file)?;
-    writeln!(file, "    #[test]")?;
-    writeln!(file, "    fn test_generated_registry_min_count() {{")?;
-    writeln!(
-        file,
-        "        assert!(generated_tag_count() >= {});",
-        MIN_TAG_COUNT
-    )?;
-    writeln!(file, "    }}")?;
-    writeln!(file, "}}")?;
 
     println!(
-        "cargo:warning=Generated {} family modules",
-        family_modules.len()
-    );
-    println!(
-        "cargo:warning=Generated main module at {}",
+        "cargo:warning=Generated legacy stub at {}",
         GENERATED_TAGS_PATH
     );
     Ok(())

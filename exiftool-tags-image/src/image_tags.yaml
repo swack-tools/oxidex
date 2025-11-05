@@ -1,8 +1,4461 @@
 tables:
-  - name: PNG
+  - name: BMP::Main
     tags:
-      - id: "0x0001"
+      - id: "0x0000"
+        name: BMPVersion
+        writable: false
+        description: "BMPVersion tag"
+      - id: "0x007C"
+        name: Windows V5
+        writable: false
+        description: "Windows V5 tag"
+      - id: "0x0004"
         name: ImageWidth
         writable: false
-        type: int32u
-        description: "Width of the image in pixels"
+        description: "ImageWidth tag"
+      - id: "0x0008"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x000C"
+        name: Planes
+        writable: false
+        description: "Planes tag"
+      - id: "0x000E"
+        name: BitDepth
+        writable: false
+        description: "BitDepth tag"
+      - id: "0x0010"
+        name: Compression
+        writable: false
+        description: "Compression tag"
+      - id: "0x0001"
+        name: 8-Bit RLE
+        writable: false
+        description: "8-Bit RLE tag"
+      - id: "0x0002"
+        name: 4-Bit RLE
+        writable: false
+        description: "4-Bit RLE tag"
+      - id: "0x0003"
+        name: Bitfields
+        writable: false
+        description: "Bitfields tag"
+      - id: "0x0014"
+        name: ImageLength
+        writable: false
+        description: "ImageLength tag"
+      - id: "0x0018"
+        name: PixelsPerMeterX
+        writable: false
+        description: "PixelsPerMeterX tag"
+      - id: "0x001C"
+        name: PixelsPerMeterY
+        writable: false
+        description: "PixelsPerMeterY tag"
+      - id: "0x0020"
+        name: NumColors
+        writable: false
+        description: "NumColors tag"
+      - id: "0x0024"
+        name: NumImportantColors
+        writable: false
+        description: "NumImportantColors tag"
+      - id: "0x0028"
+        name: RedMask
+        writable: false
+        description: "RedMask tag"
+      - id: "0x002C"
+        name: GreenMask
+        writable: false
+        description: "GreenMask tag"
+      - id: "0x0030"
+        name: BlueMask
+        writable: false
+        description: "BlueMask tag"
+      - id: "0x0034"
+        name: AlphaMask
+        writable: false
+        description: "AlphaMask tag"
+      - id: "0x0038"
+        name: ColorSpace
+        writable: false
+        description: "ColorSpace tag"
+      - id: "0x0001"
+        name: Device RGB
+        writable: false
+        description: "Device RGB tag"
+      - id: "0x0002"
+        name: Device CMYK
+        writable: false
+        description: "Device CMYK tag"
+      - id: "0x003C"
+        name: RedEndpoint
+        writable: false
+        description: "RedEndpoint tag"
+      - id: "0x0048"
+        name: GreenEndpoint
+        writable: false
+        description: "GreenEndpoint tag"
+      - id: "0x0054"
+        name: BlueEndpoint
+        writable: false
+        description: "BlueEndpoint tag"
+      - id: "0x0060"
+        name: GammaRed
+        writable: false
+        description: "GammaRed tag"
+      - id: "0x0064"
+        name: GammaGreen
+        writable: false
+        description: "GammaGreen tag"
+      - id: "0x0068"
+        name: GammaBlue
+        writable: false
+        description: "GammaBlue tag"
+      - id: "0x006C"
+        name: RenderingIntent
+        writable: false
+        description: "RenderingIntent tag"
+      - id: "0x0002"
+        name: Proof (LCS_GM_GRAPHICS)
+        writable: false
+        description: "Proof (LCS_GM_GRAPHICS) tag"
+      - id: "0x0004"
+        name: Picture (LCS_GM_IMAGES)
+        writable: false
+        description: "Picture (LCS_GM_IMAGES) tag"
+      - id: "0x0008"
+        name: Absolute Colorimetric (LCS_GM_ABS_COLORIMETRIC)
+        writable: false
+        description: "Absolute Colorimetric (LCS_GM_ABS_COLORIMETRIC) tag"
+      - id: "0x0070"
+        name: ProfileDataOffset
+        writable: false
+        description: "ProfileDataOffset tag"
+      - id: "0x0074"
+        name: ProfileSize
+        writable: false
+        description: "ProfileSize tag"
+  - name: BMP::OS2
+    tags:
+      - id: "0x0000"
+        name: BMPVersion
+        writable: false
+        description: "BMPVersion tag"
+      - id: "0x0040"
+        name: OS/2 V2
+        writable: false
+        description: "OS/2 V2 tag"
+      - id: "0x0004"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x0006"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x0008"
+        name: Planes
+        writable: false
+        description: "Planes tag"
+      - id: "0x000A"
+        name: BitDepth
+        writable: false
+        description: "BitDepth tag"
+  - name: BPG::Extensions
+    tags:
+      - id: "0x0001"
+        name: EXIF
+        writable: false
+        description: "EXIF tag"
+      - id: "0x0002"
+        name: ICC_Profile
+        writable: false
+        description: "ICC_Profile tag"
+      - id: "0x0003"
+        name: XMP
+        writable: false
+        description: "XMP tag"
+      - id: "0x0004"
+        name: ThumbnailBPG
+        writable: false
+        description: "ThumbnailBPG tag"
+      - id: "0x0005"
+        name: AnimationControl
+        writable: false
+        description: "AnimationControl tag"
+  - name: BPG::Main
+    tags:
+      - id: "0x0004"
+        name: PixelFormat
+        writable: false
+        description: "PixelFormat tag"
+      - id: "0x0001"
+        name: 4:2:0 (chroma at 0.5, 0.5)
+        writable: false
+        description: "4:2:0 (chroma at 0.5, 0.5) tag"
+      - id: "0x0002"
+        name: 4:2:2 (chroma at 0.5, 0)
+        writable: false
+        description: "4:2:2 (chroma at 0.5, 0) tag"
+      - id: "0x0003"
+        name: 4:4:4
+        writable: false
+        description: "4:4:4 tag"
+      - id: "0x0004"
+        name: 4:2:0 (chroma at 0, 0.5)
+        writable: false
+        description: "4:2:0 (chroma at 0, 0.5) tag"
+      - id: "0x0005"
+        name: 4:2:2 (chroma at 0, 0)
+        writable: false
+        description: "4:2:2 (chroma at 0, 0) tag"
+      - id: "0x1000"
+        name: Alpha Exists (color not premultiplied)
+        writable: false
+        description: "Alpha Exists (color not premultiplied) tag"
+      - id: "0x1004"
+        name: Alpha Exists (color premultiplied)
+        writable: false
+        description: "Alpha Exists (color premultiplied) tag"
+      - id: "0x0004"
+        name: Alpha Exists (W color component)
+        writable: false
+        description: "Alpha Exists (W color component) tag"
+      - id: "0x0001"
+        name: RGB
+        writable: false
+        description: "RGB tag"
+      - id: "0x0002"
+        name: YCgCo
+        writable: false
+        description: "YCgCo tag"
+      - id: "0x0003"
+        name: YCbCr (BT 709)
+        writable: false
+        description: "YCbCr (BT 709) tag"
+      - id: "0x0004"
+        name: YCbCr (BT 2020)
+        writable: false
+        description: "YCbCr (BT 2020) tag"
+      - id: "0x0005"
+        name: BT 2020 Constant Luminance
+        writable: false
+        description: "BT 2020 Constant Luminance tag"
+      - id: "0x0001"
+        name: Limited Range
+        writable: false
+        description: "Limited Range tag"
+      - id: "0x0003"
+        name: Extension Present
+        writable: false
+        description: "Extension Present tag"
+      - id: "0x0006"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x0007"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x0008"
+        name: ImageLength
+        writable: false
+        description: "ImageLength tag"
+  - name: DNG::AdobeData
+    tags:
+      - id: "0x3F0E"
+        name: AdobeMRW
+        writable: false
+        description: "AdobeMRW tag"
+      - id: "0xF4CD"
+        name: AdobeSR2
+        writable: false
+        description: "AdobeSR2 tag"
+      - id: "0x4309"
+        name: AdobeRAF
+        writable: false
+        description: "AdobeRAF tag"
+      - id: "0xD792"
+        name: AdobePano
+        writable: false
+        description: "AdobePano tag"
+      - id: "0xC501"
+        name: AdobeKoda
+        writable: false
+        description: "AdobeKoda tag"
+      - id: "0x137E"
+        name: AdobeLeaf
+        writable: false
+        description: "AdobeLeaf tag"
+  - name: DNG::ImageSeq
+    tags:
+      - id: "0x0000"
+        name: SeqID
+        writable: false
+        description: "SeqID tag"
+      - id: "0x0001"
+        name: SeqType
+        writable: false
+        description: "SeqType tag"
+      - id: "0x0002"
+        name: SeqFrameInfo
+        writable: false
+        description: "SeqFrameInfo tag"
+      - id: "0x0003"
+        name: SeqIndex
+        writable: false
+        description: "SeqIndex tag"
+      - id: "0x0007"
+        name: SeqCount
+        writable: false
+        description: "SeqCount tag"
+      - id: "0x000B"
+        name: SeqFinal
+        writable: false
+        description: "SeqFinal tag"
+  - name: DNG::OriginalRaw
+    tags:
+      - id: "0x0000"
+        name: OriginalRawImage
+        writable: false
+        description: "OriginalRawImage tag"
+      - id: "0x0001"
+        name: OriginalRawResource
+        writable: false
+        description: "OriginalRawResource tag"
+      - id: "0x0002"
+        name: OriginalRawFileType
+        writable: false
+        description: "OriginalRawFileType tag"
+      - id: "0x0003"
+        name: OriginalRawCreator
+        writable: false
+        description: "OriginalRawCreator tag"
+      - id: "0x0004"
+        name: OriginalTHMImage
+        writable: false
+        description: "OriginalTHMImage tag"
+      - id: "0x0005"
+        name: OriginalTHMResource
+        writable: false
+        description: "OriginalTHMResource tag"
+      - id: "0x0006"
+        name: OriginalTHMFileType
+        writable: false
+        description: "OriginalTHMFileType tag"
+      - id: "0x0007"
+        name: OriginalTHMCreator
+        writable: false
+        description: "OriginalTHMCreator tag"
+  - name: DNG::ProfileDynamicRange
+    tags:
+      - id: "0x0000"
+        name: PDRVersion
+        writable: false
+        description: "PDRVersion tag"
+      - id: "0x0002"
+        name: DynamicRange
+        writable: false
+        description: "DynamicRange tag"
+      - id: "0x0004"
+        name: HintMaxOutputValue
+        writable: false
+        description: "HintMaxOutputValue tag"
+  - name: DPX::Main
+    tags:
+      - id: "0x0000"
+        name: ByteOrder
+        writable: false
+        description: "ByteOrder tag"
+      - id: "0x0008"
+        name: HeaderVersion
+        writable: false
+        description: "HeaderVersion tag"
+      - id: "0x0010"
+        name: DPXFileSize
+        writable: false
+        description: "DPXFileSize tag"
+      - id: "0x0014"
+        name: DittoKey
+        writable: false
+        description: "DittoKey tag"
+      - id: "0x0024"
+        name: ImageFileName
+        writable: false
+        description: "ImageFileName tag"
+      - id: "0x0088"
+        name: CreateDate
+        writable: false
+        description: "CreateDate tag"
+      - id: "0x00A0"
+        name: Creator
+        writable: false
+        description: "Creator tag"
+      - id: "0x0104"
+        name: Project
+        writable: false
+        description: "Project tag"
+      - id: "0x01CC"
+        name: Copyright
+        writable: false
+        description: "Copyright tag"
+      - id: "0x0294"
+        name: EncryptionKey
+        writable: false
+        description: "EncryptionKey tag"
+      - id: "0x0300"
+        name: Orientation
+        writable: false
+        description: "Orientation tag"
+      - id: "0x0001"
+        name: Mirror vertical
+        writable: false
+        description: "Mirror vertical tag"
+      - id: "0x0002"
+        name: Mirror horizontal
+        writable: false
+        description: "Mirror horizontal tag"
+      - id: "0x0003"
+        name: Rotate 180
+        writable: false
+        description: "Rotate 180 tag"
+      - id: "0x0004"
+        name: Mirror horizontal and rotate 270 CW
+        writable: false
+        description: "Mirror horizontal and rotate 270 CW tag"
+      - id: "0x0005"
+        name: Rotate 90 CW
+        writable: false
+        description: "Rotate 90 CW tag"
+      - id: "0x0006"
+        name: Rotate 270 CW
+        writable: false
+        description: "Rotate 270 CW tag"
+      - id: "0x0007"
+        name: Mirror horizontal and rotate 90 CW
+        writable: false
+        description: "Mirror horizontal and rotate 90 CW tag"
+      - id: "0x0302"
+        name: ImageElements
+        writable: false
+        description: "ImageElements tag"
+      - id: "0x0304"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x0308"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x030C"
+        name: DataSign
+        writable: false
+        description: "DataSign tag"
+      - id: "0x0320"
+        name: ComponentsConfiguration
+        writable: false
+        description: "ComponentsConfiguration tag"
+      - id: "0x0001"
+        name: Red (R)
+        writable: false
+        description: "Red (R) tag"
+      - id: "0x0002"
+        name: Green (G)
+        writable: false
+        description: "Green (G) tag"
+      - id: "0x0003"
+        name: Blue (B)
+        writable: false
+        description: "Blue (B) tag"
+      - id: "0x0004"
+        name: Alpha (matte)
+        writable: false
+        description: "Alpha (matte) tag"
+      - id: "0x0006"
+        name: Luminance (Y)
+        writable: false
+        description: "Luminance (Y) tag"
+      - id: "0x0007"
+        name: Chrominance (Cb, Cr, subsampled by two)
+        writable: false
+        description: "Chrominance (Cb, Cr, subsampled by two) tag"
+      - id: "0x0008"
+        name: Depth (Z)
+        writable: false
+        description: "Depth (Z) tag"
+      - id: "0x0009"
+        name: Composite video
+        writable: false
+        description: "Composite video tag"
+      - id: "0x0032"
+        name: R, G, B
+        writable: false
+        description: "R, G, B tag"
+      - id: "0x0033"
+        name: R, G, B, Alpha
+        writable: false
+        description: "R, G, B, Alpha tag"
+      - id: "0x0034"
+        name: Alpha, B, G, R
+        writable: false
+        description: "Alpha, B, G, R tag"
+      - id: "0x0064"
+        name: Cb, Y, Cr, Y (4:2:2)
+        writable: false
+        description: "Cb, Y, Cr, Y (4:2:2) tag"
+      - id: "0x0065"
+        name: Cb, Y, A, Cr, Y, A (4:2:2:4)
+        writable: false
+        description: "Cb, Y, A, Cr, Y, A (4:2:2:4) tag"
+      - id: "0x0066"
+        name: Cb, Y, Cr (4:4:4)
+        writable: false
+        description: "Cb, Y, Cr (4:4:4) tag"
+      - id: "0x0067"
+        name: Cb, Y, Cr, A (4:4:4:4)
+        writable: false
+        description: "Cb, Y, Cr, A (4:4:4:4) tag"
+      - id: "0x0096"
+        name: User-defined 2 component element
+        writable: false
+        description: "User-defined 2 component element tag"
+      - id: "0x0097"
+        name: User-defined 3 component element
+        writable: false
+        description: "User-defined 3 component element tag"
+      - id: "0x0098"
+        name: User-defined 4 component element
+        writable: false
+        description: "User-defined 4 component element tag"
+      - id: "0x0099"
+        name: User-defined 5 component element
+        writable: false
+        description: "User-defined 5 component element tag"
+      - id: "0x009A"
+        name: User-defined 6 component element
+        writable: false
+        description: "User-defined 6 component element tag"
+      - id: "0x009B"
+        name: User-defined 7 component element
+        writable: false
+        description: "User-defined 7 component element tag"
+      - id: "0x009C"
+        name: User-defined 8 component element
+        writable: false
+        description: "User-defined 8 component element tag"
+      - id: "0x0321"
+        name: TransferCharacteristic
+        writable: false
+        description: "TransferCharacteristic tag"
+      - id: "0x0001"
+        name: Printing density
+        writable: false
+        description: "Printing density tag"
+      - id: "0x0002"
+        name: Linear
+        writable: false
+        description: "Linear tag"
+      - id: "0x0003"
+        name: Logarithmic
+        writable: false
+        description: "Logarithmic tag"
+      - id: "0x0004"
+        name: Unspecified video
+        writable: false
+        description: "Unspecified video tag"
+      - id: "0x0005"
+        name: SMPTE 274M
+        writable: false
+        description: "SMPTE 274M tag"
+      - id: "0x0006"
+        name: ITU-R 709-4
+        writable: false
+        description: "ITU-R 709-4 tag"
+      - id: "0x0007"
+        name: ITU-R 601-5 system B or G (625)
+        writable: false
+        description: "ITU-R 601-5 system B or G (625) tag"
+      - id: "0x0008"
+        name: ITU-R 601-5 system M (525)
+        writable: false
+        description: "ITU-R 601-5 system M (525) tag"
+      - id: "0x0009"
+        name: Composite video (NTSC)
+        writable: false
+        description: "Composite video (NTSC) tag"
+      - id: "0x000A"
+        name: Composite video (PAL)
+        writable: false
+        description: "Composite video (PAL) tag"
+      - id: "0x000B"
+        name: Z (depth) - linear
+        writable: false
+        description: "Z (depth) - linear tag"
+      - id: "0x000C"
+        name: Z (depth) - homogeneous
+        writable: false
+        description: "Z (depth) - homogeneous tag"
+      - id: "0x000D"
+        name: SMPTE ADX
+        writable: false
+        description: "SMPTE ADX tag"
+      - id: "0x000E"
+        name: ITU-R 2020 NCL
+        writable: false
+        description: "ITU-R 2020 NCL tag"
+      - id: "0x000F"
+        name: ITU-R 2020 CL
+        writable: false
+        description: "ITU-R 2020 CL tag"
+      - id: "0x0010"
+        name: IEC 61966-2-4 xvYCC
+        writable: false
+        description: "IEC 61966-2-4 xvYCC tag"
+      - id: "0x0011"
+        name: ITU-R 2100 NCL/PQ
+        writable: false
+        description: "ITU-R 2100 NCL/PQ tag"
+      - id: "0x0012"
+        name: ITU-R 2100 ICtCp/PQ
+        writable: false
+        description: "ITU-R 2100 ICtCp/PQ tag"
+      - id: "0x0013"
+        name: ITU-R 2100 NCL/HLG
+        writable: false
+        description: "ITU-R 2100 NCL/HLG tag"
+      - id: "0x0014"
+        name: ITU-R 2100 ICtCp/HLG
+        writable: false
+        description: "ITU-R 2100 ICtCp/HLG tag"
+      - id: "0x0015"
+        name: RP 431-2:2011 Gama 2.6
+        writable: false
+        description: "RP 431-2:2011 Gama 2.6 tag"
+      - id: "0x0016"
+        name: IEC 61966-2-1 sRGB
+        writable: false
+        description: "IEC 61966-2-1 sRGB tag"
+      - id: "0x0322"
+        name: ColorimetricSpecification
+        writable: false
+        description: "ColorimetricSpecification tag"
+      - id: "0x0001"
+        name: Printing density
+        writable: false
+        description: "Printing density tag"
+      - id: "0x0004"
+        name: Unspecified video
+        writable: false
+        description: "Unspecified video tag"
+      - id: "0x0005"
+        name: SMPTE 274M
+        writable: false
+        description: "SMPTE 274M tag"
+      - id: "0x0006"
+        name: ITU-R 709-4
+        writable: false
+        description: "ITU-R 709-4 tag"
+      - id: "0x0007"
+        name: ITU-R 601-5 system B or G (625)
+        writable: false
+        description: "ITU-R 601-5 system B or G (625) tag"
+      - id: "0x0008"
+        name: ITU-R 601-5 system M (525)
+        writable: false
+        description: "ITU-R 601-5 system M (525) tag"
+      - id: "0x0009"
+        name: Composite video (NTSC)
+        writable: false
+        description: "Composite video (NTSC) tag"
+      - id: "0x000A"
+        name: Composite video (PAL)
+        writable: false
+        description: "Composite video (PAL) tag"
+      - id: "0x000D"
+        name: SMPTE ADX
+        writable: false
+        description: "SMPTE ADX tag"
+      - id: "0x000E"
+        name: ITU-R 2020
+        writable: false
+        description: "ITU-R 2020 tag"
+      - id: "0x000F"
+        name: P3D65
+        writable: false
+        description: "P3D65 tag"
+      - id: "0x0010"
+        name: P3DCI
+        writable: false
+        description: "P3DCI tag"
+      - id: "0x0011"
+        name: P3D60
+        writable: false
+        description: "P3D60 tag"
+      - id: "0x0012"
+        name: ACES
+        writable: false
+        description: "ACES tag"
+      - id: "0x0323"
+        name: BitDepth
+        writable: false
+        description: "BitDepth tag"
+      - id: "0x0334"
+        name: ImageDescription
+        writable: false
+        description: "ImageDescription tag"
+      - id: "0x037C"
+        name: Image2Description
+        writable: false
+        description: "Image2Description tag"
+      - id: "0x03C4"
+        name: Image3Description
+        writable: false
+        description: "Image3Description tag"
+      - id: "0x040C"
+        name: Image4Description
+        writable: false
+        description: "Image4Description tag"
+      - id: "0x0454"
+        name: Image5Description
+        writable: false
+        description: "Image5Description tag"
+      - id: "0x049C"
+        name: Image6Description
+        writable: false
+        description: "Image6Description tag"
+      - id: "0x04E4"
+        name: Image7Description
+        writable: false
+        description: "Image7Description tag"
+      - id: "0x052C"
+        name: Image8Description
+        writable: false
+        description: "Image8Description tag"
+      - id: "0x0598"
+        name: SourceFileName
+        writable: false
+        description: "SourceFileName tag"
+      - id: "0x05FC"
+        name: SourceCreateDate
+        writable: false
+        description: "SourceCreateDate tag"
+      - id: "0x0614"
+        name: InputDeviceName
+        writable: false
+        description: "InputDeviceName tag"
+      - id: "0x0634"
+        name: InputDeviceSerialNumber
+        writable: false
+        description: "InputDeviceSerialNumber tag"
+      - id: "0x065C"
+        name: AspectRatio
+        writable: false
+        description: "AspectRatio tag"
+      - id: "0x06BC"
+        name: OriginalFrameRate
+        writable: false
+        description: "OriginalFrameRate tag"
+      - id: "0x06C0"
+        name: ShutterAngle
+        writable: false
+        description: "ShutterAngle tag"
+      - id: "0x06C4"
+        name: FrameID
+        writable: false
+        description: "FrameID tag"
+      - id: "0x06E4"
+        name: SlateInformation
+        writable: false
+        description: "SlateInformation tag"
+      - id: "0x0780"
+        name: TimeCode
+        writable: false
+        description: "TimeCode tag"
+      - id: "0x0794"
+        name: FrameRate
+        writable: false
+        description: "FrameRate tag"
+      - id: "0x07B4"
+        name: Reserved5
+        writable: false
+        description: "Reserved5 tag"
+      - id: "0x0800"
+        name: UserID
+        writable: false
+        description: "UserID tag"
+  - name: FLIF::Main
+    tags:
+      - id: "0x0000"
+        name: ImageType
+        writable: false
+        description: "ImageType tag"
+      - id: "0x0001"
+        name: BitDepth
+        writable: false
+        description: "BitDepth tag"
+      - id: "0x0002"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x0003"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x0004"
+        name: AnimationFrames
+        writable: false
+        description: "AnimationFrames tag"
+      - id: "0x0005"
+        name: Encoding
+        writable: false
+        description: "Encoding tag"
+  - name: GIF::Animation
+    tags:
+      - id: "0x0001"
+        name: AnimationIterations
+        writable: false
+        description: "AnimationIterations tag"
+  - name: GIF::Extensions
+    tags:
+      - id: "0xF6BB"
+        name: XMP
+        writable: false
+        description: "XMP tag"
+      - id: "0x7E30"
+        name: ICC_Profile
+        writable: false
+        description: "ICC_Profile tag"
+      - id: "0x7826"
+        name: MIDIControl
+        writable: false
+        description: "MIDIControl tag"
+      - id: "0x2ED5"
+        name: MIDISong
+        writable: false
+        description: "MIDISong tag"
+      - id: "0x6F6A"
+        name: JUMBF
+        writable: false
+        description: "JUMBF tag"
+  - name: GIF::MIDIControl
+    tags:
+      - id: "0x0000"
+        name: MIDIControlVersion
+        writable: false
+        description: "MIDIControlVersion tag"
+      - id: "0x0001"
+        name: SequenceNumber
+        writable: false
+        description: "SequenceNumber tag"
+      - id: "0x0002"
+        name: MelodicPolyphony
+        writable: false
+        description: "MelodicPolyphony tag"
+      - id: "0x0003"
+        name: PercussivePolyphony
+        writable: false
+        description: "PercussivePolyphony tag"
+      - id: "0x0004"
+        name: ChannelUsage
+        writable: false
+        description: "ChannelUsage tag"
+      - id: "0x0006"
+        name: DelayTime
+        writable: false
+        description: "DelayTime tag"
+  - name: GIF::Screen
+    tags:
+      - id: "0x0000"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x0002"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x0005"
+        name: BackgroundColor
+        writable: false
+        description: "BackgroundColor tag"
+      - id: "0x0006"
+        name: PixelAspectRatio
+        writable: false
+        description: "PixelAspectRatio tag"
+  - name: ICO::IconDir
+    tags:
+      - id: "0x0000"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x0001"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x0002"
+        name: NumColors
+        writable: false
+        description: "NumColors tag"
+      - id: "0x0008"
+        name: ImageLength
+        writable: false
+        description: "ImageLength tag"
+  - name: ICO::Main
+    tags:
+      - id: "0x0002"
+        name: ImageType
+        writable: false
+        description: "ImageType tag"
+      - id: "0x0004"
+        name: ImageCount
+        writable: false
+        description: "ImageCount tag"
+      - id: "0x0006"
+        name: IconDir
+        writable: false
+        description: "IconDir tag"
+  - name: JPEG::AVI1
+    tags:
+      - id: "0x0000"
+        name: InterleavedField
+        writable: false
+        description: "InterleavedField tag"
+      - id: "0x0001"
+        name: Odd
+        writable: false
+        description: "Odd tag"
+      - id: "0x0002"
+        name: Even
+        writable: false
+        description: "Even tag"
+  - name: JPEG::Adobe
+    tags:
+      - id: "0x0000"
+        name: DCTEncodeVersion
+        writable: false
+        description: "DCTEncodeVersion tag"
+      - id: "0x0001"
+        name: APP14Flags0
+        writable: false
+        description: "APP14Flags0 tag"
+      - id: "0x0002"
+        name: APP14Flags1
+        writable: false
+        description: "APP14Flags1 tag"
+      - id: "0x0003"
+        name: ColorTransform
+        writable: false
+        description: "ColorTransform tag"
+      - id: "0x0001"
+        name: YCbCr
+        writable: false
+        description: "YCbCr tag"
+      - id: "0x0002"
+        name: YCCK
+        writable: false
+        description: "YCCK tag"
+  - name: JPEG::AdobeCM
+    tags:
+      - id: "0x0000"
+        name: AdobeCMType
+        writable: false
+        description: "AdobeCMType tag"
+  - name: JPEG::EPPIM
+    tags:
+      - id: "0xC4A5"
+        name: PrintIM
+        writable: false
+        description: "PrintIM tag"
+  - name: JPEG::HDRGainInfo
+    tags:
+      - id: "0x0006"
+        name: HDRGainCurveSize
+        writable: false
+        description: "HDRGainCurveSize tag"
+      - id: "0x000A"
+        name: HDRGainCurve
+        writable: false
+        description: "HDRGainCurve tag"
+  - name: JPEG::JPS
+    tags:
+      - id: "0x000A"
+        name: JPSSeparation
+        writable: false
+        description: "JPSSeparation tag"
+      - id: "0x0008"
+        name: HdrLength
+        writable: false
+        description: "HdrLength tag"
+      - id: "0x000B"
+        name: JPSFlags
+        writable: false
+        description: "JPSFlags tag"
+      - id: "0x0001"
+        name: Half width
+        writable: false
+        description: "Half width tag"
+      - id: "0x0002"
+        name: Left field first
+        writable: false
+        description: "Left field first tag"
+      - id: "0x0001"
+        name: Left Eye
+        writable: false
+        description: "Left Eye tag"
+      - id: "0x0002"
+        name: Right Eye
+        writable: false
+        description: "Right Eye tag"
+      - id: "0x0002"
+        name: Side By Side
+        writable: false
+        description: "Side By Side tag"
+      - id: "0x0003"
+        name: Over Under
+        writable: false
+        description: "Over Under tag"
+      - id: "0x0004"
+        name: Anaglyph
+        writable: false
+        description: "Anaglyph tag"
+      - id: "0x000D"
+        name: JPSType
+        writable: false
+        description: "JPSType tag"
+      - id: "0x0010"
+        name: JPSComment
+        writable: false
+        description: "JPSComment tag"
+  - name: JPEG::NITF
+    tags:
+      - id: "0x0000"
+        name: NITFVersion
+        writable: false
+        description: "NITFVersion tag"
+      - id: "0x0002"
+        name: ImageFormat
+        writable: false
+        description: "ImageFormat tag"
+      - id: "0x0003"
+        name: BlocksPerRow
+        writable: false
+        description: "BlocksPerRow tag"
+      - id: "0x0005"
+        name: BlocksPerColumn
+        writable: false
+        description: "BlocksPerColumn tag"
+      - id: "0x0007"
+        name: ImageColor
+        writable: false
+        description: "ImageColor tag"
+      - id: "0x0008"
+        name: BitDepth
+        writable: false
+        description: "BitDepth tag"
+      - id: "0x0009"
+        name: ImageClass
+        writable: false
+        description: "ImageClass tag"
+      - id: "0x0004"
+        name: Tactical Imagery
+        writable: false
+        description: "Tactical Imagery tag"
+      - id: "0x000A"
+        name: JPEGProcess
+        writable: false
+        description: "JPEGProcess tag"
+      - id: "0x0004"
+        name: Extended sequential DCT, Huffman coding, 12-bit samples
+        writable: false
+        description: "Extended sequential DCT, Huffman coding, 12-bit samples tag"
+      - id: "0x000B"
+        name: Quality
+        writable: false
+        description: "Quality tag"
+      - id: "0x000C"
+        name: StreamColor
+        writable: false
+        description: "StreamColor tag"
+      - id: "0x000D"
+        name: StreamBitDepth
+        writable: false
+        description: "StreamBitDepth tag"
+      - id: "0x000E"
+        name: Flags
+        writable: false
+        description: "Flags tag"
+  - name: JPEG::SPIFF
+    tags:
+      - id: "0x0000"
+        name: SPIFFVersion
+        writable: false
+        description: "SPIFFVersion tag"
+      - id: "0x0002"
+        name: ProfileID
+        writable: false
+        description: "ProfileID tag"
+      - id: "0x0001"
+        name: Continuous-tone Base
+        writable: false
+        description: "Continuous-tone Base tag"
+      - id: "0x0002"
+        name: Continuous-tone Progressive
+        writable: false
+        description: "Continuous-tone Progressive tag"
+      - id: "0x0003"
+        name: Bi-level Facsimile
+        writable: false
+        description: "Bi-level Facsimile tag"
+      - id: "0x0004"
+        name: Continuous-tone Facsimile
+        writable: false
+        description: "Continuous-tone Facsimile tag"
+      - id: "0x0003"
+        name: ColorComponents
+        writable: false
+        description: "ColorComponents tag"
+      - id: "0x0006"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x000A"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x000E"
+        name: ColorSpace
+        writable: false
+        description: "ColorSpace tag"
+      - id: "0x0001"
+        name: YCbCr, ITU-R BT 709, video
+        writable: false
+        description: "YCbCr, ITU-R BT 709, video tag"
+      - id: "0x0002"
+        name: No color space specified
+        writable: false
+        description: "No color space specified tag"
+      - id: "0x0003"
+        name: YCbCr, ITU-R BT 601-1, RGB
+        writable: false
+        description: "YCbCr, ITU-R BT 601-1, RGB tag"
+      - id: "0x0004"
+        name: YCbCr, ITU-R BT 601-1, video
+        writable: false
+        description: "YCbCr, ITU-R BT 601-1, video tag"
+      - id: "0x0008"
+        name: Gray-scale
+        writable: false
+        description: "Gray-scale tag"
+      - id: "0x0009"
+        name: PhotoYCC
+        writable: false
+        description: "PhotoYCC tag"
+      - id: "0x000A"
+        name: RGB
+        writable: false
+        description: "RGB tag"
+      - id: "0x000B"
+        name: CMY
+        writable: false
+        description: "CMY tag"
+      - id: "0x000C"
+        name: CMYK
+        writable: false
+        description: "CMYK tag"
+      - id: "0x000D"
+        name: YCCK
+        writable: false
+        description: "YCCK tag"
+      - id: "0x000E"
+        name: CIELab
+        writable: false
+        description: "CIELab tag"
+      - id: "0x000F"
+        name: BitsPerSample
+        writable: false
+        description: "BitsPerSample tag"
+      - id: "0x0010"
+        name: Compression
+        writable: false
+        description: "Compression tag"
+      - id: "0x0001"
+        name: Modified Huffman
+        writable: false
+        description: "Modified Huffman tag"
+      - id: "0x0002"
+        name: Modified READ
+        writable: false
+        description: "Modified READ tag"
+      - id: "0x0003"
+        name: Modified Modified READ
+        writable: false
+        description: "Modified Modified READ tag"
+      - id: "0x0004"
+        name: JBIG
+        writable: false
+        description: "JBIG tag"
+      - id: "0x0005"
+        name: JPEG
+        writable: false
+        description: "JPEG tag"
+      - id: "0x0011"
+        name: ResolutionUnit
+        writable: false
+        description: "ResolutionUnit tag"
+      - id: "0x0001"
+        name: inches
+        writable: false
+        description: "inches tag"
+      - id: "0x0002"
+        name: cm
+        writable: false
+        description: "cm tag"
+      - id: "0x0012"
+        name: YResolution
+        writable: false
+        description: "YResolution tag"
+      - id: "0x0016"
+        name: XResolution
+        writable: false
+        description: "XResolution tag"
+  - name: MIFF::Main
+    tags:
+      - id: "0xF2B4"
+        name: EXIF_Profile
+        writable: false
+        description: "EXIF_Profile tag"
+      - id: "0x9865"
+        name: ICC_Profile
+        writable: false
+        description: "ICC_Profile tag"
+      - id: "0xA77A"
+        name: IPTC_Profile
+        writable: false
+        description: "IPTC_Profile tag"
+      - id: "0xD1F7"
+        name: XMP_Profile
+        writable: false
+        description: "XMP_Profile tag"
+  - name: MNG::Background
+    tags:
+      - id: "0x0000"
+        name: BackgroundColor
+        writable: false
+        description: "BackgroundColor tag"
+      - id: "0x0006"
+        name: MandatoryBackground
+        writable: false
+        description: "MandatoryBackground tag"
+      - id: "0x0001"
+        name: Color Mandatory, Image Advisory
+        writable: false
+        description: "Color Mandatory, Image Advisory tag"
+      - id: "0x0002"
+        name: Color Advisory, Image Mandatory
+        writable: false
+        description: "Color Advisory, Image Mandatory tag"
+      - id: "0x0003"
+        name: Color and Image Mandatory
+        writable: false
+        description: "Color and Image Mandatory tag"
+      - id: "0x0007"
+        name: BackgroundImageID
+        writable: false
+        description: "BackgroundImageID tag"
+      - id: "0x0009"
+        name: BackgroundTiling
+        writable: false
+        description: "BackgroundTiling tag"
+  - name: MNG::BasisObject
+    tags:
+      - id: "0x0000"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x0004"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x0008"
+        name: BitDepth
+        writable: false
+        description: "BitDepth tag"
+      - id: "0x0009"
+        name: ColorType
+        writable: false
+        description: "ColorType tag"
+      - id: "0x0002"
+        name: RGB
+        writable: false
+        description: "RGB tag"
+      - id: "0x0003"
+        name: Palette
+        writable: false
+        description: "Palette tag"
+      - id: "0x0004"
+        name: Grayscale with Alpha
+        writable: false
+        description: "Grayscale with Alpha tag"
+      - id: "0x0006"
+        name: RGB with Alpha
+        writable: false
+        description: "RGB with Alpha tag"
+      - id: "0x000A"
+        name: Compression
+        writable: false
+        description: "Compression tag"
+      - id: "0x000B"
+        name: Filter
+        writable: false
+        description: "Filter tag"
+      - id: "0x000C"
+        name: Interlace
+        writable: false
+        description: "Interlace tag"
+      - id: "0x000D"
+        name: RedSample
+        writable: false
+        description: "RedSample tag"
+      - id: "0x0011"
+        name: GreenSample
+        writable: false
+        description: "GreenSample tag"
+      - id: "0x0015"
+        name: BlueSample
+        writable: false
+        description: "BlueSample tag"
+      - id: "0x0019"
+        name: AlphaSample
+        writable: false
+        description: "AlphaSample tag"
+      - id: "0x001A"
+        name: Viewable
+        writable: false
+        description: "Viewable tag"
+  - name: MNG::ClipObjects
+    tags:
+      - id: "0x0000"
+        name: FirstObject
+        writable: false
+        description: "FirstObject tag"
+      - id: "0x0002"
+        name: LastObject
+        writable: false
+        description: "LastObject tag"
+      - id: "0x0004"
+        name: DeltaType
+        writable: false
+        description: "DeltaType tag"
+      - id: "0x0005"
+        name: ClipBoundary
+        writable: false
+        description: "ClipBoundary tag"
+  - name: MNG::CloneObject
+    tags:
+      - id: "0x0000"
+        name: SourceID
+        writable: false
+        description: "SourceID tag"
+      - id: "0x0002"
+        name: CloneID
+        writable: false
+        description: "CloneID tag"
+      - id: "0x0004"
+        name: CloneType
+        writable: false
+        description: "CloneType tag"
+      - id: "0x0005"
+        name: DoNotShow
+        writable: false
+        description: "DoNotShow tag"
+      - id: "0x0006"
+        name: ConcreteFlag
+        writable: false
+        description: "ConcreteFlag tag"
+      - id: "0x0007"
+        name: LocalDeltaType
+        writable: false
+        description: "LocalDeltaType tag"
+      - id: "0x0008"
+        name: DeltaXY
+        writable: false
+        description: "DeltaXY tag"
+  - name: MNG::DefineObject
+    tags:
+      - id: "0x0000"
+        name: ObjectID
+        writable: false
+        description: "ObjectID tag"
+      - id: "0x0002"
+        name: DoNotShow
+        writable: false
+        description: "DoNotShow tag"
+      - id: "0x0003"
+        name: ConcreteFlag
+        writable: false
+        description: "ConcreteFlag tag"
+      - id: "0x0004"
+        name: XYLocation
+        writable: false
+        description: "XYLocation tag"
+      - id: "0x000C"
+        name: ClippingBoundary
+        writable: false
+        description: "ClippingBoundary tag"
+  - name: MNG::DeltaPNGHeader
+    tags:
+      - id: "0x0000"
+        name: ObjectID
+        writable: false
+        description: "ObjectID tag"
+      - id: "0x0002"
+        name: ImageType
+        writable: false
+        description: "ImageType tag"
+      - id: "0x0001"
+        name: PNG
+        writable: false
+        description: "PNG tag"
+      - id: "0x0002"
+        name: JNG
+        writable: false
+        description: "JNG tag"
+      - id: "0x0003"
+        name: DeltaType
+        writable: false
+        description: "DeltaType tag"
+      - id: "0x0001"
+        name: Pixel Addition
+        writable: false
+        description: "Pixel Addition tag"
+      - id: "0x0002"
+        name: Alpha Addition
+        writable: false
+        description: "Alpha Addition tag"
+      - id: "0x0003"
+        name: Color Addition
+        writable: false
+        description: "Color Addition tag"
+      - id: "0x0004"
+        name: Pixel Replacement
+        writable: false
+        description: "Pixel Replacement tag"
+      - id: "0x0005"
+        name: Alpha Replacement
+        writable: false
+        description: "Alpha Replacement tag"
+      - id: "0x0006"
+        name: Color Replacement
+        writable: false
+        description: "Color Replacement tag"
+      - id: "0x0007"
+        name: No Change
+        writable: false
+        description: "No Change tag"
+      - id: "0x0004"
+        name: BlockSize
+        writable: false
+        description: "BlockSize tag"
+      - id: "0x000C"
+        name: BlockLocation
+        writable: false
+        description: "BlockLocation tag"
+  - name: MNG::ExportImage
+    tags:
+      - id: "0x0000"
+        name: SnapshotID
+        writable: false
+        description: "SnapshotID tag"
+      - id: "0x0002"
+        name: SnapshotName
+        writable: false
+        description: "SnapshotName tag"
+  - name: MNG::FramePriority
+    tags:
+      - id: "0x0000"
+        name: DeltaType
+        writable: false
+        description: "DeltaType tag"
+      - id: "0x0002"
+        name: Priority
+        writable: false
+        description: "Priority tag"
+  - name: MNG::JNGHeader
+    tags:
+      - id: "0x0000"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x0004"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x0008"
+        name: ColorType
+        writable: false
+        description: "ColorType tag"
+      - id: "0x000A"
+        name: Color
+        writable: false
+        description: "Color tag"
+      - id: "0x000C"
+        name: Gray Alpha
+        writable: false
+        description: "Gray Alpha tag"
+      - id: "0x000E"
+        name: Color Alpha
+        writable: false
+        description: "Color Alpha tag"
+      - id: "0x0009"
+        name: BitDepth
+        writable: false
+        description: "BitDepth tag"
+      - id: "0x000A"
+        name: Compression
+        writable: false
+        description: "Compression tag"
+      - id: "0x000B"
+        name: Interlace
+        writable: false
+        description: "Interlace tag"
+      - id: "0x000C"
+        name: AlphaBitDepth
+        writable: false
+        description: "AlphaBitDepth tag"
+      - id: "0x000D"
+        name: AlphaCompression
+        writable: false
+        description: "AlphaCompression tag"
+      - id: "0x0008"
+        name: JNG 8-bit Grayscale JDAA
+        writable: false
+        description: "JNG 8-bit Grayscale JDAA tag"
+      - id: "0x000E"
+        name: AlphaFilter
+        writable: false
+        description: "AlphaFilter tag"
+      - id: "0x000F"
+        name: AlphaInterlace
+        writable: false
+        description: "AlphaInterlace tag"
+  - name: MNG::Loop
+    tags:
+      - id: "0x0000"
+        name: NestLevel
+        writable: false
+        description: "NestLevel tag"
+      - id: "0x0001"
+        name: IterationCount
+        writable: false
+        description: "IterationCount tag"
+      - id: "0x0005"
+        name: TerminationCondition
+        writable: false
+        description: "TerminationCondition tag"
+      - id: "0x0001"
+        name: Decoder discretion, not cacheable
+        writable: false
+        description: "Decoder discretion, not cacheable tag"
+      - id: "0x0002"
+        name: User discretion, not cacheable
+        writable: false
+        description: "User discretion, not cacheable tag"
+      - id: "0x0003"
+        name: External signal, not cacheable
+        writable: false
+        description: "External signal, not cacheable tag"
+      - id: "0x0004"
+        name: Deterministic, cacheable
+        writable: false
+        description: "Deterministic, cacheable tag"
+      - id: "0x0005"
+        name: Decoder discretion, cacheable
+        writable: false
+        description: "Decoder discretion, cacheable tag"
+      - id: "0x0006"
+        name: User discretion, cacheable
+        writable: false
+        description: "User discretion, cacheable tag"
+      - id: "0x0007"
+        name: External signal, cacheable
+        writable: false
+        description: "External signal, cacheable tag"
+      - id: "0x0006"
+        name: IterationMinMax
+        writable: false
+        description: "IterationMinMax tag"
+      - id: "0x000E"
+        name: SignalNumber
+        writable: false
+        description: "SignalNumber tag"
+  - name: MNG::MNGHeader
+    tags:
+      - id: "0x0000"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x0001"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x0002"
+        name: TicksPerSecond
+        writable: false
+        description: "TicksPerSecond tag"
+      - id: "0x0003"
+        name: NominalLayerCount
+        writable: false
+        description: "NominalLayerCount tag"
+      - id: "0x0004"
+        name: NominalFrameCount
+        writable: false
+        description: "NominalFrameCount tag"
+      - id: "0x0005"
+        name: NominalPlayTime
+        writable: false
+        description: "NominalPlayTime tag"
+      - id: "0x0006"
+        name: SimplicityProfile
+        writable: false
+        description: "SimplicityProfile tag"
+  - name: MNG::MagnifyObject
+    tags:
+      - id: "0x0000"
+        name: FirstObjectID
+        writable: false
+        description: "FirstObjectID tag"
+      - id: "0x0002"
+        name: LastObjectID
+        writable: false
+        description: "LastObjectID tag"
+      - id: "0x0004"
+        name: XMethod
+        writable: false
+        description: "XMethod tag"
+      - id: "0x0005"
+        name: XMag
+        writable: false
+        description: "XMag tag"
+      - id: "0x0007"
+        name: YMag
+        writable: false
+        description: "YMag tag"
+      - id: "0x0009"
+        name: LeftMag
+        writable: false
+        description: "LeftMag tag"
+      - id: "0x000B"
+        name: RightMag
+        writable: false
+        description: "RightMag tag"
+      - id: "0x000D"
+        name: TopMag
+        writable: false
+        description: "TopMag tag"
+      - id: "0x000F"
+        name: BottomMag
+        writable: false
+        description: "BottomMag tag"
+      - id: "0x0011"
+        name: YMethod
+        writable: false
+        description: "YMethod tag"
+  - name: MNG::MoveObjects
+    tags:
+      - id: "0x0000"
+        name: FirstObject
+        writable: false
+        description: "FirstObject tag"
+      - id: "0x0002"
+        name: LastObject
+        writable: false
+        description: "LastObject tag"
+      - id: "0x0004"
+        name: DeltaType
+        writable: false
+        description: "DeltaType tag"
+      - id: "0x0005"
+        name: DeltaXY
+        writable: false
+        description: "DeltaXY tag"
+  - name: MNG::PasteImage
+    tags:
+      - id: "0x0000"
+        name: DestinationID
+        writable: false
+        description: "DestinationID tag"
+      - id: "0x0002"
+        name: TargetDeltaType
+        writable: false
+        description: "TargetDeltaType tag"
+      - id: "0x0003"
+        name: TargetXY
+        writable: false
+        description: "TargetXY tag"
+      - id: "0x000B"
+        name: SourceID
+        writable: false
+        description: "SourceID tag"
+      - id: "0x000D"
+        name: CompositionMode
+        writable: false
+        description: "CompositionMode tag"
+      - id: "0x000E"
+        name: Orientation
+        writable: false
+        description: "Orientation tag"
+      - id: "0x0002"
+        name: Flipped left-right, then up-down
+        writable: false
+        description: "Flipped left-right, then up-down tag"
+      - id: "0x0004"
+        name: Flipped left-right
+        writable: false
+        description: "Flipped left-right tag"
+      - id: "0x0006"
+        name: Flipped up-down
+        writable: false
+        description: "Flipped up-down tag"
+      - id: "0x0008"
+        name: Tiled
+        writable: false
+        description: "Tiled tag"
+      - id: "0x000F"
+        name: OffsetOrigin
+        writable: false
+        description: "OffsetOrigin tag"
+      - id: "0x0010"
+        name: OffsetXY
+        writable: false
+        description: "OffsetXY tag"
+      - id: "0x0018"
+        name: BoundaryOrigin
+        writable: false
+        description: "BoundaryOrigin tag"
+      - id: "0x0019"
+        name: PastClippingBoundary
+        writable: false
+        description: "PastClippingBoundary tag"
+  - name: MNG::PromoteParent
+    tags:
+      - id: "0x0000"
+        name: NewColorType
+        writable: false
+        description: "NewColorType tag"
+      - id: "0x0001"
+        name: NewBitDepth
+        writable: false
+        description: "NewBitDepth tag"
+      - id: "0x0002"
+        name: FillMethod
+        writable: false
+        description: "FillMethod tag"
+  - name: MNG::ShowObjects
+    tags:
+      - id: "0x0000"
+        name: FirstObject
+        writable: false
+        description: "FirstObject tag"
+      - id: "0x0002"
+        name: LastObject
+        writable: false
+        description: "LastObject tag"
+      - id: "0x0004"
+        name: ShowMode
+        writable: false
+        description: "ShowMode tag"
+  - name: MNG::TerminationAction
+    tags:
+      - id: "0x0000"
+        name: TerminationAction
+        writable: false
+        description: "TerminationAction tag"
+      - id: "0x0001"
+        name: Display Nothing
+        writable: false
+        description: "Display Nothing tag"
+      - id: "0x0002"
+        name: Show First Frame
+        writable: false
+        description: "Show First Frame tag"
+      - id: "0x0003"
+        name: Repeat Sequence
+        writable: false
+        description: "Repeat Sequence tag"
+      - id: "0x0001"
+        name: IterationEndAction
+        writable: false
+        description: "IterationEndAction tag"
+      - id: "0x0001"
+        name: Display Nothing
+        writable: false
+        description: "Display Nothing tag"
+      - id: "0x0002"
+        name: Show First Frame
+        writable: false
+        description: "Show First Frame tag"
+      - id: "0x0002"
+        name: Delay
+        writable: false
+        description: "Delay tag"
+      - id: "0x0006"
+        name: IterationMax
+        writable: false
+        description: "IterationMax tag"
+  - name: OpenEXR::Main
+    tags:
+      - id: "0x000A"
+        name: Long names
+        writable: false
+        description: "Long names tag"
+      - id: "0x000B"
+        name: Deep data
+        writable: false
+        description: "Deep data tag"
+      - id: "0x000C"
+        name: Multipart
+        writable: false
+        description: "Multipart tag"
+      - id: "0x0001"
+        name: RLE
+        writable: false
+        description: "RLE tag"
+      - id: "0x0002"
+        name: ZIPS
+        writable: false
+        description: "ZIPS tag"
+      - id: "0x0003"
+        name: ZIP
+        writable: false
+        description: "ZIP tag"
+      - id: "0x0004"
+        name: PIZ
+        writable: false
+        description: "PIZ tag"
+      - id: "0x0005"
+        name: PXR24
+        writable: false
+        description: "PXR24 tag"
+      - id: "0x0006"
+        name: B44
+        writable: false
+        description: "B44 tag"
+      - id: "0x0007"
+        name: B44A
+        writable: false
+        description: "B44A tag"
+      - id: "0x0001"
+        name: Cube
+        writable: false
+        description: "Cube tag"
+      - id: "0x0001"
+        name: Decreasing Y
+        writable: false
+        description: "Decreasing Y tag"
+      - id: "0x0002"
+        name: Random Y
+        writable: false
+        description: "Random Y tag"
+  - name: PCX::Main
+    tags:
+      - id: "0x0000"
+        name: Manufacturer
+        writable: false
+        description: "Manufacturer tag"
+      - id: "0x0001"
+        name: Software
+        writable: false
+        description: "Software tag"
+      - id: "0x0002"
+        name: PC Paintbrush 2.8 (with palette)
+        writable: false
+        description: "PC Paintbrush 2.8 (with palette) tag"
+      - id: "0x0003"
+        name: PC Paintbrush 2.8 (without palette)
+        writable: false
+        description: "PC Paintbrush 2.8 (without palette) tag"
+      - id: "0x0004"
+        name: PC Paintbrush for Windows
+        writable: false
+        description: "PC Paintbrush for Windows tag"
+      - id: "0x0005"
+        name: PC Paintbrush 3.0+
+        writable: false
+        description: "PC Paintbrush 3.0+ tag"
+      - id: "0x0002"
+        name: Encoding
+        writable: false
+        description: "Encoding tag"
+      - id: "0x0003"
+        name: BitsPerPixel
+        writable: false
+        description: "BitsPerPixel tag"
+      - id: "0x0004"
+        name: LeftMargin
+        writable: false
+        description: "LeftMargin tag"
+      - id: "0x0006"
+        name: TopMargin
+        writable: false
+        description: "TopMargin tag"
+      - id: "0x0008"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x000A"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x000C"
+        name: XResolution
+        writable: false
+        description: "XResolution tag"
+      - id: "0x000E"
+        name: YResolution
+        writable: false
+        description: "YResolution tag"
+      - id: "0x0041"
+        name: ColorPlanes
+        writable: false
+        description: "ColorPlanes tag"
+      - id: "0x0042"
+        name: BytesPerLine
+        writable: false
+        description: "BytesPerLine tag"
+      - id: "0x0044"
+        name: ColorMode
+        writable: false
+        description: "ColorMode tag"
+      - id: "0x0001"
+        name: Color Palette
+        writable: false
+        description: "Color Palette tag"
+      - id: "0x0002"
+        name: Grayscale
+        writable: false
+        description: "Grayscale tag"
+      - id: "0x0046"
+        name: ScreenWidth
+        writable: false
+        description: "ScreenWidth tag"
+      - id: "0x0048"
+        name: ScreenHeight
+        writable: false
+        description: "ScreenHeight tag"
+  - name: PGF::Main
+    tags:
+      - id: "0x0003"
+        name: PGFVersion
+        writable: false
+        description: "PGFVersion tag"
+      - id: "0x0008"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x000C"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x0010"
+        name: PyramidLevels
+        writable: false
+        description: "PyramidLevels tag"
+      - id: "0x0011"
+        name: Quality
+        writable: false
+        description: "Quality tag"
+      - id: "0x0012"
+        name: BitsPerPixel
+        writable: false
+        description: "BitsPerPixel tag"
+      - id: "0x0013"
+        name: ColorComponents
+        writable: false
+        description: "ColorComponents tag"
+      - id: "0x0014"
+        name: ColorMode
+        writable: false
+        description: "ColorMode tag"
+      - id: "0x0001"
+        name: Grayscale
+        writable: false
+        description: "Grayscale tag"
+      - id: "0x0002"
+        name: Indexed
+        writable: false
+        description: "Indexed tag"
+      - id: "0x0003"
+        name: RGB
+        writable: false
+        description: "RGB tag"
+      - id: "0x0004"
+        name: CMYK
+        writable: false
+        description: "CMYK tag"
+      - id: "0x0007"
+        name: Multichannel
+        writable: false
+        description: "Multichannel tag"
+      - id: "0x0008"
+        name: Duotone
+        writable: false
+        description: "Duotone tag"
+      - id: "0x0009"
+        name: Lab
+        writable: false
+        description: "Lab tag"
+      - id: "0x0015"
+        name: BackgroundColor
+        writable: false
+        description: "BackgroundColor tag"
+  - name: PICT::Main
+    tags:
+      - id: "0x0000"
+        name: Nop
+        writable: false
+        description: "Nop tag"
+      - id: "0x0001"
+        name: ClipRgn
+        writable: false
+        description: "ClipRgn tag"
+      - id: "0x0002"
+        name: BkPat
+        writable: false
+        description: "BkPat tag"
+      - id: "0x0003"
+        name: TxFont
+        writable: false
+        description: "TxFont tag"
+      - id: "0x0004"
+        name: TxFace
+        writable: false
+        description: "TxFace tag"
+      - id: "0x0005"
+        name: TxMode
+        writable: false
+        description: "TxMode tag"
+      - id: "0x0006"
+        name: SpExtra
+        writable: false
+        description: "SpExtra tag"
+      - id: "0x0007"
+        name: PnSize
+        writable: false
+        description: "PnSize tag"
+      - id: "0x0008"
+        name: PnMode
+        writable: false
+        description: "PnMode tag"
+      - id: "0x0009"
+        name: PnPat
+        writable: false
+        description: "PnPat tag"
+      - id: "0x000A"
+        name: FillPat
+        writable: false
+        description: "FillPat tag"
+      - id: "0x000B"
+        name: OvSize
+        writable: false
+        description: "OvSize tag"
+      - id: "0x000C"
+        name: Origin
+        writable: false
+        description: "Origin tag"
+      - id: "0x000D"
+        name: TxSize
+        writable: false
+        description: "TxSize tag"
+      - id: "0x000E"
+        name: FgColor
+        writable: false
+        description: "FgColor tag"
+      - id: "0x000F"
+        name: BkColor
+        writable: false
+        description: "BkColor tag"
+      - id: "0x0010"
+        name: TxRatio
+        writable: false
+        description: "TxRatio tag"
+      - id: "0x0011"
+        name: VersionOp
+        writable: false
+        description: "VersionOp tag"
+      - id: "0x0012"
+        name: BkPixPat
+        writable: false
+        description: "BkPixPat tag"
+      - id: "0x0013"
+        name: PnPixPat
+        writable: false
+        description: "PnPixPat tag"
+      - id: "0x0014"
+        name: FillPixPat
+        writable: false
+        description: "FillPixPat tag"
+      - id: "0x0015"
+        name: PnLocHFrac
+        writable: false
+        description: "PnLocHFrac tag"
+      - id: "0x0016"
+        name: ChExtra
+        writable: false
+        description: "ChExtra tag"
+      - id: "0x0017"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x001A"
+        name: RGBFgCol
+        writable: false
+        description: "RGBFgCol tag"
+      - id: "0x001B"
+        name: RGBBkCol
+        writable: false
+        description: "RGBBkCol tag"
+      - id: "0x001C"
+        name: HiliteMode
+        writable: false
+        description: "HiliteMode tag"
+      - id: "0x001D"
+        name: HiliteColor
+        writable: false
+        description: "HiliteColor tag"
+      - id: "0x001E"
+        name: DefHilite
+        writable: false
+        description: "DefHilite tag"
+      - id: "0x001F"
+        name: OpColor
+        writable: false
+        description: "OpColor tag"
+      - id: "0x0020"
+        name: Line
+        writable: false
+        description: "Line tag"
+      - id: "0x0021"
+        name: LineFrom
+        writable: false
+        description: "LineFrom tag"
+      - id: "0x0022"
+        name: ShortLine
+        writable: false
+        description: "ShortLine tag"
+      - id: "0x0023"
+        name: ShortLineFrom
+        writable: false
+        description: "ShortLineFrom tag"
+      - id: "0x0024"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0028"
+        name: LongText
+        writable: false
+        description: "LongText tag"
+      - id: "0x0029"
+        name: DHText
+        writable: false
+        description: "DHText tag"
+      - id: "0x002A"
+        name: DVText
+        writable: false
+        description: "DVText tag"
+      - id: "0x002B"
+        name: DHDVText
+        writable: false
+        description: "DHDVText tag"
+      - id: "0x002C"
+        name: FontName
+        writable: false
+        description: "FontName tag"
+      - id: "0x002D"
+        name: LineJustify
+        writable: false
+        description: "LineJustify tag"
+      - id: "0x002E"
+        name: GlyphState
+        writable: false
+        description: "GlyphState tag"
+      - id: "0x002F"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0030"
+        name: FrameRect
+        writable: false
+        description: "FrameRect tag"
+      - id: "0x0031"
+        name: PaintRect
+        writable: false
+        description: "PaintRect tag"
+      - id: "0x0032"
+        name: EraseRect
+        writable: false
+        description: "EraseRect tag"
+      - id: "0x0033"
+        name: InvertRect
+        writable: false
+        description: "InvertRect tag"
+      - id: "0x0034"
+        name: FillRect
+        writable: false
+        description: "FillRect tag"
+      - id: "0x0035"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0038"
+        name: FrameSameRect
+        writable: false
+        description: "FrameSameRect tag"
+      - id: "0x0039"
+        name: PaintSameRect
+        writable: false
+        description: "PaintSameRect tag"
+      - id: "0x003A"
+        name: EraseSameRect
+        writable: false
+        description: "EraseSameRect tag"
+      - id: "0x003B"
+        name: InvertSameRect
+        writable: false
+        description: "InvertSameRect tag"
+      - id: "0x003C"
+        name: FillSameRect
+        writable: false
+        description: "FillSameRect tag"
+      - id: "0x003D"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0040"
+        name: FrameRRect
+        writable: false
+        description: "FrameRRect tag"
+      - id: "0x0041"
+        name: PaintRRect
+        writable: false
+        description: "PaintRRect tag"
+      - id: "0x0042"
+        name: EraseRRect
+        writable: false
+        description: "EraseRRect tag"
+      - id: "0x0043"
+        name: InvertRRect
+        writable: false
+        description: "InvertRRect tag"
+      - id: "0x0044"
+        name: FillRRect
+        writable: false
+        description: "FillRRect tag"
+      - id: "0x0045"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0048"
+        name: FrameSameRRect
+        writable: false
+        description: "FrameSameRRect tag"
+      - id: "0x0049"
+        name: PaintSameRRect
+        writable: false
+        description: "PaintSameRRect tag"
+      - id: "0x004A"
+        name: EraseSameRRect
+        writable: false
+        description: "EraseSameRRect tag"
+      - id: "0x004B"
+        name: InvertSameRRect
+        writable: false
+        description: "InvertSameRRect tag"
+      - id: "0x004C"
+        name: FillSameRRect
+        writable: false
+        description: "FillSameRRect tag"
+      - id: "0x004D"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0050"
+        name: FrameOval
+        writable: false
+        description: "FrameOval tag"
+      - id: "0x0051"
+        name: PaintOval
+        writable: false
+        description: "PaintOval tag"
+      - id: "0x0052"
+        name: EraseOval
+        writable: false
+        description: "EraseOval tag"
+      - id: "0x0053"
+        name: InvertOval
+        writable: false
+        description: "InvertOval tag"
+      - id: "0x0054"
+        name: FillOval
+        writable: false
+        description: "FillOval tag"
+      - id: "0x0055"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0058"
+        name: FrameSameOval
+        writable: false
+        description: "FrameSameOval tag"
+      - id: "0x0059"
+        name: PaintSameOval
+        writable: false
+        description: "PaintSameOval tag"
+      - id: "0x005A"
+        name: EraseSameOval
+        writable: false
+        description: "EraseSameOval tag"
+      - id: "0x005B"
+        name: InvertSameOval
+        writable: false
+        description: "InvertSameOval tag"
+      - id: "0x005C"
+        name: FillSameOval
+        writable: false
+        description: "FillSameOval tag"
+      - id: "0x005D"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0060"
+        name: FrameArc
+        writable: false
+        description: "FrameArc tag"
+      - id: "0x0061"
+        name: PaintArc
+        writable: false
+        description: "PaintArc tag"
+      - id: "0x0062"
+        name: EraseArc
+        writable: false
+        description: "EraseArc tag"
+      - id: "0x0063"
+        name: InvertArc
+        writable: false
+        description: "InvertArc tag"
+      - id: "0x0064"
+        name: FillArc
+        writable: false
+        description: "FillArc tag"
+      - id: "0x0065"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0068"
+        name: FrameSameArc
+        writable: false
+        description: "FrameSameArc tag"
+      - id: "0x0069"
+        name: PaintSameArc
+        writable: false
+        description: "PaintSameArc tag"
+      - id: "0x006A"
+        name: EraseSameArc
+        writable: false
+        description: "EraseSameArc tag"
+      - id: "0x006B"
+        name: InvertSameArc
+        writable: false
+        description: "InvertSameArc tag"
+      - id: "0x006C"
+        name: FillSameArc
+        writable: false
+        description: "FillSameArc tag"
+      - id: "0x006D"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0070"
+        name: FramePoly
+        writable: false
+        description: "FramePoly tag"
+      - id: "0x0071"
+        name: PaintPoly
+        writable: false
+        description: "PaintPoly tag"
+      - id: "0x0072"
+        name: ErasePoly
+        writable: false
+        description: "ErasePoly tag"
+      - id: "0x0073"
+        name: InvertPoly
+        writable: false
+        description: "InvertPoly tag"
+      - id: "0x0074"
+        name: FillPoly
+        writable: false
+        description: "FillPoly tag"
+      - id: "0x0075"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0078"
+        name: FrameSamePoly
+        writable: false
+        description: "FrameSamePoly tag"
+      - id: "0x0079"
+        name: PaintSamePoly
+        writable: false
+        description: "PaintSamePoly tag"
+      - id: "0x007A"
+        name: EraseSamePoly
+        writable: false
+        description: "EraseSamePoly tag"
+      - id: "0x007B"
+        name: InvertSamePoly
+        writable: false
+        description: "InvertSamePoly tag"
+      - id: "0x007C"
+        name: FillSamePoly
+        writable: false
+        description: "FillSamePoly tag"
+      - id: "0x007D"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0080"
+        name: FrameRgn
+        writable: false
+        description: "FrameRgn tag"
+      - id: "0x0081"
+        name: PaintRgn
+        writable: false
+        description: "PaintRgn tag"
+      - id: "0x0082"
+        name: EraseRgn
+        writable: false
+        description: "EraseRgn tag"
+      - id: "0x0083"
+        name: InvertRgn
+        writable: false
+        description: "InvertRgn tag"
+      - id: "0x0084"
+        name: FillRgn
+        writable: false
+        description: "FillRgn tag"
+      - id: "0x0085"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0088"
+        name: FrameSameRgn
+        writable: false
+        description: "FrameSameRgn tag"
+      - id: "0x0089"
+        name: PaintSameRgn
+        writable: false
+        description: "PaintSameRgn tag"
+      - id: "0x008A"
+        name: EraseSameRgn
+        writable: false
+        description: "EraseSameRgn tag"
+      - id: "0x008B"
+        name: InvertSameRgn
+        writable: false
+        description: "InvertSameRgn tag"
+      - id: "0x008C"
+        name: FillSameRgn
+        writable: false
+        description: "FillSameRgn tag"
+      - id: "0x008D"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0090"
+        name: BitsRect
+        writable: false
+        description: "BitsRect tag"
+      - id: "0x0091"
+        name: BitsRgn
+        writable: false
+        description: "BitsRgn tag"
+      - id: "0x0092"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0098"
+        name: PackBitsRect
+        writable: false
+        description: "PackBitsRect tag"
+      - id: "0x0099"
+        name: PackBitsRgn
+        writable: false
+        description: "PackBitsRgn tag"
+      - id: "0x009A"
+        name: DirectBitsRect
+        writable: false
+        description: "DirectBitsRect tag"
+      - id: "0x009B"
+        name: DirectBitsRgn
+        writable: false
+        description: "DirectBitsRgn tag"
+      - id: "0x009C"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x009D"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x009E"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x009F"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x00A0"
+        name: ShortComment
+        writable: false
+        description: "ShortComment tag"
+      - id: "0x00A2"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x00B0"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x00D0"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x00FF"
+        name: OpEndPic
+        writable: false
+        description: "OpEndPic tag"
+      - id: "0x0100"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0200"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x02FF"
+        name: Version
+        writable: false
+        description: "Version tag"
+      - id: "0x0300"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0BFF"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x0C00"
+        name: HeaderOp
+        writable: false
+        description: "HeaderOp tag"
+      - id: "0x0C01"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x7F00"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x8000"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x8100"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+      - id: "0x8200"
+        name: CompressedQuickTime
+        writable: false
+        description: "CompressedQuickTime tag"
+      - id: "0x8201"
+        name: UncompressedQuickTime
+        writable: false
+        description: "UncompressedQuickTime tag"
+      - id: "0xFFFF"
+        name: Reserved
+        writable: false
+        description: "Reserved tag"
+  - name: PNG::AnimationControl
+    tags:
+      - id: "0x0000"
+        name: AnimationFrames
+        writable: false
+        description: "AnimationFrames tag"
+      - id: "0x0001"
+        name: AnimationPlays
+        writable: false
+        description: "AnimationPlays tag"
+  - name: PNG::CICodePoints
+    tags:
+      - id: "0x0000"
+        name: ColorPrimaries
+        writable: false
+        description: "ColorPrimaries tag"
+      - id: "0x0002"
+        name: Unspecified
+        writable: false
+        description: "Unspecified tag"
+      - id: "0x0004"
+        name: BT.470 System M (historical)
+        writable: false
+        description: "BT.470 System M (historical) tag"
+      - id: "0x0005"
+        name: BT.470 System B, G (historical)
+        writable: false
+        description: "BT.470 System B, G (historical) tag"
+      - id: "0x0006"
+        name: BT.601
+        writable: false
+        description: "BT.601 tag"
+      - id: "0x0007"
+        name: SMPTE 240
+        writable: false
+        description: "SMPTE 240 tag"
+      - id: "0x0008"
+        name: Generic film (color filters using illuminant C)
+        writable: false
+        description: "Generic film (color filters using illuminant C) tag"
+      - id: "0x0009"
+        name: BT.2020, BT.2100
+        writable: false
+        description: "BT.2020, BT.2100 tag"
+      - id: "0x000A"
+        name: SMPTE 428 (CIE 1921 XYZ)
+        writable: false
+        description: "SMPTE 428 (CIE 1921 XYZ) tag"
+      - id: "0x000B"
+        name: SMPTE RP 431-2
+        writable: false
+        description: "SMPTE RP 431-2 tag"
+      - id: "0x000C"
+        name: SMPTE EG 432-1
+        writable: false
+        description: "SMPTE EG 432-1 tag"
+      - id: "0x0016"
+        name: EBU Tech. 3213-E
+        writable: false
+        description: "EBU Tech. 3213-E tag"
+      - id: "0x0001"
+        name: TransferCharacteristics
+        writable: false
+        description: "TransferCharacteristics tag"
+      - id: "0x0001"
+        name: BT.709
+        writable: false
+        description: "BT.709 tag"
+      - id: "0x0002"
+        name: Unspecified
+        writable: false
+        description: "Unspecified tag"
+      - id: "0x0003"
+        name: For future use (3)
+        writable: false
+        description: "For future use (3) tag"
+      - id: "0x0004"
+        name: BT.470 System M (historical)
+        writable: false
+        description: "BT.470 System M (historical) tag"
+      - id: "0x0005"
+        name: BT.470 System B, G (historical)
+        writable: false
+        description: "BT.470 System B, G (historical) tag"
+      - id: "0x0006"
+        name: BT.601
+        writable: false
+        description: "BT.601 tag"
+      - id: "0x0007"
+        name: SMPTE 240 M
+        writable: false
+        description: "SMPTE 240 M tag"
+      - id: "0x0008"
+        name: Linear
+        writable: false
+        description: "Linear tag"
+      - id: "0x0009"
+        name: Logarithmic (100 : 1 range)
+        writable: false
+        description: "Logarithmic (100 : 1 range) tag"
+      - id: "0x000A"
+        name: Logarithmic (100 * Sqrt(10) : 1 range)
+        writable: false
+        description: "Logarithmic (100 * Sqrt(10) : 1 range) tag"
+      - id: "0x000B"
+        name: IEC 61966-2-4
+        writable: false
+        description: "IEC 61966-2-4 tag"
+      - id: "0x000C"
+        name: BT.1361
+        writable: false
+        description: "BT.1361 tag"
+      - id: "0x000D"
+        name: sRGB or sYCC
+        writable: false
+        description: "sRGB or sYCC tag"
+      - id: "0x000E"
+        name: BT.2020 10-bit systems
+        writable: false
+        description: "BT.2020 10-bit systems tag"
+      - id: "0x000F"
+        name: BT.2020 12-bit systems
+        writable: false
+        description: "BT.2020 12-bit systems tag"
+      - id: "0x0010"
+        name: SMPTE ST 2084, ITU BT.2100 PQ
+        writable: false
+        description: "SMPTE ST 2084, ITU BT.2100 PQ tag"
+      - id: "0x0011"
+        name: SMPTE ST 428
+        writable: false
+        description: "SMPTE ST 428 tag"
+      - id: "0x0012"
+        name: BT.2100 HLG, ARIB STD-B67
+        writable: false
+        description: "BT.2100 HLG, ARIB STD-B67 tag"
+      - id: "0x0002"
+        name: MatrixCoefficients
+        writable: false
+        description: "MatrixCoefficients tag"
+      - id: "0x0001"
+        name: BT.709
+        writable: false
+        description: "BT.709 tag"
+      - id: "0x0002"
+        name: Unspecified
+        writable: false
+        description: "Unspecified tag"
+      - id: "0x0003"
+        name: For future use (3)
+        writable: false
+        description: "For future use (3) tag"
+      - id: "0x0004"
+        name: US FCC 73.628
+        writable: false
+        description: "US FCC 73.628 tag"
+      - id: "0x0005"
+        name: BT.470 System B, G (historical)
+        writable: false
+        description: "BT.470 System B, G (historical) tag"
+      - id: "0x0006"
+        name: BT.601
+        writable: false
+        description: "BT.601 tag"
+      - id: "0x0007"
+        name: SMPTE 240 M
+        writable: false
+        description: "SMPTE 240 M tag"
+      - id: "0x0008"
+        name: YCgCo
+        writable: false
+        description: "YCgCo tag"
+      - id: "0x0009"
+        name: BT.2020 non-constant luminance, BT.2100 YCbCr
+        writable: false
+        description: "BT.2020 non-constant luminance, BT.2100 YCbCr tag"
+      - id: "0x000A"
+        name: BT.2020 constant luminance
+        writable: false
+        description: "BT.2020 constant luminance tag"
+      - id: "0x000B"
+        name: SMPTE ST 2085 YDzDx
+        writable: false
+        description: "SMPTE ST 2085 YDzDx tag"
+      - id: "0x000C"
+        name: Chromaticity-derived non-constant luminance
+        writable: false
+        description: "Chromaticity-derived non-constant luminance tag"
+      - id: "0x000D"
+        name: Chromaticity-derived constant luminance
+        writable: false
+        description: "Chromaticity-derived constant luminance tag"
+      - id: "0x000E"
+        name: BT.2100 ICtCp
+        writable: false
+        description: "BT.2100 ICtCp tag"
+      - id: "0x0003"
+        name: VideoFullRangeFlag
+        writable: false
+        description: "VideoFullRangeFlag tag"
+  - name: PNG::ImageHeader
+    tags:
+      - id: "0x0000"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x0004"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x0008"
+        name: BitDepth
+        writable: false
+        description: "BitDepth tag"
+      - id: "0x0009"
+        name: ColorType
+        writable: false
+        description: "ColorType tag"
+      - id: "0x0002"
+        name: RGB
+        writable: false
+        description: "RGB tag"
+      - id: "0x0003"
+        name: Palette
+        writable: false
+        description: "Palette tag"
+      - id: "0x0004"
+        name: Grayscale with Alpha
+        writable: false
+        description: "Grayscale with Alpha tag"
+      - id: "0x0006"
+        name: RGB with Alpha
+        writable: false
+        description: "RGB with Alpha tag"
+      - id: "0x000A"
+        name: Compression
+        writable: false
+        description: "Compression tag"
+      - id: "0x000B"
+        name: Filter
+        writable: false
+        description: "Filter tag"
+      - id: "0x000C"
+        name: Interlace
+        writable: false
+        description: "Interlace tag"
+  - name: PNG::Main
+    tags:
+      - id: "0x15B1"
+        name: ProfileName
+        writable: false
+        description: "ProfileName tag"
+      - id: "0x0001"
+        name: Relative Colorimetric
+        writable: false
+        description: "Relative Colorimetric tag"
+      - id: "0x0002"
+        name: Saturation
+        writable: false
+        description: "Saturation tag"
+      - id: "0x0003"
+        name: Absolute Colorimetric
+        writable: false
+        description: "Absolute Colorimetric tag"
+  - name: PNG::PhysicalPixel
+    tags:
+      - id: "0x0000"
+        name: PixelsPerUnitX
+        writable: false
+        description: "PixelsPerUnitX tag"
+      - id: "0x0004"
+        name: PixelsPerUnitY
+        writable: false
+        description: "PixelsPerUnitY tag"
+      - id: "0x0008"
+        name: PixelUnits
+        writable: false
+        description: "PixelUnits tag"
+  - name: PNG::PrimaryChromaticities
+    tags:
+      - id: "0x0000"
+        name: WhitePointX
+        writable: false
+        description: "WhitePointX tag"
+      - id: "0x0001"
+        name: WhitePointY
+        writable: false
+        description: "WhitePointY tag"
+      - id: "0x0002"
+        name: RedX
+        writable: false
+        description: "RedX tag"
+      - id: "0x0003"
+        name: RedY
+        writable: false
+        description: "RedY tag"
+      - id: "0x0004"
+        name: GreenX
+        writable: false
+        description: "GreenX tag"
+      - id: "0x0005"
+        name: GreenY
+        writable: false
+        description: "GreenY tag"
+      - id: "0x0006"
+        name: BlueX
+        writable: false
+        description: "BlueX tag"
+      - id: "0x0007"
+        name: BlueY
+        writable: false
+        description: "BlueY tag"
+  - name: PNG::StereoImage
+    tags:
+      - id: "0x0000"
+        name: StereoMode
+        writable: false
+        description: "StereoMode tag"
+      - id: "0x0001"
+        name: Diverging-fuse Layout
+        writable: false
+        description: "Diverging-fuse Layout tag"
+  - name: PNG::SubjectScale
+    tags:
+      - id: "0x0000"
+        name: SubjectUnits
+        writable: false
+        description: "SubjectUnits tag"
+      - id: "0x0001"
+        name: SubjectPixelWidth
+        writable: false
+        description: "SubjectPixelWidth tag"
+      - id: "0x0002"
+        name: SubjectPixelHeight
+        writable: false
+        description: "SubjectPixelHeight tag"
+  - name: PNG::TextualData
+    tags:
+      - id: "0xEB6E"
+        name: CreationTime
+        writable: false
+        description: "CreationTime tag"
+      - id: "0xFCE1"
+        name: ModDate
+        writable: false
+        description: "ModDate tag"
+      - id: "0x212C"
+        name: XMP
+        writable: false
+        description: "XMP tag"
+      - id: "0x8E67"
+        name: EXIF_Profile
+        writable: false
+        description: "EXIF_Profile tag"
+      - id: "0x3A52"
+        name: ICC_Profile
+        writable: false
+        description: "ICC_Profile tag"
+      - id: "0x3A5C"
+        name: ICC_Profile
+        writable: false
+        description: "ICC_Profile tag"
+      - id: "0x432D"
+        name: IPTC_Profile
+        writable: false
+        description: "IPTC_Profile tag"
+      - id: "0x73E4"
+        name: XMP_Profile
+        writable: false
+        description: "XMP_Profile tag"
+      - id: "0xC725"
+        name: Photoshop_Profile
+        writable: false
+        description: "Photoshop_Profile tag"
+  - name: PNG::VirtualPage
+    tags:
+      - id: "0x0000"
+        name: VirtualImageWidth
+        writable: false
+        description: "VirtualImageWidth tag"
+      - id: "0x0001"
+        name: VirtualImageHeight
+        writable: false
+        description: "VirtualImageHeight tag"
+      - id: "0x0002"
+        name: VirtualPageUnits
+        writable: false
+        description: "VirtualPageUnits tag"
+  - name: PSP::Creator
+    tags:
+      - id: "0x0001"
+        name: CreateDate
+        writable: false
+        description: "CreateDate tag"
+      - id: "0x0002"
+        name: ModifyDate
+        writable: false
+        description: "ModifyDate tag"
+      - id: "0x0003"
+        name: Artist
+        writable: false
+        description: "Artist tag"
+      - id: "0x0004"
+        name: Copyright
+        writable: false
+        description: "Copyright tag"
+      - id: "0x0005"
+        name: Description
+        writable: false
+        description: "Description tag"
+      - id: "0x0006"
+        name: CreatorAppID
+        writable: false
+        description: "CreatorAppID tag"
+      - id: "0x0001"
+        name: Paint Shop Pro
+        writable: false
+        description: "Paint Shop Pro tag"
+      - id: "0x0007"
+        name: CreatorAppVersion
+        writable: false
+        description: "CreatorAppVersion tag"
+  - name: PSP::Ext
+    tags:
+      - id: "0x0003"
+        name: EXIFInfo
+        writable: false
+        description: "EXIFInfo tag"
+  - name: PSP::Image
+    tags:
+      - id: "0x0000"
+        name: ImageWidth
+        writable: false
+        description: "ImageWidth tag"
+      - id: "0x0004"
+        name: ImageHeight
+        writable: false
+        description: "ImageHeight tag"
+      - id: "0x0008"
+        name: ImageResolution
+        writable: false
+        description: "ImageResolution tag"
+      - id: "0x0010"
+        name: ResolutionUnit
+        writable: false
+        description: "ResolutionUnit tag"
+      - id: "0x0001"
+        name: inches
+        writable: false
+        description: "inches tag"
+      - id: "0x0002"
+        name: cm
+        writable: false
+        description: "cm tag"
+      - id: "0x0011"
+        name: Compression
+        writable: false
+        description: "Compression tag"
+      - id: "0x0001"
+        name: RLE
+        writable: false
+        description: "RLE tag"
+      - id: "0x0002"
+        name: LZ77
+        writable: false
+        description: "LZ77 tag"
+      - id: "0x0003"
+        name: JPEG
+        writable: false
+        description: "JPEG tag"
+      - id: "0x0013"
+        name: BitsPerSample
+        writable: false
+        description: "BitsPerSample tag"
+      - id: "0x0015"
+        name: Planes
+        writable: false
+        description: "Planes tag"
+      - id: "0x0017"
+        name: NumColors
+        writable: false
+        description: "NumColors tag"
+  - name: PSP::Main
+    tags:
+      - id: "0x0001"
+        name: CreatorInfo
+        writable: false
+        description: "CreatorInfo tag"
+      - id: "0x000A"
+        name: ExtendedInfo
+        writable: false
+        description: "ExtendedInfo tag"
+  - name: Palm::EXTH
+    tags:
+      - id: "0x0001"
+        name: DRMServerID
+        writable: false
+        description: "DRMServerID tag"
+      - id: "0x0002"
+        name: DRMCommerceID
+        writable: false
+        description: "DRMCommerceID tag"
+      - id: "0x0003"
+        name: DRM_E-BookBaseID
+        writable: false
+        description: "DRM_E-BookBaseID tag"
+      - id: "0x0064"
+        name: Author
+        writable: false
+        description: "Author tag"
+      - id: "0x0065"
+        name: Publisher
+        writable: false
+        description: "Publisher tag"
+      - id: "0x0066"
+        name: Imprint
+        writable: false
+        description: "Imprint tag"
+      - id: "0x0067"
+        name: Description
+        writable: false
+        description: "Description tag"
+      - id: "0x0068"
+        name: ISBN
+        writable: false
+        description: "ISBN tag"
+      - id: "0x0069"
+        name: Subject
+        writable: false
+        description: "Subject tag"
+      - id: "0x006A"
+        name: PublishDate
+        writable: false
+        description: "PublishDate tag"
+      - id: "0x006B"
+        name: Review
+        writable: false
+        description: "Review tag"
+      - id: "0x006C"
+        name: Contributor
+        writable: false
+        description: "Contributor tag"
+      - id: "0x006D"
+        name: Rights
+        writable: false
+        description: "Rights tag"
+      - id: "0x006E"
+        name: SubjectCode
+        writable: false
+        description: "SubjectCode tag"
+      - id: "0x006F"
+        name: BookType
+        writable: false
+        description: "BookType tag"
+      - id: "0x0070"
+        name: Source
+        writable: false
+        description: "Source tag"
+      - id: "0x0071"
+        name: ASIN
+        writable: false
+        description: "ASIN tag"
+      - id: "0x0072"
+        name: BookVersion
+        writable: false
+        description: "BookVersion tag"
+      - id: "0x0073"
+        name: SampleFlag
+        writable: false
+        description: "SampleFlag tag"
+      - id: "0x0074"
+        name: StartReading
+        writable: false
+        description: "StartReading tag"
+      - id: "0x0075"
+        name: Adult
+        writable: false
+        description: "Adult tag"
+      - id: "0x0076"
+        name: RetailPrice
+        writable: false
+        description: "RetailPrice tag"
+      - id: "0x0077"
+        name: RetailPriceCurrency
+        writable: false
+        description: "RetailPriceCurrency tag"
+      - id: "0x007D"
+        name: ResourceCount
+        writable: false
+        description: "ResourceCount tag"
+      - id: "0x0081"
+        name: KF8CoverURI
+        writable: false
+        description: "KF8CoverURI tag"
+      - id: "0x00C8"
+        name: DictionaryShortName
+        writable: false
+        description: "DictionaryShortName tag"
+      - id: "0x00CC"
+        name: CreatorSoftware
+        writable: false
+        description: "CreatorSoftware tag"
+      - id: "0x0002"
+        name: Mobipocket
+        writable: false
+        description: "Mobipocket tag"
+      - id: "0x00C8"
+        name: Kindlegen (Windows)
+        writable: false
+        description: "Kindlegen (Windows) tag"
+      - id: "0x00C9"
+        name: Kindlegen (Linux)
+        writable: false
+        description: "Kindlegen (Linux) tag"
+      - id: "0x00CA"
+        name: Kindlegen (Mac)
+        writable: false
+        description: "Kindlegen (Mac) tag"
+      - id: "0x00CD"
+        name: CreatorMajorVersion
+        writable: false
+        description: "CreatorMajorVersion tag"
+      - id: "0x00CE"
+        name: CreatorMinorVersion
+        writable: false
+        description: "CreatorMinorVersion tag"
+      - id: "0x00CF"
+        name: CreatorBuildNumber
+        writable: false
+        description: "CreatorBuildNumber tag"
+      - id: "0x00D0"
+        name: Watermark
+        writable: false
+        description: "Watermark tag"
+      - id: "0x00D1"
+        name: Tamper-proofKeys
+        writable: false
+        description: "Tamper-proofKeys tag"
+      - id: "0x0191"
+        name: ClippingLimit
+        writable: false
+        description: "ClippingLimit tag"
+      - id: "0x0192"
+        name: PublisherLimit
+        writable: false
+        description: "PublisherLimit tag"
+      - id: "0x0194"
+        name: TextToSpeech
+        writable: false
+        description: "TextToSpeech tag"
+      - id: "0x0195"
+        name: RentalFlag
+        writable: false
+        description: "RentalFlag tag"
+      - id: "0x0196"
+        name: RentalExpirationDate
+        writable: false
+        description: "RentalExpirationDate tag"
+      - id: "0x01F5"
+        name: CDEType
+        writable: false
+        description: "CDEType tag"
+      - id: "0x01F6"
+        name: LastUpdateTime
+        writable: false
+        description: "LastUpdateTime tag"
+      - id: "0x01F7"
+        name: UpdatedTitle
+        writable: false
+        description: "UpdatedTitle tag"
+      - id: "0x01F8"
+        name: ASIN2
+        writable: false
+        description: "ASIN2 tag"
+      - id: "0x020C"
+        name: Language
+        writable: false
+        description: "Language tag"
+      - id: "0x020D"
+        name: Alignment
+        writable: false
+        description: "Alignment tag"
+      - id: "0x0217"
+        name: CreatorBuildNumber2
+        writable: false
+        description: "CreatorBuildNumber2 tag"
+  - name: Palm::MOBI
+    tags:
+      - id: "0x0000"
+        name: Compression
+        writable: false
+        description: "Compression tag"
+      - id: "0x0002"
+        name: PalmDOC
+        writable: false
+        description: "PalmDOC tag"
+      - id: "0x4448"
+        name: HUFF/CDIC
+        writable: false
+        description: "HUFF/CDIC tag"
+      - id: "0x0001"
+        name: UncompressedTextLength
+        writable: false
+        description: "UncompressedTextLength tag"
+      - id: "0x0003"
+        name: Encryption
+        writable: false
+        description: "Encryption tag"
+      - id: "0x0001"
+        name: Old Mobipocket
+        writable: false
+        description: "Old Mobipocket tag"
+      - id: "0x0002"
+        name: Mobipocket
+        writable: false
+        description: "Mobipocket tag"
+      - id: "0x0006"
+        name: MobiType
+        writable: false
+        description: "MobiType tag"
+      - id: "0x0003"
+        name: PalmDoc Book
+        writable: false
+        description: "PalmDoc Book tag"
+      - id: "0x0004"
+        name: Audio
+        writable: false
+        description: "Audio tag"
+      - id: "0x00E8"
+        name: mobipocket? generated by kindlegen1.2
+        writable: false
+        description: "mobipocket? generated by kindlegen1.2 tag"
+      - id: "0x00F8"
+        name: KF8: generated by kindlegen2
+        writable: false
+        description: "KF8: generated by kindlegen2 tag"
+      - id: "0x0101"
+        name: News
+        writable: false
+        description: "News tag"
+      - id: "0x0102"
+        name: News_Feed
+        writable: false
+        description: "News_Feed tag"
+      - id: "0x0103"
+        name: News_Magazine
+        writable: false
+        description: "News_Magazine tag"
+      - id: "0x0201"
+        name: PICS
+        writable: false
+        description: "PICS tag"
+      - id: "0x0202"
+        name: WORD
+        writable: false
+        description: "WORD tag"
+      - id: "0x0203"
+        name: XLS
+        writable: false
+        description: "XLS tag"
+      - id: "0x0204"
+        name: PPT
+        writable: false
+        description: "PPT tag"
+      - id: "0x0205"
+        name: TEXT
+        writable: false
+        description: "TEXT tag"
+      - id: "0x0206"
+        name: HTML
+        writable: false
+        description: "HTML tag"
+      - id: "0x0007"
+        name: CodePage
+        writable: false
+        description: "CodePage tag"
+      - id: "0xFDE9"
+        name: Unicode (UTF-8)
+        writable: false
+        description: "Unicode (UTF-8) tag"
+      - id: "0x0009"
+        name: MobiVersion
+        writable: false
+        description: "MobiVersion tag"
+  - name: Palm::Main
+    tags:
+      - id: "0x0000"
+        name: DatabaseName
+        writable: false
+        description: "DatabaseName tag"
+      - id: "0x0009"
+        name: CreateDate
+        writable: false
+        description: "CreateDate tag"
+      - id: "0x000A"
+        name: ModifyDate
+        writable: false
+        description: "ModifyDate tag"
+      - id: "0x000B"
+        name: LastBackupDate
+        writable: false
+        description: "LastBackupDate tag"
+      - id: "0x000C"
+        name: ModificationNumber
+        writable: false
+        description: "ModificationNumber tag"
+      - id: "0x000F"
+        name: PalmFileType
+        writable: false
+        description: "PalmFileType tag"
+  - name: PhotoCD::Main
+    tags:
+      - id: "0x0007"
+        name: SpecificationVersion
+        writable: false
+        description: "SpecificationVersion tag"
+      - id: "0x0009"
+        name: AuthoringSoftwareRelease
+        writable: false
+        description: "AuthoringSoftwareRelease tag"
+      - id: "0x000B"
+        name: ImageMagnificationDescriptor
+        writable: false
+        description: "ImageMagnificationDescriptor tag"
+      - id: "0x000D"
+        name: CreateDate
+        writable: false
+        description: "CreateDate tag"
+      - id: "0x0011"
+        name: ModifyDate
+        writable: false
+        description: "ModifyDate tag"
+      - id: "0x0015"
+        name: ImageMedium
+        writable: false
+        description: "ImageMedium tag"
+      - id: "0x0001"
+        name: Color reversal
+        writable: false
+        description: "Color reversal tag"
+      - id: "0x0002"
+        name: Color hard copy
+        writable: false
+        description: "Color hard copy tag"
+      - id: "0x0003"
+        name: Thermal hard copy
+        writable: false
+        description: "Thermal hard copy tag"
+      - id: "0x0004"
+        name: Black and white negative
+        writable: false
+        description: "Black and white negative tag"
+      - id: "0x0005"
+        name: Black and white reversal
+        writable: false
+        description: "Black and white reversal tag"
+      - id: "0x0006"
+        name: Black and white hard copy
+        writable: false
+        description: "Black and white hard copy tag"
+      - id: "0x0007"
+        name: Internegative
+        writable: false
+        description: "Internegative tag"
+      - id: "0x0008"
+        name: Synthetic image
+        writable: false
+        description: "Synthetic image tag"
+      - id: "0x0016"
+        name: ProductType
+        writable: false
+        description: "ProductType tag"
+      - id: "0x002A"
+        name: ScannerVendorID
+        writable: false
+        description: "ScannerVendorID tag"
+      - id: "0x003E"
+        name: ScannerProductID
+        writable: false
+        description: "ScannerProductID tag"
+      - id: "0x004E"
+        name: ScannerFirmwareVersion
+        writable: false
+        description: "ScannerFirmwareVersion tag"
+      - id: "0x0052"
+        name: ScannerFirmwareDate
+        writable: false
+        description: "ScannerFirmwareDate tag"
+      - id: "0x005A"
+        name: ScannerSerialNumber
+        writable: false
+        description: "ScannerSerialNumber tag"
+      - id: "0x006E"
+        name: ScannerPixelSize
+        writable: false
+        description: "ScannerPixelSize tag"
+      - id: "0x0070"
+        name: ImageWorkstationMake
+        writable: false
+        description: "ImageWorkstationMake tag"
+      - id: "0x0084"
+        name: CharacterSet
+        writable: false
+        description: "CharacterSet tag"
+      - id: "0x0002"
+        name: 65 characters ISO 646
+        writable: false
+        description: "65 characters ISO 646 tag"
+      - id: "0x0003"
+        name: 95 characters ISO 646
+        writable: false
+        description: "95 characters ISO 646 tag"
+      - id: "0x0004"
+        name: 191 characters ISO 8850-1
+        writable: false
+        description: "191 characters ISO 8850-1 tag"
+      - id: "0x0005"
+        name: ISO 2022
+        writable: false
+        description: "ISO 2022 tag"
+      - id: "0x0006"
+        name: Includes characters not ISO 2375 registered
+        writable: false
+        description: "Includes characters not ISO 2375 registered tag"
+      - id: "0x0085"
+        name: CharacterEscapeSequence
+        writable: false
+        description: "CharacterEscapeSequence tag"
+      - id: "0x00A5"
+        name: PhotoFinisherName
+        writable: false
+        description: "PhotoFinisherName tag"
+      - id: "0x00E1"
+        name: HasSBA
+        writable: false
+        description: "HasSBA tag"
+      - id: "0x00E4"
+        name: SceneBalanceAlgorithmRevision
+        writable: false
+        description: "SceneBalanceAlgorithmRevision tag"
+      - id: "0x00E6"
+        name: SceneBalanceAlgorithmCommand
+        writable: false
+        description: "SceneBalanceAlgorithmCommand tag"
+      - id: "0x0001"
+        name: Neutral SBA Off, Color SBA Off
+        writable: false
+        description: "Neutral SBA Off, Color SBA Off tag"
+      - id: "0x0002"
+        name: Neutral SBA On, Color SBA Off
+        writable: false
+        description: "Neutral SBA On, Color SBA Off tag"
+      - id: "0x0003"
+        name: Neutral SBA Off, Color SBA On
+        writable: false
+        description: "Neutral SBA Off, Color SBA On tag"
+      - id: "0x0145"
+        name: SceneBalanceAlgorithmFilmID
+        writable: false
+        description: "SceneBalanceAlgorithmFilmID tag"
+      - id: "0x0002"
+        name: 3M ScotchColor AT 200
+        writable: false
+        description: "3M ScotchColor AT 200 tag"
+      - id: "0x0003"
+        name: 3M ScotchColor HR2 400
+        writable: false
+        description: "3M ScotchColor HR2 400 tag"
+      - id: "0x0007"
+        name: 3M Scotch HR 200 Gen 2
+        writable: false
+        description: "3M Scotch HR 200 Gen 2 tag"
+      - id: "0x0009"
+        name: 3M Scotch HR 400 Gen 2
+        writable: false
+        description: "3M Scotch HR 400 Gen 2 tag"
+      - id: "0x0010"
+        name: Agfa Agfacolor XRS 400 Gen 1
+        writable: false
+        description: "Agfa Agfacolor XRS 400 Gen 1 tag"
+      - id: "0x0011"
+        name: Agfa Agfacolor XRG/XRS 400
+        writable: false
+        description: "Agfa Agfacolor XRG/XRS 400 tag"
+      - id: "0x0012"
+        name: Agfa Agfacolor XRG/XRS 200
+        writable: false
+        description: "Agfa Agfacolor XRG/XRS 200 tag"
+      - id: "0x0013"
+        name: Agfa Agfacolor XRS 1000 Gen 2
+        writable: false
+        description: "Agfa Agfacolor XRS 1000 Gen 2 tag"
+      - id: "0x0014"
+        name: Agfa Agfacolor XRS 400 Gen 2
+        writable: false
+        description: "Agfa Agfacolor XRS 400 Gen 2 tag"
+      - id: "0x0015"
+        name: Agfa Agfacolor XRS/XRC 100
+        writable: false
+        description: "Agfa Agfacolor XRS/XRC 100 tag"
+      - id: "0x001A"
+        name: Fuji Reala 100 (JAPAN)
+        writable: false
+        description: "Fuji Reala 100 (JAPAN) tag"
+      - id: "0x001B"
+        name: Fuji Reala 100 Gen 1
+        writable: false
+        description: "Fuji Reala 100 Gen 1 tag"
+      - id: "0x001C"
+        name: Fuji Reala 100 Gen 2
+        writable: false
+        description: "Fuji Reala 100 Gen 2 tag"
+      - id: "0x001D"
+        name: Fuji SHR 400 Gen 2
+        writable: false
+        description: "Fuji SHR 400 Gen 2 tag"
+      - id: "0x001E"
+        name: Fuji Super HG 100
+        writable: false
+        description: "Fuji Super HG 100 tag"
+      - id: "0x001F"
+        name: Fuji Super HG 1600 Gen 1
+        writable: false
+        description: "Fuji Super HG 1600 Gen 1 tag"
+      - id: "0x0020"
+        name: Fuji Super HG 200
+        writable: false
+        description: "Fuji Super HG 200 tag"
+      - id: "0x0021"
+        name: Fuji Super HG 400
+        writable: false
+        description: "Fuji Super HG 400 tag"
+      - id: "0x0022"
+        name: Fuji Super HG 100 Gen 2
+        writable: false
+        description: "Fuji Super HG 100 Gen 2 tag"
+      - id: "0x0023"
+        name: Fuji Super HR 100 Gen 1
+        writable: false
+        description: "Fuji Super HR 100 Gen 1 tag"
+      - id: "0x0024"
+        name: Fuji Super HR 100 Gen 2
+        writable: false
+        description: "Fuji Super HR 100 Gen 2 tag"
+      - id: "0x0025"
+        name: Fuji Super HR 1600 Gen 2
+        writable: false
+        description: "Fuji Super HR 1600 Gen 2 tag"
+      - id: "0x0026"
+        name: Fuji Super HR 200 Gen 1
+        writable: false
+        description: "Fuji Super HR 200 Gen 1 tag"
+      - id: "0x0027"
+        name: Fuji Super HR 200 Gen 2
+        writable: false
+        description: "Fuji Super HR 200 Gen 2 tag"
+      - id: "0x0028"
+        name: Fuji Super HR 400 Gen 1
+        writable: false
+        description: "Fuji Super HR 400 Gen 1 tag"
+      - id: "0x002B"
+        name: Fuji NSP 160S (Pro)
+        writable: false
+        description: "Fuji NSP 160S (Pro) tag"
+      - id: "0x002D"
+        name: Kodak Kodacolor VR 100 Gen 2
+        writable: false
+        description: "Kodak Kodacolor VR 100 Gen 2 tag"
+      - id: "0x002F"
+        name: Kodak Gold 400 Gen 3
+        writable: false
+        description: "Kodak Gold 400 Gen 3 tag"
+      - id: "0x0037"
+        name: Kodak Ektar 100 Gen 1
+        writable: false
+        description: "Kodak Ektar 100 Gen 1 tag"
+      - id: "0x0038"
+        name: Kodak Ektar 1000 Gen 1
+        writable: false
+        description: "Kodak Ektar 1000 Gen 1 tag"
+      - id: "0x0039"
+        name: Kodak Ektar 125 Gen 1
+        writable: false
+        description: "Kodak Ektar 125 Gen 1 tag"
+      - id: "0x003A"
+        name: Kodak Royal Gold 25 RZ
+        writable: false
+        description: "Kodak Royal Gold 25 RZ tag"
+      - id: "0x003C"
+        name: Kodak Gold 1600 Gen 1
+        writable: false
+        description: "Kodak Gold 1600 Gen 1 tag"
+      - id: "0x003D"
+        name: Kodak Gold 200 Gen 2
+        writable: false
+        description: "Kodak Gold 200 Gen 2 tag"
+      - id: "0x003E"
+        name: Kodak Gold 400 Gen 2
+        writable: false
+        description: "Kodak Gold 400 Gen 2 tag"
+      - id: "0x0041"
+        name: Kodak Kodacolor VR 100 Gen 1
+        writable: false
+        description: "Kodak Kodacolor VR 100 Gen 1 tag"
+      - id: "0x0042"
+        name: Kodak Kodacolor VR 1000 Gen 2
+        writable: false
+        description: "Kodak Kodacolor VR 1000 Gen 2 tag"
+      - id: "0x0043"
+        name: Kodak Kodacolor VR 1000 Gen 1
+        writable: false
+        description: "Kodak Kodacolor VR 1000 Gen 1 tag"
+      - id: "0x0044"
+        name: Kodak Kodacolor VR 200 Gen 1
+        writable: false
+        description: "Kodak Kodacolor VR 200 Gen 1 tag"
+      - id: "0x0045"
+        name: Kodak Kodacolor VR 400 Gen 1
+        writable: false
+        description: "Kodak Kodacolor VR 400 Gen 1 tag"
+      - id: "0x0046"
+        name: Kodak Kodacolor VR 200 Gen 2
+        writable: false
+        description: "Kodak Kodacolor VR 200 Gen 2 tag"
+      - id: "0x0047"
+        name: Kodak Kodacolor VRG 100 Gen 1
+        writable: false
+        description: "Kodak Kodacolor VRG 100 Gen 1 tag"
+      - id: "0x0048"
+        name: Kodak Gold 100 Gen 2
+        writable: false
+        description: "Kodak Gold 100 Gen 2 tag"
+      - id: "0x0049"
+        name: Kodak Kodacolor VRG 200 Gen 1
+        writable: false
+        description: "Kodak Kodacolor VRG 200 Gen 1 tag"
+      - id: "0x004A"
+        name: Kodak Gold 400 Gen 1
+        writable: false
+        description: "Kodak Gold 400 Gen 1 tag"
+      - id: "0x0057"
+        name: Kodak Ektacolor Gold 160
+        writable: false
+        description: "Kodak Ektacolor Gold 160 tag"
+      - id: "0x0058"
+        name: Kodak Ektapress 1600 Gen 1 PPC
+        writable: false
+        description: "Kodak Ektapress 1600 Gen 1 PPC tag"
+      - id: "0x0059"
+        name: Kodak Ektapress Gold 100 Gen 1 PPA
+        writable: false
+        description: "Kodak Ektapress Gold 100 Gen 1 PPA tag"
+      - id: "0x005A"
+        name: Kodak Ektapress Gold 400 PPB-3
+        writable: false
+        description: "Kodak Ektapress Gold 400 PPB-3 tag"
+      - id: "0x005C"
+        name: Kodak Ektar 25 Professional PHR
+        writable: false
+        description: "Kodak Ektar 25 Professional PHR tag"
+      - id: "0x0061"
+        name: Kodak T-Max 100 Professional
+        writable: false
+        description: "Kodak T-Max 100 Professional tag"
+      - id: "0x0062"
+        name: Kodak T-Max 3200 Professional
+        writable: false
+        description: "Kodak T-Max 3200 Professional tag"
+      - id: "0x0063"
+        name: Kodak T-Max 400 Professional
+        writable: false
+        description: "Kodak T-Max 400 Professional tag"
+      - id: "0x0065"
+        name: Kodak Vericolor 400 Prof VPH
+        writable: false
+        description: "Kodak Vericolor 400 Prof VPH tag"
+      - id: "0x0066"
+        name: Kodak Vericolor III Pro
+        writable: false
+        description: "Kodak Vericolor III Pro tag"
+      - id: "0x0079"
+        name: Konika Konica Color SR-G 3200
+        writable: false
+        description: "Konika Konica Color SR-G 3200 tag"
+      - id: "0x007A"
+        name: Konika Konica Color Super SR100
+        writable: false
+        description: "Konika Konica Color Super SR100 tag"
+      - id: "0x007B"
+        name: Konika Konica Color Super SR 400
+        writable: false
+        description: "Konika Konica Color Super SR 400 tag"
+      - id: "0x008A"
+        name: Kodak Gold Unknown
+        writable: false
+        description: "Kodak Gold Unknown tag"
+      - id: "0x008B"
+        name: Kodak Unknown Neg A- Normal SBA
+        writable: false
+        description: "Kodak Unknown Neg A- Normal SBA tag"
+      - id: "0x008F"
+        name: Kodak Ektar 100 Gen 2
+        writable: false
+        description: "Kodak Ektar 100 Gen 2 tag"
+      - id: "0x0093"
+        name: Kodak Kodacolor CII
+        writable: false
+        description: "Kodak Kodacolor CII tag"
+      - id: "0x0094"
+        name: Kodak Kodacolor II
+        writable: false
+        description: "Kodak Kodacolor II tag"
+      - id: "0x0095"
+        name: Kodak Gold Plus 200 Gen 3
+        writable: false
+        description: "Kodak Gold Plus 200 Gen 3 tag"
+      - id: "0x0096"
+        name: Kodak Internegative +10% Contrast
+        writable: false
+        description: "Kodak Internegative +10% Contrast tag"
+      - id: "0x0097"
+        name: Agfa Agfacolor Ultra 50
+        writable: false
+        description: "Agfa Agfacolor Ultra 50 tag"
+      - id: "0x0098"
+        name: Fuji NHG 400
+        writable: false
+        description: "Fuji NHG 400 tag"
+      - id: "0x0099"
+        name: Agfa Agfacolor XRG 100
+        writable: false
+        description: "Agfa Agfacolor XRG 100 tag"
+      - id: "0x009A"
+        name: Kodak Gold Plus 100 Gen 3
+        writable: false
+        description: "Kodak Gold Plus 100 Gen 3 tag"
+      - id: "0x009B"
+        name: Konika Konica Color Super SR200 Gen 1
+        writable: false
+        description: "Konika Konica Color Super SR200 Gen 1 tag"
+      - id: "0x009C"
+        name: Konika Konica Color SR-G 160
+        writable: false
+        description: "Konika Konica Color SR-G 160 tag"
+      - id: "0x009D"
+        name: Agfa Agfacolor Optima 125
+        writable: false
+        description: "Agfa Agfacolor Optima 125 tag"
+      - id: "0x009E"
+        name: Agfa Agfacolor Portrait 160
+        writable: false
+        description: "Agfa Agfacolor Portrait 160 tag"
+      - id: "0x00A2"
+        name: Kodak Kodacolor VRG 400 Gen 1
+        writable: false
+        description: "Kodak Kodacolor VRG 400 Gen 1 tag"
+      - id: "0x00A3"
+        name: Kodak Gold 200 Gen 1
+        writable: false
+        description: "Kodak Gold 200 Gen 1 tag"
+      - id: "0x00A4"
+        name: Kodak Kodacolor VRG 100 Gen 2
+        writable: false
+        description: "Kodak Kodacolor VRG 100 Gen 2 tag"
+      - id: "0x00AE"
+        name: Kodak Internegative +20% Contrast
+        writable: false
+        description: "Kodak Internegative +20% Contrast tag"
+      - id: "0x00AF"
+        name: Kodak Internegative +30% Contrast
+        writable: false
+        description: "Kodak Internegative +30% Contrast tag"
+      - id: "0x00B0"
+        name: Kodak Internegative +40% Contrast
+        writable: false
+        description: "Kodak Internegative +40% Contrast tag"
+      - id: "0x00B8"
+        name: Kodak TMax-100 D-76 CI = .40
+        writable: false
+        description: "Kodak TMax-100 D-76 CI = .40 tag"
+      - id: "0x00B9"
+        name: Kodak TMax-100 D-76 CI = .50
+        writable: false
+        description: "Kodak TMax-100 D-76 CI = .50 tag"
+      - id: "0x00BA"
+        name: Kodak TMax-100 D-76 CI = .55
+        writable: false
+        description: "Kodak TMax-100 D-76 CI = .55 tag"
+      - id: "0x00BB"
+        name: Kodak TMax-100 D-76 CI = .70
+        writable: false
+        description: "Kodak TMax-100 D-76 CI = .70 tag"
+      - id: "0x00BC"
+        name: Kodak TMax-100 D-76 CI = .80
+        writable: false
+        description: "Kodak TMax-100 D-76 CI = .80 tag"
+      - id: "0x00BD"
+        name: Kodak TMax-100 TMax CI = .40
+        writable: false
+        description: "Kodak TMax-100 TMax CI = .40 tag"
+      - id: "0x00BE"
+        name: Kodak TMax-100 TMax CI = .50
+        writable: false
+        description: "Kodak TMax-100 TMax CI = .50 tag"
+      - id: "0x00BF"
+        name: Kodak TMax-100 TMax CI = .55
+        writable: false
+        description: "Kodak TMax-100 TMax CI = .55 tag"
+      - id: "0x00C0"
+        name: Kodak TMax-100 TMax CI = .70
+        writable: false
+        description: "Kodak TMax-100 TMax CI = .70 tag"
+      - id: "0x00C1"
+        name: Kodak TMax-100 TMax CI = .80
+        writable: false
+        description: "Kodak TMax-100 TMax CI = .80 tag"
+      - id: "0x00C3"
+        name: Kodak TMax-400 D-76 CI = .40
+        writable: false
+        description: "Kodak TMax-400 D-76 CI = .40 tag"
+      - id: "0x00C4"
+        name: Kodak TMax-400 D-76 CI = .50
+        writable: false
+        description: "Kodak TMax-400 D-76 CI = .50 tag"
+      - id: "0x00C5"
+        name: Kodak TMax-400 D-76 CI = .55
+        writable: false
+        description: "Kodak TMax-400 D-76 CI = .55 tag"
+      - id: "0x00C6"
+        name: Kodak TMax-400 D-76 CI = .70
+        writable: false
+        description: "Kodak TMax-400 D-76 CI = .70 tag"
+      - id: "0x00D6"
+        name: Kodak TMax-400 D-76 CI = .80
+        writable: false
+        description: "Kodak TMax-400 D-76 CI = .80 tag"
+      - id: "0x00D7"
+        name: Kodak TMax-400 TMax CI = .40
+        writable: false
+        description: "Kodak TMax-400 TMax CI = .40 tag"
+      - id: "0x00D8"
+        name: Kodak TMax-400 TMax CI = .50
+        writable: false
+        description: "Kodak TMax-400 TMax CI = .50 tag"
+      - id: "0x00D9"
+        name: Kodak TMax-400 TMax CI = .55
+        writable: false
+        description: "Kodak TMax-400 TMax CI = .55 tag"
+      - id: "0x00DA"
+        name: Kodak TMax-400 TMax CI = .70
+        writable: false
+        description: "Kodak TMax-400 TMax CI = .70 tag"
+      - id: "0x00DB"
+        name: Kodak TMax-400 TMax CI = .80
+        writable: false
+        description: "Kodak TMax-400 TMax CI = .80 tag"
+      - id: "0x00E0"
+        name: 3M ScotchColor ATG 400/EXL 400
+        writable: false
+        description: "3M ScotchColor ATG 400/EXL 400 tag"
+      - id: "0x010A"
+        name: Agfa Agfacolor Optima 200
+        writable: false
+        description: "Agfa Agfacolor Optima 200 tag"
+      - id: "0x010B"
+        name: Konika Impressa 50
+        writable: false
+        description: "Konika Impressa 50 tag"
+      - id: "0x010C"
+        name: Polaroid Polaroid CP 200
+        writable: false
+        description: "Polaroid Polaroid CP 200 tag"
+      - id: "0x010D"
+        name: Konika Konica Color Super SR200 Gen 2
+        writable: false
+        description: "Konika Konica Color Super SR200 Gen 2 tag"
+      - id: "0x010E"
+        name: ILFORD XP2 400
+        writable: false
+        description: "ILFORD XP2 400 tag"
+      - id: "0x010F"
+        name: Polaroid Polaroid Color HD2 100
+        writable: false
+        description: "Polaroid Polaroid Color HD2 100 tag"
+      - id: "0x0110"
+        name: Polaroid Polaroid Color HD2 400
+        writable: false
+        description: "Polaroid Polaroid Color HD2 400 tag"
+      - id: "0x0111"
+        name: Polaroid Polaroid Color HD2 200
+        writable: false
+        description: "Polaroid Polaroid Color HD2 200 tag"
+      - id: "0x011A"
+        name: 3M ScotchColor ATG-1 200
+        writable: false
+        description: "3M ScotchColor ATG-1 200 tag"
+      - id: "0x011C"
+        name: Konika XG 400
+        writable: false
+        description: "Konika XG 400 tag"
+      - id: "0x0133"
+        name: Kodak Universal Reversal B/W
+        writable: false
+        description: "Kodak Universal Reversal B/W tag"
+      - id: "0x0134"
+        name: Kodak RPC Copy Film Gen 1
+        writable: false
+        description: "Kodak RPC Copy Film Gen 1 tag"
+      - id: "0x0138"
+        name: Kodak Universal E6
+        writable: false
+        description: "Kodak Universal E6 tag"
+      - id: "0x0144"
+        name: Kodak Gold Ultra 400 Gen 4
+        writable: false
+        description: "Kodak Gold Ultra 400 Gen 4 tag"
+      - id: "0x0148"
+        name: Fuji Super G 100
+        writable: false
+        description: "Fuji Super G 100 tag"
+      - id: "0x0149"
+        name: Fuji Super G 200
+        writable: false
+        description: "Fuji Super G 200 tag"
+      - id: "0x014A"
+        name: Fuji Super G 400 Gen 2
+        writable: false
+        description: "Fuji Super G 400 Gen 2 tag"
+      - id: "0x014D"
+        name: Kodak Universal K14
+        writable: false
+        description: "Kodak Universal K14 tag"
+      - id: "0x014E"
+        name: Fuji Super G 400 Gen 1
+        writable: false
+        description: "Fuji Super G 400 Gen 1 tag"
+      - id: "0x016E"
+        name: Kodak Vericolor HC 6329 VHC
+        writable: false
+        description: "Kodak Vericolor HC 6329 VHC tag"
+      - id: "0x016F"
+        name: Kodak Vericolor HC 4329 VHC
+        writable: false
+        description: "Kodak Vericolor HC 4329 VHC tag"
+      - id: "0x0170"
+        name: Kodak Vericolor L 6013 VPL
+        writable: false
+        description: "Kodak Vericolor L 6013 VPL tag"
+      - id: "0x0171"
+        name: Kodak Vericolor L 4013 VPL
+        writable: false
+        description: "Kodak Vericolor L 4013 VPL tag"
+      - id: "0x01A2"
+        name: Kodak Ektacolor Gold II 400 Prof
+        writable: false
+        description: "Kodak Ektacolor Gold II 400 Prof tag"
+      - id: "0x01AE"
+        name: Kodak Royal Gold 1000
+        writable: false
+        description: "Kodak Royal Gold 1000 tag"
+      - id: "0x01AF"
+        name: Kodak Kodacolor VR 200 / 5093
+        writable: false
+        description: "Kodak Kodacolor VR 200 / 5093 tag"
+      - id: "0x01B0"
+        name: Kodak Gold Plus 100 Gen 4
+        writable: false
+        description: "Kodak Gold Plus 100 Gen 4 tag"
+      - id: "0x01BB"
+        name: Kodak Royal Gold 100
+        writable: false
+        description: "Kodak Royal Gold 100 tag"
+      - id: "0x01BC"
+        name: Kodak Royal Gold 400
+        writable: false
+        description: "Kodak Royal Gold 400 tag"
+      - id: "0x01BD"
+        name: Kodak Universal E6 auto-balance
+        writable: false
+        description: "Kodak Universal E6 auto-balance tag"
+      - id: "0x01BE"
+        name: Kodak Universal E6 illum. corr.
+        writable: false
+        description: "Kodak Universal E6 illum. corr. tag"
+      - id: "0x01BF"
+        name: Kodak Universal K14 auto-balance
+        writable: false
+        description: "Kodak Universal K14 auto-balance tag"
+      - id: "0x01C0"
+        name: Kodak Universal K14 illum. corr.
+        writable: false
+        description: "Kodak Universal K14 illum. corr. tag"
+      - id: "0x01C1"
+        name: Kodak Ektar 100 Gen 3 SY
+        writable: false
+        description: "Kodak Ektar 100 Gen 3 SY tag"
+      - id: "0x01C8"
+        name: Kodak Ektar 25
+        writable: false
+        description: "Kodak Ektar 25 tag"
+      - id: "0x01C9"
+        name: Kodak Ektar 100 Gen 3 CX
+        writable: false
+        description: "Kodak Ektar 100 Gen 3 CX tag"
+      - id: "0x01CA"
+        name: Kodak Ektapress Plus 100 Prof PJA-1
+        writable: false
+        description: "Kodak Ektapress Plus 100 Prof PJA-1 tag"
+      - id: "0x01CB"
+        name: Kodak Ektapress Gold II 100 Prof
+        writable: false
+        description: "Kodak Ektapress Gold II 100 Prof tag"
+      - id: "0x01CC"
+        name: Kodak Pro 100 PRN
+        writable: false
+        description: "Kodak Pro 100 PRN tag"
+      - id: "0x01CD"
+        name: Kodak Vericolor HC 100 Prof VHC-2
+        writable: false
+        description: "Kodak Vericolor HC 100 Prof VHC-2 tag"
+      - id: "0x01CE"
+        name: Kodak Prof Color Neg 100
+        writable: false
+        description: "Kodak Prof Color Neg 100 tag"
+      - id: "0x01CF"
+        name: Kodak Ektar 1000 Gen 2
+        writable: false
+        description: "Kodak Ektar 1000 Gen 2 tag"
+      - id: "0x01D0"
+        name: Kodak Ektapress Plus 1600 Pro PJC-1
+        writable: false
+        description: "Kodak Ektapress Plus 1600 Pro PJC-1 tag"
+      - id: "0x01D1"
+        name: Kodak Ektapress Gold II 1600 Prof
+        writable: false
+        description: "Kodak Ektapress Gold II 1600 Prof tag"
+      - id: "0x01D2"
+        name: Kodak Super Gold 1600 GF Gen 2
+        writable: false
+        description: "Kodak Super Gold 1600 GF Gen 2 tag"
+      - id: "0x01D3"
+        name: Kodak Kodacolor 100 Print Gen 4
+        writable: false
+        description: "Kodak Kodacolor 100 Print Gen 4 tag"
+      - id: "0x01D4"
+        name: Kodak Super Gold 100 Gen 4
+        writable: false
+        description: "Kodak Super Gold 100 Gen 4 tag"
+      - id: "0x01D5"
+        name: Kodak Gold 100 Gen 4
+        writable: false
+        description: "Kodak Gold 100 Gen 4 tag"
+      - id: "0x01D6"
+        name: Kodak Gold III 100 Gen 4
+        writable: false
+        description: "Kodak Gold III 100 Gen 4 tag"
+      - id: "0x01D7"
+        name: Kodak Funtime 100 FA
+        writable: false
+        description: "Kodak Funtime 100 FA tag"
+      - id: "0x01D8"
+        name: Kodak Funtime 200 FB
+        writable: false
+        description: "Kodak Funtime 200 FB tag"
+      - id: "0x01D9"
+        name: Kodak Kodacolor VR 200 Gen 4
+        writable: false
+        description: "Kodak Kodacolor VR 200 Gen 4 tag"
+      - id: "0x01DA"
+        name: Kodak Gold Super 200 Gen 4
+        writable: false
+        description: "Kodak Gold Super 200 Gen 4 tag"
+      - id: "0x01DB"
+        name: Kodak Kodacolor 200 Print Gen 4
+        writable: false
+        description: "Kodak Kodacolor 200 Print Gen 4 tag"
+      - id: "0x01DC"
+        name: Kodak Super Gold 200 Gen 4
+        writable: false
+        description: "Kodak Super Gold 200 Gen 4 tag"
+      - id: "0x01DD"
+        name: Kodak Gold 200 Gen 4
+        writable: false
+        description: "Kodak Gold 200 Gen 4 tag"
+      - id: "0x01DE"
+        name: Kodak Gold III 200 Gen 4
+        writable: false
+        description: "Kodak Gold III 200 Gen 4 tag"
+      - id: "0x01DF"
+        name: Kodak Gold Ultra 400 Gen 5
+        writable: false
+        description: "Kodak Gold Ultra 400 Gen 5 tag"
+      - id: "0x01E0"
+        name: Kodak Super Gold 400 Gen 5
+        writable: false
+        description: "Kodak Super Gold 400 Gen 5 tag"
+      - id: "0x01E1"
+        name: Kodak Gold 400 Gen 5
+        writable: false
+        description: "Kodak Gold 400 Gen 5 tag"
+      - id: "0x01E2"
+        name: Kodak Gold III 400 Gen 5
+        writable: false
+        description: "Kodak Gold III 400 Gen 5 tag"
+      - id: "0x01E3"
+        name: Kodak Kodacolor 400 Print Gen 5
+        writable: false
+        description: "Kodak Kodacolor 400 Print Gen 5 tag"
+      - id: "0x01E4"
+        name: Kodak Ektapress Plus 400 Prof PJB-2
+        writable: false
+        description: "Kodak Ektapress Plus 400 Prof PJB-2 tag"
+      - id: "0x01E5"
+        name: Kodak Ektapress Gold II 400 Prof G5
+        writable: false
+        description: "Kodak Ektapress Gold II 400 Prof G5 tag"
+      - id: "0x01E6"
+        name: Kodak Pro 400 PPF-2
+        writable: false
+        description: "Kodak Pro 400 PPF-2 tag"
+      - id: "0x01E7"
+        name: Kodak Ektacolor Gold II 400 EGP-4
+        writable: false
+        description: "Kodak Ektacolor Gold II 400 EGP-4 tag"
+      - id: "0x01E8"
+        name: Kodak Ektacolor Gold 400 Prof EGP-4
+        writable: false
+        description: "Kodak Ektacolor Gold 400 Prof EGP-4 tag"
+      - id: "0x01E9"
+        name: Kodak Ektapress Gold II Multspd PJM
+        writable: false
+        description: "Kodak Ektapress Gold II Multspd PJM tag"
+      - id: "0x01EA"
+        name: Kodak Pro 400 MC PMC
+        writable: false
+        description: "Kodak Pro 400 MC PMC tag"
+      - id: "0x01EB"
+        name: Kodak Vericolor 400 Prof VPH-2
+        writable: false
+        description: "Kodak Vericolor 400 Prof VPH-2 tag"
+      - id: "0x01EC"
+        name: Kodak Vericolor 400 Plus Prof VPH-2
+        writable: false
+        description: "Kodak Vericolor 400 Plus Prof VPH-2 tag"
+      - id: "0x01ED"
+        name: Kodak Unknown Neg Product Code 83
+        writable: false
+        description: "Kodak Unknown Neg Product Code 83 tag"
+      - id: "0x01F9"
+        name: Kodak Ektacolor Pro Gold 160 GPX
+        writable: false
+        description: "Kodak Ektacolor Pro Gold 160 GPX tag"
+      - id: "0x01FC"
+        name: Kodak Royal Gold 200
+        writable: false
+        description: "Kodak Royal Gold 200 tag"
+      - id: "0x0205"
+        name: Kodak 4050000000
+        writable: false
+        description: "Kodak 4050000000 tag"
+      - id: "0x0207"
+        name: Kodak Gold Plus 100 Gen 5
+        writable: false
+        description: "Kodak Gold Plus 100 Gen 5 tag"
+      - id: "0x0208"
+        name: Kodak Gold 800 Gen 1
+        writable: false
+        description: "Kodak Gold 800 Gen 1 tag"
+      - id: "0x0209"
+        name: Kodak Gold Super 200 Gen 5
+        writable: false
+        description: "Kodak Gold Super 200 Gen 5 tag"
+      - id: "0x020A"
+        name: Kodak Ektapress Plus 200 Prof
+        writable: false
+        description: "Kodak Ektapress Plus 200 Prof tag"
+      - id: "0x020B"
+        name: Kodak 4050 E6 auto-balance
+        writable: false
+        description: "Kodak 4050 E6 auto-balance tag"
+      - id: "0x020C"
+        name: Kodak 4050 E6 ilum. corr.
+        writable: false
+        description: "Kodak 4050 E6 ilum. corr. tag"
+      - id: "0x020D"
+        name: Kodak 4050 K14
+        writable: false
+        description: "Kodak 4050 K14 tag"
+      - id: "0x020E"
+        name: Kodak 4050 K14 auto-balance
+        writable: false
+        description: "Kodak 4050 K14 auto-balance tag"
+      - id: "0x020F"
+        name: Kodak 4050 K14 ilum. corr.
+        writable: false
+        description: "Kodak 4050 K14 ilum. corr. tag"
+      - id: "0x0210"
+        name: Kodak 4050 Reversal B&W
+        writable: false
+        description: "Kodak 4050 Reversal B&W tag"
+      - id: "0x0214"
+        name: Kodak Advantix 200
+        writable: false
+        description: "Kodak Advantix 200 tag"
+      - id: "0x0215"
+        name: Kodak Advantix 400
+        writable: false
+        description: "Kodak Advantix 400 tag"
+      - id: "0x0216"
+        name: Kodak Advantix 100
+        writable: false
+        description: "Kodak Advantix 100 tag"
+      - id: "0x0217"
+        name: Kodak Ektapress Multspd Prof PJM-2
+        writable: false
+        description: "Kodak Ektapress Multspd Prof PJM-2 tag"
+      - id: "0x0218"
+        name: Kodak Kodacolor VR 200 Gen 5
+        writable: false
+        description: "Kodak Kodacolor VR 200 Gen 5 tag"
+      - id: "0x0219"
+        name: Kodak Funtime 200 FB Gen 2
+        writable: false
+        description: "Kodak Funtime 200 FB Gen 2 tag"
+      - id: "0x021A"
+        name: Kodak Commercial 200
+        writable: false
+        description: "Kodak Commercial 200 tag"
+      - id: "0x021B"
+        name: Kodak Royal Gold 25 Copystand
+        writable: false
+        description: "Kodak Royal Gold 25 Copystand tag"
+      - id: "0x021C"
+        name: Kodak Kodacolor DA 100 Gen 5
+        writable: false
+        description: "Kodak Kodacolor DA 100 Gen 5 tag"
+      - id: "0x0221"
+        name: Kodak Kodacolor VR 400 Gen 2
+        writable: false
+        description: "Kodak Kodacolor VR 400 Gen 2 tag"
+      - id: "0x0222"
+        name: Kodak Gold 100 Gen 6
+        writable: false
+        description: "Kodak Gold 100 Gen 6 tag"
+      - id: "0x0223"
+        name: Kodak Gold 200 Gen 6
+        writable: false
+        description: "Kodak Gold 200 Gen 6 tag"
+      - id: "0x0224"
+        name: Kodak Gold 400 Gen 6
+        writable: false
+        description: "Kodak Gold 400 Gen 6 tag"
+      - id: "0x0225"
+        name: Kodak Royal Gold 100 Gen 2
+        writable: false
+        description: "Kodak Royal Gold 100 Gen 2 tag"
+      - id: "0x0226"
+        name: Kodak Royal Gold 200 Gen 2
+        writable: false
+        description: "Kodak Royal Gold 200 Gen 2 tag"
+      - id: "0x0227"
+        name: Kodak Royal Gold 400 Gen 2
+        writable: false
+        description: "Kodak Royal Gold 400 Gen 2 tag"
+      - id: "0x0228"
+        name: Kodak Gold Max 800 Gen 2
+        writable: false
+        description: "Kodak Gold Max 800 Gen 2 tag"
+      - id: "0x022A"
+        name: Kodak 4050 E6 high contrast
+        writable: false
+        description: "Kodak 4050 E6 high contrast tag"
+      - id: "0x022B"
+        name: Kodak 4050 E6 low saturation high contrast
+        writable: false
+        description: "Kodak 4050 E6 low saturation high contrast tag"
+      - id: "0x022C"
+        name: Kodak 4050 E6 low saturation
+        writable: false
+        description: "Kodak 4050 E6 low saturation tag"
+      - id: "0x022D"
+        name: Kodak Universal E-6 Low Saturation
+        writable: false
+        description: "Kodak Universal E-6 Low Saturation tag"
+      - id: "0x022E"
+        name: Kodak T-Max T400 CN
+        writable: false
+        description: "Kodak T-Max T400 CN tag"
+      - id: "0x0233"
+        name: Kodak Ektapress PJ100
+        writable: false
+        description: "Kodak Ektapress PJ100 tag"
+      - id: "0x0234"
+        name: Kodak Ektapress PJ400
+        writable: false
+        description: "Kodak Ektapress PJ400 tag"
+      - id: "0x0235"
+        name: Kodak Ektapress PJ800
+        writable: false
+        description: "Kodak Ektapress PJ800 tag"
+      - id: "0x0237"
+        name: Kodak Portra 160NC
+        writable: false
+        description: "Kodak Portra 160NC tag"
+      - id: "0x0238"
+        name: Kodak Portra 160VC
+        writable: false
+        description: "Kodak Portra 160VC tag"
+      - id: "0x0239"
+        name: Kodak Portra 400NC
+        writable: false
+        description: "Kodak Portra 400NC tag"
+      - id: "0x023A"
+        name: Kodak Portra 400VC
+        writable: false
+        description: "Kodak Portra 400VC tag"
+      - id: "0x023F"
+        name: Kodak Advantix 100-2
+        writable: false
+        description: "Kodak Advantix 100-2 tag"
+      - id: "0x0240"
+        name: Kodak Advantix 200-2
+        writable: false
+        description: "Kodak Advantix 200-2 tag"
+      - id: "0x0241"
+        name: Kodak Advantix Black & White + 400
+        writable: false
+        description: "Kodak Advantix Black & White + 400 tag"
+      - id: "0x0242"
+        name: Kodak Ektapress PJ800-2
+        writable: false
+        description: "Kodak Ektapress PJ800-2 tag"
+      - id: "0x014B"
+        name: CopyrightStatus
+        writable: false
+        description: "CopyrightStatus tag"
+      - id: "0x00FF"
+        name: Not specified
+        writable: false
+        description: "Not specified tag"
+      - id: "0x014C"
+        name: CopyrightFileName
+        writable: false
+        description: "CopyrightFileName tag"
+      - id: "0x0602"
+        name: Orientation
+        writable: false
+        description: "Orientation tag"
+      - id: "0x0001"
+        name: Rotate 270 CW
+        writable: false
+        description: "Rotate 270 CW tag"
+      - id: "0x0002"
+        name: Rotate 180
+        writable: false
+        description: "Rotate 180 tag"
+      - id: "0x0003"
+        name: Rotate 90 CW
+        writable: false
+        description: "Rotate 90 CW tag"
+      - id: "0x0001"
+        name: Class 2 - Large format film
+        writable: false
+        description: "Class 2 - Large format film tag"
+      - id: "0x0002"
+        name: Class 3 - Text and graphics, high resolution
+        writable: false
+        description: "Class 3 - Text and graphics, high resolution tag"
+      - id: "0x0003"
+        name: Class 4 - Text and graphics, high dynamic range
+        writable: false
+        description: "Class 4 - Text and graphics, high dynamic range tag"
