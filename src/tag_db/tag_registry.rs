@@ -5,13 +5,13 @@
 //! This is a manual implementation that will later be replaced by automated tag
 //! generation in build.rs (task I5.T5).
 
-use exiftool_tags::GENERATED_TAG_REGISTRY;
 use crate::core::{FormatFamily, TagDescriptor, TagId, ValueType};
+use exiftool_tags::GENERATED_TAG_REGISTRY;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
 // Import YAML tag databases for fallback lookup
-use exiftool_tags::{core, camera, media, image, document, specialty};
+use exiftool_tags::{camera, core, document, image, media, specialty};
 
 /// Static registry containing all 500+ registered metadata tags.
 /// Uses lazy initialization for zero-cost abstraction until first access.
@@ -6849,7 +6849,9 @@ static YAML_TAG_DESCRIPTORS: Lazy<HashMap<String, TagDescriptor>> = Lazy::new(||
                             format_family,
                             tag.writable,
                             ValueType::String, // Default to String; YAML doesn't have detailed type info
-                            tag.description.clone().unwrap_or_else(|| format!("{} tag", tag.name)),
+                            tag.description
+                                .clone()
+                                .unwrap_or_else(|| format!("{} tag", tag.name)),
                             Vec::new(), // No example values in YAML
                         );
                         descriptors.insert(full_name, descriptor);

@@ -11,10 +11,8 @@ pub use types::*;
 const CORE_TAGS_YAML: &str = include_str!("core_tags.yaml");
 
 /// Lazily-initialized core tag database
-pub static CORE_TAGS: Lazy<TagDatabase> = Lazy::new(|| {
-    serde_yaml::from_str(CORE_TAGS_YAML)
-        .expect("Failed to parse core tags YAML")
-});
+pub static CORE_TAGS: Lazy<TagDatabase> =
+    Lazy::new(|| serde_yaml::from_str(CORE_TAGS_YAML).expect("Failed to parse core tags YAML"));
 
 /// Get a specific tag table by name
 pub fn get_tag_table(name: &str) -> Option<&'static TagTable> {

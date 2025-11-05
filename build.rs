@@ -45,39 +45,35 @@ fn get_domain_for_table(table_name: &str) -> &'static str {
 
     match base_name {
         // Core - universal standards
-        "EXIF" | "XMP" | "IPTC" | "GPS" | "ICC_Profile" | "MWG" |
-        "Photoshop" | "FlashPix" | "GeoTiff" | "Composite" | "Trailer" |
-        "MakerNotes" => "core",
+        "EXIF" | "XMP" | "IPTC" | "GPS" | "ICC_Profile" | "MWG" | "Photoshop" | "FlashPix"
+        | "GeoTiff" | "Composite" | "Trailer" | "MakerNotes" => "core",
 
         // Camera manufacturers
-        "Canon" | "CanonCustom" | "CanonRaw" | "Nikon" | "NikonCapture" |
-        "NikonCustom" | "NikonSettings" | "Sony" | "SonyIDC" | "Panasonic" |
-        "PanasonicRaw" | "Olympus" | "FujiFilm" | "Pentax" | "Casio" |
-        "Minolta" | "MinoltaRaw" | "Ricoh" | "Sigma" | "SigmaRaw" |
-        "PhaseOne" | "Kodak" | "KyoceraRaw" | "Samsung" | "Sanyo" |
-        "HP" | "GE" | "Reconyx" | "JVC" | "Motorola" | "Apple" |
-        "DJI" | "GoPro" | "Parrot" | "Infiray" | "FLIR" => "camera",
+        "Canon" | "CanonCustom" | "CanonRaw" | "Nikon" | "NikonCapture" | "NikonCustom"
+        | "NikonSettings" | "Sony" | "SonyIDC" | "Panasonic" | "PanasonicRaw" | "Olympus"
+        | "FujiFilm" | "Pentax" | "Casio" | "Minolta" | "MinoltaRaw" | "Ricoh" | "Sigma"
+        | "SigmaRaw" | "PhaseOne" | "Kodak" | "KyoceraRaw" | "Samsung" | "Sanyo" | "HP" | "GE"
+        | "Reconyx" | "JVC" | "Motorola" | "Apple" | "DJI" | "GoPro" | "Parrot" | "Infiray"
+        | "FLIR" => "camera",
 
         // Media formats
-        "QuickTime" | "Matroska" | "MPEG" | "M2TS" | "MXF" | "FLAC" |
-        "AAC" | "AIFF" | "Vorbis" | "Opus" | "ID3" | "APE" | "ASF" |
-        "Flash" | "Real" | "Theora" | "H264" | "WavPack" | "MPC" |
-        "DSF" | "WTV" => "media",
+        "QuickTime" | "Matroska" | "MPEG" | "M2TS" | "MXF" | "FLAC" | "AAC" | "AIFF" | "Vorbis"
+        | "Opus" | "ID3" | "APE" | "ASF" | "Flash" | "Real" | "Theora" | "H264" | "WavPack"
+        | "MPC" | "DSF" | "WTV" => "media",
 
         // Image formats
-        "PNG" | "GIF" | "JPEG" | "JPEG2000" | "BMP" | "TIFF" | "DNG" |
-        "MNG" | "PGF" | "PICT" | "OpenEXR" | "FLIF" | "BPG" | "WebP" |
-        "DPX" | "PSP" | "PCX" | "MIFF" | "PhotoCD" | "ICO" | "Palm" => "image",
+        "PNG" | "GIF" | "JPEG" | "JPEG2000" | "BMP" | "TIFF" | "DNG" | "MNG" | "PGF" | "PICT"
+        | "OpenEXR" | "FLIF" | "BPG" | "WebP" | "DPX" | "PSP" | "PCX" | "MIFF" | "PhotoCD"
+        | "ICO" | "Palm" => "image",
 
         // Document formats
-        "PDF" | "PostScript" | "Font" | "PLIST" | "HTML" | "Torrent" |
-        "ZIP" | "TNEF" | "VCard" | "Microsoft" | "MacOS" | "EXE" |
-        "Lnk" | "RSRC" | "FotoStation" | "PhotoMechanic" | "ITC" |
-        "GIMP" | "GM" | "Google" => "document",
+        "PDF" | "PostScript" | "Font" | "PLIST" | "HTML" | "Torrent" | "ZIP" | "TNEF" | "VCard"
+        | "Microsoft" | "MacOS" | "EXE" | "Lnk" | "RSRC" | "FotoStation" | "PhotoMechanic"
+        | "ITC" | "GIMP" | "GM" | "Google" => "document",
 
         // Specialty/scientific
-        "DICOM" | "FITS" | "MRC" | "STIM" | "PCAP" | "XISF" | "MISB" |
-        "DjVu" | "ISO" | "Nintendo" => "specialty",
+        "DICOM" | "FITS" | "MRC" | "STIM" | "PCAP" | "XISF" | "MISB" | "DjVu" | "ISO"
+        | "Nintendo" => "specialty",
 
         // Default to core for unknown
         _ => "core",
@@ -585,7 +581,8 @@ fn generate_domain_yaml(domain: &str, tags: &[TagDefinition]) -> Result<String> 
             // Optional description field
             if !tag.description.is_empty() {
                 // Escape YAML special characters in description
-                let escaped = tag.description
+                let escaped = tag
+                    .description
                     .replace('\\', "\\\\")
                     .replace('"', "\\\"")
                     .replace('\n', " ")

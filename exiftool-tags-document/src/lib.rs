@@ -2,14 +2,13 @@
 //!
 //! Contains tags for PDF, PostScript, fonts, archives, etc.
 
-use once_cell::sync::Lazy;
 pub use exiftool_tags_core::types::*;
+use once_cell::sync::Lazy;
 
 const DOCUMENT_TAGS_YAML: &str = include_str!("document_tags.yaml");
 
 pub static DOCUMENT_TAGS: Lazy<TagDatabase> = Lazy::new(|| {
-    serde_yaml::from_str(DOCUMENT_TAGS_YAML)
-        .expect("Failed to parse document tags YAML")
+    serde_yaml::from_str(DOCUMENT_TAGS_YAML).expect("Failed to parse document tags YAML")
 });
 
 pub fn get_tag_table(name: &str) -> Option<&'static TagTable> {
