@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 pub mod tag_registry;
+pub mod generated_tags;
 
 // Re-export everything from exiftool-tags crate
 pub use exiftool_tags::*;
