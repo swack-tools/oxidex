@@ -6,10 +6,10 @@
 default:
     @just --list
 
-# Run all tests (matches CI main test suite, excludes comparison tests)
+# Run all tests (matches CI exactly)
 test:
     @echo "Running all tests (matching CI)..."
-    cargo test --release --verbose --workspace
+    cargo test --release --verbose --all-features
 
 # Run tests in debug mode
 test-debug:
@@ -19,7 +19,7 @@ test-debug:
 # Run tests with output capture disabled
 test-nocapture:
     @echo "Running all tests with output..."
-    cargo test --release --verbose --workspace -- --nocapture --test-threads=1
+    cargo test --release --verbose --all-features -- --nocapture --test-threads=1
 
 # Run only unit tests
 test-unit:
