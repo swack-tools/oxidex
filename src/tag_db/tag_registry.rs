@@ -10,6 +10,9 @@ use crate::core::{FormatFamily, TagDescriptor, TagId, ValueType};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
+// Import YAML tag databases for fallback lookup
+use exiftool_tags::{core, camera, media, image, document, specialty};
+
 /// Static registry containing all 500+ registered metadata tags.
 /// Uses lazy initialization for zero-cost abstraction until first access.
 static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
@@ -6791,6 +6794,74 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
     registry
 });
 
+/// Lazy-loaded registry of TagDescriptors built from YAML tag databases.
+/// This serves as a fallback when tags are not found in the manual TAG_REGISTRY.
+static YAML_TAG_DESCRIPTORS: Lazy<HashMap<String, TagDescriptor>> = Lazy::new(|| {
+    let mut descriptors = HashMap::with_capacity(10000);
+
+    // Helper to parse hex tag ID
+    fn parse_tag_id(id_str: &str) -> Option<u16> {
+        if let Some(hex_str) = id_str.strip_prefix("0x") {
+            u16::from_str_radix(hex_str, 16).ok()
+        } else {
+            id_str.parse::<u16>().ok()
+        }
+    }
+
+    // Helper to determine FormatFamily and prefix from table name
+    fn get_format_info(table_name: &str) -> Option<(FormatFamily, &str)> {
+        if table_name.starts_with("Exif::") {
+            Some((FormatFamily::EXIF, "EXIF"))
+        } else if table_name.starts_with("GPS::") {
+            Some((FormatFamily::GPS, "GPS"))
+        } else if table_name.starts_with("XMP::") {
+            Some((FormatFamily::XMP, "XMP"))
+        } else if table_name.starts_with("IPTC::") {
+            Some((FormatFamily::IPTC, "IPTC"))
+        } else if table_name.starts_with("ICC_Profile::") {
+            Some((FormatFamily::ICCProfile, "ICC_Profile"))
+        } else if table_name.starts_with("Photoshop::") {
+            Some((FormatFamily::Photoshop, "Photoshop"))
+        } else {
+            None
+        }
+    }
+
+    // Scan all domain tag databases
+    let all_tables = [
+        &core::CORE_TAGS.tables[..],
+        &camera::CAMERA_TAGS.tables[..],
+        &media::MEDIA_TAGS.tables[..],
+        &image::IMAGE_TAGS.tables[..],
+        &document::DOCUMENT_TAGS.tables[..],
+        &specialty::SPECIALTY_TAGS.tables[..],
+    ];
+
+    for tables in all_tables.iter() {
+        for table in tables.iter() {
+            if let Some((format_family, prefix)) = get_format_info(&table.name) {
+                for tag in &table.tags {
+                    if let Some(tag_id) = parse_tag_id(&tag.id) {
+                        let full_name = format!("{}:{}", prefix, tag.name);
+                        let descriptor = TagDescriptor::new(
+                            TagId::Numeric(tag_id),
+                            full_name.clone(),
+                            format_family,
+                            tag.writable,
+                            ValueType::String, // Default to String; YAML doesn't have detailed type info
+                            tag.description.clone().unwrap_or_else(|| format!("{} tag", tag.name)),
+                            Vec::new(), // No example values in YAML
+                        );
+                        descriptors.insert(full_name, descriptor);
+                    }
+                }
+            }
+        }
+    }
+
+    descriptors
+});
+
 /// Retrieves a tag descriptor by its canonical name.
 ///
 /// # Arguments
@@ -6812,13 +6883,18 @@ static TAG_REGISTRY: Lazy<HashMap<&'static str, TagDescriptor>> = Lazy::new(|| {
 /// assert!(unknown.is_none());
 /// ```
 pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
-    // Try direct lookup first
+    // Try direct lookup first in manual registry
     if let Some(descriptor) = TAG_REGISTRY.get(name) {
         return Some(descriptor);
     }
 
     // Try generated registry direct match
     if let Some(descriptor) = GENERATED_TAG_REGISTRY.get(name) {
+        return Some(descriptor);
+    }
+
+    // Try YAML registry direct match
+    if let Some(descriptor) = YAML_TAG_DESCRIPTORS.get(name) {
         return Some(descriptor);
     }
 
@@ -6839,13 +6915,14 @@ pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
         }
     } else {
         // GPS and other families stay as-is
-        // Try generated registry before giving up
-        return GENERATED_TAG_REGISTRY.get(name);
+        // Try YAML registry before giving up
+        return YAML_TAG_DESCRIPTORS.get(name);
     };
 
     TAG_REGISTRY
         .get(normalized_name.as_str())
         .or_else(|| GENERATED_TAG_REGISTRY.get(normalized_name.as_str()))
+        .or_else(|| YAML_TAG_DESCRIPTORS.get(normalized_name.as_str()))
 }
 
 /// Returns the total number of tags in the registry.
