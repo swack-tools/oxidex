@@ -25,6 +25,59 @@ const GENERATED_TAGS_PATH: &str = "src/tag_db/generated_tags.rs";
 /// Minimum required tag count (matching manual registry)
 const MIN_TAG_COUNT: usize = 500;
 
+/// Map tag table name to domain crate
+///
+/// This function routes tag tables to their appropriate domain crate based on
+/// the table name. This enables splitting the monolithic tag database into
+/// domain-specific crates for faster parallel compilation.
+///
+/// # Arguments
+/// * `table_name` - The name of the tag table (e.g., "Canon", "EXIF", "QuickTime")
+///
+/// # Returns
+/// The domain name as a static string: "core", "camera", "media", "image", "document", or "specialty"
+fn get_domain_for_table(table_name: &str) -> &'static str {
+    match table_name {
+        // Core - universal standards
+        "EXIF" | "XMP" | "IPTC" | "GPS" | "ICC_Profile" | "MWG" |
+        "Photoshop" | "FlashPix" | "GeoTIFF" | "Composite" | "Trailer" |
+        "MakerNotes" => "core",
+
+        // Camera manufacturers
+        "Canon" | "CanonCustom" | "CanonRaw" | "Nikon" | "NikonCapture" |
+        "NikonCustom" | "NikonSettings" | "Sony" | "SonyIDC" | "Panasonic" |
+        "PanasonicRaw" | "Olympus" | "Fujifilm" | "Pentax" | "Casio" |
+        "Minolta" | "MinoltaRaw" | "Ricoh" | "Sigma" | "SigmaRaw" |
+        "PhaseOne" | "Kodak" | "KyoceraRaw" | "Samsung" | "Sanyo" |
+        "HP" | "GE" | "Reconyx" | "JVC" | "Motorola" | "Apple" |
+        "DJI" | "GoPro" | "Parrot" | "Infiray" | "FLIR" => "camera",
+
+        // Media formats
+        "QuickTime" | "Matroska" | "MPEG" | "M2TS" | "MXF" | "FLAC" |
+        "AAC" | "AIFF" | "Vorbis" | "Opus" | "ID3" | "APE" | "ASF" |
+        "Flash" | "Real" | "Theora" | "H264" | "WavPack" | "MPC" |
+        "DSF" | "WTV" => "media",
+
+        // Image formats
+        "PNG" | "GIF" | "JPEG" | "JPEG2000" | "BMP" | "TIFF" | "DNG" |
+        "MNG" | "PGF" | "PICT" | "OpenEXR" | "FLIF" | "BPG" | "WebP" |
+        "DPX" | "PSP" | "PCX" | "MIFF" | "PhotoCD" | "ICO" | "Palm" => "image",
+
+        // Document formats
+        "PDF" | "PostScript" | "Font" | "PList" | "HTML" | "Torrent" |
+        "ZIP" | "TNEF" | "VCard" | "Microsoft" | "MacOS" | "EXE" |
+        "Lnk" | "RSRC" | "FotoStation" | "PhotoMechanic" | "ITC" |
+        "GIMP" | "GM" | "Google" => "document",
+
+        // Specialty/scientific
+        "DICOM" | "FITS" | "MRC" | "STIM" | "PCAP" | "XISF" | "MISB" |
+        "DjVu" | "ISO" | "Nintendo" => "specialty",
+
+        // Default to core for unknown
+        _ => "core",
+    }
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/tag_db/tag_registry.rs");
