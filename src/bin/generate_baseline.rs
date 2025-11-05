@@ -19,6 +19,7 @@
 //! cargo run --bin generate_baseline -- --input tests/fixtures/jpeg --output tests/baselines/jpeg
 //! ```
 
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -26,6 +27,27 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// ExifTool-RS Baseline Generation Tool
+///
+/// Generates baseline metadata outputs for all test fixtures by comparing
+/// Perl ExifTool and ExifTool-RS outputs.
+#[derive(Parser, Debug)]
+#[command(name = "generate_baseline")]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// Input directory containing test images
+    #[arg(short, long, default_value = "tests/fixtures")]
+    input: PathBuf,
+
+    /// Output directory for baseline files
+    #[arg(short, long, default_value = "tests/baselines")]
+    output: PathBuf,
+
+    /// Update existing baselines (uses default paths)
+    #[arg(short, long)]
+    update: bool,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct BaselineMetadata {
@@ -274,28 +296,12 @@ fn find_test_images(dir: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
+    // Parse command line arguments using clap (safe from invalid Unicode)
+    let cli = Cli::parse();
 
-    // Parse command line arguments
-    let input_dir = if let Some(idx) = args.iter().position(|a| a == "--input") {
-        args.get(idx + 1)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("tests/fixtures"))
-    } else if args.contains(&"--update".to_string()) {
-        PathBuf::from("tests/fixtures")
-    } else {
-        PathBuf::from("tests/fixtures")
-    };
-
-    let output_dir = if let Some(idx) = args.iter().position(|a| a == "--output") {
-        args.get(idx + 1)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("tests/baselines"))
-    } else if args.contains(&"--update".to_string()) {
-        PathBuf::from("tests/baselines")
-    } else {
-        PathBuf::from("tests/baselines")
-    };
+    // Use input/output from CLI args (defaults are handled by clap)
+    let input_dir = cli.input;
+    let output_dir = cli.output;
 
     println!("ExifTool-RS Baseline Generation Tool");
     println!("====================================\n");
