@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "exiftool-tags", "exiftool-tags-core", "exiftool-tags-camera"]
+members = [".", "exiftool-tags", "exiftool-tags-core", "exiftool-tags-camera", "exiftool-tags-media"]
 resolver = "2"
 
 [package]
