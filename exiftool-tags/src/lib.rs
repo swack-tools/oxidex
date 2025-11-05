@@ -28,11 +28,11 @@
 
 // Re-export all domain crates at the module level
 // This allows users to access domain-specific functionality via `exiftool_tags::core::`, etc.
-pub use exiftool_tags_core as core;
 pub use exiftool_tags_camera as camera;
-pub use exiftool_tags_media as media;
-pub use exiftool_tags_image as image;
+pub use exiftool_tags_core as core;
 pub use exiftool_tags_document as document;
+pub use exiftool_tags_image as image;
+pub use exiftool_tags_media as media;
 pub use exiftool_tags_specialty as specialty;
 
 // Re-export common types at root level for convenience
@@ -133,11 +133,17 @@ mod tests {
     fn test_domain_specific_access() {
         // Core domain should be accessible
         let core_tags = &*core::CORE_TAGS;
-        assert!(!core_tags.tables.is_empty(), "Core tags should not be empty");
+        assert!(
+            !core_tags.tables.is_empty(),
+            "Core tags should not be empty"
+        );
 
         // Camera domain should be accessible
         let camera_tags = &*camera::CAMERA_TAGS;
-        assert!(!camera_tags.tables.is_empty(), "Camera tags should not be empty");
+        assert!(
+            !camera_tags.tables.is_empty(),
+            "Camera tags should not be empty"
+        );
     }
 
     /// Test that the unified get_tag_table function works

@@ -2,14 +2,13 @@
 //!
 //! Contains tags for DICOM, FITS, MRC, and other medical/scientific formats
 
-use once_cell::sync::Lazy;
 pub use exiftool_tags_core::types::*;
+use once_cell::sync::Lazy;
 
 const SPECIALTY_TAGS_YAML: &str = include_str!("specialty_tags.yaml");
 
 pub static SPECIALTY_TAGS: Lazy<TagDatabase> = Lazy::new(|| {
-    serde_yaml::from_str(SPECIALTY_TAGS_YAML)
-        .expect("Failed to parse specialty tags YAML")
+    serde_yaml::from_str(SPECIALTY_TAGS_YAML).expect("Failed to parse specialty tags YAML")
 });
 
 pub fn get_tag_table(name: &str) -> Option<&'static TagTable> {
