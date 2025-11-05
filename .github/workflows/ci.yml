@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ "**" ]
+    branches: ["**"]
   pull_request:
-    branches: [ "**" ]
+    branches: ["**"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -61,7 +61,7 @@ jobs:
 
   audit:
     name: Security Audit
-    runs-on: ubicloud-premium-30
+    runs-on: ubicloud-premium-2
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -76,7 +76,7 @@ jobs:
 
   coverage:
     name: Code Coverage
-    runs-on: ubicloud-premium-30
+    runs-on: ubicloud-premium-4
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -105,7 +105,7 @@ jobs:
 
   integration-tests:
     name: Integration Tests (ExifTool Comparison)
-    runs-on: ubicloud-premium-30
+    runs-on: ubicloud-premium-4
     timeout-minutes: 30
 
     steps:
@@ -154,7 +154,7 @@ jobs:
 
   benchmarks:
     name: Performance Benchmarks
-    runs-on: ubicloud-premium-30
+    runs-on: ubicloud-premium-2s
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -177,14 +177,14 @@ jobs:
         uses: benchmark-action/github-action-benchmark@4bdcce38c94cec68da58d012ac24b7b1155efe8b # v1
         if: github.ref == 'refs/heads/main'
         with:
-          tool: 'cargo'
+          tool: "cargo"
           output-file-path: target/criterion/*/new/estimates.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: false
-          alert-threshold: '110%'
+          alert-threshold: "110%"
           comment-on-alert: true
           fail-on-alert: false
-          alert-comment-cc-users: '@exiftool-rs/maintainers'
+          alert-comment-cc-users: "@exiftool-rs/maintainers"
 
       - name: Upload benchmark results
         if: always()
