@@ -173,18 +173,9 @@ jobs:
       - name: Run benchmarks
         run: cargo bench --bench integration_benchmarks --bench parse_benchmarks
 
-      - name: Store benchmark results
-        uses: benchmark-action/github-action-benchmark@4bdcce38c94cec68da58d012ac24b7b1155efe8b # v1
-        if: github.ref == 'refs/heads/main'
-        with:
-          tool: "cargo"
-          output-file-path: target/criterion/*/new/estimates.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
-          alert-threshold: "110%"
-          comment-on-alert: true
-          fail-on-alert: false
-          alert-comment-cc-users: "@exiftool-rs/maintainers"
+      # Note: Benchmark comparison action removed due to path globbing issues.
+      # Benchmark results are still captured and uploaded as artifacts below.
+      # For benchmark comparisons, review the uploaded artifacts manually.
 
       - name: Upload benchmark results
         if: always()
