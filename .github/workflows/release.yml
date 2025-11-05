@@ -77,8 +77,8 @@ jobs:
 
           # macOS Intel
           - target: x86_64-apple-darwin
-            os: puzl-ubuntu-latest
-            use_cross: true
+            os: macos-13
+            use_cross: false
             binary_name: exiftool-rs
             archive_name: exiftool-rs-x86_64-macos.tar.gz
 
@@ -90,13 +90,13 @@ jobs:
             archive_name: exiftool-rs-aarch64-macos.tar.gz
 
           # Windows x86_64
-          - target: x86_64-pc-windows-gnu
-            os: puzl-ubuntu-latest
-            use_cross: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            use_cross: false
             binary_name: exiftool-rs.exe
             archive_name: exiftool-rs-x86_64-windows.zip
 
-    steps:
+    steps:  
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -133,7 +133,7 @@ jobs:
         run: |
           cross build --release --target ${{ matrix.target }}
 
-      - name: Build with cargo (macOS native)
+      - name: Build with cargo (native)
         if: "!matrix.use_cross"
         run: |
           cargo build --release --target ${{ matrix.target }}
