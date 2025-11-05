@@ -13,7 +13,7 @@ env:
 jobs:
   test:
     name: Test Suite
-    runs-on: ubicloud-standard-2
+    runs-on: ubicloud
     timeout-minutes: 45
 
     steps:
@@ -61,7 +61,7 @@ jobs:
 
   audit:
     name: Security Audit
-    runs-on: ubicloud-standard-2
+    runs-on: ubicloud
     timeout-minutes: 10
     steps:
       - name: Checkout repository
@@ -76,7 +76,7 @@ jobs:
 
   coverage:
     name: Code Coverage
-    runs-on: ubicloud-standard-2
+    runs-on: ubicloud
     timeout-minutes: 45
     steps:
       - name: Checkout repository
@@ -105,7 +105,7 @@ jobs:
 
   integration-tests:
     name: Integration Tests (ExifTool Comparison)
-    runs-on: ubicloud-standard-2
+    runs-on: ubicloud
     timeout-minutes: 45
 
     steps:
@@ -139,7 +139,7 @@ jobs:
         run: |
           echo "# ExifTool Comparison Test Results" > comparison_report.md
           echo "" >> comparison_report.md
-          echo "**Platform:** ubicloud-standard-2 (Ubuntu Linux)" >> comparison_report.md
+          echo "**Platform:** ubicloud (Ubuntu Linux)" >> comparison_report.md
           echo "**Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> comparison_report.md
           echo "" >> comparison_report.md
           echo "See test output above for detailed match rates." >> comparison_report.md
@@ -154,7 +154,7 @@ jobs:
 
   benchmarks:
     name: Performance Benchmarks
-    runs-on: ubicloud-standard-2
+    runs-on: ubicloud
     timeout-minutes: 30
     steps:
       - name: Checkout repository
