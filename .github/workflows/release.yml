@@ -63,22 +63,22 @@ jobs:
         include:
           # Linux x86_64 (static musl)
           - target: x86_64-unknown-linux-musl
-            os: ubicloud
+            os: puzl-ubuntu-latest
             use_cross: true
             binary_name: exiftool-rs
             archive_name: exiftool-rs-x86_64-linux-musl.tar.gz
 
           # Linux ARM64 (static musl)
           - target: aarch64-unknown-linux-musl
-            os: ubicloud
+            os: puzl-ubuntu-latest
             use_cross: true
             binary_name: exiftool-rs
             archive_name: exiftool-rs-aarch64-linux-musl.tar.gz
 
           # macOS Intel
           - target: x86_64-apple-darwin
-            os: macos-13
-            use_cross: false
+            os: puzl-ubuntu-latest
+            use_cross: true
             binary_name: exiftool-rs
             archive_name: exiftool-rs-x86_64-macos.tar.gz
 
@@ -91,7 +91,7 @@ jobs:
 
           # Windows x86_64
           - target: x86_64-pc-windows-gnu
-            os: ubicloud
+            os: puzl-ubuntu-latest
             use_cross: true
             binary_name: exiftool-rs.exe
             archive_name: exiftool-rs-x86_64-windows.zip
