@@ -719,153 +719,11 @@ fn generate_legacy_rust_stub(tags: &[TagDefinition]) -> Result<()> {
     Ok(())
 }
 
-/// Generates a single format family module
-fn generate_family_module(path: &Path, family: &str, tags: &[&TagDefinition]) -> Result<()> {
-    let mut file = File::create(path)?;
-
-    writeln!(file, "//! {} format family tags (auto-generated)", family)?;
-    writeln!(file)?;
-    writeln!(
-        file,
-        "use crate::core::{{FormatFamily, TagDescriptor, TagId, ValueType}};"
-    )?;
-    writeln!(file, "use once_cell::sync::Lazy;")?;
-    writeln!(file, "use std::collections::HashMap;")?;
-    writeln!(file)?;
-
-    writeln!(
-        file,
-        "static TAGS: Lazy<Vec<TagDescriptor>> = Lazy::new(|| vec!["
-    )?;
-    for tag in tags {
-        generate_tag_array_entry(&mut file, tag)?;
-    }
-    writeln!(file, "]);")?;
-    writeln!(file)?;
-
-    writeln!(
-        file,
-        "pub fn get_tags() -> &'static HashMap<String, TagDescriptor> {{"
-    )?;
-    writeln!(
-        file,
-        "    static MAP: Lazy<HashMap<String, TagDescriptor>> = Lazy::new(|| {{"
-    )?;
-    writeln!(
-        file,
-        "        let mut map = HashMap::with_capacity(TAGS.len());"
-    )?;
-    writeln!(file, "        for tag in TAGS.iter() {{")?;
-    writeln!(
-        file,
-        "            map.insert(tag.tag_name.clone(), tag.clone());"
-    )?;
-    writeln!(file, "        }}")?;
-    writeln!(file, "        map")?;
-    writeln!(file, "    }});")?;
-    writeln!(file, "    &MAP")?;
-    writeln!(file, "}}")?;
-
-    Ok(())
-}
-
-/// Sanitizes a format family name to be a valid Rust module name
-fn sanitize_module_name(name: &str) -> String {
-    name.to_lowercase()
-        .replace('-', "_")
-        .replace("::", "_")
-        .replace(':', "_")
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '_')
-        .collect()
-}
-
-/// Generates a compact tag array entry (single line for efficiency)
-fn generate_tag_array_entry(file: &mut File, tag: &TagDefinition) -> Result<()> {
-    // Format family - map to known FormatFamily enum variants
-    let family_variant = match tag.format_family.as_str() {
-        "ICC_Profile" => "ICCProfile",
-        "EXIF" => "EXIF",
-        "XMP" => "XMP",
-        "IPTC" => "IPTC",
-        "GPS" => "GPS",
-        "Photoshop" => "Photoshop",
-        "MakerNotes" => "MakerNotes",
-        "JFIF" => "JFIF",
-        "JPEG" => "JPEG",
-        "PNG" => "PNG",
-        "PDF" => "PDF",
-        "QuickTime" => "QuickTime",
-        "TIFF" => "TIFF",
-        "RIFF" => "RIFF",
-        "PostScript" => "PostScript",
-        // Map all maker note modules to MakerNotes family
-        "Canon" | "Nikon" | "Sony" | "Olympus" | "Panasonic" | "Pentax" | "FujiFilm"
-        | "Samsung" | "Minolta" | "Kodak" | "Casio" | "Ricoh" | "Sanyo" | "CanonCustom"
-        | "NikonCapture" | "KyoceraRaw" | "MinoltaRaw" | "SigmaRaw" | "Leaf" | "PhaseOne" => {
-            "MakerNotes"
-        }
-        // Map video/audio formats to QuickTime for now
-        "Matroska" | "Flash" | "ASF" | "MPEG" | "H264" | "FLAC" | "Ogg" | "Vorbis" | "AAC"
-        | "APE" => "QuickTime",
-        // Map other formats to appropriate families
-        "GIF" | "BMP" | "PSD" | "DjVu" | "MNG" | "BPG" | "FLIF" | "ICO" => "PNG",
-        "HTML" | "XML" | "SVG" => "PDF",
-        // Default: unknown formats map to MakerNotes as a catch-all
-        _ => "MakerNotes",
-    };
-
-    // Example value based on type
-    let example_value = match tag.value_type {
-        ValueType::String => "\"Example\".to_string()",
-        ValueType::Integer => "\"100\".to_string()",
-        ValueType::Float => "\"1.5\".to_string()",
-        ValueType::Rational => "\"1/100\".to_string()",
-        ValueType::DateTime => "\"2024:01:01 12:00:00\".to_string()",
-        _ => "\"Value\".to_string()",
-    };
-
-    // Generate compact single-line entry
-    match &tag.tag_id {
-        TagId::Numeric(n) => {
-            writeln!(
-                file,
-                "    TagDescriptor::new(TagId::new_numeric(0x{:04X}), \"{}\".to_string(), FormatFamily::{}, {}, ValueType::{:?}, \"{}\".to_string(), vec![{}]),",
-                n,
-                escape_string(&tag.tag_name),
-                family_variant,
-                tag.writable,
-                tag.value_type,
-                escape_string(&tag.description),
-                example_value
-            )?;
-        }
-        TagId::Named(s) => {
-            writeln!(
-                file,
-                "    TagDescriptor::new(TagId::new_named(\"{}\".to_string()), \"{}\".to_string(), FormatFamily::{}, {}, ValueType::{:?}, \"{}\".to_string(), vec![{}]),",
-                escape_string(s),
-                escape_string(&tag.tag_name),
-                family_variant,
-                tag.writable,
-                tag.value_type,
-                escape_string(&tag.description),
-                example_value
-            )?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Escapes special characters in strings for Rust code generation
-fn escape_string(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
-}
+// Removed unused Rust code generation functions:
+// - generate_family_module (YAML generation replaced Rust codegen)
+// - sanitize_module_name (YAML generation replaced Rust codegen)
+// - generate_tag_array_entry (YAML generation replaced Rust codegen)
+// - escape_string (YAML generation replaced Rust codegen)
 
 /// Creates a fallback generated_tags.rs that references the manual registry
 fn create_fallback_generated_tags() -> Result<()> {
@@ -923,10 +781,12 @@ fn create_fallback_generated_tags() -> Result<()> {
 struct TagDefinition {
     tag_id: TagId,
     tag_name: String,
+    #[allow(dead_code)] // Used in old Rust codegen, kept for ExifTool parsing
     format_family: String,
     table_name: String, // NEW: track which table this tag came from
     writable: bool,
     writable_type: Option<String>, // NEW: track writable type (int16u, string, etc)
+    #[allow(dead_code)] // Used in old Rust codegen, kept for ExifTool parsing
     value_type: ValueType,
     description: String,
 }
@@ -935,6 +795,7 @@ struct TagDefinition {
 #[derive(Debug, Clone)]
 enum TagId {
     Numeric(u16),
+    #[allow(dead_code)] // Used in old Rust codegen, kept for future extensibility
     Named(String),
 }
 
