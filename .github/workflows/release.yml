@@ -18,7 +18,7 @@ env:
 jobs:
   create-release:
     name: Create GitHub Release
-    runs-on: ubicloud
+    runs-on: puzl-ubuntu-latest
     permissions:
       contents: write
     outputs:
@@ -183,7 +183,7 @@ jobs:
   verify-release:
     name: Verify Release
     needs: [create-release, build-binaries]
-    runs-on: ubicloud
+    runs-on: puzl-ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

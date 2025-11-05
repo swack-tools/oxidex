@@ -13,7 +13,7 @@ env:
 jobs:
   test:
     name: Test Suite
-    runs-on: ubicloud-premium-8
+    runs-on: puzl-ubuntu-latest
     timeout-minutes: 30
 
     steps:
@@ -61,7 +61,7 @@ jobs:
 
   audit:
     name: Security Audit
-    runs-on: ubicloud-premium-2
+    runs-on: puzl-ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -76,7 +76,7 @@ jobs:
 
   coverage:
     name: Code Coverage
-    runs-on: ubicloud-premium-4
+    runs-on: puzl-ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -105,7 +105,7 @@ jobs:
 
   integration-tests:
     name: Integration Tests (ExifTool Comparison)
-    runs-on: ubicloud-premium-4
+    runs-on: puzl-ubuntu-latest
     timeout-minutes: 30
 
     steps:
@@ -154,7 +154,7 @@ jobs:
 
   benchmarks:
     name: Performance Benchmarks
-    runs-on: ubicloud-premium-2
+    runs-on: puzl-ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout repository
