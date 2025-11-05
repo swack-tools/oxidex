@@ -1,0 +1,8 @@
+tables:
+  - name: PNG
+    tags:
+      - id: "0x0001"
+        name: ImageWidth
+        writable: false
+        type: int32u
+        description: "Width of the image in pixels"
