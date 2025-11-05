@@ -39,7 +39,7 @@ fn descriptor_allows_datetime(descriptor: &TagDescriptor) -> bool {
 /// # Examples
 ///
 /// ```
-/// use exiftool_rs::core::tag_descriptor::{TagDescriptor, TagId, FormatFamily, ValueType};
+/// use exiftool_rs::core::{TagDescriptor, TagId, FormatFamily, ValueType};
 /// use exiftool_rs::core::tag_value::TagValue;
 /// use exiftool_rs::core::validation::validate_tag_value;
 ///
@@ -201,7 +201,7 @@ pub fn validate_tag_value_with_name(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::tag_descriptor::{FormatFamily, TagId};
+    use crate::core::{FormatFamily, TagId};
     use chrono::{TimeZone, Utc};
     use std::collections::HashMap;
 
