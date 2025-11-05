@@ -467,6 +467,10 @@ tables:
         name: "Model"
         writable: false
         description: "Model tag"
+      - id: "0x0111"
+        name: "StripOffsets"
+        writable: false
+        description: "StripOffsets tag"
       - id: "0x0112"
         name: "Orientation"
         writable: false
@@ -479,6 +483,10 @@ tables:
         name: "RowsPerStrip"
         writable: false
         description: "RowsPerStrip tag"
+      - id: "0x0117"
+        name: "StripByteCounts"
+        writable: false
+        description: "StripByteCounts tag"
       - id: "0x0118"
         name: "MinSampleValue"
         writable: false
