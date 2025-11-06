@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          lfs: false
 
       - name: Get version from tag
         id: get_version
@@ -96,9 +98,11 @@ jobs:
             binary_name: exiftool-rs.exe
             archive_name: exiftool-rs-x86_64-windows.zip
 
-    steps:  
+    steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          lfs: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -204,6 +208,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          lfs: false
 
       - name: Check release artifacts
         run: |
