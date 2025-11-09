@@ -20,10 +20,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          lfs: false
-
-      - name: Fetch LFS files for tests
-        run: git lfs pull
+          lfs: true
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
@@ -85,10 +82,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          lfs: false
-
-      - name: Fetch LFS files for tests
-        run: git lfs pull
+          lfs: true
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
@@ -118,10 +112,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          lfs: false
-
-      - name: Fetch LFS files for tests
-        run: git lfs pull
+          lfs: true
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
@@ -169,10 +160,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          lfs: false
-
-      - name: Fetch LFS files for tests
-        run: git lfs pull
+          lfs: true
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
