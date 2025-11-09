@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "exiftool-rs"
-version = "1.0.0"
+version = "1.0.2"
 edition = "2021"
 authors = ["ExifTool-RS Contributors"]
 description = "A modern, high-performance Rust reimplementation of ExifTool for reading, writing, and editing metadata in 300+ file formats"
