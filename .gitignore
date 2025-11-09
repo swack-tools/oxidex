@@ -83,3 +83,6 @@ __pycache__/
 
 # Codacy CLI
 .codacy/
+
+# Ignore target in all workspace crates (fix for exiftool-tags-core/target/)
+**/target/
