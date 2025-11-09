@@ -1,6 +1,6 @@
 [package]
 name = "exiftool-tags-specialty"
-version = "1.0.0"
+version = "1.0.2"
 edition = "2021"
 authors = ["ExifTool-RS Contributors"]
 description = "Specialty format metadata tags (medical, scientific, etc.) for exiftool-rs"
