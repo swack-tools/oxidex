@@ -72,7 +72,7 @@ jobs:
 
           # Linux ARM64 (static musl)
           - target: aarch64-unknown-linux-musl
-            os: warp-ubuntu-latest-arm64-2x
+            os: warp-ubuntu-latest-arm64-8x
             use_cross: true
             binary_name: exiftool-rs
             archive_name: exiftool-rs-aarch64-linux-musl.tar.gz
