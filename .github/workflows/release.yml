@@ -32,9 +32,12 @@ jobs:
 
       - name: Get version from tag
         id: get_version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.tag }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_TAG"
           else
             VERSION="${GITHUB_REF#refs/tags/}"
           fi
@@ -43,7 +46,7 @@ jobs:
 
       - name: Create Release
         id: create_release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@26994186c0ac3ef5cae75ac16aa32e8153525f77 # v1
         with:
           tag_name: ${{ steps.get_version.outputs.version }}
           name: Release ${{ steps.get_version.outputs.version }}
@@ -66,21 +69,21 @@ jobs:
           # Linux x86_64 (static musl)
           - target: x86_64-unknown-linux-musl
             os: warp-ubuntu-latest-x64-2x
-            use_cross: true
+            use_cross: false
             binary_name: exiftool-rs
             archive_name: exiftool-rs-x86_64-linux-musl.tar.gz
 
           # Linux ARM64 (static musl)
           - target: aarch64-unknown-linux-musl
             os: warp-ubuntu-latest-arm64-8x
-            use_cross: true
+            use_cross: false
             binary_name: exiftool-rs
             archive_name: exiftool-rs-aarch64-linux-musl.tar.gz
 
           # macOS Intel
           - target: x86_64-apple-darwin
             os: warp-macos-13-arm64-6x
-            use_cross: false
+            use_cross: true
             binary_name: exiftool-rs
             archive_name: exiftool-rs-x86_64-macos.tar.gz
 
@@ -138,12 +141,12 @@ jobs:
           cross build --release --target ${{ matrix.target }}
 
       - name: Build with cargo (native)
-        if: "!matrix.use_cross"
+        if: ${{ !matrix.use_cross }}
         run: |
           cargo build --release --target ${{ matrix.target }}
 
       - name: Verify binary (Unix)
-        if: "!contains(matrix.target, 'windows')"
+        if: ${{ !contains(matrix.target, 'windows') }}
         run: |
           ls -lh target/${{ matrix.target }}/release/${{ matrix.binary_name }}
           file target/${{ matrix.target }}/release/${{ matrix.binary_name }} || true
@@ -155,12 +158,12 @@ jobs:
           ls -lh target/${{ matrix.target }}/release/${{ matrix.binary_name }}
 
       - name: Strip binary (non-Windows)
-        if: "!contains(matrix.target, 'windows')"
+        if: ${{ !contains(matrix.target, 'windows') }}
         run: |
           strip target/${{ matrix.target }}/release/${{ matrix.binary_name }} || true
 
       - name: Create archive (Linux/macOS)
-        if: "!contains(matrix.target, 'windows')"
+        if: ${{ !contains(matrix.target, 'windows') }}
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../${{ matrix.archive_name }} ${{ matrix.binary_name }}
@@ -177,7 +180,7 @@ jobs:
           sha256sum ${{ matrix.archive_name }} > ${{ matrix.archive_name }}.sha256
 
       - name: Display binary size (Unix)
-        if: "!contains(matrix.target, 'windows')"
+        if: ${{ !contains(matrix.target, 'windows') }}
         run: |
           ls -lh ${{ matrix.archive_name }}
           echo "SHA256:"
@@ -192,7 +195,7 @@ jobs:
           cat ${{ matrix.archive_name }}.sha256
 
       - name: Upload binary to release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@26994186c0ac3ef5cae75ac16aa32e8153525f77 # v1
         with:
           tag_name: ${{ needs.create-release.outputs.version }}
           files: |
