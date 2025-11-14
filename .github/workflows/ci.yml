@@ -209,6 +209,17 @@ jobs:
         with:
           lfs: true
 
+      - name: Verify runner architecture
+        run: |
+          echo "=== Runner Architecture Diagnostics ==="
+          echo "uname -m: $(uname -m)"
+          echo "uname -a: $(uname -a)"
+          echo "arch: $(arch)"
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Runner arch: ${{ runner.arch }}"
+          echo "Target: ${{ matrix.target }}"
+          echo "Expected: aarch64 for ARM64, x86_64 for x64"
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
         with:
