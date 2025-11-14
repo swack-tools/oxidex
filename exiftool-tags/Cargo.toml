@@ -1,6 +1,6 @@
 [package]
 name = "exiftool-tags"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 authors = ["ExifTool-RS Contributors"]
 description = "Facade crate re-exporting all tag databases for exiftool-rs"

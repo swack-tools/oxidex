@@ -1,6 +1,6 @@
 [package]
 name = "exiftool-tags-camera"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 authors = ["ExifTool-RS Contributors"]
 description = "Camera manufacturer metadata tags for exiftool-rs"
