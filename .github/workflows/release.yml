@@ -18,7 +18,7 @@ env:
 jobs:
   create-release:
     name: Create GitHub Release
-    runs-on: puzl-ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-4x
     permissions:
       contents: write
     outputs:
@@ -65,35 +65,35 @@ jobs:
         include:
           # Linux x86_64 (static musl)
           - target: x86_64-unknown-linux-musl
-            os: puzl-ubuntu-latest
+            os: warp-ubuntu-latest-x64-4x
             use_cross: true
             binary_name: exiftool-rs
             archive_name: exiftool-rs-x86_64-linux-musl.tar.gz
 
           # Linux ARM64 (static musl)
           - target: aarch64-unknown-linux-musl
-            os: puzl-ubuntu-latest
+            os: warp-ubuntu-latest-arm64-4x
             use_cross: true
             binary_name: exiftool-rs
             archive_name: exiftool-rs-aarch64-linux-musl.tar.gz
 
           # macOS Intel
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: warp-macos-13-arm64-6x
             use_cross: false
             binary_name: exiftool-rs
             archive_name: exiftool-rs-x86_64-macos.tar.gz
 
           # macOS Apple Silicon
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: warp-macos-14-arm64-6x
             use_cross: false
             binary_name: exiftool-rs
             archive_name: exiftool-rs-aarch64-macos.tar.gz
 
           # Windows x86_64
           - target: x86_64-pc-windows-msvc
-            os: windows-latest
+            os: warp-windows-2025-x64-4x
             use_cross: false
             binary_name: exiftool-rs.exe
             archive_name: exiftool-rs-x86_64-windows.zip
@@ -204,7 +204,7 @@ jobs:
   verify-release:
     name: Verify Release
     needs: [create-release, build-binaries]
-    runs-on: puzl-ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-4x
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
