@@ -184,3 +184,50 @@ jobs:
           name: benchmark-results
           path: target/criterion/
           retention-days: 90
+
+  cross-compile:
+    name: Cross-compilation Test (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux ARM64 - use native ARM64 runner
+          - target: aarch64-unknown-linux-musl
+            os: warp-ubuntu-latest-arm64-2x
+            use_cross: true
+
+          # Linux x86_64 - use native x64 runner
+          - target: x86_64-unknown-linux-musl
+            os: warp-ubuntu-latest-x64-2x
+            use_cross: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          lfs: true
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2
+        with:
+          cache-on-failure: true
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build with cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Verify binary
+        run: |
+          ls -lh target/${{ matrix.target }}/release/exiftool-rs
+          file target/${{ matrix.target }}/release/exiftool-rs || true
