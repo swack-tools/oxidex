@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **CI/CD**: Fixed ARM64 cross-compilation in GitHub Actions by implementing QEMU emulation. Previously, attempting to run ARM64 Docker images (`ghcr.io/cross-rs/aarch64-unknown-linux-musl`) on x86_64 runners resulted in "exec format error". The fix adds `docker/setup-qemu-action` and `docker/setup-buildx-action` to enable multi-platform builds on x86_64 runners.
+
+### Added
+- **CI/CD**: New `cross-compile` job in CI workflow that tests both ARM64 (`aarch64-unknown-linux-musl`) and x86_64 (`x86_64-unknown-linux-musl`) Linux builds using the `cross` tool with QEMU emulation support.
+
 ## [1.0.0] - 2025-10-30
 
 ### Added

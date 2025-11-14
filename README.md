@@ -419,6 +419,48 @@ cargo fmt
 cargo fmt -- --check
 ```
 
+### CI/CD Pipeline
+
+ExifTool-RS uses GitHub Actions for continuous integration and automated releases. The CI pipeline includes:
+
+#### CI Workflow (`.github/workflows/ci.yml`)
+
+Runs on every push and pull request:
+
+- **Test Suite**: Full test suite with all features enabled
+- **Code Quality**: Clippy linting and formatting checks
+- **Security Audit**: Dependency vulnerability scanning with cargo-audit
+- **Code Coverage**: Test coverage reporting via Codecov
+- **Integration Tests**: Comparison testing against Perl ExifTool
+- **Performance Benchmarks**: Automated benchmark runs with Criterion
+- **Cross-Compilation Tests**: Builds for both ARM64 and x86_64 Linux targets using QEMU emulation
+
+The cross-compilation job uses [cross](https://github.com/cross-rs/cross) with QEMU emulation to test builds for:
+- `aarch64-unknown-linux-musl` (ARM64 Linux)
+- `x86_64-unknown-linux-musl` (x86_64 Linux)
+
+This ensures binaries work correctly across different architectures before release.
+
+#### Release Workflow (`.github/workflows/release.yml`)
+
+Triggered on git tags (`v*`):
+
+- Builds static binaries for all supported platforms:
+  - Linux x86_64 (musl)
+  - Linux ARM64 (musl)
+  - macOS Intel
+  - macOS Apple Silicon
+  - Windows x86_64
+- Generates checksums (SHA256) for all binaries
+- Creates GitHub Release with auto-generated release notes
+- Uploads all artifacts to the release
+
+To trigger a release:
+```bash
+git tag v1.0.3
+git push origin v1.0.3
+```
+
 ### Fuzzing
 
 ExifTool-RS includes continuous fuzzing targets for security-critical parsers to detect crashes, hangs, and memory safety issues.
