@@ -69,35 +69,24 @@ jobs:
           # Linux x86_64 (static musl) - native build on x64
           - target: x86_64-unknown-linux-musl
             os: warp-ubuntu-latest-x64-2x
-            use_cross: false
             binary_name: exiftool-rs
             archive_name: exiftool-rs-x86_64-linux-musl.tar.gz
 
           # Linux ARM64 (static musl) - native build on arm64
           - target: aarch64-unknown-linux-musl
             os: warp-ubuntu-latest-arm64-2x
-            use_cross: false
             binary_name: exiftool-rs
             archive_name: exiftool-rs-aarch64-linux-musl.tar.gz
-
-          # macOS Intel - cross-compile from ARM64 (no native Intel runners available)
-          - target: x86_64-apple-darwin
-            os: warp-macos-15-arm64-6x
-            use_cross: true
-            binary_name: exiftool-rs
-            archive_name: exiftool-rs-x86_64-macos.tar.gz
 
           # macOS Apple Silicon - native build on arm64
           - target: aarch64-apple-darwin
             os: warp-macos-15-arm64-6x
-            use_cross: false
             binary_name: exiftool-rs
             archive_name: exiftool-rs-aarch64-macos.tar.gz
 
           # Windows x86_64 - native build on x64
           - target: x86_64-pc-windows-msvc
             os: warp-windows-2025-x64-4x
-            use_cross: false
             binary_name: exiftool-rs.exe
             archive_name: exiftool-rs-x86_64-windows.zip
 
@@ -117,20 +106,8 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Install cross
-        if: matrix.use_cross
-        run: |
-          cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Build with cross
-        if: matrix.use_cross
-        run: |
-          cross build --release --target ${{ matrix.target }}
-
-      - name: Build with cargo (native)
-        if: ${{ !matrix.use_cross }}
-        run: |
-          cargo build --release --target ${{ matrix.target }}
+      - name: Build (native)
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Verify binary (Unix)
         if: ${{ !contains(matrix.target, 'windows') }}
@@ -207,7 +184,6 @@ jobs:
           echo "Expected artifacts:"
           echo "  - exiftool-rs-x86_64-linux-musl.tar.gz"
           echo "  - exiftool-rs-aarch64-linux-musl.tar.gz"
-          echo "  - exiftool-rs-x86_64-macos.tar.gz"
           echo "  - exiftool-rs-aarch64-macos.tar.gz"
           echo "  - exiftool-rs-x86_64-windows.zip"
           echo "  + corresponding .sha256 checksums"
