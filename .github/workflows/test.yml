@@ -1,0 +1,88 @@
+name: Test
+
+on:
+  push:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: warp-ubuntu-latest-x64-2x
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          lfs: true
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+
+      - name: Cache Cargo dependencies and build artifacts
+        uses: WarpBuilds/cache@v1
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --release --verbose --all-features
+
+      - name: Run tests
+        run: cargo test --release --verbose --all-features
+
+      - name: Run Clippy
+        run: cargo clippy --all-features -- -D warnings
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  integration-tests:
+    name: Integration Tests (ExifTool Comparison)
+    runs-on: warp-ubuntu-latest-x64-2x
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          lfs: true
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+
+      - name: Cache Cargo dependencies and build artifacts
+        uses: WarpBuilds/cache@v1
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install Perl ExifTool
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libimage-exiftool-perl
+          exiftool -ver
+
+      - name: Build ExifTool-RS
+        run: cargo build --release --all-features
+
+      - name: Run integration tests with ExifTool comparison
+        run: cargo test --release --features exiftool-comparison -- --nocapture
