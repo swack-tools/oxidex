@@ -49,8 +49,42 @@ jobs:
       - name: Run tests
         run: cargo test --verbose --all-features
 
+  clippy:
+    name: Clippy Lints
+    runs-on: warp-ubuntu-latest-x64-2x
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          lfs: false
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@89e9040de88b577a072e3760aaf59f585da083af # v0.0.5
+
+      - name: Setup Rust cache
+        uses: WarpBuilds/rust-cache@v2
+
       - name: Run Clippy
         run: cargo clippy --all-features -- -D warnings
+
+  fmt:
+    name: Code Formatting
+    runs-on: warp-ubuntu-latest-x64-2x
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          lfs: false
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+        with:
+          components: rustfmt
 
       - name: Check formatting
         run: cargo fmt --all -- --check
