@@ -66,35 +66,35 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64 (static musl)
+          # Linux x86_64 (static musl) - native build on x64
           - target: x86_64-unknown-linux-musl
             os: warp-ubuntu-latest-x64-2x
             use_cross: false
             binary_name: exiftool-rs
             archive_name: exiftool-rs-x86_64-linux-musl.tar.gz
 
-          # Linux ARM64 (static musl)
+          # Linux ARM64 (static musl) - native build on arm64
           - target: aarch64-unknown-linux-musl
-            os: warp-ubuntu-latest-arm64-8x
+            os: warp-ubuntu-latest-arm64-2x
             use_cross: false
             binary_name: exiftool-rs
             archive_name: exiftool-rs-aarch64-linux-musl.tar.gz
 
-          # macOS Intel
+          # macOS Intel - cross-compile from ARM64 (no native Intel runners available)
           - target: x86_64-apple-darwin
-            os: warp-macos-13-arm64-6x
+            os: warp-macos-15-arm64-6x
             use_cross: true
             binary_name: exiftool-rs
             archive_name: exiftool-rs-x86_64-macos.tar.gz
 
-          # macOS Apple Silicon
+          # macOS Apple Silicon - native build on arm64
           - target: aarch64-apple-darwin
-            os: warp-macos-14-arm64-6x
+            os: warp-macos-15-arm64-6x
             use_cross: false
             binary_name: exiftool-rs
             archive_name: exiftool-rs-aarch64-macos.tar.gz
 
-          # Windows x86_64
+          # Windows x86_64 - native build on x64
           - target: x86_64-pc-windows-msvc
             os: warp-windows-2025-x64-4x
             use_cross: false
