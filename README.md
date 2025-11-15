@@ -374,6 +374,16 @@ cargo test
 
 ### Running Benchmarks
 
+#### Latest CI Benchmark Results
+
+📊 **[View Live Benchmark Reports](https://swack-tools.github.io/exiftool-rs/benchmarks/report/index.html)** - Interactive Criterion.rs reports automatically updated on every commit to main
+
+The CI pipeline runs comprehensive benchmarks on every push and publishes the results to GitHub Pages. You can view detailed performance graphs, statistical analysis, and historical trends.
+
+Alternatively, download artifacts from the [latest workflow run](../../actions/workflows/ci.yml).
+
+#### Running Benchmarks Locally
+
 The project includes performance benchmarks for core parsing operations:
 
 ```bash

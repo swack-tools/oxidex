@@ -185,6 +185,28 @@ jobs:
           path: target/criterion/
           retention-days: 90
 
+  publish-benchmarks:
+    name: Publish Benchmarks to GitHub Pages
+    runs-on: warp-ubuntu-latest-x64-2x
+    needs: benchmarks
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - name: Download benchmark results
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: benchmark-results
+          path: benchmark-results
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e # v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./benchmark-results
+          destination_dir: benchmarks
+          keep_files: false
+
   multi-platform-build:
     name: Multi-platform Build Test (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
