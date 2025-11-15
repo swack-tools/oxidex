@@ -59,11 +59,25 @@ jobs:
         with:
           cache-on-failure: true
 
+      - name: Cache Perl ExifTool
+        id: cache-exiftool
+        uses: WarpBuilds/cache@v1
+        with:
+          path: |
+            /usr/bin/exiftool
+            /usr/share/perl5/Image
+          key: ${{ runner.os }}-exiftool-${{ hashFiles('/etc/apt/sources.list') }}
+          restore-keys: |
+            ${{ runner.os }}-exiftool-
+
       - name: Install Perl ExifTool
+        if: steps.cache-exiftool.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y libimage-exiftool-perl
-          exiftool -ver
+
+      - name: Verify ExifTool installation
+        run: exiftool -ver
 
       - name: Build ExifTool-RS
         run: cargo build --release --all-features
