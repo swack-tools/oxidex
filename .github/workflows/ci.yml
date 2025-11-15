@@ -43,7 +43,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Install cbindgen
-        run: cargo install cbindgen --locked
+        run: |
+          if ! command -v cbindgen &> /dev/null; then
+            echo "cbindgen not found in cache, installing..."
+            cargo install cbindgen --locked
+          else
+            echo "cbindgen found in cache: $(cbindgen --version)"
+          fi
 
       - name: Verify C header is up-to-date
         run: |
@@ -91,7 +97,13 @@ jobs:
         uses: WarpBuilds/rust-cache@v2
 
       - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin
+        run: |
+          if ! command -v cargo-tarpaulin &> /dev/null; then
+            echo "cargo-tarpaulin not found in cache, installing..."
+            cargo install cargo-tarpaulin
+          else
+            echo "cargo-tarpaulin found in cache: $(cargo-tarpaulin --version)"
+          fi
 
       - name: Generate coverage report
         run: cargo tarpaulin --verbose --all-features --workspace --timeout 120 --out xml
