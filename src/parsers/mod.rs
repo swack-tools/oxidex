@@ -7,6 +7,7 @@
 
 pub mod common;
 pub mod format_detector;
+pub mod icc_parser;
 pub mod jpeg;
 pub mod pdf;
 pub mod png;

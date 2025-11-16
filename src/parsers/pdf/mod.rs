@@ -44,13 +44,12 @@
 
 #![allow(dead_code)]
 
-pub mod icc_parser;
 pub mod info_parser;
 pub mod xmp_extractor;
 
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
-use icc_parser::extract_icc_profile;
+use crate::parsers::icc_parser::extract_icc_profile;
 use info_parser::parse_info_dict;
 use xmp_extractor::extract_xmp_metadata;
 

@@ -370,6 +370,47 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         }
     }
 
+    // Extract ICC profile from APP2 segments
+    // ICC profiles in JPEG are stored in APP2 segments with "ICC_PROFILE\0" marker
+    for segment in segments.iter().filter(|s| s.marker == 0xFFE2) {
+        // Check if this is an ICC profile segment (starts with "ICC_PROFILE\0")
+        if segment.data.len() >= 14 && &segment.data[0..12] == b"ICC_PROFILE\0" {
+            // ICC profile structure in JPEG APP2:
+            // Bytes 0-11: "ICC_PROFILE\0" identifier
+            // Byte 12: Chunk number (1-based)
+            // Byte 13: Total chunks
+            // Bytes 14+: ICC profile data
+
+            // For now, only handle single-chunk ICC profiles (most common)
+            let chunk_num = segment.data[12];
+            let total_chunks = segment.data[13];
+
+            if chunk_num == 1 && total_chunks == 1 {
+                // Single chunk - parse ICC profile directly
+                let icc_data = &segment.data[14..];
+                match crate::parsers::icc_parser::parse_icc_profile_data(icc_data) {
+                    Ok(icc_tags) => {
+                        // Add all ICC tags to metadata with "Profile:" prefix
+                        for (tag_name, value) in icc_tags {
+                            metadata.insert(format!("Profile:{}", tag_name), value);
+                        }
+                    }
+                    Err(e) => {
+                        // Log error but continue processing
+                        eprintln!("Warning: Failed to parse ICC profile: {}", e);
+                    }
+                }
+            } else {
+                // Multi-chunk ICC profile - would need to reassemble chunks
+                // This is less common, so we'll skip for now
+                eprintln!(
+                    "Warning: Multi-chunk ICC profile detected ({}/{}), not yet supported",
+                    chunk_num, total_chunks
+                );
+            }
+        }
+    }
+
     Ok(metadata)
 }
 
@@ -479,6 +520,23 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                 makernote_data = Some(bytes);
                 // Note: We don't continue here - we still add the raw MakerNote tag
                 // to metadata so tools can see it, but we'll also parse it below
+            }
+
+            // Check for ICC Profile tag (0x8773)
+            if *tag_id == 0x8773 && bytes.len() >= 128 {
+                // Parse ICC profile data
+                match crate::parsers::icc_parser::parse_icc_profile_data(bytes) {
+                    Ok(icc_tags) => {
+                        // Add all ICC tags to metadata with "Profile:" prefix
+                        for (tag_name, value) in icc_tags {
+                            metadata.insert(format!("Profile:{}", tag_name), value);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to parse ICC profile in TIFF: {}", e);
+                    }
+                }
+                // Don't continue - still add the raw ICC_Profile tag
             }
 
             // Convert tag to metadata

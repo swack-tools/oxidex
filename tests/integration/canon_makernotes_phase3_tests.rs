@@ -46,16 +46,20 @@ fn test_lens_database_coverage() {
 
     // Test coverage of major lens categories
     let test_lenses = vec![
-        (4156, "Canon EF 50mm f/1.8 STM"),         // Budget prime
-        (368, "Canon EF 24-70mm f/2.8L II USM"),   // Pro zoom
-        (61182, "Canon RF 24-105mm f/4L IS USM"),  // RF mirrorless
-        (186, "Canon EF 70-200mm f/2.8L IS"),      // Pro telephoto
-        (50, "Canon EF 17-40mm f/4L USM"),         // Wide angle
+        (4156, "Canon EF 50mm f/1.8 STM"),        // Budget prime
+        (368, "Canon EF 24-70mm f/2.8L II USM"),  // Pro zoom
+        (61182, "Canon RF 24-105mm f/4L IS USM"), // RF mirrorless
+        (186, "Canon EF 70-200mm f/2.8L IS"),     // Pro telephoto
+        (50, "Canon EF 17-40mm f/4L USM"),        // Wide angle
     ];
 
     for (lens_id, expected_name) in test_lenses {
         let result = lookup_lens_name(lens_id);
-        assert!(result.is_some(), "Lens ID {} should be in database", lens_id);
+        assert!(
+            result.is_some(),
+            "Lens ID {} should be in database",
+            lens_id
+        );
         assert_eq!(
             result.unwrap(),
             expected_name,

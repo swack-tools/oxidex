@@ -14,8 +14,8 @@ pub fn lookup_lens_name(lens_id: u16) -> Option<String> {
     CANON_LENS_DATABASE.get(&lens_id).map(|s| s.to_string())
 }
 
-use std::collections::HashMap;
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 
 static CANON_LENS_DATABASE: Lazy<HashMap<u16, &'static str>> = Lazy::new(|| {
     let mut db = HashMap::new();
@@ -47,7 +47,10 @@ static CANON_LENS_DATABASE: Lazy<HashMap<u16, &'static str>> = Lazy::new(|| {
     db.insert(24, "Canon EF 35-80mm f/4-5.6 Power Zoom");
     db.insert(26, "Canon EF 100-300mm f/5.6L");
     db.insert(27, "Canon EF 100mm f/2");
-    db.insert(28, "Canon EF 14mm f/2.8L or Sigma 14mm f/2.8 EX Aspherical HSM");
+    db.insert(
+        28,
+        "Canon EF 14mm f/2.8L or Sigma 14mm f/2.8 EX Aspherical HSM",
+    );
     db.insert(29, "Canon EF 200mm f/2.8L");
     db.insert(30, "Canon EF 300mm f/2.8L");
     db.insert(31, "Canon EF 400mm f/2.8L");
@@ -85,20 +88,38 @@ static CANON_LENS_DATABASE: Lazy<HashMap<u16, &'static str>> = Lazy::new(|| {
     db.insert(138, "Canon EF 28-80mm f/2.8-4L");
     db.insert(139, "Canon EF 400mm f/2.8L");
     db.insert(140, "Canon EF 500mm f/4L IS");
-    db.insert(141, "Canon EF 500mm f/4L IS or Sigma 17-35mm f/2.8-4 EX Aspherical");
+    db.insert(
+        141,
+        "Canon EF 500mm f/4L IS or Sigma 17-35mm f/2.8-4 EX Aspherical",
+    );
 
     db.insert(142, "Canon EF 300mm f/2.8L IS");
     db.insert(143, "Canon EF 500mm f/4L");
     db.insert(149, "Canon EF 100mm f/2");
-    db.insert(150, "Canon EF 14mm f/2.8L or Sigma 20mm f/1.8 EX Aspherical");
+    db.insert(
+        150,
+        "Canon EF 14mm f/2.8L or Sigma 20mm f/1.8 EX Aspherical",
+    );
     db.insert(151, "Canon EF 200mm f/2.8L");
     db.insert(152, "Canon EF 300mm f/4L IS or Sigma 55-200mm f/4-5.6 DC");
-    db.insert(153, "Canon EF 35-350mm f/3.5-5.6L or Sigma 28-300mm f/3.5-6.3 Macro");
-    db.insert(154, "Canon EF 20mm f/2.8 USM or Tamron AF 28-300mm f/3.5-6.3 XR Di VC");
+    db.insert(
+        153,
+        "Canon EF 35-350mm f/3.5-5.6L or Sigma 28-300mm f/3.5-6.3 Macro",
+    );
+    db.insert(
+        154,
+        "Canon EF 20mm f/2.8 USM or Tamron AF 28-300mm f/3.5-6.3 XR Di VC",
+    );
     db.insert(155, "Canon EF 85mm f/1.8 USM or Sigma 30mm f/1.4 EX DC HSM");
-    db.insert(156, "Canon EF 28-105mm f/3.5-4.5 USM or Tamron AF 90mm f/2.8 Di Macro");
+    db.insert(
+        156,
+        "Canon EF 28-105mm f/3.5-4.5 USM or Tamron AF 90mm f/2.8 Di Macro",
+    );
 
-    db.insert(160, "Canon EF 20-35mm f/3.5-4.5 USM or Tamron AF 19-35mm f/3.5-4.5");
+    db.insert(
+        160,
+        "Canon EF 20-35mm f/3.5-4.5 USM or Tamron AF 19-35mm f/3.5-4.5",
+    );
     db.insert(161, "Canon EF 28-70mm f/2.8L or Sigma 24-70mm f/2.8 EX");
     db.insert(162, "Canon EF 200mm f/2.8L");
     db.insert(163, "Canon EF 300mm f/4L");
@@ -106,13 +127,25 @@ static CANON_LENS_DATABASE: Lazy<HashMap<u16, &'static str>> = Lazy::new(|| {
     db.insert(165, "Canon EF 70-200mm f/2.8L");
     db.insert(166, "Canon EF 70-200mm f/2.8L + 1.4x");
     db.insert(167, "Canon EF 70-200mm f/2.8L + 2x");
-    db.insert(168, "Canon EF 28mm f/1.8 USM or Sigma 50-500mm f/4-6.3 APO HSM EX");
-    db.insert(169, "Canon EF 17-35mm f/2.8L or Sigma 18-200mm f/3.5-6.3 DC OS");
+    db.insert(
+        168,
+        "Canon EF 28mm f/1.8 USM or Sigma 50-500mm f/4-6.3 APO HSM EX",
+    );
+    db.insert(
+        169,
+        "Canon EF 17-35mm f/2.8L or Sigma 18-200mm f/3.5-6.3 DC OS",
+    );
 
     db.insert(170, "Canon EF 200mm f/2.8L II");
     db.insert(171, "Canon EF 300mm f/4L");
-    db.insert(172, "Canon EF 400mm f/5.6L or Sigma 150-600mm f/5-6.3 DG OS HSM | S");
-    db.insert(173, "Canon EF 180mm Macro f/3.5L or Sigma 180mm EX HSM Macro f/3.5");
+    db.insert(
+        172,
+        "Canon EF 400mm f/5.6L or Sigma 150-600mm f/5-6.3 DG OS HSM | S",
+    );
+    db.insert(
+        173,
+        "Canon EF 180mm Macro f/3.5L or Sigma 180mm EX HSM Macro f/3.5",
+    );
     db.insert(174, "Canon EF 135mm f/2L or Sigma 28mm f/1.8 DG Macro EX");
     db.insert(175, "Canon EF 400mm f/2.8L");
     db.insert(176, "Canon EF 24-85mm f/3.5-4.5 USM");
@@ -147,7 +180,10 @@ static CANON_LENS_DATABASE: Lazy<HashMap<u16, &'static str>> = Lazy::new(|| {
     db.insert(224, "Canon EF 70-200mm f/2.8L IS II");
     db.insert(225, "Canon EF 70-200mm f/2.8L IS II + 1.4x");
     db.insert(226, "Canon EF 70-200mm f/2.8L IS II + 2x");
-    db.insert(234, "Canon EF 200mm f/2L IS or Sigma 24-105mm f/4 DG OS HSM | A");
+    db.insert(
+        234,
+        "Canon EF 200mm f/2L IS or Sigma 24-105mm f/4 DG OS HSM | A",
+    );
     db.insert(235, "Canon EF 800mm f/5.6L IS");
     db.insert(236, "Canon EF 24mm f/1.4L II or Sigma 35mm f/1.4 DG HSM");
     db.insert(237, "Canon EF 70-300mm f/4-5.6L IS USM");
@@ -223,8 +259,10 @@ mod tests {
     #[test]
     fn test_database_size() {
         // Should have 100+ lens entries minimum
-        assert!(CANON_LENS_DATABASE.len() >= 100,
+        assert!(
+            CANON_LENS_DATABASE.len() >= 100,
             "Expected at least 100 lens entries, found {}",
-            CANON_LENS_DATABASE.len());
+            CANON_LENS_DATABASE.len()
+        );
     }
 }

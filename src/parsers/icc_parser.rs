@@ -1,8 +1,9 @@
-//! ICC Profile parser for PDF embedded color profiles
+//! ICC Profile parser for embedded color profiles
 //!
-//! This module handles extraction and parsing of ICC (International Color Consortium)
-//! profiles embedded in PDF files. ICC profiles describe color characteristics
-//! for accurate color reproduction across different devices.
+//! This module handles parsing of ICC (International Color Consortium)
+//! profiles embedded in various file formats (PDF, JPEG, PNG, TIFF, etc.).
+//! ICC profiles describe color characteristics for accurate color reproduction
+//! across different devices.
 //!
 //! # ICC Profile Structure
 //!
@@ -435,12 +436,40 @@ fn parse_xref_table(xref_data: &[u8]) -> Result<HashMap<u32, u64>> {
     Ok(xref_map)
 }
 
-/// Parses an ICC profile binary data and extracts metadata.
+/// Parses ICC profile binary data and extracts metadata.
+///
+/// This is the main entry point for parsing ICC profile data from any source
+/// (JPEG APP2 segments, PDF streams, PNG chunks, etc.).
 ///
 /// # ICC Profile Format
 ///
 /// The profile starts with a 128-byte header followed by a tag table.
 /// Each tag has a 4-byte signature, 4-byte offset, and 4-byte size.
+///
+/// # Parameters
+///
+/// - `data`: Raw ICC profile binary data
+///
+/// # Returns
+///
+/// - `Ok(HashMap)`: Map of ICC tag names to their values (without "Profile:" prefix)
+/// - `Err(ExifToolError)`: Parse error
+///
+/// # Example
+///
+/// ```no_run
+/// use exiftool_rs::parsers::icc_parser::parse_icc_profile_data;
+///
+/// # fn example(icc_data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+/// let metadata = parse_icc_profile_data(icc_data)?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn parse_icc_profile_data(data: &[u8]) -> Result<HashMap<String, TagValue>> {
+    parse_icc_profile(data)
+}
+
+/// Internal ICC profile parser.
 ///
 /// # Parameters
 ///

@@ -276,6 +276,55 @@ pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                 }
             }
 
+            b"iCCP" => {
+                // Parse iCCP chunk (ICC profile)
+                // Structure: profile name (null-terminated) + compression method (1 byte) + compressed profile data
+                if let Some(null_pos) = chunk.data.iter().position(|&b| b == 0) {
+                    if null_pos + 2 <= chunk.data.len() {
+                        let _profile_name = String::from_utf8_lossy(&chunk.data[..null_pos]);
+                        let compression_method = chunk.data[null_pos + 1];
+
+                        if compression_method == 0 {
+                            // Deflate/Inflate compression
+                            let compressed_data = &chunk.data[null_pos + 2..];
+
+                            // Decompress ICC profile data
+                            use flate2::read::ZlibDecoder;
+                            use std::io::Read;
+
+                            let mut decoder = ZlibDecoder::new(compressed_data);
+                            let mut icc_data = Vec::new();
+
+                            if decoder.read_to_end(&mut icc_data).is_ok() {
+                                // Parse ICC profile
+                                match crate::parsers::icc_parser::parse_icc_profile_data(&icc_data)
+                                {
+                                    Ok(icc_tags) => {
+                                        // Add all ICC tags to metadata with "Profile:" prefix
+                                        for (tag_name, value) in icc_tags {
+                                            metadata.insert(format!("Profile:{}", tag_name), value);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "Warning: Failed to parse ICC profile in PNG: {}",
+                                            e
+                                        );
+                                    }
+                                }
+                            } else {
+                                eprintln!("Warning: Failed to decompress iCCP chunk data");
+                            }
+                        } else {
+                            eprintln!(
+                                "Warning: Unknown iCCP compression method: {}",
+                                compression_method
+                            );
+                        }
+                    }
+                }
+            }
+
             _ => {
                 // Skip other chunk types (IDAT, etc.)
             }

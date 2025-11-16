@@ -426,7 +426,7 @@ dependencies = [
 
 [[package]]
 name = "exiftool-rs"
-version = "1.0.3"
+version = "1.0.8"
 dependencies = [
  "anyhow",
  "cc",

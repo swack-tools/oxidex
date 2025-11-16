@@ -573,7 +573,10 @@ pub fn parse_canon_makernote(
                     ) {
                         let shutter_count = ((high as u32) << 16) | (low as u32 & 0xFFFF);
                         if shutter_count > 0 {
-                            tags.insert("Canon:ShutterCount".to_string(), shutter_count.to_string());
+                            tags.insert(
+                                "Canon:ShutterCount".to_string(),
+                                shutter_count.to_string(),
+                            );
                         }
                     }
                 }
@@ -604,12 +607,18 @@ pub fn parse_canon_makernote(
 
                     // AF points in focus (bitmask)
                     if let Some(&points_in_focus) = array.get(AF_INFO_POINTS_IN_FOCUS) {
-                        tags.insert("Canon:AFPointsInFocus".to_string(), points_in_focus.to_string());
+                        tags.insert(
+                            "Canon:AFPointsInFocus".to_string(),
+                            points_in_focus.to_string(),
+                        );
                     }
 
                     // AF points selected (bitmask)
                     if let Some(&points_selected) = array.get(AF_INFO_POINTS_SELECTED) {
-                        tags.insert("Canon:AFPointsSelected".to_string(), points_selected.to_string());
+                        tags.insert(
+                            "Canon:AFPointsSelected".to_string(),
+                            points_selected.to_string(),
+                        );
                     }
                 }
             }
@@ -1253,14 +1262,14 @@ mod tests {
         // AFInfo array
         // Based on ExifTool: NumAFPoints at index 1, AFImageWidth at 2, AFImageHeight at 3
         let af_info: Vec<i16> = vec![
-            20, // [0] Array length
-            45, // [1] NumAFPoints (e.g., 45-point AF system)
-            5568, // [2] AFImageWidth
-            3712, // [3] AFImageHeight
-            9,  // [4] AFAreaWidth
-            9,  // [5] AFAreaHeight
-            2784, // [6] AFAreaXPositions (center)
-            1856, // [7] AFAreaYPositions (center)
+            20,     // [0] Array length
+            45,     // [1] NumAFPoints (e.g., 45-point AF system)
+            5568,   // [2] AFImageWidth
+            3712,   // [3] AFImageHeight
+            9,      // [4] AFAreaWidth
+            9,      // [5] AFAreaHeight
+            2784,   // [6] AFAreaXPositions (center)
+            1856,   // [7] AFAreaYPositions (center)
             0x0001, // [8] AFPointsInFocus (bit 0 set = center point)
             0x0001, // [9] AFPointsSelected
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // [10-19]
