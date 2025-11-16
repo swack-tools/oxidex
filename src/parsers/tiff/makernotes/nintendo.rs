@@ -78,7 +78,7 @@ fn format_parallax(value: i16) -> String {
 }
 
 fn format_3d_effect(value: i16) -> String {
-    if value < 0 || value > 100 {
+    if !(0..=100).contains(&value) {
         return "Invalid".to_string();
     }
     format!("{}%", value)

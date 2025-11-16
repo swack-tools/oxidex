@@ -72,6 +72,7 @@ fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> O
     Some(value)
 }
 
+/// Parser for Motorola camera MakerNotes
 pub struct MotorolaParser;
 
 impl Default for MotorolaParser {
@@ -81,6 +82,7 @@ impl Default for MotorolaParser {
 }
 
 impl MotorolaParser {
+    /// Creates a new Motorola parser instance
     pub fn new() -> Self {
         MotorolaParser
     }

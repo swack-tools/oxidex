@@ -269,7 +269,7 @@ fn format_distance(value: i16) -> String {
 /// # Returns
 /// Formatted humidity string
 fn format_humidity(value: i16) -> String {
-    if value < 0 || value > 100 {
+    if !(0..=100).contains(&value) {
         return "Unknown".to_string();
     }
     format!("{}%", value)
@@ -283,7 +283,7 @@ fn format_humidity(value: i16) -> String {
 /// # Returns
 /// Formatted transmission string
 fn format_transmission(value: i16) -> String {
-    if value < 0 || value > 100 {
+    if !(0..=100).contains(&value) {
         return "Unknown".to_string();
     }
     format!("{}%", value)

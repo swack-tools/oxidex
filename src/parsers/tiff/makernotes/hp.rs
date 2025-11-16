@@ -62,6 +62,7 @@ fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> O
     Some(value)
 }
 
+/// Parser for HP camera MakerNotes
 pub struct HpParser;
 
 impl Default for HpParser {
@@ -71,6 +72,7 @@ impl Default for HpParser {
 }
 
 impl HpParser {
+    /// Creates a new HP parser instance
     pub fn new() -> Self {
         HpParser
     }

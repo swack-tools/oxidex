@@ -290,8 +290,6 @@ fn format_shutter_speed(value: i16) -> String {
     }
     if value == 1 {
         "1 s".to_string()
-    } else if value < 10 {
-        format!("1/{} s", value)
     } else {
         format!("1/{} s", value)
     }
@@ -619,7 +617,7 @@ impl MakerNoteParser for DjiParser {
                 DJI_BATTERY_LEVEL => {
                     if let Some(array) = extract_i16_array(&entry, parse_data, byte_order) {
                         if let Some(&val) = array.first() {
-                            if val >= 0 && val <= 100 {
+                            if (0..=100).contains(&val) {
                                 tags.insert("DJI:BatteryLevel".to_string(), format!("{}%", val));
                             }
                         }

@@ -63,6 +63,7 @@ fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> O
     Some(value)
 }
 
+/// Parser for GE camera MakerNotes
 pub struct GeParser;
 
 impl Default for GeParser {
@@ -72,6 +73,7 @@ impl Default for GeParser {
 }
 
 impl GeParser {
+    /// Creates a new GE parser instance
     pub fn new() -> Self {
         GeParser
     }

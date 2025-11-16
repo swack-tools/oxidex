@@ -60,6 +60,7 @@ fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> O
     Some(value)
 }
 
+/// Parser for JVC camera MakerNotes
 pub struct JvcParser;
 
 impl Default for JvcParser {
@@ -69,6 +70,7 @@ impl Default for JvcParser {
 }
 
 impl JvcParser {
+    /// Creates a new JVC parser instance
     pub fn new() -> Self {
         JvcParser
     }

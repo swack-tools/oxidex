@@ -22,7 +22,7 @@ use std::collections::HashMap;
 /// use exiftool_rs::parsers::tiff::makernotes::fujifilm_lens_database::lookup_lens_name;
 ///
 /// let lens_name = lookup_lens_name(35);
-/// assert_eq!(lens_name, Some("XF 56mm f/1.2 R".to_string()));
+/// assert_eq!(lens_name, Some("XF 35mm f/1.4 R".to_string()));
 /// ```
 pub fn lookup_lens_name(lens_id: u16) -> Option<String> {
     FUJIFILM_LENS_DATABASE.get(&lens_id).map(|s| s.to_string())

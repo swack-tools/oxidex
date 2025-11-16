@@ -78,6 +78,7 @@ fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> O
     Some(value)
 }
 
+/// Parser for Ricoh camera MakerNotes
 pub struct RicohParser;
 
 impl Default for RicohParser {
@@ -87,6 +88,7 @@ impl Default for RicohParser {
 }
 
 impl RicohParser {
+    /// Creates a new Ricoh parser instance
     pub fn new() -> Self {
         RicohParser
     }

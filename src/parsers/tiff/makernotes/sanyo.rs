@@ -95,6 +95,7 @@ fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> O
     Some(value)
 }
 
+/// Parser for Sanyo camera MakerNotes
 pub struct SanyoParser;
 
 impl Default for SanyoParser {
@@ -104,6 +105,7 @@ impl Default for SanyoParser {
 }
 
 impl SanyoParser {
+    /// Creates a new Sanyo parser instance
     pub fn new() -> Self {
         SanyoParser
     }

@@ -154,7 +154,7 @@ fn decode_edit_status(value: i16) -> String {
 /// # Returns
 /// Formatted rating string
 fn format_rating(value: i16) -> String {
-    if value < 0 || value > 5 {
+    if !(0..=5).contains(&value) {
         return "None".to_string();
     }
     if value == 0 {
