@@ -476,7 +476,27 @@ pub fn parse_canon_makernote(
                 }
             }
 
-            // Other array tags - skip for now (will add in subsequent tasks)
+            // FocalLength array (Phase 2)
+            CANON_FOCAL_LENGTH => {
+                if let Some(array) = extract_i16_array(&entry, data, byte_order) {
+                    // array[0] = focal type
+                    // array[1] = focal length
+                    if array.len() > 0 {
+                        tags.insert(
+                            "Canon:FocalType".to_string(),
+                            array[0].to_string(),
+                        );
+                    }
+                    if array.len() > 1 {
+                        tags.insert(
+                            "Canon:FocalLength".to_string(),
+                            format!("{} mm", array[1]),
+                        );
+                    }
+                }
+            }
+
+            // Other array tags - skip for now (will add in future phases)
             _ => continue,
         }
     }
@@ -969,5 +989,34 @@ mod tests {
         assert_eq!(result.get("Canon:TargetAperture"), Some(&"160".to_string()));
         assert_eq!(result.get("Canon:TargetShutterSpeed"), Some(&"96".to_string()));
         assert_eq!(result.get("Canon:SubjectDistance"), Some(&"1000 mm".to_string()));
+    }
+
+    #[test]
+    fn test_parse_focal_length_array() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+
+        // FocalLength tag (0x0002)
+        data.extend_from_slice(&[0x02, 0x00]); // Tag
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]); // Count: 4
+        data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
+
+        // FocalLength array: [focal_type, focal_length, focal_plane_x_size, focal_plane_y_size]
+        // focal_type: 2 (35mm equivalent available)
+        // focal_length: 50mm (stored as 50)
+        // focal_units: typically stored separately
+        let focal_data: Vec<i16> = vec![2, 50, 0, 0];
+
+        for value in focal_data {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let result = parse_canon_makernote(&data, ByteOrder::LittleEndian).unwrap();
+
+        assert_eq!(result.get("Canon:FocalType"), Some(&"2".to_string()));
+        assert_eq!(result.get("Canon:FocalLength"), Some(&"50 mm".to_string()));
     }
 }
