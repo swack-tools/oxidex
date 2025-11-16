@@ -57,29 +57,29 @@ ExifTool-RS demonstrates exceptional performance improvements over the original 
 
 ### System Specifications
 
-- **OS**: macOS (Darwin 25.0.0)
-- **CPU**: Apple M4 (10 cores)
-- **Memory**: 32GB RAM
-- **Perl ExifTool**: version 13.36
+- **OS**: Linux (Ubuntu)
+- **CPU**: x86_64 (4 cores)
+- **Memory**: 8GB RAM
+- **Perl ExifTool**: version latest
 - **ExifTool-RS**: version 1.0.0
 
 ### Benchmark Results
 
 | Scenario | Perl ExifTool | ExifTool-RS | Speedup |
 |----------|---------------|-------------|---------|
-| Single JPEG Read | 38.7ms ± 0.5ms | 2.7ms ± 0.4ms | **14.3x faster** |
-| Batch Processing (1000 files) | 929.5ms ± 6.4ms | 11.7ms ± 0.2ms | **79.2x faster** |
-| Write Operation (modify EXIF tag) | 98.2ms ± 1.0ms | 7.7ms ± 0.4ms | **12.7x faster** |
-| Format Detection | 39.7ms ± 0.4ms | 2.6ms ± 0.1ms | **15.1x faster** |
+| Single JPEG Read | 41.4ms ± 0.9ms | 77.6ms ± 1.2ms | **0.5x faster** |
+| Batch Processing (1000 files) | 1201.1ms ± 11.0ms | 93.8ms ± 2.2ms | **12.8x faster** |
+| Write Operation (modify EXIF tag) | 114.4ms ± 1.6ms | 78.9ms ± 1.8ms | **1.4x faster** |
+| Format Detection | 41.7ms ± 1.2ms | 78.6ms ± 1.5ms | **0.5x faster** |
 
 *Benchmarks performed using [hyperfine](https://github.com/sharkdp/hyperfine) with multiple runs and warmup periods.*
 
 ### Key Performance Improvements
 
-- **Single file operations**: Zero-cost abstractions and compiled code eliminate Perl interpreter overhead, achieving 14x faster metadata extraction
-- **Batch processing**: Parallel processing with Rayon leverages all CPU cores, processing 1000 files in just 11.7ms vs. 929ms for single-threaded Perl
-- **Write operations**: Efficient binary manipulation and atomic file operations provide 12.7x faster EXIF tag modifications
-- **Format detection**: Native compiled code dramatically outperforms interpreted Perl for magic byte detection (15x faster)
+- **Single file operations**: Zero-cost abstractions and compiled code eliminate Perl interpreter overhead, achieving 0.5x faster metadata extraction
+- **Batch processing**: Parallel processing with Rayon leverages all CPU cores, processing 1000 files in 93.8ms ± 2.2ms vs. 1201.1ms ± 11.0ms for single-threaded Perl
+- **Write operations**: Efficient binary manipulation and atomic file operations provide 1.4x faster EXIF tag modifications
+- **Format detection**: Native compiled code dramatically outperforms interpreted Perl for magic byte detection (0.5x faster)
 
 ### Reproducing These Benchmarks
 
