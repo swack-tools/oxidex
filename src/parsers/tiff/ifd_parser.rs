@@ -207,7 +207,8 @@ pub fn parse_ifd(
     };
 
     // Extract tag values
-    let mut result = Vec::new();
+    // Pre-allocate capacity to avoid reallocations since entry_count is known upfront
+    let mut result = Vec::with_capacity(entry_count as usize);
 
     for entry in ifd_entries {
         // Get type information
