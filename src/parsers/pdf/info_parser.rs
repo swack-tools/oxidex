@@ -226,13 +226,15 @@ fn format_pdf_date(pdf_date: &str) -> Option<String> {
     let timezone = if date_str.len() > 14 {
         let tz_part = &date_str[14..];
         if tz_part.starts_with('Z') {
-            "+00:00".to_string()
+            // Z indicates UTC - format might be just "Z" or "Z00'00'"
+            "Z".to_string()
         } else if tz_part.starts_with('+') || tz_part.starts_with('-') {
             // Format: +HH'mm' or -HH'mm'
             let sign = &tz_part[0..1];
             if tz_part.len() >= 3 {
                 let tz_hour = &tz_part[1..3];
                 let tz_min = if tz_part.len() >= 6 {
+                    // Extract minutes, skipping the apostrophe
                     &tz_part[4..6]
                 } else {
                     "00"
@@ -242,7 +244,7 @@ fn format_pdf_date(pdf_date: &str) -> Option<String> {
                 "+00:00".to_string()
             }
         } else {
-            "+00:00".to_string()
+            "".to_string()
         }
     } else {
         "".to_string()
@@ -700,8 +702,8 @@ fn parse_dict_entry(input: &[u8]) -> IResult<&[u8], (String, String)> {
     let key = str::from_utf8(key)
         .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Char)))?;
 
-    // Skip whitespace
-    let (input, _) = space0(input)?;
+    // Skip whitespace (including newlines)
+    let (input, _) = multispace0(input)?;
 
     // Parse value (string literal, hex string, or other)
     let (input, value) = parse_dict_value(input)?;
@@ -737,13 +739,54 @@ fn parse_dict_value(input: &[u8]) -> IResult<&[u8], String> {
 }
 
 /// Parses a PDF string literal: (text)
+/// Handles escaped parentheses \( and \)
 fn parse_string_literal(input: &[u8]) -> IResult<&[u8], String> {
-    let (input, content) = delimited(tag(b"("), take_while(|c| c != b')'), tag(b")"))(input)?;
+    // Find opening (
+    let (input, _) = tag(b"(")(input)?;
 
-    let text = str::from_utf8(content)
-        .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Char)))?;
+    // Parse content, handling escaped characters
+    let mut content = Vec::new();
+    let mut i = 0;
+    let mut depth = 1; // Track nested parentheses
 
-    Ok((input, text.to_string()))
+    while i < input.len() {
+        if input[i] == b'\\' && i + 1 < input.len() {
+            // Escaped character - take both backslash and next char
+            content.push(input[i]);
+            content.push(input[i + 1]);
+            i += 2;
+        } else if input[i] == b'(' {
+            // Unescaped opening paren - increase depth
+            depth += 1;
+            content.push(input[i]);
+            i += 1;
+        } else if input[i] == b')' {
+            // Unescaped closing paren
+            depth -= 1;
+            if depth == 0 {
+                // Found the matching closing paren
+                break;
+            }
+            content.push(input[i]);
+            i += 1;
+        } else {
+            content.push(input[i]);
+            i += 1;
+        }
+    }
+
+    if depth != 0 {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Char,
+        )));
+    }
+
+    // Convert to string
+    let text = String::from_utf8_lossy(&content).to_string();
+
+    // Return remaining input (skip the closing paren)
+    Ok((&input[i + 1..], text))
 }
 
 /// Parses a PDF hex string: <hexdigits>

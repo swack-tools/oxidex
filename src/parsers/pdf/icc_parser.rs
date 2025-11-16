@@ -44,7 +44,10 @@
 
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use flate2::read::ZlibDecoder;
 use std::collections::HashMap;
+use std::io::Read;
+use std::str;
 
 /// Extracts ICC profile metadata from a PDF file.
 ///
@@ -78,22 +81,11 @@ use std::collections::HashMap;
 /// - Profile:ProfileCreator
 /// - Profile:MediaWhitePoint
 /// - Profile:MediaBlackPoint
+/// - And many more ICC tags
 pub fn extract_icc_profile(reader: &dyn FileReader) -> Result<MetadataMap> {
-    // For now, return a placeholder implementation
-    // This will be implemented with actual ICC parsing logic
     let mut metadata = MetadataMap::new();
 
     // Try to find and extract ICC profile from PDF
-    // This is a complex operation that requires:
-    // 1. Finding the Catalog object
-    // 2. Locating OutputIntents array
-    // 3. Finding DestOutputProfile stream
-    // 4. Decompressing the stream (usually FlateDecode)
-    // 5. Parsing the ICC profile binary data
-
-    // For the Resume.pdf file, we'll implement a basic version that works
-    // with the specific structure of that PDF
-
     match extract_icc_from_pdf(reader) {
         Ok(icc_data) => {
             // Parse the ICC profile header and tags
@@ -105,11 +97,12 @@ pub fn extract_icc_profile(reader: &dyn FileReader) -> Result<MetadataMap> {
                 }
                 Err(e) => {
                     eprintln!("Warning: Failed to parse ICC profile: {}", e);
+                    return Err(e);
                 }
             }
         }
         Err(e) => {
-            eprintln!("Warning: Failed to extract ICC profile from PDF: {}", e);
+            return Err(e);
         }
     }
 
@@ -126,17 +119,325 @@ pub fn extract_icc_profile(reader: &dyn FileReader) -> Result<MetadataMap> {
 ///
 /// This function searches for the ICC profile stream in the PDF's OutputIntents
 /// and returns the decompressed profile data.
+///
+/// The function performs these steps:
+/// 1. Finds the Catalog object from the trailer
+/// 2. Locates /OutputIntents array in the Catalog
+/// 3. Finds /DestOutputProfile stream reference
+/// 4. Reads and decompresses the stream (if FlateDecode)
 fn extract_icc_from_pdf(reader: &dyn FileReader) -> Result<Vec<u8>> {
-    // For a complete implementation, we would:
-    // 1. Parse the PDF structure to find the Catalog
-    // 2. Look for /OutputIntents array
-    // 3. Find /DestOutputProfile stream reference
-    // 4. Read and decompress the stream
+    let file_size = reader.size();
 
-    // For now, we'll return an error indicating this feature is not yet implemented
-    Err(ExifToolError::parse_error(
-        "ICC profile extraction from PDF not yet fully implemented",
-    ))
+    // Read the last 1024 bytes to find trailer
+    let tail_size = std::cmp::min(1024, file_size as usize);
+    let tail_offset = file_size.saturating_sub(tail_size as u64);
+    let tail_data = reader.read(tail_offset, tail_size)?;
+
+    // Find startxref and get xref offset
+    let xref_offset = find_xref_offset(tail_data)?;
+
+    // Read xref table and trailer region
+    let xref_size = std::cmp::min(8192, file_size.saturating_sub(xref_offset) as usize);
+    let xref_data = reader.read(xref_offset, xref_size)?;
+
+    // Parse xref table
+    let xref_map = parse_xref_table(xref_data)?;
+
+    // Find /Root reference in trailer
+    let root_ref = find_root_reference(xref_data)?;
+
+    // Get Root/Catalog object offset
+    let root_offset = *xref_map.get(&root_ref).ok_or_else(|| {
+        ExifToolError::parse_error(format!("Root object {} not found in xref table", root_ref))
+    })?;
+
+    // Read Root/Catalog object (up to 8KB)
+    let root_size = std::cmp::min(8192, file_size.saturating_sub(root_offset) as usize);
+    let root_data = reader.read(root_offset, root_size)?;
+
+    // Try to find ICC profile reference
+    // Method 1: /OutputIntents array in Catalog
+    // Method 2: /ICCBased in ColorSpace
+    let output_profile_ref = find_output_profile_reference(root_data)
+        .or_else(|_| {
+            // If OutputIntents not found, search entire PDF for /ICCBased reference
+            find_icc_based_reference(reader, &xref_map)
+        })?;
+
+    // Get ICC profile stream object offset
+    let profile_offset = *xref_map.get(&output_profile_ref).ok_or_else(|| {
+        ExifToolError::parse_error(format!(
+            "ICC profile object {} not found in xref table",
+            output_profile_ref
+        ))
+    })?;
+
+    // Read ICC profile stream object (up to 128KB for large ICC profiles)
+    let profile_size = std::cmp::min(131072, file_size.saturating_sub(profile_offset) as usize);
+    let profile_data = reader.read(profile_offset, profile_size)?;
+
+    // Extract and decompress the stream
+    extract_and_decompress_stream(profile_data)
+}
+
+/// Finds the /OutputIntents -> /DestOutputProfile reference in the Catalog
+fn find_output_profile_reference(root_data: &[u8]) -> Result<u32> {
+    // Search for /OutputIntents in binary data
+    let output_intents_marker = b"/OutputIntents";
+    let output_intents_pos = find_bytes(root_data, output_intents_marker).ok_or_else(|| {
+        ExifToolError::parse_error("No /OutputIntents found in Catalog (no ICC profile)")
+    })?;
+
+    let after_output = &root_data[output_intents_pos..];
+
+    // Find /DestOutputProfile reference
+    let dest_profile_marker = b"/DestOutputProfile";
+    let dest_profile_pos = find_bytes(after_output, dest_profile_marker).ok_or_else(|| {
+        ExifToolError::parse_error("No /DestOutputProfile found in OutputIntents")
+    })?;
+
+    // Extract object reference after /DestOutputProfile
+    let after_dest = &after_output[dest_profile_pos + 18..]; // "/DestOutputProfile".len() = 18
+
+    // Convert to string for parsing (object references are always ASCII)
+    let after_dest_str = str::from_utf8(
+        &after_dest[..std::cmp::min(100, after_dest.len())]
+    ).unwrap_or("");
+
+    // Parse object reference (e.g., "5 0 R")
+    let obj_ref = parse_object_ref(after_dest_str)?;
+
+    Ok(obj_ref)
+}
+
+/// Finds a byte sequence in a larger byte slice
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// Finds ICC profile reference via /ICCBased in the PDF
+///
+/// This method searches for /ICCBased references in ColorSpace objects,
+/// which is an alternative way PDFs embed ICC profiles (common in macOS PDFs)
+fn find_icc_based_reference(reader: &dyn FileReader, xref_map: &HashMap<u32, u64>) -> Result<u32> {
+    let file_size = reader.size();
+
+    // Search through all objects for /ICCBased reference
+    // We'll read the first 64KB which should contain the page resources
+    let search_size = std::cmp::min(65536, file_size as usize);
+    let search_data = reader.read(0, search_size)?;
+
+    // Find /ICCBased marker
+    let icc_based_marker = b"/ICCBased";
+    let icc_based_pos = find_bytes(search_data, icc_based_marker).ok_or_else(|| {
+        ExifToolError::parse_error("No /ICCBased reference found (no ICC profile)")
+    })?;
+
+    // Extract object reference after /ICCBased (e.g., "36 0 R")
+    let after_icc = &search_data[icc_based_pos + 9..]; // "/ICCBased".len() = 9
+
+    // Convert to string for parsing (object references are always ASCII)
+    // Handle potential UTF-8 issues by replacing invalid chars
+    let after_icc_bytes = &after_icc[..std::cmp::min(100, after_icc.len())];
+    let after_icc_str = String::from_utf8_lossy(after_icc_bytes);
+
+    // Parse object reference
+    let obj_ref = parse_object_ref(&after_icc_str)?;
+
+    Ok(obj_ref)
+}
+
+/// Parses an object reference like "5 0 R" and returns the object number
+fn parse_object_ref(s: &str) -> Result<u32> {
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.is_empty() {
+        return Err(ExifToolError::parse_error(
+            "No object reference found",
+        ));
+    }
+
+    // Find the 'R' marker
+    let r_index = parts.iter().position(|&p| p == "R" || p.starts_with('R'));
+
+    if let Some(idx) = r_index {
+        if idx >= 2 {
+            // Object reference is "N G R" format
+            return parts[idx - 2]
+                .parse::<u32>()
+                .map_err(|_| ExifToolError::parse_error("Invalid object number in reference"));
+        } else if idx >= 1 {
+            // Try first part
+            return parts[0]
+                .parse::<u32>()
+                .map_err(|_| ExifToolError::parse_error("Invalid object number in reference"));
+        }
+    }
+
+    // Fallback: try first numeric part
+    for part in &parts {
+        if let Ok(num) = part.parse::<u32>() {
+            return Ok(num);
+        }
+    }
+
+    Err(ExifToolError::parse_error("Invalid object reference format"))
+}
+
+/// Extracts and decompresses a stream from a PDF object
+fn extract_and_decompress_stream(obj_data: &[u8]) -> Result<Vec<u8>> {
+    // Find stream markers in binary data
+    let stream_marker = b"stream";
+    let stream_start_pos = find_bytes(obj_data, stream_marker)
+        .ok_or_else(|| ExifToolError::parse_error("No stream marker found in object"))?;
+
+    // Stream data starts after "stream" + newline
+    // The newline can be \n or \r\n
+    let stream_content_start = stream_start_pos + 6; // "stream".len() = 6
+    let mut stream_offset = stream_content_start;
+
+    // Skip newline after "stream"
+    if obj_data.len() > stream_offset {
+        if obj_data[stream_offset] == b'\r' {
+            stream_offset += 1;
+        }
+        if obj_data.len() > stream_offset && obj_data[stream_offset] == b'\n' {
+            stream_offset += 1;
+        }
+    }
+
+    // Find end of stream
+    let endstream_marker = b"endstream";
+    let endstream_pos = find_bytes(obj_data, endstream_marker).ok_or_else(|| {
+        ExifToolError::parse_error("No endstream marker found - stream may be truncated")
+    })?;
+
+    // Extract raw stream data
+    let stream_data = &obj_data[stream_offset..endstream_pos];
+
+    // Check if stream is compressed (FlateDecode) - check in the header before stream
+    let header_data = &obj_data[..stream_start_pos];
+    let is_compressed = find_bytes(header_data, b"/FlateDecode").is_some()
+        || find_bytes(header_data, b"/Fl").is_some();
+
+    if is_compressed {
+        // Decompress using zlib
+        let mut decoder = ZlibDecoder::new(stream_data);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed).map_err(|e| {
+            ExifToolError::parse_error(format!("Failed to decompress FlateDecode stream: {}", e))
+        })?;
+        Ok(decompressed)
+    } else {
+        // Return raw stream data
+        Ok(stream_data.to_vec())
+    }
+}
+
+/// Finds the /Root reference from trailer
+fn find_root_reference(xref_data: &[u8]) -> Result<u32> {
+    let xref_str = str::from_utf8(xref_data)
+        .map_err(|_| ExifToolError::parse_error("xref data contains invalid UTF-8"))?;
+
+    let trailer_pos = xref_str
+        .find("trailer")
+        .ok_or_else(|| ExifToolError::parse_error("trailer not found in PDF"))?;
+
+    let after_trailer = &xref_str[trailer_pos..];
+
+    // Find /Root reference
+    let root_pos = after_trailer
+        .find("/Root")
+        .ok_or_else(|| ExifToolError::parse_error("No /Root reference in trailer"))?;
+
+    let after_root = &after_trailer[root_pos + 5..]; // "/Root".len() = 5
+
+    parse_object_ref(after_root)
+}
+
+/// Finds startxref offset from PDF tail
+fn find_xref_offset(tail_data: &[u8]) -> Result<u64> {
+    let tail_str = str::from_utf8(tail_data)
+        .map_err(|_| ExifToolError::parse_error("PDF tail contains invalid UTF-8"))?;
+
+    let startxref_pos = tail_str
+        .rfind("startxref")
+        .ok_or_else(|| ExifToolError::parse_error("startxref not found in PDF"))?;
+
+    let after_keyword = &tail_str[startxref_pos + 9..]; // "startxref".len() = 9
+
+    // Extract the number
+    let num_str: String = after_keyword
+        .chars()
+        .skip_while(|c| c.is_whitespace())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+
+    num_str
+        .parse::<u64>()
+        .map_err(|_| ExifToolError::parse_error("Invalid xref offset after startxref"))
+}
+
+/// Parses xref table and builds object offset map
+fn parse_xref_table(xref_data: &[u8]) -> Result<HashMap<u32, u64>> {
+    let xref_str = str::from_utf8(xref_data)
+        .map_err(|_| ExifToolError::parse_error("xref table contains invalid UTF-8"))?;
+
+    let xref_pos = xref_str
+        .find("xref")
+        .ok_or_else(|| ExifToolError::parse_error("xref table not found"))?;
+
+    let after_xref = &xref_str[xref_pos + 4..]; // "xref".len() = 4
+
+    let mut xref_map = HashMap::new();
+    let lines: Vec<&str> = after_xref.lines().collect();
+
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i].trim();
+
+        // Stop at trailer
+        if line.starts_with("trailer") {
+            break;
+        }
+
+        // Check if this is a subsection header (two numbers)
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() == 2 {
+            if let (Ok(start_obj), Ok(count)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+            {
+                // Parse xref entries for this subsection
+                for j in 0..count {
+                    i += 1;
+                    if i >= lines.len() {
+                        break;
+                    }
+
+                    let entry_line = lines[i].trim();
+                    let entry_parts: Vec<&str> = entry_line.split_whitespace().collect();
+
+                    if entry_parts.len() >= 3 {
+                        if let Ok(offset) = entry_parts[0].parse::<u64>() {
+                            let in_use = entry_parts[2];
+                            if in_use == "n" {
+                                let obj_num = start_obj + j;
+                                xref_map.insert(obj_num, offset);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    if xref_map.is_empty() {
+        return Err(ExifToolError::parse_error("No valid xref entries found"));
+    }
+
+    Ok(xref_map)
 }
 
 /// Parses an ICC profile binary data and extracts metadata.
@@ -186,10 +487,12 @@ fn parse_icc_header(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Re
 
     // CMM Type (bytes 4-7, 4-char signature)
     let cmm_type = read_signature(data, 4)?;
-    metadata.insert(
-        "ProfileCMMType".to_string(),
-        TagValue::new_string(cmm_type),
-    );
+    if !cmm_type.is_empty() {
+        metadata.insert(
+            "ProfileCMMType".to_string(),
+            TagValue::new_string(cmm_type),
+        );
+    }
 
     // Profile Version (bytes 8-11)
     let version = format!(
@@ -265,10 +568,12 @@ fn parse_icc_header(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Re
         "SUNW" => "Sun Microsystems",
         _ => platform.trim(),
     };
-    metadata.insert(
-        "PrimaryPlatform".to_string(),
-        TagValue::new_string(platform_name.to_string()),
-    );
+    if !platform_name.is_empty() {
+        metadata.insert(
+            "PrimaryPlatform".to_string(),
+            TagValue::new_string(platform_name.to_string()),
+        );
+    }
 
     // CMM Flags (bytes 44-47)
     let flags = read_u32_be(data, 44)?;
@@ -290,19 +595,23 @@ fn parse_icc_header(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Re
     // Device Manufacturer (bytes 48-51)
     if data.len() >= 52 {
         let manufacturer = read_signature(data, 48)?;
-        metadata.insert(
-            "DeviceManufacturer".to_string(),
-            TagValue::new_string(manufacturer),
-        );
+        if !manufacturer.trim().is_empty() {
+            metadata.insert(
+                "DeviceManufacturer".to_string(),
+                TagValue::new_string(manufacturer),
+            );
+        }
     }
 
     // Device Model (bytes 52-55)
     if data.len() >= 56 {
         let model = read_signature(data, 52)?;
-        metadata.insert(
-            "DeviceModel".to_string(),
-            TagValue::new_string(model),
-        );
+        if !model.trim().is_empty() {
+            metadata.insert(
+                "DeviceModel".to_string(),
+                TagValue::new_string(model),
+            );
+        }
     }
 
     // Device Attributes (bytes 56-63)
@@ -356,10 +665,27 @@ fn parse_icc_header(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Re
     // Profile Creator (bytes 80-83)
     if data.len() >= 84 {
         let creator = read_signature(data, 80)?;
-        metadata.insert(
-            "ProfileCreator".to_string(),
-            TagValue::new_string(creator),
-        );
+        if !creator.trim().is_empty() {
+            metadata.insert(
+                "ProfileCreator".to_string(),
+                TagValue::new_string(creator),
+            );
+        }
+    }
+
+    // Profile ID (bytes 84-99) - 16 bytes MD5 hash
+    if data.len() >= 100 {
+        let id_bytes = &data[84..100];
+        // Check if all zeros
+        if id_bytes.iter().all(|&b| b == 0) {
+            metadata.insert("ProfileID".to_string(), TagValue::new_string("0".to_string()));
+        } else {
+            let id_hex = id_bytes
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>();
+            metadata.insert("ProfileID".to_string(), TagValue::new_string(id_hex));
+        }
     }
 
     Ok(())
@@ -373,19 +699,470 @@ fn parse_icc_header(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Re
 ///
 /// This function extracts common tags like:
 /// - desc (description)
+/// - cprt (copyright)
 /// - wtpt (white point)
 /// - bkpt (black point)
-/// - cprt (copyright)
-fn parse_icc_tags(_data: &[u8], _metadata: &mut HashMap<String, TagValue>) -> Result<()> {
-    // Tag parsing would go here
-    // For now, we just parse the header which gives us the main fields
-    // Full tag parsing would require:
-    // 1. Read tag count at offset 128
-    // 2. Read tag table entries
-    // 3. For each tag, read its data based on offset and size
-    // 4. Parse tag data according to its type signature
+/// - rXYZ, gXYZ, bXYZ (RGB matrix columns)
+/// - rTRC, gTRC, bTRC (tone reproduction curves)
+/// - dmnd, dmdd (device manufacturer/model descriptions)
+/// - vued, view (viewing conditions)
+/// - lumi (luminance)
+/// - meas (measurement)
+/// - tech (technology)
+fn parse_icc_tags(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Result<()> {
+    // Tag count at offset 128
+    if data.len() < 132 {
+        return Ok(()); // No tag table
+    }
+
+    let tag_count = read_u32_be(data, 128)?;
+
+    // Tag table starts at offset 132
+    // Each entry is 12 bytes: 4-byte signature, 4-byte offset, 4-byte size
+    for i in 0..tag_count {
+        let entry_offset = 132 + (i * 12) as usize;
+        if entry_offset + 12 > data.len() {
+            break;
+        }
+
+        let tag_signature = read_signature(data, entry_offset)?;
+        let tag_offset = read_u32_be(data, entry_offset + 4)? as usize;
+        let tag_size = read_u32_be(data, entry_offset + 8)? as usize;
+
+        // Validate tag offset and size
+        if tag_offset >= data.len() || tag_offset + tag_size > data.len() {
+            continue; // Skip invalid tags
+        }
+
+        let tag_data = &data[tag_offset..tag_offset + tag_size];
+
+        // Parse tag based on signature
+        match tag_signature.trim() {
+            "desc" => {
+                if let Ok(desc) = parse_text_description_type(tag_data) {
+                    metadata.insert(
+                        "ProfileDescription".to_string(),
+                        TagValue::new_string(desc),
+                    );
+                }
+            }
+            "cprt" => {
+                if let Ok(cprt) = parse_text_type(tag_data) {
+                    metadata.insert("ProfileCopyright".to_string(), TagValue::new_string(cprt));
+                }
+            }
+            "wtpt" => {
+                if let Ok(xyz) = parse_xyz_type(tag_data) {
+                    metadata.insert(
+                        "MediaWhitePoint".to_string(),
+                        TagValue::new_string(format!("{} {} {}", xyz.0, xyz.1, xyz.2)),
+                    );
+                }
+            }
+            "bkpt" => {
+                if let Ok(xyz) = parse_xyz_type(tag_data) {
+                    metadata.insert(
+                        "MediaBlackPoint".to_string(),
+                        TagValue::new_string(format!("{} {} {}", xyz.0, xyz.1, xyz.2)),
+                    );
+                }
+            }
+            "rXYZ" => {
+                if let Ok(xyz) = parse_xyz_type(tag_data) {
+                    metadata.insert(
+                        "RedMatrixColumn".to_string(),
+                        TagValue::new_string(format!("{} {} {}", xyz.0, xyz.1, xyz.2)),
+                    );
+                }
+            }
+            "gXYZ" => {
+                if let Ok(xyz) = parse_xyz_type(tag_data) {
+                    metadata.insert(
+                        "GreenMatrixColumn".to_string(),
+                        TagValue::new_string(format!("{} {} {}", xyz.0, xyz.1, xyz.2)),
+                    );
+                }
+            }
+            "bXYZ" => {
+                if let Ok(xyz) = parse_xyz_type(tag_data) {
+                    metadata.insert(
+                        "BlueMatrixColumn".to_string(),
+                        TagValue::new_string(format!("{} {} {}", xyz.0, xyz.1, xyz.2)),
+                    );
+                }
+            }
+            "rTRC" => {
+                let desc = format!("(Binary data {} bytes, use -b option to extract)", tag_size);
+                metadata.insert(
+                    "RedToneReproductionCurve".to_string(),
+                    TagValue::new_string(desc),
+                );
+            }
+            "gTRC" => {
+                let desc = format!("(Binary data {} bytes, use -b option to extract)", tag_size);
+                metadata.insert(
+                    "GreenToneReproductionCurve".to_string(),
+                    TagValue::new_string(desc),
+                );
+            }
+            "bTRC" => {
+                let desc = format!("(Binary data {} bytes, use -b option to extract)", tag_size);
+                metadata.insert(
+                    "BlueToneReproductionCurve".to_string(),
+                    TagValue::new_string(desc),
+                );
+            }
+            "dmnd" => {
+                if let Ok(desc) = parse_text_description_type(tag_data) {
+                    metadata.insert("DeviceMfgDesc".to_string(), TagValue::new_string(desc));
+                }
+            }
+            "dmdd" => {
+                if let Ok(desc) = parse_text_description_type(tag_data) {
+                    metadata.insert("DeviceModelDesc".to_string(), TagValue::new_string(desc));
+                }
+            }
+            "vued" => {
+                if let Ok(desc) = parse_text_description_type(tag_data) {
+                    metadata.insert("ViewingCondDesc".to_string(), TagValue::new_string(desc));
+                }
+            }
+            "view" => {
+                if let Ok(viewing_cond) = parse_viewing_conditions(tag_data) {
+                    if let Some(illuminant) = viewing_cond.get("illuminant") {
+                        metadata.insert(
+                            "ViewingCondIlluminant".to_string(),
+                            TagValue::new_string(illuminant.clone()),
+                        );
+                    }
+                    if let Some(surround) = viewing_cond.get("surround") {
+                        metadata.insert(
+                            "ViewingCondSurround".to_string(),
+                            TagValue::new_string(surround.clone()),
+                        );
+                    }
+                    if let Some(illum_type) = viewing_cond.get("illuminant_type") {
+                        metadata.insert(
+                            "ViewingCondIlluminantType".to_string(),
+                            TagValue::new_string(illum_type.clone()),
+                        );
+                    }
+                }
+            }
+            "lumi" => {
+                if let Ok(xyz) = parse_xyz_type(tag_data) {
+                    metadata.insert(
+                        "Luminance".to_string(),
+                        TagValue::new_string(format!("{} {} {}", xyz.0, xyz.1, xyz.2)),
+                    );
+                }
+            }
+            "meas" => {
+                if let Ok(measurement) = parse_measurement(tag_data) {
+                    if let Some(observer) = measurement.get("observer") {
+                        metadata.insert(
+                            "MeasurementObserver".to_string(),
+                            TagValue::new_string(observer.clone()),
+                        );
+                    }
+                    if let Some(backing) = measurement.get("backing") {
+                        metadata.insert(
+                            "MeasurementBacking".to_string(),
+                            TagValue::new_string(backing.clone()),
+                        );
+                    }
+                    if let Some(geometry) = measurement.get("geometry") {
+                        metadata.insert(
+                            "MeasurementGeometry".to_string(),
+                            TagValue::new_string(geometry.clone()),
+                        );
+                    }
+                    if let Some(flare) = measurement.get("flare") {
+                        metadata.insert(
+                            "MeasurementFlare".to_string(),
+                            TagValue::new_string(flare.clone()),
+                        );
+                    }
+                    if let Some(illuminant) = measurement.get("illuminant") {
+                        metadata.insert(
+                            "MeasurementIlluminant".to_string(),
+                            TagValue::new_string(illuminant.clone()),
+                        );
+                    }
+                }
+            }
+            "tech" => {
+                if let Ok(tech) = parse_signature_type(tag_data) {
+                    let tech_name = match tech.trim() {
+                        "fscn" => "Film Scanner",
+                        "dcam" => "Digital Camera",
+                        "rscn" => "Reflective Scanner",
+                        "ijet" => "Ink Jet Printer",
+                        "twax" => "Thermal Wax Printer",
+                        "epho" => "Electrophotographic Printer",
+                        "esta" => "Electrostatic Printer",
+                        "dsub" => "Dye Sublimation Printer",
+                        "rpho" => "Photographic Paper Printer",
+                        "fprn" => "Film Writer",
+                        "vidm" => "Video Monitor",
+                        "vidc" => "Video Camera",
+                        "pjtv" => "Projection Television",
+                        "CRT" => "Cathode Ray Tube Display",
+                        "PMD" => "Passive Matrix Display",
+                        "AMD" => "Active Matrix Display",
+                        "KPCD" => "Photo CD",
+                        "imgs" => "Photo Image Setter",
+                        "grav" => "Gravure",
+                        "offs" => "Offset Lithography",
+                        "silk" => "Silkscreen",
+                        "flex" => "Flexography",
+                        _ => &tech,
+                    };
+                    metadata.insert("Technology".to_string(), TagValue::new_string(tech_name.to_string()));
+                }
+            }
+            _ => {
+                // Unknown or unhandled tag
+            }
+        }
+    }
 
     Ok(())
+}
+
+/// Parses ICC textDescriptionType (old-style text)
+fn parse_text_description_type(data: &[u8]) -> Result<String> {
+    if data.len() < 12 {
+        return Err(ExifToolError::parse_error("textDescriptionType too small"));
+    }
+
+    // Check type signature (should be "desc")
+    let type_sig = read_signature(data, 0)?;
+
+    if type_sig.trim() == "desc" {
+        // ASCII description count at offset 8
+        let ascii_count = read_u32_be(data, 8)? as usize;
+        if ascii_count > 0 && data.len() >= 12 + ascii_count {
+            let text_bytes = &data[12..12 + ascii_count];
+            // Remove null terminator if present
+            let text_len = text_bytes.iter().position(|&b| b == 0).unwrap_or(text_bytes.len());
+            return Ok(String::from_utf8_lossy(&text_bytes[..text_len]).to_string());
+        }
+    } else if type_sig.trim() == "mluc" {
+        // MultiLocalizedUnicodeType - modern text format
+        return parse_mluc_type(data);
+    }
+
+    Err(ExifToolError::parse_error("Invalid text description type"))
+}
+
+/// Parses ICC multiLocalizedUnicodeType (modern text format)
+fn parse_mluc_type(data: &[u8]) -> Result<String> {
+    if data.len() < 16 {
+        return Err(ExifToolError::parse_error("mluc type too small"));
+    }
+
+    // Number of records at offset 8
+    let num_records = read_u32_be(data, 8)? as usize;
+    // Record size at offset 12 (should be 12)
+    let _record_size = read_u32_be(data, 12)?;
+
+    if num_records == 0 {
+        return Err(ExifToolError::parse_error("mluc has no records"));
+    }
+
+    // Each record: 4 bytes language code, 4 bytes country code, 4 bytes length, 4 bytes offset
+    // We'll just use the first record
+    if data.len() < 16 + 12 {
+        return Err(ExifToolError::parse_error("mluc record table too small"));
+    }
+
+    let str_length = read_u32_be(data, 16 + 8)? as usize;
+    let str_offset = read_u32_be(data, 16 + 12)? as usize;
+
+    if str_offset + str_length > data.len() {
+        return Err(ExifToolError::parse_error("mluc string out of bounds"));
+    }
+
+    // String is UTF-16 Big Endian
+    let utf16_bytes = &data[str_offset..str_offset + str_length];
+    let u16_vec: Vec<u16> = utf16_bytes
+        .chunks(2)
+        .filter_map(|chunk| {
+            if chunk.len() == 2 {
+                Some(u16::from_be_bytes([chunk[0], chunk[1]]))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    String::from_utf16(&u16_vec)
+        .map_err(|_| ExifToolError::parse_error("Invalid UTF-16 in mluc string"))
+}
+
+/// Parses ICC textType (simple text)
+fn parse_text_type(data: &[u8]) -> Result<String> {
+    if data.len() < 8 {
+        return Err(ExifToolError::parse_error("textType too small"));
+    }
+
+    // Type signature at offset 0 (should be "text")
+    let type_sig = read_signature(data, 0)?;
+
+    if type_sig.trim() == "text" {
+        // Text starts at offset 8
+        let text_bytes = &data[8..];
+        // Remove null terminator if present
+        let text_len = text_bytes.iter().position(|&b| b == 0).unwrap_or(text_bytes.len());
+        return Ok(String::from_utf8_lossy(&text_bytes[..text_len]).to_string());
+    } else if type_sig.trim() == "mluc" {
+        // Also support mluc for copyright
+        return parse_mluc_type(data);
+    }
+
+    Err(ExifToolError::parse_error("Invalid text type"))
+}
+
+/// Parses ICC XYZType (XYZ color values)
+fn parse_xyz_type(data: &[u8]) -> Result<(f64, f64, f64)> {
+    if data.len() < 20 {
+        return Err(ExifToolError::parse_error("XYZType too small"));
+    }
+
+    // Type signature at offset 0 (should be "XYZ ")
+    // Reserved at offset 4-7
+    // XYZ values start at offset 8 (3 x s15Fixed16Number)
+    let x = read_s15fixed16(data, 8)?;
+    let y = read_s15fixed16(data, 12)?;
+    let z = read_s15fixed16(data, 16)?;
+
+    Ok((x, y, z))
+}
+
+/// Parses ICC signatureType (4-byte signature)
+fn parse_signature_type(data: &[u8]) -> Result<String> {
+    if data.len() < 12 {
+        return Err(ExifToolError::parse_error("signatureType too small"));
+    }
+
+    // Type signature at offset 0 (should be "sig ")
+    // Reserved at offset 4-7
+    // Signature at offset 8-11
+    let sig = read_signature(data, 8)?;
+    Ok(sig)
+}
+
+/// Parses ICC viewing conditions structure
+fn parse_viewing_conditions(data: &[u8]) -> Result<HashMap<String, String>> {
+    let mut result = HashMap::new();
+
+    if data.len() < 36 {
+        return Err(ExifToolError::parse_error("Viewing conditions too small"));
+    }
+
+    // Type signature at offset 0 (should be "view")
+    // Reserved at offset 4-7
+    // Illuminant XYZ at offset 8-19
+    let illum_x = read_s15fixed16(data, 8)?;
+    let illum_y = read_s15fixed16(data, 12)?;
+    let illum_z = read_s15fixed16(data, 16)?;
+    result.insert(
+        "illuminant".to_string(),
+        format!("{} {} {}", illum_x, illum_y, illum_z),
+    );
+
+    // Surround XYZ at offset 20-31
+    let surr_x = read_s15fixed16(data, 20)?;
+    let surr_y = read_s15fixed16(data, 24)?;
+    let surr_z = read_s15fixed16(data, 28)?;
+    result.insert(
+        "surround".to_string(),
+        format!("{} {} {}", surr_x, surr_y, surr_z),
+    );
+
+    // Illuminant type at offset 32-35
+    if data.len() >= 36 {
+        let illum_type = read_u32_be(data, 32)?;
+        let illum_name = match illum_type {
+            1 => "D50",
+            2 => "D65",
+            3 => "D93",
+            4 => "F2",
+            5 => "D55",
+            6 => "A",
+            7 => "Equi-Power (E)",
+            8 => "F8",
+            _ => "Unknown",
+        };
+        result.insert("illuminant_type".to_string(), illum_name.to_string());
+    }
+
+    Ok(result)
+}
+
+/// Parses ICC measurement structure
+fn parse_measurement(data: &[u8]) -> Result<HashMap<String, String>> {
+    let mut result = HashMap::new();
+
+    if data.len() < 36 {
+        return Err(ExifToolError::parse_error("Measurement data too small"));
+    }
+
+    // Type signature at offset 0 (should be "meas")
+    // Reserved at offset 4-7
+    // Standard observer at offset 8-11
+    let observer = read_u32_be(data, 8)?;
+    let observer_name = match observer {
+        1 => "CIE 1931",
+        2 => "CIE 1964",
+        _ => "Unknown",
+    };
+    result.insert("observer".to_string(), observer_name.to_string());
+
+    // Measurement backing XYZ at offset 12-23
+    let back_x = read_s15fixed16(data, 12)?;
+    let back_y = read_s15fixed16(data, 16)?;
+    let back_z = read_s15fixed16(data, 20)?;
+    result.insert(
+        "backing".to_string(),
+        format!("{} {} {}", back_x, back_y, back_z),
+    );
+
+    // Measurement geometry at offset 24-27
+    let geometry = read_u32_be(data, 24)?;
+    let geometry_name = match geometry {
+        0 => "Unknown",
+        1 => "0/45 or 45/0",
+        2 => "0/d or d/0",
+        _ => "Unknown",
+    };
+    result.insert("geometry".to_string(), geometry_name.to_string());
+
+    // Measurement flare at offset 28-31 (u16Fixed16Number)
+    if data.len() >= 32 {
+        let flare = read_u16fixed16(data, 28)?;
+        result.insert("flare".to_string(), format!("{}%", flare * 100.0));
+    }
+
+    // Standard illuminant at offset 32-35
+    if data.len() >= 36 {
+        let illuminant = read_u32_be(data, 32)?;
+        let illuminant_name = match illuminant {
+            1 => "D50",
+            2 => "D65",
+            3 => "D93",
+            4 => "F2",
+            5 => "D55",
+            6 => "A",
+            7 => "Equi-Power (E)",
+            8 => "F8",
+            _ => "Unknown",
+        };
+        result.insert("illuminant".to_string(), illuminant_name.to_string());
+    }
+
+    Ok(result)
 }
 
 /// Reads a 4-byte big-endian unsigned integer.
@@ -432,7 +1209,7 @@ fn read_signature(data: &[u8], offset: usize) -> Result<String> {
         return Err(ExifToolError::parse_error("Offset out of bounds"));
     }
     let bytes = &data[offset..offset + 4];
-    Ok(String::from_utf8_lossy(bytes).trim().to_string())
+    Ok(String::from_utf8_lossy(bytes).to_string())
 }
 
 /// Reads a signed 15.16 fixed-point number and converts to f64.
@@ -443,6 +1220,16 @@ fn read_signature(data: &[u8], offset: usize) -> Result<String> {
 fn read_s15fixed16(data: &[u8], offset: usize) -> Result<f64> {
     let value = read_u32_be(data, offset)? as i32;
     let integer_part = (value >> 16) as i16 as f64;
+    let fractional_part = (value & 0xFFFF) as f64 / 65536.0;
+    Ok(integer_part + fractional_part)
+}
+
+/// Reads an unsigned 16.16 fixed-point number and converts to f64.
+///
+/// Similar to s15Fixed16Number but unsigned.
+fn read_u16fixed16(data: &[u8], offset: usize) -> Result<f64> {
+    let value = read_u32_be(data, offset)?;
+    let integer_part = (value >> 16) as f64;
     let fractional_part = (value & 0xFFFF) as f64 / 65536.0;
     Ok(integer_part + fractional_part)
 }

@@ -44,11 +44,13 @@
 
 #![allow(dead_code)]
 
+pub mod icc_parser;
 pub mod info_parser;
 pub mod xmp_extractor;
 
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
+use icc_parser::extract_icc_profile;
 use info_parser::parse_info_dict;
 use xmp_extractor::extract_xmp_metadata;
 
@@ -183,10 +185,24 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         }
     }
 
+    // Extract ICC profile metadata
+    match extract_icc_profile(reader) {
+        Ok(icc_metadata) => {
+            // Merge ICC profile tags into main metadata
+            for (key, value) in icc_metadata.iter() {
+                metadata.insert(key.clone(), value.clone());
+            }
+        }
+        Err(e) => {
+            // Log warning but continue - ICC profile might not exist
+            eprintln!("Warning: Failed to extract ICC profile: {}", e);
+        }
+    }
+
     // If we didn't extract any metadata at all, return error
     if metadata.is_empty() {
         return Err(ExifToolError::parse_error(
-            "No metadata found in PDF (no Info dictionary or XMP)",
+            "No metadata found in PDF (no Info dictionary, XMP, or ICC profile)",
         ));
     }
 
@@ -299,11 +315,11 @@ startxref
 
         assert_eq!(
             metadata.get_string("PDF:CreateDate"),
-            Some("2024:01:15 12:00:00+00:00")
+            Some("2024:01:15 12:00:00Z")
         );
         assert_eq!(
             metadata.get_string("PDF:ModifyDate"),
-            Some("2024:01:15 12:00:00+00:00")
+            Some("2024:01:15 12:00:00Z")
         );
 
         // Should have at least 5 metadata fields as per acceptance criteria
