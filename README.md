@@ -80,19 +80,19 @@ ExifTool-RS demonstrates exceptional performance improvements over the original 
 
 | Scenario | Perl ExifTool | ExifTool-RS | Speedup |
 |----------|---------------|-------------|---------|
-| Single JPEG Read | 43.4ms ± 4.2ms | 6.6ms ± 0.2ms | **6.5x faster** |
-| Batch Processing (1000 files) | 1206.3ms ± 27.5ms | 603.8ms ± 5.5ms | **2.0x faster** |
-| Write Operation (modify EXIF tag) | 112.8ms ± 1.7ms | 8.4ms ± 0.5ms | **13.5x faster** |
-| Format Detection | 41.4ms ± 0.9ms | 6.7ms ± 0.2ms | **6.2x faster** |
+| Single JPEG Read | 42.8ms ± 0.7ms | 6.6ms ± 0.1ms | **6.5x faster** |
+| Batch Processing (1000 files) | 1249.0ms ± 6.4ms | 532.8ms ± 0.4ms | **2.3x faster** |
+| Write Operation (modify EXIF tag) | 116.1ms ± 0.9ms | 7.9ms ± 0.2ms | **14.7x faster** |
+| Format Detection | 42.7ms ± 2.1ms | 6.6ms ± 0.2ms | **6.4x faster** |
 
 *Benchmarks performed using [hyperfine](https://github.com/sharkdp/hyperfine) with multiple runs and warmup periods.*
 
 ### Key Performance Improvements
 
 - **Single file operations**: Zero-cost abstractions and compiled code eliminate Perl interpreter overhead, achieving 6.5x faster metadata extraction
-- **Batch processing**: Parallel processing with Rayon leverages all CPU cores, processing 1000 files in 603.8ms ± 5.5ms vs. 1206.3ms ± 27.5ms for single-threaded Perl
-- **Write operations**: Efficient binary manipulation and atomic file operations provide 13.5x faster EXIF tag modifications
-- **Format detection**: Native compiled code dramatically outperforms interpreted Perl for magic byte detection (6.2x faster)
+- **Batch processing**: Parallel processing with Rayon leverages all CPU cores, processing 1000 files in 532.8ms ± 0.4ms vs. 1249.0ms ± 6.4ms for single-threaded Perl
+- **Write operations**: Efficient binary manipulation and atomic file operations provide 14.7x faster EXIF tag modifications
+- **Format detection**: Native compiled code dramatically outperforms interpreted Perl for magic byte detection (6.4x faster)
 
 ### Reproducing These Benchmarks
 
