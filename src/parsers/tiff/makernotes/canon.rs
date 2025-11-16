@@ -31,6 +31,8 @@ const CANON_SERIAL_NUMBER: u16 = 0x000C;
 const CANON_CAMERA_INFO: u16 = 0x000D;
 const CANON_CUSTOM_FUNCTIONS: u16 = 0x000F;
 const CANON_MODEL_ID: u16 = 0x0010;
+const CANON_AF_INFO: u16 = 0x0012;
+const CANON_AF_INFO2: u16 = 0x0026;
 const CANON_FILE_INFO: u16 = 0x0093;
 const CANON_LENS_MODEL: u16 = 0x0095;
 
@@ -81,6 +83,15 @@ const FILE_INFO_SHUTTER_COUNT_HIGH: usize = 3;
 const FILE_INFO_BRACKET_MODE: usize = 4;
 const FILE_INFO_BRACKET_VALUE: usize = 5;
 const FILE_INFO_LENS_ID: usize = 6;
+
+// AFInfo array indices
+const AF_INFO_NUM_AF_POINTS: usize = 1;
+const AF_INFO_IMAGE_WIDTH: usize = 2;
+const AF_INFO_IMAGE_HEIGHT: usize = 3;
+const AF_INFO_AREA_WIDTH: usize = 4;
+const AF_INFO_AREA_HEIGHT: usize = 5;
+const AF_INFO_POINTS_IN_FOCUS: usize = 8;
+const AF_INFO_POINTS_SELECTED: usize = 9;
 
 /// Decodes Canon macro mode value to human-readable string
 fn decode_macro_mode(value: i16) -> String {
@@ -564,6 +575,41 @@ pub fn parse_canon_makernote(
                         if shutter_count > 0 {
                             tags.insert("Canon:ShutterCount".to_string(), shutter_count.to_string());
                         }
+                    }
+                }
+            }
+
+            // AFInfo array (Phase 3) - autofocus point information
+            CANON_AF_INFO | CANON_AF_INFO2 => {
+                // AFInfo is a SHORT array
+                if let Some(array) = extract_i16_array(&entry, data, byte_order) {
+                    // Number of AF points
+                    if let Some(&num_points) = array.get(AF_INFO_NUM_AF_POINTS) {
+                        if num_points > 0 {
+                            tags.insert("Canon:NumAFPoints".to_string(), num_points.to_string());
+                        }
+                    }
+
+                    // AF area dimensions
+                    if let Some(&width) = array.get(AF_INFO_IMAGE_WIDTH) {
+                        if width > 0 {
+                            tags.insert("Canon:AFImageWidth".to_string(), width.to_string());
+                        }
+                    }
+                    if let Some(&height) = array.get(AF_INFO_IMAGE_HEIGHT) {
+                        if height > 0 {
+                            tags.insert("Canon:AFImageHeight".to_string(), height.to_string());
+                        }
+                    }
+
+                    // AF points in focus (bitmask)
+                    if let Some(&points_in_focus) = array.get(AF_INFO_POINTS_IN_FOCUS) {
+                        tags.insert("Canon:AFPointsInFocus".to_string(), points_in_focus.to_string());
+                    }
+
+                    // AF points selected (bitmask)
+                    if let Some(&points_selected) = array.get(AF_INFO_POINTS_SELECTED) {
+                        tags.insert("Canon:AFPointsSelected".to_string(), points_selected.to_string());
                     }
                 }
             }
@@ -1189,5 +1235,46 @@ mod tests {
             result.get("Canon:LensType"),
             Some(&"Canon EF 24-70mm f/2.8L II USM".to_string())
         );
+    }
+
+    #[test]
+    fn test_parse_af_info_array() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+
+        // AFInfo tag (0x0012 or 0x0026)
+        data.extend_from_slice(&[0x26, 0x00]); // Tag: AFInfo2
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x14, 0x00, 0x00, 0x00]); // Count: 20
+        data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
+
+        // AFInfo array
+        // Based on ExifTool: NumAFPoints at index 1, AFImageWidth at 2, AFImageHeight at 3
+        let af_info: Vec<i16> = vec![
+            20, // [0] Array length
+            45, // [1] NumAFPoints (e.g., 45-point AF system)
+            5568, // [2] AFImageWidth
+            3712, // [3] AFImageHeight
+            9,  // [4] AFAreaWidth
+            9,  // [5] AFAreaHeight
+            2784, // [6] AFAreaXPositions (center)
+            1856, // [7] AFAreaYPositions (center)
+            0x0001, // [8] AFPointsInFocus (bit 0 set = center point)
+            0x0001, // [9] AFPointsSelected
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // [10-19]
+        ];
+
+        for value in af_info {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let result = parse_canon_makernote(&data, ByteOrder::LittleEndian).unwrap();
+
+        assert_eq!(result.get("Canon:NumAFPoints"), Some(&"45".to_string()));
+        assert_eq!(result.get("Canon:AFImageWidth"), Some(&"5568".to_string()));
+        assert_eq!(result.get("Canon:AFImageHeight"), Some(&"3712".to_string()));
+        assert_eq!(result.get("Canon:AFPointsInFocus"), Some(&"1".to_string()));
     }
 }
