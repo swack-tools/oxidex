@@ -75,3 +75,12 @@ mod olympus_makernotes_tests;
 
 #[path = "integration/pentax_makernotes_tests.rs"]
 mod pentax_makernotes_tests;
+
+#[path = "integration/leica_makernotes_tests.rs"]
+mod leica_makernotes_tests;
+
+#[path = "integration/sigma_makernotes_tests.rs"]
+mod sigma_makernotes_tests;
+
+#[path = "integration/phaseone_makernotes_tests.rs"]
+mod phaseone_makernotes_tests;
