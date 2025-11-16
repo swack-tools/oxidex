@@ -56,7 +56,7 @@ This design ensures:
 - ✅ **EXIF** - Complete support for IFD0, IFD1, ExifIFD, GPS, and Interoperability IFD
 - ✅ **XMP** - 10+ namespaces supported (Dublin Core, IPTC Core, Photoshop, etc.)
 - ✅ **IPTC** - Complete support for IPTC IIM Application Record (journalism/stock photography)
-- ✅ **Canon MakerNotes** - Phase 1: Basic tags (ImageType, FirmwareVersion, OwnerName, SerialNumber, ModelID, FileNumber)
+- ✅ **Canon MakerNotes** - Phase 2: Array tags + basic metadata (CameraSettings, ShotInfo, FocalLength) ⭐ **UPDATED**
 - ✅ **JFIF** - JPEG File Interchange Format metadata
 - ✅ **ICC Profiles** - Color profile metadata extraction
 - ✅ **Photoshop IRB** - Adobe Photoshop Image Resource Blocks
@@ -65,7 +65,15 @@ This design ensures:
 - ✅ **QuickTime/MP4** - Video/audio metadata atoms
 - ✅ **File System** - File attributes, permissions, timestamps
 
-**Note:** Canon MakerNotes Phase 1 covers basic identification and metadata tags. Phase 2 will add complex array tags including camera settings, lens information, and autofocus data.
+**Canon MakerNotes Details:**
+- **Phase 1 (Basic Tags):** ImageType, FirmwareVersion, OwnerName, SerialNumber, ModelID, FileNumber
+- **Phase 2 (Array Tags):** CameraSettings (8 tags), ShotInfo (6 tags), FocalLength (2 tags)
+- **Phase 3 (Future):** Lens database, AFInfo, FileInfo, additional camera-specific arrays
+
+**Phase 2 Tags:**
+- **CameraSettings:** MacroMode, Quality, FlashMode, DriveMode, FocusMode, ISO, MeteringMode, ExposureMode
+- **ShotInfo:** AutoISO, BaseISO, MeasuredEV, TargetAperture, TargetShutterSpeed, SubjectDistance
+- **FocalLength:** FocalType, FocalLength
 
 ## Performance Benchmarks
 

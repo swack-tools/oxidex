@@ -27,6 +27,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `src/parsers/tiff/makernotes/canon.rs` - Canon MakerNote parser with comprehensive documentation
   - **Integration:** Canon MakerNotes are automatically extracted from JPEG EXIF data when present
 
+- **Canon MakerNotes Phase 2**: Complex array tag support for camera settings and shot information
+  - **CameraSettings Array (tag 0x0001) - 8 tags:**
+    - `Canon:MacroMode` - Macro mode setting (Macro, Normal)
+    - `Canon:Quality` - Image quality (Economy, Normal, Fine, Superfine, RAW, CRAW)
+    - `Canon:FlashMode` - Flash mode (Off, Auto, On, Red-eye Reduction, etc.)
+    - `Canon:DriveMode` - Drive mode (Single, Continuous, Movie, etc.)
+    - `Canon:FocusMode` - Focus mode (One-shot AF, AI Servo AF, Manual, etc.)
+    - `Canon:ISO` - ISO speed setting
+    - `Canon:MeteringMode` - Metering mode (Evaluative, Partial, Center-weighted)
+    - `Canon:ExposureMode` - Exposure mode (Program, Av, Tv, Manual, Bulb, etc.)
+  - **ShotInfo Array (tag 0x0004) - 6 tags:**
+    - `Canon:AutoISO` - Auto ISO value
+    - `Canon:BaseISO` - Base ISO value
+    - `Canon:MeasuredEV` - Measured exposure value
+    - `Canon:TargetAperture` - Target aperture value
+    - `Canon:TargetShutterSpeed` - Target shutter speed
+    - `Canon:SubjectDistance` - Subject distance in mm
+  - **FocalLength Array (tag 0x0002) - 2 tags:**
+    - `Canon:FocalType` - Focal length type
+    - `Canon:FocalLength` - Focal length in mm
+  - **Implementation Details:**
+    - Added `extract_i16_array()` helper for Canon's integer array tags
+    - Supports both inline (≤2 values) and offset-based (>2 values) arrays
+    - Value decoders convert numeric codes to human-readable strings
+    - Based on ExifTool Canon.pm reference implementation
+    - All values gracefully handle missing/invalid data
+  - **Files Modified:**
+    - `src/parsers/tiff/makernotes/canon.rs` (+400 lines of tests and implementation)
+
 ### Fixed
 - **CI/CD**: Fixed ARM64 cross-compilation in GitHub Actions by implementing QEMU emulation. Previously, attempting to run ARM64 Docker images (`ghcr.io/cross-rs/aarch64-unknown-linux-musl`) on x86_64 runners resulted in "exec format error". The fix adds `docker/setup-qemu-action` and `docker/setup-buildx-action` to enable multi-platform builds on x86_64 runners.
 
