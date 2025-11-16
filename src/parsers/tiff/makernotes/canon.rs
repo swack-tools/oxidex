@@ -55,6 +55,21 @@ const CAMERA_SETTINGS_EXPOSURE_MODE: usize = 20;
 const CAMERA_SETTINGS_FLASH_ACTIVITY: usize = 28;
 const CAMERA_SETTINGS_FOCUS_CONTINUOUS: usize = 32;
 
+// ShotInfo array (tag 0x0004) indices
+const SHOT_INFO_AUTO_ISO: usize = 1;
+const SHOT_INFO_BASE_ISO: usize = 2;
+const SHOT_INFO_MEASURED_EV: usize = 3;
+const SHOT_INFO_TARGET_APERTURE: usize = 4;
+const SHOT_INFO_TARGET_SHUTTER_SPEED: usize = 5;
+const SHOT_INFO_WHITE_BALANCE: usize = 7;
+const SHOT_INFO_SLOW_SHUTTER: usize = 8;
+const SHOT_INFO_SEQUENCE_NUMBER: usize = 9;
+const SHOT_INFO_FLASH_GUIDE_NUMBER: usize = 13;
+const SHOT_INFO_AF_POINTS_USED: usize = 14;
+const SHOT_INFO_FLASH_EXPOSURE_COMP: usize = 15;
+const SHOT_INFO_AUTO_EXPOSURE_BRACKETING: usize = 16;
+const SHOT_INFO_SUBJECT_DISTANCE: usize = 19;
+
 /// Decodes Canon macro mode value to human-readable string
 fn decode_macro_mode(value: i16) -> String {
     match value {
@@ -413,6 +428,49 @@ pub fn parse_canon_makernote(
                         tags.insert(
                             "Canon:ExposureMode".to_string(),
                             decode_exposure_mode(array[CAMERA_SETTINGS_EXPOSURE_MODE]),
+                        );
+                    }
+                }
+            }
+
+            // ShotInfo array (Phase 2)
+            CANON_SHOT_INFO => {
+                if let Some(array) = extract_i16_array(&entry, data, byte_order) {
+                    if array.len() > SHOT_INFO_AUTO_ISO {
+                        tags.insert(
+                            "Canon:AutoISO".to_string(),
+                            array[SHOT_INFO_AUTO_ISO].to_string(),
+                        );
+                    }
+                    if array.len() > SHOT_INFO_BASE_ISO {
+                        tags.insert(
+                            "Canon:BaseISO".to_string(),
+                            array[SHOT_INFO_BASE_ISO].to_string(),
+                        );
+                    }
+                    if array.len() > SHOT_INFO_MEASURED_EV {
+                        tags.insert(
+                            "Canon:MeasuredEV".to_string(),
+                            array[SHOT_INFO_MEASURED_EV].to_string(),
+                        );
+                    }
+                    if array.len() > SHOT_INFO_TARGET_APERTURE {
+                        tags.insert(
+                            "Canon:TargetAperture".to_string(),
+                            array[SHOT_INFO_TARGET_APERTURE].to_string(),
+                        );
+                    }
+                    if array.len() > SHOT_INFO_TARGET_SHUTTER_SPEED {
+                        tags.insert(
+                            "Canon:TargetShutterSpeed".to_string(),
+                            array[SHOT_INFO_TARGET_SHUTTER_SPEED].to_string(),
+                        );
+                    }
+                    if array.len() > SHOT_INFO_SUBJECT_DISTANCE {
+                        let distance = array[SHOT_INFO_SUBJECT_DISTANCE];
+                        tags.insert(
+                            "Canon:SubjectDistance".to_string(),
+                            format!("{} mm", distance),
                         );
                     }
                 }
@@ -847,5 +905,69 @@ mod tests {
         assert_eq!(result.get("Canon:MeteringMode"), Some(&"Evaluative".to_string()));
         assert_eq!(result.get("Canon:ExposureMode"), Some(&"Program AE".to_string()));
         assert_eq!(result.get("Canon:ISO"), Some(&"80".to_string()));
+    }
+
+    #[test]
+    fn test_shot_info_indices() {
+        assert_eq!(SHOT_INFO_AUTO_ISO, 1);
+        assert_eq!(SHOT_INFO_BASE_ISO, 2);
+        assert_eq!(SHOT_INFO_MEASURED_EV, 3);
+        assert_eq!(SHOT_INFO_TARGET_APERTURE, 4);
+        assert_eq!(SHOT_INFO_TARGET_SHUTTER_SPEED, 5);
+        assert_eq!(SHOT_INFO_WHITE_BALANCE, 7);
+        assert_eq!(SHOT_INFO_SLOW_SHUTTER, 8);
+        assert_eq!(SHOT_INFO_SEQUENCE_NUMBER, 9);
+        assert_eq!(SHOT_INFO_FLASH_GUIDE_NUMBER, 13);
+        assert_eq!(SHOT_INFO_AF_POINTS_USED, 14);
+        assert_eq!(SHOT_INFO_FLASH_EXPOSURE_COMP, 15);
+        assert_eq!(SHOT_INFO_AUTO_EXPOSURE_BRACKETING, 16);
+        assert_eq!(SHOT_INFO_SUBJECT_DISTANCE, 19);
+    }
+
+    #[test]
+    fn test_parse_shot_info_array() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+
+        // ShotInfo tag (0x0004)
+        data.extend_from_slice(&[0x04, 0x00]); // Tag
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x14, 0x00, 0x00, 0x00]); // Count: 20
+        data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
+
+        // ShotInfo array (20 values)
+        let shot_info: Vec<i16> = vec![
+            20,   // [0] Array length
+            100,  // [1] Auto ISO
+            100,  // [2] Base ISO
+            128,  // [3] Measured EV
+            160,  // [4] Target aperture (f/5.6)
+            96,   // [5] Target shutter speed (1/60)
+            0,    // [6] (unused)
+            0,    // [7] White balance: Auto
+            0,    // [8] Slow shutter: Off
+            0,    // [9] Sequence number
+            0, 0, 0, 0, // [10-13]
+            0,    // [14] AF points used
+            0,    // [15] Flash exposure comp
+            0,    // [16] Auto exposure bracketing
+            0, 0, // [17-18]
+            1000, // [19] Subject distance (mm)
+        ];
+
+        for value in shot_info {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let result = parse_canon_makernote(&data, ByteOrder::LittleEndian).unwrap();
+
+        assert_eq!(result.get("Canon:AutoISO"), Some(&"100".to_string()));
+        assert_eq!(result.get("Canon:BaseISO"), Some(&"100".to_string()));
+        assert_eq!(result.get("Canon:MeasuredEV"), Some(&"128".to_string()));
+        assert_eq!(result.get("Canon:TargetAperture"), Some(&"160".to_string()));
+        assert_eq!(result.get("Canon:TargetShutterSpeed"), Some(&"96".to_string()));
+        assert_eq!(result.get("Canon:SubjectDistance"), Some(&"1000 mm".to_string()));
     }
 }
