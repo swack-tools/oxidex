@@ -103,6 +103,16 @@ pub struct IfdEntry {
 /// a vector of (tag_id, raw_value) pairs. The raw values are returned as
 /// owned byte vectors.
 ///
+/// # Performance Notes
+///
+/// The current implementation optimizes inline values (≤4 bytes) by extracting
+/// them directly from the IFD entry without file I/O. However, the API returns
+/// `Vec<u8>` which requires allocation even for small values.
+///
+/// TODO: Consider using `Cow<[u8]>` to avoid copies for large external values.
+/// This would require API changes and lifetime annotations but could reduce
+/// allocations for large tags like MakerNotes.
+///
 /// # Parameters
 ///
 /// - `reader`: FileReader implementation for accessing file data
