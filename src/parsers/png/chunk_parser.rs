@@ -802,7 +802,7 @@ mod tests {
         let tags = result.unwrap();
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].0, 0x010F); // Make tag
-        assert_eq!(&tags[0].3, b"Test\0");
+        assert_eq!(tags[0].3.as_ref(), b"Test\0");
     }
 
     #[test]

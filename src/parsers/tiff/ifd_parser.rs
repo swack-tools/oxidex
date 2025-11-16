@@ -44,7 +44,8 @@
 //! let tags = parse_ifd(&reader, 8, ByteOrder::LittleEndian)?;
 //!
 //! for (tag_id, _, _, value) in tags {
-//!     println!("Tag 0x{:04X}: {} bytes", tag_id, value.len());
+//!     // value is Cow<[u8]>, use .as_ref() to get &[u8]
+//!     println!("Tag 0x{:04X}: {} bytes", tag_id, value.as_ref().len());
 //! }
 //! # Ok(())
 //! # }
@@ -61,9 +62,15 @@ use nom::{
     number::complete::{be_u16, be_u32, le_u16, le_u32},
     IResult,
 };
+use std::borrow::Cow;
 
 /// Type alias for IFD entry tuples: (tag, type, count, data)
-pub type IfdEntryTuple = (u16, u16, u32, Vec<u8>);
+///
+/// Using `Cow<'static, [u8]>` allows zero-copy optimization for large values
+/// while still supporting owned data when needed. The 'static lifetime is used
+/// pragmatically since the data lifetime is tied to the FileReader, which we
+/// don't want to propagate through the entire type system.
+pub type IfdEntryTuple = (u16, u16, u32, Cow<'static, [u8]>);
 
 /// Type alias for vector of IFD entries
 pub type IfdEntries = Vec<IfdEntryTuple>;
@@ -121,7 +128,7 @@ pub struct IfdEntry {
 ///
 /// # Returns
 ///
-/// - `Ok(Vec<(u16, u16, u32, Vec<u8>)>)`: Vector of (tag_id, field_type, value_count, raw_value_bytes) tuples
+/// - `Ok(Vec<(u16, u16, u32, Cow<'static, [u8]>)>)`: Vector of (tag_id, field_type, value_count, raw_value_bytes) tuples
 /// - `Err(ExifToolError)`: Parse error or I/O error
 ///
 /// # Errors
@@ -147,7 +154,8 @@ pub struct IfdEntry {
 /// // Find Make tag (0x010F)
 /// for (tag_id, _, _, value) in &tags {
 ///     if *tag_id == 0x010F {
-///         let make = String::from_utf8_lossy(value);
+///         // value is Cow<[u8]>, use .as_ref() to get &[u8]
+///         let make = String::from_utf8_lossy(value.as_ref());
 ///         println!("Make: {}", make);
 ///     }
 /// }
@@ -229,10 +237,11 @@ pub fn parse_ifd(
         let type_size = exif_type.size_in_bytes();
         let total_size = type_size * entry.value_count as usize;
 
-        // Extract value bytes
+        // Extract value bytes using Cow for zero-copy optimization
         let value_bytes = if total_size <= 4 {
             // Value is stored inline in the value_offset field
-            extract_inline_value(entry.value_offset, total_size, byte_order)
+            // We need to create owned data since it's derived from the field value
+            Cow::Owned(extract_inline_value(entry.value_offset, total_size, byte_order))
         } else {
             // Value is stored at an offset
             let value_offset = entry.value_offset as u64;
@@ -249,7 +258,11 @@ pub fn parse_ifd(
             }
 
             // Read value data from offset
-            reader.read(value_offset, total_size)?.to_vec()
+            // For now, we use Cow::Owned since the FileReader API returns borrowed slices
+            // but we can't guarantee the lifetime matches our 'static constraint.
+            // Future optimization: change FileReader to support arena allocation or
+            // return data with explicit lifetimes that can be borrowed.
+            Cow::Owned(reader.read(value_offset, total_size)?.to_vec())
         };
 
         result.push((
@@ -528,19 +541,19 @@ mod tests {
         let make = tags.iter().find(|(id, _, _, _)| *id == 0x010F);
         assert!(make.is_some());
         let (_, _, _, make_value) = make.unwrap();
-        assert_eq!(make_value, b"Canon\0");
+        assert_eq!(make_value.as_ref(), b"Canon\0");
 
         // Check Model tag (0x0110)
         let model = tags.iter().find(|(id, _, _, _)| *id == 0x0110);
         assert!(model.is_some());
         let (_, _, _, model_value) = model.unwrap();
-        assert_eq!(model_value, b"EOS\0");
+        assert_eq!(model_value.as_ref(), b"EOS\0");
 
         // Check DateTime tag (0x0132)
         let datetime = tags.iter().find(|(id, _, _, _)| *id == 0x0132);
         assert!(datetime.is_some());
         let (_, _, _, datetime_value) = datetime.unwrap();
-        assert_eq!(datetime_value, b"2024:01:01 12:00:00\0");
+        assert_eq!(datetime_value.as_ref(), b"2024:01:01 12:00:00\0");
     }
 
     #[test]
@@ -558,19 +571,19 @@ mod tests {
         let make = tags.iter().find(|(id, _, _, _)| *id == 0x010F);
         assert!(make.is_some());
         let (_, _, _, make_value) = make.unwrap();
-        assert_eq!(make_value, b"Canon\0");
+        assert_eq!(make_value.as_ref(), b"Canon\0");
 
         // Check Model tag
         let model = tags.iter().find(|(id, _, _, _)| *id == 0x0110);
         assert!(model.is_some());
         let (_, _, _, model_value) = model.unwrap();
-        assert_eq!(model_value, b"EOS\0");
+        assert_eq!(model_value.as_ref(), b"EOS\0");
 
         // Check DateTime tag
         let datetime = tags.iter().find(|(id, _, _, _)| *id == 0x0132);
         assert!(datetime.is_some());
         let (_, _, _, datetime_value) = datetime.unwrap();
-        assert_eq!(datetime_value, b"2024:01:01 12:00:00\0");
+        assert_eq!(datetime_value.as_ref(), b"2024:01:01 12:00:00\0");
     }
 
     #[test]

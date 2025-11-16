@@ -258,7 +258,7 @@ fn extract_u32_from_tag_value(value: &[u8], byte_order: ByteOrder) -> Option<u32
 ///
 /// # Returns
 ///
-/// - `Ok(Vec<(u16, u16, u32, Vec<u8>)>)`: Vector of (tag_id, field_type, value_count, raw_value_bytes) from all IFDs
+/// - `Ok(Vec<(u16, u16, u32, Cow<'static, [u8]>)>)`: Vector of (tag_id, field_type, value_count, raw_value_bytes) from all IFDs
 /// - `Err(ExifToolError)`: Parse error, I/O error, or invalid file structure
 ///
 /// # Errors
@@ -334,7 +334,8 @@ pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<IfdEntries> {
         for (tag_id, _field_type, _value_count, value) in &tags {
             match *tag_id {
                 EXIF_IFD_POINTER | GPS_INFO_IFD_POINTER | INTEROPERABILITY_IFD_POINTER => {
-                    if let Some(sub_ifd_offset) = extract_u32_from_tag_value(value, byte_order) {
+                    // Convert Cow<[u8]> to &[u8] using as_ref()
+                    if let Some(sub_ifd_offset) = extract_u32_from_tag_value(value.as_ref(), byte_order) {
                         // Skip if we've already visited this offset
                         if !visited_offsets.contains(&(sub_ifd_offset as u64)) {
                             // Parse sub-IFD
@@ -357,9 +358,11 @@ pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<IfdEntries> {
                 SUB_IFDS => {
                     // SubIFDs tag can contain multiple offsets
                     // Each offset is 4 bytes (u32)
-                    let offset_count = value.len() / 4;
+                    // Convert Cow<[u8]> to &[u8] using as_ref()
+                    let value_bytes = value.as_ref();
+                    let offset_count = value_bytes.len() / 4;
                     for i in 0..offset_count {
-                        let offset_bytes = &value[i * 4..(i + 1) * 4];
+                        let offset_bytes = &value_bytes[i * 4..(i + 1) * 4];
                         if let Some(sub_ifd_offset) =
                             extract_u32_from_tag_value(offset_bytes, byte_order)
                         {

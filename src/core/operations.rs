@@ -238,20 +238,23 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 
                     // Convert raw tag data to MetadataMap entries
                     for (tag_id, field_type, value_count, raw_bytes) in &tags {
+                        // Convert Cow<[u8]> to &[u8] for processing
+                        let bytes = raw_bytes.as_ref();
+
                         // Check for EXIF Sub-IFD pointer (tag 0x8769)
-                        if *tag_id == 0x8769 && raw_bytes.len() >= 4 {
+                        if *tag_id == 0x8769 && bytes.len() >= 4 {
                             let offset = match byte_order {
                                 ByteOrder::LittleEndian => u32::from_le_bytes([
-                                    raw_bytes[0],
-                                    raw_bytes[1],
-                                    raw_bytes[2],
-                                    raw_bytes[3],
+                                    bytes[0],
+                                    bytes[1],
+                                    bytes[2],
+                                    bytes[3],
                                 ]),
                                 ByteOrder::BigEndian => u32::from_be_bytes([
-                                    raw_bytes[0],
-                                    raw_bytes[1],
-                                    raw_bytes[2],
-                                    raw_bytes[3],
+                                    bytes[0],
+                                    bytes[1],
+                                    bytes[2],
+                                    bytes[3],
                                 ]),
                             };
                             exif_ifd_offset = Some(offset as u64);
@@ -259,19 +262,19 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                         }
 
                         // Check for GPS Sub-IFD pointer (tag 0x8825)
-                        if *tag_id == 0x8825 && raw_bytes.len() >= 4 {
+                        if *tag_id == 0x8825 && bytes.len() >= 4 {
                             let offset = match byte_order {
                                 ByteOrder::LittleEndian => u32::from_le_bytes([
-                                    raw_bytes[0],
-                                    raw_bytes[1],
-                                    raw_bytes[2],
-                                    raw_bytes[3],
+                                    bytes[0],
+                                    bytes[1],
+                                    bytes[2],
+                                    bytes[3],
                                 ]),
                                 ByteOrder::BigEndian => u32::from_be_bytes([
-                                    raw_bytes[0],
-                                    raw_bytes[1],
-                                    raw_bytes[2],
-                                    raw_bytes[3],
+                                    bytes[0],
+                                    bytes[1],
+                                    bytes[2],
+                                    bytes[3],
                                 ]),
                             };
                             gps_ifd_offset = Some(offset as u64);
@@ -283,7 +286,7 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 
                         // Convert raw bytes to TagValue
                         let tag_value = raw_bytes_to_tag_value(
-                            raw_bytes,
+                            bytes,
                             *field_type,
                             *value_count,
                             *tag_id,
@@ -299,7 +302,7 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                             for (tag_id, field_type, value_count, raw_bytes) in exif_tags {
                                 let tag_name = lookup_tag_name(tag_id, "ExifIFD");
                                 let tag_value = raw_bytes_to_tag_value(
-                                    &raw_bytes,
+                                    raw_bytes.as_ref(),
                                     field_type,
                                     value_count,
                                     tag_id,
@@ -316,7 +319,7 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                             for (tag_id, field_type, value_count, raw_bytes) in gps_tags {
                                 let tag_name = lookup_tag_name(tag_id, "GPS");
                                 let tag_value = raw_bytes_to_tag_value(
-                                    &raw_bytes,
+                                    raw_bytes.as_ref(),
                                     field_type,
                                     value_count,
                                     tag_id,
@@ -451,14 +454,17 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 
         // Convert tags to metadata
         for (tag_id, field_type, value_count, raw_bytes) in &tags {
+            // Convert Cow<[u8]> to &[u8] for processing
+            let bytes = raw_bytes.as_ref();
+
             // Check for EXIF Sub-IFD pointer (tag 0x8769)
-            if *tag_id == 0x8769 && raw_bytes.len() >= 4 {
+            if *tag_id == 0x8769 && bytes.len() >= 4 {
                 let offset = match byte_order {
                     ByteOrder::LittleEndian => {
-                        u32::from_le_bytes([raw_bytes[0], raw_bytes[1], raw_bytes[2], raw_bytes[3]])
+                        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
                     }
                     ByteOrder::BigEndian => {
-                        u32::from_be_bytes([raw_bytes[0], raw_bytes[1], raw_bytes[2], raw_bytes[3]])
+                        u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
                     }
                 };
                 exif_ifd_offset = Some(offset as u64);
@@ -466,13 +472,13 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             }
 
             // Check for GPS Sub-IFD pointer (tag 0x8825)
-            if *tag_id == 0x8825 && raw_bytes.len() >= 4 {
+            if *tag_id == 0x8825 && bytes.len() >= 4 {
                 let offset = match byte_order {
                     ByteOrder::LittleEndian => {
-                        u32::from_le_bytes([raw_bytes[0], raw_bytes[1], raw_bytes[2], raw_bytes[3]])
+                        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
                     }
                     ByteOrder::BigEndian => {
-                        u32::from_be_bytes([raw_bytes[0], raw_bytes[1], raw_bytes[2], raw_bytes[3]])
+                        u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
                     }
                 };
                 gps_ifd_offset = Some(offset as u64);
@@ -482,7 +488,7 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             // Check for MakerNote tag (0x927C)
             // Store the data for later processing after we've added other tags
             if *tag_id == 0x927C {
-                makernote_data = Some(raw_bytes.as_slice());
+                makernote_data = Some(bytes);
                 // Note: We don't continue here - we still add the raw MakerNote tag
                 // to metadata so tools can see it, but we'll also parse it below
             }
@@ -490,7 +496,7 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             // Convert tag to metadata
             let tag_name = lookup_tag_name(*tag_id, ifd_name);
             let tag_value =
-                raw_bytes_to_tag_value(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
+                raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order);
             metadata.insert(tag_name, tag_value);
         }
 
@@ -503,14 +509,17 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 
                 // First pass: convert tags and capture MakerNote
                 for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                    // Convert Cow<[u8]> to &[u8] for processing
+                    let bytes = raw_bytes.as_ref();
+
                     // Check for MakerNote in EXIF IFD
                     if *tag_id == 0x927C {
-                        exif_makernote_data = Some(raw_bytes.as_slice());
+                        exif_makernote_data = Some(bytes);
                     }
 
                     let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
                     let tag_value = raw_bytes_to_tag_value(
-                        raw_bytes,
+                        bytes,
                         *field_type,
                         *value_count,
                         *tag_id,
@@ -549,7 +558,7 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                 for (tag_id, field_type, value_count, raw_bytes) in gps_tags {
                     let tag_name = lookup_tag_name(tag_id, "GPS");
                     let tag_value = raw_bytes_to_tag_value(
-                        &raw_bytes,
+                        raw_bytes.as_ref(),
                         field_type,
                         value_count,
                         tag_id,

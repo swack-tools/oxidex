@@ -25,28 +25,31 @@ use tempfile::TempDir;
 
 /// Helper function to convert raw tag bytes to a MetadataMap
 ///
-/// This converts the Vec<(u16, u16, Vec<u8>)> format returned by parse_tiff_file
+/// This converts the Vec<(u16, u16, Cow<[u8]>)> format returned by parse_tiff_file
 /// into a MetadataMap with proper TagValue objects.
-fn tags_to_metadata_map(tags: Vec<(u16, u16, u32, Vec<u8>)>) -> MetadataMap {
+fn tags_to_metadata_map(tags: Vec<(u16, u16, u32, std::borrow::Cow<'static, [u8]>)>) -> MetadataMap {
     let mut metadata = MetadataMap::new();
 
     for (tag_id, _field_type, _value_count, value) in tags {
+        // Convert Cow<[u8]> to &[u8] for processing
+        let bytes = value.as_ref();
+
         // Map common tag IDs to tag names and create appropriate TagValue
         let (tag_name, tag_value) = match tag_id {
             0x010F => {
                 // Make - ASCII string
-                let s = String::from_utf8_lossy(&value);
+                let s = String::from_utf8_lossy(bytes);
                 ("IFD0:Make", TagValue::new_string(s.trim_end_matches('\0')))
             }
             0x0110 => {
                 // Model - ASCII string
-                let s = String::from_utf8_lossy(&value);
+                let s = String::from_utf8_lossy(bytes);
                 ("IFD0:Model", TagValue::new_string(s.trim_end_matches('\0')))
             }
             0x0100 => {
                 // ImageWidth - SHORT (u16)
-                if value.len() >= 2 {
-                    let width = u16::from_le_bytes([value[0], value[1]]);
+                if bytes.len() >= 2 {
+                    let width = u16::from_le_bytes([bytes[0], bytes[1]]);
                     ("IFD0:ImageWidth", TagValue::new_integer(width as i64))
                 } else {
                     continue;
@@ -54,8 +57,8 @@ fn tags_to_metadata_map(tags: Vec<(u16, u16, u32, Vec<u8>)>) -> MetadataMap {
             }
             0x0101 => {
                 // ImageHeight (also called ImageLength) - SHORT (u16)
-                if value.len() >= 2 {
-                    let length = u16::from_le_bytes([value[0], value[1]]);
+                if bytes.len() >= 2 {
+                    let length = u16::from_le_bytes([bytes[0], bytes[1]]);
                     ("IFD0:ImageHeight", TagValue::new_integer(length as i64))
                 } else {
                     continue;
@@ -63,8 +66,8 @@ fn tags_to_metadata_map(tags: Vec<(u16, u16, u32, Vec<u8>)>) -> MetadataMap {
             }
             0x8827 => {
                 // ISO - SHORT (u16)
-                if value.len() >= 2 {
-                    let iso = u16::from_le_bytes([value[0], value[1]]);
+                if bytes.len() >= 2 {
+                    let iso = u16::from_le_bytes([bytes[0], bytes[1]]);
                     ("ExifIFD:ISO", TagValue::new_integer(iso as i64))
                 } else {
                     continue;
@@ -72,9 +75,9 @@ fn tags_to_metadata_map(tags: Vec<(u16, u16, u32, Vec<u8>)>) -> MetadataMap {
             }
             0x829A => {
                 // ExposureTime - RATIONAL (numerator/denominator)
-                if value.len() >= 8 {
-                    let numerator = u32::from_le_bytes([value[0], value[1], value[2], value[3]]);
-                    let denominator = u32::from_le_bytes([value[4], value[5], value[6], value[7]]);
+                if bytes.len() >= 8 {
+                    let numerator = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    let denominator = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
                     (
                         "ExifIFD:ExposureTime",
                         TagValue::new_rational(numerator as i32, denominator as i32),
@@ -85,9 +88,9 @@ fn tags_to_metadata_map(tags: Vec<(u16, u16, u32, Vec<u8>)>) -> MetadataMap {
             }
             0x829D => {
                 // FNumber - RATIONAL
-                if value.len() >= 8 {
-                    let numerator = u32::from_le_bytes([value[0], value[1], value[2], value[3]]);
-                    let denominator = u32::from_le_bytes([value[4], value[5], value[6], value[7]]);
+                if bytes.len() >= 8 {
+                    let numerator = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    let denominator = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
                     (
                         "ExifIFD:FNumber",
                         TagValue::new_rational(numerator as i32, denominator as i32),

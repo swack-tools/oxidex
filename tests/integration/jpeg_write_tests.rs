@@ -125,10 +125,10 @@ fn parse_exif_tags(tiff_data: &[u8]) -> Result<Vec<(u16, Vec<u8>)>, Box<dyn std:
     // IFD starts at offset 8 (after TIFF header)
     let tags = parse_ifd(&reader, 8, byte_order)?;
 
-    // Convert from (u16, u16, Vec<u8>) to (u16, Vec<u8>) by dropping field_type
+    // Convert from (u16, u16, u32, Cow<[u8]>) to (u16, Vec<u8>) by dropping field_type and converting Cow to Vec
     let tags_without_type = tags
         .into_iter()
-        .map(|(tag_id, _field_type, _value_count, value)| (tag_id, value))
+        .map(|(tag_id, _field_type, _value_count, value)| (tag_id, value.into_owned()))
         .collect();
 
     Ok(tags_without_type)
