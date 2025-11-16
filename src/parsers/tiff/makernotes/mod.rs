@@ -29,3 +29,17 @@ pub mod google;
 pub mod microsoft;
 pub mod qualcomm;
 pub mod samsung;
+
+// Legacy camera manufacturers (Phase 4)
+pub mod casio;
+pub mod ge;
+pub mod hp;
+pub mod jvc;
+pub mod kodak;
+pub mod leaf;
+pub mod leaf_lens_database;
+pub mod minolta;
+pub mod minolta_lens_database;
+pub mod motorola;
+pub mod ricoh;
+pub mod sanyo;
