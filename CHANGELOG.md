@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Dependency Upgrades**: Updated all major dependencies to latest versions for improved performance and security
+  - `criterion` 0.5 → 0.7 - Modern benchmarking framework with improved measurement accuracy
+  - `indicatif` 0.17 → 0.18 - Enhanced progress bar library with better terminal compatibility
+  - `nom` 7.1 → 8.0 - Binary parser combinator with refined error handling and improved performance
+  - `quick-xml` 0.31 → 0.38 - XML parser for XMP metadata with enhanced API and better namespace support
+  - `bincode` 1.3 → 2.0 - Binary serialization across all tag workspace crates with new encoding API
+  - **Breaking Changes Addressed:**
+    - Bincode: Migrated from `serialize`/`deserialize` to `encode`/`decode` API across 6 workspace crates
+    - Bincode: Regenerated all tag database binary files with new format
+    - Nom: Updated parser error types and combinator APIs
+    - Quick-xml: Migrated Reader and Event APIs to 0.38 interface
+  - **Verification:**
+    - All 800+ unit tests passing
+    - Benchmarks compile successfully (note: `criterion::black_box` deprecation warnings present)
+    - CLI tested and verified with JPEG, PNG, PDF, and TIFF formats
+    - Clean build from scratch successful
+
 ### Added
 - **Canon MakerNotes Phase 1**: Basic Canon-specific metadata extraction from EXIF MakerNote tags
   - **Supported Tags:**
