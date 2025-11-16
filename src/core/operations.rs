@@ -67,14 +67,25 @@ use std::path::Path;
 /// - File format is unsupported (UnsupportedFormat)
 /// - File contains invalid or truncated metadata (ParseError)
 pub fn read_metadata(path: &Path) -> Result<MetadataMap> {
-    // Step 1: Open file with MMapReader for zero-copy access
+    // Step 1: Extract file system metadata (File:FileName, File:FileSize, etc.)
+    // This is done first and independently of the file format
+    let mut metadata = match crate::core::file_metadata::extract_file_metadata(path) {
+        Ok(file_meta) => file_meta,
+        Err(e) => {
+            // If we can't get file metadata, log a warning but continue
+            eprintln!("Warning: Failed to extract file metadata: {}", e);
+            MetadataMap::new()
+        }
+    };
+
+    // Step 2: Open file with MMapReader for zero-copy access
     let reader = MMapReader::new(path)?;
 
-    // Step 2: Detect format via magic bytes
+    // Step 3: Detect format via magic bytes
     let format = detect_format(&reader)?;
 
-    // Step 3: Route to appropriate parser based on detected format
-    match format {
+    // Step 4: Route to appropriate parser based on detected format and extract format-specific metadata
+    let format_metadata = match format {
         FileFormat::JPEG => parse_jpeg_metadata(&reader),
         FileFormat::TIFF => parse_tiff_metadata(&reader),
         FileFormat::PNG => {
@@ -92,7 +103,15 @@ pub fn read_metadata(path: &Path) -> Result<MetadataMap> {
             "Format {:?} not yet supported in this iteration",
             format
         ))),
+    }?;
+
+    // Step 5: Merge format-specific metadata into file metadata
+    // Format-specific metadata takes precedence over file metadata in case of conflicts
+    for (key, value) in format_metadata.iter() {
+        metadata.insert(key.clone(), value.clone());
     }
+
+    Ok(metadata)
 }
 
 /// Parses metadata from a JPEG file.

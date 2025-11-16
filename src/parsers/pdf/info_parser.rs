@@ -173,6 +173,14 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
         );
     }
 
+    // Try to extract media box from the document pages
+    if let Ok(media_box) = extract_media_box(reader) {
+        metadata.insert(
+            "PDF:MediaBox".to_string(),
+            TagValue::new_string(media_box),
+        );
+    }
+
     Ok(metadata)
 }
 
@@ -302,6 +310,63 @@ fn extract_page_count(reader: &dyn FileReader) -> Result<u32> {
     extract_count_from_pages(pages_data)
 }
 
+/// Extracts media box from PDF document pages tree.
+///
+/// The media box defines the boundaries of the page and is stored in the Pages object.
+/// It can be inherited from the Pages tree or defined on individual page objects.
+/// Format: [x1, y1, x2, y2]
+fn extract_media_box(reader: &dyn FileReader) -> Result<String> {
+    let file_size = reader.size();
+
+    // Read the last 1024 bytes to find trailer
+    let tail_size = std::cmp::min(1024, file_size as usize);
+    let tail_offset = file_size.saturating_sub(tail_size as u64);
+    let tail_data = reader.read(tail_offset, tail_size)?;
+
+    // Find startxref and get xref offset
+    let xref_offset = find_xref_offset(tail_data)?;
+
+    // Read xref table and trailer region
+    let xref_size = std::cmp::min(8192, file_size.saturating_sub(xref_offset) as usize);
+    let xref_data = reader.read(xref_offset, xref_size)?;
+
+    // Parse xref table
+    let xref_map = parse_xref_table(xref_data)?;
+
+    // Find /Root reference in trailer
+    let root_ref = find_root_reference(xref_data)?;
+
+    // Get Root object offset
+    let root_offset = xref_map.get(&root_ref.object_num).ok_or_else(|| {
+        ExifToolError::parse_error(format!(
+            "Root object {} not found in xref table",
+            root_ref.object_num
+        ))
+    })?;
+
+    // Read Root object
+    let root_size = std::cmp::min(4096, file_size.saturating_sub(*root_offset) as usize);
+    let root_data = reader.read(*root_offset, root_size)?;
+
+    // Find /Pages reference in Root object
+    let pages_ref = find_pages_reference(root_data)?;
+
+    // Get Pages object offset
+    let pages_offset = xref_map.get(&pages_ref.object_num).ok_or_else(|| {
+        ExifToolError::parse_error(format!(
+            "Pages object {} not found in xref table",
+            pages_ref.object_num
+        ))
+    })?;
+
+    // Read Pages object
+    let pages_size = std::cmp::min(4096, file_size.saturating_sub(*pages_offset) as usize);
+    let pages_data = reader.read(*pages_offset, pages_size)?;
+
+    // Extract /MediaBox from Pages object
+    extract_media_box_from_pages(pages_data)
+}
+
 /// Finds the /Root reference from the trailer dictionary
 fn find_root_reference(xref_data: &[u8]) -> Result<ObjectRef> {
     let xref_str = str::from_utf8(xref_data)
@@ -330,10 +395,9 @@ fn parse_trailer_root_ref(input: &[u8]) -> IResult<&[u8], ObjectRef> {
 
 /// Finds the /Pages reference from the Root/Catalog object
 fn find_pages_reference(root_data: &[u8]) -> Result<ObjectRef> {
-    let root_str = str::from_utf8(root_data)
-        .map_err(|_| ExifToolError::parse_error("Root object contains invalid UTF-8"))?;
-
-    let (_, pages_ref) = parse_pages_ref(root_str.as_bytes())
+    // PDF objects may contain binary stream data, so we search directly in bytes
+    // instead of requiring valid UTF-8
+    let (_, pages_ref) = parse_pages_ref(root_data)
         .map_err(|_| ExifToolError::parse_error("Could not parse /Pages reference from Root"))?;
 
     Ok(pages_ref)
@@ -349,10 +413,8 @@ fn parse_pages_ref(input: &[u8]) -> IResult<&[u8], ObjectRef> {
 
 /// Extracts /Count value from Pages object
 fn extract_count_from_pages(pages_data: &[u8]) -> Result<u32> {
-    let pages_str = str::from_utf8(pages_data)
-        .map_err(|_| ExifToolError::parse_error("Pages object contains invalid UTF-8"))?;
-
-    let (_, count) = parse_count(pages_str.as_bytes())
+    // PDF objects may contain binary stream data, so we search directly in bytes
+    let (_, count) = parse_count(pages_data)
         .map_err(|_| ExifToolError::parse_error("Could not parse /Count from Pages object"))?;
 
     Ok(count as u32)
@@ -364,6 +426,42 @@ fn parse_count(input: &[u8]) -> IResult<&[u8], u64> {
     let (input, _) = tag(b"/Count")(input)?;
     let (input, _) = multispace0(input)?;
     parse_number(input)
+}
+
+/// Extracts /MediaBox value from Pages object
+fn extract_media_box_from_pages(pages_data: &[u8]) -> Result<String> {
+    // PDF objects may contain binary stream data, so we search directly in bytes
+    let (_, media_box) = parse_media_box(pages_data)
+        .map_err(|_| ExifToolError::parse_error("Could not parse /MediaBox from Pages object"))?;
+
+    Ok(media_box)
+}
+
+/// Parses the /MediaBox array from Pages dictionary
+/// Format: /MediaBox [x1 y1 x2 y2]
+/// Returns formatted as "x1, y1, x2, y2"
+fn parse_media_box(input: &[u8]) -> IResult<&[u8], String> {
+    let (input, _) = take_until("/MediaBox")(input)?;
+    let (input, _) = tag(b"/MediaBox")(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, _) = tag(b"[")(input)?;
+    let (input, _) = multispace0(input)?;
+
+    // Parse four numbers
+    let (input, x1) = parse_number(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, y1) = parse_number(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, x2) = parse_number(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, y2) = parse_number(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, _) = tag(b"]")(input)?;
+
+    // Format as comma-separated string (matching ExifTool output)
+    let media_box_str = format!("{}, {}, {}, {}", x1, y1, x2, y2);
+
+    Ok((input, media_box_str))
 }
 
 /// Object reference structure (e.g., "4 0 R" means object 4, generation 0)

@@ -119,31 +119,41 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::with_capacity(20);
 
     // Extract PDF version from header (e.g., "%PDF-1.4")
-    if let Ok(header_str) = std::str::from_utf8(header_data) {
+    // The version is in format "%PDF-X.Y" on the first line
+    // PDF headers often have binary data after the first line, so we need to extract just the first line
+    // Look for the newline to find end of first line
+    let first_line_end = header_data.iter().position(|&b| b == b'\n' || b == b'\r')
+        .unwrap_or(header_data.len());
+    let first_line = &header_data[..first_line_end];
+
+    // The first line should be ASCII: %PDF-X.Y
+    if let Ok(header_str) = std::str::from_utf8(first_line) {
         if let Some(version_str) = header_str.strip_prefix("%PDF-") {
-            if let Some(version_end) = version_str.find(|c: char| !c.is_ascii_digit() && c != '.') {
-                let version = &version_str[..version_end];
-                if let Ok(version_float) = version.parse::<f64>() {
-                    metadata.insert(
-                        "PDF:PDFVersion".to_string(),
-                        crate::core::TagValue::new_float(version_float),
-                    );
-                }
-            }
+            let version = version_str.trim();
+            // Store as string to preserve exact version format (e.g., "1.3", "1.4", "2.0")
+            metadata.insert(
+                "PDF:PDFVersion".to_string(),
+                crate::core::TagValue::new_string(version.to_string()),
+            );
         }
     }
 
     // Check for linearization (optimize for web display)
     // Linearized PDFs have a linearization dictionary in the first object
+    // We search for the byte sequence "/Linearized" in the first 2KB
     let check_size = std::cmp::min(2048, file_size as usize);
     let check_data = reader.read(0, check_size)?;
-    if let Ok(check_str) = std::str::from_utf8(check_data) {
-        let is_linearized = check_str.contains("/Linearized");
-        metadata.insert(
-            "PDF:Linearized".to_string(),
-            crate::core::TagValue::new_string(if is_linearized { "Yes" } else { "No" }),
-        );
-    }
+
+    // Search for "/Linearized" as bytes (PDF dictionaries can contain binary data)
+    let linearized_marker = b"/Linearized";
+    let is_linearized = check_data
+        .windows(linearized_marker.len())
+        .any(|window| window == linearized_marker);
+
+    metadata.insert(
+        "PDF:Linearized".to_string(),
+        crate::core::TagValue::new_string(if is_linearized { "Yes" } else { "No" }),
+    );
 
     // Extract Info dictionary metadata
     match parse_info_dict(reader) {

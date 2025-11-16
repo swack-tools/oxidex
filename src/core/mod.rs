@@ -8,6 +8,7 @@
 
 pub mod date_shift;
 pub mod file_format;
+pub mod file_metadata;
 pub mod file_reader_trait;
 pub mod format_parser_trait;
 pub mod metadata_map;
