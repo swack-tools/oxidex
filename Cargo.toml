@@ -95,6 +95,7 @@ proptest = "1.4"
 criterion = "0.5"
 tempfile = "3.10"
 cc = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
 
 [profile.release]
 opt-level = 3
@@ -142,6 +143,14 @@ codegen-units = 16
 [profile.test]
 opt-level = 2
 codegen-units = 4
+
+# Dedicated benchmark profile with aggressive optimizations
+# Uses thin LTO for better performance measurement without excessive compile times
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+incremental = false
 
 [features]
 exiftool-comparison = []
