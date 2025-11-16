@@ -57,3 +57,6 @@ mod canon_real_image_test;
 
 #[path = "integration/canon_makernotes_phase3_tests.rs"]
 mod canon_makernotes_phase3_tests;
+
+#[path = "integration/nikon_makernotes_tests.rs"]
+mod nikon_makernotes_tests;
