@@ -32,6 +32,9 @@ use exiftool_rs::parsers::jpeg::segment_parser::parse_segments;
 use exiftool_rs::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};
 use std::path::Path;
 
+// Import IPTC parser for tag name generation benchmark
+use exiftool_rs::parsers::jpeg::iptc_parser;
+
 /// Benchmark for format detection via magic bytes
 ///
 /// This benchmark measures the performance of detecting file formats by
@@ -175,13 +178,33 @@ impl<'a> exiftool_rs::core::FileReader for TiffSubReader<'a> {
     }
 }
 
-// Define benchmark group with all four benchmarks
+/// Benchmark for IPTC tag name generation
+///
+/// This benchmark measures the performance of converting IPTC dataset numbers
+/// to tag names. The current implementation uses format!() which allocates
+/// on every call. This benchmark helps measure the impact of optimizing
+/// to static strings for known datasets.
+fn bench_iptc_tag_name_generation(c: &mut Criterion) {
+    c.bench_function("iptc_tag_name_generation", |b| {
+        b.iter(|| {
+            // Benchmark common tag lookups
+            // Using black_box to prevent compiler optimizations
+            black_box(iptc_parser::dataset_to_tag_name(2, 5));   // ObjectName
+            black_box(iptc_parser::dataset_to_tag_name(2, 25));  // Keywords
+            black_box(iptc_parser::dataset_to_tag_name(2, 80));  // By-line
+            black_box(iptc_parser::dataset_to_tag_name(2, 120)); // Caption-Abstract
+        });
+    });
+}
+
+// Define benchmark group with all five benchmarks
 criterion_group!(
     benches,
     bench_format_detection,
     bench_jpeg_segment_parsing,
     bench_tiff_ifd_parsing,
-    bench_full_read_metadata
+    bench_full_read_metadata,
+    bench_iptc_tag_name_generation
 );
 
 // Main entry point for Criterion

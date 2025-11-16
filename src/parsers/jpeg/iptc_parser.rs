@@ -152,42 +152,47 @@ fn parse_all_iptc_records(input: &[u8]) -> Result<Vec<IptcRecord>> {
 /// - `dataset_number`: The dataset number identifying the tag
 ///
 /// # Returns
+/// Maps IPTC dataset numbers to tag names.
+///
+/// Returns static string slices for known datasets to avoid allocations.
 /// Tag name in the format "IPTC:TagName"
-fn dataset_to_tag_name(record_number: u8, dataset_number: u8) -> String {
+pub fn dataset_to_tag_name(record_number: u8, dataset_number: u8) -> String {
     // Only handle Record 2 (Application Record) for now
     if record_number != 2 {
         return format!("IPTC:Unknown-{}-{}", record_number, dataset_number);
     }
 
+    // Return static strings for known datasets to avoid allocations
     let tag_name = match dataset_number {
-        5 => "ObjectName",
-        7 => "EditStatus",
-        10 => "Urgency",
-        15 => "Category",
-        20 => "SupplementalCategories",
-        25 => "Keywords",
-        40 => "SpecialInstructions",
-        55 => "DateCreated",
-        60 => "TimeCreated",
-        80 => "By-line",
-        85 => "By-lineTitle",
-        90 => "City",
-        92 => "Sub-location",
-        95 => "Province-State",
-        100 => "Country-PrimaryLocationCode",
-        101 => "Country-PrimaryLocationName",
-        103 => "OriginalTransmissionReference",
-        105 => "Headline",
-        110 => "Credit",
-        115 => "Source",
-        116 => "CopyrightNotice",
-        118 => "Contact",
-        120 => "Caption-Abstract",
-        122 => "Writer-Editor",
+        5 => "IPTC:ObjectName",
+        7 => "IPTC:EditStatus",
+        10 => "IPTC:Urgency",
+        15 => "IPTC:Category",
+        20 => "IPTC:SupplementalCategories",
+        25 => "IPTC:Keywords",
+        40 => "IPTC:SpecialInstructions",
+        55 => "IPTC:DateCreated",
+        60 => "IPTC:TimeCreated",
+        80 => "IPTC:By-line",
+        85 => "IPTC:By-lineTitle",
+        90 => "IPTC:City",
+        92 => "IPTC:Sub-location",
+        95 => "IPTC:Province-State",
+        100 => "IPTC:Country-PrimaryLocationCode",
+        101 => "IPTC:Country-PrimaryLocationName",
+        103 => "IPTC:OriginalTransmissionReference",
+        105 => "IPTC:Headline",
+        110 => "IPTC:Credit",
+        115 => "IPTC:Source",
+        116 => "IPTC:CopyrightNotice",
+        118 => "IPTC:Contact",
+        120 => "IPTC:Caption-Abstract",
+        122 => "IPTC:Writer-Editor",
         _ => return format!("IPTC:Unknown-{}-{}", record_number, dataset_number),
     };
 
-    format!("IPTC:{}", tag_name)
+    // Convert static string to String
+    tag_name.to_string()
 }
 
 /// Decodes an IPTC string from bytes.
