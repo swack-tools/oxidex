@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Canon MakerNotes Phase 1**: Basic Canon-specific metadata extraction from EXIF MakerNote tags
+  - **Supported Tags:**
+    - `Canon:ImageType` - Image type identifier (e.g., "IMG:EOS R5")
+    - `Canon:FirmwareVersion` - Camera firmware version
+    - `Canon:OwnerName` - Camera owner name
+    - `Canon:SerialNumber` - Camera serial number
+    - `Canon:CanonModelID` - Canon-specific model identifier
+    - `Canon:FileNumber` - Internal file number assigned by camera
+  - **Implementation Details:**
+    - Parses Canon MakerNote IFD structure (TIFF-based format)
+    - Supports both little-endian and big-endian byte orders
+    - Handles both inline values (≤4 bytes) and offset-based values (>4 bytes)
+    - Gracefully handles missing or invalid MakerNote data
+  - **Phase 2 Preview:** Complex array tags (CameraSettings, ShotInfo, AFInfo, LensInfo) planned for next phase
+  - **Files Added:**
+    - `src/parsers/tiff/makernotes/mod.rs` - MakerNotes module structure
+    - `src/parsers/tiff/makernotes/canon.rs` - Canon MakerNote parser with comprehensive documentation
+  - **Integration:** Canon MakerNotes are automatically extracted from JPEG EXIF data when present
+
 ### Fixed
 - **CI/CD**: Fixed ARM64 cross-compilation in GitHub Actions by implementing QEMU emulation. Previously, attempting to run ARM64 Docker images (`ghcr.io/cross-rs/aarch64-unknown-linux-musl`) on x86_64 runners resulted in "exec format error". The fix adds `docker/setup-qemu-action` and `docker/setup-buildx-action` to enable multi-platform builds on x86_64 runners.
 

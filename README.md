@@ -56,6 +56,7 @@ This design ensures:
 - ✅ **EXIF** - Complete support for IFD0, IFD1, ExifIFD, GPS, and Interoperability IFD
 - ✅ **XMP** - 10+ namespaces supported (Dublin Core, IPTC Core, Photoshop, etc.)
 - ✅ **IPTC** - Complete support for IPTC IIM Application Record (journalism/stock photography)
+- ✅ **Canon MakerNotes** - Phase 1: Basic tags (ImageType, FirmwareVersion, OwnerName, SerialNumber, ModelID, FileNumber)
 - ✅ **JFIF** - JPEG File Interchange Format metadata
 - ✅ **ICC Profiles** - Color profile metadata extraction
 - ✅ **Photoshop IRB** - Adobe Photoshop Image Resource Blocks
@@ -63,6 +64,8 @@ This design ensures:
 - ✅ **PNG** - PNG chunks (tEXt, iTXt, zTXt, etc.)
 - ✅ **QuickTime/MP4** - Video/audio metadata atoms
 - ✅ **File System** - File attributes, permissions, timestamps
+
+**Note:** Canon MakerNotes Phase 1 covers basic identification and metadata tags. Phase 2 will add complex array tags including camera settings, lens information, and autofocus data.
 
 ## Performance Benchmarks
 
@@ -279,6 +282,9 @@ exiftool-rs -TagsFromFile source.jpg target.jpg
 
 # Date shifting (adjust all timestamps by offset)
 exiftool-rs "-DateTimeOriginal+=1:0:0 0:0:0" photo.jpg
+
+# Extract Canon-specific metadata (for Canon cameras)
+exiftool-rs -Canon:FirmwareVersion -Canon:SerialNumber -Canon:OwnerName canon_photo.jpg
 ```
 
 ### Library API
@@ -290,6 +296,14 @@ use exiftool_rs::core::MetadataMap;
 let metadata = MetadataMap::from_file("photo.jpg")?;
 println!("Camera: {}", metadata.get("Make")?);
 println!("Date: {}", metadata.get("DateTimeOriginal")?);
+
+// Extract Canon-specific tags (if applicable)
+if let Ok(firmware) = metadata.get("Canon:FirmwareVersion") {
+    println!("Canon Firmware: {}", firmware);
+}
+if let Ok(serial) = metadata.get("Canon:SerialNumber") {
+    println!("Camera Serial: {}", serial);
+}
 
 // Edit and write metadata
 metadata.set("Artist", "Your Name")?;

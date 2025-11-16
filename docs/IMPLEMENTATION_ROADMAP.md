@@ -175,6 +175,11 @@ Each record:
 
 ## Priority 0: MakerNotes Support (Canon)
 
+### Status: Phase 1 Complete ✅
+
+**Completed:** Basic Canon MakerNotes tag extraction (ImageType, FirmwareVersion, OwnerName, SerialNumber, ModelID, FileNumber)
+**Next:** Phase 2 - Complex array tags (CameraSettings, ShotInfo, AFInfo, LensInfo)
+
 ### Overview
 
 MakerNotes contain camera-specific metadata that manufacturers embed in proprietary formats. Canon is the largest professional camera manufacturer, making Canon MakerNotes the highest priority.
@@ -623,18 +628,20 @@ Label GitHub issues with:
 
 1. ✅ Create this implementation roadmap
 2. ✅ Implement IPTC parser
-3. Create GitHub issues for:
-   - Canon MakerNotes (#6)
+3. ✅ Canon MakerNotes Phase 1 implementation
+4. Create GitHub issues for:
+   - Canon MakerNotes Phase 2 (#6)
    - Composite tags (#7)
-4. Set up project board with milestones
-5. Recruit contributors for lens database creation
+5. Set up project board with milestones
+6. Recruit contributors for lens database creation
 
 ### This Month
 
 1. ✅ Implement IPTC parser
 2. ✅ Create test fixtures for IPTC samples
-3. Begin Canon MakerNotes phase 1
-4. Create lens database schema
+3. ✅ Canon MakerNotes Phase 1 - Basic tag support (ImageType, FirmwareVersion, OwnerName, SerialNumber, ModelID, FileNumber)
+4. Begin Canon MakerNotes Phase 2 (complex arrays and camera settings)
+5. Create lens database schema
 
 ### Next 3 Months
 
