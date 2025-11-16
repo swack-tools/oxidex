@@ -72,3 +72,6 @@ mod panasonic_makernotes_tests;
 
 #[path = "integration/olympus_makernotes_tests.rs"]
 mod olympus_makernotes_tests;
+
+#[path = "integration/pentax_makernotes_tests.rs"]
+mod pentax_makernotes_tests;
