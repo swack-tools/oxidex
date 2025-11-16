@@ -344,31 +344,82 @@ pub fn parse_canon_makernote(
 
     let mut tags = HashMap::new();
 
-    // Extract simple values from entries
-    // Phase 1: Only extract simple string and integer tags
+    // Extract values from entries
     for entry in entries {
-        let tag_name = canon_tag_to_name(entry.tag_id);
-
-        // For Phase 1, extract simple values only
-        // Skip complex arrays (CameraSettings, ShotInfo, etc.)
-        let value = match entry.tag_id {
+        match entry.tag_id {
+            // Simple string tags (Phase 1)
             CANON_IMAGE_TYPE | CANON_FIRMWARE_VERSION | CANON_OWNER_NAME | CANON_SERIAL_NUMBER => {
-                // String tags (EXIF type 2 = ASCII)
-                // Pass full data (including Canon signature) for offset resolution
-                extract_string_value(&entry, data)
+                if let Some(value) = extract_string_value(&entry, data) {
+                    let tag_name = canon_tag_to_name(entry.tag_id);
+                    tags.insert(tag_name, value);
+                }
             }
-            CANON_MODEL_ID | CANON_FILE_NUMBER => {
-                // Integer tags (EXIF type 4 = LONG)
-                extract_integer_value(&entry)
-            }
-            _ => {
-                // Skip complex arrays and unknown tags for Phase 1
-                continue;
-            }
-        };
 
-        if let Some(v) = value {
-            tags.insert(tag_name, v);
+            // Simple integer tags (Phase 1)
+            CANON_MODEL_ID | CANON_FILE_NUMBER => {
+                if let Some(value) = extract_integer_value(&entry) {
+                    let tag_name = canon_tag_to_name(entry.tag_id);
+                    tags.insert(tag_name, value);
+                }
+            }
+
+            // CameraSettings array (Phase 2)
+            CANON_CAMERA_SETTINGS => {
+                if let Some(array) = extract_i16_array(&entry, data, byte_order) {
+                    // Extract specific settings from array
+                    if array.len() > CAMERA_SETTINGS_MACRO_MODE {
+                        tags.insert(
+                            "Canon:MacroMode".to_string(),
+                            decode_macro_mode(array[CAMERA_SETTINGS_MACRO_MODE]),
+                        );
+                    }
+                    if array.len() > CAMERA_SETTINGS_QUALITY {
+                        tags.insert(
+                            "Canon:Quality".to_string(),
+                            decode_quality(array[CAMERA_SETTINGS_QUALITY]),
+                        );
+                    }
+                    if array.len() > CAMERA_SETTINGS_FLASH_MODE {
+                        tags.insert(
+                            "Canon:FlashMode".to_string(),
+                            decode_flash_mode(array[CAMERA_SETTINGS_FLASH_MODE]),
+                        );
+                    }
+                    if array.len() > CAMERA_SETTINGS_DRIVE_MODE {
+                        tags.insert(
+                            "Canon:DriveMode".to_string(),
+                            decode_drive_mode(array[CAMERA_SETTINGS_DRIVE_MODE]),
+                        );
+                    }
+                    if array.len() > CAMERA_SETTINGS_FOCUS_MODE {
+                        tags.insert(
+                            "Canon:FocusMode".to_string(),
+                            decode_focus_mode(array[CAMERA_SETTINGS_FOCUS_MODE]),
+                        );
+                    }
+                    if array.len() > CAMERA_SETTINGS_ISO {
+                        tags.insert(
+                            "Canon:ISO".to_string(),
+                            array[CAMERA_SETTINGS_ISO].to_string(),
+                        );
+                    }
+                    if array.len() > CAMERA_SETTINGS_METERING_MODE {
+                        tags.insert(
+                            "Canon:MeteringMode".to_string(),
+                            decode_metering_mode(array[CAMERA_SETTINGS_METERING_MODE]),
+                        );
+                    }
+                    if array.len() > CAMERA_SETTINGS_EXPOSURE_MODE {
+                        tags.insert(
+                            "Canon:ExposureMode".to_string(),
+                            decode_exposure_mode(array[CAMERA_SETTINGS_EXPOSURE_MODE]),
+                        );
+                    }
+                }
+            }
+
+            // Other array tags - skip for now (will add in subsequent tasks)
+            _ => continue,
         }
     }
 
@@ -734,5 +785,67 @@ mod tests {
         assert_eq!(decode_exposure_mode(6), "M-Dep");
         assert_eq!(decode_exposure_mode(7), "Bulb");
         assert_eq!(decode_exposure_mode(99), "Unknown (99)");
+    }
+
+    #[test]
+    fn test_parse_camera_settings_array() {
+        // Create Canon MakerNote with CameraSettings array
+        let mut data = Vec::new();
+
+        // Canon signature
+        data.extend_from_slice(b"Canon");
+
+        // IFD: 1 entry (CameraSettings)
+        data.extend_from_slice(&[0x01, 0x00]); // Entry count (LE)
+
+        // IFD Entry for CameraSettings (tag 0x0001)
+        data.extend_from_slice(&[0x01, 0x00]); // Tag: CameraSettings
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x15, 0x00, 0x00, 0x00]); // Count: 21 values
+        data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23 (5 sig + 2 count + 12 entry + 4 next = 23)
+
+        // Next IFD offset
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+
+        // CameraSettings array data at offset 20 (21 i16 values)
+        let settings: Vec<i16> = vec![
+            21,  // [0] Array length
+            2,   // [1] Macro mode: Normal
+            0,   // [2] Self-timer: Off
+            3,   // [3] Quality: Fine
+            2,   // [4] Flash mode: On
+            0,   // [5] Drive mode: Single
+            0,   // [6] (unused)
+            0,   // [7] Focus mode: One-shot AF
+            0,   // [8] (unused)
+            0,   // [9] (unused)
+            1,   // [10] Image size: Large
+            0,   // [11] Easy mode: Off
+            0,   // [12] (unused)
+            0,   // [13] Contrast: Normal
+            0,   // [14] Saturation: Normal
+            0,   // [15] Sharpness: Normal
+            80,  // [16] ISO: 80
+            3,   // [17] Metering mode: Evaluative
+            0,   // [18] Focus type
+            0,   // [19] AF point
+            1,   // [20] Exposure mode: Program AE
+        ];
+
+        for value in settings {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let result = parse_canon_makernote(&data, ByteOrder::LittleEndian).unwrap();
+
+        // Verify extracted values
+        assert_eq!(result.get("Canon:MacroMode"), Some(&"Normal".to_string()));
+        assert_eq!(result.get("Canon:Quality"), Some(&"Fine".to_string()));
+        assert_eq!(result.get("Canon:FlashMode"), Some(&"On".to_string()));
+        assert_eq!(result.get("Canon:DriveMode"), Some(&"Single".to_string()));
+        assert_eq!(result.get("Canon:FocusMode"), Some(&"One-shot AF".to_string()));
+        assert_eq!(result.get("Canon:MeteringMode"), Some(&"Evaluative".to_string()));
+        assert_eq!(result.get("Canon:ExposureMode"), Some(&"Program AE".to_string()));
+        assert_eq!(result.get("Canon:ISO"), Some(&"80".to_string()));
     }
 }
