@@ -191,6 +191,7 @@ fn test_sony_is_sony_makernote() {
 fn test_sony_parse_basic_tags() {
     use exiftool_rs::parsers::tiff::ifd_parser::ByteOrder;
     use exiftool_rs::parsers::tiff::makernotes::sony::parse_sony_makernote;
+    use std::collections::HashMap;
 
     // Create minimal Sony MakerNote
     let mut data = Vec::new();
@@ -220,7 +221,8 @@ fn test_sony_parse_basic_tags() {
     // Next IFD offset
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
 
-    let result = parse_sony_makernote(&data, ByteOrder::LittleEndian).unwrap();
+    let mut result = HashMap::new();
+    parse_sony_makernote(&data, ByteOrder::LittleEndian, &mut result);
 
     // Verify extracted tags
     assert!(result.contains_key("Sony:ImageQuality"));
@@ -237,6 +239,7 @@ fn test_sony_parse_basic_tags() {
 fn test_sony_parse_lens_id_lookup() {
     use exiftool_rs::parsers::tiff::ifd_parser::ByteOrder;
     use exiftool_rs::parsers::tiff::makernotes::sony::parse_sony_makernote;
+    use std::collections::HashMap;
 
     let mut data = Vec::new();
 
@@ -251,7 +254,8 @@ fn test_sony_parse_lens_id_lookup() {
 
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
 
-    let result = parse_sony_makernote(&data, ByteOrder::LittleEndian).unwrap();
+    let mut result = HashMap::new();
+    parse_sony_makernote(&data, ByteOrder::LittleEndian, &mut result);
 
     // Should have looked up lens name from database
     assert!(result.contains_key("Sony:LensType"));
@@ -265,6 +269,7 @@ fn test_sony_parse_lens_id_lookup() {
 fn test_sony_parse_camera_settings_array() {
     use exiftool_rs::parsers::tiff::ifd_parser::ByteOrder;
     use exiftool_rs::parsers::tiff::makernotes::sony::parse_sony_makernote;
+    use std::collections::HashMap;
 
     let mut data = Vec::new();
 
@@ -304,7 +309,8 @@ fn test_sony_parse_camera_settings_array() {
         data.extend_from_slice(&value.to_le_bytes());
     }
 
-    let result = parse_sony_makernote(&data, ByteOrder::LittleEndian).unwrap();
+    let mut result = HashMap::new();
+    parse_sony_makernote(&data, ByteOrder::LittleEndian, &mut result);
 
     // Verify decoded settings
     assert_eq!(
@@ -352,6 +358,7 @@ fn test_sony_parse_camera_settings_array() {
 fn test_sony_parse_af_info_array() {
     use exiftool_rs::parsers::tiff::ifd_parser::ByteOrder;
     use exiftool_rs::parsers::tiff::makernotes::sony::parse_sony_makernote;
+    use std::collections::HashMap;
 
     let mut data = Vec::new();
 
@@ -380,7 +387,8 @@ fn test_sony_parse_af_info_array() {
         data.extend_from_slice(&value.to_le_bytes());
     }
 
-    let result = parse_sony_makernote(&data, ByteOrder::LittleEndian).unwrap();
+    let mut result = HashMap::new();
+    parse_sony_makernote(&data, ByteOrder::LittleEndian, &mut result);
 
     assert_eq!(result.get("Sony:AFPointSelected"), Some(&"5".to_string()));
     assert_eq!(result.get("Sony:AFPointsInFocus"), Some(&"3".to_string()));
@@ -392,6 +400,7 @@ fn test_sony_parse_af_info_array() {
 fn test_sony_parse_shot_info_array() {
     use exiftool_rs::parsers::tiff::ifd_parser::ByteOrder;
     use exiftool_rs::parsers::tiff::makernotes::sony::parse_sony_makernote;
+    use std::collections::HashMap;
 
     let mut data = Vec::new();
 
@@ -424,7 +433,8 @@ fn test_sony_parse_shot_info_array() {
         data.extend_from_slice(&value.to_le_bytes());
     }
 
-    let result = parse_sony_makernote(&data, ByteOrder::LittleEndian).unwrap();
+    let mut result = HashMap::new();
+    parse_sony_makernote(&data, ByteOrder::LittleEndian, &mut result);
 
     assert_eq!(
         result.get("Sony:ShotInfoWhiteBalance"),
@@ -444,21 +454,25 @@ fn test_sony_parse_shot_info_array() {
 fn test_sony_parse_empty_data() {
     use exiftool_rs::parsers::tiff::ifd_parser::ByteOrder;
     use exiftool_rs::parsers::tiff::makernotes::sony::parse_sony_makernote;
+    use std::collections::HashMap;
 
     // Empty data should not crash
-    let result = parse_sony_makernote(&[], ByteOrder::LittleEndian).unwrap();
+    let mut result = HashMap::new();
+    parse_sony_makernote(&[], ByteOrder::LittleEndian, &mut result);
     assert!(result.is_empty());
 
     // Too short data should not crash
     let short_data = b"\x01";
-    let result = parse_sony_makernote(short_data, ByteOrder::LittleEndian).unwrap();
-    assert!(result.is_empty());
+    let mut result2 = HashMap::new();
+    parse_sony_makernote(short_data, ByteOrder::LittleEndian, &mut result2);
+    assert!(result2.is_empty());
 }
 
 #[test]
 fn test_sony_parse_with_signature() {
     use exiftool_rs::parsers::tiff::ifd_parser::ByteOrder;
     use exiftool_rs::parsers::tiff::makernotes::sony::parse_sony_makernote;
+    use std::collections::HashMap;
 
     let mut data = Vec::new();
 
@@ -476,7 +490,8 @@ fn test_sony_parse_with_signature() {
 
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
 
-    let result = parse_sony_makernote(&data, ByteOrder::LittleEndian).unwrap();
+    let mut result = HashMap::new();
+    parse_sony_makernote(&data, ByteOrder::LittleEndian, &mut result);
 
     // Should skip signature and parse IFD correctly
     assert_eq!(result.get("Sony:SequenceNumber"), Some(&"10".to_string()));

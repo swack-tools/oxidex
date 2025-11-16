@@ -21,6 +21,7 @@ use crate::tag_db::tag_registry::get_tag_descriptor;
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::jpeg_writer::write_exif_to_jpeg;
 use chrono;
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Reads metadata from a file at the specified path.
@@ -577,21 +578,13 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                 // Second pass: Parse Canon MakerNote if found in EXIF IFD
                 if let Some(makernote_bytes) = exif_makernote_data {
                     if canon::is_canon_makernote(makernote_bytes) {
-                        match canon::parse_canon_makernote(makernote_bytes, byte_order) {
-                            Ok(canon_tags) => {
-                                // Add Canon tags to metadata
-                                // Note: tag names already include "Canon:" prefix
-                                for (tag_name, tag_value_str) in canon_tags {
-                                    let tag_value = TagValue::String(tag_value_str);
-                                    metadata.insert(tag_name, tag_value);
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!(
-                                    "Warning: Failed to parse Canon MakerNote in EXIF IFD: {}",
-                                    e
-                                );
-                            }
+                        let mut canon_tags = HashMap::new();
+                        canon::parse_canon_makernotes(makernote_bytes, byte_order, &mut canon_tags);
+                        // Add Canon tags to metadata
+                        // Note: tag names already include "Canon:" prefix
+                        for (tag_name, tag_value_str) in canon_tags {
+                            let tag_value = TagValue::String(tag_value_str);
+                            metadata.insert(tag_name, tag_value);
                         }
                     }
                 }
@@ -621,25 +614,14 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             // Check if this is a Canon MakerNote
             if canon::is_canon_makernote(makernote_bytes) {
                 // Parse Canon MakerNote tags
-                match canon::parse_canon_makernote(makernote_bytes, byte_order) {
-                    Ok(canon_tags) => {
-                        // Add Canon tags to metadata
-                        // Note: tag names already include "Canon:" prefix from canon_tag_to_name()
-                        for (tag_name, tag_value_str) in canon_tags {
-                            // Convert string value to TagValue
-                            let tag_value = TagValue::String(tag_value_str);
-                            metadata.insert(tag_name, tag_value);
-                        }
-                    }
-                    Err(e) => {
-                        // Log parsing error but don't fail the entire operation
-                        // Some Canon MakerNotes may be partially corrupt or use
-                        // proprietary formats we don't fully support yet
-                        eprintln!(
-                            "Warning: Failed to parse Canon MakerNote at IFD{}: {}",
-                            ifd_index, e
-                        );
-                    }
+                let mut canon_tags = HashMap::new();
+                canon::parse_canon_makernotes(makernote_bytes, byte_order, &mut canon_tags);
+                // Add Canon tags to metadata
+                // Note: tag names already include "Canon:" prefix from canon_tag_to_name()
+                for (tag_name, tag_value_str) in canon_tags {
+                    // Convert string value to TagValue
+                    let tag_value = TagValue::String(tag_value_str);
+                    metadata.insert(tag_name, tag_value);
                 }
             }
             // If not Canon, silently ignore - other vendors' MakerNotes
