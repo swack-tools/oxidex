@@ -18,6 +18,7 @@ use nom::{
 use std::collections::HashMap;
 
 use super::shared::array_extractors::extract_i16_array;
+use super::shared::MakerNoteParser;
 use super::sony_lens_database::lookup_lens_name;
 
 // Sony MakerNote Tag IDs
@@ -489,6 +490,43 @@ fn parse_ifd_entry(input: &[u8], byte_order: ByteOrder) -> IResult<&[u8], IfdEnt
     ))
 }
 
+/// Represents a Sony MakerNote parser
+pub struct SonyParser;
+
+impl MakerNoteParser for SonyParser {
+    fn manufacturer_name(&self) -> &'static str {
+        "Sony"
+    }
+
+    fn tag_prefix(&self) -> &'static str {
+        "Sony:"
+    }
+
+    fn validate_header(&self, data: &[u8]) -> bool {
+        is_sony_makernote(data)
+    }
+
+    fn parse(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        // Call the existing parse_sony_makernote function and handle Result conversion
+        match parse_sony_makernote_impl(data, byte_order) {
+            Ok(parsed_tags) => {
+                tags.extend(parsed_tags);
+                Ok(())
+            }
+            Err(e) => Err(format!("Sony MakerNote parse error: {}", e)),
+        }
+    }
+
+    fn lookup_lens(&self, lens_id: u16) -> Option<String> {
+        lookup_lens_name(lens_id)
+    }
+}
+
 /// Checks if data appears to be Sony MakerNote
 ///
 /// Sony MakerNotes may optionally start with "SONY" signature,
@@ -521,7 +559,7 @@ pub fn is_sony_makernote(data: &[u8]) -> bool {
     is_reasonable(entry_count_le) || is_reasonable(entry_count_be)
 }
 
-/// Parses Sony MakerNote data into a map of tag names to values.
+/// Internal implementation of Sony MakerNote parsing.
 ///
 /// This parser extracts tags from Sony MakerNotes including:
 /// - Camera settings (drive mode, white balance, focus mode, etc.)
@@ -539,7 +577,10 @@ pub fn is_sony_makernote(data: &[u8]) -> bool {
 ///
 /// # Errors
 /// Returns error if IFD parsing fails or data is invalid
-pub fn parse_sony_makernote(data: &[u8], byte_order: ByteOrder) -> Result<HashMap<String, String>> {
+fn parse_sony_makernote_impl(
+    data: &[u8],
+    byte_order: ByteOrder,
+) -> Result<HashMap<String, String>> {
     if data.is_empty() {
         return Ok(HashMap::new());
     }
@@ -783,6 +824,34 @@ pub fn parse_sony_makernote(data: &[u8], byte_order: ByteOrder) -> Result<HashMa
     Ok(tags)
 }
 
+/// Parses Sony MakerNote data into a map of tag names to values.
+///
+/// This is the public API that delegates to the SonyParser trait implementation.
+///
+/// # Parameters
+/// - `data`: Raw MakerNote data (may include Sony signature)
+/// - `byte_order`: Byte order for parsing (usually LittleEndian for Sony)
+/// - `tags`: Mutable reference to HashMap to populate with extracted tags
+///
+/// # Example
+/// ```ignore
+/// use std::collections::HashMap;
+/// use exiftool_rs::parsers::tiff::ifd_parser::ByteOrder;
+///
+/// let mut tags = HashMap::new();
+/// parse_sony_makernote(&data, ByteOrder::LittleEndian, &mut tags);
+/// ```
+pub fn parse_sony_makernote(
+    data: &[u8],
+    byte_order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+) {
+    let parser = SonyParser;
+    if let Err(e) = parser.parse(data, byte_order, tags) {
+        eprintln!("Sony MakerNotes parse error: {}", e);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -868,5 +937,44 @@ mod tests {
         assert_eq!(sony_tag_to_name(SONY_QUALITY), "Sony:Quality");
         assert_eq!(sony_tag_to_name(SONY_FOCUS_MODE), "Sony:FocusMode");
         assert_eq!(sony_tag_to_name(SONY_SHUTTER_COUNT), "Sony:ShutterCount");
+    }
+
+    #[test]
+    fn test_parser_trait_implementation() {
+        let parser = SonyParser;
+        assert_eq!(parser.manufacturer_name(), "Sony");
+        assert_eq!(parser.tag_prefix(), "Sony:");
+    }
+
+    #[test]
+    fn test_validate_header() {
+        let parser = SonyParser;
+
+        // Test with Sony signature
+        let with_signature = b"SONY\x01\x00extra";
+        assert!(parser.validate_header(with_signature));
+
+        // Test without signature but valid IFD
+        let without_signature = b"\x05\x00"; // 5 entries
+        assert!(parser.validate_header(without_signature));
+
+        // Test invalid data
+        let invalid = b"\xFF\xFF";
+        assert!(!parser.validate_header(invalid));
+    }
+
+    #[test]
+    fn test_lens_lookup() {
+        let parser = SonyParser;
+
+        // Test E-mount lens lookup
+        assert!(parser.lookup_lens(281).is_some());
+        assert_eq!(
+            parser.lookup_lens(281),
+            Some("Sony FE 24-70mm f/2.8 GM".to_string())
+        );
+
+        // Test unknown lens
+        assert_eq!(parser.lookup_lens(65000), None);
     }
 }

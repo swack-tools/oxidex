@@ -21,7 +21,6 @@ use nom::{
 use std::collections::HashMap;
 
 use super::panasonic_lens_database::lookup_lens_name;
-use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
 use super::shared::MakerNoteParser;
 
 // ===== Panasonic MakerNote Tag IDs =====

@@ -18,6 +18,7 @@ use std::collections::HashMap;
 
 use super::canon_lens_database::lookup_lens_name;
 use super::shared::array_extractors::extract_i16_array;
+use super::shared::MakerNoteParser;
 
 // Canon MakerNote Tag IDs
 const CANON_CAMERA_SETTINGS: u16 = 0x0001;
@@ -295,6 +296,43 @@ fn parse_ifd_entries(
     }
 }
 
+/// Represents a Canon MakerNote parser
+pub struct CanonParser;
+
+impl MakerNoteParser for CanonParser {
+    fn manufacturer_name(&self) -> &'static str {
+        "Canon"
+    }
+
+    fn tag_prefix(&self) -> &'static str {
+        "Canon:"
+    }
+
+    fn validate_header(&self, data: &[u8]) -> bool {
+        is_canon_makernote(data)
+    }
+
+    fn parse(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        // Call the existing parse_canon_makernote function and handle Result conversion
+        match parse_canon_makernote_impl(data, byte_order) {
+            Ok(parsed_tags) => {
+                tags.extend(parsed_tags);
+                Ok(())
+            }
+            Err(e) => Err(format!("Canon MakerNote parse error: {}", e)),
+        }
+    }
+
+    fn lookup_lens(&self, lens_id: u16) -> Option<String> {
+        lookup_lens_name(lens_id)
+    }
+}
+
 /// Checks if data appears to be a Canon MakerNote.
 ///
 /// Canon MakerNotes may optionally start with "Canon" signature,
@@ -332,10 +370,10 @@ pub fn is_canon_makernote(data: &[u8]) -> bool {
     false
 }
 
-/// Parses Canon MakerNote data into a map of tag names to values.
+/// Internal implementation of Canon MakerNote parsing.
 ///
-/// This parser extracts simple tags (strings and integers) from Canon MakerNotes.
-/// Complex array tags (CameraSettings, ShotInfo, etc.) are deferred to Phase 2.
+/// This parser extracts tags from Canon MakerNotes including simple tags
+/// (strings and integers) and complex array tags (CameraSettings, ShotInfo, etc.).
 ///
 /// # Parameters
 /// - `data`: Raw MakerNote data (may include Canon signature)
@@ -346,7 +384,7 @@ pub fn is_canon_makernote(data: &[u8]) -> bool {
 ///
 /// # Errors
 /// Returns error if IFD parsing fails or data is invalid
-pub fn parse_canon_makernote(
+fn parse_canon_makernote_impl(
     data: &[u8],
     byte_order: ByteOrder,
 ) -> Result<HashMap<String, String>> {
@@ -632,6 +670,34 @@ pub fn parse_canon_makernote(
     Ok(tags)
 }
 
+/// Parses Canon MakerNote data into a map of tag names to values.
+///
+/// This is the public API that delegates to the CanonParser trait implementation.
+///
+/// # Parameters
+/// - `data`: Raw MakerNote data (may include Canon signature)
+/// - `byte_order`: Byte order for parsing (usually matches TIFF header)
+/// - `tags`: Mutable reference to HashMap to populate with extracted tags
+///
+/// # Example
+/// ```ignore
+/// use std::collections::HashMap;
+/// use exiftool_rs::parsers::tiff::ifd_parser::ByteOrder;
+///
+/// let mut tags = HashMap::new();
+/// parse_canon_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
+/// ```
+pub fn parse_canon_makernotes(
+    data: &[u8],
+    byte_order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+) {
+    let parser = CanonParser;
+    if let Err(e) = parser.parse(data, byte_order, tags) {
+        eprintln!("Canon MakerNotes parse error: {}", e);
+    }
+}
+
 /// Extracts inline value bytes from the value_offset field.
 ///
 /// For values that fit in 4 bytes or less, they are stored directly
@@ -786,7 +852,7 @@ mod tests {
             b'I', b'M', b'G', b':', b'E', b'O', b'S', b' ', b'R', b'5', 0x00,
         ]);
 
-        let result = parse_canon_makernote(&data, ByteOrder::LittleEndian);
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian);
         assert!(result.is_ok());
 
         let tags = result.unwrap();
@@ -997,7 +1063,7 @@ mod tests {
             data.extend_from_slice(&value.to_le_bytes());
         }
 
-        let result = parse_canon_makernote(&data, ByteOrder::LittleEndian).unwrap();
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
 
         // Verify extracted values
         assert_eq!(result.get("Canon:MacroMode"), Some(&"Normal".to_string()));
@@ -1073,7 +1139,7 @@ mod tests {
             data.extend_from_slice(&value.to_le_bytes());
         }
 
-        let result = parse_canon_makernote(&data, ByteOrder::LittleEndian).unwrap();
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
 
         assert_eq!(result.get("Canon:AutoISO"), Some(&"100".to_string()));
         assert_eq!(result.get("Canon:BaseISO"), Some(&"100".to_string()));
@@ -1112,7 +1178,7 @@ mod tests {
             data.extend_from_slice(&value.to_le_bytes());
         }
 
-        let result = parse_canon_makernote(&data, ByteOrder::LittleEndian).unwrap();
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
 
         assert_eq!(result.get("Canon:FocalType"), Some(&"2".to_string()));
         assert_eq!(result.get("Canon:FocalLength"), Some(&"50 mm".to_string()));
@@ -1135,7 +1201,7 @@ mod tests {
         let lens_name = b"Canon EF 24-70mm f/2.8L II USM\0";
         data.extend_from_slice(lens_name);
 
-        let result = parse_canon_makernote(&data, ByteOrder::LittleEndian).unwrap();
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
 
         assert_eq!(
             result.get("Canon:LensModel"),
@@ -1173,7 +1239,7 @@ mod tests {
             data.extend_from_slice(&value.to_le_bytes());
         }
 
-        let result = parse_canon_makernote(&data, ByteOrder::LittleEndian).unwrap();
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
 
         // Should extract lens name from database
         assert_eq!(
@@ -1215,11 +1281,54 @@ mod tests {
             data.extend_from_slice(&value.to_le_bytes());
         }
 
-        let result = parse_canon_makernote(&data, ByteOrder::LittleEndian).unwrap();
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
 
         assert_eq!(result.get("Canon:NumAFPoints"), Some(&"45".to_string()));
         assert_eq!(result.get("Canon:AFImageWidth"), Some(&"5568".to_string()));
         assert_eq!(result.get("Canon:AFImageHeight"), Some(&"3712".to_string()));
         assert_eq!(result.get("Canon:AFPointsInFocus"), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn test_parser_trait_implementation() {
+        let parser = CanonParser;
+        assert_eq!(parser.manufacturer_name(), "Canon");
+        assert_eq!(parser.tag_prefix(), "Canon:");
+    }
+
+    #[test]
+    fn test_validate_header() {
+        let parser = CanonParser;
+
+        // Test with Canon signature
+        let with_signature = b"Canon\x00\x01\x00extra";
+        assert!(parser.validate_header(with_signature));
+
+        // Test without signature but valid IFD (reasonable entry count)
+        let without_signature = b"\x05\x00extra_data_here_to_make_it_longer";
+        assert!(parser.validate_header(without_signature));
+
+        // Test invalid data (unreasonable entry count)
+        let invalid = b"\xFF\xFF";
+        assert!(!parser.validate_header(invalid));
+
+        // Test too short data
+        let too_short = b"\x01";
+        assert!(!parser.validate_header(too_short));
+    }
+
+    #[test]
+    fn test_lens_lookup() {
+        let parser = CanonParser;
+
+        // Test EF lens lookup
+        assert!(parser.lookup_lens(368).is_some());
+        assert_eq!(
+            parser.lookup_lens(368),
+            Some("Canon EF 24-70mm f/2.8L II USM".to_string())
+        );
+
+        // Test unknown lens
+        assert_eq!(parser.lookup_lens(65000), None);
     }
 }
