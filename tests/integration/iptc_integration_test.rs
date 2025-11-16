@@ -12,12 +12,14 @@ fn test_iptc_extraction_from_real_file() {
     let sample_path = Path::new("tests/fixtures/iptc_sample.jpg");
 
     if !sample_path.exists() {
-        eprintln!("Skipping test: IPTC sample file not found at {:?}", sample_path);
+        eprintln!(
+            "Skipping test: IPTC sample file not found at {:?}",
+            sample_path
+        );
         return;
     }
 
-    let metadata = read_metadata(sample_path)
-        .expect("Failed to read metadata from IPTC sample");
+    let metadata = read_metadata(sample_path).expect("Failed to read metadata from IPTC sample");
 
     // Verify IPTC tags were extracted
     assert!(
