@@ -195,9 +195,8 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                 metadata.insert(key.clone(), value.clone());
             }
         }
-        Err(e) => {
-            // Log warning but continue - ICC profile might not exist
-            eprintln!("Warning: Failed to extract ICC profile: {}", e);
+        Err(_) => {
+            // ICC profile is optional - silently continue if not present
         }
     }
 
