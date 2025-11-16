@@ -202,7 +202,7 @@ benchmark_batch_processing() {
     echo "Running batch extraction benchmarks..."
 
     hyperfine \
-        --warmup 1 \
+        --warmup 3 \
         --runs 5 \
         --export-markdown "$TEMP_DIR/batch.md" \
         --export-json "$TEMP_DIR/batch.json" \
@@ -237,7 +237,7 @@ benchmark_write_operation() {
 
     # Prepare function creates a fresh copy before each run
     hyperfine \
-        --warmup 2 \
+        --warmup 3 \
         --runs 30 \
         --prepare "cp '$SOURCE_FILE' '$WRITE_DIR/test_perl.jpg'" \
         --export-markdown "$TEMP_DIR/write.md" \
