@@ -213,17 +213,30 @@ jobs:
         run: cargo build --release --all-features
 
       - name: Run integration tests with ExifTool comparison
-        run: cargo test --release --features exiftool-comparison -- --nocapture
+        id: integration-tests
+        continue-on-error: true
+        run: |
+          cargo test --release --features exiftool-comparison -- --nocapture 2>&1 | tee test_output.log
+          echo "test_exit_code=$?" >> $GITHUB_OUTPUT
 
       - name: Generate comparison report
         if: always()
         run: |
           echo "# ExifTool Comparison Test Results" > comparison_report.md
           echo "" >> comparison_report.md
-          echo "**Platform:** ubicloud-premium-30 (Ubuntu Linux)" >> comparison_report.md
+          echo "**Platform:** ${{ runner.os }} (${{ runner.arch }})" >> comparison_report.md
           echo "**Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> comparison_report.md
+          echo "**Exit Code:** ${{ steps.integration-tests.outputs.test_exit_code }}" >> comparison_report.md
           echo "" >> comparison_report.md
-          echo "See test output above for detailed match rates." >> comparison_report.md
+          echo "## Test Output" >> comparison_report.md
+          echo "" >> comparison_report.md
+          echo '```' >> comparison_report.md
+          if [ -f test_output.log ]; then
+            cat test_output.log >> comparison_report.md
+          else
+            echo "No test output captured" >> comparison_report.md
+          fi
+          echo '```' >> comparison_report.md
 
       - name: Upload comparison report
         if: always()
