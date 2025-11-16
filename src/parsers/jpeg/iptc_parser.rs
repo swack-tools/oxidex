@@ -206,6 +206,90 @@ fn decode_iptc_string(data: &[u8]) -> String {
     s.trim().to_string()
 }
 
+/// Extracts IPTC metadata from JPEG segments.
+///
+/// This function scans through all segments, identifies APP13 segments with
+/// the Photoshop signature, extracts IPTC data from 8BIM resource blocks,
+/// and parses IPTC IIM records.
+///
+/// # Parameters
+///
+/// - `segments`: Slice of parsed JPEG segments (from `parse_segments()`)
+///
+/// # Returns
+///
+/// Vector of (tag_name, value) tuples where tag_name is in the format
+/// "IPTC:PropertyName" (e.g., "IPTC:ObjectName", "IPTC:By-line").
+///
+/// Returns an empty vector if no IPTC segments are found (not an error).
+///
+/// # Errors
+///
+/// Returns `ParseError` if:
+/// - APP13 segment is malformed
+/// - 8BIM resource blocks are invalid
+/// - IPTC records cannot be parsed
+pub fn extract_iptc_from_segments(segments: &[Segment]) -> Result<Vec<(String, String)>> {
+    let mut all_iptc_tags = Vec::new();
+
+    // Iterate through all segments looking for APP13 segments
+    for segment in segments {
+        // Check if this is an APP13 segment (0xFFED)
+        if segment.marker != APP13_MARKER {
+            continue;
+        }
+
+        // Check if this APP13 segment contains Photoshop data
+        if !segment.data.starts_with(PHOTOSHOP_SIGNATURE) {
+            continue;
+        }
+
+        // Skip past the Photoshop signature
+        let mut current = &segment.data[PHOTOSHOP_SIGNATURE.len()..];
+
+        // Parse all 8BIM resource blocks
+        while current.len() > 4 {
+            // Check if this looks like a 8BIM block
+            if !current.starts_with(EIGHTBIM_SIGNATURE) {
+                break;
+            }
+
+            match parse_image_resource_block(current) {
+                Ok((remaining, block)) => {
+                    // Check if this is the IPTC resource block (ID 0x0404)
+                    if block.id == IPTC_RESOURCE_ID {
+                        // Parse IPTC records from the block data
+                        match parse_all_iptc_records(block.data) {
+                            Ok(records) => {
+                                // Convert records to tag name/value pairs
+                                for record in records {
+                                    let tag_name =
+                                        dataset_to_tag_name(record.record_number, record.dataset_number);
+                                    let value = decode_iptc_string(&record.data);
+
+                                    all_iptc_tags.push((tag_name, value));
+                                }
+                            }
+                            Err(e) => {
+                                // Log error but continue processing other blocks
+                                eprintln!("Warning: Failed to parse IPTC records: {}", e);
+                            }
+                        }
+                    }
+
+                    current = remaining;
+                }
+                Err(_) => {
+                    // Failed to parse block, stop processing this segment
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(all_iptc_tags)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,5 +424,68 @@ mod tests {
         // Test string with trailing spaces (should be trimmed)
         let padded_data = b"Test    ";
         assert_eq!(decode_iptc_string(padded_data), "Test");
+    }
+
+    #[test]
+    fn test_extract_iptc_from_segments() {
+        // Create a complete APP13 segment with IPTC data
+        let mut app13_data = Vec::new();
+
+        // Photoshop signature
+        app13_data.extend_from_slice(PHOTOSHOP_SIGNATURE);
+
+        // 8BIM resource block
+        app13_data.extend_from_slice(b"8BIM");
+        app13_data.extend_from_slice(&[0x04, 0x04]); // ID: IPTC
+        app13_data.push(0x00); // Empty name
+        app13_data.push(0x00); // Padding
+
+        // IPTC data
+        let mut iptc_data = Vec::new();
+        // Record: ObjectName (dataset 5)
+        iptc_data.push(0x1C);
+        iptc_data.extend_from_slice(&[0x02, 0x05]);
+        iptc_data.extend_from_slice(&[0x00, 0x0A]);
+        iptc_data.extend_from_slice(b"Test Title");
+
+        // Record: By-line (dataset 80)
+        iptc_data.push(0x1C);
+        iptc_data.extend_from_slice(&[0x02, 0x50]);
+        iptc_data.extend_from_slice(&[0x00, 0x0B]);
+        iptc_data.extend_from_slice(b"Test Author");
+
+        // Add IPTC data size and data to 8BIM block
+        let iptc_size = iptc_data.len() as u32;
+        app13_data.extend_from_slice(&iptc_size.to_be_bytes());
+        app13_data.extend_from_slice(&iptc_data);
+
+        // Create APP13 segment
+        let segment = Segment::new(APP13_MARKER, 0, &app13_data);
+        let segments = vec![segment];
+
+        // Extract IPTC
+        let result = extract_iptc_from_segments(&segments);
+        assert!(result.is_ok());
+
+        let tags = result.unwrap();
+        assert_eq!(tags.len(), 2);
+
+        // Check tags
+        let title = tags.iter().find(|(k, _)| k == "IPTC:ObjectName");
+        assert!(title.is_some());
+        assert_eq!(title.unwrap().1, "Test Title");
+
+        let author = tags.iter().find(|(k, _)| k == "IPTC:By-line");
+        assert!(author.is_some());
+        assert_eq!(author.unwrap().1, "Test Author");
+    }
+
+    #[test]
+    fn test_extract_iptc_no_app13_segments() {
+        // Empty segments
+        let segments = vec![];
+        let result = extract_iptc_from_segments(&segments);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 0);
     }
 }
