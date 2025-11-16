@@ -26,11 +26,35 @@
 //!
 //! # Example Canon Tags
 //!
-//! When successful, you should see tags like:
-//! - `Canon:CanonModelID`: Camera model identifier
-//! - `Canon:CanonFirmwareVersion`: Firmware version string
-//! - `Canon:CanonImageType`: Image type descriptor
-//! - And potentially many more depending on the camera model
+//! ## Phase 1 Tags (Simple Values)
+//! - `Canon:CanonModelID` - e.g., "0x80000001"
+//! - `Canon:FirmwareVersion` - e.g., "Firmware Version 1.0.0"
+//! - `Canon:OwnerName` - e.g., "John Doe"
+//! - `Canon:SerialNumber` - e.g., "012345678901"
+//! - `Canon:ImageType` - e.g., "IMG:EOS R5"
+//! - `Canon:FileNumber` - e.g., "1234567"
+//!
+//! ## Phase 2 Tags (Array Values - Camera Settings)
+//! - `Canon:MacroMode` - e.g., "Normal" (Phase 2)
+//! - `Canon:Quality` - e.g., "Fine" (Phase 2)
+//! - `Canon:FlashMode` - e.g., "Off" (Phase 2)
+//! - `Canon:DriveMode` - e.g., "Single" (Phase 2)
+//! - `Canon:FocusMode` - e.g., "One-shot AF" (Phase 2)
+//! - `Canon:MeteringMode` - e.g., "Evaluative" (Phase 2)
+//! - `Canon:ExposureMode` - e.g., "Manual" (Phase 2)
+//! - `Canon:ISO` - e.g., "100" (Phase 2)
+//!
+//! ## Phase 2 Tags (Shot Info)
+//! - `Canon:AutoISO` - e.g., "100" (Phase 2)
+//! - `Canon:BaseISO` - e.g., "100" (Phase 2)
+//! - `Canon:MeasuredEV` - e.g., "128" (Phase 2)
+//! - `Canon:TargetAperture` - e.g., "160" (Phase 2)
+//! - `Canon:TargetShutterSpeed` - e.g., "96" (Phase 2)
+//! - `Canon:SubjectDistance` - e.g., "1000 mm" (Phase 2)
+//!
+//! ## Phase 2 Tags (Focal Length)
+//! - `Canon:FocalType` - e.g., "2" (Phase 2)
+//! - `Canon:FocalLength` - e.g., "50 mm" (Phase 2)
 
 use exiftool_rs::core::operations::read_metadata;
 use std::path::Path;
