@@ -1,6 +1,6 @@
 [package]
 name = "exiftool-tags-core"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2021"
 authors = ["ExifTool-RS Contributors"]
 description = "Core metadata tags (EXIF, XMP, IPTC, GPS) for exiftool-rs"

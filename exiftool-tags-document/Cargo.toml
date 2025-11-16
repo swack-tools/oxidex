@@ -1,6 +1,6 @@
 [package]
 name = "exiftool-tags-document"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2021"
 authors = ["ExifTool-RS Contributors"]
 description = "Document format metadata tags for exiftool-rs"

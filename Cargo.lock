@@ -455,7 +455,7 @@ dependencies = [
 
 [[package]]
 name = "exiftool-rs"
-version = "1.0.8"
+version = "1.0.9"
 dependencies = [
  "anyhow",
  "cc",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "exiftool-tags"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "exiftool-tags-camera",
  "exiftool-tags-core",
@@ -498,7 +498,7 @@ dependencies = [
 
 [[package]]
 name = "exiftool-tags-camera"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "bincode",
  "exiftool-tags-core",
@@ -509,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "exiftool-tags-core"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "bincode",
  "once_cell",
@@ -519,7 +519,7 @@ dependencies = [
 
 [[package]]
 name = "exiftool-tags-document"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "bincode",
  "exiftool-tags-core",
@@ -530,7 +530,7 @@ dependencies = [
 
 [[package]]
 name = "exiftool-tags-image"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "bincode",
  "exiftool-tags-core",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "exiftool-tags-media"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "bincode",
  "exiftool-tags-core",
@@ -552,7 +552,7 @@ dependencies = [
 
 [[package]]
 name = "exiftool-tags-specialty"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "bincode",
  "exiftool-tags-core",
