@@ -244,18 +244,12 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                         // Check for EXIF Sub-IFD pointer (tag 0x8769)
                         if *tag_id == 0x8769 && bytes.len() >= 4 {
                             let offset = match byte_order {
-                                ByteOrder::LittleEndian => u32::from_le_bytes([
-                                    bytes[0],
-                                    bytes[1],
-                                    bytes[2],
-                                    bytes[3],
-                                ]),
-                                ByteOrder::BigEndian => u32::from_be_bytes([
-                                    bytes[0],
-                                    bytes[1],
-                                    bytes[2],
-                                    bytes[3],
-                                ]),
+                                ByteOrder::LittleEndian => {
+                                    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                                }
+                                ByteOrder::BigEndian => {
+                                    u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                                }
                             };
                             exif_ifd_offset = Some(offset as u64);
                             continue; // Don't add the pointer tag to metadata
@@ -264,18 +258,12 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                         // Check for GPS Sub-IFD pointer (tag 0x8825)
                         if *tag_id == 0x8825 && bytes.len() >= 4 {
                             let offset = match byte_order {
-                                ByteOrder::LittleEndian => u32::from_le_bytes([
-                                    bytes[0],
-                                    bytes[1],
-                                    bytes[2],
-                                    bytes[3],
-                                ]),
-                                ByteOrder::BigEndian => u32::from_be_bytes([
-                                    bytes[0],
-                                    bytes[1],
-                                    bytes[2],
-                                    bytes[3],
-                                ]),
+                                ByteOrder::LittleEndian => {
+                                    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                                }
+                                ByteOrder::BigEndian => {
+                                    u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                                }
                             };
                             gps_ifd_offset = Some(offset as u64);
                             continue; // Don't add the pointer tag to metadata

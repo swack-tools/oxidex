@@ -241,7 +241,11 @@ pub fn parse_ifd(
         let value_bytes = if total_size <= 4 {
             // Value is stored inline in the value_offset field
             // We need to create owned data since it's derived from the field value
-            Cow::Owned(extract_inline_value(entry.value_offset, total_size, byte_order))
+            Cow::Owned(extract_inline_value(
+                entry.value_offset,
+                total_size,
+                byte_order,
+            ))
         } else {
             // Value is stored at an offset
             let value_offset = entry.value_offset as u64;

@@ -335,7 +335,9 @@ pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<IfdEntries> {
             match *tag_id {
                 EXIF_IFD_POINTER | GPS_INFO_IFD_POINTER | INTEROPERABILITY_IFD_POINTER => {
                     // Convert Cow<[u8]> to &[u8] using as_ref()
-                    if let Some(sub_ifd_offset) = extract_u32_from_tag_value(value.as_ref(), byte_order) {
+                    if let Some(sub_ifd_offset) =
+                        extract_u32_from_tag_value(value.as_ref(), byte_order)
+                    {
                         // Skip if we've already visited this offset
                         if !visited_offsets.contains(&(sub_ifd_offset as u64)) {
                             // Parse sub-IFD

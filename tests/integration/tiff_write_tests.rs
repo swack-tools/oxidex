@@ -27,7 +27,9 @@ use tempfile::TempDir;
 ///
 /// This converts the Vec<(u16, u16, Cow<[u8]>)> format returned by parse_tiff_file
 /// into a MetadataMap with proper TagValue objects.
-fn tags_to_metadata_map(tags: Vec<(u16, u16, u32, std::borrow::Cow<'static, [u8]>)>) -> MetadataMap {
+fn tags_to_metadata_map(
+    tags: Vec<(u16, u16, u32, std::borrow::Cow<'static, [u8]>)>,
+) -> MetadataMap {
     let mut metadata = MetadataMap::new();
 
     for (tag_id, _field_type, _value_count, value) in tags {

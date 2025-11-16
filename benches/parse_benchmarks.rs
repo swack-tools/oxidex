@@ -189,9 +189,9 @@ fn bench_iptc_tag_name_generation(c: &mut Criterion) {
         b.iter(|| {
             // Benchmark common tag lookups
             // Using black_box to prevent compiler optimizations
-            black_box(iptc_parser::dataset_to_tag_name(2, 5));   // ObjectName
-            black_box(iptc_parser::dataset_to_tag_name(2, 25));  // Keywords
-            black_box(iptc_parser::dataset_to_tag_name(2, 80));  // By-line
+            black_box(iptc_parser::dataset_to_tag_name(2, 5)); // ObjectName
+            black_box(iptc_parser::dataset_to_tag_name(2, 25)); // Keywords
+            black_box(iptc_parser::dataset_to_tag_name(2, 80)); // By-line
             black_box(iptc_parser::dataset_to_tag_name(2, 120)); // Caption-Abstract
         });
     });

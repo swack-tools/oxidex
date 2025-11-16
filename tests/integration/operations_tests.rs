@@ -205,8 +205,5 @@ fn test_metadata_merge_preserves_all_data() {
     }
 
     // Verify we can access tags after merge
-    assert!(
-        !metadata.is_empty(),
-        "Merged metadata should contain tags"
-    );
+    assert!(!metadata.is_empty(), "Merged metadata should contain tags");
 }
