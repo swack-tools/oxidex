@@ -54,3 +54,6 @@ mod exif_makernotes_tests;
 
 #[path = "integration/canon_real_image_test.rs"]
 mod canon_real_image_test;
+
+#[path = "integration/canon_makernotes_phase3_tests.rs"]
+mod canon_makernotes_phase3_tests;
