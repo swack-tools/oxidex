@@ -43,3 +43,14 @@ pub mod minolta_lens_database;
 pub mod motorola;
 pub mod ricoh;
 pub mod sanyo;
+
+// Specialty devices (Phase 5)
+pub mod dji; // DJI drones (Mavic, Phantom, Inspire)
+pub mod flir; // FLIR thermal imaging cameras
+pub mod gopro; // GoPro action cameras
+pub mod infiray; // InfiRay thermal cameras
+pub mod lytro; // Lytro light field cameras
+pub mod nintendo; // Nintendo 3DS cameras
+pub mod parrot; // Parrot drones (Anafi, Bebop)
+pub mod reconyx; // Reconyx wildlife/trail cameras
+pub mod red; // RED cinema cameras (KOMODO, V-RAPTOR)
