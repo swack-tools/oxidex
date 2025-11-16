@@ -154,16 +154,22 @@ fn download_exiftool_source() -> Result<PathBuf> {
     // Create cache directory
     fs::create_dir_all(&cache_dir)?;
 
+    // Create agent with timeout configuration
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(120)))
+        .build()
+        .into();
+
     // Download archive
-    let response = ureq::get(EXIFTOOL_ARCHIVE_URL)
-        .timeout(std::time::Duration::from_secs(120))
+    let mut response = agent
+        .get(EXIFTOOL_ARCHIVE_URL)
         .call()
         .context("Failed to download ExifTool archive")?;
 
     // Save to temporary file
     let zip_path = cache_dir.join("exiftool.zip");
     let mut zip_file = File::create(&zip_path)?;
-    std::io::copy(&mut response.into_reader(), &mut zip_file)?;
+    std::io::copy(&mut response.body_mut().as_reader(), &mut zip_file)?;
 
     println!("cargo:warning=Extracting ExifTool source...");
 
