@@ -67,11 +67,12 @@ fn test_canon_real_image() {
     }
 
     // Read metadata from the Canon sample file
-    let metadata = read_metadata(sample_path)
-        .expect("Failed to read metadata from Canon sample file");
+    let metadata =
+        read_metadata(sample_path).expect("Failed to read metadata from Canon sample file");
 
     // Verify that at least some Canon tags were extracted
-    let canon_tags: Vec<_> = metadata.keys()
+    let canon_tags: Vec<_> = metadata
+        .keys()
         .filter(|k| k.starts_with("Canon:"))
         .collect();
 
@@ -81,10 +82,14 @@ fn test_canon_real_image() {
     );
 
     // Print all extracted Canon tags for manual verification
-    eprintln!("\n=== Extracted Canon Tags ({} total) ===", canon_tags.len());
+    eprintln!(
+        "\n=== Extracted Canon Tags ({} total) ===",
+        canon_tags.len()
+    );
 
     // Sort tags for consistent output
-    let mut sorted_tags: Vec<_> = metadata.iter()
+    let mut sorted_tags: Vec<_> = metadata
+        .iter()
         .filter(|(k, _)| k.starts_with("Canon:"))
         .collect();
     sorted_tags.sort_by_key(|(k, _)| *k);

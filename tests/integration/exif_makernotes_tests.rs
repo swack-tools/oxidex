@@ -31,7 +31,7 @@ fn test_canon_makernote_extraction() {
     // === TIFF Header (8 bytes) ===
     // Byte order: "II" (little-endian)
     tiff_data.extend_from_slice(&[0x49, 0x49]); // "II"
-    // Magic number: 42
+                                                // Magic number: 42
     tiff_data.extend_from_slice(&[0x2A, 0x00]);
     // First IFD offset: 8 (points right after header)
     tiff_data.extend_from_slice(&[0x08, 0x00, 0x00, 0x00]);
@@ -116,10 +116,7 @@ fn test_canon_makernote_extraction() {
         || metadata.contains_key("FirmwareVersion");
 
     // At minimum, we should have extracted *some* metadata
-    assert!(
-        metadata.len() > 0,
-        "Expected some metadata to be extracted"
-    );
+    assert!(metadata.len() > 0, "Expected some metadata to be extracted");
 
     // Check for Canon tags if integration is complete
     // If integration isn't complete yet, this test will fail here,
@@ -207,7 +204,10 @@ fn test_non_canon_makernote_rejected() {
     let result = read_metadata(temp_file.path());
 
     // Should still parse successfully
-    assert!(result.is_ok(), "Should parse TIFF even with non-Canon MakerNote");
+    assert!(
+        result.is_ok(),
+        "Should parse TIFF even with non-Canon MakerNote"
+    );
 
     let metadata = result.unwrap();
 
