@@ -175,11 +175,12 @@ Each record:
 
 ## Priority 0: MakerNotes Support (Canon)
 
-### Status: Phase 2 Complete ✅
+### Status: Phase 3 Complete ✅
 
 **Phase 1 (Complete):** Basic Canon MakerNotes tag extraction (ImageType, FirmwareVersion, OwnerName, SerialNumber, ModelID, FileNumber)
 **Phase 2 (Complete):** Complex array tags - CameraSettings (8 tags), ShotInfo (6 tags), FocalLength (2 tags)
-**Next:** Phase 3 - Lens database (~400 lens IDs), AFInfo, FileInfo, additional camera-specific arrays
+**Phase 3 (Complete):** Lens database (120+ lenses), AFInfo, FileInfo arrays, LensModel tag ✅
+**Next:** Phase 4 - Additional camera manufacturers (Nikon, Sony, Panasonic)
 
 ### Overview
 
