@@ -48,3 +48,6 @@ mod date_shift_tests;
 
 #[path = "integration/iptc_integration_test.rs"]
 mod iptc_integration_test;
+
+#[path = "integration/exif_makernotes_tests.rs"]
+mod exif_makernotes_tests;

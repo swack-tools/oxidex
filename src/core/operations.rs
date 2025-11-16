@@ -15,6 +15,7 @@ use crate::parsers::pdf::parse_pdf_metadata;
 use crate::parsers::png::parse_png_metadata;
 use crate::parsers::quicktime::parse_quicktime_metadata;
 use crate::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};
+use crate::parsers::tiff::makernotes::canon;
 use crate::tag_db::lookup_tag_name;
 use crate::tag_db::tag_registry::get_tag_descriptor;
 use crate::writers::atomic_writer::write_atomic;
@@ -445,6 +446,7 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         // Track sub-IFD offsets
         let mut exif_ifd_offset = None;
         let mut gps_ifd_offset = None;
+        let mut makernote_data: Option<&[u8]> = None;
 
         // Convert tags to metadata
         for (tag_id, field_type, value_count, raw_bytes) in &tags {
@@ -476,6 +478,14 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                 continue; // Don't add the pointer tag to metadata
             }
 
+            // Check for MakerNote tag (0x927C)
+            // Store the data for later processing after we've added other tags
+            if *tag_id == 0x927C {
+                makernote_data = Some(raw_bytes.as_slice());
+                // Note: We don't continue here - we still add the raw MakerNote tag
+                // to metadata so tools can see it, but we'll also parse it below
+            }
+
             // Convert tag to metadata
             let tag_name = lookup_tag_name(*tag_id, ifd_name);
             let tag_value =
@@ -484,18 +494,50 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         }
 
         // Parse EXIF Sub-IFD if present
+        // Note: MakerNote tags are typically found in the EXIF IFD, not IFD0
         if let Some(offset) = exif_ifd_offset {
             if let Ok(exif_tags) = parse_ifd(reader, offset, byte_order) {
-                for (tag_id, field_type, value_count, raw_bytes) in exif_tags {
-                    let tag_name = lookup_tag_name(tag_id, "ExifIFD");
+                // Track MakerNote in EXIF IFD
+                let mut exif_makernote_data: Option<&[u8]> = None;
+
+                // First pass: convert tags and capture MakerNote
+                for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                    // Check for MakerNote in EXIF IFD
+                    if *tag_id == 0x927C {
+                        exif_makernote_data = Some(raw_bytes.as_slice());
+                    }
+
+                    let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
                     let tag_value = raw_bytes_to_tag_value(
-                        &raw_bytes,
-                        field_type,
-                        value_count,
-                        tag_id,
+                        raw_bytes,
+                        *field_type,
+                        *value_count,
+                        *tag_id,
                         byte_order,
                     );
                     metadata.insert(tag_name, tag_value);
+                }
+
+                // Second pass: Parse Canon MakerNote if found in EXIF IFD
+                if let Some(makernote_bytes) = exif_makernote_data {
+                    if canon::is_canon_makernote(makernote_bytes) {
+                        match canon::parse_canon_makernote(makernote_bytes, byte_order) {
+                            Ok(canon_tags) => {
+                                // Add Canon tags to metadata
+                                // Note: tag names already include "Canon:" prefix
+                                for (tag_name, tag_value_str) in canon_tags {
+                                    let tag_value = TagValue::String(tag_value_str);
+                                    metadata.insert(tag_name, tag_value);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "Warning: Failed to parse Canon MakerNote in EXIF IFD: {}",
+                                    e
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -515,6 +557,37 @@ fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                     metadata.insert(tag_name, tag_value);
                 }
             }
+        }
+
+        // Parse Canon MakerNote if present
+        // This is done after EXIF and GPS sub-IFDs to ensure proper tag context
+        if let Some(makernote_bytes) = makernote_data {
+            // Check if this is a Canon MakerNote
+            if canon::is_canon_makernote(makernote_bytes) {
+                // Parse Canon MakerNote tags
+                match canon::parse_canon_makernote(makernote_bytes, byte_order) {
+                    Ok(canon_tags) => {
+                        // Add Canon tags to metadata
+                        // Note: tag names already include "Canon:" prefix from canon_tag_to_name()
+                        for (tag_name, tag_value_str) in canon_tags {
+                            // Convert string value to TagValue
+                            let tag_value = TagValue::String(tag_value_str);
+                            metadata.insert(tag_name, tag_value);
+                        }
+                    }
+                    Err(e) => {
+                        // Log parsing error but don't fail the entire operation
+                        // Some Canon MakerNotes may be partially corrupt or use
+                        // proprietary formats we don't fully support yet
+                        eprintln!(
+                            "Warning: Failed to parse Canon MakerNote at IFD{}: {}",
+                            ifd_index, e
+                        );
+                    }
+                }
+            }
+            // If not Canon, silently ignore - other vendors' MakerNotes
+            // can be added in future phases (Nikon, Sony, etc.)
         }
 
         // Read next IFD offset (located after all tag entries)
