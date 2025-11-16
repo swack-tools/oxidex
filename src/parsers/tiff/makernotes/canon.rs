@@ -29,6 +29,7 @@ const CANON_SERIAL_NUMBER: u16 = 0x000C;
 const CANON_CAMERA_INFO: u16 = 0x000D;
 const CANON_CUSTOM_FUNCTIONS: u16 = 0x000F;
 const CANON_MODEL_ID: u16 = 0x0010;
+const CANON_LENS_MODEL: u16 = 0x0095;
 
 // Canon signature (not always present)
 const CANON_SIGNATURE: &[u8] = b"Canon";
@@ -490,12 +491,68 @@ pub fn parse_canon_makernote(
                 }
             }
 
+            // LensModel tag (Phase 3) - ASCII string containing lens name
+            CANON_LENS_MODEL => {
+                // LensModel is an ASCII string tag
+                if entry.field_type == 2 {
+                    // ASCII type
+                    let value_bytes = if entry.value_count <= 4 {
+                        // Inline value
+                        extract_inline_value(
+                            entry.value_offset,
+                            entry.value_count as usize,
+                            byte_order,
+                        )
+                    } else {
+                        // External value
+                        if (entry.value_offset as usize) < data.len() {
+                            let end = std::cmp::min(
+                                (entry.value_offset as usize) + (entry.value_count as usize),
+                                data.len(),
+                            );
+                            data[entry.value_offset as usize..end].to_vec()
+                        } else {
+                            Vec::new()
+                        }
+                    };
+
+                    if !value_bytes.is_empty() {
+                        let lens_model = String::from_utf8_lossy(&value_bytes)
+                            .trim_end_matches('\0')
+                            .to_string();
+                        if !lens_model.is_empty() {
+                            tags.insert("Canon:LensModel".to_string(), lens_model);
+                        }
+                    }
+                }
+            }
+
             // Other array tags - skip for now (will add in future phases)
             _ => continue,
         }
     }
 
     Ok(tags)
+}
+
+/// Extracts inline value bytes from the value_offset field.
+///
+/// For values that fit in 4 bytes or less, they are stored directly
+/// in the value_offset field rather than at an external offset.
+///
+/// # Parameters
+/// - `value_offset`: The value_offset field from IFD entry
+/// - `count`: Number of bytes to extract
+/// - `byte_order`: Byte order for extraction
+///
+/// # Returns
+/// Vector of bytes extracted from value_offset field
+fn extract_inline_value(value_offset: u32, count: usize, byte_order: ByteOrder) -> Vec<u8> {
+    let bytes = match byte_order {
+        ByteOrder::LittleEndian => value_offset.to_le_bytes(),
+        ByteOrder::BigEndian => value_offset.to_be_bytes(),
+    };
+    bytes[0..count.min(4)].to_vec()
 }
 
 /// Extracts string value from IFD entry.
@@ -1027,5 +1084,30 @@ mod tests {
 
         assert_eq!(result.get("Canon:FocalType"), Some(&"2".to_string()));
         assert_eq!(result.get("Canon:FocalLength"), Some(&"50 mm".to_string()));
+    }
+
+    #[test]
+    fn test_parse_lens_model_tag() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+
+        // LensModel tag (0x0095)
+        data.extend_from_slice(&[0x95, 0x00]); // Tag
+        data.extend_from_slice(&[0x02, 0x00]); // Type: ASCII
+        data.extend_from_slice(&[0x1E, 0x00, 0x00, 0x00]); // Count: 30 chars
+        data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
+
+        // Lens model string: "Canon EF 24-70mm f/2.8L II USM\0"
+        let lens_name = b"Canon EF 24-70mm f/2.8L II USM\0";
+        data.extend_from_slice(lens_name);
+
+        let result = parse_canon_makernote(&data, ByteOrder::LittleEndian).unwrap();
+
+        assert_eq!(
+            result.get("Canon:LensModel"),
+            Some(&"Canon EF 24-70mm f/2.8L II USM".to_string())
+        );
     }
 }
