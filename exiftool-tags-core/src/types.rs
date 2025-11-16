@@ -26,7 +26,7 @@ pub struct TagTable {
 }
 
 /// Database containing multiple tag tables
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TagDatabase {
     /// All tag tables in this domain
     pub tables: Vec<TagTable>,
