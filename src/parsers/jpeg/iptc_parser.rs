@@ -145,6 +145,67 @@ fn parse_all_iptc_records(input: &[u8]) -> Result<Vec<IptcRecord>> {
     Ok(records)
 }
 
+/// Maps IPTC dataset numbers to tag names.
+///
+/// # Parameters
+/// - `record_number`: The record number (usually 2 for Application Record)
+/// - `dataset_number`: The dataset number identifying the tag
+///
+/// # Returns
+/// Tag name in the format "IPTC:TagName"
+fn dataset_to_tag_name(record_number: u8, dataset_number: u8) -> String {
+    // Only handle Record 2 (Application Record) for now
+    if record_number != 2 {
+        return format!("IPTC:Unknown-{}-{}", record_number, dataset_number);
+    }
+
+    let tag_name = match dataset_number {
+        5 => "ObjectName",
+        7 => "EditStatus",
+        10 => "Urgency",
+        15 => "Category",
+        20 => "SupplementalCategories",
+        25 => "Keywords",
+        40 => "SpecialInstructions",
+        55 => "DateCreated",
+        60 => "TimeCreated",
+        80 => "By-line",
+        85 => "By-lineTitle",
+        90 => "City",
+        92 => "Sub-location",
+        95 => "Province-State",
+        100 => "Country-PrimaryLocationCode",
+        101 => "Country-PrimaryLocationName",
+        103 => "OriginalTransmissionReference",
+        105 => "Headline",
+        110 => "Credit",
+        115 => "Source",
+        116 => "CopyrightNotice",
+        118 => "Contact",
+        120 => "Caption-Abstract",
+        122 => "Writer-Editor",
+        _ => return format!("IPTC:Unknown-{}-{}", record_number, dataset_number),
+    };
+
+    format!("IPTC:{}", tag_name)
+}
+
+/// Decodes an IPTC string from bytes.
+///
+/// IPTC strings are typically Latin-1 encoded, but may also be UTF-8.
+/// This function attempts UTF-8 first, falls back to Latin-1, and trims whitespace.
+fn decode_iptc_string(data: &[u8]) -> String {
+    // Try UTF-8 first
+    if let Ok(s) = std::str::from_utf8(data) {
+        return s.trim().to_string();
+    }
+
+    // Fall back to Latin-1 (ISO-8859-1)
+    // In Latin-1, each byte maps directly to a Unicode code point
+    let s: String = data.iter().map(|&b| b as char).collect();
+    s.trim().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +317,28 @@ mod tests {
 
         assert_eq!(records[1].dataset_number, 80);
         assert_eq!(records[1].data, b"Author");
+    }
+
+    #[test]
+    fn test_dataset_to_tag_name() {
+        assert_eq!(dataset_to_tag_name(2, 5), "IPTC:ObjectName");
+        assert_eq!(dataset_to_tag_name(2, 25), "IPTC:Keywords");
+        assert_eq!(dataset_to_tag_name(2, 80), "IPTC:By-line");
+        assert_eq!(dataset_to_tag_name(2, 90), "IPTC:City");
+        assert_eq!(dataset_to_tag_name(2, 120), "IPTC:Caption-Abstract");
+
+        // Unknown dataset should return generic name
+        assert_eq!(dataset_to_tag_name(2, 255), "IPTC:Unknown-2-255");
+    }
+
+    #[test]
+    fn test_decode_iptc_string() {
+        // Test ASCII string
+        let ascii_data = b"Hello World";
+        assert_eq!(decode_iptc_string(ascii_data), "Hello World");
+
+        // Test string with trailing spaces (should be trimmed)
+        let padded_data = b"Test    ";
+        assert_eq!(decode_iptc_string(padded_data), "Test");
     }
 }
