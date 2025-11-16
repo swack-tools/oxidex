@@ -18,11 +18,12 @@ const SPECIALTY_TAGS_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/spec
 
 /// Lazily-initialized specialty tag database
 ///
-/// Uses binary deserialization (bincode) instead of YAML parsing for faster initialization.
+/// Uses binary deserialization (bincode 2.0 serde API) instead of YAML parsing for faster initialization.
 /// The Lazy wrapper ensures thread-safe initialization on first access.
 pub static SPECIALTY_TAGS: Lazy<TagDatabase> = Lazy::new(|| {
-    bincode::deserialize(SPECIALTY_TAGS_BIN)
+    bincode::serde::decode_from_slice(SPECIALTY_TAGS_BIN, bincode::config::legacy())
         .expect("Failed to deserialize pre-compiled specialty tags binary data")
+        .0 // decode_from_slice returns (T, usize), extract the decoded value
 });
 
 /// Get a specific tag table by name

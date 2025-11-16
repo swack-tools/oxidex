@@ -45,8 +45,9 @@ fn main() {
     let tag_database: TagDatabase =
         serde_yaml::from_str(&yaml_content).expect("Failed to parse camera_tags.yaml during build");
 
-    // Serialize to binary format using bincode
-    let binary_data = bincode::serialize(&tag_database)
+    // Serialize to binary format using bincode 2.0 serde API
+    // Uses legacy() config for compatibility with bincode 1.x binary format
+    let binary_data = bincode::serde::encode_to_vec(&tag_database, bincode::config::legacy())
         .expect("Failed to serialize tag database to binary format");
 
     // Write binary data to OUT_DIR

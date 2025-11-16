@@ -20,11 +20,12 @@ const CORE_TAGS_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/core_tags
 
 /// Lazily-initialized core tag database
 ///
-/// Uses binary deserialization (bincode) instead of YAML parsing for faster initialization.
+/// Uses binary deserialization (bincode 2.0 serde API) instead of YAML parsing for faster initialization.
 /// The Lazy wrapper ensures thread-safe initialization on first access.
 pub static CORE_TAGS: Lazy<TagDatabase> = Lazy::new(|| {
-    bincode::deserialize(CORE_TAGS_BIN)
+    bincode::serde::decode_from_slice(CORE_TAGS_BIN, bincode::config::legacy())
         .expect("Failed to deserialize pre-compiled core tags binary data")
+        .0 // decode_from_slice returns (T, usize), extract the decoded value
 });
 
 /// Get a specific tag table by name
