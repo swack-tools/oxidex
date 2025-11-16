@@ -82,7 +82,7 @@ use quick_xml::Reader;
 /// ```
 pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
     let mut reader = Reader::from_reader(xml_bytes);
-    reader.trim_text(true); // Trim whitespace from text nodes
+    reader.config_mut().trim_text(true); // Trim whitespace from text nodes
 
     let mut resolver = NamespaceResolver::new();
     let mut results = Vec::new();
@@ -142,7 +142,7 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
             Ok(Event::Text(e)) => {
                 // Collect text content if we're inside a property
                 if current_property.is_some() {
-                    if let Ok(text) = e.unescape() {
+                    if let Ok(text) = e.xml_content() {
                         current_value.push_str(&text);
                     }
                 }
