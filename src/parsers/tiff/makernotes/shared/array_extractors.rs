@@ -30,7 +30,11 @@ pub fn extract_i16_array(entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) -
     // Inline: ≤2 shorts fit in 4-byte value_offset field
     if bytes_needed <= 4 {
         let mut result = Vec::with_capacity(count);
-        let bytes = entry.value_offset.to_le_bytes();
+        // Respect byte order when converting value_offset to bytes
+        let bytes = match byte_order {
+            ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+            ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+        };
 
         for i in 0..count {
             let offset = i * 2;
@@ -223,6 +227,20 @@ mod tests {
 
         let result = extract_i16_array(&entry, &[], ByteOrder::LittleEndian);
         assert_eq!(result, Some(vec![50, 100]));
+    }
+
+    #[test]
+    fn test_extract_i16_array_inline_big_endian() {
+        // Test inline array with BigEndian byte order
+        let entry = IfdEntry {
+            tag_id: 0x0001,
+            field_type: 3, // SHORT
+            value_count: 2,
+            value_offset: 0x0064_0032, // Two shorts: [100, 50] in big-endian
+        };
+
+        let result = extract_i16_array(&entry, &[], ByteOrder::BigEndian);
+        assert_eq!(result, Some(vec![100, 50]));
     }
 
     #[test]
