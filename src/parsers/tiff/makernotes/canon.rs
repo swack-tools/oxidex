@@ -325,6 +325,71 @@ fn extract_integer_value(entry: &IfdEntry) -> Option<String> {
     Some(entry.value_offset.to_string())
 }
 
+/// Extracts an array of signed 16-bit integers from an IFD entry.
+///
+/// Handles both inline arrays (≤2 values fitting in 4-byte value_offset)
+/// and offset-based arrays (>2 values stored elsewhere in data).
+///
+/// # Parameters
+/// - `entry`: The IFD entry containing the array data
+/// - `ifd_data`: The complete IFD data buffer for offset-based reads
+/// - `byte_order`: Byte order for parsing (little or big endian)
+///
+/// # Returns
+/// Optional vector of i16 values, or None if the data is invalid or wrong type
+fn extract_i16_array(entry: &IfdEntry, ifd_data: &[u8], byte_order: ByteOrder) -> Option<Vec<i16>> {
+    // Canon array tags use SHORT type (field_type = 3)
+    if entry.field_type != 3 {
+        return None;
+    }
+
+    let count = entry.value_count as usize;
+    let bytes_needed = count * 2; // 2 bytes per i16
+
+    // Inline: ≤2 shorts fit in 4-byte value_offset field
+    if bytes_needed <= 4 {
+        let mut result = Vec::with_capacity(count);
+        let bytes = entry.value_offset.to_le_bytes();
+
+        for i in 0..count {
+            let offset = i * 2;
+            let value = match byte_order {
+                ByteOrder::LittleEndian => i16::from_le_bytes([bytes[offset], bytes[offset + 1]]),
+                ByteOrder::BigEndian => i16::from_be_bytes([bytes[offset], bytes[offset + 1]]),
+            };
+            result.push(value);
+        }
+
+        return Some(result);
+    }
+
+    // Offset-based: read from ifd_data at specified offset
+    let offset = entry.value_offset as usize;
+
+    // Bounds check
+    if offset + bytes_needed > ifd_data.len() {
+        return None;
+    }
+
+    let mut result = Vec::with_capacity(count);
+    let array_data = &ifd_data[offset..offset + bytes_needed];
+
+    for i in 0..count {
+        let byte_offset = i * 2;
+        let value = match byte_order {
+            ByteOrder::LittleEndian => {
+                i16::from_le_bytes([array_data[byte_offset], array_data[byte_offset + 1]])
+            }
+            ByteOrder::BigEndian => {
+                i16::from_be_bytes([array_data[byte_offset], array_data[byte_offset + 1]])
+            }
+        };
+        result.push(value);
+    }
+
+    Some(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,5 +463,61 @@ mod tests {
         let tags = result.unwrap();
         assert!(tags.len() > 0);
         assert_eq!(tags.get("Canon:ImageType"), Some(&"IMG:EOS R5".to_string()));
+    }
+
+    #[test]
+    fn test_extract_i16_array_inline() {
+        // Test inline array (count * 2 <= 4 bytes)
+        let entry = IfdEntry {
+            tag_id: CANON_FOCAL_LENGTH,
+            field_type: 3, // SHORT
+            value_count: 2,
+            value_offset: 0x0064_0032, // Two shorts: 50, 100 (little-endian)
+        };
+
+        let result = extract_i16_array(&entry, &[], ByteOrder::LittleEndian);
+        assert_eq!(result, Some(vec![50, 100]));
+    }
+
+    #[test]
+    fn test_extract_i16_array_offset() {
+        // Test offset-based array (count * 2 > 4 bytes)
+        let entry = IfdEntry {
+            tag_id: CANON_CAMERA_SETTINGS,
+            field_type: 3, // SHORT
+            value_count: 4,
+            value_offset: 0, // Offset to data
+        };
+
+        // Data at offset 0: [1, 2, 3, 4] as little-endian shorts
+        let data = vec![
+            0x01, 0x00, // 1
+            0x02, 0x00, // 2
+            0x03, 0x00, // 3
+            0x04, 0x00, // 4
+        ];
+
+        let result = extract_i16_array(&entry, &data, ByteOrder::LittleEndian);
+        assert_eq!(result, Some(vec![1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn test_extract_i16_array_big_endian() {
+        let entry = IfdEntry {
+            tag_id: CANON_CAMERA_SETTINGS,
+            field_type: 3,
+            value_count: 3, // Use 3 values to force offset-based reading (>4 bytes)
+            value_offset: 0,
+        };
+
+        // Big-endian data: [256, 512, 768]
+        let data = vec![
+            0x01, 0x00, // 256 (big-endian)
+            0x02, 0x00, // 512 (big-endian)
+            0x03, 0x00, // 768 (big-endian)
+        ];
+
+        let result = extract_i16_array(&entry, &data, ByteOrder::BigEndian);
+        assert_eq!(result, Some(vec![256, 512, 768]));
     }
 }
