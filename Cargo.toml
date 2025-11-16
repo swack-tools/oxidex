@@ -36,7 +36,8 @@ harness = false
 exiftool-tags = { path = "exiftool-tags" }
 
 # CLI Framework
-clap = { version = "4.5", features = ["derive", "cargo"] }
+# Pinned to 4.5.49 to avoid version mismatch with clap_derive on Linux CI
+clap = { version = "=4.5.49", features = ["derive", "cargo"] }
 
 # Binary Parsing
 nom = "7.1"
