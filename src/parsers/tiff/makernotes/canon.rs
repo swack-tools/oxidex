@@ -33,6 +33,28 @@ const CANON_MODEL_ID: u16 = 0x0010;
 // Canon signature (not always present)
 const CANON_SIGNATURE: &[u8] = b"Canon";
 
+// CameraSettings array (tag 0x0001) indices
+// Array contains ~50 values with camera settings
+// Reference: ExifTool Canon.pm CameraSettings table
+const CAMERA_SETTINGS_MACRO_MODE: usize = 1;
+const CAMERA_SETTINGS_SELF_TIMER: usize = 2;
+const CAMERA_SETTINGS_QUALITY: usize = 3;
+const CAMERA_SETTINGS_FLASH_MODE: usize = 4;
+const CAMERA_SETTINGS_DRIVE_MODE: usize = 5;
+const CAMERA_SETTINGS_FOCUS_MODE: usize = 7;
+const CAMERA_SETTINGS_IMAGE_SIZE: usize = 10;
+const CAMERA_SETTINGS_EASY_MODE: usize = 11;
+const CAMERA_SETTINGS_CONTRAST: usize = 13;
+const CAMERA_SETTINGS_SATURATION: usize = 14;
+const CAMERA_SETTINGS_SHARPNESS: usize = 15;
+const CAMERA_SETTINGS_ISO: usize = 16;
+const CAMERA_SETTINGS_METERING_MODE: usize = 17;
+const CAMERA_SETTINGS_FOCUS_TYPE: usize = 18;
+const CAMERA_SETTINGS_AF_POINT: usize = 19;
+const CAMERA_SETTINGS_EXPOSURE_MODE: usize = 20;
+const CAMERA_SETTINGS_FLASH_ACTIVITY: usize = 28;
+const CAMERA_SETTINGS_FOCUS_CONTINUOUS: usize = 32;
+
 /// Represents a Canon MakerNote tag value
 #[derive(Debug, Clone, PartialEq)]
 pub enum CanonTagValue {
@@ -519,5 +541,28 @@ mod tests {
 
         let result = extract_i16_array(&entry, &data, ByteOrder::BigEndian);
         assert_eq!(result, Some(vec![256, 512, 768]));
+    }
+
+    #[test]
+    fn test_camera_settings_indices() {
+        // Verify key CameraSettings array indices are defined correctly
+        assert_eq!(CAMERA_SETTINGS_MACRO_MODE, 1);
+        assert_eq!(CAMERA_SETTINGS_SELF_TIMER, 2);
+        assert_eq!(CAMERA_SETTINGS_QUALITY, 3);
+        assert_eq!(CAMERA_SETTINGS_FLASH_MODE, 4);
+        assert_eq!(CAMERA_SETTINGS_DRIVE_MODE, 5);
+        assert_eq!(CAMERA_SETTINGS_FOCUS_MODE, 7);
+        assert_eq!(CAMERA_SETTINGS_IMAGE_SIZE, 10);
+        assert_eq!(CAMERA_SETTINGS_EASY_MODE, 11);
+        assert_eq!(CAMERA_SETTINGS_CONTRAST, 13);
+        assert_eq!(CAMERA_SETTINGS_SATURATION, 14);
+        assert_eq!(CAMERA_SETTINGS_SHARPNESS, 15);
+        assert_eq!(CAMERA_SETTINGS_ISO, 16);
+        assert_eq!(CAMERA_SETTINGS_METERING_MODE, 17);
+        assert_eq!(CAMERA_SETTINGS_FOCUS_TYPE, 18);
+        assert_eq!(CAMERA_SETTINGS_AF_POINT, 19);
+        assert_eq!(CAMERA_SETTINGS_EXPOSURE_MODE, 20);
+        assert_eq!(CAMERA_SETTINGS_FLASH_ACTIVITY, 28);
+        assert_eq!(CAMERA_SETTINGS_FOCUS_CONTINUOUS, 32);
     }
 }
