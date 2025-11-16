@@ -30,7 +30,7 @@ env:
 jobs:
   test:
     name: Test Suite
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: swack
     timeout-minutes: 30
 
     steps:
@@ -94,7 +94,7 @@ jobs:
 
   audit:
     name: Security Audit
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: swack
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -109,7 +109,7 @@ jobs:
 
   clippy:
     name: Clippy Lints
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: swack
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -145,7 +145,7 @@ jobs:
 
   fmt:
     name: Code Formatting
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: swack
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -176,7 +176,7 @@ jobs:
 
   coverage:
     name: Code Coverage
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: swack
     timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
@@ -226,7 +226,7 @@ jobs:
 
   integration-tests:
     name: Integration Tests (ExifTool Comparison)
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: swack
     timeout-minutes: 30
 
     steps:
@@ -305,7 +305,7 @@ jobs:
 
   benchmarks:
     name: Performance Benchmarks
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: swack
     timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
@@ -352,7 +352,7 @@ jobs:
 
   publish-benchmarks:
     name: Publish Benchmarks to GitHub Pages
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: swack
     needs: benchmarks
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
@@ -391,7 +391,7 @@ jobs:
 
           # Linux x86_64 - native build on x64
           - target: x86_64-unknown-linux-musl
-            os: warp-ubuntu-latest-x64-2x
+            os: swack
 
     steps:
       - name: Checkout repository
