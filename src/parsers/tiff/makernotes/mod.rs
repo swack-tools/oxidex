@@ -6,6 +6,8 @@ pub mod fujifilm;
 pub mod fujifilm_lens_database;
 pub mod nikon;
 pub mod nikon_lens_database;
+pub mod panasonic;
+pub mod panasonic_lens_database;
 pub mod shared;
 pub mod sony;
 pub mod sony_lens_database;
