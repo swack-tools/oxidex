@@ -1,6 +1,6 @@
 //! ExifTool-RS Command Line Interface
 //!
-//! This is the main entry point for the exiftool-rs command-line application.
+//! Main entry point for the exiftool-rs command-line application.
 
 use clap::Parser;
 use exiftool_rs::cli::args::CliArgs;
