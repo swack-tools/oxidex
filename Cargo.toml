@@ -40,7 +40,7 @@ exiftool-tags = { path = "exiftool-tags" }
 clap = { version = "=4.5.49", features = ["derive", "cargo"] }
 
 # Binary Parsing
-nom = "7.1"
+nom = "8.0"
 
 # XML Parsing (for XMP metadata)
 quick-xml = "0.31"
@@ -101,7 +101,7 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
-panic = 'unwind'
+panic = 'abort'
 
 [profile.dev]
 opt-level = 0
