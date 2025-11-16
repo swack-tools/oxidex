@@ -622,23 +622,23 @@ Label GitHub issues with:
 ### Immediate (This Week)
 
 1. ✅ Create this implementation roadmap
-2. Create GitHub issues for:
-   - IPTC support (#5)
+2. ✅ Implement IPTC parser
+3. Create GitHub issues for:
    - Canon MakerNotes (#6)
    - Composite tags (#7)
-3. Set up project board with milestones
-4. Recruit contributors for lens database creation
+4. Set up project board with milestones
+5. Recruit contributors for lens database creation
 
 ### This Month
 
-1. Implement IPTC parser
-2. Create test fixtures for IPTC samples
+1. ✅ Implement IPTC parser
+2. ✅ Create test fixtures for IPTC samples
 3. Begin Canon MakerNotes phase 1
 4. Create lens database schema
 
 ### Next 3 Months
 
-1. Complete IPTC support
+1. ✅ Complete IPTC support
 2. Complete Canon MakerNotes (all phases)
 3. Implement Composite tags
 4. Begin Nikon MakerNotes

@@ -51,6 +51,19 @@ This design ensures:
 - ✅ Integration tests with ExifTool comparison
 - ✅ Continuous fuzzing for security
 
+### Supported Metadata Formats
+
+- ✅ **EXIF** - Complete support for IFD0, IFD1, ExifIFD, GPS, and Interoperability IFD
+- ✅ **XMP** - 10+ namespaces supported (Dublin Core, IPTC Core, Photoshop, etc.)
+- ✅ **IPTC** - Complete support for IPTC IIM Application Record (journalism/stock photography)
+- ✅ **JFIF** - JPEG File Interchange Format metadata
+- ✅ **ICC Profiles** - Color profile metadata extraction
+- ✅ **Photoshop IRB** - Adobe Photoshop Image Resource Blocks
+- ✅ **PDF** - Document metadata, XMP, and ICC profiles
+- ✅ **PNG** - PNG chunks (tEXt, iTXt, zTXt, etc.)
+- ✅ **QuickTime/MP4** - Video/audio metadata atoms
+- ✅ **File System** - File attributes, permissions, timestamps
+
 ## Performance Benchmarks
 
 ExifTool-RS demonstrates exceptional performance improvements over the original Perl ExifTool implementation. The following benchmarks compare both tools running on identical hardware.
