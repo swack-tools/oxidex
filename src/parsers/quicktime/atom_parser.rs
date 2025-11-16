@@ -118,7 +118,8 @@ fn parse_atom(input: &[u8]) -> IResult<&[u8], Atom<'_>> {
     // Parse type (4 bytes, FourCC)
     let (input, type_bytes) = take(4usize)(input)?;
     use nom::Parser;
-    let atom_type = map_opt(take(0usize), |_: &[u8]| FourCC::from_bytes(type_bytes)).parse(input)?;
+    let atom_type =
+        map_opt(take(0usize), |_: &[u8]| FourCC::from_bytes(type_bytes)).parse(input)?;
 
     // Handle extended size (size == 1)
     let (input, actual_size) = if size == 1 {

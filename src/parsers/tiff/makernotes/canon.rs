@@ -253,7 +253,8 @@ fn parse_ifd_entry_le(input: &[u8]) -> IResult<&[u8], IfdEntry> {
             value_count,
             value_offset,
         },
-    ).parse(input)
+    )
+    .parse(input)
 }
 
 /// Parses a single IFD entry (12 bytes) in big-endian byte order.
@@ -275,7 +276,8 @@ fn parse_ifd_entry_be(input: &[u8]) -> IResult<&[u8], IfdEntry> {
             value_count,
             value_offset,
         },
-    ).parse(input)
+    )
+    .parse(input)
 }
 
 /// Parses IFD entries in the specified byte order.

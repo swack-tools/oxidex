@@ -552,7 +552,8 @@ fn parse_number(input: &[u8]) -> IResult<&[u8], u64> {
     preceded(
         multispace0,
         map_res(map_res(digit1, str::from_utf8), |s: &str| s.parse::<u64>()),
-    ).parse(input)
+    )
+    .parse(input)
 }
 
 /// Parses the xref table and builds a map of object numbers to file offsets
@@ -620,7 +621,8 @@ fn parse_xref_entries(input: &[u8]) -> IResult<&[u8], HashMap<u32, u64>> {
                     multispace0,
                     take_while1(|c| c == b'n' || c == b'f'),
                     multispace0,
-                ).parse(input);
+                )
+                    .parse(input);
 
                 if let Ok((inp, (offset, _, _generation, _, in_use, _))) = parse_entry {
                     input = inp;
@@ -796,7 +798,8 @@ fn parse_hex_string(input: &[u8]) -> IResult<&[u8], String> {
         tag(&b"<"[..]),
         take_while(|c: u8| c.is_ascii_hexdigit() || c.is_ascii_whitespace()),
         tag(&b">"[..]),
-    ).parse(input)?;
+    )
+    .parse(input)?;
 
     // Convert hex to string
     let hex_str = str::from_utf8(content)
