@@ -38,6 +38,39 @@ pub enum CanonTagValue {
     IntArray(Vec<i16>),
 }
 
+/// Maps Canon MakerNote tag IDs to human-readable tag names.
+///
+/// # Parameters
+/// - `tag_id`: The Canon-specific tag ID
+///
+/// # Returns
+/// Tag name in the format "Canon:TagName"
+///
+/// # Example
+/// ```
+/// use exiftool_rs::parsers::tiff::makernotes::canon::canon_tag_to_name;
+/// assert_eq!(canon_tag_to_name(0x0001), "Canon:CameraSettings");
+/// ```
+pub fn canon_tag_to_name(tag_id: u16) -> String {
+    let tag_name = match tag_id {
+        CANON_CAMERA_SETTINGS => "CameraSettings",
+        CANON_FOCAL_LENGTH => "FocalLength",
+        CANON_SHOT_INFO => "ShotInfo",
+        CANON_PANORAMA => "Panorama",
+        CANON_IMAGE_TYPE => "ImageType",
+        CANON_FIRMWARE_VERSION => "FirmwareVersion",
+        CANON_FILE_NUMBER => "FileNumber",
+        CANON_OWNER_NAME => "OwnerName",
+        CANON_SERIAL_NUMBER => "SerialNumber",
+        CANON_CAMERA_INFO => "CameraInfo",
+        CANON_CUSTOM_FUNCTIONS => "CustomFunctions",
+        CANON_MODEL_ID => "CanonModelID",
+        _ => return format!("Canon:Unknown-{:#06X}", tag_id),
+    };
+
+    format!("Canon:{}", tag_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,5 +86,18 @@ mod tests {
     #[test]
     fn test_canon_signature() {
         assert_eq!(CANON_SIGNATURE, b"Canon");
+    }
+
+    #[test]
+    fn test_canon_tag_to_name() {
+        assert_eq!(canon_tag_to_name(0x0001), "Canon:CameraSettings");
+        assert_eq!(canon_tag_to_name(0x0002), "Canon:FocalLength");
+        assert_eq!(canon_tag_to_name(0x0004), "Canon:ShotInfo");
+        assert_eq!(canon_tag_to_name(0x0006), "Canon:ImageType");
+        assert_eq!(canon_tag_to_name(0x0007), "Canon:FirmwareVersion");
+        assert_eq!(canon_tag_to_name(0x0010), "Canon:CanonModelID");
+
+        // Unknown tag
+        assert_eq!(canon_tag_to_name(0xFFFF), "Canon:Unknown-0xFFFF");
     }
 }
