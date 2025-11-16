@@ -51,3 +51,6 @@ mod iptc_integration_test;
 
 #[path = "integration/exif_makernotes_tests.rs"]
 mod exif_makernotes_tests;
+
+#[path = "integration/canon_real_image_test.rs"]
+mod canon_real_image_test;
