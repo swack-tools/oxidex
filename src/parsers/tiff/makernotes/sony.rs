@@ -453,8 +453,9 @@ fn parse_ifd_entries(
     entry_count: u16,
     byte_order: ByteOrder,
 ) -> IResult<&[u8], Vec<IfdEntry>> {
+    use nom::Parser;
     let entry_parser = |i| parse_ifd_entry(i, byte_order);
-    count(entry_parser, entry_count as usize)(input)
+    count(entry_parser, entry_count as usize).parse(input)
 }
 
 /// Parses a single IFD entry (12 bytes)

@@ -117,7 +117,8 @@ fn parse_atom(input: &[u8]) -> IResult<&[u8], Atom<'_>> {
 
     // Parse type (4 bytes, FourCC)
     let (input, type_bytes) = take(4usize)(input)?;
-    let atom_type = map_opt(take(0usize), |_: &[u8]| FourCC::from_bytes(type_bytes))(input)?;
+    use nom::Parser;
+    let atom_type = map_opt(take(0usize), |_: &[u8]| FourCC::from_bytes(type_bytes)).parse(input)?;
 
     // Handle extended size (size == 1)
     let (input, actual_size) = if size == 1 {
@@ -146,7 +147,8 @@ fn parse_atom(input: &[u8]) -> IResult<&[u8], Atom<'_>> {
 
 /// Parse multiple atoms from input
 pub fn parse_atoms(input: &[u8]) -> IResult<&[u8], Vec<Atom<'_>>> {
-    many0(parse_atom)(input)
+    use nom::Parser;
+    many0(parse_atom).parse(input)
 }
 
 /// Find a top-level atom by type in the input data

@@ -219,7 +219,7 @@ pub fn parse_segments<'a>(reader: &'a dyn FileReader) -> Result<Vec<Segment<'a>>
 /// - `Ok((remaining, ()))`: Remaining bytes after SOI marker
 /// - `Err`: Parse error if SOI marker is not found
 fn parse_soi_marker(input: &[u8]) -> IResult<&[u8], ()> {
-    let (input, _) = tag(&[0xFF, 0xD8])(input)?;
+    let (input, _) = tag(&[0xFF, 0xD8][..])(input)?;
     Ok((input, ()))
 }
 

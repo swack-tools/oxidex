@@ -88,7 +88,7 @@ fn parse_image_resource_block(input: &[u8]) -> IResult<&[u8], ImageResourceBlock
 /// - Data: variable length
 fn parse_iptc_record(input: &[u8]) -> IResult<&[u8], IptcRecord> {
     // Parse tag marker (must be 0x1C)
-    let (input, _) = tag(&[IPTC_TAG_MARKER])(input)?;
+    let (input, _) = tag(&[IPTC_TAG_MARKER][..])(input)?;
 
     // Parse record number (1 byte)
     let (input, record_number) = nom_u8(input)?;

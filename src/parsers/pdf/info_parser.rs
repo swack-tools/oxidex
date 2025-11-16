@@ -37,7 +37,7 @@ use nom::{
     character::complete::{digit1, multispace0},
     combinator::map_res,
     multi::many0,
-    sequence::{delimited, preceded, tuple},
+    sequence::{delimited, preceded},
     IResult,
 };
 use std::collections::HashMap;
@@ -387,7 +387,7 @@ fn find_root_reference(xref_data: &[u8]) -> Result<ObjectRef> {
 /// Parses the /Root reference from trailer dictionary
 fn parse_trailer_root_ref(input: &[u8]) -> IResult<&[u8], ObjectRef> {
     let (input, _) = take_until("/Root")(input)?;
-    let (input, _) = tag(b"/Root")(input)?;
+    let (input, _) = tag(&b"/Root"[..])(input)?;
     let (input, _) = multispace0(input)?;
     parse_object_reference(input)
 }
@@ -405,7 +405,7 @@ fn find_pages_reference(root_data: &[u8]) -> Result<ObjectRef> {
 /// Parses the /Pages reference from Root object
 fn parse_pages_ref(input: &[u8]) -> IResult<&[u8], ObjectRef> {
     let (input, _) = take_until("/Pages")(input)?;
-    let (input, _) = tag(b"/Pages")(input)?;
+    let (input, _) = tag(&b"/Pages"[..])(input)?;
     let (input, _) = multispace0(input)?;
     parse_object_reference(input)
 }
@@ -422,7 +422,7 @@ fn extract_count_from_pages(pages_data: &[u8]) -> Result<u32> {
 /// Parses the /Count value from Pages dictionary
 fn parse_count(input: &[u8]) -> IResult<&[u8], u64> {
     let (input, _) = take_until("/Count")(input)?;
-    let (input, _) = tag(b"/Count")(input)?;
+    let (input, _) = tag(&b"/Count"[..])(input)?;
     let (input, _) = multispace0(input)?;
     parse_number(input)
 }
@@ -441,9 +441,9 @@ fn extract_media_box_from_pages(pages_data: &[u8]) -> Result<String> {
 /// Returns formatted as "x1, y1, x2, y2"
 fn parse_media_box(input: &[u8]) -> IResult<&[u8], String> {
     let (input, _) = take_until("/MediaBox")(input)?;
-    let (input, _) = tag(b"/MediaBox")(input)?;
+    let (input, _) = tag(&b"/MediaBox"[..])(input)?;
     let (input, _) = multispace0(input)?;
-    let (input, _) = tag(b"[")(input)?;
+    let (input, _) = tag(&b"["[..])(input)?;
     let (input, _) = multispace0(input)?;
 
     // Parse four numbers
@@ -455,7 +455,7 @@ fn parse_media_box(input: &[u8]) -> IResult<&[u8], String> {
     let (input, _) = multispace0(input)?;
     let (input, y2) = parse_number(input)?;
     let (input, _) = multispace0(input)?;
-    let (input, _) = tag(b"]")(input)?;
+    let (input, _) = tag(&b"]"[..])(input)?;
 
     // Format as comma-separated string (matching ExifTool output)
     let media_box_str = format!("{}, {}, {}, {}", x1, y1, x2, y2);
@@ -522,7 +522,7 @@ fn find_info_reference(xref_data: &[u8]) -> Result<ObjectRef> {
 fn parse_trailer_info_ref(input: &[u8]) -> IResult<&[u8], ObjectRef> {
     // Find /Info key followed by object reference
     let (input, _) = take_until("/Info")(input)?;
-    let (input, _) = tag(b"/Info")(input)?;
+    let (input, _) = tag(&b"/Info"[..])(input)?;
     let (input, _) = multispace0(input)?;
 
     // Parse object reference (e.g., "4 0 R")
@@ -535,7 +535,7 @@ fn parse_object_reference(input: &[u8]) -> IResult<&[u8], ObjectRef> {
     let (input, _) = multispace0(input)?;
     let (input, generation) = parse_number(input)?;
     let (input, _) = multispace0(input)?;
-    let (input, _) = tag(b"R")(input)?;
+    let (input, _) = tag(&b"R"[..])(input)?;
 
     Ok((
         input,
@@ -548,10 +548,11 @@ fn parse_object_reference(input: &[u8]) -> IResult<&[u8], ObjectRef> {
 
 /// Parses a decimal number from bytes
 fn parse_number(input: &[u8]) -> IResult<&[u8], u64> {
+    use nom::Parser;
     preceded(
         multispace0,
         map_res(map_res(digit1, str::from_utf8), |s: &str| s.parse::<u64>()),
-    )(input)
+    ).parse(input)
 }
 
 /// Parses the xref table and builds a map of object numbers to file offsets
@@ -575,6 +576,7 @@ fn parse_xref_table(xref_data: &[u8]) -> Result<HashMap<u32, u64>> {
 
 /// Parses xref entries and returns a map of object numbers to offsets
 fn parse_xref_entries(input: &[u8]) -> IResult<&[u8], HashMap<u32, u64>> {
+    use nom::Parser;
     let mut xref_map = HashMap::new();
     let mut input = input;
 
@@ -589,7 +591,7 @@ fn parse_xref_entries(input: &[u8]) -> IResult<&[u8], HashMap<u32, u64>> {
         }
 
         // Parse subsection header: "start_obj_num count"
-        let parse_result = tuple((parse_number, multispace0, parse_number, multispace0))(inp);
+        let parse_result = (parse_number, multispace0, parse_number, multispace0).parse(inp);
 
         if let Ok((inp, (start_num, _, count, _))) = parse_result {
             input = inp;
@@ -611,14 +613,14 @@ fn parse_xref_entries(input: &[u8]) -> IResult<&[u8], HashMap<u32, u64>> {
                 };
 
                 // Parse xref entry: "offset generation n/f"
-                let parse_entry = tuple((
+                let parse_entry = (
                     parse_number,
                     multispace0,
                     parse_number,
                     multispace0,
                     take_while1(|c| c == b'n' || c == b'f'),
                     multispace0,
-                ))(input);
+                ).parse(input);
 
                 if let Ok((inp, (offset, _, _generation, _, in_use, _))) = parse_entry {
                     input = inp;
@@ -683,7 +685,8 @@ fn parse_info_object(input: &[u8]) -> Result<HashMap<String, String>> {
 
 /// Parses dictionary entries (key-value pairs)
 fn parse_dict_entries(input: &[u8]) -> IResult<&[u8], HashMap<String, String>> {
-    let (input, pairs) = many0(parse_dict_entry)(input)?;
+    use nom::Parser;
+    let (input, pairs) = many0(parse_dict_entry).parse(input)?;
     let dict = pairs.into_iter().collect();
     Ok((input, dict))
 }
@@ -694,7 +697,7 @@ fn parse_dict_entry(input: &[u8]) -> IResult<&[u8], (String, String)> {
     let (input, _) = multispace0(input)?;
 
     // Parse key: /KeyName
-    let (input, _) = tag(b"/")(input)?;
+    let (input, _) = tag(&b"/"[..])(input)?;
     let (input, key) = take_while1(|c: u8| c.is_ascii_alphanumeric())(input)?;
     let key = str::from_utf8(key)
         .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Char)))?;
@@ -739,7 +742,7 @@ fn parse_dict_value(input: &[u8]) -> IResult<&[u8], String> {
 /// Handles escaped parentheses \( and \)
 fn parse_string_literal(input: &[u8]) -> IResult<&[u8], String> {
     // Find opening (
-    let (input, _) = tag(b"(")(input)?;
+    let (input, _) = tag(&b"("[..])(input)?;
 
     // Parse content, handling escaped characters
     let mut content = Vec::new();
@@ -788,11 +791,12 @@ fn parse_string_literal(input: &[u8]) -> IResult<&[u8], String> {
 
 /// Parses a PDF hex string: <hexdigits>
 fn parse_hex_string(input: &[u8]) -> IResult<&[u8], String> {
+    use nom::Parser;
     let (input, content) = delimited(
-        tag(b"<"),
+        tag(&b"<"[..]),
         take_while(|c: u8| c.is_ascii_hexdigit() || c.is_ascii_whitespace()),
-        tag(b">"),
-    )(input)?;
+        tag(&b">"[..]),
+    ).parse(input)?;
 
     // Convert hex to string
     let hex_str = str::from_utf8(content)
@@ -849,7 +853,7 @@ fn parse_hex_string(input: &[u8]) -> IResult<&[u8], String> {
 
 /// Parses a PDF name value: /Name
 fn parse_name_value(input: &[u8]) -> IResult<&[u8], String> {
-    let (input, _) = tag(b"/")(input)?;
+    let (input, _) = tag(&b"/"[..])(input)?;
     let (input, name) =
         take_while1(|c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')(input)?;
 

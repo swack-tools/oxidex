@@ -298,16 +298,19 @@ fn extract_inline_value(value_offset: u32, size: usize, byte_order: ByteOrder) -
 
 /// Parses IFD entries in little-endian byte order.
 fn parse_ifd_entries_le(input: &[u8], entry_count: u16) -> IResult<&[u8], Vec<IfdEntry>> {
-    count(parse_ifd_entry_le, entry_count as usize)(input)
+    use nom::Parser;
+    count(parse_ifd_entry_le, entry_count as usize).parse(input)
 }
 
 /// Parses IFD entries in big-endian byte order.
 fn parse_ifd_entries_be(input: &[u8], entry_count: u16) -> IResult<&[u8], Vec<IfdEntry>> {
-    count(parse_ifd_entry_be, entry_count as usize)(input)
+    use nom::Parser;
+    count(parse_ifd_entry_be, entry_count as usize).parse(input)
 }
 
 /// Parses a single IFD entry (12 bytes) in little-endian byte order.
 fn parse_ifd_entry_le(input: &[u8]) -> IResult<&[u8], IfdEntry> {
+    use nom::Parser;
     map(
         |input| {
             let (input, tag_id) = le_u16(input)?;
@@ -322,11 +325,12 @@ fn parse_ifd_entry_le(input: &[u8]) -> IResult<&[u8], IfdEntry> {
             value_count,
             value_offset,
         },
-    )(input)
+    ).parse(input)
 }
 
 /// Parses a single IFD entry (12 bytes) in big-endian byte order.
 fn parse_ifd_entry_be(input: &[u8]) -> IResult<&[u8], IfdEntry> {
+    use nom::Parser;
     map(
         |input| {
             let (input, tag_id) = be_u16(input)?;
@@ -341,7 +345,7 @@ fn parse_ifd_entry_be(input: &[u8]) -> IResult<&[u8], IfdEntry> {
             value_count,
             value_offset,
         },
-    )(input)
+    ).parse(input)
 }
 
 #[cfg(test)]
