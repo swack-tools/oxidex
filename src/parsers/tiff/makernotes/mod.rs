@@ -1,5 +1,6 @@
 //! MakerNote parsers for camera manufacturers
 
+// Traditional camera manufacturers
 pub mod canon;
 pub mod canon_lens_database;
 pub mod fujifilm;
@@ -21,3 +22,10 @@ pub mod sigma;
 pub mod sigma_lens_database;
 pub mod sony;
 pub mod sony_lens_database;
+
+// Smartphone manufacturers (Phase 3)
+pub mod apple;
+pub mod google;
+pub mod microsoft;
+pub mod qualcomm;
+pub mod samsung;
