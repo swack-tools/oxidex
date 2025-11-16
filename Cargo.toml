@@ -140,7 +140,8 @@ opt-level = 2
 codegen-units = 16
 
 [profile.test]
-opt-level = 1
+opt-level = 2
+codegen-units = 4
 
 [features]
 exiftool-comparison = []
