@@ -481,17 +481,11 @@ pub fn parse_canon_makernote(
                 if let Some(array) = extract_i16_array(&entry, data, byte_order) {
                     // array[0] = focal type
                     // array[1] = focal length
-                    if array.len() > 0 {
-                        tags.insert(
-                            "Canon:FocalType".to_string(),
-                            array[0].to_string(),
-                        );
+                    if !array.is_empty() {
+                        tags.insert("Canon:FocalType".to_string(), array[0].to_string());
                     }
                     if array.len() > 1 {
-                        tags.insert(
-                            "Canon:FocalLength".to_string(),
-                            format!("{} mm", array[1]),
-                        );
+                        tags.insert("Canon:FocalLength".to_string(), format!("{} mm", array[1]));
                     }
                 }
             }
@@ -887,27 +881,27 @@ mod tests {
 
         // CameraSettings array data at offset 20 (21 i16 values)
         let settings: Vec<i16> = vec![
-            21,  // [0] Array length
-            2,   // [1] Macro mode: Normal
-            0,   // [2] Self-timer: Off
-            3,   // [3] Quality: Fine
-            2,   // [4] Flash mode: On
-            0,   // [5] Drive mode: Single
-            0,   // [6] (unused)
-            0,   // [7] Focus mode: One-shot AF
-            0,   // [8] (unused)
-            0,   // [9] (unused)
-            1,   // [10] Image size: Large
-            0,   // [11] Easy mode: Off
-            0,   // [12] (unused)
-            0,   // [13] Contrast: Normal
-            0,   // [14] Saturation: Normal
-            0,   // [15] Sharpness: Normal
-            80,  // [16] ISO: 80
-            3,   // [17] Metering mode: Evaluative
-            0,   // [18] Focus type
-            0,   // [19] AF point
-            1,   // [20] Exposure mode: Program AE
+            21, // [0] Array length
+            2,  // [1] Macro mode: Normal
+            0,  // [2] Self-timer: Off
+            3,  // [3] Quality: Fine
+            2,  // [4] Flash mode: On
+            0,  // [5] Drive mode: Single
+            0,  // [6] (unused)
+            0,  // [7] Focus mode: One-shot AF
+            0,  // [8] (unused)
+            0,  // [9] (unused)
+            1,  // [10] Image size: Large
+            0,  // [11] Easy mode: Off
+            0,  // [12] (unused)
+            0,  // [13] Contrast: Normal
+            0,  // [14] Saturation: Normal
+            0,  // [15] Sharpness: Normal
+            80, // [16] ISO: 80
+            3,  // [17] Metering mode: Evaluative
+            0,  // [18] Focus type
+            0,  // [19] AF point
+            1,  // [20] Exposure mode: Program AE
         ];
 
         for value in settings {
@@ -921,9 +915,18 @@ mod tests {
         assert_eq!(result.get("Canon:Quality"), Some(&"Fine".to_string()));
         assert_eq!(result.get("Canon:FlashMode"), Some(&"On".to_string()));
         assert_eq!(result.get("Canon:DriveMode"), Some(&"Single".to_string()));
-        assert_eq!(result.get("Canon:FocusMode"), Some(&"One-shot AF".to_string()));
-        assert_eq!(result.get("Canon:MeteringMode"), Some(&"Evaluative".to_string()));
-        assert_eq!(result.get("Canon:ExposureMode"), Some(&"Program AE".to_string()));
+        assert_eq!(
+            result.get("Canon:FocusMode"),
+            Some(&"One-shot AF".to_string())
+        );
+        assert_eq!(
+            result.get("Canon:MeteringMode"),
+            Some(&"Evaluative".to_string())
+        );
+        assert_eq!(
+            result.get("Canon:ExposureMode"),
+            Some(&"Program AE".to_string())
+        );
         assert_eq!(result.get("Canon:ISO"), Some(&"80".to_string()));
     }
 
@@ -959,21 +962,21 @@ mod tests {
 
         // ShotInfo array (20 values)
         let shot_info: Vec<i16> = vec![
-            20,   // [0] Array length
-            100,  // [1] Auto ISO
-            100,  // [2] Base ISO
-            128,  // [3] Measured EV
-            160,  // [4] Target aperture (f/5.6)
-            96,   // [5] Target shutter speed (1/60)
-            0,    // [6] (unused)
-            0,    // [7] White balance: Auto
-            0,    // [8] Slow shutter: Off
-            0,    // [9] Sequence number
+            20,  // [0] Array length
+            100, // [1] Auto ISO
+            100, // [2] Base ISO
+            128, // [3] Measured EV
+            160, // [4] Target aperture (f/5.6)
+            96,  // [5] Target shutter speed (1/60)
+            0,   // [6] (unused)
+            0,   // [7] White balance: Auto
+            0,   // [8] Slow shutter: Off
+            0,   // [9] Sequence number
             0, 0, 0, 0, // [10-13]
-            0,    // [14] AF points used
-            0,    // [15] Flash exposure comp
-            0,    // [16] Auto exposure bracketing
-            0, 0, // [17-18]
+            0, // [14] AF points used
+            0, // [15] Flash exposure comp
+            0, // [16] Auto exposure bracketing
+            0, 0,    // [17-18]
             1000, // [19] Subject distance (mm)
         ];
 
@@ -987,8 +990,14 @@ mod tests {
         assert_eq!(result.get("Canon:BaseISO"), Some(&"100".to_string()));
         assert_eq!(result.get("Canon:MeasuredEV"), Some(&"128".to_string()));
         assert_eq!(result.get("Canon:TargetAperture"), Some(&"160".to_string()));
-        assert_eq!(result.get("Canon:TargetShutterSpeed"), Some(&"96".to_string()));
-        assert_eq!(result.get("Canon:SubjectDistance"), Some(&"1000 mm".to_string()));
+        assert_eq!(
+            result.get("Canon:TargetShutterSpeed"),
+            Some(&"96".to_string())
+        );
+        assert_eq!(
+            result.get("Canon:SubjectDistance"),
+            Some(&"1000 mm".to_string())
+        );
     }
 
     #[test]
