@@ -352,6 +352,7 @@ mod tests {
         assert_eq!(block.id, 0x0404);
         assert_eq!(block.name, b"TEST");
         assert_eq!(block.data, &[0x11, 0x22]);
+        assert!(remaining.is_empty());
     }
 
     #[test]

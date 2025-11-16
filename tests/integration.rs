@@ -45,3 +45,6 @@ mod rename_tests;
 
 #[path = "integration/date_shift_tests.rs"]
 mod date_shift_tests;
+
+#[path = "integration/iptc_integration_test.rs"]
+mod iptc_integration_test;
