@@ -17,6 +17,7 @@ use nom::{
 use std::collections::HashMap;
 
 use super::canon_lens_database::lookup_lens_name;
+use super::shared::array_extractors::extract_i16_array;
 
 // Canon MakerNote Tag IDs
 const CANON_CAMERA_SETTINGS: u16 = 0x0001;
@@ -718,71 +719,6 @@ fn extract_integer_value(entry: &IfdEntry) -> Option<String> {
     Some(entry.value_offset.to_string())
 }
 
-/// Extracts an array of signed 16-bit integers from an IFD entry.
-///
-/// Handles both inline arrays (≤2 values fitting in 4-byte value_offset)
-/// and offset-based arrays (>2 values stored elsewhere in data).
-///
-/// # Parameters
-/// - `entry`: The IFD entry containing the array data
-/// - `ifd_data`: The complete IFD data buffer for offset-based reads
-/// - `byte_order`: Byte order for parsing (little or big endian)
-///
-/// # Returns
-/// Optional vector of i16 values, or None if the data is invalid or wrong type
-fn extract_i16_array(entry: &IfdEntry, ifd_data: &[u8], byte_order: ByteOrder) -> Option<Vec<i16>> {
-    // Canon array tags use SHORT type (field_type = 3)
-    if entry.field_type != 3 {
-        return None;
-    }
-
-    let count = entry.value_count as usize;
-    let bytes_needed = count * 2; // 2 bytes per i16
-
-    // Inline: ≤2 shorts fit in 4-byte value_offset field
-    if bytes_needed <= 4 {
-        let mut result = Vec::with_capacity(count);
-        let bytes = entry.value_offset.to_le_bytes();
-
-        for i in 0..count {
-            let offset = i * 2;
-            let value = match byte_order {
-                ByteOrder::LittleEndian => i16::from_le_bytes([bytes[offset], bytes[offset + 1]]),
-                ByteOrder::BigEndian => i16::from_be_bytes([bytes[offset], bytes[offset + 1]]),
-            };
-            result.push(value);
-        }
-
-        return Some(result);
-    }
-
-    // Offset-based: read from ifd_data at specified offset
-    let offset = entry.value_offset as usize;
-
-    // Bounds check
-    if offset + bytes_needed > ifd_data.len() {
-        return None;
-    }
-
-    let mut result = Vec::with_capacity(count);
-    let array_data = &ifd_data[offset..offset + bytes_needed];
-
-    for i in 0..count {
-        let byte_offset = i * 2;
-        let value = match byte_order {
-            ByteOrder::LittleEndian => {
-                i16::from_le_bytes([array_data[byte_offset], array_data[byte_offset + 1]])
-            }
-            ByteOrder::BigEndian => {
-                i16::from_be_bytes([array_data[byte_offset], array_data[byte_offset + 1]])
-            }
-        };
-        result.push(value);
-    }
-
-    Some(result)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -854,7 +790,7 @@ mod tests {
         assert!(result.is_ok());
 
         let tags = result.unwrap();
-        assert!(tags.len() > 0);
+        assert!(!tags.is_empty());
         assert_eq!(tags.get("Canon:ImageType"), Some(&"IMG:EOS R5".to_string()));
     }
 

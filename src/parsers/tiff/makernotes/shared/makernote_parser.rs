@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
+use std::collections::HashMap;
 
 /// Common trait for all MakerNotes parsers
 ///
@@ -25,7 +25,7 @@ pub trait MakerNoteParser {
         &self,
         data: &[u8],
         byte_order: ByteOrder,
-        tags: &mut HashMap<String, String>
+        tags: &mut HashMap<String, String>,
     ) -> Result<(), String>;
 
     /// Optional: Validate that this data belongs to this manufacturer
