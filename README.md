@@ -69,7 +69,7 @@ This design ensures:
 
 ## Performance Benchmarks
 
-ExifTool-RS demonstrates exceptional performance improvements over the original Perl ExifTool implementation. Through systematic optimization efforts including compiler-level optimizations (LTO, panic='abort'), hot-path improvements (static strings, zero-copy semantics), and allocation reductions, we've achieved substantial performance gains while reducing binary size.
+ExifTool-RS demonstrates exceptional performance improvements over the original Perl ExifTool implementation. The following benchmarks compare both tools running on identical hardware.
 
 ### System Specifications
 
@@ -83,52 +83,19 @@ ExifTool-RS demonstrates exceptional performance improvements over the original 
 
 | Scenario | Perl ExifTool | ExifTool-RS | Speedup |
 |----------|---------------|-------------|---------|
-| Single JPEG Read | 40.3ms ± 0.5ms | 4.37ms ± 0.1ms | **9.2x faster** |
-| Batch Processing (1000 files) | 1183.8ms ± 5.1ms | 509.9ms ± 20.2ms | **2.3x faster** |
-| Write Operation (modify EXIF tag) | 111.4ms ± 1.2ms | 7.2ms ± 0.5ms | **15.4x faster** |
-| Format Detection | 40.6ms ± 1.5ms | 6.0ms ± 0.1ms | **6.7x faster** |
+| Single JPEG Read | 42.0ms ± 0.9ms | 6.3ms ± 0.3ms | **6.6x faster** |
+| Batch Processing (1000 files) | 1256.5ms ± 5.6ms | 529.7ms ± 1.4ms | **2.4x faster** |
+| Write Operation (modify EXIF tag) | 114.9ms ± 1.2ms | 7.5ms ± 0.3ms | **15.3x faster** |
+| Format Detection | 42.0ms ± 0.7ms | 6.2ms ± 0.1ms | **6.7x faster** |
 
-*Benchmarks performed using [Criterion.rs](https://github.com/bheisler/criterion.rs) for microbenchmarks and [hyperfine](https://github.com/sharkdp/hyperfine) for macro-benchmarks with statistical validation and multiple warmup runs.*
-
-### Binary Size
-
-- **Optimized Release Build**: 3.6 MB (after 7.7% reduction from baseline)
-- Achieved through LTO, panic='abort', and codegen optimizations
-- Maintained compact size while improving performance
+*Benchmarks performed using [hyperfine](https://github.com/sharkdp/hyperfine) with multiple runs and warmup periods.*
 
 ### Key Performance Improvements
 
-- **Single file operations**: Zero-cost abstractions and compiled code eliminate Perl interpreter overhead, achieving 9.2x faster metadata extraction
-  - **58.4% average improvement** across all benchmarks from pre-optimization baseline (7.49ms → 4.37ms)
-  - Hot-path optimizations: IPTC static strings (47.1% improvement), TIFF Cow zero-copy (28.4% improvement)
-  - Allocation optimizations: Vec pre-allocation (3.24% improvement), eliminated clones in metadata merge
-- **Batch processing**: Parallel processing with Rayon leverages all CPU cores, processing 1000 files in 509.9ms ± 20.2ms vs. 1183.8ms ± 5.1ms for single-threaded Perl (2.3x faster)
-- **Write operations**: Efficient binary manipulation and atomic file operations provide 15.4x faster EXIF tag modifications
+- **Single file operations**: Zero-cost abstractions and compiled code eliminate Perl interpreter overhead, achieving 6.6x faster metadata extraction
+- **Batch processing**: Parallel processing with Rayon leverages all CPU cores, processing 1000 files in 529.7ms ± 1.4ms vs. 1256.5ms ± 5.6ms for single-threaded Perl
+- **Write operations**: Efficient binary manipulation and atomic file operations provide 15.3x faster EXIF tag modifications
 - **Format detection**: Native compiled code dramatically outperforms interpreted Perl for magic byte detection (6.7x faster)
-
-### Performance Optimization Techniques Applied
-
-The following optimizations were applied based on Criterion-guided profiling and flamegraph analysis:
-
-1. **Compiler-level optimizations**:
-   - Link-Time Optimization (LTO) for cross-crate inlining
-   - `panic='abort'` to eliminate unwinding overhead
-   - Optimized codegen-units and split-debuginfo settings
-
-2. **Hot-path optimizations**:
-   - Static string allocation in IPTC parser (47.1% improvement)
-   - Zero-copy `Cow<'static, str>` in TIFF value formatting (28.4% improvement)
-   - Reduced string cloning and allocations
-
-3. **Allocation optimizations**:
-   - Pre-allocated `Vec` with capacity in segment parsers (3.24% improvement)
-   - Eliminated redundant clones in metadata merge operations
-   - Optimized memory layout for frequently accessed structures
-
-4. **Profiling-driven development**:
-   - Criterion.rs for statistical benchmarking and regression detection
-   - Flamegraph analysis to identify hot paths
-   - Incremental validation of each optimization
 
 ### Reproducing These Benchmarks
 
