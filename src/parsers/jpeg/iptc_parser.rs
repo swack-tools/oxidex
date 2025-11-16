@@ -78,6 +78,73 @@ fn parse_image_resource_block(input: &[u8]) -> IResult<&[u8], ImageResourceBlock
     Ok((input, ImageResourceBlock { id, name, data }))
 }
 
+/// Parses a single IPTC IIM record.
+///
+/// # Format
+/// - Tag marker: 0x1C (1 byte)
+/// - Record number: 1 byte (usually 2 for Application Record)
+/// - Dataset number: 1 byte
+/// - Length: 2 bytes (big-endian), or extended format for > 32767 bytes
+/// - Data: variable length
+fn parse_iptc_record(input: &[u8]) -> IResult<&[u8], IptcRecord> {
+    // Parse tag marker (must be 0x1C)
+    let (input, _) = tag(&[IPTC_TAG_MARKER])(input)?;
+
+    // Parse record number (1 byte)
+    let (input, record_number) = nom_u8(input)?;
+
+    // Parse dataset number (1 byte)
+    let (input, dataset_number) = nom_u8(input)?;
+
+    // Parse length (2 bytes, big-endian)
+    let (input, length) = be_u16(input)?;
+
+    // Check for extended format (if length > 32767, it's actually a marker)
+    // For now, we'll just support standard format (< 32768 bytes)
+    let data_length = length as usize;
+
+    // Parse data
+    let (input, data_bytes) = take(data_length)(input)?;
+
+    Ok((
+        input,
+        IptcRecord {
+            record_number,
+            dataset_number,
+            data: data_bytes.to_vec(),
+        },
+    ))
+}
+
+/// Parses all IPTC IIM records from a data block.
+///
+/// Returns a vector of all successfully parsed records.
+/// Stops at first parse error or end of data.
+fn parse_all_iptc_records(input: &[u8]) -> Result<Vec<IptcRecord>> {
+    let mut records = Vec::new();
+    let mut current = input;
+
+    while !current.is_empty() {
+        // Check if next byte is tag marker
+        if current[0] != IPTC_TAG_MARKER {
+            break;
+        }
+
+        match parse_iptc_record(current) {
+            Ok((remaining, record)) => {
+                records.push(record);
+                current = remaining;
+            }
+            Err(_) => {
+                // Stop on parse error
+                break;
+            }
+        }
+    }
+
+    Ok(records)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +205,56 @@ mod tests {
         assert_eq!(block.id, 0x0404);
         assert_eq!(block.name, b"TEST");
         assert_eq!(block.data, &[0x11, 0x22]);
+    }
+
+    #[test]
+    fn test_parse_iptc_record() {
+        // Create a minimal IPTC record
+        // Record 2, Dataset 5 (ObjectName), Data: "Test"
+        let data = vec![
+            0x1C, // Tag marker
+            0x02, // Record number (Application Record)
+            0x05, // Dataset number (ObjectName)
+            0x00, 0x04, // Length: 4 bytes
+            b'T', b'e', b's', b't', // Data: "Test"
+        ];
+
+        let result = parse_iptc_record(&data);
+        assert!(result.is_ok());
+
+        let (remaining, record) = result.unwrap();
+        assert_eq!(record.record_number, 2);
+        assert_eq!(record.dataset_number, 5);
+        assert_eq!(record.data, b"Test");
+        assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_iptc_records() {
+        let mut data = Vec::new();
+
+        // Record 1
+        data.push(0x1C);
+        data.extend_from_slice(&[0x02, 0x05]); // Record 2, Dataset 5
+        data.extend_from_slice(&[0x00, 0x05]); // Length: 5
+        data.extend_from_slice(b"Title");
+
+        // Record 2
+        data.push(0x1C);
+        data.extend_from_slice(&[0x02, 0x50]); // Record 2, Dataset 80 (ByLine)
+        data.extend_from_slice(&[0x00, 0x06]); // Length: 6
+        data.extend_from_slice(b"Author");
+
+        let result = parse_all_iptc_records(&data);
+        assert!(result.is_ok());
+
+        let records = result.unwrap();
+        assert_eq!(records.len(), 2);
+
+        assert_eq!(records[0].dataset_number, 5);
+        assert_eq!(records[0].data, b"Title");
+
+        assert_eq!(records[1].dataset_number, 80);
+        assert_eq!(records[1].data, b"Author");
     }
 }
