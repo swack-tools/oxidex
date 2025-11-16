@@ -16,6 +16,8 @@ use nom::{
 };
 use std::collections::HashMap;
 
+use super::canon_lens_database::lookup_lens_name;
+
 // Canon MakerNote Tag IDs
 const CANON_CAMERA_SETTINGS: u16 = 0x0001;
 const CANON_FOCAL_LENGTH: u16 = 0x0002;
@@ -29,6 +31,7 @@ const CANON_SERIAL_NUMBER: u16 = 0x000C;
 const CANON_CAMERA_INFO: u16 = 0x000D;
 const CANON_CUSTOM_FUNCTIONS: u16 = 0x000F;
 const CANON_MODEL_ID: u16 = 0x0010;
+const CANON_FILE_INFO: u16 = 0x0093;
 const CANON_LENS_MODEL: u16 = 0x0095;
 
 // Canon signature (not always present)
@@ -70,6 +73,14 @@ const SHOT_INFO_AF_POINTS_USED: usize = 14;
 const SHOT_INFO_FLASH_EXPOSURE_COMP: usize = 15;
 const SHOT_INFO_AUTO_EXPOSURE_BRACKETING: usize = 16;
 const SHOT_INFO_SUBJECT_DISTANCE: usize = 19;
+
+// FileInfo array indices (tag 0x0093)
+const FILE_INFO_FILE_NUMBER: usize = 1;
+const FILE_INFO_SHUTTER_COUNT_LOW: usize = 2;
+const FILE_INFO_SHUTTER_COUNT_HIGH: usize = 3;
+const FILE_INFO_BRACKET_MODE: usize = 4;
+const FILE_INFO_BRACKET_VALUE: usize = 5;
+const FILE_INFO_LENS_ID: usize = 6;
 
 /// Decodes Canon macro mode value to human-readable string
 fn decode_macro_mode(value: i16) -> String {
@@ -522,6 +533,36 @@ pub fn parse_canon_makernote(
                             .to_string();
                         if !lens_model.is_empty() {
                             tags.insert("Canon:LensModel".to_string(), lens_model);
+                        }
+                    }
+                }
+            }
+
+            // FileInfo array (Phase 3) - contains lens ID and shutter count
+            CANON_FILE_INFO => {
+                // FileInfo is a SHORT array
+                if let Some(array) = extract_i16_array(&entry, data, byte_order) {
+                    // Extract lens ID (index 6)
+                    if let Some(&lens_id) = array.get(FILE_INFO_LENS_ID) {
+                        if lens_id > 0 {
+                            // Look up lens name from database
+                            if let Some(lens_name) = lookup_lens_name(lens_id as u16) {
+                                tags.insert("Canon:LensType".to_string(), lens_name);
+                            } else {
+                                // Unknown lens - store ID
+                                tags.insert("Canon:LensID".to_string(), lens_id.to_string());
+                            }
+                        }
+                    }
+
+                    // Extract shutter count (combine low and high words)
+                    if let (Some(&low), Some(&high)) = (
+                        array.get(FILE_INFO_SHUTTER_COUNT_LOW),
+                        array.get(FILE_INFO_SHUTTER_COUNT_HIGH),
+                    ) {
+                        let shutter_count = ((high as u32) << 16) | (low as u32 & 0xFFFF);
+                        if shutter_count > 0 {
+                            tags.insert("Canon:ShutterCount".to_string(), shutter_count.to_string());
                         }
                     }
                 }
@@ -1107,6 +1148,45 @@ mod tests {
 
         assert_eq!(
             result.get("Canon:LensModel"),
+            Some(&"Canon EF 24-70mm f/2.8L II USM".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_file_info_with_lens_id() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+
+        // FileInfo tag (0x0093)
+        data.extend_from_slice(&[0x93, 0x00]); // Tag
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // Count: 16
+        data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
+
+        // FileInfo array (16 values)
+        // Based on ExifTool Canon.pm: LensID is at index 6
+        let file_info: Vec<i16> = vec![
+            16,  // [0] Array length
+            0,   // [1] File number
+            0,   // [2] Shutter count low
+            0,   // [3] Shutter count high
+            0,   // [4] Bracket mode
+            0,   // [5] Bracket value
+            368, // [6] LensID: Canon EF 24-70mm f/2.8L II USM
+            0, 0, 0, 0, 0, 0, 0, 0, 0, // [7-15]
+        ];
+
+        for value in file_info {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let result = parse_canon_makernote(&data, ByteOrder::LittleEndian).unwrap();
+
+        // Should extract lens name from database
+        assert_eq!(
+            result.get("Canon:LensType"),
             Some(&"Canon EF 24-70mm f/2.8L II USM".to_string())
         );
     }
