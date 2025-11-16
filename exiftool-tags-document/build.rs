@@ -17,8 +17,7 @@ fn main() {
 
     // Read the YAML source file
     let yaml_path = "src/document_tags.yaml";
-    let yaml_content = fs::read_to_string(yaml_path)
-        .expect("Failed to read document_tags.yaml");
+    let yaml_content = fs::read_to_string(yaml_path).expect("Failed to read document_tags.yaml");
 
     // Deserialize YAML into TagDatabase structure
     // We need to use the same types that will be used at runtime
@@ -54,8 +53,7 @@ fn main() {
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
     let dest_path = Path::new(&out_dir).join("document_tags.bin");
 
-    fs::write(&dest_path, binary_data)
-        .expect("Failed to write binary tag database file");
+    fs::write(&dest_path, binary_data).expect("Failed to write binary tag database file");
 
     println!(
         "cargo:warning=Pre-compiled document_tags.yaml to binary format ({} bytes)",

@@ -20,8 +20,10 @@ const IMAGE_TAGS_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/image_ta
 ///
 /// Uses binary deserialization (bincode) instead of YAML parsing for faster initialization.
 /// The Lazy wrapper ensures thread-safe initialization on first access.
-pub static IMAGE_TAGS: Lazy<TagDatabase> =
-    Lazy::new(|| bincode::deserialize(IMAGE_TAGS_BIN).expect("Failed to deserialize pre-compiled image tags binary data"));
+pub static IMAGE_TAGS: Lazy<TagDatabase> = Lazy::new(|| {
+    bincode::deserialize(IMAGE_TAGS_BIN)
+        .expect("Failed to deserialize pre-compiled image tags binary data")
+});
 
 /// Get a specific tag table by name
 ///

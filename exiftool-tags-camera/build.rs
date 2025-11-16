@@ -17,8 +17,7 @@ fn main() {
 
     // Read the YAML source file
     let yaml_path = "src/camera_tags.yaml";
-    let yaml_content = fs::read_to_string(yaml_path)
-        .expect("Failed to read camera_tags.yaml");
+    let yaml_content = fs::read_to_string(yaml_path).expect("Failed to read camera_tags.yaml");
 
     // Deserialize YAML into TagDatabase structure
     // We need to use the same types that will be used at runtime
@@ -43,8 +42,8 @@ fn main() {
         tables: Vec<TagTable>,
     }
 
-    let tag_database: TagDatabase = serde_yaml::from_str(&yaml_content)
-        .expect("Failed to parse camera_tags.yaml during build");
+    let tag_database: TagDatabase =
+        serde_yaml::from_str(&yaml_content).expect("Failed to parse camera_tags.yaml during build");
 
     // Serialize to binary format using bincode
     let binary_data = bincode::serialize(&tag_database)
@@ -54,8 +53,7 @@ fn main() {
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
     let dest_path = Path::new(&out_dir).join("camera_tags.bin");
 
-    fs::write(&dest_path, binary_data)
-        .expect("Failed to write binary tag database file");
+    fs::write(&dest_path, binary_data).expect("Failed to write binary tag database file");
 
     println!(
         "cargo:warning=Pre-compiled camera_tags.yaml to binary format ({} bytes)",
