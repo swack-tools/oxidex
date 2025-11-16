@@ -60,3 +60,6 @@ mod canon_makernotes_phase3_tests;
 
 #[path = "integration/nikon_makernotes_tests.rs"]
 mod nikon_makernotes_tests;
+
+#[path = "integration/sony_makernotes_tests.rs"]
+mod sony_makernotes_tests;
