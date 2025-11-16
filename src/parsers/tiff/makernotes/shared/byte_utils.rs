@@ -9,12 +9,8 @@ pub fn read_u16(data: &[u8], offset: usize, byte_order: ByteOrder) -> Option<u16
     }
 
     let value = match byte_order {
-        ByteOrder::LittleEndian => {
-            u16::from_le_bytes([data[offset], data[offset + 1]])
-        }
-        ByteOrder::BigEndian => {
-            u16::from_be_bytes([data[offset], data[offset + 1]])
-        }
+        ByteOrder::LittleEndian => u16::from_le_bytes([data[offset], data[offset + 1]]),
+        ByteOrder::BigEndian => u16::from_be_bytes([data[offset], data[offset + 1]]),
     };
 
     Some(value)
@@ -27,12 +23,8 @@ pub fn read_i16(data: &[u8], offset: usize, byte_order: ByteOrder) -> Option<i16
     }
 
     let value = match byte_order {
-        ByteOrder::LittleEndian => {
-            i16::from_le_bytes([data[offset], data[offset + 1]])
-        }
-        ByteOrder::BigEndian => {
-            i16::from_be_bytes([data[offset], data[offset + 1]])
-        }
+        ByteOrder::LittleEndian => i16::from_le_bytes([data[offset], data[offset + 1]]),
+        ByteOrder::BigEndian => i16::from_be_bytes([data[offset], data[offset + 1]]),
     };
 
     Some(value)
@@ -45,22 +37,18 @@ pub fn read_u32(data: &[u8], offset: usize, byte_order: ByteOrder) -> Option<u32
     }
 
     let value = match byte_order {
-        ByteOrder::LittleEndian => {
-            u32::from_le_bytes([
-                data[offset],
-                data[offset + 1],
-                data[offset + 2],
-                data[offset + 3],
-            ])
-        }
-        ByteOrder::BigEndian => {
-            u32::from_be_bytes([
-                data[offset],
-                data[offset + 1],
-                data[offset + 2],
-                data[offset + 3],
-            ])
-        }
+        ByteOrder::LittleEndian => u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]),
+        ByteOrder::BigEndian => u32::from_be_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]),
     };
 
     Some(value)
@@ -101,10 +89,7 @@ mod tests {
     #[test]
     fn test_read_ascii_string() {
         let data = b"Hello\0World";
-        assert_eq!(
-            read_ascii_string(data, 0, 11),
-            Some("Hello".to_string())
-        );
+        assert_eq!(read_ascii_string(data, 0, 11), Some("Hello".to_string()));
     }
 
     #[test]
