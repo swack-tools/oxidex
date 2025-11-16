@@ -124,7 +124,9 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     // The version is in format "%PDF-X.Y" on the first line
     // PDF headers often have binary data after the first line, so we need to extract just the first line
     // Look for the newline to find end of first line
-    let first_line_end = header_data.iter().position(|&b| b == b'\n' || b == b'\r')
+    let first_line_end = header_data
+        .iter()
+        .position(|&b| b == b'\n' || b == b'\r')
         .unwrap_or(header_data.len());
     let first_line = &header_data[..first_line_end];
 

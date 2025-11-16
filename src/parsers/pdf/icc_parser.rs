@@ -107,9 +107,7 @@ pub fn extract_icc_profile(reader: &dyn FileReader) -> Result<MetadataMap> {
     }
 
     if metadata.is_empty() {
-        return Err(ExifToolError::parse_error(
-            "No ICC profile found in PDF",
-        ));
+        return Err(ExifToolError::parse_error("No ICC profile found in PDF"));
     }
 
     Ok(metadata)
@@ -158,11 +156,10 @@ fn extract_icc_from_pdf(reader: &dyn FileReader) -> Result<Vec<u8>> {
     // Try to find ICC profile reference
     // Method 1: /OutputIntents array in Catalog
     // Method 2: /ICCBased in ColorSpace
-    let output_profile_ref = find_output_profile_reference(root_data)
-        .or_else(|_| {
-            // If OutputIntents not found, search entire PDF for /ICCBased reference
-            find_icc_based_reference(reader, &xref_map)
-        })?;
+    let output_profile_ref = find_output_profile_reference(root_data).or_else(|_| {
+        // If OutputIntents not found, search entire PDF for /ICCBased reference
+        find_icc_based_reference(reader, &xref_map)
+    })?;
 
     // Get ICC profile stream object offset
     let profile_offset = *xref_map.get(&output_profile_ref).ok_or_else(|| {
@@ -200,9 +197,8 @@ fn find_output_profile_reference(root_data: &[u8]) -> Result<u32> {
     let after_dest = &after_output[dest_profile_pos + 18..]; // "/DestOutputProfile".len() = 18
 
     // Convert to string for parsing (object references are always ASCII)
-    let after_dest_str = str::from_utf8(
-        &after_dest[..std::cmp::min(100, after_dest.len())]
-    ).unwrap_or("");
+    let after_dest_str =
+        str::from_utf8(&after_dest[..std::cmp::min(100, after_dest.len())]).unwrap_or("");
 
     // Parse object reference (e.g., "5 0 R")
     let obj_ref = parse_object_ref(after_dest_str)?;
@@ -253,9 +249,7 @@ fn find_icc_based_reference(reader: &dyn FileReader, xref_map: &HashMap<u32, u64
 fn parse_object_ref(s: &str) -> Result<u32> {
     let parts: Vec<&str> = s.split_whitespace().collect();
     if parts.is_empty() {
-        return Err(ExifToolError::parse_error(
-            "No object reference found",
-        ));
+        return Err(ExifToolError::parse_error("No object reference found"));
     }
 
     // Find the 'R' marker
@@ -282,7 +276,9 @@ fn parse_object_ref(s: &str) -> Result<u32> {
         }
     }
 
-    Err(ExifToolError::parse_error("Invalid object reference format"))
+    Err(ExifToolError::parse_error(
+        "Invalid object reference format",
+    ))
 }
 
 /// Extracts and decompresses a stream from a PDF object
@@ -405,8 +401,7 @@ fn parse_xref_table(xref_data: &[u8]) -> Result<HashMap<u32, u64>> {
         // Check if this is a subsection header (two numbers)
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() == 2 {
-            if let (Ok(start_obj), Ok(count)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
-            {
+            if let (Ok(start_obj), Ok(count)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
                 // Parse xref entries for this subsection
                 for j in 0..count {
                     i += 1;
@@ -488,10 +483,7 @@ fn parse_icc_header(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Re
     // CMM Type (bytes 4-7, 4-char signature)
     let cmm_type = read_signature(data, 4)?;
     if !cmm_type.is_empty() {
-        metadata.insert(
-            "ProfileCMMType".to_string(),
-            TagValue::new_string(cmm_type),
-        );
+        metadata.insert("ProfileCMMType".to_string(), TagValue::new_string(cmm_type));
     }
 
     // Profile Version (bytes 8-11)
@@ -607,10 +599,7 @@ fn parse_icc_header(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Re
     if data.len() >= 56 {
         let model = read_signature(data, 52)?;
         if !model.trim().is_empty() {
-            metadata.insert(
-                "DeviceModel".to_string(),
-                TagValue::new_string(model),
-            );
+            metadata.insert("DeviceModel".to_string(), TagValue::new_string(model));
         }
     }
 
@@ -631,7 +620,10 @@ fn parse_icc_header(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Re
         let color = if attrs & 0x08 == 0 { "Color" } else { "B&W" };
         metadata.insert(
             "DeviceAttributes".to_string(),
-            TagValue::new_string(format!("{}, {}, {}, {}", reflective, glossy, positive, color)),
+            TagValue::new_string(format!(
+                "{}, {}, {}, {}",
+                reflective, glossy, positive, color
+            )),
         );
     }
 
@@ -666,10 +658,7 @@ fn parse_icc_header(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Re
     if data.len() >= 84 {
         let creator = read_signature(data, 80)?;
         if !creator.trim().is_empty() {
-            metadata.insert(
-                "ProfileCreator".to_string(),
-                TagValue::new_string(creator),
-            );
+            metadata.insert("ProfileCreator".to_string(), TagValue::new_string(creator));
         }
     }
 
@@ -678,7 +667,10 @@ fn parse_icc_header(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Re
         let id_bytes = &data[84..100];
         // Check if all zeros
         if id_bytes.iter().all(|&b| b == 0) {
-            metadata.insert("ProfileID".to_string(), TagValue::new_string("0".to_string()));
+            metadata.insert(
+                "ProfileID".to_string(),
+                TagValue::new_string("0".to_string()),
+            );
         } else {
             let id_hex = id_bytes
                 .iter()
@@ -740,10 +732,7 @@ fn parse_icc_tags(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Resu
         match tag_signature.trim() {
             "desc" => {
                 if let Ok(desc) = parse_text_description_type(tag_data) {
-                    metadata.insert(
-                        "ProfileDescription".to_string(),
-                        TagValue::new_string(desc),
-                    );
+                    metadata.insert("ProfileDescription".to_string(), TagValue::new_string(desc));
                 }
             }
             "cprt" => {
@@ -918,7 +907,10 @@ fn parse_icc_tags(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Resu
                         "flex" => "Flexography",
                         _ => &tech,
                     };
-                    metadata.insert("Technology".to_string(), TagValue::new_string(tech_name.to_string()));
+                    metadata.insert(
+                        "Technology".to_string(),
+                        TagValue::new_string(tech_name.to_string()),
+                    );
                 }
             }
             _ => {
@@ -945,7 +937,10 @@ fn parse_text_description_type(data: &[u8]) -> Result<String> {
         if ascii_count > 0 && data.len() >= 12 + ascii_count {
             let text_bytes = &data[12..12 + ascii_count];
             // Remove null terminator if present
-            let text_len = text_bytes.iter().position(|&b| b == 0).unwrap_or(text_bytes.len());
+            let text_len = text_bytes
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(text_bytes.len());
             return Ok(String::from_utf8_lossy(&text_bytes[..text_len]).to_string());
         }
     } else if type_sig.trim() == "mluc" {
@@ -1014,7 +1009,10 @@ fn parse_text_type(data: &[u8]) -> Result<String> {
         // Text starts at offset 8
         let text_bytes = &data[8..];
         // Remove null terminator if present
-        let text_len = text_bytes.iter().position(|&b| b == 0).unwrap_or(text_bytes.len());
+        let text_len = text_bytes
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(text_bytes.len());
         return Ok(String::from_utf8_lossy(&text_bytes[..text_len]).to_string());
     } else if type_sig.trim() == "mluc" {
         // Also support mluc for copyright

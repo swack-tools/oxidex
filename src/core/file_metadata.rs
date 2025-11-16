@@ -42,8 +42,8 @@
 
 use crate::core::{MetadataMap, TagValue};
 use crate::error::Result;
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 use std::time::SystemTime;
 
 #[cfg(unix)]
@@ -109,19 +109,13 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
         } else {
             parent.to_string_lossy().to_string()
         };
-        metadata.insert(
-            "File:Directory".to_string(),
-            TagValue::new_string(dir_str),
-        );
+        metadata.insert("File:Directory".to_string(), TagValue::new_string(dir_str));
     }
 
     // File size (human-readable format)
     let file_size = file_metadata.len();
     let size_str = format_file_size(file_size);
-    metadata.insert(
-        "File:FileSize".to_string(),
-        TagValue::new_string(size_str),
-    );
+    metadata.insert("File:FileSize".to_string(), TagValue::new_string(size_str));
 
     // File modification date/time
     if let Ok(modified) = file_metadata.modified() {

@@ -263,8 +263,10 @@ pub fn extract_iptc_from_segments(segments: &[Segment]) -> Result<Vec<(String, S
                             Ok(records) => {
                                 // Convert records to tag name/value pairs
                                 for record in records {
-                                    let tag_name =
-                                        dataset_to_tag_name(record.record_number, record.dataset_number);
+                                    let tag_name = dataset_to_tag_name(
+                                        record.record_number,
+                                        record.dataset_number,
+                                    );
                                     let value = decode_iptc_string(&record.data);
 
                                     all_iptc_tags.push((tag_name, value));

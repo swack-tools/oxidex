@@ -175,10 +175,7 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
 
     // Try to extract media box from the document pages
     if let Ok(media_box) = extract_media_box(reader) {
-        metadata.insert(
-            "PDF:MediaBox".to_string(),
-            TagValue::new_string(media_box),
-        );
+        metadata.insert("PDF:MediaBox".to_string(), TagValue::new_string(media_box));
     }
 
     Ok(metadata)
