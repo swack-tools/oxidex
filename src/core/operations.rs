@@ -108,8 +108,9 @@ pub fn read_metadata(path: &Path) -> Result<MetadataMap> {
 
     // Step 5: Merge format-specific metadata into file metadata
     // Format-specific metadata takes precedence over file metadata in case of conflicts
-    for (key, value) in format_metadata.iter() {
-        metadata.insert(key.clone(), value.clone());
+    // Use into_iter() to consume format_metadata and avoid cloning keys and values
+    for (key, value) in format_metadata {
+        metadata.insert(key, value);
     }
 
     Ok(metadata)
@@ -1409,13 +1410,15 @@ pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result
     let mut dest_metadata = read_metadata(dest)?;
 
     // Step 3: Filter and merge source tags into destination metadata
-    for (tag_name, tag_value) in source_metadata.iter() {
+    // Use into_iter() to consume source_metadata and avoid cloning when possible
+    for (tag_name, tag_value) in source_metadata {
         // Check if this tag should be copied (if filter is specified)
-        let should_copy = tags.is_none_or(|filter| filter.contains(tag_name));
+        let should_copy = tags.is_none_or(|filter| filter.contains(&tag_name));
 
         if should_copy {
             // Insert tag into destination (merges with existing, preserving others)
-            dest_metadata.insert(tag_name.clone(), tag_value.clone());
+            // No clone needed since we own the data from into_iter()
+            dest_metadata.insert(tag_name, tag_value);
         }
     }
 

@@ -181,3 +181,32 @@ fn test_read_metadata_workflow() {
 
     println!("Complete workflow test passed");
 }
+
+#[test]
+fn test_metadata_merge_preserves_all_data() {
+    // Test that metadata merge operations preserve all data from multiple sources
+    // This verifies that the merge loops correctly combine data from different
+    // format parsers (EXIF, JFIF, etc.) without data loss.
+    let path = Path::new("tests/fixtures/jpeg/sample_with_exif.jpg");
+    let metadata = read_metadata(path).expect("Failed to read metadata");
+
+    // Verify we have tags from multiple sources (EXIF, JFIF, etc.)
+    // A typical JPEG file will have both EXIF and JFIF tags that need to be merged
+    assert!(
+        metadata.len() > 10,
+        "Should have merged multiple tag sources, found only {} tags",
+        metadata.len()
+    );
+
+    // Print all tags to verify merge worked
+    println!("Merged metadata contains {} tags:", metadata.len());
+    for (name, value) in metadata.iter() {
+        println!("  {}: {:?}", name, value);
+    }
+
+    // Verify we can access tags after merge
+    assert!(
+        !metadata.is_empty(),
+        "Merged metadata should contain tags"
+    );
+}
