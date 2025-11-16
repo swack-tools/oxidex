@@ -1,6 +1,8 @@
 name: Benchmark Comparison
 
-# Only run on pushes to main branch to avoid infinite loops and unnecessary runs
+# Automated benchmark comparison workflow that compares Perl ExifTool with Rust ExifTool
+# and automatically updates the README.md with the latest benchmark results.
+# Only runs on pushes to main branch to avoid infinite loops and unnecessary runs.
 on:
   push:
     branches: [main]
