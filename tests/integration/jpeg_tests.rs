@@ -684,3 +684,87 @@ fn test_jpeg_xmp_extraction_end_to_end() {
     println!("  Rights:  {}", rights_tags[0].1);
     println!("\n✓ All integration test assertions passed!\n");
 }
+
+/// Helper: Creates a FileReader from byte buffer
+struct TestReader {
+    data: Vec<u8>,
+}
+
+impl TestReader {
+    fn new(data: Vec<u8>) -> Self {
+        Self { data }
+    }
+}
+
+impl exiftool_rs::core::FileReader for TestReader {
+    fn read(&self, offset: u64, length: usize) -> std::io::Result<&[u8]> {
+        let start = offset as usize;
+        let end = start + length;
+
+        if end > self.data.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "read beyond end of file",
+            ));
+        }
+
+        Ok(&self.data[start..end])
+    }
+
+    fn size(&self) -> u64 {
+        self.data.len() as u64
+    }
+}
+
+#[test]
+fn test_jpeg_with_iptc_metadata() {
+    use exiftool_rs::parsers::jpeg::iptc_parser::extract_iptc_from_segments;
+    use exiftool_rs::parsers::jpeg::segment_parser::parse_segments;
+
+    // Create minimal JPEG with APP13 (IPTC) segment
+    let mut jpeg_data = Vec::new();
+
+    // SOI marker
+    jpeg_data.extend_from_slice(&[0xFF, 0xD8]);
+
+    // APP13 marker
+    jpeg_data.extend_from_slice(&[0xFF, 0xED]);
+
+    // Create IPTC data
+    let mut iptc_payload = Vec::new();
+    iptc_payload.extend_from_slice(b"Photoshop 3.0\0"); // Signature
+    iptc_payload.extend_from_slice(b"8BIM"); // 8BIM signature
+    iptc_payload.extend_from_slice(&[0x04, 0x04]); // IPTC resource ID
+    iptc_payload.push(0x00); // Empty name
+    iptc_payload.push(0x00); // Padding
+
+    // IPTC IIM records
+    let mut iptc_records = Vec::new();
+    iptc_records.push(0x1C); // Tag marker
+    iptc_records.extend_from_slice(&[0x02, 0x05]); // Record 2, Dataset 5 (ObjectName)
+    iptc_records.extend_from_slice(&[0x00, 0x0A]); // Length: 10
+    iptc_records.extend_from_slice(b"IPTC Title");
+
+    let iptc_size = iptc_records.len() as u32;
+    iptc_payload.extend_from_slice(&iptc_size.to_be_bytes());
+    iptc_payload.extend_from_slice(&iptc_records);
+
+    // APP13 length
+    let app13_length = (iptc_payload.len() + 2) as u16;
+    jpeg_data.extend_from_slice(&app13_length.to_be_bytes());
+    jpeg_data.extend_from_slice(&iptc_payload);
+
+    // EOI marker
+    jpeg_data.extend_from_slice(&[0xFF, 0xD9]);
+
+    // Parse segments
+    let reader = TestReader::new(jpeg_data);
+    let segments = parse_segments(&reader).expect("Failed to parse segments");
+
+    // Extract IPTC
+    let iptc_tags = extract_iptc_from_segments(&segments).expect("Failed to extract IPTC");
+
+    assert_eq!(iptc_tags.len(), 1);
+    assert_eq!(iptc_tags[0].0, "IPTC:ObjectName");
+    assert_eq!(iptc_tags[0].1, "IPTC Title");
+}

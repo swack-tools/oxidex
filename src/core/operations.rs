@@ -355,6 +355,28 @@ fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         }
     }
 
+    // Extract IPTC metadata from APP13 segments
+    match crate::parsers::jpeg::iptc_parser::extract_iptc_from_segments(&segments) {
+        Ok(iptc_tags) => {
+            // Add all IPTC tags to metadata
+            for (tag_name, value) in iptc_tags {
+                // Try to parse as integer first, then as float, otherwise keep as string
+                let tag_value = if let Ok(int_val) = value.parse::<i64>() {
+                    TagValue::Integer(int_val)
+                } else if let Ok(float_val) = value.parse::<f64>() {
+                    TagValue::Float(float_val)
+                } else {
+                    TagValue::String(value)
+                };
+                metadata.insert(tag_name, tag_value);
+            }
+        }
+        Err(e) => {
+            // Log error but continue processing
+            eprintln!("Warning: Failed to extract IPTC metadata: {}", e);
+        }
+    }
+
     Ok(metadata)
 }
 
