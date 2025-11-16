@@ -3,7 +3,7 @@
 //! This module handles parsing of IPTC data in JPEG APP13 segments.
 //! IPTC data is stored in Adobe Photoshop Image Resource Blocks (8BIM).
 
-use crate::error::{ExifToolError, Result};
+use crate::error::Result;
 use crate::parsers::jpeg::segment_parser::Segment;
 use nom::{
     bytes::complete::{tag, take},
@@ -48,7 +48,7 @@ struct IptcRecord {
 /// - Name: Pascal string (1 byte length + data), padded to even length
 /// - Size: 4 bytes (big-endian)
 /// - Data: variable length
-fn parse_image_resource_block(input: &[u8]) -> IResult<&[u8], ImageResourceBlock> {
+fn parse_image_resource_block(input: &[u8]) -> IResult<&[u8], ImageResourceBlock<'_>> {
     // Parse 8BIM signature
     let (input, _) = tag(EIGHTBIM_SIGNATURE)(input)?;
 

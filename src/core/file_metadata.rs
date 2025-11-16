@@ -281,8 +281,8 @@ fn format_system_time(time: SystemTime) -> String {
         0
     };
 
-    for i in 0..12 {
-        let month_days = DAYS_IN_MONTH[i] + if i == 1 { leap } else { 0 };
+    for (i, &days_in_month) in DAYS_IN_MONTH.iter().enumerate() {
+        let month_days = days_in_month + if i == 1 { leap } else { 0 };
         if days < month_days {
             month = i as i64 + 1;
             break;

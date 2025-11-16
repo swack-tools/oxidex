@@ -34,7 +34,7 @@ use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use nom::{
     bytes::complete::{tag, take_until, take_while, take_while1},
-    character::complete::{digit1, multispace0, space0},
+    character::complete::{digit1, multispace0},
     combinator::map_res,
     multi::many0,
     sequence::{delimited, preceded, tuple},

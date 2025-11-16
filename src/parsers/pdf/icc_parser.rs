@@ -217,7 +217,7 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 ///
 /// This method searches for /ICCBased references in ColorSpace objects,
 /// which is an alternative way PDFs embed ICC profiles (common in macOS PDFs)
-fn find_icc_based_reference(reader: &dyn FileReader, xref_map: &HashMap<u32, u64>) -> Result<u32> {
+fn find_icc_based_reference(reader: &dyn FileReader, _xref_map: &HashMap<u32, u64>) -> Result<u32> {
     let file_size = reader.size();
 
     // Search through all objects for /ICCBased reference
