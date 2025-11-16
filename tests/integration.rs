@@ -69,3 +69,6 @@ mod fujifilm_makernotes_tests;
 
 #[path = "integration/panasonic_makernotes_tests.rs"]
 mod panasonic_makernotes_tests;
+
+#[path = "integration/olympus_makernotes_tests.rs"]
+mod olympus_makernotes_tests;
