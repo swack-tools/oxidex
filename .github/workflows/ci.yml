@@ -39,6 +39,18 @@ jobs:
         with:
           lfs: true
 
+      - name: Cache Rust toolchain
+        uses: WarpBuilds/cache@v1
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: ${{ runner.os }}-${{ runner.arch }}-rustup-stable-${{ hashFiles('**/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-rustup-stable-
+            ${{ runner.os }}-${{ runner.arch }}-rustup-
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
 
@@ -49,6 +61,7 @@ jobs:
         uses: WarpBuilds/rust-cache@v2
         with:
           cache-on-failure: true
+          cache-provider: warpbuild
 
       - name: Build
         run: cargo build --release --verbose --all-features
@@ -104,6 +117,18 @@ jobs:
         with:
           lfs: false
 
+      - name: Cache Rust toolchain
+        uses: WarpBuilds/cache@v1
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: ${{ runner.os }}-${{ runner.arch }}-rustup-stable-${{ hashFiles('**/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-rustup-stable-
+            ${{ runner.os }}-${{ runner.arch }}-rustup-
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
 
@@ -112,6 +137,8 @@ jobs:
 
       - name: Setup Rust cache
         uses: WarpBuilds/rust-cache@v2
+        with:
+          cache-provider: warpbuild
 
       - name: Run Clippy
         run: cargo clippy --all-features -- -D warnings
@@ -125,6 +152,19 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           lfs: false
+
+      - name: Cache Rust toolchain
+        uses: WarpBuilds/cache@v1
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: ${{ runner.os }}-${{ runner.arch }}-rustup-stable-rustfmt-${{ hashFiles('**/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-rustup-stable-rustfmt-
+            ${{ runner.os }}-${{ runner.arch }}-rustup-stable-
+            ${{ runner.os }}-${{ runner.arch }}-rustup-
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
@@ -145,11 +185,25 @@ jobs:
         with:
           lfs: true
 
+      - name: Cache Rust toolchain
+        uses: WarpBuilds/cache@v1
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: ${{ runner.os }}-${{ runner.arch }}-rustup-stable-${{ hashFiles('**/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-rustup-stable-
+            ${{ runner.os }}-${{ runner.arch }}-rustup-
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
 
       - name: Setup Rust cache
         uses: WarpBuilds/rust-cache@v2
+        with:
+          cache-provider: warpbuild
 
       - name: Install cargo-tarpaulin
         run: |
@@ -181,6 +235,18 @@ jobs:
         with:
           lfs: true
 
+      - name: Cache Rust toolchain
+        uses: WarpBuilds/cache@v1
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: ${{ runner.os }}-${{ runner.arch }}-rustup-stable-${{ hashFiles('**/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-rustup-stable-
+            ${{ runner.os }}-${{ runner.arch }}-rustup-
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
 
@@ -188,6 +254,7 @@ jobs:
         uses: WarpBuilds/rust-cache@v2
         with:
           cache-on-failure: true
+          cache-provider: warpbuild
 
       - name: Install Perl ExifTool
         run: |
@@ -247,6 +314,18 @@ jobs:
         with:
           lfs: true
 
+      - name: Cache Rust toolchain
+        uses: WarpBuilds/cache@v1
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: ${{ runner.os }}-${{ runner.arch }}-rustup-stable-${{ hashFiles('**/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-rustup-stable-
+            ${{ runner.os }}-${{ runner.arch }}-rustup-
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
 
@@ -254,6 +333,7 @@ jobs:
         uses: WarpBuilds/rust-cache@v2
         with:
           cache-on-failure: true
+          cache-provider: warpbuild
 
       - name: Run benchmarks
         run: cargo bench --bench integration_benchmarks --bench parse_benchmarks
@@ -319,6 +399,18 @@ jobs:
         with:
           lfs: false
 
+      - name: Cache Rust toolchain
+        uses: WarpBuilds/cache@v1
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: ${{ runner.os }}-${{ runner.arch }}-rustup-${{ matrix.target }}-${{ hashFiles('**/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-rustup-${{ matrix.target }}-
+            ${{ runner.os }}-${{ runner.arch }}-rustup-
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
         with:
@@ -329,6 +421,7 @@ jobs:
         with:
           cache-on-failure: true
           key: ${{ matrix.target }}
+          cache-provider: warpbuild
 
       - name: Build (native)
         run: cargo build --release --target ${{ matrix.target }}

@@ -96,6 +96,18 @@ jobs:
         with:
           lfs: false
 
+      - name: Cache Rust toolchain
+        uses: WarpBuilds/cache@v1
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: ${{ runner.os }}-${{ runner.arch }}-rustup-${{ matrix.target }}-${{ hashFiles('**/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-rustup-${{ matrix.target }}-
+            ${{ runner.os }}-${{ runner.arch }}-rustup-
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -105,6 +117,7 @@ jobs:
         uses: WarpBuilds/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          cache-provider: warpbuild
 
       - name: Build (native)
         run: cargo build --release --target ${{ matrix.target }}
