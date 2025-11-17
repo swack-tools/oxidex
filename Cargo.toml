@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "oxidex"
-version = "1.0.9"
+version = "1.0.10"
 edition = "2021"
 authors = ["OxiDex Contributors"]
 description = "A modern, high-performance Rust implementation of ExifTool for reading, writing, and editing metadata in 300+ file formats"
