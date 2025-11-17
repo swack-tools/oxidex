@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2025-11-17
+
 ### Added
 - **Phase 1: Video/Audio Format Support** - Complete parser implementation for 12 new multimedia formats
   - **Video Formats (5)**:
@@ -272,4 +274,5 @@ This release is suitable for production use in:
 
 ---
 
+[1.1.0]: https://github.com/exiftool-rs/exiftool-rs/releases/tag/v1.1.0
 [1.0.0]: https://github.com/exiftool-rs/exiftool-rs/releases/tag/v1.0.0
