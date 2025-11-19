@@ -518,7 +518,9 @@ fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Result
         FileFormat::PNG => parse_png_metadata(reader),
         FileFormat::PDF => parse_pdf_metadata(reader),
         FileFormat::PE => parse_pe_metadata(reader),
-        FileFormat::QuickTime => convert_string_error(parse_quicktime_metadata(reader), "QuickTime"),
+        FileFormat::QuickTime => {
+            convert_string_error(parse_quicktime_metadata(reader), "QuickTime")
+        }
         FileFormat::CasioCAM => parse_casio_cam_metadata(reader),
         FileFormat::CameraRaw(raw_format) => {
             // Parse camera raw format using raw metadata parser
@@ -704,7 +706,11 @@ fn process_jfif_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 /// * `segments` - Parsed JPEG segments
 /// * `reader` - File reader for accessing full file (needed for offset calculations)
 /// * `metadata` - MetadataMap to populate with EXIF tags
-fn process_exif_segments(segments: &[Segment], reader: &dyn FileReader, metadata: &mut MetadataMap) {
+fn process_exif_segments(
+    segments: &[Segment],
+    reader: &dyn FileReader,
+    metadata: &mut MetadataMap,
+) {
     // Find all APP1 segments (EXIF/XMP)
     let app1_segments: Vec<_> = segments.iter().filter(|s| s.is_app1()).collect();
 
@@ -810,13 +816,8 @@ fn process_ifd0_tags(
         let tag_name = lookup_tag_name(*tag_id, "IFD0");
 
         // Convert raw bytes to TagValue
-        let tag_value = raw_bytes_to_tag_value(
-            bytes,
-            *field_type,
-            *value_count,
-            *tag_id,
-            byte_order,
-        );
+        let tag_value =
+            raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order);
 
         metadata.insert(tag_name, tag_value);
     }
@@ -1184,13 +1185,8 @@ fn parse_exif_subifd(
             }
 
             let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
-            let tag_value = raw_bytes_to_tag_value(
-                bytes,
-                *field_type,
-                *value_count,
-                *tag_id,
-                byte_order,
-            );
+            let tag_value =
+                raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order);
             metadata.insert(tag_name, tag_value);
         }
 
@@ -1436,12 +1432,10 @@ fn handle_special_byte_tags(tag_id: u16, bytes: &[u8]) -> Option<TagValue> {
 
     match tag_id {
         // GPS Version ID (4 bytes: major.minor.rev.0)
-        GPS_VERSION_ID if bytes.len() >= 4 => {
-            Some(TagValue::new_string(format!(
-                "{}.{}.{}.{}",
-                bytes[0], bytes[1], bytes[2], bytes[3]
-            )))
-        }
+        GPS_VERSION_ID if bytes.len() >= 4 => Some(TagValue::new_string(format!(
+            "{}.{}.{}.{}",
+            bytes[0], bytes[1], bytes[2], bytes[3]
+        ))),
 
         // Exif Version (4 bytes: ASCII "0232")
         EXIF_VERSION if bytes.len() >= 4 => {
@@ -2079,7 +2073,7 @@ mod tests {
     fn test_raw_bytes_to_tag_value_integer_u16() {
         use crate::parsers::tiff::ifd_parser::ByteOrder;
         let bytes = [0x05, 0x00]; // 5 in little-endian
-        // Use tag_id=0x0112 (Orientation) instead of 0
+                                  // Use tag_id=0x0112 (Orientation) instead of 0
         let value = raw_bytes_to_tag_value(&bytes, 3, 1, 0x0112, ByteOrder::LittleEndian); // Type 3 = SHORT
         assert_eq!(value.as_integer(), Some(5));
     }
@@ -2088,7 +2082,7 @@ mod tests {
     fn test_raw_bytes_to_tag_value_integer_u32() {
         use crate::parsers::tiff::ifd_parser::ByteOrder;
         let bytes = [0x64, 0x00, 0x00, 0x00]; // 100 in little-endian
-        // Use tag_id=0x0100 (ImageWidth) instead of 0
+                                              // Use tag_id=0x0100 (ImageWidth) instead of 0
         let value = raw_bytes_to_tag_value(&bytes, 4, 1, 0x0100, ByteOrder::LittleEndian); // Type 4 = LONG
         assert_eq!(value.as_integer(), Some(100));
     }

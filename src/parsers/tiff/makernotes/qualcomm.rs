@@ -61,11 +61,8 @@ const QUALCOMM_SIGNATURE: &[u8] = b"Qualcomm";
 
 /// Decoder for Clear Sight fusion status
 /// Maps 0=Off, 1=On, 2=Auto
-const CLEAR_SIGHT_DECODER: SimpleValueDecoder<i16> = SimpleValueDecoder::new(&[
-    (0, "Off"),
-    (1, "On"),
-    (2, "Auto"),
-]);
+const CLEAR_SIGHT_DECODER: SimpleValueDecoder<i16> =
+    SimpleValueDecoder::new(&[(0, "Off"), (1, "On"), (2, "Auto")]);
 
 /// Decoder for Clear Sight fusion mode variant
 /// Different types of camera fusion modes available
@@ -200,41 +197,46 @@ static QUALCOMM_TAGS: LazyLock<TagRegistry> = LazyLock::new(|| {
     TagRegistry::with_capacity(15)
         // Clear Sight dual-camera fusion tags
         .register_simple_i16(QUALCOMM_CLEAR_SIGHT, "ClearSight", &CLEAR_SIGHT_DECODER)
-        .register_simple_i16(QUALCOMM_CLEAR_SIGHT_MODE, "ClearSightMode", &CLEAR_SIGHT_MODE_DECODER)
-
+        .register_simple_i16(
+            QUALCOMM_CLEAR_SIGHT_MODE,
+            "ClearSightMode",
+            &CLEAR_SIGHT_MODE_DECODER,
+        )
         // Chroma Flash multi-frame blending tags
         .register_simple_i16(QUALCOMM_CHROMA_FLASH, "ChromaFlash", &CHROMA_FLASH_DECODER)
         .register_raw(QUALCOMM_CHROMA_FLASH_FRAMES, "ChromaFlashFrames")
-
         // OptiZoom digital enhancement tags
         .register_simple_i16(QUALCOMM_OPTIZOOM, "OptiZoom", &OPTIZOOM_DECODER)
         .register_i16(QUALCOMM_ZOOM_LEVEL, "ZoomLevel", decode_zoom_level)
-
         // HDR processing tags
         .register_simple_i16(QUALCOMM_HDR_MODE, "HDRMode", &HDR_MODE_DECODER)
-
         // Multi-frame noise reduction (binary On/Off)
-        .register_i16(QUALCOMM_MULTI_FRAME_NR, "MultiFrameNoiseReduction", normalize_to_binary)
-
+        .register_i16(
+            QUALCOMM_MULTI_FRAME_NR,
+            "MultiFrameNoiseReduction",
+            normalize_to_binary,
+        )
         // AI scene detection tag
-        .register_simple_i16(QUALCOMM_SCENE_DETECTION, "SceneDetection", &SCENE_TYPE_DECODER)
-
+        .register_simple_i16(
+            QUALCOMM_SCENE_DETECTION,
+            "SceneDetection",
+            &SCENE_TYPE_DECODER,
+        )
         // Bokeh depth processing tags
         .register_i16(QUALCOMM_BOKEH_MODE, "BokehMode", normalize_to_binary)
         .register_raw(QUALCOMM_BOKEH_LEVEL, "BokehLevel")
-
         // Low-light enhancement (binary On/Off)
         .register_i16(QUALCOMM_LOW_LIGHT_MODE, "LowLightMode", normalize_to_binary)
-
         // Night mode processing (binary On/Off)
         .register_i16(QUALCOMM_NIGHT_MODE, "NightMode", normalize_to_binary)
-
         // Phase detection autofocus tag
-        .register_i16(QUALCOMM_PHASE_DETECT_AF, "PhaseDetectAF", decode_phase_detect_af)
-
+        .register_i16(
+            QUALCOMM_PHASE_DETECT_AF,
+            "PhaseDetectAF",
+            decode_phase_detect_af,
+        )
         // ISP version tag (u32 decoder)
         .register_u32(QUALCOMM_ISP_VERSION, "ISPVersion", decode_isp_version)
-
         // Frame merge count (raw numeric value)
         .register_raw(QUALCOMM_FRAME_MERGE_COUNT, "FrameMergeCount")
 });
@@ -378,7 +380,10 @@ mod tests {
     #[test]
     fn test_clear_sight_mode_decoder() {
         assert_eq!(CLEAR_SIGHT_MODE_DECODER.decode(0), "None");
-        assert_eq!(CLEAR_SIGHT_MODE_DECODER.decode(1), "Monochrome + RGB Fusion");
+        assert_eq!(
+            CLEAR_SIGHT_MODE_DECODER.decode(1),
+            "Monochrome + RGB Fusion"
+        );
         assert_eq!(CLEAR_SIGHT_MODE_DECODER.decode(3), "Multi-Camera Fusion");
     }
 

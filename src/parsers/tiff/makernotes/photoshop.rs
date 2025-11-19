@@ -120,71 +120,84 @@ const PHOTOSHOP_SIGNATURE: &[u8] = b"Adobe Photoshop";
 // Decoder for Photoshop color modes
 // Maps numeric color mode codes to human-readable strings.
 // Used by PS_COLOR_MODE tag.
-const_decoder!(COLOR_MODE, i16, [
-    (0, "Bitmap"),
-    (1, "Grayscale"),
-    (2, "Indexed"),
-    (3, "RGB"),
-    (4, "CMYK"),
-    (5, "Multichannel"),
-    (6, "Duotone"),
-    (7, "Lab"),
-]);
+const_decoder!(
+    COLOR_MODE,
+    i16,
+    [
+        (0, "Bitmap"),
+        (1, "Grayscale"),
+        (2, "Indexed"),
+        (3, "RGB"),
+        (4, "CMYK"),
+        (5, "Multichannel"),
+        (6, "Duotone"),
+        (7, "Lab"),
+    ]
+);
 
 // Decoder for bit depth values
 // Maps bit depth codes to formatted strings (e.g., "8-bit").
 // Used by PS_BIT_DEPTH tag.
-const_decoder!(BIT_DEPTH, i16, [
-    (1, "1-bit"),
-    (8, "8-bit"),
-    (16, "16-bit"),
-    (32, "32-bit"),
-]);
+const_decoder!(
+    BIT_DEPTH,
+    i16,
+    [(1, "1-bit"), (8, "8-bit"), (16, "16-bit"), (32, "32-bit"),]
+);
 
 // Decoder for ruler unit settings
 // Maps ruler unit codes to measurement system names.
 // Used by PS_RULER_UNITS tag.
-const_decoder!(RULER_UNITS, i16, [
-    (1, "Inches"),
-    (2, "Centimeters"),
-    (3, "Points"),
-    (4, "Picas"),
-    (5, "Pixels"),
-]);
+const_decoder!(
+    RULER_UNITS,
+    i16,
+    [
+        (1, "Inches"),
+        (2, "Centimeters"),
+        (3, "Points"),
+        (4, "Picas"),
+        (5, "Pixels"),
+    ]
+);
 
 // Decoder for blending modes bitmask
 // Converts a bitmask into a comma-separated list of active blending modes.
 // Each bit represents a different blending mode supported by Photoshop.
 // Used by PS_BLENDING_MODES tag.
-bitfield_decoder!(BLENDING_MODES, [
-    (0x01, "Normal"),
-    (0x02, "Multiply"),
-    (0x04, "Screen"),
-    (0x08, "Overlay"),
-    (0x10, "Soft Light"),
-    (0x20, "Hard Light"),
-    (0x40, "Color Dodge"),
-    (0x80, "Color Burn"),
-    (0x100, "Darken"),
-    (0x200, "Lighten"),
-]);
+bitfield_decoder!(
+    BLENDING_MODES,
+    [
+        (0x01, "Normal"),
+        (0x02, "Multiply"),
+        (0x04, "Screen"),
+        (0x08, "Overlay"),
+        (0x10, "Soft Light"),
+        (0x20, "Hard Light"),
+        (0x40, "Color Dodge"),
+        (0x80, "Color Burn"),
+        (0x100, "Darken"),
+        (0x200, "Lighten"),
+    ]
+);
 
 // Decoder for layer effects bitmask
 // Converts a bitmask into a comma-separated list of active layer effects.
 // Each bit represents a different layer effect (shadow, glow, bevel, etc.).
 // Used by PS_LAYER_EFFECTS tag.
-bitfield_decoder!(LAYER_EFFECTS, [
-    (0x01, "Drop Shadow"),
-    (0x02, "Inner Shadow"),
-    (0x04, "Outer Glow"),
-    (0x08, "Inner Glow"),
-    (0x10, "Bevel and Emboss"),
-    (0x20, "Satin"),
-    (0x40, "Color Overlay"),
-    (0x80, "Gradient Overlay"),
-    (0x100, "Pattern Overlay"),
-    (0x200, "Stroke"),
-]);
+bitfield_decoder!(
+    LAYER_EFFECTS,
+    [
+        (0x01, "Drop Shadow"),
+        (0x02, "Inner Shadow"),
+        (0x04, "Outer Glow"),
+        (0x08, "Inner Glow"),
+        (0x10, "Bevel and Emboss"),
+        (0x20, "Satin"),
+        (0x40, "Color Overlay"),
+        (0x80, "Gradient Overlay"),
+        (0x100, "Pattern Overlay"),
+        (0x200, "Stroke"),
+    ]
+);
 
 // ============================================================================
 // Custom Formatter Functions
@@ -277,7 +290,6 @@ fn decode_blending_modes(value: i16) -> String {
 fn decode_layer_effects(value: i16) -> String {
     LAYER_EFFECTS.decode(value as u32)
 }
-
 
 // ============================================================================
 // Tag Registry

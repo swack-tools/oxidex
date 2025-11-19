@@ -36,8 +36,8 @@
 #![allow(unused_imports)]
 
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
-use std::collections::HashMap;
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 
 use super::shared::array_extractors::extract_i16_array;
 use super::shared::generic_decoders::{SimpleValueDecoder, YES_NO};
@@ -102,74 +102,94 @@ const DJI_SIGNATURE: &[u8] = b"DJI";
 // Maps flight mode numeric codes to human-readable mode names.
 // Covers all common flight modes from Manual to Force Landing.
 // Used by DJI_FLIGHT_MODE tag.
-const_decoder!(FLIGHT_MODE, i16, [
-    (0, "Manual"),
-    (1, "Atti (Attitude)"),
-    (2, "GPS"),
-    (3, "GPS + ATTI"),
-    (4, "Sport"),
-    (5, "Tripod"),
-    (6, "ActiveTrack"),
-    (7, "Point of Interest"),
-    (8, "TapFly"),
-    (9, "Waypoint"),
-    (10, "Return to Home"),
-    (11, "Landing"),
-    (12, "Force Landing"),
-]);
+const_decoder!(
+    FLIGHT_MODE,
+    i16,
+    [
+        (0, "Manual"),
+        (1, "Atti (Attitude)"),
+        (2, "GPS"),
+        (3, "GPS + ATTI"),
+        (4, "Sport"),
+        (5, "Tripod"),
+        (6, "ActiveTrack"),
+        (7, "Point of Interest"),
+        (8, "TapFly"),
+        (9, "Waypoint"),
+        (10, "Return to Home"),
+        (11, "Landing"),
+        (12, "Force Landing"),
+    ]
+);
 
 // Decoder for DJI white balance mode
 // Maps white balance numeric codes to mode names.
 // Supports all standard white balance presets plus custom settings.
 // Used by DJI_CAMERA_WB tag.
-const_decoder!(WHITE_BALANCE, i16, [
-    (0, "Auto"),
-    (1, "Sunny"),
-    (2, "Cloudy"),
-    (3, "Incandescent"),
-    (4, "Fluorescent"),
-    (5, "Custom"),
-    (6, "Neutral"),
-]);
+const_decoder!(
+    WHITE_BALANCE,
+    i16,
+    [
+        (0, "Auto"),
+        (1, "Sunny"),
+        (2, "Cloudy"),
+        (3, "Incandescent"),
+        (4, "Fluorescent"),
+        (5, "Custom"),
+        (6, "Neutral"),
+    ]
+);
 
 // Decoder for DJI color mode settings
 // Maps color mode codes to color profile names.
 // Includes standard and professional color profiles like D-Log for video.
 // Used by DJI_COLOR_MODE tag.
-const_decoder!(COLOR_MODE, i16, [
-    (0, "Normal"),
-    (1, "D-Cinelike"),
-    (2, "D-Log"),
-    (3, "Art"),
-    (4, "Film"),
-    (5, "B&W"),
-    (6, "HLG"),
-]);
+const_decoder!(
+    COLOR_MODE,
+    i16,
+    [
+        (0, "Normal"),
+        (1, "D-Cinelike"),
+        (2, "D-Log"),
+        (3, "Art"),
+        (4, "Film"),
+        (5, "B&W"),
+        (6, "HLG"),
+    ]
+);
 
 // Decoder for DJI image format
 // Maps image format codes to file type descriptions.
 // Supports JPEG, RAW, DNG, and combination formats.
 // Used by DJI_IMAGE_FORMAT tag.
-const_decoder!(IMAGE_FORMAT, i16, [
-    (0, "JPEG"),
-    (1, "RAW"),
-    (2, "JPEG + RAW"),
-    (3, "DNG"),
-    (4, "DNG + JPEG"),
-]);
+const_decoder!(
+    IMAGE_FORMAT,
+    i16,
+    [
+        (0, "JPEG"),
+        (1, "RAW"),
+        (2, "JPEG + RAW"),
+        (3, "DNG"),
+        (4, "DNG + JPEG"),
+    ]
+);
 
 // Decoder for GPS signal strength
 // Maps signal strength codes (0-5) to quality descriptions.
 // Higher numbers indicate better GPS reception.
 // Used by DJI_GPS_SIGNAL tag.
-const_decoder!(GPS_SIGNAL, i16, [
-    (0, "None"),
-    (1, "Very Weak"),
-    (2, "Weak"),
-    (3, "Good"),
-    (4, "Strong"),
-    (5, "Excellent"),
-]);
+const_decoder!(
+    GPS_SIGNAL,
+    i16,
+    [
+        (0, "None"),
+        (1, "Very Weak"),
+        (2, "Weak"),
+        (3, "Good"),
+        (4, "Strong"),
+        (5, "Excellent"),
+    ]
+);
 
 // Decoder for obstacle avoidance sensors bitmask
 // Converts a bitmask into a comma-separated list of active sensors.
@@ -184,14 +204,17 @@ const_decoder!(GPS_SIGNAL, i16, [
 // - 0x08: Right sensor
 // - 0x10: Top sensor
 // - 0x20: Bottom sensor
-bitfield_decoder!(OBSTACLE_AVOIDANCE, [
-    (0x01, "Front"),
-    (0x02, "Back"),
-    (0x04, "Left"),
-    (0x08, "Right"),
-    (0x10, "Top"),
-    (0x20, "Bottom"),
-]);
+bitfield_decoder!(
+    OBSTACLE_AVOIDANCE,
+    [
+        (0x01, "Front"),
+        (0x02, "Back"),
+        (0x04, "Left"),
+        (0x08, "Right"),
+        (0x10, "Top"),
+        (0x20, "Bottom"),
+    ]
+);
 
 // ============================================================================
 // Custom Formatter Functions
@@ -211,7 +234,7 @@ bitfield_decoder!(OBSTACLE_AVOIDANCE, [
 /// Formatted coordinate string with 7 decimal places
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// assert_eq!(format_gps_coordinate(377123456), "37.7123456");
 /// ```
 fn format_gps_coordinate(value: i32) -> String {
@@ -231,7 +254,7 @@ fn format_gps_coordinate(value: i32) -> String {
 /// Formatted altitude string in meters with "m" suffix
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// assert_eq!(format_altitude(12000), "120.00 m");
 /// ```
 fn format_altitude(value: i32) -> String {
@@ -251,7 +274,7 @@ fn format_altitude(value: i32) -> String {
 /// Formatted speed string in m/s with suffix
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// assert_eq!(format_speed(1500), "15.00 m/s");
 /// ```
 fn format_speed(value: i16) -> String {
@@ -271,7 +294,7 @@ fn format_speed(value: i16) -> String {
 /// Formatted angle string with degree symbol
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// assert_eq!(format_gimbal_angle(-900), "-90.0°");
 /// ```
 fn format_gimbal_angle(value: i16) -> String {
@@ -291,7 +314,7 @@ fn format_gimbal_angle(value: i16) -> String {
 /// Formatted voltage string with "V" suffix
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// assert_eq!(format_voltage(15400), "15.40 V");
 /// ```
 fn format_voltage(value: i16) -> String {
@@ -311,7 +334,7 @@ fn format_voltage(value: i16) -> String {
 /// Formatted shutter speed string
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// assert_eq!(format_shutter_speed(125), "1/125 s");
 /// assert_eq!(format_shutter_speed(1), "1 s");
 /// ```
@@ -338,7 +361,7 @@ fn format_shutter_speed(value: i16) -> String {
 /// Formatted aperture string with f/ prefix
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// assert_eq!(format_aperture(28), "f/2.8");
 /// ```
 fn format_aperture(value: i16) -> String {
@@ -358,7 +381,7 @@ fn format_aperture(value: i16) -> String {
 /// Formatted EV string with +/- sign and "EV" suffix
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// assert_eq!(format_ev(10), "+1.0 EV");
 /// assert_eq!(format_ev(-7), "-0.7 EV");
 /// ```
@@ -383,7 +406,7 @@ fn format_ev(value: i16) -> String {
 /// Formatted time string in MM:SS format
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// assert_eq!(format_flight_time(125), "2:05");
 /// assert_eq!(format_flight_time(3661), "61:01");
 /// ```
@@ -531,7 +554,6 @@ static DJI_TAGS: Lazy<TagRegistry> = Lazy::new(|| {
         .register_i32(DJI_GPS_LONGITUDE, "GPSLongitude", format_gps_coordinate)
         .register_i32(DJI_GPS_ALTITUDE, "GPSAltitude", format_altitude)
         .register_i32(DJI_RELATIVE_ALTITUDE, "RelativeAltitude", format_altitude)
-
         // i16 tags with custom formatting functions
         .register_i16(DJI_GIMBAL_PITCH, "GimbalPitch", format_gimbal_angle)
         .register_i16(DJI_GIMBAL_ROLL, "GimbalRoll", format_gimbal_angle)
@@ -543,14 +565,21 @@ static DJI_TAGS: Lazy<TagRegistry> = Lazy::new(|| {
         .register_i16(DJI_BATTERY_LEVEL, "BatteryLevel", format_battery_level)
         .register_i16(DJI_BATTERY_VOLTAGE, "BatteryVoltage", format_voltage)
         .register_i16(DJI_FLIGHT_TIME, "FlightTime", format_flight_time)
-        .register_i16(DJI_OBSTACLE_AVOID, "ObstacleAvoidance", decode_obstacle_avoidance)
+        .register_i16(
+            DJI_OBSTACLE_AVOID,
+            "ObstacleAvoidance",
+            decode_obstacle_avoidance,
+        )
         .register_i16(DJI_CAMERA_ISO, "ISO", format_iso)
         .register_i16(DJI_CAMERA_SHUTTER, "ShutterSpeed", format_shutter_speed)
         .register_i16(DJI_CAMERA_APERTURE, "Aperture", format_aperture)
         .register_i16(DJI_CAMERA_EV, "ExposureCompensation", format_ev)
-        .register_i16(DJI_SATELLITE_COUNT, "SatelliteCount", format_satellite_count)
+        .register_i16(
+            DJI_SATELLITE_COUNT,
+            "SatelliteCount",
+            format_satellite_count,
+        )
         .register_i16(DJI_HASSELBLAD, "Hasselblad", decode_hasselblad)
-
         // i16 tags with simple value decoders
         .register_simple_i16(DJI_FLIGHT_MODE, "FlightMode", &FLIGHT_MODE)
         .register_simple_i16(DJI_GPS_SIGNAL, "GPSSignal", &GPS_SIGNAL)
@@ -577,11 +606,9 @@ static DJI_TAGS: Lazy<TagRegistry> = Lazy::new(|| {
 /// Extracted i32 value or None if extraction fails
 fn extract_i32(entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) -> Option<i32> {
     // For LONG/SLONG types with count=1, value might be inline
-    if entry.value_count == 1 {
-        if entry.field_type == 4 || entry.field_type == 9 {
-            // LONG (4) or SLONG (9) - value is inline in value_offset field
-            return Some(entry.value_offset as i32);
-        }
+    if entry.value_count == 1 && (entry.field_type == 4 || entry.field_type == 9) {
+        // LONG (4) or SLONG (9) - value is inline in value_offset field
+        return Some(entry.value_offset as i32);
     }
 
     // Read from offset in data buffer

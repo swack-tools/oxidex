@@ -141,10 +141,17 @@ fn contains_text(data: &[u8], pattern: &str, limit: usize) -> bool {
 /// correct detection when multiple formats share similar patterns.
 static SIMPLE_SIGNATURES: &[Signature] = &[
     // Camera Raw formats with unique signatures
-    signature!(b"FUJIFILMCCD-RAW ", 0, FileFormat::CameraRaw(raw::RawFormat::FujifilmRAF)),
+    signature!(
+        b"FUJIFILMCCD-RAW ",
+        0,
+        FileFormat::CameraRaw(raw::RawFormat::FujifilmRAF)
+    ),
     signature!(b"FOVb", 0, FileFormat::CameraRaw(raw::RawFormat::SigmaX3F)),
-    signature!(b"\x00MRM", 0, FileFormat::CameraRaw(raw::RawFormat::MinoltaMRW)),
-
+    signature!(
+        b"\x00MRM",
+        0,
+        FileFormat::CameraRaw(raw::RawFormat::MinoltaMRW)
+    ),
     // Image formats
     signature!(b"\x89PNG", 0, FileFormat::PNG),
     signature!(b"GIF87a", 0, FileFormat::GIF),
@@ -156,7 +163,6 @@ static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"\x76\x2F\x31\x01", 0, FileFormat::EXR),
     signature!(b"\x42\x50\x47\xFB", 0, FileFormat::BPG),
     signature!(b"\xFF\x0A", 0, FileFormat::JXL),
-
     // Audio formats
     signature!(b"fLaC", 0, FileFormat::FLAC),
     signature!(b"ID3", 0, FileFormat::MP3),
@@ -164,30 +170,25 @@ static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"MAC ", 0, FileFormat::APE),
     signature!(b"\x1A\x45\xDF\xA3", 0, FileFormat::MKV),
     signature!(b"OggS", 0, FileFormat::OGG),
-
     // Document formats
     signature!(b"%PDF", 0, FileFormat::PDF),
-
     // Archive formats
     signature!(b"PK", 0, FileFormat::ZIP),
     signature!(b"Rar!", 0, FileFormat::RAR),
     signature!(b"\x37\x7A\xBC\xAF\x27\x1C", 0, FileFormat::SevenZ),
     signature!(b"\x1F\x8B", 0, FileFormat::GZ),
-
     // Font formats
     signature!(b"OTTO", 0, FileFormat::OTF),
     signature!(b"wOFF", 0, FileFormat::WOFF),
     signature!(b"wOF2", 0, FileFormat::WOFF2),
     signature!(b"\x00\x01\x00\x00", 0, FileFormat::TTF),
     signature!(b"true", 0, FileFormat::TTF),
-
     // Binary formats
     signature!(b"\x7FELF", 0, FileFormat::ELF),
     signature!(b"\x89HDF\x0D\x0A\x1A\x0A", 0, FileFormat::HDF5),
     signature!(b"SIMPLE", 0, FileFormat::FITS),
     signature!(b"BEGIN:VCARD", 0, FileFormat::VCF),
     signature!(b"\x4C\x00\x00\x00", 0, FileFormat::LNK),
-
     // Archive formats with offset signatures
     signature!(b"ustar", 257, FileFormat::TAR),
     signature!(b"CD001", 32769, FileFormat::ISO),
@@ -222,14 +223,16 @@ fn detect_tiff_variants(data: &[u8]) -> Option<FileFormat> {
     // Canon CR2: Little-endian TIFF with "CR\x02\x00" at offset 8
     if data.len() >= 12
         && data.starts_with(&[0x49, 0x49, 0x2A, 0x00])
-        && matches_at_offset(data, b"CR\x02\x00", 8) {
+        && matches_at_offset(data, b"CR\x02\x00", 8)
+    {
         return Some(FileFormat::CameraRaw(raw::RawFormat::CanonCR2));
     }
 
     // Canon CRW: CIFF format with "II\x1a\x00" + "HEAPCCDR"
     if data.len() >= 14
         && matches_at_offset(data, &[0x49, 0x49, 0x1A, 0x00], 0)
-        && matches_at_offset(data, b"HEAPCCDR", 6) {
+        && matches_at_offset(data, b"HEAPCCDR", 6)
+    {
         return Some(FileFormat::CameraRaw(raw::RawFormat::CanonCRW));
     }
 
@@ -293,8 +296,7 @@ fn detect_bmff_variants(data: &[u8]) -> Option<FileFormat> {
 
     // HEIF brands
     let heif_brands = [
-        b"heic", b"heix", b"hevc", b"hevx",
-        b"heim", b"heis", b"hevm", b"hevs", b"mif1",
+        b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1",
     ];
 
     if heif_brands.iter().any(|b| brand == *b) {
@@ -366,9 +368,7 @@ fn is_mp3_sync(data: &[u8]) -> bool {
 ///
 /// `true` if ADTS sync pattern detected
 fn is_aac_adts(data: &[u8]) -> bool {
-    data.len() >= 2
-        && data[0] == 0xFF
-        && (data[1] == 0xF1 || data[1] == 0xF9)
+    data.len() >= 2 && data[0] == 0xFF && (data[1] == 0xF1 || data[1] == 0xF9)
 }
 
 /// Detect MPEG Transport Stream (MTS/M2TS) format
@@ -385,18 +385,12 @@ fn is_aac_adts(data: &[u8]) -> bool {
 /// `true` if MTS sync pattern detected
 fn is_mts_stream(data: &[u8]) -> bool {
     // Standard TS: 188-byte packets
-    if data.len() >= 564
-        && data[0] == 0x47
-        && data[188] == 0x47
-        && data[376] == 0x47 {
+    if data.len() >= 564 && data[0] == 0x47 && data[188] == 0x47 && data[376] == 0x47 {
         return true;
     }
 
     // M2TS: 192-byte packets with timestamp
-    if data.len() >= 576
-        && data[4] == 0x47
-        && data[196] == 0x47
-        && data[388] == 0x47 {
+    if data.len() >= 576 && data[4] == 0x47 && data[196] == 0x47 && data[388] == 0x47 {
         return true;
     }
 
@@ -446,9 +440,7 @@ fn detect_pe_format(data: &[u8], reader: &dyn FileReader) -> Option<FileFormat> 
         return None;
     }
 
-    let e_lfanew = u32::from_le_bytes([
-        data[0x3C], data[0x3D], data[0x3E], data[0x3F],
-    ]) as u64;
+    let e_lfanew = u32::from_le_bytes([data[0x3C], data[0x3D], data[0x3E], data[0x3F]]) as u64;
 
     // Verify PE signature at e_lfanew offset
     if e_lfanew < reader.size() && e_lfanew + 4 <= reader.size() {
@@ -557,10 +549,7 @@ fn is_macho(data: &[u8]) -> bool {
 ///
 /// `true` if DWG signature detected
 fn is_dwg(data: &[u8]) -> bool {
-    data.len() >= 6
-        && matches_at_offset(data, b"AC", 0)
-        && data[2] >= b'1'
-        && data[3] >= b'0'
+    data.len() >= 6 && matches_at_offset(data, b"AC", 0) && data[2] >= b'1' && data[3] >= b'0'
 }
 
 /// Detect text-based 3D and interchange formats
@@ -731,10 +720,10 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         if sig.offset == 0 {
             // Optimization: most signatures are at offset 0
             if magic_bytes.starts_with(sig.bytes) {
-                return Ok(sig.format.clone());
+                return Ok(sig.format);
             }
         } else if matches_at_offset(magic_bytes, sig.bytes, sig.offset as usize) {
-            return Ok(sig.format.clone());
+            return Ok(sig.format);
         }
     }
 
@@ -804,7 +793,12 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
 
     // JXL (second variant with longer signature)
     if magic_bytes.len() >= 12
-        && matches_at_offset(magic_bytes, &[0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20], 0) {
+        && matches_at_offset(
+            magic_bytes,
+            &[0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20],
+            0,
+        )
+    {
         return Ok(FileFormat::JXL);
     }
 

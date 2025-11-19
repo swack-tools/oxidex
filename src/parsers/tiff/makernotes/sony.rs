@@ -146,182 +146,234 @@ const SHOT_INFO_FLASH_EXPOSURE_COMP: usize = 9;
 // The const_decoder! macro creates a const SimpleValueDecoder<i16> with the given mappings.
 
 // Drive mode decoder - maps numeric values to shooting drive modes
-const_decoder!(DRIVE_MODE, i16, [
-    (0, "Single Frame"),
-    (1, "Continuous High"),
-    (2, "Self-timer"),
-    (3, "Continuous Bracketing"),
-    (4, "Single Bracketing"),
-    (5, "Continuous Low"),
-    (6, "White Balance Bracketing Low"),
-    (7, "DRO Bracketing Low"),
-    (8, "Continuous Mid"),
-    (9, "Continuous High+"),
-    (10, "Single Silent"),
-    (11, "Continuous Silent"),
-]);
+const_decoder!(
+    DRIVE_MODE,
+    i16,
+    [
+        (0, "Single Frame"),
+        (1, "Continuous High"),
+        (2, "Self-timer"),
+        (3, "Continuous Bracketing"),
+        (4, "Single Bracketing"),
+        (5, "Continuous Low"),
+        (6, "White Balance Bracketing Low"),
+        (7, "DRO Bracketing Low"),
+        (8, "Continuous Mid"),
+        (9, "Continuous High+"),
+        (10, "Single Silent"),
+        (11, "Continuous Silent"),
+    ]
+);
 
 // White balance mode decoder - maps values to white balance presets
-const_decoder!(WHITE_BALANCE, i16, [
-    (0, "Auto"),
-    (4, "Custom"),
-    (5, "Daylight"),
-    (6, "Cloudy"),
-    (7, "Tungsten"),
-    (8, "Flash"),
-    (9, "Fluorescent"),
-    (10, "Shade"),
-    (11, "Color Temperature/Color Filter"),
-    (12, "Custom 1"),
-    (13, "Custom 2"),
-    (14, "Custom 3"),
-]);
+const_decoder!(
+    WHITE_BALANCE,
+    i16,
+    [
+        (0, "Auto"),
+        (4, "Custom"),
+        (5, "Daylight"),
+        (6, "Cloudy"),
+        (7, "Tungsten"),
+        (8, "Flash"),
+        (9, "Fluorescent"),
+        (10, "Shade"),
+        (11, "Color Temperature/Color Filter"),
+        (12, "Custom 1"),
+        (13, "Custom 2"),
+        (14, "Custom 3"),
+    ]
+);
 
 // Focus mode decoder - maps values to autofocus modes
-const_decoder!(FOCUS_MODE, i16, [
-    (0, "Manual"),
-    (1, "AF-S (Single)"),
-    (2, "AF-C (Continuous)"),
-    (3, "AF-A (Automatic)"),
-    (4, "DMF (Direct Manual Focus)"),
-    (5, "AF-D (Depth)"),
-]);
+const_decoder!(
+    FOCUS_MODE,
+    i16,
+    [
+        (0, "Manual"),
+        (1, "AF-S (Single)"),
+        (2, "AF-C (Continuous)"),
+        (3, "AF-A (Automatic)"),
+        (4, "DMF (Direct Manual Focus)"),
+        (5, "AF-D (Depth)"),
+    ]
+);
 
 // AF area mode decoder - maps values to AF area selection modes
-const_decoder!(AF_AREA_MODE, i16, [
-    (0, "Wide"),
-    (1, "Spot"),
-    (2, "Local"),
-    (3, "Flexible Spot"),
-    (4, "Zone"),
-    (5, "Expand Flexible Spot"),
-    (6, "Lock-on AF"),
-    (7, "Tracking"),
-    (8, "Eye AF"),
-]);
+const_decoder!(
+    AF_AREA_MODE,
+    i16,
+    [
+        (0, "Wide"),
+        (1, "Spot"),
+        (2, "Local"),
+        (3, "Flexible Spot"),
+        (4, "Zone"),
+        (5, "Expand Flexible Spot"),
+        (6, "Lock-on AF"),
+        (7, "Tracking"),
+        (8, "Eye AF"),
+    ]
+);
 
 // Metering mode decoder - maps values to exposure metering modes
-const_decoder!(METERING_MODE, i16, [
-    (0, "Multi-segment"),
-    (1, "Center-weighted average"),
-    (2, "Spot"),
-    (3, "Average"),
-    (4, "Highlight-weighted"),
-]);
+const_decoder!(
+    METERING_MODE,
+    i16,
+    [
+        (0, "Multi-segment"),
+        (1, "Center-weighted average"),
+        (2, "Spot"),
+        (3, "Average"),
+        (4, "Highlight-weighted"),
+    ]
+);
 
 // Exposure mode decoder - maps values to shooting modes
-const_decoder!(EXPOSURE_MODE, i16, [
-    (0, "Program AE"),
-    (1, "Aperture Priority"),
-    (2, "Shutter Priority"),
-    (3, "Manual"),
-    (4, "Auto"),
-    (5, "iAuto"),
-    (6, "Superior Auto"),
-    (7, "iAuto+"),
-    (8, "Portrait"),
-    (9, "Landscape"),
-    (10, "Twilight"),
-    (11, "Sports"),
-    (12, "Macro"),
-]);
+const_decoder!(
+    EXPOSURE_MODE,
+    i16,
+    [
+        (0, "Program AE"),
+        (1, "Aperture Priority"),
+        (2, "Shutter Priority"),
+        (3, "Manual"),
+        (4, "Auto"),
+        (5, "iAuto"),
+        (6, "Superior Auto"),
+        (7, "iAuto+"),
+        (8, "Portrait"),
+        (9, "Landscape"),
+        (10, "Twilight"),
+        (11, "Sports"),
+        (12, "Macro"),
+    ]
+);
 
 // Quality setting decoder - maps values to image quality modes
-const_decoder!(QUALITY, i16, [
-    (0, "RAW"),
-    (1, "Super Fine"),
-    (2, "Fine"),
-    (3, "Standard"),
-    (4, "Economy"),
-    (5, "Extra Fine"),
-    (6, "RAW + JPEG"),
-    (7, "Compressed RAW"),
-    (8, "Compressed RAW + JPEG"),
-]);
+const_decoder!(
+    QUALITY,
+    i16,
+    [
+        (0, "RAW"),
+        (1, "Super Fine"),
+        (2, "Fine"),
+        (3, "Standard"),
+        (4, "Economy"),
+        (5, "Extra Fine"),
+        (6, "RAW + JPEG"),
+        (7, "Compressed RAW"),
+        (8, "Compressed RAW + JPEG"),
+    ]
+);
 
 // Flash mode decoder - maps values to flash modes
-const_decoder!(FLASH_MODE, i16, [
-    (0, "Auto"),
-    (1, "Fill-flash"),
-    (2, "Rear Sync"),
-    (3, "Wireless"),
-    (4, "Off"),
-    (5, "Slow Sync"),
-]);
+const_decoder!(
+    FLASH_MODE,
+    i16,
+    [
+        (0, "Auto"),
+        (1, "Fill-flash"),
+        (2, "Rear Sync"),
+        (3, "Wireless"),
+        (4, "Off"),
+        (5, "Slow Sync"),
+    ]
+);
 
 // Release mode decoder - maps values to shutter release modes
-const_decoder!(RELEASE_MODE, i16, [
-    (0, "Normal"),
-    (1, "Continuous"),
-    (2, "Continuous Speed Priority"),
-    (3, "Continuous Low"),
-    (5, "Single Frame"),
-    (6, "Continuous High"),
-]);
+const_decoder!(
+    RELEASE_MODE,
+    i16,
+    [
+        (0, "Normal"),
+        (1, "Continuous"),
+        (2, "Continuous Speed Priority"),
+        (3, "Continuous Low"),
+        (5, "Single Frame"),
+        (6, "Continuous High"),
+    ]
+);
 
 // Color mode decoder - maps values to creative styles/color modes
-const_decoder!(COLOR_MODE, i16, [
-    (0, "Standard"),
-    (1, "Vivid"),
-    (2, "Portrait"),
-    (3, "Landscape"),
-    (4, "Sunset"),
-    (5, "Night View/Portrait"),
-    (6, "Black & White"),
-    (7, "Adobe RGB"),
-    (8, "Neutral"),
-    (9, "Clear"),
-    (10, "Deep"),
-    (11, "Light"),
-    (12, "Autumn"),
-    (13, "Sepia"),
-]);
+const_decoder!(
+    COLOR_MODE,
+    i16,
+    [
+        (0, "Standard"),
+        (1, "Vivid"),
+        (2, "Portrait"),
+        (3, "Landscape"),
+        (4, "Sunset"),
+        (5, "Night View/Portrait"),
+        (6, "Black & White"),
+        (7, "Adobe RGB"),
+        (8, "Neutral"),
+        (9, "Clear"),
+        (10, "Deep"),
+        (11, "Light"),
+        (12, "Autumn"),
+        (13, "Sepia"),
+    ]
+);
 
 // Dynamic Range Optimizer decoder - maps values to DRO and HDR settings
-const_decoder!(DRO, i16, [
-    (0, "Off"),
-    (1, "DRO Auto"),
-    (2, "DRO Lv1"),
-    (3, "DRO Lv2"),
-    (4, "DRO Lv3"),
-    (5, "DRO Lv4"),
-    (6, "DRO Lv5"),
-    (16, "HDR Auto"),
-    (17, "HDR 1.0 EV"),
-    (18, "HDR 2.0 EV"),
-    (19, "HDR 3.0 EV"),
-    (20, "HDR 4.0 EV"),
-    (21, "HDR 5.0 EV"),
-    (22, "HDR 6.0 EV"),
-]);
+const_decoder!(
+    DRO,
+    i16,
+    [
+        (0, "Off"),
+        (1, "DRO Auto"),
+        (2, "DRO Lv1"),
+        (3, "DRO Lv2"),
+        (4, "DRO Lv3"),
+        (5, "DRO Lv4"),
+        (6, "DRO Lv5"),
+        (16, "HDR Auto"),
+        (17, "HDR 1.0 EV"),
+        (18, "HDR 2.0 EV"),
+        (19, "HDR 3.0 EV"),
+        (20, "HDR 4.0 EV"),
+        (21, "HDR 5.0 EV"),
+        (22, "HDR 6.0 EV"),
+    ]
+);
 
 // Noise reduction decoder - maps values to noise reduction levels
-const_decoder!(NOISE_REDUCTION, i16, [
-    (0, "Off"),
-    (1, "Low"),
-    (2, "Normal"),
-    (3, "High"),
-    (4, "Auto"),
-]);
+const_decoder!(
+    NOISE_REDUCTION,
+    i16,
+    [
+        (0, "Off"),
+        (1, "Low"),
+        (2, "Normal"),
+        (3, "High"),
+        (4, "Auto"),
+    ]
+);
 
 // Image stabilization decoder - maps values to image stabilization modes
-const_decoder!(IMAGE_STABILIZATION, i16, [
-    (0, "Off"),
-    (1, "On"),
-    (2, "On (Shooting)"),
-]);
+const_decoder!(
+    IMAGE_STABILIZATION,
+    i16,
+    [(0, "Off"), (1, "On"), (2, "On (Shooting)"),]
+);
 
 // HDR decoder - maps values to HDR settings
-const_decoder!(HDR, i16, [
-    (0, "Off"),
-    (1, "Auto"),
-    (2, "1.0 EV"),
-    (3, "2.0 EV"),
-    (4, "3.0 EV"),
-    (5, "4.0 EV"),
-    (6, "5.0 EV"),
-    (7, "6.0 EV"),
-]);
+const_decoder!(
+    HDR,
+    i16,
+    [
+        (0, "Off"),
+        (1, "Auto"),
+        (2, "1.0 EV"),
+        (3, "2.0 EV"),
+        (4, "3.0 EV"),
+        (5, "4.0 EV"),
+        (6, "5.0 EV"),
+        (7, "6.0 EV"),
+    ]
+);
 
 /// Converts Sony tag ID to human-readable tag name
 ///

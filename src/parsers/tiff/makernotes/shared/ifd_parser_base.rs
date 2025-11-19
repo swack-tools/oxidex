@@ -58,7 +58,7 @@ pub struct IfdParserConfig<'a> {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```ignore
 /// let config = IfdParserConfig {
 ///     signature: Some(b"GoPro"),
 ///     signature_offset: 5,

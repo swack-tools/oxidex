@@ -83,8 +83,11 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
     // Find and parse the Info dictionary
     let info_ref = find_dict_reference(&context.xref_data, "/Info")?;
     let info_offset = context.get_object_offset(info_ref.object_num, "Info")?;
-    let info_data = reader.read(info_offset, std::cmp::min(4096, reader.size().saturating_sub(info_offset) as usize))?;
-    let info_dict = parse_info_object(&info_data)?;
+    let info_data = reader.read(
+        info_offset,
+        std::cmp::min(4096, reader.size().saturating_sub(info_offset) as usize),
+    )?;
+    let info_dict = parse_info_object(info_data)?;
 
     // Convert dictionary to metadata map with proper formatting
     let mut metadata = convert_info_dict_to_metadata(info_dict);
@@ -130,14 +133,14 @@ impl PdfContext {
         let tail_data = reader.read(tail_offset, tail_size)?;
 
         // Find startxref and get xref offset
-        let xref_offset = find_xref_offset(&tail_data)?;
+        let xref_offset = find_xref_offset(tail_data)?;
 
         // Read xref table and trailer region (up to 8KB should be enough)
         let xref_size = std::cmp::min(8192, file_size.saturating_sub(xref_offset) as usize);
         let xref_data = reader.read(xref_offset, xref_size)?;
 
         // Parse xref table to build object offset map
-        let xref_map = parse_xref_table(&xref_data)?;
+        let xref_map = parse_xref_table(xref_data)?;
 
         Ok(PdfContext {
             xref_data: xref_data.to_vec(),
@@ -147,15 +150,12 @@ impl PdfContext {
 
     /// Gets the file offset for a given object number, with descriptive error messages.
     fn get_object_offset(&self, object_num: u32, object_type: &str) -> Result<u64> {
-        self.xref_map
-            .get(&object_num)
-            .copied()
-            .ok_or_else(|| {
-                ExifToolError::parse_error(format!(
-                    "{} object {} not found in xref table",
-                    object_type, object_num
-                ))
-            })
+        self.xref_map.get(&object_num).copied().ok_or_else(|| {
+            ExifToolError::parse_error(format!(
+                "{} object {} not found in xref table",
+                object_type, object_num
+            ))
+        })
     }
 }
 
@@ -172,7 +172,9 @@ fn convert_info_dict_to_metadata(info_dict: HashMap<String, String>) -> Metadata
 
     for (key, value) in info_dict {
         match key.as_str() {
-            "CreationDate" => insert_date_metadata(&mut metadata, "CreationDate", "CreateDate", &value),
+            "CreationDate" => {
+                insert_date_metadata(&mut metadata, "CreationDate", "CreateDate", &value)
+            }
             "ModDate" => insert_date_metadata(&mut metadata, "ModDate", "ModifyDate", &value),
             "Keywords" => insert_keywords_metadata(&mut metadata, &value),
             _ => {
@@ -216,7 +218,12 @@ fn insert_keywords_metadata(metadata: &mut MetadataMap, value: &str) {
     let tag_value = match keyword_values.len() {
         0 => TagValue::new_string(value.to_string()),
         1 => TagValue::new_string(keyword_values[0].clone()),
-        _ => TagValue::new_array(keyword_values.into_iter().map(TagValue::new_string).collect()),
+        _ => TagValue::new_array(
+            keyword_values
+                .into_iter()
+                .map(TagValue::new_string)
+                .collect(),
+        ),
     };
 
     metadata.insert("PDF:Keywords".to_string(), tag_value);
@@ -262,7 +269,12 @@ fn format_pdf_date(pdf_date: &str) -> Option<String> {
 }
 
 /// Extracts a date component from the date string, returning a default if not present.
-fn extract_date_component<'a>(date_str: &'a str, start: usize, end: usize, default: &'a str) -> &'a str {
+fn extract_date_component<'a>(
+    date_str: &'a str,
+    start: usize,
+    end: usize,
+    default: &'a str,
+) -> &'a str {
     if date_str.len() >= end {
         &date_str[start..end]
     } else {
@@ -334,7 +346,7 @@ fn navigate_to_pages_object(reader: &dyn FileReader, context: &PdfContext) -> Re
     let root_data = reader.read(root_offset, root_size)?;
 
     // Find /Pages reference in Root object
-    let pages_ref = find_dict_reference(&root_data, "/Pages")?;
+    let pages_ref = find_dict_reference(root_data, "/Pages")?;
     let pages_offset = context.get_object_offset(pages_ref.object_num, "Pages")?;
 
     // Read Pages object
@@ -383,9 +395,8 @@ struct ObjectRef {
 /// - `data`: The PDF data to search (trailer or object data)
 /// - `key`: The dictionary key to find (e.g., "/Info", "/Root", "/Pages")
 fn find_dict_reference(data: &[u8], key: &str) -> Result<ObjectRef> {
-    let (_, obj_ref) = parse_dict_reference(data, key).map_err(|_| {
-        ExifToolError::parse_error(format!("Could not parse {} reference", key))
-    })?;
+    let (_, obj_ref) = parse_dict_reference(data, key)
+        .map_err(|_| ExifToolError::parse_error(format!("Could not parse {} reference", key)))?;
     Ok(obj_ref)
 }
 
@@ -579,7 +590,9 @@ fn parse_info_object(input: &[u8]) -> Result<HashMap<String, String>> {
         .ok_or_else(|| ExifToolError::parse_error("Dictionary end offset overflow"))?;
 
     if content_end > input_str.len() {
-        return Err(ExifToolError::parse_error("Dictionary extends beyond input"));
+        return Err(ExifToolError::parse_error(
+            "Dictionary extends beyond input",
+        ));
     }
 
     let dict_content = &input_str[content_start..content_end];
@@ -652,7 +665,10 @@ fn parse_string_literal(input: &[u8]) -> IResult<&[u8], String> {
 
 /// Extracts content from a parenthesized string, handling escapes and nesting.
 /// Returns (content_bytes, closing_paren_position)
-fn extract_parenthesized_content(input: &[u8]) -> std::result::Result<(Vec<u8>, usize), nom::Err<nom::error::Error<&[u8]>>> {
+#[allow(clippy::type_complexity)]
+fn extract_parenthesized_content(
+    input: &[u8],
+) -> std::result::Result<(Vec<u8>, usize), nom::Err<nom::error::Error<&[u8]>>> {
     let mut content = Vec::new();
     let mut i = 0;
     let mut depth = 1; // Track nested parentheses
@@ -683,7 +699,10 @@ fn extract_parenthesized_content(input: &[u8]) -> std::result::Result<(Vec<u8>, 
     }
 
     // Unclosed parentheses
-    Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Char)))
+    Err(nom::Err::Error(nom::error::Error::new(
+        input,
+        nom::error::ErrorKind::Char,
+    )))
 }
 
 /// Parses a PDF hex string: <hexdigits>

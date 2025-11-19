@@ -583,7 +583,7 @@ fn parse_header_basic_info(data: &[u8], metadata: &mut HashMap<String, TagValue>
 
 /// Maps ICC profile class signature to human-readable name
 fn get_profile_class_name(class: &str) -> &str {
-    match class.as_ref() {
+    match class {
         "scnr" => "Input Device Profile",
         "mntr" => "Display Device Profile",
         "prtr" => "Output Device Profile",
@@ -760,7 +760,10 @@ fn parse_device_attributes(data: &[u8], metadata: &mut HashMap<String, TagValue>
 /// Parses rendering intent and illuminant from header
 ///
 /// Extracts rendering intent and connection space illuminant from bytes 64-79
-fn parse_header_rendering_info(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Result<()> {
+fn parse_header_rendering_info(
+    data: &[u8],
+    metadata: &mut HashMap<String, TagValue>,
+) -> Result<()> {
     // Rendering Intent (bytes 64-67)
     if data.len() < 68 {
         return Ok(());
@@ -970,11 +973,7 @@ fn handle_text_description_tags(
 /// Handles XYZ coordinate type tags (wtpt, bkpt, rXYZ, gXYZ, bXYZ, lumi)
 ///
 /// Returns true if the tag was handled, false otherwise
-fn handle_xyz_tags(
-    sig: &str,
-    tag_data: &[u8],
-    metadata: &mut HashMap<String, TagValue>,
-) -> bool {
+fn handle_xyz_tags(sig: &str, tag_data: &[u8], metadata: &mut HashMap<String, TagValue>) -> bool {
     let (key, handled) = match sig {
         "wtpt" => ("MediaWhitePoint", true),
         "bkpt" => ("MediaBlackPoint", true),
@@ -1001,11 +1000,7 @@ fn handle_xyz_tags(
 ///
 /// These contain binary curve data that should be extracted with -b option.
 /// Returns true if the tag was handled, false otherwise
-fn handle_curve_tags(
-    sig: &str,
-    tag_size: usize,
-    metadata: &mut HashMap<String, TagValue>,
-) -> bool {
+fn handle_curve_tags(sig: &str, tag_size: usize, metadata: &mut HashMap<String, TagValue>) -> bool {
     let (key, handled) = match sig {
         "rTRC" => ("RedToneReproductionCurve", true),
         "gTRC" => ("GreenToneReproductionCurve", true),

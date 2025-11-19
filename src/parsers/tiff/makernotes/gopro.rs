@@ -37,8 +37,8 @@
 #![allow(unused_imports)]
 
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
-use std::collections::HashMap;
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 
 use super::shared::array_extractors::{extract_i16_array, extract_string};
 use super::shared::generic_decoders::{ON_OFF, YES_NO};
@@ -102,139 +102,163 @@ const GOPRO_SIGNATURE: &[u8] = b"GoPro";
 // duplication from 181% to under 50% while maintaining all functionality.
 
 // Field of View decoder - GoPro's FOV options
-const_decoder!(FOV, i16, [
-    (0, "Wide"),
-    (1, "Medium"),
-    (2, "Narrow"),
-    (3, "Linear"),
-    (4, "SuperView"),
-    (5, "Max SuperView"),
-    (6, "HyperView"),
-]);
+const_decoder!(
+    FOV,
+    i16,
+    [
+        (0, "Wide"),
+        (1, "Medium"),
+        (2, "Narrow"),
+        (3, "Linear"),
+        (4, "SuperView"),
+        (5, "Max SuperView"),
+        (6, "HyperView"),
+    ]
+);
 
 // White Balance decoder - Temperature presets and Auto/Native modes
-const_decoder!(WHITE_BALANCE, i16, [
-    (0, "Auto"),
-    (1, "3000K"),
-    (2, "4000K"),
-    (3, "4500K"),
-    (4, "5000K"),
-    (5, "5500K"),
-    (6, "6000K"),
-    (7, "6500K"),
-    (8, "Native"),
-]);
+const_decoder!(
+    WHITE_BALANCE,
+    i16,
+    [
+        (0, "Auto"),
+        (1, "3000K"),
+        (2, "4000K"),
+        (3, "4500K"),
+        (4, "5000K"),
+        (5, "5500K"),
+        (6, "6000K"),
+        (7, "6500K"),
+        (8, "Native"),
+    ]
+);
 
 // Color Profile decoder - GoPro's color modes
-const_decoder!(COLOR_PROFILE, i16, [
-    (0, "GoPro Color"),
-    (1, "Flat"),
-    (2, "Vibrant"),
-    (3, "Natural"),
-]);
+const_decoder!(
+    COLOR_PROFILE,
+    i16,
+    [
+        (0, "GoPro Color"),
+        (1, "Flat"),
+        (2, "Vibrant"),
+        (3, "Natural"),
+    ]
+);
 
 // Sharpness Level decoder - Low/Medium/High
-const_decoder!(SHARPNESS, i16, [
-    (0, "Low"),
-    (1, "Medium"),
-    (2, "High"),
-]);
+const_decoder!(SHARPNESS, i16, [(0, "Low"), (1, "Medium"), (2, "High"),]);
 
 // Contrast Level decoder - Protune contrast range
-const_decoder!(CONTRAST, i16, [
-    (-2, "Very Low"),
-    (-1, "Low"),
-    (0, "Normal"),
-    (1, "High"),
-    (2, "Very High"),
-]);
+const_decoder!(
+    CONTRAST,
+    i16,
+    [
+        (-2, "Very Low"),
+        (-1, "Low"),
+        (0, "Normal"),
+        (1, "High"),
+        (2, "Very High"),
+    ]
+);
 
 // Saturation Level decoder - Same range as contrast
-const_decoder!(SATURATION, i16, [
-    (-2, "Very Low"),
-    (-1, "Low"),
-    (0, "Normal"),
-    (1, "High"),
-    (2, "Very High"),
-]);
+const_decoder!(
+    SATURATION,
+    i16,
+    [
+        (-2, "Very Low"),
+        (-1, "Low"),
+        (0, "Normal"),
+        (1, "High"),
+        (2, "Very High"),
+    ]
+);
 
 // Metering Mode decoder - Center/Spot/Matrix
-const_decoder!(METERING, i16, [
-    (0, "Center"),
-    (1, "Spot"),
-    (2, "Matrix"),
-]);
+const_decoder!(METERING, i16, [(0, "Center"), (1, "Spot"), (2, "Matrix"),]);
 
 // HyperSmooth Level decoder - Off through Auto Boost
-const_decoder!(HYPERSMOOTH, i16, [
-    (0, "Off"),
-    (1, "On"),
-    (2, "High"),
-    (3, "Boost"),
-    (4, "Auto Boost"),
-]);
+const_decoder!(
+    HYPERSMOOTH,
+    i16,
+    [
+        (0, "Off"),
+        (1, "On"),
+        (2, "High"),
+        (3, "Boost"),
+        (4, "Auto Boost"),
+    ]
+);
 
 // Video Resolution decoder - 4K, 5K, and specialty modes
-const_decoder!(RESOLUTION, i16, [
-    (0, "4K"),
-    (1, "2.7K"),
-    (2, "2.7K 4:3"),
-    (3, "1440p"),
-    (4, "1080p"),
-    (5, "720p"),
-    (6, "5.3K"),
-    (7, "5K"),
-    (8, "4K 4:3"),
-    (9, "2K"),
-    (10, "5.3K 4:3"),
-]);
+const_decoder!(
+    RESOLUTION,
+    i16,
+    [
+        (0, "4K"),
+        (1, "2.7K"),
+        (2, "2.7K 4:3"),
+        (3, "1440p"),
+        (4, "1080p"),
+        (5, "720p"),
+        (6, "5.3K"),
+        (7, "5K"),
+        (8, "4K 4:3"),
+        (9, "2K"),
+        (10, "5.3K 4:3"),
+    ]
+);
 
 // Video Encoding decoder - Codec options
-const_decoder!(VIDEO_ENCODING, i16, [
-    (0, "H.264"),
-    (1, "H.265 (HEVC)"),
-    (2, "H.264 High Profile"),
-    (3, "H.265 10-bit"),
-]);
+const_decoder!(
+    VIDEO_ENCODING,
+    i16,
+    [
+        (0, "H.264"),
+        (1, "H.265 (HEVC)"),
+        (2, "H.264 High Profile"),
+        (3, "H.265 10-bit"),
+    ]
+);
 
 // SuperPhoto Mode decoder - Off/Auto/HDR
-const_decoder!(SUPER_PHOTO, i16, [
-    (0, "Off"),
-    (1, "Auto"),
-    (2, "HDR"),
-]);
+const_decoder!(SUPER_PHOTO, i16, [(0, "Off"), (1, "Auto"), (2, "HDR"),]);
 
 // Night Photo Mode decoder - Exposure time options
-const_decoder!(NIGHT_PHOTO, i16, [
-    (0, "Off"),
-    (1, "Auto"),
-    (2, "2s"),
-    (3, "5s"),
-    (4, "10s"),
-    (5, "15s"),
-    (6, "20s"),
-    (7, "30s"),
-]);
+const_decoder!(
+    NIGHT_PHOTO,
+    i16,
+    [
+        (0, "Off"),
+        (1, "Auto"),
+        (2, "2s"),
+        (3, "5s"),
+        (4, "10s"),
+        (5, "15s"),
+        (6, "20s"),
+        (7, "30s"),
+    ]
+);
 
 // Burst Rate decoder - Photos per second
-const_decoder!(BURST_RATE, i16, [
-    (0, "3/1s"),
-    (1, "5/1s"),
-    (2, "10/1s"),
-    (3, "10/2s"),
-    (4, "10/3s"),
-    (5, "30/1s"),
-    (6, "30/2s"),
-    (7, "30/3s"),
-    (8, "30/6s"),
-]);
+const_decoder!(
+    BURST_RATE,
+    i16,
+    [
+        (0, "3/1s"),
+        (1, "5/1s"),
+        (2, "10/1s"),
+        (3, "10/2s"),
+        (4, "10/3s"),
+        (5, "30/1s"),
+        (6, "30/2s"),
+        (7, "30/3s"),
+        (8, "30/6s"),
+    ]
+);
 
 // Camera Orientation decoder - Up/Down/Auto
-const_decoder!(ORIENTATION, i16, [
-    (0, "Up"),
-    (1, "Down"),
-    (2, "Auto"),
-]);
+const_decoder!(ORIENTATION, i16, [(0, "Up"), (1, "Down"), (2, "Auto"),]);
 
 // ============================================================================
 // Tag Registry
@@ -273,7 +297,6 @@ static GOPRO_TAGS: Lazy<TagRegistry> = Lazy::new(|| {
         .register_simple_i16(GOPRO_NIGHT_PHOTO, "NightPhoto", &NIGHT_PHOTO)
         .register_simple_i16(GOPRO_BURST_RATE, "BurstRate", &BURST_RATE)
         .register_simple_i16(GOPRO_ORIENTATION, "Orientation", &ORIENTATION)
-
         // ON/OFF boolean tags - use helper function for boolean conversion
         .register_i16(GOPRO_LOW_LIGHT, "LowLight", decode_on_off)
         .register_i16(GOPRO_PROTUNE, "Protune", decode_on_off)
@@ -285,10 +308,8 @@ static GOPRO_TAGS: Lazy<TagRegistry> = Lazy::new(|| {
         .register_i16(GOPRO_RAW_AUDIO, "RawAudio", decode_on_off)
         .register_i16(GOPRO_WIND_NOISE, "WindNoiseReduction", decode_on_off)
         .register_i16(GOPRO_LIVE_BURST, "LiveBurst", decode_on_off)
-
         // YES/NO boolean tag
         .register_i16(GOPRO_GPS_FIX, "GPSFix", decode_yes_no)
-
         // Custom i16 decoders - require mathematical transformations
         .register_i16(GOPRO_FRAME_RATE, "FrameRate", format_frame_rate)
         .register_i16(GOPRO_EXPOSURE, "ExposureCompensation", format_exposure)
@@ -296,10 +317,17 @@ static GOPRO_TAGS: Lazy<TagRegistry> = Lazy::new(|| {
         .register_i16(GOPRO_DIGITAL_ZOOM, "DigitalZoom", format_digital_zoom)
         .register_i16(GOPRO_TIMEWARP_SPEED, "TimeWarpSpeed", format_timewarp_speed)
         .register_i16(GOPRO_BIT_RATE, "BitRate", format_bitrate)
-        .register_i16(GOPRO_TIMELAPSE_INTERVAL, "TimelapseInterval", format_interval)
-        .register_i16(GOPRO_NIGHT_LAPSE_INTERVAL, "NightLapseInterval", format_interval)
+        .register_i16(
+            GOPRO_TIMELAPSE_INTERVAL,
+            "TimelapseInterval",
+            format_interval,
+        )
+        .register_i16(
+            GOPRO_NIGHT_LAPSE_INTERVAL,
+            "NightLapseInterval",
+            format_interval,
+        )
         .register_i16(GOPRO_LOOP_DURATION, "LoopDuration", format_loop_duration)
-
         // Raw value tags - no decoding needed, displayed as-is
         .register_raw(GOPRO_ISO_MIN, "ISOMin")
         .register_raw(GOPRO_ISO_MAX, "ISOMax")

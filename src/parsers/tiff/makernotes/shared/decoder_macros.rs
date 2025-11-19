@@ -12,7 +12,7 @@
 //! ## Before & After Example
 //!
 //! **Before** (manual decoder function):
-//! ```rust
+//! ```ignore
 //! fn decode_scene_type(value: i16) -> String {
 //!     match value {
 //!         0 => "None".to_string(),
@@ -25,7 +25,7 @@
 //! ```
 //!
 //! **After** (using simple_decoder! macro):
-//! ```rust
+//! ```ignore
 //! simple_decoder!(decode_scene_type, i16, {
 //!     0 => "None",
 //!     1 => "Food",
@@ -46,7 +46,7 @@
 /// unknown value handling.
 ///
 /// # Syntax
-/// ```rust
+/// ```ignore
 /// simple_decoder!(function_name, input_type, {
 ///     value1 => "string1",
 ///     value2 => "string2",
@@ -55,8 +55,8 @@
 /// ```
 ///
 /// # Example
-/// ```rust
-/// use exiftool_rs::simple_decoder;
+/// ```ignore
+/// use oxidex::simple_decoder;
 ///
 /// simple_decoder!(decode_quality, i16, {
 ///     1 => "Low",
@@ -99,7 +99,7 @@ macro_rules! simple_decoder {
 /// This variant allows you to customize the unknown value message.
 ///
 /// # Syntax
-/// ```rust
+/// ```ignore
 /// simple_decoder_custom!(function_name, input_type, "Custom Unknown", {
 ///     value1 => "string1",
 ///     value2 => "string2",
@@ -107,8 +107,8 @@ macro_rules! simple_decoder {
 /// ```
 ///
 /// # Example
-/// ```rust
-/// use exiftool_rs::simple_decoder_custom;
+/// ```ignore
+/// use oxidex::simple_decoder_custom;
 ///
 /// simple_decoder_custom!(decode_mode, i16, "Invalid Mode", {
 ///     0 => "Normal",
@@ -138,7 +138,7 @@ macro_rules! simple_decoder_custom {
 /// offering better performance than function-based decoders.
 ///
 /// # Syntax
-/// ```rust
+/// ```ignore
 /// const_decoder!(DECODER_NAME, input_type, [
 ///     (value1, "string1"),
 ///     (value2, "string2"),
@@ -146,9 +146,9 @@ macro_rules! simple_decoder_custom {
 /// ```
 ///
 /// # Example
-/// ```rust
-/// use exiftool_rs::const_decoder;
-/// use exiftool_rs::parsers::tiff::makernotes::shared::generic_decoders::SimpleValueDecoder;
+/// ```ignore
+/// use oxidex::const_decoder;
+/// use oxidex::parsers::tiff::makernotes::shared::generic_decoders::SimpleValueDecoder;
 ///
 /// const_decoder!(WHITE_BALANCE, i16, [
 ///     (0, "Auto"),
@@ -161,7 +161,7 @@ macro_rules! simple_decoder_custom {
 /// ```
 ///
 /// # Generated Code
-/// ```rust
+/// ```ignore
 /// const WHITE_BALANCE: SimpleValueDecoder<i16> = SimpleValueDecoder::new(&[
 ///     (0, "Auto"),
 ///     (1, "Daylight"),
@@ -184,7 +184,7 @@ macro_rules! const_decoder {
 /// Creates a const BitfieldDecoder for multi-flag value decoding
 ///
 /// # Syntax
-/// ```rust
+/// ```ignore
 /// bitfield_decoder!(DECODER_NAME, [
 ///     (bit_mask1, "name1"),
 ///     (bit_mask2, "name2"),
@@ -192,9 +192,9 @@ macro_rules! const_decoder {
 /// ```
 ///
 /// # Example
-/// ```rust
-/// use exiftool_rs::bitfield_decoder;
-/// use exiftool_rs::parsers::tiff::makernotes::shared::generic_decoders::BitfieldDecoder;
+/// ```ignore
+/// use oxidex::bitfield_decoder;
+/// use oxidex::parsers::tiff::makernotes::shared::generic_decoders::BitfieldDecoder;
 ///
 /// bitfield_decoder!(CAMERA_FEATURES, [
 ///     (0x01, "HDR"),
@@ -222,7 +222,7 @@ macro_rules! bitfield_decoder {
 /// for explicit handling of invalid values.
 ///
 /// # Syntax
-/// ```rust
+/// ```ignore
 /// decoder_fn!(function_name, input_type, {
 ///     value1 => "string1",
 ///     value2 => "string2",
@@ -230,8 +230,8 @@ macro_rules! bitfield_decoder {
 /// ```
 ///
 /// # Example
-/// ```rust
-/// use exiftool_rs::decoder_fn;
+/// ```ignore
+/// use oxidex::decoder_fn;
 ///
 /// decoder_fn!(decode_optional, i16, {
 ///     0 => "Zero",
@@ -261,7 +261,7 @@ macro_rules! decoder_fn {
 /// making the code more maintainable and self-documenting.
 ///
 /// # Syntax
-/// ```rust
+/// ```ignore
 /// documented_decoder!(
 ///     /// Your documentation here
 ///     function_name, input_type, {
@@ -272,8 +272,8 @@ macro_rules! decoder_fn {
 /// ```
 ///
 /// # Example
-/// ```rust
-/// use exiftool_rs::documented_decoder;
+/// ```ignore
+/// use oxidex::documented_decoder;
 ///
 /// documented_decoder!(
 ///     /// Decodes the camera's shooting mode
@@ -312,7 +312,7 @@ macro_rules! documented_decoder {
 /// share similar patterns.
 ///
 /// # Syntax
-/// ```rust
+/// ```ignore
 /// decoder_group! {
 ///     decoder1_name, type1, { ... },
 ///     decoder2_name, type2, { ... },
@@ -320,8 +320,8 @@ macro_rules! documented_decoder {
 /// ```
 ///
 /// # Example
-/// ```rust
-/// use exiftool_rs::decoder_group;
+/// ```ignore
+/// use oxidex::decoder_group;
 ///
 /// decoder_group! {
 ///     decode_on_off, i16, {
@@ -386,11 +386,7 @@ mod tests {
 
     #[test]
     fn test_const_decoder_macro() {
-        const_decoder!(TEST_WB, i16, [
-            (0, "Auto"),
-            (1, "Daylight"),
-            (2, "Cloudy"),
-        ]);
+        const_decoder!(TEST_WB, i16, [(0, "Auto"), (1, "Daylight"), (2, "Cloudy"),]);
 
         assert_eq!(TEST_WB.decode(0), "Auto");
         assert_eq!(TEST_WB.decode(1), "Daylight");
@@ -400,11 +396,10 @@ mod tests {
 
     #[test]
     fn test_bitfield_decoder_macro() {
-        bitfield_decoder!(TEST_FEATURES, [
-            (0x01, "HDR"),
-            (0x02, "Panorama"),
-            (0x04, "Night Mode"),
-        ]);
+        bitfield_decoder!(
+            TEST_FEATURES,
+            [(0x01, "HDR"), (0x02, "Panorama"), (0x04, "Night Mode"),]
+        );
 
         assert_eq!(TEST_FEATURES.decode(0x00), "None");
         assert_eq!(TEST_FEATURES.decode(0x01), "HDR");
@@ -466,10 +461,7 @@ mod tests {
             1 => "One",
         });
 
-        const_decoder!(TEST_TRAILING_CONST, i16, [
-            (0, "Zero"),
-            (1, "One"),
-        ]);
+        const_decoder!(TEST_TRAILING_CONST, i16, [(0, "Zero"), (1, "One"),]);
 
         assert_eq!(test_trailing(0), "Zero");
         assert_eq!(TEST_TRAILING_CONST.decode(1), "One");

@@ -29,10 +29,12 @@
 #![allow(unused_imports)]
 
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
-use std::collections::HashMap;
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 
-use super::shared::array_extractors::{extract_i16_array, extract_i16_value, extract_u32_value, extract_string};
+use super::shared::array_extractors::{
+    extract_i16_array, extract_i16_value, extract_string, extract_u32_value,
+};
 use super::shared::generic_decoders::{SimpleValueDecoder, ON_OFF};
 use super::shared::ifd_parser_base::{parse_ifd_entries, IfdParserConfig};
 use super::shared::tag_registry::TagRegistry;
@@ -70,55 +72,63 @@ const SAMSUNG_SIGNATURE: &[u8] = b"Samsung";
 // from 1294% to under 50% while maintaining all functionality.
 
 // Scene Optimizer mode decoder (Off/On/Auto)
-const_decoder!(SCENE_OPTIMIZER, i16, [
-    (0, "Off"),
-    (1, "On"),
-    (2, "Auto"),
-]);
+const_decoder!(SCENE_OPTIMIZER, i16, [(0, "Off"), (1, "On"), (2, "Auto"),]);
 
 // AI scene detection result decoder
-const_decoder!(SCENE_TYPE, i16, [
-    (0, "None"),
-    (1, "Food"),
-    (2, "Sunset"),
-    (3, "Blue Sky"),
-    (4, "Snow"),
-    (5, "Greenery"),
-    (6, "Beach"),
-    (7, "Night"),
-    (8, "Flower"),
-    (9, "Indoor"),
-    (10, "Pet"),
-    (11, "Text"),
-    (12, "Backlit"),
-]);
+const_decoder!(
+    SCENE_TYPE,
+    i16,
+    [
+        (0, "None"),
+        (1, "Food"),
+        (2, "Sunset"),
+        (3, "Blue Sky"),
+        (4, "Snow"),
+        (5, "Greenery"),
+        (6, "Beach"),
+        (7, "Night"),
+        (8, "Flower"),
+        (9, "Indoor"),
+        (10, "Pet"),
+        (11, "Text"),
+        (12, "Backlit"),
+    ]
+);
 
 // Single Take mode status decoder
-const_decoder!(SINGLE_TAKE, i16, [
-    (0, "Off"),
-    (1, "Recording"),
-    (2, "Processing"),
-]);
+const_decoder!(
+    SINGLE_TAKE,
+    i16,
+    [(0, "Off"), (1, "Recording"), (2, "Processing"),]
+);
 
 // Portrait mode effect type decoder
-const_decoder!(PORTRAIT_EFFECT, i16, [
-    (0, "None"),
-    (1, "Blur"),
-    (2, "Spin"),
-    (3, "Zoom"),
-    (4, "Color Point"),
-    (5, "Glitch"),
-]);
+const_decoder!(
+    PORTRAIT_EFFECT,
+    i16,
+    [
+        (0, "None"),
+        (1, "Blur"),
+        (2, "Spin"),
+        (3, "Zoom"),
+        (4, "Color Point"),
+        (5, "Glitch"),
+    ]
+);
 
 // Multi-camera lens type decoder
-const_decoder!(LENS_TYPE, i16, [
-    (0, "Wide (Main)"),
-    (1, "Ultra Wide"),
-    (2, "Telephoto"),
-    (3, "Front Camera"),
-    (4, "Telephoto 3x"),
-    (5, "Telephoto 10x"),
-]);
+const_decoder!(
+    LENS_TYPE,
+    i16,
+    [
+        (0, "Wide (Main)"),
+        (1, "Ultra Wide"),
+        (2, "Telephoto"),
+        (3, "Front Camera"),
+        (4, "Telephoto 3x"),
+        (5, "Telephoto 10x"),
+    ]
+);
 
 /// Decodes digital zoom level (custom logic: 10 = 1.0x, 100 = 10.0x)
 ///
@@ -172,18 +182,28 @@ static SAMSUNG_TAGS: Lazy<TagRegistry> = Lazy::new(|| {
         .register_simple_i16(SAMSUNG_PORTRAIT_EFFECT, "PortraitEffect", &PORTRAIT_EFFECT)
         .register_simple_i16(SAMSUNG_LENS_TYPE, "LensType", &LENS_TYPE)
         .register_i16(SAMSUNG_ZOOM_LEVEL, "ZoomLevel", decode_zoom_level)
-
         // Raw value tag (no decoder)
         .register_raw(SAMSUNG_SINGLE_TAKE_FRAME, "SingleTakeFrame")
-
         // Binary on/off tags - all use decode_binary_onoff
         .register_i16(SAMSUNG_EXPERT_RAW, "ExpertRAW", decode_binary_onoff)
-        .register_i16(SAMSUNG_MULTI_FRAME_NR, "MultiFrameNoiseReduction", decode_binary_onoff)
+        .register_i16(
+            SAMSUNG_MULTI_FRAME_NR,
+            "MultiFrameNoiseReduction",
+            decode_binary_onoff,
+        )
         .register_i16(SAMSUNG_DIRECTORS_VIEW, "DirectorsView", decode_binary_onoff)
         .register_i16(SAMSUNG_PRO_MODE, "ProMode", decode_binary_onoff)
-        .register_i16(SAMSUNG_OBJECT_TRACKING, "ObjectTracking", decode_binary_onoff)
+        .register_i16(
+            SAMSUNG_OBJECT_TRACKING,
+            "ObjectTracking",
+            decode_binary_onoff,
+        )
         .register_i16(SAMSUNG_NIGHT_MODE, "NightMode", decode_binary_onoff)
-        .register_i16(SAMSUNG_NIGHT_HYPERLAPSE, "NightHyperlapse", decode_binary_onoff)
+        .register_i16(
+            SAMSUNG_NIGHT_HYPERLAPSE,
+            "NightHyperlapse",
+            decode_binary_onoff,
+        )
         .register_i16(SAMSUNG_SUPER_STEADY, "SuperSteady", decode_binary_onoff)
         .register_i16(SAMSUNG_FOOD_MODE, "FoodMode", decode_binary_onoff)
 });
@@ -417,7 +437,10 @@ mod tests {
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
 
         assert!(result.is_ok());
-        assert_eq!(tags.get("Samsung:SceneOptimizer"), Some(&"Auto".to_string()));
+        assert_eq!(
+            tags.get("Samsung:SceneOptimizer"),
+            Some(&"Auto".to_string())
+        );
         assert_eq!(tags.get("Samsung:SceneType"), Some(&"Food".to_string()));
         assert_eq!(tags.get("Samsung:ExpertRAW"), Some(&"On".to_string()));
         assert_eq!(tags.get("Samsung:SingleTakeFrame"), Some(&"5".to_string()));
