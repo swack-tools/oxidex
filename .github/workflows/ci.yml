@@ -18,7 +18,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -269,3 +269,41 @@ jobs:
         run: |
           ls -lh target/${{ matrix.target }}/release/oxidex
           file target/${{ matrix.target }}/release/oxidex || true
+
+  coverage:
+    name: Code Coverage
+    runs-on: arc-runner-set
+    timeout-minutes: 30
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y wget build-essential pkg-config libssl-dev
+
+      - name: Install cargo-tarpaulin
+        run: |
+          if ! command -v cargo-tarpaulin &> /dev/null; then
+            echo "cargo-tarpaulin not found, installing..."
+            cargo install cargo-tarpaulin --locked
+          else
+            echo "cargo-tarpaulin found: $(cargo-tarpaulin --version)"
+          fi
+
+      - name: Generate coverage
+        run: |
+          cargo tarpaulin --verbose --all-features --workspace --timeout 300 --out xml --output-dir ./coverage
+        env:
+          CARGO_TERM_COLOR: always
+
+      - name: Upload coverage to Codacy
+        uses: codacy/codacy-coverage-reporter-action@89d6c85cfafaec52c72b6c5e8b2878d33104c699 # v1
+        with:
+          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          coverage-reports: coverage/cobertura.xml

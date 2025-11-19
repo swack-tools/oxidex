@@ -59,29 +59,38 @@ jobs:
 
   build-windows:
     name: Build Windows (x86_64)
-    runs-on: windows-latest
+    runs-on: arc-runner-set
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Install MinGW cross-compiler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y mingw-w64 gcc
 
       - name: Build release binary
-        run: cargo build --release --target x86_64-pc-windows-msvc
+        run: cargo build --release --target x86_64-pc-windows-gnu
+        env:
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
 
       - name: Create artifact directory
-        run: mkdir artifacts
+        run: mkdir -p artifacts
 
       - name: Copy binary to artifacts
         run: |
-          copy target\x86_64-pc-windows-msvc\release\oxidex.exe artifacts\oxidex-x86_64-pc-windows-msvc.exe
+          cp target/x86_64-pc-windows-gnu/release/oxidex.exe artifacts/oxidex-x86_64-pc-windows-gnu.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: oxidex-x86_64-pc-windows-msvc
-          path: artifacts/oxidex-x86_64-pc-windows-msvc.exe
+          name: oxidex-x86_64-pc-windows-gnu
+          path: artifacts/oxidex-x86_64-pc-windows-gnu.exe
           retention-days: 1
 
   build-macos:
@@ -242,7 +251,7 @@ jobs:
   create-release:
     name: Create GitHub Release
     needs: [build-linux, build-windows, build-macos]
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     permissions:
       contents: write
     steps:
@@ -265,7 +274,7 @@ jobs:
           # Linux ARM64 (musl static binary)
           cp artifacts/oxidex-aarch64-unknown-linux-musl/oxidex-aarch64-unknown-linux-musl release-assets/
           # Windows x64
-          cp artifacts/oxidex-x86_64-pc-windows-msvc/oxidex-x86_64-pc-windows-msvc.exe release-assets/
+          cp artifacts/oxidex-x86_64-pc-windows-gnu/oxidex-x86_64-pc-windows-gnu.exe release-assets/
           # macOS signed binary (ARM64)
           cp artifacts/oxidex-aarch64-apple-darwin/oxidex-aarch64-apple-darwin release-assets/
           # macOS DMG (signed and notarized)
@@ -287,7 +296,7 @@ jobs:
           - `oxidex-aarch64-unknown-linux-musl` - Linux ARM64 (musl, static binary)
 
           **Windows:**
-          - `oxidex-x86_64-pc-windows-msvc.exe` - Windows x86_64
+          - `oxidex-x86_64-pc-windows-gnu.exe` - Windows x86_64
 
           **macOS:**
           - `oxidex-aarch64-apple-darwin` - Signed macOS ARM64 binary
@@ -303,7 +312,7 @@ jobs:
           ```
 
           **Windows:**
-          Download and run `oxidex-x86_64-pc-windows-msvc.exe`
+          Download and run `oxidex-x86_64-pc-windows-gnu.exe`
 
           **macOS DMG:**
           1. Download and open the DMG file
@@ -328,3 +337,97 @@ jobs:
             release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-docs:
+    name: Update GitHub Pages
+    needs: create-release
+    runs-on: arc-runner-set
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Fetch main branch changelog
+        run: |
+          git fetch origin main
+          git show origin/main:CHANGELOG.md > main-changelog.md
+
+      - name: Update gh-pages changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Extract the section for this version from main branch changelog
+          # Look for the version heading and extract until the next version heading or end
+          awk -v ver="$VERSION" '
+            /^## \['"$VERSION"'\]/ { found=1; print; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' main-changelog.md > version-entry.md
+
+          # Check if we found the version entry
+          if [ ! -s version-entry.md ]; then
+            echo "Warning: No entry found for version $VERSION in main changelog"
+            echo "Creating a basic entry..."
+            cat > version-entry.md << EOF
+          ## [$VERSION] - $(date +%Y-%m-%d)
+
+          See [GitHub Release](https://github.com/swack-tools/oxidex/releases/tag/v$VERSION) for details.
+          EOF
+          fi
+
+          # Insert the new version entry after the ## [Unreleased] section
+          awk -v entry="$(cat version-entry.md)" '
+            /^## \[Unreleased\]/ {
+              print
+              # Print blank line, then the new entry, then another blank line
+              print ""
+              print entry
+              print ""
+              next
+            }
+            # Skip if this is the first occurrence of our version (avoid duplicates)
+            /^## \['"$VERSION"'\]/ && !seen { seen=1; next }
+            seen && /^## \[/ { seen=0 }
+            !seen || !/^## \['"$VERSION"'\]/
+          ' changelog.md > changelog-updated.md
+
+          mv changelog-updated.md changelog.md
+
+          # Clean up
+          rm -f main-changelog.md version-entry.md
+
+      - name: Update VitePress version dropdown
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Update the version in .vitepress/config.mts
+          sed -i "s/text: 'v[0-9.]*',/text: 'v$VERSION',/" .vitepress/config.mts
+
+          echo "✓ Updated version dropdown to v$VERSION"
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit and push changes
+        run: |
+          git add changelog.md .vitepress/config.mts
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "docs: update to v${{ steps.version.outputs.version }}"
+            git push origin gh-pages
+            echo "✓ Documentation updated on gh-pages"
+          fi
