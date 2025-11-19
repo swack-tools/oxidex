@@ -43,7 +43,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y wget build-essential
+          sudo apt-get install -y wget build-essential libssl-dev pkg-config
 
       - name: Build
         run: cargo build --release --verbose --all-features
@@ -88,7 +88,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y wget build-essential
+          sudo apt-get install -y wget build-essential libssl-dev pkg-config
           rustup component add clippy rustfmt
 
       - name: Run cargo-audit
@@ -121,7 +121,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y wget build-essential pkg-config libssl-dev
+          sudo apt-get install -y wget build-essential libssl-dev pkg-config pkg-config libssl-dev
 
       - name: Install Perl ExifTool
         run: |
@@ -184,7 +184,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y wget build-essential pkg-config libssl-dev
+          sudo apt-get install -y wget build-essential libssl-dev pkg-config pkg-config libssl-dev
 
       - name: Clean cargo to avoid cache corruption
         run: |
@@ -256,7 +256,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y wget build-essential pkg-config libssl-dev
+          sudo apt-get install -y wget build-essential libssl-dev pkg-config pkg-config libssl-dev
       - name: Install musl development tools
         run: |
           sudo apt-get update -qq
@@ -285,7 +285,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y wget build-essential pkg-config libssl-dev
+          sudo apt-get install -y wget build-essential libssl-dev pkg-config pkg-config libssl-dev
 
       - name: Install cargo-tarpaulin
         run: |
