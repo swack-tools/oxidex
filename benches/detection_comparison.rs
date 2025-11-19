@@ -20,17 +20,13 @@ fn bench_jpeg_detection(c: &mut Criterion) {
 
     // Benchmark signature-based detection
     group.bench_function("Signature", |b| {
-        b.iter(|| {
-            read_metadata_with_detector(black_box(path), DetectorMode::Signature)
-        });
+        b.iter(|| read_metadata_with_detector(black_box(path), DetectorMode::Signature));
     });
 
     // Benchmark Magika detection (only if feature is enabled)
     #[cfg(feature = "magika")]
     group.bench_function("Magika", |b| {
-        b.iter(|| {
-            read_metadata_with_detector(black_box(path), DetectorMode::Magika)
-        });
+        b.iter(|| read_metadata_with_detector(black_box(path), DetectorMode::Magika));
     });
 
     group.finish();
@@ -48,16 +44,12 @@ fn bench_png_detection(c: &mut Criterion) {
     let mut group = c.benchmark_group("PNG Detection");
 
     group.bench_function("Signature", |b| {
-        b.iter(|| {
-            read_metadata_with_detector(black_box(path), DetectorMode::Signature)
-        });
+        b.iter(|| read_metadata_with_detector(black_box(path), DetectorMode::Signature));
     });
 
     #[cfg(feature = "magika")]
     group.bench_function("Magika", |b| {
-        b.iter(|| {
-            read_metadata_with_detector(black_box(path), DetectorMode::Magika)
-        });
+        b.iter(|| read_metadata_with_detector(black_box(path), DetectorMode::Magika));
     });
 
     group.finish();
@@ -75,16 +67,12 @@ fn bench_tiff_detection(c: &mut Criterion) {
     let mut group = c.benchmark_group("TIFF Detection");
 
     group.bench_function("Signature", |b| {
-        b.iter(|| {
-            read_metadata_with_detector(black_box(path), DetectorMode::Signature)
-        });
+        b.iter(|| read_metadata_with_detector(black_box(path), DetectorMode::Signature));
     });
 
     #[cfg(feature = "magika")]
     group.bench_function("Magika", |b| {
-        b.iter(|| {
-            read_metadata_with_detector(black_box(path), DetectorMode::Magika)
-        });
+        b.iter(|| read_metadata_with_detector(black_box(path), DetectorMode::Magika));
     });
 
     group.finish();
@@ -108,26 +96,14 @@ fn bench_multi_format_detection(c: &mut Criterion) {
 
         let mut group = c.benchmark_group(format!("{} Format", format_name));
 
-        group.bench_with_input(
-            BenchmarkId::new("Signature", format_name),
-            &path,
-            |b, p| {
-                b.iter(|| {
-                    read_metadata_with_detector(black_box(p), DetectorMode::Signature)
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("Signature", format_name), &path, |b, p| {
+            b.iter(|| read_metadata_with_detector(black_box(p), DetectorMode::Signature));
+        });
 
         #[cfg(feature = "magika")]
-        group.bench_with_input(
-            BenchmarkId::new("Magika", format_name),
-            &path,
-            |b, p| {
-                b.iter(|| {
-                    read_metadata_with_detector(black_box(p), DetectorMode::Magika)
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("Magika", format_name), &path, |b, p| {
+            b.iter(|| read_metadata_with_detector(black_box(p), DetectorMode::Magika));
+        });
 
         group.finish();
     }

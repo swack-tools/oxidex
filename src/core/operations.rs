@@ -8,7 +8,6 @@ use super::{FileFormat, FileReader, MetadataMap, TagValue};
 use crate::core::validation::validate_tag_value_with_name;
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
-use crate::parsers::DetectorMode;
 use crate::parsers::archive::gz::parse_gz_metadata;
 use crate::parsers::archive::iso::parse_iso_metadata;
 use crate::parsers::archive::rar::parse_rar_metadata;
@@ -34,6 +33,7 @@ use crate::parsers::video::flv::parse_flv_metadata;
 use crate::parsers::video::mkv::parse_mkv_metadata;
 use crate::parsers::video::mts::parse_mts_metadata;
 use crate::parsers::video::webm::parse_webm_metadata;
+use crate::parsers::DetectorMode;
 // Font parsers
 use crate::parsers::document::epub::parse_epub_metadata;
 use crate::parsers::document::ooxml::parse_docx_metadata;
@@ -197,7 +197,10 @@ fn detect_format_with_mode(reader: &dyn FileReader, mode: DetectorMode) -> Resul
 /// )?;
 /// # Ok::<(), oxidex::error::ExifToolError>(())
 /// ```
-pub fn read_metadata_with_detector(path: &Path, detector_mode: DetectorMode) -> Result<MetadataMap> {
+pub fn read_metadata_with_detector(
+    path: &Path,
+    detector_mode: DetectorMode,
+) -> Result<MetadataMap> {
     // Step 1: Extract file system metadata (File:FileName, File:FileSize, etc.)
     // This is done first and independently of the file format
     let mut metadata = match crate::core::file_metadata::extract_file_metadata(path) {

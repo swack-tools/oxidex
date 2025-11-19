@@ -113,8 +113,16 @@ fn test_magika_vs_signature_equivalence() {
         match (signature_result, magika_result) {
             (Ok(sig_meta), Ok(mag_meta)) => {
                 // Both should extract metadata successfully
-                assert!(!sig_meta.is_empty(), "Signature detection failed for {}", file_path);
-                assert!(!mag_meta.is_empty(), "Magika detection failed for {}", file_path);
+                assert!(
+                    !sig_meta.is_empty(),
+                    "Signature detection failed for {}",
+                    file_path
+                );
+                assert!(
+                    !mag_meta.is_empty(),
+                    "Magika detection failed for {}",
+                    file_path
+                );
 
                 // File system tags should be identical
                 for tag in &["File:FileName", "File:FileSize"] {

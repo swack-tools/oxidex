@@ -67,16 +67,20 @@ use crate::core::FileFormat;
 #[cfg(feature = "magika")]
 pub fn detect_with_magika(data: &[u8]) -> io::Result<FileFormat> {
     // Create a new Magika session (sessions are lightweight and thread-safe)
-    let mut session = Session::new()
-        .map_err(|e| io::Error::new(
+    let mut session = Session::new().map_err(|e| {
+        io::Error::new(
             io::ErrorKind::Other,
-            format!("Failed to initialize Magika: {}", e)
-        ))?;
+            format!("Failed to initialize Magika: {}", e),
+        )
+    })?;
 
     // Perform AI-based detection
-    let result = session
-        .identify_content_sync(data)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Magika detection failed: {}", e)))?;
+    let result = session.identify_content_sync(data).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Magika detection failed: {}", e),
+        )
+    })?;
 
     // Map Magika label to our FileFormat enum
     magika_label_to_format(result.info().label)
@@ -197,48 +201,24 @@ mod tests {
     #[test]
     fn test_magika_label_mapping() {
         // Test common image formats
-        assert_eq!(
-            magika_label_to_format("jpeg").unwrap(),
-            FileFormat::JPEG
-        );
-        assert_eq!(
-            magika_label_to_format("png").unwrap(),
-            FileFormat::PNG
-        );
-        assert_eq!(
-            magika_label_to_format("gif").unwrap(),
-            FileFormat::GIF
-        );
+        assert_eq!(magika_label_to_format("jpeg").unwrap(), FileFormat::JPEG);
+        assert_eq!(magika_label_to_format("png").unwrap(), FileFormat::PNG);
+        assert_eq!(magika_label_to_format("gif").unwrap(), FileFormat::GIF);
 
         // Test video formats
         assert_eq!(
             magika_label_to_format("mp4").unwrap(),
             FileFormat::QuickTime
         );
-        assert_eq!(
-            magika_label_to_format("mkv").unwrap(),
-            FileFormat::MKV
-        );
+        assert_eq!(magika_label_to_format("mkv").unwrap(), FileFormat::MKV);
 
         // Test audio formats
-        assert_eq!(
-            magika_label_to_format("mp3").unwrap(),
-            FileFormat::MP3
-        );
-        assert_eq!(
-            magika_label_to_format("flac").unwrap(),
-            FileFormat::FLAC
-        );
+        assert_eq!(magika_label_to_format("mp3").unwrap(), FileFormat::MP3);
+        assert_eq!(magika_label_to_format("flac").unwrap(), FileFormat::FLAC);
 
         // Test documents
-        assert_eq!(
-            magika_label_to_format("pdf").unwrap(),
-            FileFormat::PDF
-        );
-        assert_eq!(
-            magika_label_to_format("docx").unwrap(),
-            FileFormat::DOCX
-        );
+        assert_eq!(magika_label_to_format("pdf").unwrap(), FileFormat::PDF);
+        assert_eq!(magika_label_to_format("docx").unwrap(), FileFormat::DOCX);
 
         // Test unsupported types
         assert_eq!(
