@@ -8,6 +8,7 @@ use super::{FileFormat, FileReader, MetadataMap, TagValue};
 use crate::core::validation::validate_tag_value_with_name;
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
+use crate::parsers::DetectorMode;
 use crate::parsers::archive::gz::parse_gz_metadata;
 use crate::parsers::archive::iso::parse_iso_metadata;
 use crate::parsers::archive::rar::parse_rar_metadata;
@@ -127,7 +128,76 @@ use std::path::Path;
 /// - File cannot be opened or read (IoError)
 /// - File format is unsupported (UnsupportedFormat)
 /// - File contains invalid or truncated metadata (ParseError)
+///
+/// # See Also
+///
+/// * `read_metadata_with_detector` - Version that supports AI-powered detection
 pub fn read_metadata(path: &Path) -> Result<MetadataMap> {
+    read_metadata_with_detector(path, DetectorMode::Signature)
+}
+
+/// Detect file format using the specified detection mode.
+///
+/// This helper function wraps format detection to support both signature-based
+/// and AI-powered (Magika) detection methods.
+fn detect_format_with_mode(reader: &dyn FileReader, mode: DetectorMode) -> Result<FileFormat> {
+    match mode {
+        DetectorMode::Signature => {
+            // Convert io::Error to ExifToolError
+            detect_format(reader).map_err(ExifToolError::from)
+        }
+        #[cfg(feature = "magika")]
+        DetectorMode::Magika => {
+            use crate::parsers::magika_detector::detect_with_magika;
+            let size = reader.size();
+            let data = reader.read(0, size as usize)?;
+            // Convert io::Error to ExifToolError
+            detect_with_magika(&data).map_err(ExifToolError::from)
+        }
+        #[cfg(not(feature = "magika"))]
+        DetectorMode::Magika => Err(ExifToolError::unsupported_format(
+            "Magika AI detection not available (build with --features magika)",
+        )),
+    }
+}
+
+/// Reads metadata from a file with specified detection mode.
+///
+/// This function extends `read_metadata` to support both signature-based and
+/// AI-powered file format detection. Use this when you want to enable Magika
+/// AI detection via the `--detector=magika` CLI flag.
+///
+/// # Arguments
+///
+/// * `path` - Path to the file to analyze
+/// * `detector_mode` - Detection mode (Signature or Magika)
+///
+/// # Returns
+///
+/// A MetadataMap containing all extracted metadata
+///
+/// # Examples
+///
+/// ```no_run
+/// use oxidex::core::operations::read_metadata_with_detector;
+/// use oxidex::parsers::DetectorMode;
+/// use std::path::Path;
+///
+/// // Default signature-based detection
+/// let metadata = read_metadata_with_detector(
+///     Path::new("photo.jpg"),
+///     DetectorMode::Signature
+/// )?;
+///
+/// // AI-powered detection (requires --features magika)
+/// # #[cfg(feature = "magika")]
+/// let metadata = read_metadata_with_detector(
+///     Path::new("photo.jpg"),
+///     DetectorMode::Magika
+/// )?;
+/// # Ok::<(), oxidex::error::ExifToolError>(())
+/// ```
+pub fn read_metadata_with_detector(path: &Path, detector_mode: DetectorMode) -> Result<MetadataMap> {
     // Step 1: Extract file system metadata (File:FileName, File:FileSize, etc.)
     // This is done first and independently of the file format
     let mut metadata = match crate::core::file_metadata::extract_file_metadata(path) {
@@ -142,8 +212,8 @@ pub fn read_metadata(path: &Path) -> Result<MetadataMap> {
     // Step 2: Open file with MMapReader for zero-copy access
     let reader = MMapReader::new(path)?;
 
-    // Step 3: Detect format via magic bytes
-    let mut format = detect_format(&reader)?;
+    // Step 3: Detect format using specified detector mode
+    let mut format = detect_format_with_mode(&reader, detector_mode)?;
 
     // Step 3b: Check for camera raw formats using filename + magic bytes
     // Many raw formats are TIFF-based and need filename context for proper detection

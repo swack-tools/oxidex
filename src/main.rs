@@ -9,7 +9,7 @@ use oxidex::cli::output_formatter::{
 };
 use oxidex::cli::rename;
 use oxidex::core::date_shift::{shift_metadata_dates, ShiftOperation};
-use oxidex::core::operations::{copy_metadata, modify_tag, read_metadata};
+use oxidex::core::operations::{copy_metadata, modify_tag, read_metadata_with_detector};
 use oxidex::core::tag_value::TagValue;
 use std::process;
 
@@ -166,7 +166,7 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
 
 /// Handles read operations (displaying metadata)
 fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
-    match read_metadata(file) {
+    match read_metadata_with_detector(file, args.detector) {
         Ok(metadata) => {
             // Check if any metadata was found
             if metadata.is_empty() {

@@ -5,7 +5,7 @@
 //! metadata operations on large file collections.
 
 use crate::cli::args::CliArgs;
-use crate::core::operations::{modify_tag, read_metadata};
+use crate::core::operations::{modify_tag, read_metadata_with_detector};
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -249,7 +249,7 @@ fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
     let results: Vec<_> = files
         .par_iter()
         .map(|path| {
-            let result = read_metadata(path);
+            let result = read_metadata_with_detector(path, args.detector);
 
             match &result {
                 Ok(_) => {

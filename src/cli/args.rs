@@ -5,9 +5,30 @@
 use lexopt::prelude::*;
 use std::path::PathBuf;
 
+// Re-export DetectorMode from parsers module
+pub use crate::parsers::DetectorMode;
+
+impl std::str::FromStr for DetectorMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "signature" => Ok(DetectorMode::Signature),
+            "magika" => Ok(DetectorMode::Magika),
+            _ => Err(format!(
+                "Invalid detector mode '{}'. Valid options: signature, magika",
+                s
+            )),
+        }
+    }
+}
+
 /// A modern, high-performance Rust reimplementation of ExifTool
 #[derive(Debug)]
 pub struct CliArgs {
+    /// File type detection mode (signature or magika)
+    pub detector: DetectorMode,
+
     /// Output in JSON format
     pub json: bool,
 
@@ -81,6 +102,7 @@ impl CliArgs {
     /// - Help (`--help`, `-h`) or version (`--version`, `-V`) is requested (exits immediately)
     pub fn parse() -> Result<Self, lexopt::Error> {
         // Initialize with default values
+        let mut detector = DetectorMode::default();
         let mut json = false;
         let mut csv = false;
         let mut short_format = false;
@@ -210,6 +232,16 @@ impl CliArgs {
                 Short('n') => {
                     dry_run = true;
                 }
+                // Detector mode (signature or magika)
+                Long("detector") => {
+                    let value_str = parser.value()?.string()?;
+                    detector = value_str.parse().map_err(|e| {
+                        lexopt::Error::Custom(Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            e,
+                        )))
+                    })?;
+                }
                 // Value argument (file path or positional argument)
                 Value(val) => {
                     args.push(val.string()?);
@@ -255,6 +287,7 @@ impl CliArgs {
         }
 
         Ok(CliArgs {
+            detector,
             json,
             csv,
             short_format,
@@ -548,6 +581,7 @@ fn print_help() {
         "        --backup                Create backup copy before modifying file (.bak extension)"
     );
     println!("        --readonly              Enable read-only mode to prevent file modifications");
+    println!("        --detector VALUE        File detection mode: signature (default) or magika (AI-powered)");
     println!("        --TagsFromFile VALUE    Copy metadata from source file");
     println!(
         "    -d VALUE                    Date format string for DateTime tags in filename patterns"

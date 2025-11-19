@@ -5,6 +5,21 @@
 
 #![allow(dead_code)]
 
+/// File type detection mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectorMode {
+    /// Fast signature-based detection (default)
+    Signature,
+    /// AI-powered detection using Magika (requires --features magika)
+    Magika,
+}
+
+impl Default for DetectorMode {
+    fn default() -> Self {
+        DetectorMode::Signature
+    }
+}
+
 pub mod archive;
 pub mod audio;
 pub mod common;
