@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Optional Magika AI-Powered File Detection** - Google's deep learning model for enhanced file type identification
+  - **Feature**: `--features magika` cargo flag enables AI detection at build time
+  - **CLI**: `--detector=magika` flag activates AI detection at runtime
+  - **Accuracy**: ~99% detection accuracy across 200+ file formats
+  - **Integration**: Seamlessly integrated with existing signature-based detection
+  - **Zero Breaking Changes**: Fully opt-in, default behavior unchanged
+  - **Performance**: Benchmarks included for signature vs Magika comparison
+  - **Testing**: Comprehensive feature-gated integration tests (8 test cases)
+  - **Documentation**: Complete README and CLI help text coverage
+
 ## [1.1.0] - 2025-11-17
 
 ### Added

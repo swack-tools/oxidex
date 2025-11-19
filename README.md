@@ -18,6 +18,7 @@ OxiDex aims to provide a memory-safe, zero-cost abstraction alternative to the P
 - **API-First Design**: Native Rust library with C FFI bindings for cross-language integration
 - **Backward Compatibility**: CLI argument compatibility with original ExifTool for drop-in replacement scenarios
 - **Cross-Platform**: Windows, Linux, macOS support with native binaries
+- **AI-Powered Detection (Optional)**: Magika deep learning model for enhanced file type detection (~99% accuracy, 200+ formats)
 
 ## Architecture
 
@@ -211,15 +212,32 @@ For development or building from source:
 git clone https://github.com/swack-tools/oxidex.git
 cd oxidex
 
-# Build the project
+# Build the project (default, signature-based detection)
 cargo build --release
+
+# Build with Magika AI detection (optional)
+cargo build --release --features magika
 
 # Run
 ./target/release/oxidex
 
 # Optional: Install to system path
 cargo install --path .
+
+# Or install with Magika feature
+cargo install --path . --features magika
 ```
+
+#### Optional Features
+
+**Magika AI-Powered File Detection**
+
+OxiDex includes optional support for [Magika](https://github.com/google/magika), Google's deep learning model for file type identification, achieving ~99% accuracy across 200+ file formats.
+
+- **Enable with**: `--features magika` flag during build
+- **Use with**: `--detector=magika` CLI flag
+- **Benefits**: Enhanced detection accuracy for edge cases and uncommon formats
+- **Default**: Fast signature-based detection (no extra dependencies)
 
 ## Usage
 
@@ -246,6 +264,12 @@ oxidex -csv -r /path/to/photos/ > metadata.csv
 
 # Copy metadata between files
 oxidex -TagsFromFile source.jpg target.jpg
+
+# Use AI-powered file detection (requires --features magika build)
+oxidex --detector=magika photo.jpg
+
+# Explicit signature-based detection (default)
+oxidex --detector=signature photo.jpg
 
 # Date shifting (adjust all timestamps by offset)
 oxidex "-DateTimeOriginal+=1:0:0 0:0:0" photo.jpg
