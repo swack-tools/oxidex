@@ -25,5 +25,9 @@ pub mod tiff;
 pub mod video;
 pub mod xmp;
 
+// Optional AI-powered file detection (feature: magika)
+#[cfg(feature = "magika")]
+pub mod magika_detector;
+
 // Re-export the format detection function for convenient access
 pub use format_detector::detect_format;

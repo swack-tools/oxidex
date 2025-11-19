@@ -91,6 +91,11 @@ flate2 = "1.1"
 # ZIP Archive Support (for Office and document formats)
 zip = "0.6"
 
+# Optional AI-powered file detection (feature: magika)
+magika = { version = "1.0", optional = true }
+ort = { version = "2.0.0-rc.10", optional = true }
+tokio = { version = "1.42", features = ["rt"], optional = true }
+
 [build-dependencies]
 # HTTP client for downloading ExifTool source
 ureq = { version = "3.1", default-features = false, features = ["rustls"] }
@@ -162,7 +167,9 @@ incremental = false
 debug = true  # Enable debug symbols for profiling
 
 [features]
+default = []
 exiftool-comparison = []
+magika = ["dep:magika", "dep:ort", "dep:tokio"]
 
 # Debian Package Configuration (cargo-deb)
 # Install cargo-deb: cargo install cargo-deb
