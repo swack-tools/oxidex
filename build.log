@@ -1,0 +1,407 @@
+[1m[92m    Updating[0m crates.io index
+[1m[92m     Locking[0m 195 packages to latest compatible versions
+[1m[92m      Adding[0m criterion v0.7.0 [1m[33m(available: v0.8.0)[0m
+[1m[92m      Adding[0m generic-array v0.14.7 [1m[33m(available: v0.14.9)[0m
+[1m[92m      Adding[0m md5 v0.7.0 [1m[33m(available: v0.8.0)[0m
+[1m[92m      Adding[0m thiserror v1.0.69 [1m[33m(available: v2.0.17)[0m
+[1m[92m      Adding[0m zip v0.6.6 [1m[33m(available: v6.0.0)[0m
+[1m[92m Downloading[0m crates ...
+[1m[92m  Downloaded[0m adler2 v2.0.1
+[1m[92m  Downloaded[0m bitflags v2.10.0
+[1m[92m  Downloaded[0m log v0.4.29
+[1m[92m  Downloaded[0m thiserror-impl v1.0.69
+[1m[92m  Downloaded[0m untrusted v0.9.0
+[1m[92m  Downloaded[0m password-hash v0.4.2
+[1m[92m  Downloaded[0m unty v0.0.4
+[1m[92m  Downloaded[0m zstd-safe v5.0.2+zstd.1.5.2
+[1m[92m  Downloaded[0m zip v0.6.6
+[1m[92m  Downloaded[0m ureq-proto v0.5.3
+[1m[92m  Downloaded[0m typenum v1.19.0
+[1m[92m  Downloaded[0m subtle v2.6.1
+[1m[92m  Downloaded[0m sha2 v0.10.9
+[1m[92m  Downloaded[0m ryu v1.0.20
+[1m[92m  Downloaded[0m serde_yaml v0.9.34+deprecated
+[1m[92m  Downloaded[0m ureq v3.1.4
+[1m[92m  Downloaded[0m cc v1.2.49
+[1m[92m  Downloaded[0m http v1.4.0
+[1m[92m  Downloaded[0m webpki-roots v1.0.4
+[1m[92m  Downloaded[0m unicode-width v0.2.2
+[1m[92m  Downloaded[0m regex v1.12.2
+[1m[92m  Downloaded[0m rayon v1.11.0
+[1m[92m  Downloaded[0m aho-corasick v1.1.4
+[1m[92m  Downloaded[0m syn v2.0.111
+[1m[92m  Downloaded[0m quick-xml v0.38.4
+[1m[92m  Downloaded[0m portable-atomic v1.11.1
+[1m[92m  Downloaded[0m serde_json v1.0.145
+[1m[92m  Downloaded[0m nom v8.0.0
+[1m[92m  Downloaded[0m regex-syntax v0.8.8
+[1m[92m  Downloaded[0m hashbrown v0.16.1
+[1m[92m  Downloaded[0m aes v0.8.4
+[1m[92m  Downloaded[0m rustls v0.23.35
+[1m[92m  Downloaded[0m time v0.3.44
+[1m[92m  Downloaded[0m serde v1.0.228
+[1m[92m  Downloaded[0m rayon-core v1.13.0
+[1m[92m  Downloaded[0m rustix v1.1.2
+[1m[92m  Downloaded[0m miniz_oxide v0.8.9
+[1m[92m  Downloaded[0m indexmap v2.12.1
+[1m[92m  Downloaded[0m bytes v1.11.0
+[1m[92m  Downloaded[0m serde_core v1.0.228
+[1m[92m  Downloaded[0m rustls-webpki v0.103.8
+[1m[92m  Downloaded[0m proc-macro2 v1.0.103
+[1m[92m  Downloaded[0m memmap2 v0.9.9
+[1m[92m  Downloaded[0m rustls-pki-types v1.13.1
+[1m[92m  Downloaded[0m bzip2-sys v0.1.13+1.0.8
+[1m[92m  Downloaded[0m quote v1.0.42
+[1m[92m  Downloaded[0m pbkdf2 v0.11.0
+[1m[92m  Downloaded[0m regex-automata v0.4.13
+[1m[92m  Downloaded[0m num-traits v0.2.19
+[1m[92m  Downloaded[0m jobserver v0.1.34
+[1m[92m  Downloaded[0m zstd-sys v2.0.16+zstd.1.5.7
+[1m[92m  Downloaded[0m libc v0.2.178
+[1m[92m  Downloaded[0m httparse v1.10.1
+[1m[92m  Downloaded[0m hmac v0.12.1
+[1m[92m  Downloaded[0m bzip2 v0.4.4
+[1m[92m  Downloaded[0m bincode v2.0.1
+[1m[92m  Downloaded[0m anyhow v1.0.100
+[1m[92m  Downloaded[0m serde_derive v1.0.228
+[1m[92m  Downloaded[0m csv v1.4.0
+[1m[92m  Downloaded[0m same-file v1.0.6
+[1m[92m  Downloaded[0m rand_core v0.6.4
+[1m[92m  Downloaded[0m parking_lot_core v0.9.12
+[1m[92m  Downloaded[0m once_cell v1.21.3
+[1m[92m  Downloaded[0m inout v0.1.4
+[1m[92m  Downloaded[0m generic-array v0.14.7
+[1m[92m  Downloaded[0m digest v0.10.7
+[1m[92m  Downloaded[0m crossbeam-utils v0.8.21
+[1m[92m  Downloaded[0m crc32fast v1.5.0
+[1m[92m  Downloaded[0m constant_time_eq v0.1.5
+[1m[92m  Downloaded[0m encoding_rs v0.8.35
+[1m[92m  Downloaded[0m cfg-if v1.0.4
+[1m[92m  Downloaded[0m byteorder v1.5.0
+[1m[92m  Downloaded[0m block-buffer v0.10.4
+[1m[92m  Downloaded[0m bincode_derive v2.0.1
+[1m[92m  Downloaded[0m autocfg v1.5.0
+[1m[92m  Downloaded[0m smallvec v1.15.1
+[1m[92m  Downloaded[0m shlex v1.3.0
+[1m[92m  Downloaded[0m sha1 v0.10.6
+[1m[92m  Downloaded[0m powerfmt v0.2.0
+[1m[92m  Downloaded[0m iana-time-zone v0.1.64
+[1m[92m  Downloaded[0m fastrand v2.3.0
+[1m[92m  Downloaded[0m csv-core v0.1.13
+[1m[92m  Downloaded[0m tempfile v3.23.0
+[1m[92m  Downloaded[0m pkg-config v0.3.32
+[1m[92m  Downloaded[0m memchr v2.7.6
+[1m[92m  Downloaded[0m unsafe-libyaml v0.2.11
+[1m[92m  Downloaded[0m simd-adler32 v0.3.7
+[1m[92m  Downloaded[0m percent-encoding v2.3.2
+[1m[92m  Downloaded[0m equivalent v1.0.2
+[1m[92m  Downloaded[0m either v1.15.0
+[1m[92m  Downloaded[0m walkdir v2.5.0
+[1m[92m  Downloaded[0m unit-prefix v0.5.2
+[1m[92m  Downloaded[0m unicode-ident v1.0.22
+[1m[92m  Downloaded[0m ring v0.17.14
+[1m[92m  Downloaded[0m zstd v0.11.2+zstd.1.5.2
+[1m[92m  Downloaded[0m zeroize v1.8.2
+[1m[92m  Downloaded[0m virtue v0.0.18
+[1m[92m  Downloaded[0m version_check v0.9.5
+[1m[92m  Downloaded[0m utf-8 v0.7.6
+[1m[92m  Downloaded[0m time-core v0.1.6
+[1m[92m  Downloaded[0m num-conv v0.1.0
+[1m[92m  Downloaded[0m lexopt v0.3.1
+[1m[92m  Downloaded[0m getrandom v0.2.16
+[1m[92m  Downloaded[0m errno v0.3.14
+[1m[92m  Downloaded[0m crypto-common v0.1.7
+[1m[92m  Downloaded[0m cpufeatures v0.2.17
+[1m[92m  Downloaded[0m itoa v1.0.15
+[1m[92m  Downloaded[0m hex v0.4.3
+[1m[92m  Downloaded[0m getrandom v0.3.4
+[1m[92m  Downloaded[0m crossbeam-epoch v0.9.18
+[1m[92m  Downloaded[0m crc v3.4.0
+[1m[92m  Downloaded[0m cipher v0.4.4
+[1m[92m  Downloaded[0m md5 v0.7.0
+[1m[92m  Downloaded[0m flate2 v1.1.5
+[1m[92m  Downloaded[0m deranged v0.5.5
+[1m[92m  Downloaded[0m chrono v0.4.42
+[1m[92m  Downloaded[0m base64ct v1.8.1
+[1m[92m  Downloaded[0m thiserror v1.0.69
+[1m[92m  Downloaded[0m indicatif v0.18.3
+[1m[92m  Downloaded[0m find-msvc-tools v0.1.5
+[1m[92m  Downloaded[0m crossbeam-deque v0.8.6
+[1m[92m  Downloaded[0m crc-catalog v2.4.0
+[1m[92m  Downloaded[0m console v0.16.1
+[1m[92m  Downloaded[0m base64 v0.22.1
+[1m[92m  Downloaded[0m linux-raw-sys v0.11.0
+[1m[92m   Compiling[0m libc v0.2.178
+[1m[92m   Compiling[0m proc-macro2 v1.0.103
+[1m[92m   Compiling[0m quote v1.0.42
+[1m[92m   Compiling[0m parking_lot_core v0.9.12
+[1m[92m   Compiling[0m unicode-ident v1.0.22
+[1m[92m   Compiling[0m serde v1.0.228
+[1m[92m   Compiling[0m cfg-if v1.0.4
+[1m[92m   Compiling[0m smallvec v1.15.1
+[1m[92m   Compiling[0m serde_core v1.0.228
+[1m[92m   Compiling[0m thiserror v1.0.69
+[1m[92m   Compiling[0m itoa v1.0.15
+[1m[92m   Compiling[0m virtue v0.0.18
+[1m[92m   Compiling[0m syn v2.0.111
+[1m[92m   Compiling[0m bincode_derive v2.0.1
+[1m[92m   Compiling[0m once_cell v1.21.3
+[1m[92m   Compiling[0m jobserver v0.1.34
+[1m[92m   Compiling[0m find-msvc-tools v0.1.5
+[1m[92m   Compiling[0m shlex v1.3.0
+[1m[92m   Compiling[0m hashbrown v0.16.1
+[1m[92m   Compiling[0m equivalent v1.0.2
+[1m[92m   Compiling[0m cc v1.2.49
+[1m[92m   Compiling[0m indexmap v2.12.1
+[1m[92m   Compiling[0m ryu v1.0.20
+[1m[92m   Compiling[0m unsafe-libyaml v0.2.11
+[1m[92m   Compiling[0m unty v0.0.4
+[1m[92m   Compiling[0m serde_derive v1.0.228
+[1m[92m   Compiling[0m thiserror-impl v1.0.69
+[1m[92m   Compiling[0m version_check v0.9.5
+[1m[92m   Compiling[0m typenum v1.19.0
+[1m[92m   Compiling[0m generic-array v0.14.7
+[1m[92m   Compiling[0m pkg-config v0.3.32
+[1m[92m   Compiling[0m ring v0.17.14
+[1m[92m   Compiling[0m crypto-common v0.1.7
+[1m[92m   Compiling[0m zeroize v1.8.2
+[1m[92m   Compiling[0m subtle v2.6.1
+[1m[92m   Compiling[0m rustls-pki-types v1.13.1
+[1m[92m   Compiling[0m block-buffer v0.10.4
+[1m[92m   Compiling[0m zstd-sys v2.0.16+zstd.1.5.7
+[1m[92m   Compiling[0m getrandom v0.2.16
+[1m[92m   Compiling[0m httparse v1.10.1
+[1m[92m   Compiling[0m crossbeam-utils v0.8.21
+[1m[92m   Compiling[0m oxidex-tags-shared v0.1.0 (/home/runner/work/oxidex/oxidex/oxidex-tags-shared)
+[1m[92m   Compiling[0m bincode v2.0.1
+[1m[92m   Compiling[0m serde_yaml v0.9.34+deprecated
+[1m[92m   Compiling[0m untrusted v0.9.0
+[1m[92m   Compiling[0m digest v0.10.7
+[1m[92m   Compiling[0m cpufeatures v0.2.17
+[1m[92m   Compiling[0m oxidex-tags-core v1.0.4 (/home/runner/work/oxidex/oxidex/oxidex-tags-core)
+[1m[92m   Compiling[0m log v0.4.29
+[1m[92m   Compiling[0m memchr v2.7.6
+[1m[33mwarning[0m: oxidex-tags-core@1.0.4: Pre-compiled core_tags.yaml to binary format (284618 bytes)
+[1m[92m   Compiling[0m rustls v0.23.35
+[1m[92m   Compiling[0m bytes v1.11.0
+[1m[92m   Compiling[0m http v1.4.0
+[1m[92m   Compiling[0m aho-corasick v1.1.4
+[1m[92m   Compiling[0m bzip2-sys v0.1.13+1.0.8
+[1m[92m   Compiling[0m base64 v0.22.1
+[1m[92m   Compiling[0m regex-syntax v0.8.8
+[1m[92m   Compiling[0m autocfg v1.5.0
+[1m[92m   Compiling[0m zstd-safe v5.0.2+zstd.1.5.2
+[1m[92m   Compiling[0m crc32fast v1.5.0
+[1m[92m   Compiling[0m anyhow v1.0.100
+[1m[92m   Compiling[0m rustls-webpki v0.103.8
+[1m[92m   Compiling[0m regex-automata v0.4.13
+[1m[92m   Compiling[0m num-traits v0.2.19
+[1m[92m   Compiling[0m ureq-proto v0.5.3
+[1m[92m   Compiling[0m crossbeam-epoch v0.9.18
+[1m[92m   Compiling[0m oxidex-tags-specialty v1.0.4 (/home/runner/work/oxidex/oxidex/oxidex-tags-specialty)
+[1m[92m   Compiling[0m oxidex-tags-document v1.0.4 (/home/runner/work/oxidex/oxidex/oxidex-tags-document)
+[1m[92m   Compiling[0m oxidex-tags-camera v1.0.4 (/home/runner/work/oxidex/oxidex/oxidex-tags-camera)
+[1m[92m   Compiling[0m oxidex-tags-media v1.0.4 (/home/runner/work/oxidex/oxidex/oxidex-tags-media)
+[1m[92m   Compiling[0m oxidex-tags-image v1.0.4 (/home/runner/work/oxidex/oxidex/oxidex-tags-image)
+[1m[92m   Compiling[0m webpki-roots v1.0.4
+[1m[92m   Compiling[0m inout v0.1.4
+[1m[92m   Compiling[0m adler2 v2.0.1
+[1m[92m   Compiling[0m simd-adler32 v0.3.7
+[1m[92m   Compiling[0m rayon-core v1.13.0
+[1m[92m   Compiling[0m rand_core v0.6.4
+[1m[92m   Compiling[0m powerfmt v0.2.0
+[1m[92m   Compiling[0m getrandom v0.3.4
+[1m[92m   Compiling[0m utf-8 v0.7.6
+[1m[92m   Compiling[0m base64ct v1.8.1
+[1m[92m   Compiling[0m portable-atomic v1.11.1
+[1m[92m   Compiling[0m rustix v1.1.2
+[1m[92m   Compiling[0m percent-encoding v2.3.2
+[1m[92m   Compiling[0m ureq v3.1.4
+[1m[92m   Compiling[0m password-hash v0.4.2
+[1m[92m   Compiling[0m deranged v0.5.5
+[1m[92m   Compiling[0m miniz_oxide v0.8.9
+[1m[92m   Compiling[0m cipher v0.4.4
+[1m[33mwarning[0m: oxidex-tags-image@1.0.4: Pre-compiled image_tags.yaml to binary format (75281 bytes)
+[1m[33mwarning[0m: oxidex-tags-media@1.0.4: Pre-compiled media_tags.yaml to binary format (464850 bytes)
+[1m[33mwarning[0m: oxidex-tags-camera@1.0.4: Pre-compiled camera_tags.yaml to binary format (1129028 bytes)
+[1m[33mwarning[0m: oxidex-tags-document@1.0.4: Pre-compiled document_tags.yaml to binary format (49303 bytes)
+[1m[92m   Compiling[0m crossbeam-deque v0.8.6
+[1m[33mwarning[0m: oxidex-tags-specialty@1.0.4: Pre-compiled specialty_tags.yaml to binary format (282634 bytes)
+[1m[92m   Compiling[0m regex v1.12.2
+[1m[92m   Compiling[0m sha2 v0.10.9
+[1m[92m   Compiling[0m hmac v0.12.1
+[1m[92m   Compiling[0m num-conv v0.1.0
+[1m[92m   Compiling[0m serde_json v1.0.145
+[1m[92m   Compiling[0m linux-raw-sys v0.11.0
+[1m[92m   Compiling[0m time-core v0.1.6
+[1m[92m   Compiling[0m bitflags v2.10.0
+[1m[92m   Compiling[0m unicode-width v0.2.2
+[1m[92m   Compiling[0m console v0.16.1
+[1m[92m   Compiling[0m time v0.3.44
+[1m[92m   Compiling[0m pbkdf2 v0.11.0
+[1m[92m   Compiling[0m oxidex v1.2.1 (/home/runner/work/oxidex/oxidex)
+[1m[92m   Compiling[0m flate2 v1.1.5
+[1m[92m   Compiling[0m aes v0.8.4
+[1m[92m   Compiling[0m bzip2 v0.4.4
+[1m[92m   Compiling[0m csv-core v0.1.13
+[1m[92m   Compiling[0m sha1 v0.10.6
+[1m[92m   Compiling[0m iana-time-zone v0.1.64
+[1m[92m   Compiling[0m same-file v1.0.6
+[1m[92m   Compiling[0m constant_time_eq v0.1.5
+[1m[92m   Compiling[0m byteorder v1.5.0
+[1m[92m   Compiling[0m either v1.15.0
+[1m[92m   Compiling[0m unit-prefix v0.5.2
+[1m[92m   Compiling[0m fastrand v2.3.0
+[1m[92m   Compiling[0m crc-catalog v2.4.0
+[1m[92m   Compiling[0m indicatif v0.18.3
+[1m[92m   Compiling[0m crc v3.4.0
+[1m[92m   Compiling[0m tempfile v3.23.0
+[1m[92m   Compiling[0m rayon v1.11.0
+[1m[92m   Compiling[0m chrono v0.4.42
+[1m[92m   Compiling[0m walkdir v2.5.0
+[1m[92m   Compiling[0m csv v1.4.0
+[1m[92m   Compiling[0m oxidex-tags v1.0.4 (/home/runner/work/oxidex/oxidex/oxidex-tags)
+[1m[92m   Compiling[0m nom v8.0.0
+[1m[92m   Compiling[0m quick-xml v0.38.4
+[1m[92m   Compiling[0m memmap2 v0.9.9
+[1m[92m   Compiling[0m encoding_rs v0.8.35
+[1m[92m   Compiling[0m hex v0.4.3
+[1m[92m   Compiling[0m lexopt v0.3.1
+[1m[92m   Compiling[0m md5 v0.7.0
+[1m[33mwarning[0m: oxidex@1.2.1: Starting tag database generation from ExifTool source...
+[1m[33mwarning[0m: oxidex@1.2.1: Downloading ExifTool source from GitHub...
+[1m[33mwarning[0m: oxidex@1.2.1: Extracting ExifTool source...
+[1m[33mwarning[0m: oxidex@1.2.1: ExifTool source downloaded successfully
+[1m[33mwarning[0m: oxidex@1.2.1: Discovered 221 Perl modules
+[1m[33mwarning[0m: oxidex@1.2.1: Parsing 221 modules for tag definitions...
+[1m[33mwarning[0m: oxidex@1.2.1:   APP12                          ->     4 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   MinoltaRaw                     ->    50 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   BMP                            ->    40 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   JVC                            ->     4 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Ricoh                          ->   198 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   LNK                            ->   144 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   MPF                            ->    47 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   MNG                            ->   133 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   DICOM                          ->  3149 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Sony                           ->  1887 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Kodak                          ->   443 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   MWG                            ->    36 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Casio                          ->   930 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   NikonCustom                    ->  3512 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   VCard                          ->    13 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Apple                          ->    52 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   DJI                            ->   186 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   PhaseOne                       ->    52 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   MISB                           ->   192 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Real                           ->   120 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   NikonSettings                  ->   969 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   PGF                            ->    16 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   PhotoCD                        ->   265 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   JPEG                           ->    72 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   OpenEXR                        ->    13 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Nikon                          ->  2398 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   MIE                            ->    11 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   AIFF                           ->    13 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   WPG                            ->    86 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Theora                         ->    17 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Sanyo                          ->    93 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Parrot                         ->   134 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   MRC                            ->   139 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   GoPro                          ->    50 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   FITS                           ->     4 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Exif                           ->   718 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   NikonCapture                   ->   155 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Photoshop                      ->   136 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Font                           ->    45 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   SonyIDC                        ->    86 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Motorola                       ->     5 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   MOI                            ->     9 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Minolta                        ->   630 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   APE                            ->    18 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Stim                           ->    38 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Google                         ->    35 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Jpeg2000                       ->    61 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   KyoceraRaw                     ->    11 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   DSF                            ->    14 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Opus                           ->     6 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   MacOS                          ->    33 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   ISO                            ->    25 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   RIFF                           ->   110 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   FLIR                           ->   235 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   PostScript                     ->     8 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   GeoTiff                        ->  1916 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   DjVu                           ->     9 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   MPC                            ->    16 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   MXF                            ->  1660 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Flash                          ->    34 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   FujiFilm                       ->   265 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   GIF                            ->    16 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   XMP                            ->   102 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   PSP                            ->    24 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Microsoft                      ->    60 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   DPX                            ->   105 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   PICT                           ->   144 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   InfiRay                        ->    80 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   HP                             ->    12 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   MIFF                           ->     4 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   PhotoMechanic                  ->    23 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Olympus                        ->   790 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   WTV                            ->    31 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   ITC                            ->     7 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Pentax                         ->   876 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   GE                             ->     3 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Matroska                       ->   242 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   QuickTime                      ->  3065 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Trailer                        ->     4 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   ICC_Profile                    ->    90 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   MPEG                           ->    55 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   PCAP                           ->   191 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Palm                           ->    78 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Reconyx                        ->   114 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   ZISRAW                         ->     3 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   TNEF                           ->    84 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Nintendo                       ->     9 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   EXE                            ->   255 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   WavPack                        ->     1 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   H264                           ->    68 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   SigmaRaw                       ->    23 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   GIMP                           ->    27 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   CanonRaw                       ->    89 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   GM                             ->     2 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Torrent                        ->    18 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   PNG                            ->    92 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Sigma                          ->    78 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   PLIST                          ->    21 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   M2TS                           ->    32 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   FLIF                           ->     6 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   FotoStation                    ->    14 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Vorbis                         ->     9 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   FlashPix                       ->   324 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   ZIP                            ->    65 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   ID3                            ->    30 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   BPG                            ->    24 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   PDF                            ->    10 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   CanonCustom                    ->   429 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   AAC                            ->     7 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   PanasonicRaw                   ->   109 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Unknown                        ->     1 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   PCX                            ->    21 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   XISF                           ->     1 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   HTML                           ->    23 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   DNG                            ->    23 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   RSRC                           ->     3 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Red                            ->    27 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   GPS                            ->    43 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   ASF                            ->    62 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Canon                          ->  2148 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   IPTC                           ->   174 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   ICO                            ->     7 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   FLAC                           ->    39 tags
+[1m[33mwarning[0m: oxidex@1.2.1:   Panasonic                      ->   418 tags
+[1m[33mwarning[0m: oxidex@1.2.1: Total tags parsed: 32685
+[1m[33mwarning[0m: oxidex@1.2.1: Parsed 32685 tags from ExifTool source
+[1m[33mwarning[0m: oxidex@1.2.1: Generating YAML files for 32685 tags across 6 domain crates
+[1m[33mwarning[0m: oxidex@1.2.1: Created fallback generated_tags.rs using manual registry
+[1m[92m   Compiling[0m zstd v0.11.2+zstd.1.5.2
+[1m[92m   Compiling[0m zip v0.6.6
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 1m 37s
