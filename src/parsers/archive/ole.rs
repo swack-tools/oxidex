@@ -22,8 +22,19 @@ const MAX_SECTOR_SIZE: usize = 4096;
 /// Directory entry size in bytes
 const DIR_ENTRY_SIZE: usize = 128;
 
+/// CFB sector allocation markers
+const FREE_SECT: u32 = 0xffff_ffff;
+const END_OF_CHAIN: u32 = 0xffff_fffe;
+const FAT_SECT: u32 = 0xffff_fffd;
+const DIFAT_SECT: u32 = 0xffff_fffc;
+
 /// MS-OVBA compression signature
 const VBA_COMPRESSION_SIGNATURE: u8 = 0x01;
+
+/// Bounded read caps for forensic VBA scanning.
+const MAX_CHAIN_SECTORS: usize = 8192;
+const MAX_STREAM_READ: usize = 1024 * 1024;
+const MAX_DIRECTORY_READ: usize = 4 * 1024 * 1024;
 
 /// Parser for OLE (Compound File Binary Format) files
 ///
@@ -39,7 +50,7 @@ struct DirectoryEntry {
     name: String,
     entry_type: u8,
     start_sector: u32,
-    size: u32,
+    size: u64,
     left_sibling: u32,
     right_sibling: u32,
     child_did: u32,
@@ -50,16 +61,52 @@ struct DirectoryEntry {
 struct OLEHeader {
     sector_size: usize,
     mini_sector_size: usize,
+    sector_count: u32,
     total_sectors: u32,
     fat_sectors: u32,
     first_dir_sector: u32,
+    mini_stream_cutoff: u32,
     first_mini_fat_sector: u32,
     mini_fat_sectors: u32,
     first_difat_sector: u32,
     difat_sectors: u32,
+    header_difat: Vec<u32>,
 }
 
 impl OLEParser {
+    fn is_real_sector(sector: u32) -> bool {
+        !matches!(sector, FREE_SECT | END_OF_CHAIN | FAT_SECT | DIFAT_SECT) && sector < DIFAT_SECT
+    }
+
+    fn sector_offset(header: &OLEHeader, sector: u32) -> Result<usize> {
+        if sector >= header.sector_count {
+            return Err(ExifToolError::parse_error("Sector index out of bounds"));
+        }
+
+        (sector as usize)
+            .checked_add(1)
+            .and_then(|sector_index| sector_index.checked_mul(header.sector_size))
+            .ok_or_else(|| ExifToolError::parse_error("Invalid sector offset"))
+    }
+
+    fn read_sector<'a>(
+        reader: &'a dyn FileReader,
+        header: &OLEHeader,
+        sector: u32,
+    ) -> Result<&'a [u8]> {
+        let offset = Self::sector_offset(header, sector)?;
+        if offset
+            .checked_add(header.sector_size)
+            .is_none_or(|end| end > reader.size() as usize)
+        {
+            return Err(ExifToolError::parse_error("Sector extends beyond file"));
+        }
+
+        reader
+            .read(offset as u64, header.sector_size)
+            .map_err(ExifToolError::IoError)
+    }
+
     /// Parse the OLE header
     fn parse_header(reader: &dyn FileReader) -> Result<OLEHeader> {
         if reader.size() < 512 {
@@ -79,61 +126,235 @@ impl OLEParser {
         let header = EndianReader::little_endian(header_data);
 
         // Parse sector sizes
+        let major_version = header.u16_at(26).unwrap_or(0);
         let sector_shift = header.u16_at(30).unwrap_or(0) as usize;
         let mini_sector_shift = header.u16_at(32).unwrap_or(0) as usize;
 
-        let sector_size = 1 << sector_shift;
+        let sector_size = match (major_version, sector_shift) {
+            (3, 9) => 512,
+            (4, 12) => MAX_SECTOR_SIZE,
+            _ => {
+                return Err(ExifToolError::parse_error(
+                    "Invalid CFB major version and sector shift",
+                ));
+            }
+        };
+        if mini_sector_shift != 6 {
+            return Err(ExifToolError::parse_error("Invalid CFB mini sector shift"));
+        }
         let mini_sector_size = 1 << mini_sector_shift;
 
-        if sector_size > MAX_SECTOR_SIZE {
-            return Err(ExifToolError::parse_error("Invalid sector size"));
+        let sector_count = if (reader.size() as usize) >= sector_size {
+            ((reader.size() as usize - sector_size) / sector_size) as u32
+        } else {
+            0
+        };
+
+        let mut header_difat = Vec::with_capacity(109);
+        for offset in (76..512).step_by(4) {
+            header_difat.push(header.u32_at(offset).unwrap_or(FREE_SECT));
         }
 
-        // Parse FAT information
-        let total_sectors = header.u32_at(44).unwrap_or(0);
+        // Parse FAT information using CFB header offsets.
+        let fat_sectors = header.u32_at(44).unwrap_or(0);
         let first_dir_sector = header.u32_at(48).unwrap_or(0);
+        let mini_stream_cutoff = header.u32_at(56).unwrap_or(4096);
         let first_mini_fat_sector = header.u32_at(60).unwrap_or(0);
         let mini_fat_sectors = header.u32_at(64).unwrap_or(0);
         let first_difat_sector = header.u32_at(68).unwrap_or(0);
         let difat_sectors = header.u32_at(72).unwrap_or(0);
-        let fat_sectors = header.u32_at(76).unwrap_or(0);
 
         Ok(OLEHeader {
             sector_size,
             mini_sector_size,
-            total_sectors,
+            sector_count,
+            total_sectors: sector_count,
             fat_sectors,
             first_dir_sector,
+            mini_stream_cutoff,
             first_mini_fat_sector,
             mini_fat_sectors,
             first_difat_sector,
             difat_sectors,
+            header_difat,
         })
+    }
+
+    fn read_u32_entries(data: &[u8]) -> Vec<u32> {
+        data.chunks_exact(4)
+            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect()
+    }
+
+    fn read_fat(reader: &dyn FileReader, header: &OLEHeader) -> Result<Vec<u32>> {
+        let expected_fat_sectors = header.fat_sectors as usize;
+        if expected_fat_sectors == 0 {
+            return Ok(Vec::new());
+        }
+        if expected_fat_sectors > header.sector_count as usize
+            || expected_fat_sectors > MAX_CHAIN_SECTORS
+        {
+            return Err(ExifToolError::parse_error(
+                "FAT sector count exceeds bounded CFB limits",
+            ));
+        }
+
+        let mut fat_sector_ids = Vec::with_capacity(expected_fat_sectors);
+        for sector in header.header_difat.iter().copied() {
+            if sector == FREE_SECT {
+                continue;
+            }
+            if !Self::is_real_sector(sector) {
+                return Err(ExifToolError::parse_error(
+                    "Invalid FAT sector in header DIFAT",
+                ));
+            }
+            fat_sector_ids.push(sector);
+            if fat_sector_ids.len() == expected_fat_sectors {
+                break;
+            }
+        }
+
+        let mut difat_sector = header.first_difat_sector;
+        let mut seen_difat = std::collections::HashSet::new();
+        let difat_limit = (header.difat_sectors as usize).min(MAX_CHAIN_SECTORS);
+        for _ in 0..difat_limit {
+            if fat_sector_ids.len() == expected_fat_sectors
+                || difat_sector == END_OF_CHAIN
+                || difat_sector == FREE_SECT
+            {
+                break;
+            }
+            if !Self::is_real_sector(difat_sector) || !seen_difat.insert(difat_sector) {
+                return Err(ExifToolError::parse_error("Invalid or cyclic DIFAT chain"));
+            }
+
+            let sector_data = Self::read_sector(reader, header, difat_sector)?;
+            let entries = Self::read_u32_entries(sector_data);
+            let Some((&next_difat, fat_entries)) = entries.split_last() else {
+                return Err(ExifToolError::parse_error("Invalid DIFAT sector"));
+            };
+
+            for sector in fat_entries.iter().copied() {
+                if sector == FREE_SECT {
+                    continue;
+                }
+                if !Self::is_real_sector(sector) {
+                    return Err(ExifToolError::parse_error("Invalid FAT sector in DIFAT"));
+                }
+                fat_sector_ids.push(sector);
+                if fat_sector_ids.len() == expected_fat_sectors {
+                    break;
+                }
+            }
+            difat_sector = next_difat;
+        }
+
+        if fat_sector_ids.len() < expected_fat_sectors {
+            return Err(ExifToolError::parse_error("FAT sector list is incomplete"));
+        }
+
+        let fat_entry_capacity = expected_fat_sectors
+            .checked_mul(header.sector_size / 4)
+            .ok_or_else(|| ExifToolError::parse_error("FAT entry capacity overflow"))?;
+        let mut fat = Vec::with_capacity(fat_entry_capacity);
+        for sector in fat_sector_ids {
+            fat.extend(Self::read_u32_entries(Self::read_sector(
+                reader, header, sector,
+            )?));
+        }
+
+        Ok(fat)
+    }
+
+    fn follow_chain(fat: &[u32], start_sector: u32, max_sectors: usize) -> Result<Vec<u32>> {
+        if start_sector == END_OF_CHAIN || start_sector == FREE_SECT {
+            return Ok(Vec::new());
+        }
+        if !Self::is_real_sector(start_sector) {
+            return Err(ExifToolError::parse_error("Invalid start sector"));
+        }
+
+        let mut chain = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut sector = start_sector;
+        let limit = max_sectors.min(MAX_CHAIN_SECTORS);
+
+        while sector != END_OF_CHAIN {
+            if sector == FREE_SECT || !Self::is_real_sector(sector) {
+                return Err(ExifToolError::parse_error("Invalid sector in FAT chain"));
+            }
+            let index = sector as usize;
+            if index >= fat.len() {
+                return Err(ExifToolError::parse_error("FAT chain sector out of bounds"));
+            }
+            if !seen.insert(sector) {
+                return Err(ExifToolError::parse_error("Cycle detected in FAT chain"));
+            }
+            if chain.len() >= limit {
+                return Err(ExifToolError::parse_error("FAT chain exceeds read limit"));
+            }
+
+            chain.push(sector);
+            sector = fat[index];
+        }
+
+        Ok(chain)
+    }
+
+    fn read_chain(
+        reader: &dyn FileReader,
+        header: &OLEHeader,
+        fat: &[u32],
+        start_sector: u32,
+        requested_size: Option<u64>,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>> {
+        let max_sectors = requested_size
+            .map(|size| (size as usize).saturating_add(header.sector_size - 1) / header.sector_size)
+            .unwrap_or(header.sector_count as usize)
+            .max(1);
+        let chain = Self::follow_chain(fat, start_sector, max_sectors)?;
+
+        let target_size = requested_size
+            .map(|size| (size as usize).min(max_bytes))
+            .unwrap_or(max_bytes);
+        let mut data = Vec::with_capacity(target_size.min(chain.len() * header.sector_size));
+
+        for sector in chain {
+            if data.len() >= target_size {
+                break;
+            }
+            let sector_data = Self::read_sector(reader, header, sector)?;
+            let remaining = target_size - data.len();
+            data.extend_from_slice(&sector_data[..sector_data.len().min(remaining)]);
+        }
+
+        if let Some(size) = requested_size {
+            data.truncate((size as usize).min(max_bytes));
+        }
+
+        Ok(data)
     }
 
     /// Read directory entries from the OLE file
     fn read_directory_entries(
         reader: &dyn FileReader,
         header: &OLEHeader,
+        fat: &[u32],
     ) -> Result<Vec<DirectoryEntry>> {
         let mut entries = Vec::new();
 
-        // Calculate directory sector offset
-        let dir_offset = 512 + (header.first_dir_sector as usize * header.sector_size);
+        let dir_data = Self::read_chain(
+            reader,
+            header,
+            fat,
+            header.first_dir_sector,
+            None,
+            MAX_DIRECTORY_READ,
+        )?;
 
-        if dir_offset + header.sector_size > reader.size() as usize {
-            return Err(ExifToolError::parse_error(
-                "Invalid directory sector offset",
-            ));
-        }
-
-        // Read first directory sector - OLE uses little-endian byte order
-        let dir_data = reader.read(dir_offset as u64, header.sector_size)?;
-
-        // Parse directory entries (4 per 512-byte sector, more for larger sectors)
-        let entries_per_sector = header.sector_size / DIR_ENTRY_SIZE;
-
-        for i in 0..entries_per_sector {
+        for i in 0..(dir_data.len() / DIR_ENTRY_SIZE) {
             let offset = i * DIR_ENTRY_SIZE;
             if offset + DIR_ENTRY_SIZE > dir_data.len() {
                 break;
@@ -169,7 +390,20 @@ impl OLEParser {
             let right_sibling = entry.u32_at(72).unwrap_or(0);
             let child_did = entry.u32_at(76).unwrap_or(0);
             let start_sector = entry.u32_at(116).unwrap_or(0);
-            let size = entry.u32_at(120).unwrap_or(0);
+            let size = if entry_data.len() >= 128 {
+                u64::from_le_bytes([
+                    entry_data[120],
+                    entry_data[121],
+                    entry_data[122],
+                    entry_data[123],
+                    entry_data[124],
+                    entry_data[125],
+                    entry_data[126],
+                    entry_data[127],
+                ])
+            } else {
+                entry.u32_at(120).unwrap_or(0) as u64
+            };
 
             entries.push(DirectoryEntry {
                 name,
@@ -184,12 +418,31 @@ impl OLEParser {
 
         Ok(entries)
     }
+
+    fn read_mini_fat(reader: &dyn FileReader, header: &OLEHeader, fat: &[u32]) -> Result<Vec<u32>> {
+        if header.mini_fat_sectors == 0 || header.first_mini_fat_sector == END_OF_CHAIN {
+            return Ok(Vec::new());
+        }
+
+        let bytes = Self::read_chain(
+            reader,
+            header,
+            fat,
+            header.first_mini_fat_sector,
+            Some(header.mini_fat_sectors as u64 * header.sector_size as u64),
+            MAX_STREAM_READ,
+        )?;
+        Ok(Self::read_u32_entries(&bytes))
+    }
 }
 
 impl FormatParser for OLEParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
         let header = Self::parse_header(reader)?;
-        let entries = Self::read_directory_entries(reader, &header)?;
+        let fat = Self::read_fat(reader, &header)?;
+        let entries = Self::read_directory_entries(reader, &header, &fat)?;
+        let mini_fat = Self::read_mini_fat(reader, &header, &fat)?;
+        let root_entry = entries.iter().find(|entry| entry.entry_type == STGTY_ROOT);
 
         let mut metadata = MetadataMap::new();
 
@@ -208,7 +461,8 @@ impl FormatParser for OLEParser {
         );
 
         // Check for VBA macros
-        let vba_metadata = VBAAnalyzer::analyze_vba(reader, &entries, &header);
+        let vba_metadata =
+            VBAAnalyzer::analyze_vba(reader, &entries, &header, &fat, &mini_fat, root_entry);
         for (key, value) in vba_metadata {
             metadata.insert(key, value);
         }
@@ -221,6 +475,12 @@ impl FormatParser for OLEParser {
     }
 }
 
+/// Parses metadata from OLE Compound File Binary Format files.
+pub fn parse_ole_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
+    let parser = OLEParser;
+    parser.parse(reader).map_err(|e| e.to_string())
+}
+
 /// VBA Macro analyzer for forensic detection
 pub struct VBAAnalyzer;
 
@@ -230,6 +490,9 @@ impl VBAAnalyzer {
         reader: &dyn FileReader,
         entries: &[DirectoryEntry],
         header: &OLEHeader,
+        fat: &[u32],
+        mini_fat: &[u32],
+        root_entry: Option<&DirectoryEntry>,
     ) -> MetadataMap {
         let mut metadata = MetadataMap::new();
 
@@ -298,7 +561,9 @@ impl VBAAnalyzer {
             }
 
             // Read stream data
-            if let Ok(stream_data) = Self::read_stream(reader, entry, header) {
+            if let Ok(stream_data) =
+                Self::read_stream(reader, entry, header, fat, mini_fat, root_entry)
+            {
                 let patterns = Self::check_suspicious_patterns(&stream_data);
                 suspicious_findings.extend(patterns);
             }
@@ -380,7 +645,8 @@ impl VBAAnalyzer {
                 continue;
             }
 
-            if let Some((snippet, _)) = Self::analyze_module(reader, entry, header)
+            if let Some((snippet, _)) =
+                Self::analyze_module(reader, entry, header, fat, mini_fat, root_entry)
                 && !snippet.is_empty()
                 && snippet.len() > 10
             {
@@ -403,23 +669,103 @@ impl VBAAnalyzer {
         reader: &dyn FileReader,
         entry: &DirectoryEntry,
         header: &OLEHeader,
+        fat: &[u32],
+        mini_fat: &[u32],
+        root_entry: Option<&DirectoryEntry>,
     ) -> Result<Vec<u8>> {
-        // For simplicity, only read small streams (< 4KB)
-        if entry.size > 4096 {
+        if entry.size == 0 || entry.size as usize > MAX_STREAM_READ {
             return Ok(Vec::new());
         }
 
-        let offset = 512 + (entry.start_sector as usize * header.sector_size);
-        let size = entry.size.min(4096) as usize;
+        if entry.size < header.mini_stream_cutoff as u64 {
+            return Self::read_mini_stream(reader, entry, header, fat, mini_fat, root_entry);
+        }
 
-        if offset + size > reader.size() as usize {
+        OLEParser::read_chain(
+            reader,
+            header,
+            fat,
+            entry.start_sector,
+            Some(entry.size),
+            MAX_STREAM_READ,
+        )
+    }
+
+    fn read_mini_stream(
+        reader: &dyn FileReader,
+        entry: &DirectoryEntry,
+        header: &OLEHeader,
+        fat: &[u32],
+        mini_fat: &[u32],
+        root_entry: Option<&DirectoryEntry>,
+    ) -> Result<Vec<u8>> {
+        let Some(root_entry) = root_entry else {
+            return Ok(Vec::new());
+        };
+        if mini_fat.is_empty() {
             return Ok(Vec::new());
         }
 
-        let data = reader
-            .read(offset as u64, size)
-            .map_err(ExifToolError::IoError)?;
-        Ok(data.to_vec())
+        let root_stream = OLEParser::read_chain(
+            reader,
+            header,
+            fat,
+            root_entry.start_sector,
+            Some(root_entry.size),
+            MAX_STREAM_READ,
+        )?;
+        if root_stream.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut chain = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut mini_sector = entry.start_sector;
+        let max_mini_sectors = (entry.size as usize).saturating_add(header.mini_sector_size - 1)
+            / header.mini_sector_size;
+
+        while mini_sector != END_OF_CHAIN {
+            if mini_sector == FREE_SECT {
+                return Err(ExifToolError::parse_error("Invalid mini stream chain"));
+            }
+            let index = mini_sector as usize;
+            if index >= mini_fat.len() {
+                return Err(ExifToolError::parse_error("MiniFAT chain out of bounds"));
+            }
+            if !seen.insert(mini_sector) {
+                return Err(ExifToolError::parse_error(
+                    "Cycle detected in MiniFAT chain",
+                ));
+            }
+            if chain.len() >= max_mini_sectors.min(MAX_CHAIN_SECTORS) {
+                return Err(ExifToolError::parse_error(
+                    "MiniFAT chain exceeds read limit",
+                ));
+            }
+
+            chain.push(mini_sector);
+            mini_sector = mini_fat[index];
+        }
+
+        let target_size = (entry.size as usize).min(MAX_STREAM_READ);
+        let mut data = Vec::with_capacity(target_size);
+        for mini_sector in chain {
+            if data.len() >= target_size {
+                break;
+            }
+            let offset = mini_sector as usize * header.mini_sector_size;
+            if offset >= root_stream.len() {
+                return Err(ExifToolError::parse_error(
+                    "Mini stream sector out of bounds",
+                ));
+            }
+            let end = (offset + header.mini_sector_size).min(root_stream.len());
+            let remaining = target_size - data.len();
+            data.extend_from_slice(&root_stream[offset..end.min(offset + remaining)]);
+        }
+
+        data.truncate(target_size);
+        Ok(data)
     }
 
     /// Check for suspicious patterns in VBA code/streams
@@ -714,9 +1060,13 @@ impl VBAAnalyzer {
         reader: &dyn FileReader,
         entry: &DirectoryEntry,
         header: &OLEHeader,
+        fat: &[u32],
+        mini_fat: &[u32],
+        root_entry: Option<&DirectoryEntry>,
     ) -> Option<(String, Vec<String>)> {
         // Read and decompress the module stream
-        let stream_data = Self::read_stream(reader, entry, header).ok()?;
+        let stream_data =
+            Self::read_stream(reader, entry, header, fat, mini_fat, root_entry).ok()?;
 
         if stream_data.is_empty() {
             return None;
@@ -778,6 +1128,9 @@ mod tests {
     fn test_ole_signature_validation() {
         let mut data = vec![0u8; 512];
         data[0..8].copy_from_slice(OLE_SIGNATURE);
+        data[26..28].copy_from_slice(&3u16.to_le_bytes());
+        data[30..32].copy_from_slice(&9u16.to_le_bytes());
+        data[32..34].copy_from_slice(&6u16.to_le_bytes());
 
         let reader = TestFileReader::new(data);
         let result = OLEParser::parse_header(&reader);

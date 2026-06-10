@@ -151,12 +151,29 @@ impl PCAPParser {
         // PCAP-NG: [0x0a, 0x0d, 0x0d, 0x0a]
 
         match magic_bytes {
-            [0x0a, 0x0d, 0x0d, 0x0a] => Ok(("PCAP-NG", true, false)),
+            [0x0a, 0x0d, 0x0d, 0x0a] => {
+                let byte_order_magic = reader.read(8, 4)?;
+                Ok((
+                    "PCAP-NG",
+                    Self::pcapng_is_little_endian(byte_order_magic)?,
+                    false,
+                ))
+            }
             [0xa1, 0xb2, 0xc3, 0xd4] => Ok(("PCAP", false, false)), // Big-endian
             [0xd4, 0xc3, 0xb2, 0xa1] => Ok(("PCAP", true, false)),  // Little-endian
             [0xa1, 0xb2, 0x3c, 0x4d] => Ok(("PCAP", false, true)),  // Big-endian nanosecond
             [0x4d, 0x3c, 0xb2, 0xa1] => Ok(("PCAP", true, true)),   // Little-endian nanosecond
             _ => Err(ExifToolError::parse_error("Invalid PCAP/PCAP-NG signature")),
+        }
+    }
+
+    fn pcapng_is_little_endian(byte_order_magic: &[u8]) -> Result<bool> {
+        match byte_order_magic {
+            [0x4d, 0x3c, 0x2b, 0x1a] => Ok(true),
+            [0x1a, 0x2b, 0x3c, 0x4d] => Ok(false),
+            _ => Err(ExifToolError::parse_error(
+                "Invalid PCAP-NG byte-order magic",
+            )),
         }
     }
 
@@ -375,7 +392,7 @@ impl PCAPParser {
     }
 
     /// Parses PCAP-NG format
-    fn parse_pcapng(reader: &dyn FileReader, little_endian: bool) -> Result<MetadataMap> {
+    fn parse_pcapng(reader: &dyn FileReader, mut little_endian: bool) -> Result<MetadataMap> {
         let mut metadata = MetadataMap::new();
         let mut offset = 0u64;
         let file_size = reader.size();
@@ -395,6 +412,10 @@ impl PCAPParser {
             let Ok(block_header) = reader.read(offset, 8) else {
                 break;
             };
+
+            if block_header.starts_with(&[0x0a, 0x0d, 0x0d, 0x0a]) {
+                little_endian = Self::pcapng_is_little_endian(reader.read(offset + 8, 4)?)?;
+            }
 
             // Create EndianReader for block header
             let r = if little_endian {
@@ -434,13 +455,12 @@ impl PCAPParser {
                 }
                 PCAPNG_BLOCK_IDB => {
                     interface_count += 1;
-                    // Parse IDB options
-                    if block_length > 20
+                    if block_length >= 20
                         && offset + block_length as u64 <= file_size
                         && let Ok(idb_data) = reader.read(offset, block_length as usize)
                     {
                         // IDB header: link_type (2) + reserved (2) + snaplen (4) = 8 bytes after block header
-                        if idb_data.len() > 16 {
+                        if idb_data.len() >= 20 {
                             let r = if little_endian {
                                 EndianReader::little_endian(idb_data)
                             } else {
@@ -468,12 +488,16 @@ impl PCAPParser {
                                 );
                             }
 
-                            // Parse IDB options (starts at offset 16)
-                            let idb_opts =
-                                Self::parse_pcapng_idb_options(&idb_data[16..], little_endian);
-                            for (key, value) in idb_opts {
-                                if !metadata.contains_key(&key) {
-                                    metadata.insert(key, value);
+                            if idb_data.len() > 20 {
+                                let options_end = idb_data.len() - 4;
+                                let idb_opts = Self::parse_pcapng_idb_options(
+                                    &idb_data[16..options_end],
+                                    little_endian,
+                                );
+                                for (key, value) in idb_opts {
+                                    if !metadata.contains_key(&key) {
+                                        metadata.insert(key, value);
+                                    }
                                 }
                             }
                         }

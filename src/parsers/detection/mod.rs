@@ -51,6 +51,7 @@ mod signatures;
 mod text;
 mod tiff;
 mod video;
+mod x509_der;
 
 use crate::core::{FileFormat, FileReader};
 use std::io;
@@ -61,16 +62,20 @@ use audio::{detect_ogg_variant, is_aac_adts, is_mp3_sync};
 use binary::{detect_pe_format, is_dwg, is_macho};
 use bmff::detect_bmff_variants;
 use camera::detect_casio_cam;
-use helpers::{contains_text, matches_at_offset};
+use helpers::matches_at_offset;
 use riff::detect_riff_formats;
 use signatures::SIMPLE_SIGNATURES;
 use text::detect_text_formats;
 use tiff::detect_tiff_variants;
 use video::is_mts_stream;
+use x509_der::{looks_like_der_x509, top_level_der_object_len};
+
+const DER_X509_MAX_PROBE_SIZE: usize = 1024 * 1024;
+pub(crate) const TEXT_FORMAT_PROBE_SIZE: usize = 64 * 1024;
 
 /// Detects the file format by examining magic bytes.
 ///
-/// This function reads the first 600 bytes of the file (or fewer if the file is smaller)
+/// This function reads the first 1024 bytes of the file (or fewer if the file is smaller)
 /// and matches them against known format signatures using a combination of:
 /// 1. Simple signature table lookup
 /// 2. Specialized detection functions for complex formats
@@ -90,7 +95,7 @@ use video::is_mts_stream;
 ///
 /// # Error Handling
 ///
-/// This function gracefully handles files smaller than 600 bytes by reading only the
+/// This function gracefully handles files smaller than 1024 bytes by reading only the
 /// available bytes and attempting format detection with the partial data. Empty files
 /// return `Ok(FileFormat::Unknown)`.
 ///
@@ -118,11 +123,11 @@ use video::is_mts_stream;
 /// # }
 /// ```
 pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
-    // Read magic bytes for detection (600 bytes needed for MTS which requires 3 packets)
-    let magic_bytes = match reader.read(0, 600) {
+    // Read 1 KiB to align with EML validation while covering MTS's 3-packet probe.
+    let magic_bytes = match reader.read(0, 1024) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-            // File is smaller than 600 bytes, read what's available
+            // File is smaller than 1024 bytes, read what's available
             let size = reader.size() as usize;
             if size == 0 {
                 return Ok(FileFormat::Unknown);
@@ -155,6 +160,12 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(format);
     }
 
+    // ZIP variants require archive inspection before offset-based signatures can claim
+    // bytes that happen to appear inside ZIP headers, names, or payloads.
+    if magic_bytes.starts_with(&[0x50, 0x4B]) {
+        return Ok(detect_zip_variant(reader));
+    }
+
     // Phase 2: Check simple signatures from lookup table
     for sig in SIMPLE_SIGNATURES {
         if sig.offset == 0 {
@@ -164,6 +175,26 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
             }
         } else if matches_at_offset(magic_bytes, sig.bytes, sig.offset as usize) {
             return Ok(sig.format);
+        }
+    }
+
+    // DER X.509 certificates share ASN.1 SEQUENCE prefixes with many formats, so inspect the
+    // declared top-level object only. Cap the object size to avoid unbounded reads while allowing
+    // large but ordinary certificates.
+    if magic_bytes.first() == Some(&0x30) {
+        if let Some(der_object_len) = top_level_der_object_len(magic_bytes)
+            && der_object_len <= DER_X509_MAX_PROBE_SIZE
+            && der_object_len as u64 == reader.size()
+        {
+            let der_probe = if der_object_len > magic_bytes.len() {
+                reader.read(0, der_object_len)?
+            } else {
+                &magic_bytes[..der_object_len]
+            };
+
+            if looks_like_der_x509(der_probe) {
+                return Ok(FileFormat::X509);
+            }
         }
     }
 
@@ -191,11 +222,6 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::MTS);
     }
 
-    // ZIP-based formats (requires archive inspection)
-    if magic_bytes.starts_with(&[0x50, 0x4B]) {
-        return Ok(detect_zip_variant(reader));
-    }
-
     // PE format (requires DOS stub validation)
     if let Some(format) = detect_pe_format(magic_bytes, reader) {
         return Ok(format);
@@ -211,14 +237,29 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::DWG);
     }
 
-    // Text-based formats (DXF, OBJ, GLTF, STL)
-    if let Some(format) = detect_text_formats(magic_bytes) {
-        return Ok(format);
+    // SVG must outrank ICS/EML text heuristics, but only when SVG is the XML
+    // root element. Email bodies may legitimately embed SVG markup.
+    if looks_like_svg_root(magic_bytes) {
+        return Ok(FileFormat::SVG);
     }
 
-    // SVG (XML-based, separate check)
-    if contains_text(magic_bytes, "<svg", 100) {
-        return Ok(FileFormat::SVG);
+    if looks_like_xml_plist_root(magic_bytes) {
+        return Ok(FileFormat::Plist);
+    }
+
+    // Text-based formats need a wider bounded probe for long ICS bodies and EML header blocks.
+    let text_probe_len = reader
+        .size()
+        .min(TEXT_FORMAT_PROBE_SIZE as u64)
+        .try_into()
+        .unwrap_or(TEXT_FORMAT_PROBE_SIZE);
+    let text_probe = if text_probe_len > magic_bytes.len() {
+        reader.read(0, text_probe_len)?
+    } else {
+        &magic_bytes[..text_probe_len]
+    };
+    if let Some(format) = detect_text_formats(text_probe) {
+        return Ok(format);
     }
 
     // Casio CAM (JPEG at offset 70)
@@ -250,6 +291,120 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
 
     // No known format matched
     Ok(FileFormat::Unknown)
+}
+
+fn looks_like_svg_root(data: &[u8]) -> bool {
+    let Ok(mut text) = std::str::from_utf8(data) else {
+        return false;
+    };
+    text = text.strip_prefix('\u{feff}').unwrap_or(text);
+
+    loop {
+        text = text.trim_start();
+
+        if let Some(rest) = text.strip_prefix("<?xml") {
+            let Some(end) = rest.find("?>") else {
+                return false;
+            };
+            text = &rest[end + 2..];
+            continue;
+        }
+
+        if let Some(rest) = text.strip_prefix("<!--") {
+            let Some(end) = rest.find("-->") else {
+                return false;
+            };
+            text = &rest[end + 3..];
+            continue;
+        }
+
+        if text.starts_with("<!DOCTYPE") {
+            let Some(end) = xml_doctype_end(text) else {
+                return false;
+            };
+            text = &text[end + 1..];
+            continue;
+        }
+
+        break;
+    }
+
+    let Some(after_svg) = text.strip_prefix("<svg") else {
+        return false;
+    };
+    after_svg
+        .chars()
+        .next()
+        .is_none_or(|character| character.is_whitespace() || matches!(character, '>' | '/'))
+}
+
+fn looks_like_xml_plist_root(data: &[u8]) -> bool {
+    let data = &data[..data.len().min(512)];
+    let Ok(text) = std::str::from_utf8(data) else {
+        return false;
+    };
+
+    let Some(rest) = text.strip_prefix("<?xml") else {
+        return false;
+    };
+    let Some(end) = rest.find("?>") else {
+        return false;
+    };
+
+    let mut text = &rest[end + 2..];
+    loop {
+        text = text.trim_start();
+
+        if let Some(rest) = text.strip_prefix("<!--") {
+            let Some(end) = rest.find("-->") else {
+                return false;
+            };
+            text = &rest[end + 3..];
+            continue;
+        }
+
+        if text.starts_with("<!DOCTYPE") {
+            let Some(end) = xml_doctype_end(text) else {
+                return false;
+            };
+            text = &text[end + 1..];
+            continue;
+        }
+
+        break;
+    }
+
+    let Some(after_plist) = text.strip_prefix("<plist") else {
+        return false;
+    };
+    after_plist
+        .chars()
+        .next()
+        .is_none_or(|character| character.is_whitespace() || matches!(character, '>' | '/'))
+}
+
+fn xml_doctype_end(text: &str) -> Option<usize> {
+    let mut quote = None;
+    let mut subset_depth = 0u32;
+
+    for (index, character) in text.char_indices() {
+        if let Some(delimiter) = quote {
+            if character == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+
+        match character {
+            '"' | '\'' => quote = Some(character),
+            '[' => subset_depth += 1,
+            ']' => subset_depth = subset_depth.saturating_sub(1),
+            '>' if subset_depth == 0 => return Some(index),
+            _ => {}
+        }
+    }
+
+    None
 }
 
 /// Checks if data is likely to be plain text

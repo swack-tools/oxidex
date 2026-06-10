@@ -5,6 +5,8 @@
 
 use crate::core::{FileFormat, FileReader};
 
+const EPUB_MIMETYPE_MAX_SIZE: u64 = 1024;
+
 /// Detect ZIP-based document formats
 ///
 /// Many document formats use ZIP containers. This function examines
@@ -21,7 +23,7 @@ use crate::core::{FileFormat, FileReader};
 ///
 /// `FileFormat` variant for detected format
 pub fn detect_zip_variant(reader: &dyn FileReader) -> FileFormat {
-    use std::io::Cursor;
+    use std::io::{Cursor, Read};
     use zip::ZipArchive;
 
     let size = reader.size() as usize;
@@ -30,8 +32,23 @@ pub fn detect_zip_variant(reader: &dyn FileReader) -> FileFormat {
     {
         // Check for specific marker files in priority order
 
-        if archive.by_name("mimetype").is_ok() {
-            return FileFormat::EPUB;
+        if let Ok(mimetype_file) = archive.by_name("mimetype") {
+            let declared_size = mimetype_file.size();
+            if declared_size <= EPUB_MIMETYPE_MAX_SIZE {
+                let mut content = Vec::with_capacity(declared_size as usize);
+                let read_result = mimetype_file
+                    .take(EPUB_MIMETYPE_MAX_SIZE + 1)
+                    .read_to_end(&mut content);
+                if read_result.is_ok() && content.len() as u64 == declared_size {
+                    let mimetype = String::from_utf8_lossy(&content);
+                    let mimetype = mimetype.trim_matches(|character: char| {
+                        character.is_ascii_whitespace() || character == '\u{feff}'
+                    });
+                    if mimetype == "application/epub+zip" {
+                        return FileFormat::EPUB;
+                    }
+                }
+            }
         }
 
         if archive.by_name("word/document.xml").is_ok() {
@@ -52,7 +69,10 @@ pub fn detect_zip_variant(reader: &dyn FileReader) -> FileFormat {
 
         // Numbers and Pages both have Document.iwa, check for Tables
         if archive.by_name("Index/Document.iwa").is_ok() {
-            if archive.by_name("Index/Tables/").is_ok() {
+            if archive
+                .file_names()
+                .any(|name| name.starts_with("Index/Tables/"))
+            {
                 return FileFormat::Numbers;
             }
             return FileFormat::Pages;

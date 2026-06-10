@@ -29,12 +29,25 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::parsers::detection::TEXT_FORMAT_PROBE_SIZE;
 use chrono::{DateTime, Utc};
 
 /// EML parser for extracting forensic metadata from email files
 pub struct EmlParser;
 
 impl EmlParser {
+    fn read_header_text(reader: &dyn FileReader) -> Result<String> {
+        let size = (reader.size() as usize).min(TEXT_FORMAT_PROBE_SIZE);
+        let content = reader.read(0, size)?;
+        let header_end = content
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .or_else(|| content.windows(2).position(|window| window == b"\n\n"))
+            .unwrap_or(content.len());
+
+        Ok(String::from_utf8_lossy(&content[..header_end]).into_owned())
+    }
+
     /// Verifies EML format by checking for common email headers
     ///
     /// # Arguments
@@ -51,10 +64,8 @@ impl EmlParser {
             return Ok(false);
         }
 
-        // Read first 1KB to check for email headers
-        let size = (reader.size() as usize).min(1024);
-        let header = reader.read(0, size)?;
-        let text = std::str::from_utf8(header).unwrap_or("");
+        // Match the bounded text detection window so long header blocks remain parseable.
+        let text = Self::read_header_text(reader)?;
 
         // Check for common email headers (case-insensitive)
         let text_lower = text.to_lowercase();
@@ -81,28 +92,11 @@ impl EmlParser {
     /// # Returns
     ///
     /// * `Ok(MetadataMap)` - Extracted email metadata
-    /// * `Err(ExifToolError)` - Parse error or invalid UTF-8
+    /// * `Err(ExifToolError)` - Parse error
     pub fn parse_email_content(reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Read the entire file for header parsing
-        // EML files are typically small (< 10MB for most emails)
-        let size = reader.size() as usize;
-        let max_read = size.min(10 * 1024 * 1024); // Cap at 10MB
-        let content = reader.read(0, max_read)?;
-
-        let text = std::str::from_utf8(content)
-            .map_err(|e| ExifToolError::parse_error(format!("Invalid UTF-8: {}", e)))?;
-
         let mut metadata = MetadataMap::new();
-
-        // Parse headers (everything before the first blank line)
-        let headers_end = text.find("\r\n\r\n").or_else(|| text.find("\n\n"));
-        let headers_text = if let Some(end) = headers_end {
-            &text[..end]
-        } else {
-            text // No body, entire file is headers
-        };
-
-        Self::parse_headers(headers_text, &mut metadata)?;
+        let headers_text = Self::read_header_text(reader)?;
+        Self::parse_headers(&headers_text, &mut metadata)?;
 
         Ok(metadata)
     }

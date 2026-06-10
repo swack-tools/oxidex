@@ -86,7 +86,6 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     // Document formats
     signature!(b"%PDF", 0, FileFormat::PDF),
     // Archive formats
-    signature!(b"PK", 0, FileFormat::ZIP),
     signature!(b"Rar!", 0, FileFormat::RAR),
     signature!(b"\x37\x7A\xBC\xAF\x27\x1C", 0, FileFormat::SevenZ),
     signature!(b"\x1F\x8B", 0, FileFormat::GZ),
@@ -103,6 +102,7 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"BEGIN:VCARD", 0, FileFormat::VCF),
     signature!(b"\x4C\x00\x00\x00", 0, FileFormat::LNK),
     signature!(b"SQLite format 3\0", 0, FileFormat::SQLite),
+    signature!(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", 0, FileFormat::OLE),
     // Windows forensic formats
     signature!(b"MAM\x04", 0, FileFormat::Prefetch), // Compressed prefetch (Win10+)
     signature!(b"SCCA", 4, FileFormat::Prefetch),    // Uncompressed prefetch
