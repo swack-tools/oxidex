@@ -91,6 +91,9 @@ mod phaseone_makernotes_tests;
 #[path = "integration/format_detection.rs"]
 mod format_detection;
 
+#[path = "integration/production_wiring_tests.rs"]
+mod production_wiring_tests;
+
 #[path = "integration/pe_tests.rs"]
 mod pe_tests;
 
