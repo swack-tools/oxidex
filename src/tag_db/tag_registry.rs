@@ -7,7 +7,7 @@
 
 use crate::core::{FormatFamily, TagDescriptor, TagId, ValueType};
 use oxidex_tags::GENERATED_TAG_REGISTRY;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 // Import YAML tag databases for fallback lookup
@@ -6799,32 +6799,42 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
 static YAML_TAG_DESCRIPTORS: LazyLock<HashMap<String, TagDescriptor>> = LazyLock::new(|| {
     let mut descriptors = HashMap::with_capacity(10000);
 
-    // Helper to parse hex tag ID
-    fn parse_tag_id(id_str: &str) -> Option<u16> {
+    // Helper to parse numeric tag IDs while preserving named YAML identifiers.
+    fn parse_tag_id(id_str: &str) -> TagId {
         if let Some(hex_str) = id_str.strip_prefix("0x") {
-            u16::from_str_radix(hex_str, 16).ok()
+            u16::from_str_radix(hex_str, 16)
+                .map(TagId::new_numeric)
+                .unwrap_or_else(|_| TagId::new_named(id_str))
         } else {
-            id_str.parse::<u16>().ok()
+            id_str
+                .parse::<u16>()
+                .map(TagId::new_numeric)
+                .unwrap_or_else(|_| TagId::new_named(id_str))
         }
     }
 
     // Helper to determine FormatFamily and prefix from table name
     fn get_format_info(table_name: &str) -> Option<(FormatFamily, &str)> {
-        if table_name.starts_with("Exif::") {
-            Some((FormatFamily::EXIF, "EXIF"))
-        } else if table_name.starts_with("GPS::") {
-            Some((FormatFamily::GPS, "GPS"))
-        } else if table_name.starts_with("XMP::") {
-            Some((FormatFamily::XMP, "XMP"))
-        } else if table_name.starts_with("IPTC::") {
-            Some((FormatFamily::IPTC, "IPTC"))
-        } else if table_name.starts_with("ICC_Profile::") {
-            Some((FormatFamily::ICCProfile, "ICC_Profile"))
-        } else if table_name.starts_with("Photoshop::") {
-            Some((FormatFamily::Photoshop, "Photoshop"))
-        } else {
-            None
-        }
+        let prefix = table_name.split("::").next()?;
+        let format_family = match prefix {
+            "Exif" => FormatFamily::EXIF,
+            "GPS" => FormatFamily::GPS,
+            "XMP" => FormatFamily::XMP,
+            "IPTC" => FormatFamily::IPTC,
+            "ICC_Profile" => FormatFamily::ICCProfile,
+            "Photoshop" => FormatFamily::Photoshop,
+            "JFIF" => FormatFamily::JFIF,
+            "JPEG" => FormatFamily::JPEG,
+            "PNG" => FormatFamily::PNG,
+            "PDF" => FormatFamily::PDF,
+            "QuickTime" => FormatFamily::QuickTime,
+            "TIFF" => FormatFamily::TIFF,
+            "RIFF" => FormatFamily::RIFF,
+            "PostScript" => FormatFamily::PostScript,
+            _ => FormatFamily::MakerNotes,
+        };
+        let canonical_prefix = if prefix == "Exif" { "EXIF" } else { prefix };
+        Some((format_family, canonical_prefix))
     }
 
     // Scan all domain tag databases
@@ -6841,21 +6851,19 @@ static YAML_TAG_DESCRIPTORS: LazyLock<HashMap<String, TagDescriptor>> = LazyLock
         for table in tables.iter() {
             if let Some((format_family, prefix)) = get_format_info(&table.name) {
                 for tag in &table.tags {
-                    if let Some(tag_id) = parse_tag_id(&tag.id) {
-                        let full_name = format!("{}:{}", prefix, tag.name);
-                        let descriptor = TagDescriptor::new(
-                            TagId::Numeric(tag_id),
-                            full_name.clone(),
-                            format_family,
-                            tag.writable,
-                            ValueType::String, // Default to String; YAML doesn't have detailed type info
-                            tag.description
-                                .clone()
-                                .unwrap_or_else(|| format!("{} tag", tag.name)),
-                            Vec::new(), // No example values in YAML
-                        );
-                        descriptors.insert(full_name, descriptor);
-                    }
+                    let full_name = format!("{}:{}", prefix, tag.name);
+                    let descriptor = TagDescriptor::new(
+                        parse_tag_id(&tag.id),
+                        full_name.clone(),
+                        format_family,
+                        tag.writable,
+                        ValueType::String, // Default to String; YAML doesn't have detailed type info
+                        tag.description
+                            .clone()
+                            .unwrap_or_else(|| format!("{} tag", tag.name)),
+                        Vec::new(), // No example values in YAML
+                    );
+                    descriptors.insert(full_name, descriptor);
                 }
             }
         }
@@ -6927,11 +6935,20 @@ pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
         .or_else(|| YAML_TAG_DESCRIPTORS.get(normalized_name.as_str()))
 }
 
-/// Returns the total number of tags in the registry.
+/// Returns the total number of unique tags reachable through descriptor lookup.
 ///
-/// This should return 500+ tags for the expanded implementation.
+/// This mirrors `get_tag_descriptor()` by counting the manual registry,
+/// generated domain registry, and YAML-backed descriptors.
 pub fn tag_count() -> usize {
-    TAG_REGISTRY.len()
+    let mut tags = HashSet::with_capacity(
+        TAG_REGISTRY.len() + GENERATED_TAG_REGISTRY.len() + YAML_TAG_DESCRIPTORS.len(),
+    );
+
+    tags.extend(TAG_REGISTRY.keys().copied());
+    tags.extend(GENERATED_TAG_REGISTRY.keys().map(String::as_str));
+    tags.extend(YAML_TAG_DESCRIPTORS.keys().map(String::as_str));
+
+    tags.len()
 }
 
 #[cfg(test)]

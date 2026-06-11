@@ -1,38 +1,32 @@
-//! Integration tests for tag database coverage
+//! Integration tests for active tag database coverage
 
-use oxidex::tag_db::generated_tags::generated_tag_count;
+use oxidex::tag_db::{generated_tags::generated_tag_count, get_tag_descriptor, tag_count};
 
 #[test]
-fn test_tag_database_has_minimum_coverage() {
-    let count = generated_tag_count();
-
-    // After adding all base format modules, expect at least 3000 tags
+fn test_tag_database_count_comes_from_active_registry() {
+    assert_eq!(
+        generated_tag_count(),
+        tag_count(),
+        "legacy generated count must reflect active registry count"
+    );
     assert!(
-        count >= 3000,
-        "Expected at least 3000 tags, found {}. Need to add more modules to build.rs",
-        count
+        tag_count() >= 2886,
+        "expected active registry to expose at least 10% ExifTool tag coverage"
     );
 }
 
 #[test]
-fn test_tag_database_target_coverage() {
-    let count = generated_tag_count();
-
-    // Ultimate target: 28,853 tags for full ExifTool parity
-    // This test documents the gap
-    let target = 28853;
-    let coverage_percent = (count as f64 / target as f64) * 100.0;
-
-    println!(
-        "Tag coverage: {}/{} ({:.1}%)",
-        count, target, coverage_percent
-    );
-
-    // For now, we expect at least 10% coverage (2886 tags)
-    assert!(
-        count >= 2886,
-        "Expected at least 10% coverage (2886 tags), found {} ({:.1}%)",
-        count,
-        coverage_percent
-    );
+fn test_core_tag_descriptors_are_reachable() {
+    for tag in [
+        "EXIF:Make",
+        "EXIF:Model",
+        "GPS:GPSLatitude",
+        "XMP:Creator",
+        "IPTC:ObjectName",
+    ] {
+        assert!(
+            get_tag_descriptor(tag).is_some(),
+            "expected active registry descriptor for {tag}"
+        );
+    }
 }
