@@ -26,6 +26,9 @@ use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::tag_registry::get_tag_descriptor;
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::jpeg_writer::write_exif_to_jpeg;
+use crate::writers::pdf_writer::write_pdf_file;
+use crate::writers::png_writer::write_png_metadata;
+use crate::writers::tiff_writer::write_tiff_file;
 use std::path::Path;
 
 // ============================================================================
@@ -202,17 +205,21 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
     // PHASE 3: DETECT FORMAT
     let format = detect_format(&reader)?;
 
-    // PHASE 4: SERIALIZE WITH APPROPRIATE WRITER
-    let serialized_bytes = match format {
+    // PHASE 4: ROUTE TO APPROPRIATE WRITER
+    match format {
         FileFormat::JPEG => {
             // Use JPEG writer to serialize metadata
-            write_exif_to_jpeg(&reader, metadata)?
+            let serialized_bytes = write_exif_to_jpeg(&reader, metadata)?;
+            write_atomic(path, &serialized_bytes)?;
+        }
+        FileFormat::PNG => {
+            write_png_metadata(path, &reader, metadata)?;
+        }
+        FileFormat::PDF => {
+            write_pdf_file(path, &reader, metadata)?;
         }
         FileFormat::TIFF => {
-            // TIFF writer not yet implemented (will be in I3.T7)
-            return Err(ExifToolError::unsupported_format(
-                "TIFF write operations are not yet supported in this iteration",
-            ));
+            write_tiff_file(path, &reader, metadata)?;
         }
         _ => {
             return Err(ExifToolError::unsupported_format(format!(
@@ -220,11 +227,7 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
                 format
             )));
         }
-    };
-
-    // PHASE 5: ATOMIC WRITE
-    // Write serialized bytes to file using atomic temp-file-and-rename pattern
-    write_atomic(path, &serialized_bytes)?;
+    }
 
     Ok(())
 }

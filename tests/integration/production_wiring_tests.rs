@@ -13,6 +13,15 @@ fn temp_with_suffix(suffix: &str) -> NamedTempFile {
         .expect("create temp file")
 }
 
+fn copy_fixture_to_temp(path: &str, suffix: &str) -> NamedTempFile {
+    let temp = tempfile::Builder::new()
+        .suffix(suffix)
+        .tempfile()
+        .expect("create temp fixture copy");
+    fs::copy(path, temp.path()).expect("copy fixture");
+    temp
+}
+
 fn read_temp_file(bytes: &[u8], suffix: &str) -> MetadataMap {
     let mut file = temp_with_suffix(suffix);
     file.write_all(bytes)
@@ -1501,4 +1510,28 @@ fn read_metadata_routes_keynote_to_iwork_parser() {
             .get("iWork:Application"),
         Some(&TagValue::String("Keynote".to_string()))
     );
+}
+
+#[test]
+fn write_metadata_routes_png_pdf_and_tiff_writers() {
+    let png = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
+    let pdf = copy_fixture_to_temp("tests/fixtures/pdf/sample.pdf", ".pdf");
+    let tiff = copy_fixture_to_temp("tests/fixtures/tiff/sample.tif", ".tif");
+
+    let mut png_metadata = read_metadata(png.path()).expect("read png");
+    // Keep the test focused on write routing; fixture metadata includes tags
+    // that can fail validation before dispatch is reached.
+    png_metadata.clear();
+    png_metadata.insert("PNG:tEXt:Author", TagValue::new_string("OxiDex QA"));
+    write_metadata(png.path(), &png_metadata).expect("write png through high-level API");
+
+    let mut pdf_metadata = read_metadata(pdf.path()).expect("read pdf");
+    pdf_metadata.clear();
+    pdf_metadata.insert("PDF:Title", TagValue::new_string("OxiDex QA"));
+    write_metadata(pdf.path(), &pdf_metadata).expect("write pdf through high-level API");
+
+    let mut tiff_metadata = read_metadata(tiff.path()).expect("read tiff");
+    tiff_metadata.clear();
+    tiff_metadata.insert("EXIF:Make", TagValue::new_string("OxiDex QA"));
+    write_metadata(tiff.path(), &tiff_metadata).expect("write tiff through high-level API");
 }
