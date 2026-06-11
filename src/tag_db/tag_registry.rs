@@ -6850,8 +6850,8 @@ fn yaml_format_info(table_name: &str) -> Option<(FormatFamily, &str)> {
         | "NikonSettings" | "Sony" | "SonyIDC" | "Panasonic" | "PanasonicRaw" | "Olympus"
         | "FujiFilm" | "Pentax" | "Casio" | "Minolta" | "MinoltaRaw" | "Ricoh" | "Sigma"
         | "SigmaRaw" | "PhaseOne" | "Kodak" | "KyoceraRaw" | "Samsung" | "Sanyo" | "HP" | "GE"
-        | "Reconyx" | "JVC" | "Motorola" | "Apple" | "DJI" | "GoPro" | "Parrot" | "Infiray"
-        | "FLIR" => FormatFamily::MakerNotes,
+        | "Reconyx" | "JVC" | "Motorola" | "Apple" | "DJI" | "GoPro" | "Google" | "Parrot"
+        | "InfiRay" | "FLIR" | "Microsoft" | "Nintendo" | "Red" => FormatFamily::MakerNotes,
         _ => return None,
     };
     let canonical_prefix = if prefix == "Exif" { "EXIF" } else { prefix };
@@ -7047,10 +7047,20 @@ mod tests {
 
     #[test]
     fn test_yaml_format_family_mapping_does_not_mislabel_unsupported_domains() {
-        assert_eq!(
-            yaml_format_info("Canon::Main").map(|(family, _)| family),
-            Some(FormatFamily::MakerNotes)
-        );
+        for table_name in [
+            "Canon::Main",
+            "Google::HDRPMakerNote",
+            "InfiRay::Factory",
+            "Microsoft::Stitch",
+            "Nintendo::CameraInfo",
+            "Red::Main",
+        ] {
+            assert_eq!(
+                yaml_format_info(table_name).map(|(family, _)| family),
+                Some(FormatFamily::MakerNotes),
+                "{table_name} should map to MakerNotes"
+            );
+        }
         assert!(yaml_format_info("BMP::Main").is_none());
         assert!(yaml_format_info("DICOM::Main").is_none());
         assert!(yaml_format_info("EXE::Main").is_none());
