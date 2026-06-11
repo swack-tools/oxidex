@@ -73,6 +73,7 @@ fn descriptor_allows_datetime(descriptor: &TagDescriptor) -> bool {
 /// - `TagValue::Binary` must match `ValueType::Binary`
 /// - `TagValue::DateTime` must match `ValueType::DateTime`
 /// - `TagValue::Struct` must match `ValueType::Struct`
+/// - `ValueType::Unknown` accepts any value because the registry has no reliable type metadata
 ///
 /// ## Rational Number Constraints
 /// For Rational values, the denominator must not be zero, as this would represent
@@ -106,6 +107,10 @@ pub fn validate_tag_value_with_name(
     value: &TagValue,
 ) -> Result<(), ExifToolError> {
     let expected_type = descriptor.value_type();
+
+    if expected_type == ValueType::Unknown {
+        return Ok(());
+    }
 
     match value {
         TagValue::String(_) => {

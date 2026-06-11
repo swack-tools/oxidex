@@ -6813,6 +6813,31 @@ static YAML_TAG_DESCRIPTORS: LazyLock<HashMap<String, TagDescriptor>> = LazyLock
         }
     }
 
+    fn parse_value_type(type_name: Option<&str>) -> ValueType {
+        let Some(type_name) = type_name else {
+            return ValueType::Unknown;
+        };
+        let normalized = type_name.to_ascii_lowercase();
+
+        if normalized.starts_with("int") {
+            ValueType::Integer
+        } else if normalized.starts_with("rational") {
+            ValueType::Rational
+        } else if matches!(normalized.as_str(), "float" | "double" | "real") {
+            ValueType::Float
+        } else if normalized.starts_with("string")
+            || matches!(normalized.as_str(), "unicode" | "utf8" | "utf-8")
+        {
+            ValueType::String
+        } else if matches!(normalized.as_str(), "undef" | "binary" | "bytes") {
+            ValueType::Binary
+        } else if normalized.contains("date") || normalized.contains("time") {
+            ValueType::DateTime
+        } else {
+            ValueType::Unknown
+        }
+    }
+
     // Helper to determine FormatFamily and prefix from table name
     fn get_format_info(table_name: &str) -> Option<(FormatFamily, &str)> {
         let prefix = table_name.split("::").next()?;
@@ -6857,7 +6882,7 @@ static YAML_TAG_DESCRIPTORS: LazyLock<HashMap<String, TagDescriptor>> = LazyLock
                         full_name.clone(),
                         format_family,
                         tag.writable,
-                        ValueType::String, // Default to String; YAML doesn't have detailed type info
+                        parse_value_type(tag.type_name.as_deref()),
                         tag.description
                             .clone()
                             .unwrap_or_else(|| format!("{} tag", tag.name)),
