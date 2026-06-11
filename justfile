@@ -39,6 +39,11 @@ test-integration:
     @echo "Running integration tests..."
     cargo test --test integration --release
 
+# Run C FFI integration test
+test-ffi-c:
+    @echo "Running C FFI integration test..."
+    cargo test --test ffi_c_integration -- --nocapture
+
 # Run ExifTool comparison tests (requires ExifTool installed)
 test-comparison:
     @echo "Running ExifTool comparison tests..."
@@ -283,6 +288,11 @@ ci:
         exit 1
     fi
 
+    # Step 5: Run C FFI integration test
+    echo ""
+    echo "Running C FFI integration test..."
+    cargo test --test ffi_c_integration -- --nocapture
+
     END_TIME=$(date +%s)
     ELAPSED=$((END_TIME - START_TIME))
 
@@ -292,14 +302,16 @@ ci:
     echo "   ✓ Clippy (release profile)"
     echo "   ✓ Build (release with all features)"
     echo "   ✓ Tests (nextest + doc tests)"
+    echo "   ✓ C FFI integration test"
 
 # Run CI without nextest (fallback if nextest not installed)
-ci-standard: fmt-check lint-release build-release test
+ci-standard: fmt-check lint-release build-release test test-ffi-c
     @echo "All CI checks passed!"
     @echo "✓ Format check"
     @echo "✓ Clippy (release profile)"
     @echo "✓ Build (release with all features)"
     @echo "✓ Tests (cargo test)"
+    @echo "✓ C FFI integration test"
 
 # Pre-commit hook: format, lint, test
 pre-commit: fmt lint test

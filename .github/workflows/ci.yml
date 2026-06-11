@@ -44,6 +44,8 @@ jobs:
           tool: cargo-nextest
       - run: cargo build --release --all-features --features tag-comparison-binary
       - run: cargo nextest run --release --all-features --features tag-comparison-binary
+      - name: C FFI integration test
+        run: cargo test --test ffi_c_integration -- --nocapture
       - name: Run doc tests
         run: cargo test --doc --all-features
       - name: Verify C header is up-to-date
