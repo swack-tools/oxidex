@@ -51,7 +51,7 @@ def _find_library() -> ctypes.CDLL:
     """
     # Determine library name based on platform
     if sys.platform == "darwin":
-        lib_name = "liboxide.dylib"
+        lib_name = "liboxidex.dylib"
     elif sys.platform == "win32":
         lib_name = "oxidex.dll"
     else:  # Linux and other Unix-like systems
@@ -103,46 +103,46 @@ _lib = _find_library()
 
 # Define function signatures
 # Handle lifecycle
-_lib.oxidex_create.restype = ctypes.c_void_p
-_lib.oxidex_create.argtypes = []
+_lib.exiftool_create.restype = ctypes.c_void_p
+_lib.exiftool_create.argtypes = []
 
-_lib.oxidex_destroy.restype = None
-_lib.oxidex_destroy.argtypes = [ctypes.c_void_p]
+_lib.exiftool_destroy.restype = None
+_lib.exiftool_destroy.argtypes = [ctypes.c_void_p]
 
 # Metadata reading
-_lib.oxidex_read_file.restype = ctypes.c_int
-_lib.oxidex_read_file.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+_lib.exiftool_read_file.restype = ctypes.c_int
+_lib.exiftool_read_file.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
 
-_lib.oxidex_get_tag_count.restype = ctypes.c_size_t
-_lib.oxidex_get_tag_count.argtypes = [ctypes.c_void_p]
+_lib.exiftool_get_tag_count.restype = ctypes.c_size_t
+_lib.exiftool_get_tag_count.argtypes = [ctypes.c_void_p]
 
-_lib.oxidex_get_tag_name_at.restype = ctypes.c_char_p
-_lib.oxidex_get_tag_name_at.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+_lib.exiftool_get_tag_name_at.restype = ctypes.c_char_p
+_lib.exiftool_get_tag_name_at.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
 
-_lib.oxidex_has_tag.restype = ctypes.c_int
-_lib.oxidex_has_tag.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+_lib.exiftool_has_tag.restype = ctypes.c_int
+_lib.exiftool_has_tag.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
 
 # Tag access
-_lib.oxidex_get_tag_string.restype = ctypes.c_char_p
-_lib.oxidex_get_tag_string.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+_lib.exiftool_get_tag_string.restype = ctypes.c_char_p
+_lib.exiftool_get_tag_string.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
 
-_lib.oxidex_get_tag_integer.restype = ctypes.c_int
-_lib.oxidex_get_tag_integer.argtypes = [
+_lib.exiftool_get_tag_integer.restype = ctypes.c_int
+_lib.exiftool_get_tag_integer.argtypes = [
     ctypes.c_void_p,
     ctypes.c_char_p,
     ctypes.POINTER(ctypes.c_int64)
 ]
 
-_lib.oxidex_get_tag_float.restype = ctypes.c_int
-_lib.oxidex_get_tag_float.argtypes = [
+_lib.exiftool_get_tag_float.restype = ctypes.c_int
+_lib.exiftool_get_tag_float.argtypes = [
     ctypes.c_void_p,
     ctypes.c_char_p,
     ctypes.POINTER(ctypes.c_double)
 ]
 
 # Error handling
-_lib.oxidex_get_last_error.restype = ctypes.c_char_p
-_lib.oxidex_get_last_error.argtypes = []
+_lib.exiftool_get_last_error.restype = ctypes.c_char_p
+_lib.exiftool_get_last_error.argtypes = []
 
 
 class Oxidex:
@@ -165,14 +165,14 @@ class Oxidex:
         Raises:
             OxidexError: If handle creation fails (out of memory)
         """
-        self._handle = _lib.oxidex_create()
+        self._handle = _lib.exiftool_create()
         if not self._handle:
             raise OxidexError("Failed to create Oxidex handle (out of memory)")
 
     def __del__(self):
         """Destroy the handle and free resources."""
         if hasattr(self, '_handle') and self._handle:
-            _lib.oxidex_destroy(self._handle)
+            _lib.exiftool_destroy(self._handle)
             self._handle = None
 
     def __enter__(self):
@@ -195,7 +195,7 @@ class Oxidex:
             OxidexError: If result is not OXIDEX_OK
         """
         if result != OXIDEX_OK:
-            error_msg = _lib.oxidex_get_last_error()
+            error_msg = _lib.exiftool_get_last_error()
             if error_msg:
                 msg = error_msg.decode('utf-8', errors='replace')
             else:
@@ -216,7 +216,7 @@ class Oxidex:
             raise OxidexError("Oxidex handle has been destroyed")
 
         filepath_bytes = filepath.encode('utf-8')
-        result = _lib.oxidex_read_file(self._handle, filepath_bytes)
+        result = _lib.exiftool_read_file(self._handle, filepath_bytes)
         self._check_error(result)
 
     def get_tag_count(self) -> int:
@@ -228,7 +228,7 @@ class Oxidex:
         """
         if not self._handle:
             return 0
-        return _lib.oxidex_get_tag_count(self._handle)
+        return _lib.exiftool_get_tag_count(self._handle)
 
     def get_tag_name_at(self, index: int) -> Optional[str]:
         """
@@ -243,7 +243,7 @@ class Oxidex:
         if not self._handle:
             return None
 
-        c_str = _lib.oxidex_get_tag_name_at(self._handle, index)
+        c_str = _lib.exiftool_get_tag_name_at(self._handle, index)
         if c_str:
             return c_str.decode('utf-8', errors='replace')
         return None
@@ -262,7 +262,7 @@ class Oxidex:
             return False
 
         tag_bytes = tag_name.encode('utf-8')
-        return _lib.oxidex_has_tag(self._handle, tag_bytes) == 1
+        return _lib.exiftool_has_tag(self._handle, tag_bytes) == 1
 
     def get_tag(self, tag_name: str) -> Optional[str]:
         """
@@ -278,7 +278,7 @@ class Oxidex:
             return None
 
         tag_bytes = tag_name.encode('utf-8')
-        c_str = _lib.oxidex_get_tag_string(self._handle, tag_bytes)
+        c_str = _lib.exiftool_get_tag_string(self._handle, tag_bytes)
         if c_str:
             # IMPORTANT: Copy the string immediately before next API call
             return c_str.decode('utf-8', errors='replace')
@@ -299,7 +299,7 @@ class Oxidex:
 
         tag_bytes = tag_name.encode('utf-8')
         value = ctypes.c_int64()
-        result = _lib.oxidex_get_tag_integer(
+        result = _lib.exiftool_get_tag_integer(
             self._handle, tag_bytes, ctypes.byref(value)
         )
 
@@ -322,7 +322,7 @@ class Oxidex:
 
         tag_bytes = tag_name.encode('utf-8')
         value = ctypes.c_double()
-        result = _lib.oxidex_get_tag_float(
+        result = _lib.exiftool_get_tag_float(
             self._handle, tag_bytes, ctypes.byref(value)
         )
 
