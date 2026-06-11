@@ -65,7 +65,6 @@ pub enum ValueType {
     Binary,
     DateTime,
     Struct,
-    Unknown,
 }
 
 /// Complete tag descriptor

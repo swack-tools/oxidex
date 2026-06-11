@@ -6794,73 +6794,74 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     registry
 });
 
+fn parse_yaml_tag_id(id_str: &str) -> TagId {
+    if let Some(hex_str) = id_str.strip_prefix("0x") {
+        u16::from_str_radix(hex_str, 16)
+            .map(TagId::new_numeric)
+            .unwrap_or_else(|_| TagId::new_named(id_str))
+    } else {
+        id_str
+            .parse::<u16>()
+            .map(TagId::new_numeric)
+            .unwrap_or_else(|_| TagId::new_named(id_str))
+    }
+}
+
+fn parse_yaml_value_type(type_name: Option<&str>) -> Option<ValueType> {
+    let normalized = type_name?.to_ascii_lowercase();
+
+    if normalized.starts_with("int") {
+        Some(ValueType::Integer)
+    } else if normalized.starts_with("rational") {
+        Some(ValueType::Rational)
+    } else if matches!(normalized.as_str(), "float" | "double" | "real") {
+        Some(ValueType::Float)
+    } else if normalized.starts_with("string")
+        || matches!(normalized.as_str(), "unicode" | "utf8" | "utf-8")
+    {
+        Some(ValueType::String)
+    } else if matches!(normalized.as_str(), "undef" | "binary" | "bytes") {
+        Some(ValueType::Binary)
+    } else if normalized.contains("date") || normalized.contains("time") {
+        Some(ValueType::DateTime)
+    } else {
+        None
+    }
+}
+
+fn yaml_format_info(table_name: &str) -> Option<(FormatFamily, &str)> {
+    let prefix = table_name.split("::").next()?;
+    let format_family = match prefix {
+        "Exif" => FormatFamily::EXIF,
+        "GPS" => FormatFamily::GPS,
+        "XMP" => FormatFamily::XMP,
+        "IPTC" => FormatFamily::IPTC,
+        "ICC_Profile" => FormatFamily::ICCProfile,
+        "Photoshop" => FormatFamily::Photoshop,
+        "JFIF" => FormatFamily::JFIF,
+        "JPEG" => FormatFamily::JPEG,
+        "PNG" => FormatFamily::PNG,
+        "PDF" => FormatFamily::PDF,
+        "QuickTime" => FormatFamily::QuickTime,
+        "TIFF" => FormatFamily::TIFF,
+        "RIFF" => FormatFamily::RIFF,
+        "PostScript" => FormatFamily::PostScript,
+        "Canon" | "CanonCustom" | "CanonRaw" | "Nikon" | "NikonCapture" | "NikonCustom"
+        | "NikonSettings" | "Sony" | "SonyIDC" | "Panasonic" | "PanasonicRaw" | "Olympus"
+        | "FujiFilm" | "Pentax" | "Casio" | "Minolta" | "MinoltaRaw" | "Ricoh" | "Sigma"
+        | "SigmaRaw" | "PhaseOne" | "Kodak" | "KyoceraRaw" | "Samsung" | "Sanyo" | "HP" | "GE"
+        | "Reconyx" | "JVC" | "Motorola" | "Apple" | "DJI" | "GoPro" | "Parrot" | "Infiray"
+        | "FLIR" => FormatFamily::MakerNotes,
+        _ => return None,
+    };
+    let canonical_prefix = if prefix == "Exif" { "EXIF" } else { prefix };
+    Some((format_family, canonical_prefix))
+}
+
 /// Lazy-loaded registry of TagDescriptors built from YAML tag databases.
 /// This serves as a fallback when tags are not found in the manual TAG_REGISTRY.
 static YAML_TAG_DESCRIPTORS: LazyLock<HashMap<String, TagDescriptor>> = LazyLock::new(|| {
     let mut descriptors = HashMap::with_capacity(10000);
-
-    // Helper to parse numeric tag IDs while preserving named YAML identifiers.
-    fn parse_tag_id(id_str: &str) -> TagId {
-        if let Some(hex_str) = id_str.strip_prefix("0x") {
-            u16::from_str_radix(hex_str, 16)
-                .map(TagId::new_numeric)
-                .unwrap_or_else(|_| TagId::new_named(id_str))
-        } else {
-            id_str
-                .parse::<u16>()
-                .map(TagId::new_numeric)
-                .unwrap_or_else(|_| TagId::new_named(id_str))
-        }
-    }
-
-    fn parse_value_type(type_name: Option<&str>) -> ValueType {
-        let Some(type_name) = type_name else {
-            return ValueType::Unknown;
-        };
-        let normalized = type_name.to_ascii_lowercase();
-
-        if normalized.starts_with("int") {
-            ValueType::Integer
-        } else if normalized.starts_with("rational") {
-            ValueType::Rational
-        } else if matches!(normalized.as_str(), "float" | "double" | "real") {
-            ValueType::Float
-        } else if normalized.starts_with("string")
-            || matches!(normalized.as_str(), "unicode" | "utf8" | "utf-8")
-        {
-            ValueType::String
-        } else if matches!(normalized.as_str(), "undef" | "binary" | "bytes") {
-            ValueType::Binary
-        } else if normalized.contains("date") || normalized.contains("time") {
-            ValueType::DateTime
-        } else {
-            ValueType::Unknown
-        }
-    }
-
-    // Helper to determine FormatFamily and prefix from table name
-    fn get_format_info(table_name: &str) -> Option<(FormatFamily, &str)> {
-        let prefix = table_name.split("::").next()?;
-        let format_family = match prefix {
-            "Exif" => FormatFamily::EXIF,
-            "GPS" => FormatFamily::GPS,
-            "XMP" => FormatFamily::XMP,
-            "IPTC" => FormatFamily::IPTC,
-            "ICC_Profile" => FormatFamily::ICCProfile,
-            "Photoshop" => FormatFamily::Photoshop,
-            "JFIF" => FormatFamily::JFIF,
-            "JPEG" => FormatFamily::JPEG,
-            "PNG" => FormatFamily::PNG,
-            "PDF" => FormatFamily::PDF,
-            "QuickTime" => FormatFamily::QuickTime,
-            "TIFF" => FormatFamily::TIFF,
-            "RIFF" => FormatFamily::RIFF,
-            "PostScript" => FormatFamily::PostScript,
-            _ => FormatFamily::MakerNotes,
-        };
-        let canonical_prefix = if prefix == "Exif" { "EXIF" } else { prefix };
-        Some((format_family, canonical_prefix))
-    }
 
     // Scan all domain tag databases
     let all_tables = [
@@ -6874,15 +6875,16 @@ static YAML_TAG_DESCRIPTORS: LazyLock<HashMap<String, TagDescriptor>> = LazyLock
 
     for tables in all_tables.iter() {
         for table in tables.iter() {
-            if let Some((format_family, prefix)) = get_format_info(&table.name) {
+            if let Some((format_family, prefix)) = yaml_format_info(&table.name) {
                 for tag in &table.tags {
                     let full_name = format!("{}:{}", prefix, tag.name);
                     let descriptor = TagDescriptor::new(
-                        parse_tag_id(&tag.id),
+                        parse_yaml_tag_id(&tag.id),
                         full_name.clone(),
                         format_family,
                         tag.writable,
-                        parse_value_type(tag.type_name.as_deref()),
+                        parse_yaml_value_type(tag.type_name.as_deref())
+                            .unwrap_or(ValueType::String),
                         tag.description
                             .clone()
                             .unwrap_or_else(|| format!("{} tag", tag.name)),
@@ -6895,6 +6897,33 @@ static YAML_TAG_DESCRIPTORS: LazyLock<HashMap<String, TagDescriptor>> = LazyLock
     }
 
     descriptors
+});
+
+static YAML_TAGS_WITH_RELIABLE_TYPES: LazyLock<HashSet<String>> = LazyLock::new(|| {
+    let mut tags = HashSet::new();
+
+    let all_tables = [
+        &core::CORE_TAGS.tables[..],
+        &camera::CAMERA_TAGS.tables[..],
+        &media::MEDIA_TAGS.tables[..],
+        &image::IMAGE_TAGS.tables[..],
+        &document::DOCUMENT_TAGS.tables[..],
+        &specialty::SPECIALTY_TAGS.tables[..],
+    ];
+
+    for tables in all_tables.iter() {
+        for table in tables.iter() {
+            if let Some((_, prefix)) = yaml_format_info(&table.name) {
+                for tag in &table.tags {
+                    if parse_yaml_value_type(tag.type_name.as_deref()).is_some() {
+                        tags.insert(format!("{}:{}", prefix, tag.name));
+                    }
+                }
+            }
+        }
+    }
+
+    tags
 });
 
 /// Retrieves a tag descriptor by its canonical name.
@@ -6960,6 +6989,32 @@ pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
         .or_else(|| YAML_TAG_DESCRIPTORS.get(normalized_name.as_str()))
 }
 
+pub(crate) fn has_reliable_value_type(name: &str) -> bool {
+    if TAG_REGISTRY.contains_key(name) || GENERATED_TAG_REGISTRY.contains_key(name) {
+        return true;
+    }
+    if YAML_TAGS_WITH_RELIABLE_TYPES.contains(name) {
+        return true;
+    }
+
+    let normalized_name = if name.starts_with("IFD0:")
+        || name.starts_with("IFD1:")
+        || name.starts_with("ExifIFD:")
+        || name.starts_with("InteropIFD:")
+    {
+        name.find(':')
+            .map(|colon_pos| format!("EXIF:{}", &name[colon_pos + 1..]))
+    } else {
+        None
+    };
+
+    normalized_name.is_some_and(|normalized_name| {
+        TAG_REGISTRY.contains_key(normalized_name.as_str())
+            || GENERATED_TAG_REGISTRY.contains_key(normalized_name.as_str())
+            || YAML_TAGS_WITH_RELIABLE_TYPES.contains(normalized_name.as_str())
+    })
+}
+
 /// Returns the total number of unique tags reachable through descriptor lookup.
 ///
 /// This mirrors `get_tag_descriptor()` by counting the manual registry,
@@ -6988,6 +7043,17 @@ mod tests {
             "Registry must contain at least 500 tags, found {}",
             count
         );
+    }
+
+    #[test]
+    fn test_yaml_format_family_mapping_does_not_mislabel_unsupported_domains() {
+        assert_eq!(
+            yaml_format_info("Canon::Main").map(|(family, _)| family),
+            Some(FormatFamily::MakerNotes)
+        );
+        assert!(yaml_format_info("BMP::Main").is_none());
+        assert!(yaml_format_info("DICOM::Main").is_none());
+        assert!(yaml_format_info("EXE::Main").is_none());
     }
 
     #[test]

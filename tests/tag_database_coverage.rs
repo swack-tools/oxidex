@@ -1,7 +1,9 @@
 //! Integration tests for active tag database coverage
 
-use oxidex::core::{TagValue, ValueType, validate_tag_value};
+use oxidex::core::{MetadataMap, TagValue, write_metadata};
 use oxidex::tag_db::{generated_tags::generated_tag_count, get_tag_descriptor, tag_count};
+use std::fs;
+use tempfile::tempdir;
 
 #[test]
 fn test_tag_database_count_comes_from_active_registry() {
@@ -34,11 +36,21 @@ fn test_core_tag_descriptors_are_reachable() {
 
 #[test]
 fn test_yaml_backed_descriptors_do_not_reject_parser_value_types() {
+    let temp_dir = tempdir().expect("create temp directory");
+    let png_path = temp_dir.path().join("sample.png");
+    fs::copy("tests/fixtures/png/sample.png", &png_path).expect("copy PNG fixture");
+
     let descriptor =
         get_tag_descriptor("PNG:ImageWidth").expect("expected YAML-backed PNG descriptor");
-    assert_eq!(descriptor.value_type(), ValueType::Unknown);
-    let value = TagValue::new_integer(640);
+    assert!(!descriptor.is_writable());
 
-    validate_tag_value(descriptor, &value)
-        .expect("YAML-backed descriptors without precise type data must not reject parser output");
+    let mut metadata = MetadataMap::new();
+    metadata.insert("PNG:ImageWidth".to_string(), TagValue::new_integer(640));
+    write_metadata(&png_path, &metadata)
+        .expect("untyped YAML descriptors must not reject parser-compatible integer values");
+
+    let mut invalid = MetadataMap::new();
+    invalid.insert("PNG:ImageWidth".to_string(), TagValue::new_rational(1, 0));
+    let error = write_metadata(&png_path, &invalid).expect_err("zero denominator must be rejected");
+    assert!(error.to_string().contains("denominator cannot be zero"));
 }

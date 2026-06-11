@@ -15,7 +15,7 @@ use crate::core::operations_helpers::{read_u16, read_u32};
 #[cfg(test)]
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::core::tiff_helpers::parse_ifd_chain;
-use crate::core::validation::validate_tag_value_with_name;
+use crate::core::validation::{validate_tag_value_intrinsics, validate_tag_value_with_name};
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
 use crate::parsers::detection::detect_format;
@@ -23,7 +23,7 @@ use crate::parsers::jpeg::segment_parser::parse_segments;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 #[cfg(test)]
 use crate::parsers::tiff::tiff_subreader::TiffSubReader;
-use crate::tag_db::tag_registry::get_tag_descriptor;
+use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::jpeg_writer::write_exif_to_jpeg;
 use crate::writers::pdf_writer::write_pdf_file;
@@ -191,9 +191,12 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
     for (tag_name, tag_value) in metadata.iter() {
         // Look up tag descriptor in registry
         if let Some(descriptor) = get_tag_descriptor(tag_name) {
-            // Validate that the tag value matches the expected type
-            // Pass the original tag_name (e.g., "IFD0:Make") for error messages
-            validate_tag_value_with_name(tag_name, descriptor, tag_value)?;
+            if has_reliable_value_type(tag_name) {
+                // Pass the original tag_name (e.g., "IFD0:Make") for error messages.
+                validate_tag_value_with_name(tag_name, descriptor, tag_value)?;
+            } else {
+                validate_tag_value_intrinsics(tag_name, tag_value)?;
+            }
         }
         // If tag is not in registry, skip validation (allows custom/rare tags)
     }

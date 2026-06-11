@@ -73,8 +73,6 @@ fn descriptor_allows_datetime(descriptor: &TagDescriptor) -> bool {
 /// - `TagValue::Binary` must match `ValueType::Binary`
 /// - `TagValue::DateTime` must match `ValueType::DateTime`
 /// - `TagValue::Struct` must match `ValueType::Struct`
-/// - `ValueType::Unknown` accepts any value because the registry has no reliable type metadata
-///
 /// ## Rational Number Constraints
 /// For Rational values, the denominator must not be zero, as this would represent
 /// an undefined mathematical value.
@@ -108,10 +106,6 @@ pub fn validate_tag_value_with_name(
 ) -> Result<(), ExifToolError> {
     let expected_type = descriptor.value_type();
 
-    if expected_type == ValueType::Unknown {
-        return Ok(());
-    }
-
     match value {
         TagValue::String(_) => {
             if expected_type != ValueType::String {
@@ -142,7 +136,7 @@ pub fn validate_tag_value_with_name(
         }
         TagValue::Rational {
             numerator: _,
-            denominator,
+            denominator: _,
         } => {
             if expected_type != ValueType::Rational {
                 return Err(ExifToolError::invalid_tag_value(
@@ -153,13 +147,7 @@ pub fn validate_tag_value_with_name(
                     ),
                 ));
             }
-            // Validate that denominator is not zero (undefined mathematical value)
-            if *denominator == 0 {
-                return Err(ExifToolError::invalid_tag_value(
-                    tag_name,
-                    "Invalid Rational value: denominator cannot be zero".to_string(),
-                ));
-            }
+            validate_tag_value_intrinsics(tag_name, value)?;
         }
         TagValue::Binary(_) => {
             if expected_type != ValueType::Binary {
@@ -198,6 +186,23 @@ pub fn validate_tag_value_with_name(
             // For this iteration, basic type matching is sufficient
             // Recursive validation of nested structure contents is out of scope
         }
+    }
+
+    Ok(())
+}
+
+/// Validates constraints that are independent of registry type metadata.
+pub(crate) fn validate_tag_value_intrinsics(
+    tag_name: &str,
+    value: &TagValue,
+) -> Result<(), ExifToolError> {
+    if let TagValue::Rational { denominator, .. } = value
+        && *denominator == 0
+    {
+        return Err(ExifToolError::invalid_tag_value(
+            tag_name,
+            "Invalid Rational value: denominator cannot be zero".to_string(),
+        ));
     }
 
     Ok(())
