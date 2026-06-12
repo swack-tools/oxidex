@@ -49,6 +49,12 @@ pub trait OutputFormatter {
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String;
 }
 
+fn tag_matches_filter(tag_name: &str, filter: &[String]) -> bool {
+    filter
+        .iter()
+        .any(|requested| requested == tag_name || tag_name.rsplit(':').next() == Some(requested))
+}
+
 /// Formats metadata in human-readable key-value format
 ///
 /// Output format: "Tag: Value\n" for each tag, sorted alphabetically by tag name.
@@ -83,7 +89,7 @@ impl OutputFormatter for HumanReadableFormatter {
 
         // Filter tags if a filter is provided
         if let Some(filter) = filter_tags {
-            tags.retain(|(name, _)| filter.contains(name));
+            tags.retain(|(name, _)| tag_matches_filter(name, filter));
             if tags.is_empty() {
                 return String::new();
             }
@@ -178,7 +184,7 @@ impl OutputFormatter for JsonFormatter {
         let metadata_to_filter = if let Some(filter) = filter_tags {
             let filtered: MetadataMap = metadata
                 .iter()
-                .filter(|(name, _)| filter.contains(name))
+                .filter(|(name, _)| tag_matches_filter(name, filter))
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect();
             filtered
@@ -320,7 +326,7 @@ impl OutputFormatter for CsvFormatter {
 
         // Filter tags if a filter is provided
         if let Some(filter) = filter_tags {
-            tags.retain(|(name, _)| filter.contains(name));
+            tags.retain(|(name, _)| tag_matches_filter(name, filter));
             if tags.is_empty() {
                 return String::new();
             }
@@ -404,7 +410,7 @@ impl OutputFormatter for ShortFormatter {
 
         // Filter tags if a filter is provided
         if let Some(filter) = filter_tags {
-            tags.retain(|(name, _)| filter.contains(name));
+            tags.retain(|(name, _)| tag_matches_filter(name, filter));
             if tags.is_empty() {
                 return String::new();
             }

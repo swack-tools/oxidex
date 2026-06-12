@@ -17,8 +17,7 @@ use oxidex::core::tag_value::TagValue;
 use std::process;
 
 fn main() {
-    // Parse command-line arguments using lexopt
-    // lexopt naturally supports both single-dash (-json) and double-dash (--json) long options
+    // Parse command-line arguments after normalizing supported ExifTool-style options.
     let args = match CliArgs::parse() {
         Ok(args) => args,
         Err(e) => {
@@ -244,8 +243,10 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
 fn handle_batch_processing(path: &std::path::Path, args: &CliArgs) {
     match batch_processor::batch_process(path, args) {
         Ok(stats) => {
-            // Print statistics
-            stats.print();
+            let is_read_mode = args.tag_modifications().is_empty();
+            if !(is_read_mode && (args.json || args.csv || args.short_format)) {
+                stats.print();
+            }
 
             // Exit with error code if there were any errors
             if stats.errors > 0 {

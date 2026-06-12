@@ -106,5 +106,8 @@ mod makernote_integration;
 #[path = "integration/cli_feature_tests.rs"]
 mod cli_feature_tests;
 
+#[path = "integration/cli_batch_wiring_tests.rs"]
+mod cli_batch_wiring_tests;
+
 #[path = "forensic/mod.rs"]
 mod forensic;
