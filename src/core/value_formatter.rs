@@ -50,7 +50,7 @@ pub fn format_file_size(bytes: u64) -> String {
 /// # Examples
 ///
 /// ```
-/// use chrono::{DateTime, Utc, TimeZone};
+/// use oxidex::chrono::{TimeZone, Utc};
 /// use oxidex::core::value_formatter::format_exif_datetime;
 ///
 /// let dt = Utc.with_ymd_and_hms(2002, 6, 20, 2, 11, 11).unwrap();
