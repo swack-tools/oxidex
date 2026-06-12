@@ -1,6 +1,6 @@
 //! Integration tests for active tag database coverage
 
-use oxidex::core::{MetadataMap, TagValue, write_metadata};
+use oxidex::core::{MetadataMap, TagValue, validate_tag_value, write_metadata};
 use oxidex::tag_db::{generated_tags::generated_tag_count, get_tag_descriptor, tag_count};
 use std::fs;
 use tempfile::tempdir;
@@ -43,6 +43,8 @@ fn test_yaml_backed_descriptors_do_not_reject_parser_value_types() {
     let descriptor =
         get_tag_descriptor("PNG:ImageWidth").expect("expected YAML-backed PNG descriptor");
     assert!(!descriptor.is_writable());
+    validate_tag_value(descriptor, &TagValue::new_integer(640))
+        .expect("public validation must share unreliable YAML type semantics");
 
     let mut metadata = MetadataMap::new();
     metadata.insert("PNG:ImageWidth".to_string(), TagValue::new_integer(640));
@@ -53,4 +55,13 @@ fn test_yaml_backed_descriptors_do_not_reject_parser_value_types() {
     invalid.insert("PNG:ImageWidth".to_string(), TagValue::new_rational(1, 0));
     let error = write_metadata(&png_path, &invalid).expect_err("zero denominator must be rejected");
     assert!(error.to_string().contains("denominator cannot be zero"));
+}
+
+#[test]
+fn test_mixed_duplicate_yaml_descriptors_do_not_force_strict_type_validation() {
+    let descriptor = get_tag_descriptor("Panasonic:WBRedLevel")
+        .expect("expected YAML-backed duplicate maker descriptor");
+
+    validate_tag_value(descriptor, &TagValue::new_rational(1, 2))
+        .expect("mixed duplicate YAML types must not force fallback descriptor type");
 }

@@ -6858,10 +6858,15 @@ fn yaml_format_info(table_name: &str) -> Option<(FormatFamily, &str)> {
     Some((format_family, canonical_prefix))
 }
 
+struct YamlTagEntry {
+    descriptor: TagDescriptor,
+    reliable_value_type: bool,
+}
+
 /// Lazy-loaded registry of TagDescriptors built from YAML tag databases.
 /// This serves as a fallback when tags are not found in the manual TAG_REGISTRY.
-static YAML_TAG_DESCRIPTORS: LazyLock<HashMap<String, TagDescriptor>> = LazyLock::new(|| {
-    let mut descriptors = HashMap::with_capacity(10000);
+static YAML_TAG_ENTRIES: LazyLock<HashMap<String, YamlTagEntry>> = LazyLock::new(|| {
+    let mut entries: HashMap<String, YamlTagEntry> = HashMap::with_capacity(10000);
 
     // Scan all domain tag databases
     let all_tables = [
@@ -6878,52 +6883,40 @@ static YAML_TAG_DESCRIPTORS: LazyLock<HashMap<String, TagDescriptor>> = LazyLock
             if let Some((format_family, prefix)) = yaml_format_info(&table.name) {
                 for tag in &table.tags {
                     let full_name = format!("{}:{}", prefix, tag.name);
+                    let parsed_type = parse_yaml_value_type(tag.type_name.as_deref());
                     let descriptor = TagDescriptor::new(
                         parse_yaml_tag_id(&tag.id),
                         full_name.clone(),
                         format_family,
                         tag.writable,
-                        parse_yaml_value_type(tag.type_name.as_deref())
-                            .unwrap_or(ValueType::String),
+                        parsed_type.unwrap_or(ValueType::String),
                         tag.description
                             .clone()
                             .unwrap_or_else(|| format!("{} tag", tag.name)),
                         Vec::new(), // No example values in YAML
                     );
-                    descriptors.insert(full_name, descriptor);
+                    let reliable_value_type = entries.get(&full_name).map_or_else(
+                        || parsed_type.is_some(),
+                        |previous| {
+                            previous.reliable_value_type
+                                && parsed_type.is_some_and(|value_type| {
+                                    value_type == previous.descriptor.value_type()
+                                })
+                        },
+                    );
+                    entries.insert(
+                        full_name,
+                        YamlTagEntry {
+                            descriptor,
+                            reliable_value_type,
+                        },
+                    );
                 }
             }
         }
     }
 
-    descriptors
-});
-
-static YAML_TAGS_WITH_RELIABLE_TYPES: LazyLock<HashSet<String>> = LazyLock::new(|| {
-    let mut tags = HashSet::new();
-
-    let all_tables = [
-        &core::CORE_TAGS.tables[..],
-        &camera::CAMERA_TAGS.tables[..],
-        &media::MEDIA_TAGS.tables[..],
-        &image::IMAGE_TAGS.tables[..],
-        &document::DOCUMENT_TAGS.tables[..],
-        &specialty::SPECIALTY_TAGS.tables[..],
-    ];
-
-    for tables in all_tables.iter() {
-        for table in tables.iter() {
-            if let Some((_, prefix)) = yaml_format_info(&table.name) {
-                for tag in &table.tags {
-                    if parse_yaml_value_type(tag.type_name.as_deref()).is_some() {
-                        tags.insert(format!("{}:{}", prefix, tag.name));
-                    }
-                }
-            }
-        }
-    }
-
-    tags
+    entries
 });
 
 /// Retrieves a tag descriptor by its canonical name.
@@ -6958,8 +6951,8 @@ pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
     }
 
     // Try YAML registry direct match
-    if let Some(descriptor) = YAML_TAG_DESCRIPTORS.get(name) {
-        return Some(descriptor);
+    if let Some(entry) = YAML_TAG_ENTRIES.get(name) {
+        return Some(&entry.descriptor);
     }
 
     // Handle IFD prefix mapping for validation
@@ -6980,21 +6973,25 @@ pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
     } else {
         // GPS and other families stay as-is
         // Try YAML registry before giving up
-        return YAML_TAG_DESCRIPTORS.get(name);
+        return YAML_TAG_ENTRIES.get(name).map(|entry| &entry.descriptor);
     };
 
     TAG_REGISTRY
         .get(normalized_name.as_str())
         .or_else(|| GENERATED_TAG_REGISTRY.get(normalized_name.as_str()))
-        .or_else(|| YAML_TAG_DESCRIPTORS.get(normalized_name.as_str()))
+        .or_else(|| {
+            YAML_TAG_ENTRIES
+                .get(normalized_name.as_str())
+                .map(|entry| &entry.descriptor)
+        })
 }
 
 pub(crate) fn has_reliable_value_type(name: &str) -> bool {
     if TAG_REGISTRY.contains_key(name) || GENERATED_TAG_REGISTRY.contains_key(name) {
         return true;
     }
-    if YAML_TAGS_WITH_RELIABLE_TYPES.contains(name) {
-        return true;
+    if let Some(entry) = YAML_TAG_ENTRIES.get(name) {
+        return entry.reliable_value_type;
     }
 
     let normalized_name = if name.starts_with("IFD0:")
@@ -7011,8 +7008,29 @@ pub(crate) fn has_reliable_value_type(name: &str) -> bool {
     normalized_name.is_some_and(|normalized_name| {
         TAG_REGISTRY.contains_key(normalized_name.as_str())
             || GENERATED_TAG_REGISTRY.contains_key(normalized_name.as_str())
-            || YAML_TAGS_WITH_RELIABLE_TYPES.contains(normalized_name.as_str())
+            || YAML_TAG_ENTRIES
+                .get(normalized_name.as_str())
+                .is_some_and(|entry| entry.reliable_value_type)
     })
+}
+
+pub(crate) fn descriptor_has_reliable_value_type(descriptor: &TagDescriptor) -> bool {
+    let name = descriptor.name();
+
+    if TAG_REGISTRY
+        .get(name)
+        .is_some_and(|registered| std::ptr::eq(registered, descriptor))
+        || GENERATED_TAG_REGISTRY
+            .get(name)
+            .is_some_and(|registered| std::ptr::eq(registered, descriptor))
+    {
+        return true;
+    }
+
+    YAML_TAG_ENTRIES
+        .get(name)
+        .filter(|entry| std::ptr::eq(&entry.descriptor, descriptor))
+        .is_none_or(|entry| entry.reliable_value_type)
 }
 
 /// Returns the total number of unique tags reachable through descriptor lookup.
@@ -7021,12 +7039,12 @@ pub(crate) fn has_reliable_value_type(name: &str) -> bool {
 /// generated domain registry, and YAML-backed descriptors.
 pub fn tag_count() -> usize {
     let mut tags = HashSet::with_capacity(
-        TAG_REGISTRY.len() + GENERATED_TAG_REGISTRY.len() + YAML_TAG_DESCRIPTORS.len(),
+        TAG_REGISTRY.len() + GENERATED_TAG_REGISTRY.len() + YAML_TAG_ENTRIES.len(),
     );
 
     tags.extend(TAG_REGISTRY.keys().copied());
     tags.extend(GENERATED_TAG_REGISTRY.keys().map(String::as_str));
-    tags.extend(YAML_TAG_DESCRIPTORS.keys().map(String::as_str));
+    tags.extend(YAML_TAG_ENTRIES.keys().map(String::as_str));
 
     tags.len()
 }
@@ -7064,6 +7082,32 @@ mod tests {
         assert!(yaml_format_info("BMP::Main").is_none());
         assert!(yaml_format_info("DICOM::Main").is_none());
         assert!(yaml_format_info("EXE::Main").is_none());
+    }
+
+    #[test]
+    fn test_mixed_duplicate_yaml_types_are_unreliable() {
+        assert!(!has_reliable_value_type("Panasonic:WBRedLevel"));
+        assert!(!has_reliable_value_type("Olympus:ExternalFlashZoom"));
+    }
+
+    #[test]
+    fn test_ifd_alias_reliability_matches_canonical_exif_tag() {
+        for (alias, canonical) in [
+            ("IFD0:Make", "EXIF:Make"),
+            ("IFD1:ImageWidth", "EXIF:ImageWidth"),
+            ("ExifIFD:ExposureTime", "EXIF:ExposureTime"),
+        ] {
+            assert_eq!(
+                has_reliable_value_type(alias),
+                has_reliable_value_type(canonical),
+                "{alias} should use the same reliability as {canonical}"
+            );
+            assert_eq!(
+                get_tag_descriptor(alias).map(TagDescriptor::name),
+                get_tag_descriptor(canonical).map(TagDescriptor::name),
+                "{alias} should resolve to the canonical EXIF descriptor"
+            );
+        }
     }
 
     #[test]

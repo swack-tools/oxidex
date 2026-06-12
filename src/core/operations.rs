@@ -181,8 +181,11 @@ pub fn read_metadata(path: &Path) -> Result<MetadataMap> {
 /// # Validation
 ///
 /// All tags are validated before any file operations. Validation checks:
-/// - Type matching (String, Integer, Float, Rational, etc.)
-/// - Value constraints (e.g., Rational denominator != 0)
+/// - Type matching for tags with reliable registry type metadata
+/// - Intrinsic value constraints (e.g., Rational denominator != 0)
+///
+/// YAML-backed tags with absent or conflicting type metadata are still validated for intrinsic
+/// constraints, but they do not force strict fallback `String` matching.
 ///
 /// Tags not in the registry are skipped during validation (allows custom tags).
 pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
