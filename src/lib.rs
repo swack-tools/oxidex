@@ -53,3 +53,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // Re-export the high-level API at crate root for convenience
 pub use crate::core::Metadata;
+
+// Re-export `chrono` so consumers (and doc examples) can construct the
+// `DateTime<Utc>` values that appear in the public API (e.g.
+// `core::value_formatter::format_exif_datetime`, `TagValue::DateTime`) without
+// depending on a separately-resolved copy of the crate. Using a single shared
+// instance also avoids the "two different versions of crate `chrono`" type
+// mismatch that rustdoc's merged-doctest compilation would otherwise produce.
+pub use chrono;
