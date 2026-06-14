@@ -106,5 +106,8 @@ mod cli_feature_tests;
 #[path = "integration/production_wiring_tests.rs"]
 mod production_wiring_tests;
 
+#[path = "integration/cli_batch_wiring_tests.rs"]
+mod cli_batch_wiring_tests;
+
 #[path = "forensic/mod.rs"]
 mod forensic;

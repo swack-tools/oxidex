@@ -103,8 +103,15 @@ impl CliArgs {
         let mut args = Vec::new();
 
         // Pre-process arguments to handle tag modifications that look like flags
-        // e.g., "-EXIF:Artist=value" starts with '-' but isn't a regular flag
-        let raw_args: Vec<String> = std::env::args().skip(1).collect();
+        // e.g., "-EXIF:Artist=value" starts with '-' but isn't a regular flag.
+        //
+        // First normalize ExifTool-style single-dash long options (e.g. `-json`)
+        // to their `--` form so the pre-filter loop and lexopt see them as long
+        // options rather than clustered short flags.
+        let raw_args: Vec<String> = std::env::args()
+            .skip(1)
+            .map(normalize_exiftool_option)
+            .collect();
         let mut lexopt_args = Vec::new();
         let mut tag_modifications = Vec::new();
 
@@ -560,6 +567,30 @@ impl CliArgs {
         }
 
         None
+    }
+}
+
+/// Normalizes ExifTool-style single-dash long options to lexopt-compatible
+/// double-dash form before parsing.
+///
+/// ExifTool accepts long options with a single leading dash (e.g. `-json`,
+/// `-csv`). lexopt would otherwise treat these as clustered short options
+/// (e.g. `-json` -> `-j -o -n -s`), so they are rewritten to their `--`
+/// equivalents that the existing match arms already handle.
+///
+/// Only exact, known long options are rewritten; everything else (including
+/// real short flags like `-s` and tag modifications like `-EXIF:Make`) is
+/// passed through unchanged.
+fn normalize_exiftool_option(arg: String) -> String {
+    match arg.as_str() {
+        "-json" => "--json".to_string(),
+        "-csv" => "--csv".to_string(),
+        "-preserve-file-times" => "--preserve-file-times".to_string(),
+        "-backup" => "--backup".to_string(),
+        "-readonly" => "--readonly".to_string(),
+        "-exiftool-compat" => "--exiftool-compat".to_string(),
+        "-TagsFromFile" => "--TagsFromFile".to_string(),
+        _ => arg,
     }
 }
 

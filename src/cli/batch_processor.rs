@@ -5,6 +5,10 @@
 //! metadata operations on large file collections.
 
 use crate::cli::args::CliArgs;
+use crate::cli::output_formatter::{
+    CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter, ShortFormatter,
+};
+use crate::core::exiftool_compat::format_for_exiftool;
 use crate::core::operations::{modify_tag, read_metadata};
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result};
@@ -269,11 +273,50 @@ fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
 
     progress.finish_and_clear();
 
-    // Output results
-    if args.json {
-        output_json_results(&results)?;
+    // Output results using the shared output formatters so that batch mode
+    // honors the same output flags (-csv, -json/--json, -s) as single-file mode.
+    let tag_filter = args.specific_tags();
+    let filter_slice = tag_filter.as_deref();
+
+    if args.csv {
+        let formatter = CsvFormatter;
+        for (_, result) in &results {
+            if let Ok(metadata) = result {
+                let metadata = if args.exiftool_compat() {
+                    format_for_exiftool(metadata)
+                } else {
+                    metadata.clone()
+                };
+                print!("{}", formatter.format(&metadata, filter_slice));
+            }
+        }
+    } else if args.json {
+        output_json_results(&results, args, filter_slice)?;
+    } else if args.short_format {
+        let formatter = ShortFormatter;
+        for (_, result) in &results {
+            if let Ok(metadata) = result {
+                let metadata = if args.exiftool_compat() {
+                    format_for_exiftool(metadata)
+                } else {
+                    metadata.clone()
+                };
+                print!("{}", formatter.format(&metadata, filter_slice));
+            }
+        }
     } else {
-        output_human_readable_results(&results);
+        let formatter = HumanReadableFormatter;
+        for (path, result) in &results {
+            if let Ok(metadata) = result {
+                println!("\n======== {} ========", path.display());
+                let metadata = if args.exiftool_compat() {
+                    format_for_exiftool(metadata)
+                } else {
+                    metadata.clone()
+                };
+                print!("{}", formatter.format(&metadata, filter_slice));
+            }
+        }
     }
 
     Ok(BatchStats {
@@ -428,97 +471,59 @@ fn create_progress_bar(total: usize, action: &str) -> ProgressBar {
 
 /// Outputs results in JSON format.
 ///
-/// Creates a JSON array with one object per file containing:
-/// - SourceFile: file path
-/// - All metadata tags (for successful reads)
-/// - Error message (for failed reads)
-fn output_json_results(results: &[(PathBuf, Result<crate::core::MetadataMap>)]) -> Result<()> {
-    use serde_json::{Value, json};
-
-    let json_array: Vec<Value> = results
-        .iter()
-        .filter_map(|(path, result)| {
-            match result {
-                Ok(metadata) => {
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("SourceFile".to_string(), json!(path.display().to_string()));
-
-                    // Add all metadata tags
-                    for (tag_name, tag_value) in metadata.iter() {
-                        let value = match tag_value {
-                            TagValue::String(s) => json!(s),
-                            TagValue::Integer(i) => json!(i),
-                            TagValue::Float(f) => json!(f),
-                            TagValue::Rational {
-                                numerator,
-                                denominator,
-                            } => {
-                                json!(format!("{}/{}", numerator, denominator))
-                            }
-                            TagValue::Binary(b) => {
-                                json!(format!(
-                                    "(Binary data {} bytes, use -b option to extract)",
-                                    b.len()
-                                ))
-                            }
-                            TagValue::DateTime(dt) => json!(dt.to_rfc3339()),
-                            TagValue::Struct(_) => json!("(Structured data)"),
-                            TagValue::Array(values) => {
-                                let array: Vec<serde_json::Value> = values
-                                    .iter()
-                                    .map(|v| match v {
-                                        TagValue::String(s) => json!(s),
-                                        TagValue::Integer(i) => json!(i),
-                                        TagValue::Float(f) => json!(f),
-                                        _ => json!(format!("{:?}", v)),
-                                    })
-                                    .collect();
-                                json!(array)
-                            }
-                        };
-                        obj.insert(tag_name.clone(), value);
-                    }
-
-                    Some(Value::Object(obj))
-                }
-                Err(_) => {
-                    // Errors already printed to stderr, skip in JSON output
-                    None
-                }
-            }
-        })
-        .collect();
-
-    match serde_json::to_string_pretty(&json_array) {
-        Ok(json_str) => {
-            println!("{}", json_str);
-            Ok(())
-        }
-        Err(e) => Err(ExifToolError::parse_error(format!(
-            "Failed to serialize JSON: {}",
-            e
-        ))),
-    }
-}
-
-/// Outputs results in human-readable format.
-///
-/// Prints each file's metadata with "File:" header separating files.
-fn output_human_readable_results(results: &[(PathBuf, Result<crate::core::MetadataMap>)]) {
-    use crate::cli::output_formatter::{HumanReadableFormatter, OutputFormatter};
-
-    let formatter = HumanReadableFormatter;
+/// Routes each file's metadata through the shared [`JsonFormatter`] so batch
+/// JSON output matches single-file output, then merges the per-file objects
+/// into one top-level array. A `SourceFile` key is injected into each object,
+/// and read failures are emitted as `{ "SourceFile": ..., "Error": ... }`
+/// entries (Perl ExifTool-compatible structure).
+fn output_json_results(
+    results: &[(PathBuf, Result<crate::core::MetadataMap>)],
+    args: &CliArgs,
+    filter_slice: Option<&[String]>,
+) -> Result<()> {
+    let formatter = JsonFormatter;
+    let mut rendered = Vec::new();
 
     for (path, result) in results {
         match result {
             Ok(metadata) => {
-                println!("\n======== {} ========", path.display());
-                let output = formatter.format(metadata, None);
-                print!("{}", output);
+                let metadata = if args.exiftool_compat() {
+                    format_for_exiftool(metadata)
+                } else {
+                    metadata.clone()
+                };
+                // JsonFormatter::format returns a one-element array: [{...}].
+                let mut value: serde_json::Value = serde_json::from_str(
+                    &formatter.format(&metadata, filter_slice),
+                )
+                .map_err(|e| ExifToolError::parse_error(format!("JSON formatting failed: {e}")))?;
+                if let Some(obj) = value
+                    .as_array_mut()
+                    .and_then(|items| items.first_mut())
+                    .and_then(|item| item.as_object_mut())
+                {
+                    obj.insert(
+                        "SourceFile".to_string(),
+                        serde_json::Value::String(path.display().to_string()),
+                    );
+                }
+                if let Some(items) = value.as_array() {
+                    rendered.extend(items.iter().cloned());
+                }
             }
-            Err(_) => {
-                // Error already printed to stderr during processing
+            Err(e) => {
+                rendered.push(serde_json::json!({
+                    "SourceFile": path.display().to_string(),
+                    "Error": e.to_string()
+                }));
             }
         }
     }
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&rendered)
+            .map_err(|e| ExifToolError::parse_error(format!("JSON serialization failed: {e}")))?
+    );
+    Ok(())
 }
