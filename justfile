@@ -50,6 +50,11 @@ test-doc:
     @echo "Running doc tests..."
     cargo test --doc --workspace
 
+# Run the C FFI integration test (compiles and runs tests/ffi/c_integration_test.c)
+test-ffi-c:
+    @echo "Running C FFI integration test..."
+    cargo test --test ffi_c_integration -- --nocapture
+
 # Run tests for specific package
 test-package package:
     @echo "Running tests for {{package}}..."
@@ -294,12 +299,13 @@ ci:
     echo "   ✓ Tests (nextest + doc tests)"
 
 # Run CI without nextest (fallback if nextest not installed)
-ci-standard: fmt-check lint-release build-release test
+ci-standard: fmt-check lint-release build-release test test-ffi-c
     @echo "All CI checks passed!"
     @echo "✓ Format check"
     @echo "✓ Clippy (release profile)"
     @echo "✓ Build (release with all features)"
     @echo "✓ Tests (cargo test)"
+    @echo "✓ C FFI integration test"
 
 # Pre-commit hook: format, lint, test
 pre-commit: fmt lint test

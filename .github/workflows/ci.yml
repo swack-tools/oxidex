@@ -46,6 +46,8 @@ jobs:
       - run: cargo nextest run --release --all-features --features tag-comparison-binary
       - name: Run doc tests
         run: cargo test --doc --all-features
+      - name: C FFI integration test
+        run: cargo test --test ffi_c_integration -- --nocapture
       - name: Verify C header is up-to-date
         run: |
           cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
