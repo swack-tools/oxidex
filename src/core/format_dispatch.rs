@@ -7,6 +7,7 @@ use super::{FileFormat, FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::archive::gz::parse_gz_metadata;
 use crate::parsers::archive::iso::parse_iso_metadata;
+use crate::parsers::archive::ole::parse_ole_metadata;
 use crate::parsers::archive::rar::parse_rar_metadata;
 use crate::parsers::archive::sevenz::parse_7z_metadata;
 use crate::parsers::archive::tar::parse_tar_metadata;
@@ -18,7 +19,12 @@ use crate::parsers::audio::mp3::parse_mp3_metadata;
 use crate::parsers::audio::ogg::parse_ogg_metadata;
 use crate::parsers::audio::opus::parse_opus_metadata;
 use crate::parsers::audio::wav::parse_wav_metadata;
+use crate::parsers::document::eml::parse_eml_metadata;
 use crate::parsers::document::epub::parse_epub_metadata;
+use crate::parsers::document::ics::parse_ics_metadata;
+use crate::parsers::document::iwork::{
+    parse_keynote_metadata, parse_numbers_metadata, parse_pages_metadata,
+};
 use crate::parsers::document::ooxml::parse_docx_metadata;
 use crate::parsers::document::ooxml::parse_pptx_metadata;
 use crate::parsers::document::ooxml::parse_xlsx_metadata;
@@ -47,11 +53,16 @@ use crate::parsers::png::parse_png_metadata;
 use crate::parsers::quicktime::parse_quicktime_metadata;
 use crate::parsers::specialized::dwg::parse_dwg_metadata;
 use crate::parsers::specialized::dxf::parse_dxf_metadata;
+use crate::parsers::specialized::evtx::parse_evtx_metadata;
 use crate::parsers::specialized::fits::parse_fits_metadata;
 use crate::parsers::specialized::gltf::parse_gltf_metadata;
 use crate::parsers::specialized::hdf5::parse_hdf5_metadata;
 use crate::parsers::specialized::lnk::parse_lnk_metadata;
 use crate::parsers::specialized::obj::parse_obj_metadata;
+use crate::parsers::specialized::pcap::parse_pcap_metadata;
+use crate::parsers::specialized::plist::parse_plist_metadata;
+use crate::parsers::specialized::prefetch::parse_prefetch_metadata;
+use crate::parsers::specialized::registry::parse_registry_metadata;
 use crate::parsers::specialized::sqlite::parse_sqlite_metadata;
 use crate::parsers::specialized::stl::parse_stl_metadata;
 use crate::parsers::specialized::x509::parse_x509_metadata;
@@ -120,9 +131,9 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::DOCX => convert_string_error(parse_docx_metadata(reader), "DOCX"),
         FileFormat::XLSX => convert_string_error(parse_xlsx_metadata(reader), "XLSX"),
         FileFormat::PPTX => convert_string_error(parse_pptx_metadata(reader), "PPTX"),
-        FileFormat::Pages => convert_string_error(parse_docx_metadata(reader), "Pages"),
-        FileFormat::Numbers => convert_string_error(parse_xlsx_metadata(reader), "Numbers"),
-        FileFormat::Keynote => convert_string_error(parse_pptx_metadata(reader), "Keynote"),
+        FileFormat::Pages => convert_string_error(parse_pages_metadata(reader), "Pages"),
+        FileFormat::Numbers => convert_string_error(parse_numbers_metadata(reader), "Numbers"),
+        FileFormat::Keynote => convert_string_error(parse_keynote_metadata(reader), "Keynote"),
         FileFormat::EPUB => convert_string_error(parse_epub_metadata(reader), "EPUB"),
         FileFormat::RAR => convert_string_error(parse_rar_metadata(reader), "RAR"),
         FileFormat::SevenZ => convert_string_error(parse_7z_metadata(reader), "7z"),
@@ -167,6 +178,21 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::ICC => parse_icc_file(reader),
         FileFormat::XMP => parse_xmp_file(reader),
         FileFormat::EPS => convert_string_error(parse_eps_metadata(reader), "EPS"),
+        // Document interchange formats
+        FileFormat::ICS => convert_string_error(parse_ics_metadata(reader), "ICS"),
+        FileFormat::EML => convert_string_error(parse_eml_metadata(reader), "EML"),
+        // OLE Compound File Binary Format
+        FileFormat::OLE => convert_string_error(parse_ole_metadata(reader), "OLE"),
+        // Windows forensic formats
+        FileFormat::Prefetch => convert_string_error(parse_prefetch_metadata(reader), "Prefetch"),
+        FileFormat::Registry => convert_string_error(parse_registry_metadata(reader), "Registry"),
+        FileFormat::EVTX => convert_string_error(parse_evtx_metadata(reader), "EVTX"),
+        // macOS property lists
+        FileFormat::Plist => convert_string_error(parse_plist_metadata(reader), "Plist"),
+        // Network packet captures
+        FileFormat::PCAP | FileFormat::PCAPNG => {
+            convert_string_error(parse_pcap_metadata(reader), "PCAP")
+        }
         _ => Err(ExifToolError::unsupported_format(format!(
             "Format {:?} not yet supported in this iteration",
             format

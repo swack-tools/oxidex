@@ -86,7 +86,12 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     // Document formats
     signature!(b"%PDF", 0, FileFormat::PDF),
     // Archive formats
-    signature!(b"PK", 0, FileFormat::ZIP),
+    // NOTE: The generic ZIP signature (b"PK") is intentionally NOT listed here.
+    // ZIP containers back many distinct formats (DOCX/XLSX/PPTX/EPUB/iWork), so
+    // PK-prefixed files are routed through `detect_zip_variant` in the detection
+    // flow, which inspects the archive contents and falls back to FileFormat::ZIP
+    // for plain archives. Adding a plain "PK" -> ZIP signature here would
+    // short-circuit that container inspection.
     signature!(b"Rar!", 0, FileFormat::RAR),
     signature!(b"\x37\x7A\xBC\xAF\x27\x1C", 0, FileFormat::SevenZ),
     signature!(b"\x1F\x8B", 0, FileFormat::GZ),
@@ -117,8 +122,12 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"\xd4\xc3\xb2\xa1", 0, FileFormat::PCAP),   // PCAP little-endian
     signature!(b"\xa1\xb2\x3c\x4d", 0, FileFormat::PCAP),   // PCAP nanosecond big-endian
     signature!(b"\x4d\x3c\xb2\xa1", 0, FileFormat::PCAP),   // PCAP nanosecond little-endian
-    // X.509 Certificates
+    // OLE Compound File Binary Format (.doc, .xls, .ppt, .msg)
+    signature!(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", 0, FileFormat::OLE),
+    // X.509 Certificates (PEM, plus DER with long-form length encoding)
     signature!(b"-----BEGIN CERTIFICATE-----", 0, FileFormat::X509),
+    signature!(b"\x30\x82", 0, FileFormat::X509),
+    signature!(b"\x30\x81", 0, FileFormat::X509),
     // ICC Profile (signature "acsp" at offset 36)
     signature!(b"acsp", 36, FileFormat::ICC),
     // XMP Sidecar (<?xpacket or <x:xmpmeta)

@@ -221,6 +221,15 @@ impl FormatParser for OLEParser {
     }
 }
 
+/// Parses metadata from OLE Compound File Binary Format files.
+///
+/// This is the public dispatch API matching the convention used by other
+/// format parsers (returning a `String` error for `convert_string_error`).
+pub fn parse_ole_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
+    let parser = OLEParser;
+    parser.parse(reader).map_err(|e| e.to_string())
+}
+
 /// VBA Macro analyzer for forensic detection
 pub struct VBAAnalyzer;
 

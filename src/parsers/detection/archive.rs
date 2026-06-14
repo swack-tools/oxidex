@@ -50,9 +50,19 @@ pub fn detect_zip_variant(reader: &dyn FileReader) -> FileFormat {
             return FileFormat::Keynote;
         }
 
-        // Numbers and Pages both have Document.iwa, check for Tables
+        // Numbers and Pages both have Document.iwa. Numbers additionally stores
+        // spreadsheet data under the "Index/Tables/" prefix. Some archives do not
+        // emit an explicit "Index/Tables/" directory entry, so scan entry names
+        // for the prefix rather than relying on a bare directory entry.
         if archive.by_name("Index/Document.iwa").is_ok() {
-            if archive.by_name("Index/Tables/").is_ok() {
+            let has_tables = archive.by_name("Index/Tables/").is_ok()
+                || (0..archive.len()).any(|i| {
+                    archive
+                        .by_index(i)
+                        .map(|entry| entry.name().starts_with("Index/Tables/"))
+                        .unwrap_or(false)
+                });
+            if has_tables {
                 return FileFormat::Numbers;
             }
             return FileFormat::Pages;
