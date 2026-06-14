@@ -170,7 +170,9 @@ fn read_metadata_routes_iwork_to_iwork_parsers() {
     let keynote = write_zip_fixture(&[("Index/Presentation.iwa", b"")], ".key");
 
     assert_eq!(
-        read_metadata(pages.path()).unwrap().get("iWork:Application"),
+        read_metadata(pages.path())
+            .unwrap()
+            .get("iWork:Application"),
         Some(&TagValue::String("Pages".to_string()))
     );
     assert_eq!(
@@ -185,4 +187,42 @@ fn read_metadata_routes_iwork_to_iwork_parsers() {
             .get("iWork:Application"),
         Some(&TagValue::String("Keynote".to_string()))
     );
+}
+
+fn copy_fixture_to_temp(path: &str, suffix: &str) -> tempfile::NamedTempFile {
+    let temp = tempfile::Builder::new()
+        .suffix(suffix)
+        .tempfile()
+        .expect("create temp fixture copy");
+    fs::copy(path, temp.path()).expect("copy fixture");
+    temp
+}
+
+#[test]
+fn write_metadata_routes_png_pdf_and_tiff_writers() {
+    // These fixtures are copied to temp files so the high-level `write_metadata`
+    // read-modify-write cycle (which writes back to the same path) does not
+    // mutate the checked-in fixtures.
+    let png = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
+    let pdf = copy_fixture_to_temp("tests/fixtures/pdf/sample.pdf", ".pdf");
+    let tiff = copy_fixture_to_temp("tests/fixtures/tiff/sample.tif", ".tif");
+
+    // Build fresh metadata maps containing only correctly-typed tags. Writing
+    // back the full read-back metadata is not exercised here because the
+    // high-level `write_metadata` validates every tag against the registry
+    // before routing, and round-tripped EXIF chunks expose pre-existing
+    // String-vs-typed mismatches unrelated to write routing. The point of this
+    // test is to prove that `write_metadata` dispatches PNG/PDF/TIFF to their
+    // dedicated writers instead of returning "unsupported format".
+    let mut png_metadata = MetadataMap::new();
+    png_metadata.insert("PNG:tEXt:Author", TagValue::new_string("OxiDex QA"));
+    write_metadata(png.path(), &png_metadata).expect("write png through high-level API");
+
+    let mut pdf_metadata = MetadataMap::new();
+    pdf_metadata.insert("PDF:Title", TagValue::new_string("OxiDex QA"));
+    write_metadata(pdf.path(), &pdf_metadata).expect("write pdf through high-level API");
+
+    let mut tiff_metadata = MetadataMap::new();
+    tiff_metadata.insert("EXIF:Make", TagValue::new_string("OxiDex QA"));
+    write_metadata(tiff.path(), &tiff_metadata).expect("write tiff through high-level API");
 }
