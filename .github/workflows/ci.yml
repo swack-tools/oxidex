@@ -41,7 +41,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          tool: cargo-nextest,cbindgen
       - run: cargo build --release --all-features --features tag-comparison-binary
       - run: cargo nextest run --release --all-features --features tag-comparison-binary
       - name: C FFI integration test
@@ -97,6 +97,9 @@ jobs:
           name: benchmark-results
           path: target/criterion/
           retention-days: 90
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-tarpaulin
       - name: Generate coverage
         run: cargo tarpaulin --verbose --all-features --workspace --timeout 300 --out xml --output-dir ./coverage
       - uses: codacy/codacy-coverage-reporter-action@v1

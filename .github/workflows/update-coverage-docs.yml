@@ -17,7 +17,7 @@ concurrency:
 jobs:
   update-coverage:
     name: Generate Coverage Report
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:

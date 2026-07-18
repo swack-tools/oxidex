@@ -7,7 +7,7 @@ on:
 
 jobs:
   sync-tags:
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
