@@ -166,7 +166,12 @@ pub fn detect_text_formats(data: &[u8]) -> Option<FileFormat> {
         return None;
     }
 
-    let text = std::str::from_utf8(&data[0..100]).ok()?;
+    // Judge the valid UTF-8 prefix of the probe so a multibyte character
+    // straddling the 100-byte cut does not disqualify these text formats.
+    let text = super::helpers::utf8_prefix(&data[0..100]);
+    if text.is_empty() {
+        return None;
+    }
 
     // DXF: starts with "0\n" and contains "SECTION"
     if text.starts_with("0\n") && text.contains("SECTION") {
