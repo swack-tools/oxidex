@@ -64,7 +64,7 @@ lexopt = "0.3"
 nom = "8.0"
 
 # XML Parsing (for XMP metadata)
-quick-xml = "0.38"
+quick-xml = "0.41"
 
 # JSON Output
 serde = { version = "1.0", features = ["derive"] }
