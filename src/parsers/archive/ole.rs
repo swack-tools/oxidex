@@ -59,6 +59,7 @@ struct DirectoryEntry {
 /// OLE file header structure
 #[derive(Debug)]
 struct OLEHeader {
+    major_version: u16,
     sector_size: usize,
     mini_sector_size: usize,
     sector_count: u32,
@@ -165,6 +166,7 @@ impl OLEParser {
         let difat_sectors = header.u32_at(72).unwrap_or(0);
 
         Ok(OLEHeader {
+            major_version,
             sector_size,
             mini_sector_size,
             sector_count,
@@ -391,7 +393,7 @@ impl OLEParser {
             let child_did = entry.u32_at(76).unwrap_or(0);
             let start_sector = entry.u32_at(116).unwrap_or(0);
             let size = if entry_data.len() >= 128 {
-                u64::from_le_bytes([
+                let raw_size = u64::from_le_bytes([
                     entry_data[120],
                     entry_data[121],
                     entry_data[122],
@@ -400,7 +402,14 @@ impl OLEParser {
                     entry_data[125],
                     entry_data[126],
                     entry_data[127],
-                ])
+                ]);
+                // MS-CFB 2.6.1: version 3 writers may leave garbage in the
+                // upper 32 bits of the stream size; readers must ignore them.
+                if header.major_version == 3 {
+                    raw_size & 0xFFFF_FFFF
+                } else {
+                    raw_size
+                }
             } else {
                 entry.u32_at(120).unwrap_or(0) as u64
             };
