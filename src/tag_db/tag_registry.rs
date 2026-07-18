@@ -7014,6 +7014,16 @@ pub(crate) fn has_reliable_value_type(name: &str) -> bool {
     })
 }
 
+/// Reports whether `descriptor`'s value type came from reliable metadata.
+///
+/// Reliability is derived from *provenance* via pointer identity: only the
+/// exact `&TagDescriptor` returned by the active registry can be recognized as
+/// a YAML-backed entry with unreliable type metadata. A CLONE of such a
+/// descriptor loses that provenance and is treated as reliable (strict
+/// validation) again — pinned by
+/// `validation::tests::test_cloned_unreliable_yaml_descriptor_remains_strict`.
+/// Callers that need lenient validation must pass the registry reference
+/// itself, not a copy.
 pub(crate) fn descriptor_has_reliable_value_type(descriptor: &TagDescriptor) -> bool {
     let name = descriptor.name();
 
