@@ -1,3 +1,7 @@
+// The harness shells out to `cc` with `-Wl,-rpath` and unix library search
+// paths, none of which exist on Windows toolchains.
+#![cfg(unix)]
+
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
