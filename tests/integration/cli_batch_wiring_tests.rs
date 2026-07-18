@@ -173,14 +173,16 @@ fn lowercase_tag_filter_matches_case_insensitively() {
 
 #[test]
 fn assignment_args_with_date_option_prefix_reach_the_write_path() {
-    // Regression: `-description=...` was consumed by the `-d` date-format short
-    // option (as an attached value), silently falling through to read mode.
+    // Regression: an assignment whose tag starts with the `-d` date-format
+    // short option (as an attached value) was silently falling through to read
+    // mode. Use a group-qualified, resolvable tag so the test verifies the
+    // value actually lands, not just that the banner printed.
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let temp_file = temp_dir.path().join("write_target.jpg");
     std::fs::copy("tests/fixtures/jpeg/sample_with_exif.jpg", &temp_file).expect("copy fixture");
 
     let output = oxidex(&[
-        "-description=OxiDex QA",
+        "-IFD0:ImageDescription=OxiDex QA",
         temp_file.to_str().expect("temp path utf-8"),
     ]);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -191,5 +193,34 @@ fn assignment_args_with_date_option_prefix_reach_the_write_path() {
     assert!(
         !stdout.contains("Found "),
         "assignment arg must not fall through to a metadata dump, got stdout: {stdout}"
+    );
+
+    // Re-read: the written tag must actually be present, not silently dropped.
+    let reread = oxidex(&[temp_file.to_str().expect("temp path utf-8")]);
+    let reread_stdout = String::from_utf8_lossy(&reread.stdout);
+    assert!(
+        reread_stdout.contains("ImageDescription: OxiDex QA"),
+        "written tag must survive a round-trip, got: {reread_stdout}"
+    );
+}
+
+#[test]
+fn bare_tag_filter_starting_with_d_is_not_swallowed_by_date_option() {
+    // Regression: `-datetimeoriginal` (a lowercase tag filter) was parsed as
+    // the `-d` date-format option with an attached value, dumping all tags.
+    let output = oxidex(&[
+        "-datetimeoriginal",
+        "tests/fixtures/jpeg/sample_with_exif.jpg",
+    ]);
+    assert!(
+        output.status.success(),
+        "expected -datetimeoriginal filter to succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // A filter narrows output to matching tags; it must not dump unrelated ones.
+    assert!(
+        !stdout.contains("IFD0:Make"),
+        "filter must not fall through to a full dump, got: {stdout}"
     );
 }

@@ -103,7 +103,14 @@ fn is_lexopt_short_arg(arg: &str) -> bool {
 
     for (index, ch) in body.char_indices() {
         if ch == 'd' {
-            return body[..index].chars().all(is_flag_short_option);
+            // Everything before 'd' was already confirmed to be a flag option.
+            // 'd' is the date-format option only when it ends the cluster
+            // (`-d`, `-srd`; format is the next argument) or is immediately
+            // followed by a strftime directive (`-d%Y%m%d`). Otherwise the arg
+            // is a tag name that merely starts with cluster letters
+            // (`-description`, `-date`, `-shadows`) and must not be swallowed.
+            let remainder = &body[index + 1..];
+            return remainder.is_empty() || remainder.starts_with('%');
         }
         if !is_flag_short_option(ch) {
             return false;
@@ -780,5 +787,26 @@ mod tests {
         assert!(!is_lexopt_short_arg("-EXIF:Model"));
         assert!(!is_lexopt_short_arg("photo.jpg"));
         assert!(!is_lexopt_short_arg("-"));
+    }
+
+    #[test]
+    fn tag_names_starting_with_cluster_letters_are_not_swallowed() {
+        // Regression: these bare (no '=') filter/extraction args start with
+        // valid cluster letters but are tag names, not option clusters. The
+        // 'd'-prefixed ones were parsed as `-d` with an attached value.
+        assert!(!is_lexopt_short_arg("-description"));
+        assert!(!is_lexopt_short_arg("-datetimeoriginal"));
+        assert!(!is_lexopt_short_arg("-date"));
+        assert!(!is_lexopt_short_arg("-shadows")); // s,h,a all flags, then 'd'
+        assert!(!is_lexopt_short_arg("-redbalance")); // r,e flags, then 'd'
+        assert!(!is_lexopt_short_arg("-address")); // a flag, then 'd'
+    }
+
+    #[test]
+    fn genuine_date_option_forms_still_reach_lexopt() {
+        assert!(is_lexopt_short_arg("-d")); // format is the next argument
+        assert!(is_lexopt_short_arg("-d%Y%m%d")); // attached strftime format
+        assert!(is_lexopt_short_arg("-srd")); // cluster ending in -d
+        assert!(is_lexopt_short_arg("-nd%H%M")); // cluster + attached format
     }
 }
