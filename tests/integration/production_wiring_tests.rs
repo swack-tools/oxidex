@@ -1566,3 +1566,41 @@ fn write_metadata_rejects_tiff_until_writer_preserves_image_data() {
         "rejected TIFF write must leave the file untouched"
     );
 }
+
+#[test]
+fn jpeg_write_preserves_scan_data_and_eoi() {
+    // The segment parser cannot represent entropy-coded scan data; the writer
+    // must copy everything after the SOS header verbatim or the image body is
+    // silently amputated.
+    let jpeg = copy_fixture_to_temp("tests/fixtures/jpeg/simple/synthetic_010.jpg", ".jpg");
+    let before = fs::read(jpeg.path()).expect("read jpeg before write");
+    assert_eq!(
+        &before[before.len() - 2..],
+        b"\xff\xd9",
+        "fixture must end with EOI"
+    );
+
+    let mut metadata = MetadataMap::new();
+    metadata.insert("IFD0:Make", TagValue::new_string("OxiDex QA"));
+    write_metadata(jpeg.path(), &metadata).expect("write jpeg through high-level API");
+
+    let after = fs::read(jpeg.path()).expect("read jpeg after write");
+    assert_eq!(
+        &after[after.len() - 2..],
+        b"\xff\xd9",
+        "EOI marker must survive a metadata write"
+    );
+    assert!(
+        after.len() > before.len() / 2,
+        "scan data must survive a metadata write: {} -> {} bytes",
+        before.len(),
+        after.len()
+    );
+
+    let reread = read_metadata(jpeg.path()).expect("re-read jpeg after write");
+    assert_eq!(
+        reread.get("IFD0:Make"),
+        Some(&TagValue::String("OxiDex QA".to_string())),
+        "written tag must survive a round-trip"
+    );
+}

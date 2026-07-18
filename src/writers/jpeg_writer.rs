@@ -61,6 +61,9 @@ const SOI_MARKER: u16 = 0xFFD8;
 /// End of Image marker (0xFFD9)
 const EOI_MARKER: u16 = 0xFFD9;
 
+/// Start of Scan marker (0xFFDA) - entropy-coded image data follows its header
+const SOS_MARKER: u16 = 0xFFDA;
+
 /// Restart markers (RST0-RST7) have no length field
 const RST0_MARKER: u16 = 0xFFD0;
 const RST7_MARKER: u16 = 0xFFD7;
@@ -133,11 +136,33 @@ pub fn write_exif_to_jpeg(reader: &dyn FileReader, metadata: &MetadataMap) -> Re
     // Step 2: Build new EXIF APP1 segment
     let new_exif_segment = build_exif_segment(metadata)?;
 
-    // Step 3: Find existing EXIF segment position
-    let exif_position = segments.iter().position(|seg| is_exif_segment(seg));
+    // Step 3: Entropy-coded scan data follows the SOS header and is not
+    // segment-structured; the parser cannot represent it (it either stops or
+    // misreads scan bytes as segments). Reconstruct only the segments up to
+    // and including the SOS header, and copy everything after it verbatim.
+    let sos_index = segments.iter().position(|seg| seg.marker == SOS_MARKER);
+    let (head_segments, raw_tail) = match sos_index {
+        Some(index) => {
+            let sos = &segments[index];
+            // marker (2) + length field (2) + scan header payload
+            let tail_start = sos.offset as usize + 4 + sos.data.len();
+            let file_size = reader.size() as usize;
+            let tail = if tail_start < file_size {
+                &reader.read(0, file_size)?[tail_start..]
+            } else {
+                &[][..]
+            };
+            (&segments[..=index], tail)
+        }
+        None => (&segments[..], &[][..]),
+    };
 
-    // Step 4: Reconstruct JPEG with modified EXIF
-    reconstruct_jpeg(&segments, new_exif_segment, exif_position)
+    // Step 4: Find existing EXIF segment position (metadata segments always
+    // precede the scan, so search only the head)
+    let exif_position = head_segments.iter().position(|seg| is_exif_segment(seg));
+
+    // Step 5: Reconstruct JPEG with modified EXIF
+    reconstruct_jpeg(head_segments, new_exif_segment, exif_position, raw_tail)
 }
 
 /// Checks if a segment is an EXIF APP1 segment.
@@ -224,10 +249,13 @@ fn reconstruct_jpeg(
     segments: &[Segment],
     new_exif_data: Vec<u8>,
     exif_position: Option<usize>,
+    raw_tail: &[u8],
 ) -> Result<Vec<u8>> {
     // Pre-allocate buffer (rough estimate)
     let mut output = Vec::with_capacity(
-        segments.iter().map(|s| s.data.len() + 4).sum::<usize>() + new_exif_data.len(),
+        segments.iter().map(|s| s.data.len() + 4).sum::<usize>()
+            + new_exif_data.len()
+            + raw_tail.len(),
     );
 
     // Determine insertion position if EXIF doesn't exist
@@ -273,6 +301,9 @@ fn reconstruct_jpeg(
         // Re-add EOI
         output.extend_from_slice(&EOI_MARKER.to_be_bytes());
     }
+
+    // Entropy-coded scan data, EOI, and any trailer copied verbatim
+    output.extend_from_slice(raw_tail);
 
     Ok(output)
 }
