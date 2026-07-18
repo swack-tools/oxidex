@@ -129,7 +129,7 @@ fn parse_opf_metadata(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
                 }
             }
             Ok(Event::Text(e)) if in_metadata => {
-                if let Ok(text) = e.xml_content()
+                if let Ok(text) = e.xml10_content()
                     && !text.is_empty()
                     && !current_element.is_empty()
                 {

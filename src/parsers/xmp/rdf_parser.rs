@@ -182,7 +182,7 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
                 // Collect text content if we're inside a property
                 // First decode the bytes, then unescape XML entities like &apos; &quot; &amp; etc.
                 if current_property.is_some()
-                    && let Ok(decoded) = e.xml_content()
+                    && let Ok(decoded) = e.xml10_content()
                 {
                     // Unescape XML entities (e.g., &apos; -> ', &quot; -> ", &amp; -> &)
                     let unescaped =
@@ -212,7 +212,7 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
             Ok(Event::GeneralRef(e)) => {
                 // Handle XML entity references like &apos; &quot; &amp; &lt; &gt;
                 if current_property.is_some() {
-                    if let Ok(entity_name) = e.xml_content() {
+                    if let Ok(entity_name) = e.xml10_content() {
                         // First try to resolve as character reference (&#123; or &#x7B;)
                         if let Ok(Some(ch)) = e.resolve_char_ref() {
                             current_value.push(ch);
