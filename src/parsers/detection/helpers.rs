@@ -60,6 +60,29 @@ pub fn contains_text(data: &[u8], pattern: &str, limit: usize) -> bool {
     }
 }
 
+/// Returns the longest prefix of `data` that is valid UTF-8
+///
+/// Detection probes cut files at fixed byte offsets, which can split a
+/// multibyte character at the end of the buffer. The split character must not
+/// disqualify otherwise valid text, so callers should judge this prefix
+/// instead of requiring the whole buffer to parse.
+///
+/// # Arguments
+///
+/// * `data` - The data buffer to interpret as UTF-8
+///
+/// # Returns
+///
+/// The longest valid UTF-8 prefix of `data` (empty if the first byte is invalid)
+#[inline]
+pub fn utf8_prefix(data: &[u8]) -> &str {
+    match std::str::from_utf8(data) {
+        Ok(text) => text,
+        // valid_up_to() is always a character boundary, so this cannot fail.
+        Err(error) => std::str::from_utf8(&data[..error.valid_up_to()]).unwrap_or(""),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

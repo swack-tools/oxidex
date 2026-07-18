@@ -152,10 +152,9 @@ pub fn detect_text_formats(data: &[u8]) -> Option<FileFormat> {
         return Some(FileFormat::EPS);
     }
 
-    if let Ok(text) = std::str::from_utf8(data) {
-        if looks_like_ics(text) {
-            return Some(FileFormat::ICS);
-        }
+    // The bounded probe may cut a multibyte character; judge the valid prefix.
+    if looks_like_ics(super::helpers::utf8_prefix(data)) {
+        return Some(FileFormat::ICS);
     }
 
     let eml_headers = String::from_utf8_lossy(eml_header_bytes(data));

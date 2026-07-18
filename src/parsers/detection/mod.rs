@@ -62,7 +62,7 @@ use audio::{detect_ogg_variant, is_aac_adts, is_mp3_sync};
 use binary::{detect_pe_format, is_dwg, is_macho};
 use bmff::detect_bmff_variants;
 use camera::detect_casio_cam;
-use helpers::matches_at_offset;
+use helpers::{matches_at_offset, utf8_prefix};
 use riff::detect_riff_formats;
 use signatures::SIMPLE_SIGNATURES;
 use text::detect_text_formats;
@@ -294,9 +294,8 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
 }
 
 fn looks_like_svg_root(data: &[u8]) -> bool {
-    let Ok(mut text) = std::str::from_utf8(data) else {
-        return false;
-    };
+    // The probe may cut a trailing multibyte character; judge the valid prefix.
+    let mut text = utf8_prefix(data);
     text = text.strip_prefix('\u{feff}').unwrap_or(text);
 
     loop {
@@ -340,9 +339,8 @@ fn looks_like_svg_root(data: &[u8]) -> bool {
 
 fn looks_like_xml_plist_root(data: &[u8]) -> bool {
     let data = &data[..data.len().min(512)];
-    let Ok(text) = std::str::from_utf8(data) else {
-        return false;
-    };
+    // The 512-byte cut may split a multibyte character; judge the valid prefix.
+    let text = utf8_prefix(data);
 
     let Some(rest) = text.strip_prefix("<?xml") else {
         return false;
@@ -434,29 +432,78 @@ fn is_likely_text(data: &[u8]) -> bool {
         return true;
     }
 
-    // Try to validate as UTF-8
-    if std::str::from_utf8(data).is_ok() {
-        // Check if it contains mostly printable characters
-        let printable_count = data
-            .iter()
-            .filter(|&&b| {
-                (0x20..0x7F).contains(&b) || // Printable ASCII
-                b == b'\t' || b == b'\n' || b == b'\r' // Whitespace
-            })
-            .count();
-
-        // If at least 95% of characters are printable, consider it text
-        let ratio = printable_count as f64 / data.len() as f64;
-        return ratio >= 0.95;
+    // Judge the valid UTF-8 prefix so a probe cut through a multibyte character
+    // does not disqualify the buffer, and count multibyte characters as
+    // printable text. Bytes past the prefix still count against the ratio so
+    // binary data with a short ASCII prefix stays non-text.
+    let text = utf8_prefix(data);
+    if text.is_empty() {
+        return false;
     }
 
-    false
+    let printable_count = text
+        .chars()
+        .filter(|&character| !character.is_control() || matches!(character, '\t' | '\n' | '\r'))
+        .count();
+    let total_count = text.chars().count() + (data.len() - text.len());
+
+    // If at least 95% of characters are printable, consider it text
+    let ratio = printable_count as f64 / total_count as f64;
+    ratio >= 0.95
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    #[test]
+    fn test_detect_svg_with_multibyte_char_straddling_probe_boundary() {
+        // An SVG whose 1 KiB probe cut splits a multibyte character must still
+        // be detected from its valid UTF-8 prefix.
+        let mut data = String::from("<svg xmlns=\"http://www.w3.org/2000/svg\"><text>");
+        while data.len() < 1023 {
+            data.push('x');
+        }
+        data.truncate(1023);
+        data.push('\u{e9}'); // two-byte char at bytes 1023..1025
+        data.push_str("</text></svg>");
+
+        let reader = TestReader::new(data.into_bytes());
+        assert_eq!(detect_format(&reader).unwrap(), FileFormat::SVG);
+    }
+
+    #[test]
+    fn test_detect_txt_with_non_ascii_tail_in_probe() {
+        // Multibyte UTF-8 content within the probe window must count as text.
+        let mut data = String::new();
+        while data.len() < 600 {
+            data.push_str("plain english text ");
+        }
+        while data.len() < 1100 {
+            data.push_str("\u{43f}\u{440}\u{438}\u{432}\u{435}\u{442} "); // Cyrillic
+        }
+
+        let reader = TestReader::new(data.into_bytes());
+        assert_eq!(detect_format(&reader).unwrap(), FileFormat::TXT);
+    }
+
+    #[test]
+    fn test_detect_ics_larger_than_probe_with_multibyte_at_cut() {
+        // Calendars larger than the text probe window must still be detected
+        // when the probe cut splits a multibyte character.
+        let mut data = String::from("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nDESCRIPTION:");
+        while data.len() < TEXT_FORMAT_PROBE_SIZE - 1 {
+            data.push('x');
+        }
+        // Two-byte char spanning the probe cut at TEXT_FORMAT_PROBE_SIZE.
+        data.push('\u{e9}');
+        assert_eq!(data.len(), TEXT_FORMAT_PROBE_SIZE + 1);
+        data.push_str("\r\nEND:VCALENDAR\r\n");
+
+        let reader = TestReader::new(data.into_bytes());
+        assert_eq!(detect_format(&reader).unwrap(), FileFormat::ICS);
+    }
 
     #[test]
     fn test_detect_jpeg() {
