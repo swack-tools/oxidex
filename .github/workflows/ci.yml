@@ -19,7 +19,7 @@ env:
 jobs:
   lint:
     name: Lint & Audit
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -34,7 +34,7 @@ jobs:
 
   test:
     name: Build & Test
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +67,7 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-musl
-            os: arc-runner-set
+            os: ubuntu-latest
           - target: aarch64-unknown-linux-musl
             os: warp-ubuntu-latest-arm64-2x
     steps:
@@ -83,7 +83,7 @@ jobs:
 
   metrics:
     name: Benchmarks & Coverage
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [test]
