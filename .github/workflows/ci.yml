@@ -31,6 +31,12 @@ jobs:
       - uses: rustsec/audit-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # Accept the informational "bincode is unmaintained" advisory: it is a
+          # transitive dependency with no security vulnerability, and the
+          # advisory postdates the last green run. Reporting it also makes the
+          # action fail on push events ("Resource not accessible by
+          # integration") when it tries to file an issue without issues:write.
+          ignore: RUSTSEC-2025-0141
 
   test:
     name: Build & Test
