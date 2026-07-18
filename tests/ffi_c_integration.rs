@@ -35,9 +35,11 @@ fn c_ffi_integration_test_compiles_and_runs() {
     let profile_dir = profile_dir
         .canonicalize()
         .expect("canonicalize debug target directory");
-    let out = env::temp_dir().join(format!(
-        "oxidex_c_integration_test-{}{}",
-        std::process::id(),
+    // A private temp dir avoids predictable paths in the shared temp root and
+    // cleans the compiled harness up automatically.
+    let out_dir = tempfile::tempdir().expect("create private temp dir for C harness");
+    let out = out_dir.path().join(format!(
+        "oxidex_c_integration_test{}",
         env::consts::EXE_SUFFIX
     ));
 
