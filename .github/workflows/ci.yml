@@ -41,9 +41,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest,cbindgen
+          # Pin cbindgen: the committed api/oxidex.h is generated with 0.29.2,
+          # and newer cbindgen emits extra #define macros that would fail the
+          # "Verify C header is up-to-date" check non-deterministically.
+          tool: cargo-nextest,cbindgen@0.29.2
       - run: cargo build --release --all-features --features tag-comparison-binary
-      - run: cargo nextest run --release --all-features --features tag-comparison-binary
+      # Tests run in the (unwind) test profile: the release profile sets
+      # panic = "abort", which newer cargo refuses to mix with the unwind test
+      # harness. The release artifacts themselves are covered by the build step
+      # above and the multi-platform jobs.
+      - run: cargo nextest run --all-features --features tag-comparison-binary
       - name: C FFI integration test
         run: cargo test --test ffi_c_integration -- --nocapture
       - name: Run doc tests
