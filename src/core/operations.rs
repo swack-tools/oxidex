@@ -28,7 +28,6 @@ use crate::writers::atomic_writer::write_atomic;
 use crate::writers::jpeg_writer::write_exif_to_jpeg;
 use crate::writers::pdf_writer::write_pdf_file;
 use crate::writers::png_writer::write_png_metadata;
-use crate::writers::tiff_writer::write_tiff_file;
 use std::path::Path;
 
 // ============================================================================
@@ -225,7 +224,12 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
             write_pdf_file(path, &reader, metadata)?;
         }
         FileFormat::TIFF => {
-            write_tiff_file(path, &reader, metadata)?;
+            // The TIFF writer rebuilds the file from metadata alone and does not
+            // yet carry over image data (strips/tiles), so routing it here would
+            // replace the image with a metadata-only file.
+            return Err(ExifToolError::unsupported_format(
+                "TIFF write operations are not yet supported: the TIFF writer does not preserve image data",
+            ));
         }
         _ => {
             return Err(ExifToolError::unsupported_format(format!(

@@ -746,8 +746,6 @@ fn pages_zip_with_acsp_decoy_fixture() -> tempfile::NamedTempFile {
 
 #[test]
 fn read_metadata_routes_evtx() {
-    let _write_metadata = write_metadata;
-
     assert_eq!(
         read_temp_file(&evtx_fixture(), ".evtx").get("FileType"),
         Some(&TagValue::String("Windows Event Log".to_string()))
@@ -1513,10 +1511,9 @@ fn read_metadata_routes_keynote_to_iwork_parser() {
 }
 
 #[test]
-fn write_metadata_routes_png_pdf_and_tiff_writers() {
+fn write_metadata_routes_png_and_pdf_writers() {
     let png = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
     let pdf = copy_fixture_to_temp("tests/fixtures/pdf/sample.pdf", ".pdf");
-    let tiff = copy_fixture_to_temp("tests/fixtures/tiff/sample.tif", ".tif");
 
     let mut png_metadata = read_metadata(png.path()).expect("read png");
     // Keep the test focused on write routing; fixture metadata includes tags
@@ -1524,14 +1521,48 @@ fn write_metadata_routes_png_pdf_and_tiff_writers() {
     png_metadata.clear();
     png_metadata.insert("PNG:tEXt:Author", TagValue::new_string("OxiDex QA"));
     write_metadata(png.path(), &png_metadata).expect("write png through high-level API");
+    let png_after = read_metadata(png.path()).expect("re-read png after write");
+    assert_eq!(
+        png_after.get("PNG:tEXt:Author"),
+        Some(&TagValue::String("OxiDex QA".to_string())),
+        "written PNG tag must survive a round-trip"
+    );
+    assert!(
+        png_after.contains_key("PNG:ImageWidth"),
+        "PNG image content must survive a metadata write"
+    );
 
     let mut pdf_metadata = read_metadata(pdf.path()).expect("read pdf");
     pdf_metadata.clear();
     pdf_metadata.insert("PDF:Title", TagValue::new_string("OxiDex QA"));
     write_metadata(pdf.path(), &pdf_metadata).expect("write pdf through high-level API");
+    let pdf_after = read_metadata(pdf.path()).expect("re-read pdf after write");
+    assert_eq!(
+        pdf_after.get("PDF:Title"),
+        Some(&TagValue::String("OxiDex QA".to_string())),
+        "written PDF tag must survive a round-trip"
+    );
+}
 
-    let mut tiff_metadata = read_metadata(tiff.path()).expect("read tiff");
-    tiff_metadata.clear();
+#[test]
+fn write_metadata_rejects_tiff_until_writer_preserves_image_data() {
+    // The TIFF writer rebuilds files from metadata alone and drops image data,
+    // so the high-level API must refuse to route TIFF writes to it.
+    let tiff = copy_fixture_to_temp("tests/fixtures/tiff/sample.tif", ".tif");
+    let size_before = std::fs::metadata(tiff.path()).expect("stat tiff").len();
+
+    let mut tiff_metadata = MetadataMap::new();
     tiff_metadata.insert("EXIF:Make", TagValue::new_string("OxiDex QA"));
-    write_metadata(tiff.path(), &tiff_metadata).expect("write tiff through high-level API");
+
+    let result = write_metadata(tiff.path(), &tiff_metadata);
+    assert!(
+        result.is_err(),
+        "TIFF writes must be rejected while the writer discards image data"
+    );
+
+    let size_after = std::fs::metadata(tiff.path()).expect("stat tiff").len();
+    assert_eq!(
+        size_before, size_after,
+        "rejected TIFF write must leave the file untouched"
+    );
 }
