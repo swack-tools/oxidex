@@ -463,11 +463,19 @@ fn output_csv_results(
             let metadata = format_metadata_for_output(metadata, args);
             let rendered = formatter.format(&metadata, filter_slice);
             let source_file = path.display().to_string();
-            let mut reader = csv::Reader::from_reader(rendered.as_bytes());
+            // Parse without implicit header handling and skip the formatter's
+            // "Tag,Value" header row explicitly, so a formatter change cannot
+            // silently swallow each file's first data row.
+            let mut reader = csv::ReaderBuilder::new()
+                .has_headers(false)
+                .from_reader(rendered.as_bytes());
 
             for record in reader.records() {
                 let record = record
                     .map_err(|e| ExifToolError::parse_error(format!("CSV parsing failed: {e}")))?;
+                if record.get(0) == Some("Tag") && record.get(1) == Some("Value") {
+                    continue;
+                }
                 writer
                     .write_record([
                         source_file.as_str(),
