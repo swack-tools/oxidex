@@ -170,28 +170,31 @@ impl FormatParser for ZipParser {
                     TagValue::new_integer(compression_value),
                 );
 
-                // Last modified date/time (DOS format -> ISO 8601)
-                let last_modified = file.last_modified();
-                metadata.insert(
-                    format!("{}LastModified", prefix),
-                    TagValue::new_string(Self::datetime_to_iso8601(last_modified)),
-                );
+                // Last modified date/time (DOS format -> ISO 8601).
+                // zip 8.x returns Option<DateTime> (absent when the entry has no
+                // valid DOS timestamp), so only record it when present.
+                if let Some(last_modified) = file.last_modified() {
+                    metadata.insert(
+                        format!("{}LastModified", prefix),
+                        TagValue::new_string(Self::datetime_to_iso8601(last_modified)),
+                    );
 
-                // Track oldest and newest dates
-                match (&oldest_date, &newest_date) {
-                    (None, None) => {
-                        oldest_date = Some(last_modified);
-                        newest_date = Some(last_modified);
-                    }
-                    (Some(oldest), Some(newest)) => {
-                        if Self::datetime_compare(&last_modified, oldest) < 0 {
+                    // Track oldest and newest dates
+                    match (&oldest_date, &newest_date) {
+                        (None, None) => {
                             oldest_date = Some(last_modified);
-                        }
-                        if Self::datetime_compare(&last_modified, newest) > 0 {
                             newest_date = Some(last_modified);
                         }
+                        (Some(oldest), Some(newest)) => {
+                            if Self::datetime_compare(&last_modified, oldest) < 0 {
+                                oldest_date = Some(last_modified);
+                            }
+                            if Self::datetime_compare(&last_modified, newest) > 0 {
+                                newest_date = Some(last_modified);
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
 
                 // File attributes (Unix mode if available)
@@ -403,7 +406,7 @@ mod tests {
     use super::*;
     use crate::io::BufferedReader;
     use std::io::Write;
-    use zip::write::{FileOptions, ZipWriter};
+    use zip::write::{SimpleFileOptions, ZipWriter};
 
     #[test]
     fn test_zip_signature() {
@@ -430,10 +433,12 @@ mod tests {
 
     #[test]
     fn test_datetime_to_iso8601() {
-        // Test DOS datetime conversion
-        let dt = zip::DateTime::from_date_and_time(2024, 3, 15, 14, 30, 45).unwrap();
+        // Test DOS datetime conversion. DOS timestamps have 2-second resolution,
+        // so use an even second that round-trips exactly (zip 8.x correctly
+        // truncates odd seconds; zip 0.6 did not).
+        let dt = zip::DateTime::from_date_and_time(2024, 3, 15, 14, 30, 44).unwrap();
         let iso = ZipParser::datetime_to_iso8601(dt);
-        assert_eq!(iso, "2024-03-15T14:30:45");
+        assert_eq!(iso, "2024-03-15T14:30:44");
 
         // Test edge case: earliest valid DOS date
         let dt = zip::DateTime::from_date_and_time(1980, 1, 1, 0, 0, 0).unwrap();
@@ -515,7 +520,7 @@ mod tests {
             let mut zip = ZipWriter::new(&mut buffer);
 
             // Add first file (stored)
-            let options = FileOptions::default()
+            let options = SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored)
                 .last_modified_time(
                     zip::DateTime::from_date_and_time(2024, 1, 15, 10, 30, 0).unwrap(),
@@ -524,7 +529,7 @@ mod tests {
             zip.write_all(b"Hello, World!").unwrap();
 
             // Add second file (deflated)
-            let options = FileOptions::default()
+            let options = SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated)
                 .last_modified_time(
                     zip::DateTime::from_date_and_time(2024, 3, 20, 15, 45, 30).unwrap(),
@@ -619,7 +624,7 @@ mod tests {
             let mut zip = ZipWriter::new(&mut buffer);
 
             // Add directory
-            let options = FileOptions::default();
+            let options = SimpleFileOptions::default();
             zip.add_directory("test_dir/", options).unwrap();
 
             // Add file in directory
@@ -653,7 +658,7 @@ mod tests {
         {
             let mut zip = ZipWriter::new(&mut buffer);
             let options =
-                FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
             zip.start_file("repeated.txt", options).unwrap();
             // Write highly compressible data (repeated pattern)
             let data = "A".repeat(10000);
@@ -689,7 +694,7 @@ mod tests {
         let mut buffer = std::io::Cursor::new(Vec::new());
         {
             let mut zip = ZipWriter::new(&mut buffer);
-            let options = FileOptions::default();
+            let options = SimpleFileOptions::default();
             zip.start_file("small.txt", options).unwrap();
             zip.write_all(b"Small file").unwrap();
             zip.finish().unwrap();

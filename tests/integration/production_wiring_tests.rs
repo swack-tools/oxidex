@@ -717,7 +717,7 @@ fn write_zip_fixture(entries: &[(&str, &[u8])], suffix: &str) -> tempfile::Named
     {
         let output = fs::File::create(file.path()).expect("open temp zip");
         let mut zip = zip::ZipWriter::new(output);
-        let options = zip::write::FileOptions::default();
+        let options = zip::write::SimpleFileOptions::default();
         for (name, data) in entries {
             zip.start_file(*name, options).expect("start zip entry");
             zip.write_all(data).expect("write zip entry");
