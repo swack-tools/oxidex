@@ -372,11 +372,8 @@ fn handle_copy_operation(dest_file: &std::path::Path, args: &CliArgs) {
     }
 
     // Print success message (matching ExifTool format)
-    if tags_to_copy.is_some() {
-        println!(
-            "    1 image files updated ({} tags copied)",
-            tags_to_copy.as_ref().unwrap().len()
-        );
+    if let Some(tags) = tags_to_copy.as_ref() {
+        println!("    1 image files updated ({} tags copied)", tags.len());
     } else {
         println!("    1 image files updated");
     }
