@@ -50,9 +50,14 @@ pub trait OutputFormatter {
 }
 
 fn tag_matches_filter(tag_name: &str, filter: &[String]) -> bool {
-    filter
-        .iter()
-        .any(|requested| requested == tag_name || tag_name.rsplit(':').next() == Some(requested))
+    // ExifTool tag-name arguments are case-insensitive (`-make` matches IFD0:Make).
+    filter.iter().any(|requested| {
+        requested.eq_ignore_ascii_case(tag_name)
+            || tag_name
+                .rsplit(':')
+                .next()
+                .is_some_and(|short_name| short_name.eq_ignore_ascii_case(requested))
+    })
 }
 
 /// Formats metadata in human-readable key-value format

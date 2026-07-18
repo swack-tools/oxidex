@@ -156,3 +156,40 @@ fn batch_directory_csv_has_single_header_and_source_file_column() {
             .any(|line| line.starts_with("tests/fixtures/jpeg/simple/") && line.contains(","))
     );
 }
+
+#[test]
+fn lowercase_tag_filter_matches_case_insensitively() {
+    // ExifTool tag-name arguments are case-insensitive: `-make` must match IFD0:Make.
+    let output = oxidex(&["-make", "tests/fixtures/jpeg/sample_with_exif.jpg"]);
+    assert!(
+        output.status.success(),
+        "expected -make to succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("IFD0:Make: TestCamera"));
+    assert!(!stdout.contains("IFD0:Model"));
+}
+
+#[test]
+fn assignment_args_with_date_option_prefix_reach_the_write_path() {
+    // Regression: `-description=...` was consumed by the `-d` date-format short
+    // option (as an attached value), silently falling through to read mode.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let temp_file = temp_dir.path().join("write_target.jpg");
+    std::fs::copy("tests/fixtures/jpeg/sample_with_exif.jpg", &temp_file).expect("copy fixture");
+
+    let output = oxidex(&[
+        "-description=OxiDex QA",
+        temp_file.to_str().expect("temp path utf-8"),
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("updated"),
+        "assignment arg must reach the tag-write path, got stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Found "),
+        "assignment arg must not fall through to a metadata dump, got stdout: {stdout}"
+    );
+}

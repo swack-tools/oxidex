@@ -95,6 +95,11 @@ fn is_lexopt_short_arg(arg: &str) -> bool {
     if body.is_empty() || body.starts_with('-') {
         return false;
     }
+    // Assignment-shaped args are tag modifications (e.g. -description=x), never
+    // short-option clusters, even when they start with a valid cluster prefix.
+    if body.contains('=') {
+        return false;
+    }
 
     for (index, ch) in body.char_indices() {
         if ch == 'd' {
@@ -742,4 +747,38 @@ fn print_help() {
 /// Displays the application name and version number from Cargo package metadata.
 fn print_version() {
     println!("oxidex {}", env!("CARGO_PKG_VERSION"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_option_clusters_are_lexopt_args() {
+        assert!(is_lexopt_short_arg("-s"));
+        assert!(is_lexopt_short_arg("-sr"));
+        assert!(is_lexopt_short_arg("-d"));
+        // Attached date-format values stay with lexopt's -d option.
+        assert!(is_lexopt_short_arg("-d%Y%m%d"));
+        assert!(is_lexopt_short_arg("-srd%Y"));
+    }
+
+    #[test]
+    fn assignment_shaped_args_are_never_lexopt_short_args() {
+        // Regression: these were consumed as `-d` with an attached value,
+        // silently dropping the requested tag write.
+        assert!(!is_lexopt_short_arg("-description=test"));
+        assert!(!is_lexopt_short_arg(
+            "-datetimeoriginal=2020:01:01 10:00:00"
+        ));
+        assert!(!is_lexopt_short_arg("-d=broken"));
+    }
+
+    #[test]
+    fn non_cluster_args_are_not_lexopt_short_args() {
+        assert!(!is_lexopt_short_arg("--json"));
+        assert!(!is_lexopt_short_arg("-EXIF:Model"));
+        assert!(!is_lexopt_short_arg("photo.jpg"));
+        assert!(!is_lexopt_short_arg("-"));
+    }
 }
