@@ -434,10 +434,11 @@ fn is_likely_text(data: &[u8]) -> bool {
 
     // Judge the valid UTF-8 prefix so a probe cut through a multibyte character
     // does not disqualify the buffer, and count multibyte characters as
-    // printable text. Bytes past the prefix still count against the ratio so
-    // binary data with a short ASCII prefix stays non-text.
+    // printable text. A UTF-8 character is at most 4 bytes, so a probe cut can
+    // strand at most 3 bytes; a longer invalid tail means genuinely non-UTF-8
+    // data, which keeps the pre-existing strictness for mixed binary content.
     let text = utf8_prefix(data);
-    if text.is_empty() {
+    if text.is_empty() || data.len() - text.len() > 3 {
         return false;
     }
 
