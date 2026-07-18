@@ -36,6 +36,15 @@ const MAX_CHAIN_SECTORS: usize = 8192;
 const MAX_STREAM_READ: usize = 1024 * 1024;
 const MAX_DIRECTORY_READ: usize = 4 * 1024 * 1024;
 
+/// Aggregate cap on stream bytes scanned during VBA analysis.
+///
+/// Each stream read is individually capped at `MAX_STREAM_READ`, but the
+/// directory can hold thousands of entries and many may point at the same
+/// sector chain. Without an aggregate bound a crafted file forces gigabytes of
+/// reads (CPU/memory exhaustion). This bounds the total work across all
+/// entries and both analysis passes.
+const MAX_TOTAL_VBA_SCAN_BYTES: usize = 32 * 1024 * 1024;
+
 /// Parser for OLE (Compound File Binary Format) files
 ///
 /// Extracts metadata from OLE files including:
@@ -561,11 +570,21 @@ impl VBAAnalyzer {
             );
         }
 
-        // Analyze suspicious patterns in VBA streams
+        // Analyze suspicious patterns in VBA streams. Dedup entries that share a
+        // sector chain and stop once the aggregate scan budget is exhausted, so
+        // a crafted directory cannot force unbounded reads.
         let mut suspicious_findings = Vec::new();
+        let mut scanned_chains = std::collections::HashSet::new();
+        let mut scan_budget = MAX_TOTAL_VBA_SCAN_BYTES;
 
         for entry in entries.iter() {
             if entry.entry_type != STGTY_STREAM || entry.size == 0 {
+                continue;
+            }
+            if scan_budget == 0 {
+                break;
+            }
+            if !scanned_chains.insert((entry.start_sector, entry.size)) {
                 continue;
             }
 
@@ -573,6 +592,7 @@ impl VBAAnalyzer {
             if let Ok(stream_data) =
                 Self::read_stream(reader, entry, header, fat, mini_fat, root_entry)
             {
+                scan_budget = scan_budget.saturating_sub(stream_data.len());
                 let patterns = Self::check_suspicious_patterns(&stream_data);
                 suspicious_findings.extend(patterns);
             }
@@ -638,11 +658,17 @@ impl VBAAnalyzer {
             );
         }
 
-        // Try to extract code from modules
+        // Try to extract code from modules, under the same dedup + aggregate
+        // budget guard as the suspicious-pattern pass.
         let mut code_snippets = Vec::new();
+        let mut analyzed_chains = std::collections::HashSet::new();
+        let mut analyze_budget = MAX_TOTAL_VBA_SCAN_BYTES;
         for entry in entries.iter() {
             if entry.entry_type != STGTY_STREAM || entry.size == 0 {
                 continue;
+            }
+            if analyze_budget == 0 {
+                break;
             }
 
             // Skip known non-code streams
@@ -653,6 +679,11 @@ impl VBAAnalyzer {
             {
                 continue;
             }
+            if !analyzed_chains.insert((entry.start_sector, entry.size)) {
+                continue;
+            }
+            analyze_budget =
+                analyze_budget.saturating_sub((entry.size as usize).min(MAX_STREAM_READ));
 
             if let Some((snippet, _)) =
                 Self::analyze_module(reader, entry, header, fat, mini_fat, root_entry)
