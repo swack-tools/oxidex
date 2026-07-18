@@ -1604,3 +1604,93 @@ fn jpeg_write_preserves_scan_data_and_eoi() {
         "written tag must survive a round-trip"
     );
 }
+
+#[test]
+fn png_write_preserves_ztxt_on_unrelated_edit() {
+    // The reader surfaces compressed text as PNG:zTXt:*, and the writer strips
+    // all text chunks before rebuilding. Without re-serializing zTXt, an
+    // unrelated tEXt edit silently drops every compressed text chunk.
+    let png = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
+
+    // Seed a zTXt chunk (exercises the new serializer end to end).
+    let mut seed = MetadataMap::new();
+    seed.insert("PNG:zTXt:Comment", TagValue::new_string("compressed note"));
+    write_metadata(png.path(), &seed).expect("seed zTXt");
+    assert_eq!(
+        read_metadata(png.path())
+            .expect("read seeded png")
+            .get("PNG:zTXt:Comment"),
+        Some(&TagValue::String("compressed note".to_string())),
+        "zTXt must round-trip through the writer"
+    );
+
+    // Now make an unrelated tEXt edit and confirm the zTXt survives.
+    let mut roundtrip = read_metadata(png.path()).expect("read png for round trip");
+    roundtrip.insert("PNG:tEXt:Author", TagValue::new_string("OxiDex QA"));
+    write_metadata(png.path(), &roundtrip).expect("write png round trip");
+
+    let after = read_metadata(png.path()).expect("re-read png");
+    assert_eq!(
+        after.get("PNG:zTXt:Comment"),
+        Some(&TagValue::String("compressed note".to_string())),
+        "unrelated edit must not drop the zTXt chunk"
+    );
+    assert_eq!(
+        after.get("PNG:tEXt:Author"),
+        Some(&TagValue::String("OxiDex QA".to_string())),
+    );
+}
+
+#[test]
+fn write_metadata_rejects_incrementally_updated_pdf() {
+    // Build a minimal incremental PDF: a base revision plus an update whose
+    // trailer chains the base via /Prev. Rebuilding from the final xref alone
+    // would drop the Catalog/Pages/Page objects, so the writer must reject it.
+    let base = b"%PDF-1.4\n\
+1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n\
+2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n\
+3 0 obj<</Type/Page/Parent 2 0 R>>endobj\n\
+4 0 obj<</Producer(orig)>>endobj\n";
+    let mut pdf = base.to_vec();
+    let base_xref_off = pdf.len();
+    pdf.extend_from_slice(
+        b"xref\n0 5\n\
+0000000000 65535 f \n\
+0000000009 00000 n \n\
+0000000052 00000 n \n\
+0000000101 00000 n \n\
+0000000143 00000 n \n\
+trailer<</Size 5/Root 1 0 R/Info 4 0 R>>\nstartxref\n",
+    );
+    pdf.extend_from_slice(format!("{base_xref_off}\n%%EOF\n").as_bytes());
+
+    // Incremental update: rewrite object 4, chain the base xref via /Prev.
+    let obj4_off = pdf.len();
+    pdf.extend_from_slice(b"4 0 obj<</Producer(updated)>>endobj\n");
+    let upd_xref_off = pdf.len();
+    pdf.extend_from_slice(
+        format!(
+            "xref\n0 1\n0000000000 65535 f \n4 1\n{obj4_off:010} 00000 n \n\
+trailer<</Size 5/Root 1 0 R/Info 4 0 R/Prev {base_xref_off}>>\nstartxref\n{upd_xref_off}\n%%EOF\n"
+        )
+        .as_bytes(),
+    );
+
+    let mut temp = temp_with_suffix(".pdf");
+    temp.write_all(&pdf).expect("write incremental pdf");
+    temp.flush().expect("flush pdf");
+    let size_before = fs::metadata(temp.path()).expect("stat pdf").len();
+
+    let mut metadata = MetadataMap::new();
+    metadata.insert("PDF:Author", TagValue::new_string("Attacker"));
+    let result = write_metadata(temp.path(), &metadata);
+    assert!(
+        result.is_err(),
+        "incremental PDF writes must be rejected, not silently gut the document"
+    );
+    assert_eq!(
+        size_before,
+        fs::metadata(temp.path()).expect("stat pdf").len(),
+        "rejected PDF write must leave the file untouched"
+    );
+}
