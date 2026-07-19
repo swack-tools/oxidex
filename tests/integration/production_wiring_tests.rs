@@ -1784,3 +1784,13 @@ fn jpeg_app6_unknown_format_extracts_nothing() {
     // The rest of the file still parses normally.
     assert_eq!(metadata.get_integer("File:ImageWidth"), Some(640));
 }
+
+#[test]
+fn jpeg_com_segment_yields_file_comment() {
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xFE, b"Test comment\0\0"),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    assert_eq!(metadata.get_string("File:Comment"), Some("Test comment"));
+}

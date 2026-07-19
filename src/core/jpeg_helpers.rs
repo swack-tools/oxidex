@@ -733,3 +733,15 @@ pub fn process_app14_segments(segments: &[Segment], metadata: &mut MetadataMap) 
         // other proprietary data that we don't support yet.
     }
 }
+
+/// Processes JPEG COM (comment) segments.
+///
+/// COM segments (marker 0xFFFE) carry free-form comment text. ExifTool exposes
+/// them as File:Comment with trailing NULs stripped; when several COM segments
+/// are present the last one wins (MetadataMap holds one value per key).
+pub fn process_com_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const COM_MARKER: u16 = 0xFFFE;
+    for segment in segments.iter().filter(|s| s.marker == COM_MARKER) {
+        let _ = crate::parsers::jpeg::app_parsers::parse_comment_segment(segment.data, metadata);
+    }
+}

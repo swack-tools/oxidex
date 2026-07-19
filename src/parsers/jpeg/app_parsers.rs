@@ -215,23 +215,28 @@ pub fn parse_adobe_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<()
     Ok(())
 }
 
-/// Parse JPEG Comment segment (COM)
+/// Parse JPEG Comment segment (COM, marker 0xFFFE)
+///
+/// ExifTool exposes COM data as the File:Comment tag and strips trailing NUL
+/// bytes ("some dumb softwares add null terminators" — ExifTool.pm COM handler).
 pub fn parse_comment_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    // Try to parse as UTF-8 text
-    match std::str::from_utf8(data) {
+    let end = data.iter().rposition(|&b| b != 0).map_or(0, |p| p + 1);
+    let trimmed = &data[..end];
+    match std::str::from_utf8(trimmed) {
         Ok(comment) => {
             metadata.insert(
-                "JPEG:Comment".to_string(),
+                "File:Comment".to_string(),
                 TagValue::String(comment.to_string()),
             );
-            Ok(())
         }
         Err(_) => {
-            // If not valid UTF-8, store as binary
-            metadata.insert("JPEG:Comment".to_string(), TagValue::Binary(data.to_vec()));
-            Ok(())
+            metadata.insert(
+                "File:Comment".to_string(),
+                TagValue::Binary(trimmed.to_vec()),
+            );
         }
     }
+    Ok(())
 }
 
 /// Estimate JPEG quality from DQT (Define Quantization Table) segment
@@ -753,15 +758,21 @@ mod tests {
 
     #[test]
     fn test_parse_comment_segment() {
-        let data = b"This is a JPEG comment";
-
         let mut metadata = MetadataMap::new();
-        let result = parse_comment_segment(data, &mut metadata);
+        // Trailing NULs are stripped, matching ExifTool's COM handler
+        let result = parse_comment_segment(b"Hello JPEG\0\0", &mut metadata);
+        assert!(result.is_ok());
+        assert_eq!(metadata.get_string("File:Comment"), Some("Hello JPEG"));
+    }
 
+    #[test]
+    fn test_parse_comment_segment_binary_fallback() {
+        let mut metadata = MetadataMap::new();
+        let result = parse_comment_segment(&[0xFF, 0xFE, 0x00, 0x41], &mut metadata);
         assert!(result.is_ok());
         assert_eq!(
-            metadata.get_string("JPEG:Comment").as_deref(),
-            Some("This is a JPEG comment")
+            metadata.get("File:Comment"),
+            Some(&TagValue::Binary(vec![0xFF, 0xFE, 0x00, 0x41]))
         );
     }
 
