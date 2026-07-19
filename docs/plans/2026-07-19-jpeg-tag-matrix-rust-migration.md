@@ -1442,7 +1442,7 @@ pub fn find_in_exiftool_json<'a>(data: &'a Value, tag: &ManifestTag, strict_grou
         return None;
     }
     data.as_object()?.iter()
-        .find(|(key, _)| key.split(':').next_back() == Some(tag.name.as_str()))
+        .find(|(key, _)| key.splitn(2, ':').last() == Some(tag.name.as_str()))
         .map(|(_, v)| v)
 }
 
