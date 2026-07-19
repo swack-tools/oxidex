@@ -6,10 +6,12 @@ from pathlib import Path
 
 from model_fix_loop import (
     build_prompt,
+    build_review_prompt,
     cargo_build,
     cargo_test_workspace,
     call_model,
     extract_diff,
+    extract_review_verdict,
     fix_gap,
     git_apply,
     git_checkout_clean,
@@ -188,6 +190,35 @@ class BuildPromptTests(unittest.TestCase):
         prompt = build_prompt(gap, max_tags=40, max_file_bytes=60_000)
         self.assertNotIn("more, not shown", prompt)
         self.assertNotIn("additional file(s) omitted", prompt)
+
+
+class BuildReviewPromptTests(unittest.TestCase):
+    def test_includes_diff_and_tag_names(self):
+        gap = make_gap(gap_count=2)  # missing: EXIF:LensModel; diff: EXIF:ISO
+        prompt = build_review_prompt(gap, "--- a/x\n+++ b/x\n")
+        self.assertIn("--- a/x", prompt)
+        self.assertIn("EXIF:LensModel", prompt)
+        self.assertIn("EXIF:ISO", prompt)
+        self.assertIn("NEF", prompt)
+
+
+class ExtractReviewVerdictTests(unittest.TestCase):
+    def test_approve(self):
+        self.assertEqual(extract_review_verdict("APPROVE"), (True, ""))
+
+    def test_approve_case_insensitive_with_trailing_text(self):
+        approved, reason = extract_review_verdict("approve\nLooks correct.")
+        self.assertTrue(approved)
+
+    def test_reject_with_reason(self):
+        approved, reason = extract_review_verdict("REJECT: hardcodes the sample's literal value")
+        self.assertFalse(approved)
+        self.assertEqual(reason, "hardcodes the sample's literal value")
+
+    def test_unparseable_defaults_to_rejected(self):
+        approved, reason = extract_review_verdict("I'm not sure about this one.")
+        self.assertFalse(approved)
+        self.assertIn("unparseable review verdict", reason)
 
 
 class FixGapHappyPathTests(unittest.TestCase):

@@ -177,6 +177,42 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     )
 
 
+def build_review_prompt(gap, diff):
+    missing_names = ", ".join(
+        f"{t['family']}:{t['name']}" for t in gap["missing_tags"][:10]
+    ) or "(none)"
+    diff_names = ", ".join(
+        d["tag_key"] for d in gap["value_differences"][:10]
+    ) or "(none)"
+    return (
+        f"You are reviewing a proposed fix for ExifTool tag-coverage gaps in the oxidex Rust codebase, "
+        f"format \"{gap['format']}\". The fix was supposed to address (among possibly more): "
+        f"missing tags [{missing_names}], value differences [{diff_names}].\n\n"
+        f"Here is the diff that was applied and successfully built:\n\n{diff}\n\n"
+        "Judge whether this is a genuine, general implementation of the missing tag parsing/serialization "
+        "logic, or whether it games the specific sample file it was tested against -- for example, "
+        "hardcoding a literal expected value instead of actually decoding it, special-casing a filename, "
+        "or any other shortcut that would only work for the one file used to verify this fix.\n\n"
+        "Respond with exactly one of:\n"
+        "APPROVE\n"
+        "or\n"
+        "REJECT: <one-sentence reason>"
+    )
+
+
+def extract_review_verdict(response_text):
+    """Parse a review response into (approved, reason). Unparseable
+    responses are treated as rejections -- fail-safe, never silently
+    approve something we couldn't understand."""
+    stripped = response_text.strip()
+    if stripped.upper().startswith("APPROVE"):
+        return True, ""
+    if stripped.upper().startswith("REJECT"):
+        _, _, reason = stripped.partition(":")
+        return False, reason.strip() or "rejected, no reason given"
+    return False, f"unparseable review verdict: {stripped[:200]!r}"
+
+
 def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
             git_checkout_clean_fn=git_checkout_clean, git_commit_fn=git_commit,
             cargo_build_fn=cargo_build, cargo_test_workspace_fn=cargo_test_workspace,
