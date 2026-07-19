@@ -4,15 +4,15 @@ use clap::Args;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use std::collections::HashSet;
+use std::path::Path;
+use std::process::Command;
+
+use crate::types::{self, ManifestFile, ManifestTag, ReadonlyFile, ReadonlyTag};
 
 #[derive(Args)]
 pub struct ManifestArgs {
     #[arg(long)]
     pub flag_noops: bool,
-}
-
-pub fn run(_args: ManifestArgs) -> anyhow::Result<()> {
-    Ok(())
 }
 
 /// XML schema for ExifTool's `-listx` output
@@ -205,6 +205,255 @@ pub fn make_sample(family0: &str, name: &str, vtype: &str, tag: &ListxTag, group
     "OxTest".to_string()
 }
 
+/// Run `exiftool -f -listx -{group}:all`, persist the raw XML dump alongside
+/// the other working files (useful for post-mortem debugging), and parse it
+/// into the `ListxRoot` schema.
+fn dump_listx(exiftool: &str, group: &str, work: &Path) -> anyhow::Result<ListxRoot> {
+    let out = Command::new(exiftool)
+        .args(["-f", "-listx", &format!("-{group}:all")])
+        .output()?;
+    let xml = String::from_utf8_lossy(&out.stdout).to_string();
+    std::fs::write(work.join(format!("listx_{group}.xml")), &xml)?;
+    let root: ListxRoot = quick_xml::de::from_str(&xml)
+        .map_err(|e| anyhow::anyhow!("empty or malformed -listx dump for {group}: {e}"))?;
+    Ok(root)
+}
+
+/// (listx group arg, family0 bucket, table filter predicate)
+struct Source {
+    group_arg: &'static str,
+    family0: &'static str,
+    table_pred: fn(&ListxTable) -> bool,
+}
+
+const SOURCES: &[Source] = &[
+    Source {
+        group_arg: "EXIF",
+        family0: "EXIF",
+        table_pred: |t| t.name == "Exif::Main" || t.name == "GPS::Main",
+    },
+    Source {
+        group_arg: "XMP",
+        family0: "XMP",
+        table_pred: |t| t.g0 == "XMP",
+    },
+    Source {
+        group_arg: "IPTC",
+        family0: "IPTC",
+        table_pred: |t| t.name.starts_with("IPTC::"),
+    },
+    Source {
+        group_arg: "JFIF",
+        family0: "JFIF",
+        table_pred: |t| t.name.starts_with("JFIF::"),
+    },
+    Source {
+        group_arg: "Photoshop",
+        family0: "Photoshop",
+        table_pred: |t| t.name.starts_with("Photoshop::"),
+    },
+    Source {
+        group_arg: "ICC_Profile",
+        family0: "ICC_Profile",
+        table_pred: |t| t.name.starts_with("ICC_Profile::"),
+    },
+    // JPEG COM segment: only the Comment tag from the Extra table.
+    Source {
+        group_arg: "File",
+        family0: "File",
+        table_pred: |t| t.name == "Extra",
+    },
+];
+
+/// (group1, name) pairs whose sample must be a file path (written as
+/// `-TAG<=file`) rather than a literal value.
+const FILE_SAMPLES: &[(&str, &str)] = &[
+    ("Photoshop", "PhotoshopThumbnail"),
+    ("Photoshop", "PhotoshopBGRThumbnail"),
+];
+
+/// Write-test suspect tags (MakerNote*/Photoshop/JFIF) against the base
+/// fixture and mark silent no-ops with `noop: true`. This is a wiring-only
+/// stub: the behavioral write-test itself is implemented in a later task.
+fn flag_noops(
+    manifest: &mut ManifestFile,
+    _ver: &str,
+    _exiftool: &str,
+    _base_fixture: &Path,
+    _work: &Path,
+) -> anyhow::Result<()> {
+    let _ = manifest;
+    Ok(())
+}
+
+pub fn run(args: ManifestArgs) -> anyhow::Result<()> {
+    let exiftool = std::env::var("EXIFTOOL").unwrap_or_else(|_| "exiftool".into());
+    let work = std::env::var("TAGMATRIX_WORK")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir().join("oxidex-tagmap"));
+    let repo = std::env::current_dir()?;
+    let base_fixture = repo.join("tests/fixtures/jpeg/tag_matrix_base.jpg");
+    std::fs::create_dir_all(&work)?;
+
+    let ver_out = Command::new(&exiftool).arg("-ver").output()?;
+    let ver = String::from_utf8_lossy(&ver_out.stdout).trim().to_string();
+    println!("exiftool {ver}; work dir {}", work.display());
+
+    let mut all_entries: std::collections::HashMap<(String, String), ManifestTag> =
+        std::collections::HashMap::new();
+
+    for source in SOURCES {
+        let root = dump_listx(&exiftool, source.group_arg, &work)?;
+        for table in root.tables.iter().filter(|t| (source.table_pred)(t)) {
+            for tag_el in &table.tags {
+                if source.family0 == "File" && tag_el.name != "Comment" {
+                    continue;
+                }
+                let g1 = if source.family0 == "File" {
+                    "File".to_string()
+                } else if !tag_el.g1.is_empty() {
+                    tag_el.g1.clone()
+                } else {
+                    table.g1.clone()
+                };
+                let writable = tag_el.writable == "true";
+                let flagset: HashSet<&str> =
+                    tag_el.flags.split(',').filter(|s| !s.is_empty()).collect();
+                let protected = flagset.contains("Protected")
+                    || flagset.contains("Unsafe")
+                    || flagset.contains("Avoid");
+
+                let mut entry = ManifestTag {
+                    group: g1.clone(),
+                    name: tag_el.name.clone(),
+                    family0: source.family0.to_string(),
+                    writable,
+                    vtype: tag_el.vtype.clone(),
+                    protected,
+                    flags: if tag_el.flags.is_empty() {
+                        None
+                    } else {
+                        Some(tag_el.flags.clone())
+                    },
+                    count: tag_el.count.parse().ok(),
+                    sample: None,
+                    sample_is_file: None,
+                    noop: None,
+                };
+
+                if writable {
+                    let mut sample =
+                        make_sample(source.family0, &tag_el.name, &tag_el.vtype, tag_el, &g1);
+                    let is_file_sample =
+                        FILE_SAMPLES.contains(&(g1.as_str(), tag_el.name.as_str()));
+                    if is_file_sample {
+                        sample = base_fixture.display().to_string();
+                        entry.sample_is_file = Some(true);
+                    }
+                    entry.sample = Some(sample);
+                }
+
+                let key = (g1.clone(), tag_el.name.clone());
+                match all_entries.get(&key) {
+                    None => {
+                        all_entries.insert(key, entry);
+                    }
+                    Some(prev) => {
+                        // Prefer writable over not, then non-protected.
+                        let prev_rank = (prev.writable, !prev.protected);
+                        let new_rank = (entry.writable, !entry.protected);
+                        if new_rank > prev_rank {
+                            all_entries.insert(key, entry);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut entries: Vec<ManifestTag> = all_entries.into_values().collect();
+    entries.sort_by(|a, b| (&a.family0, &a.group, &a.name).cmp(&(&b.family0, &b.group, &b.name)));
+
+    let writable_tags: Vec<ManifestTag> = entries.iter().filter(|e| e.writable).cloned().collect();
+    let readonly_tags: Vec<ReadonlyTag> = entries
+        .iter()
+        .filter(|e| !e.writable)
+        .map(|e| ReadonlyTag {
+            group: e.group.clone(),
+            name: e.name.clone(),
+            family0: e.family0.clone(),
+            vtype: e.vtype.clone(),
+        })
+        .collect();
+
+    let mut groups: std::collections::BTreeMap<String, types::GroupCounts> = Default::default();
+    for e in &entries {
+        let g = groups.entry(e.family0.clone()).or_default();
+        if e.writable {
+            g.writable += 1;
+            if e.protected {
+                g.protected_writable += 1;
+            }
+        } else {
+            g.readonly += 1;
+        }
+    }
+
+    let mut manifest = ManifestFile {
+        generated_by: format!("exiftool {ver}"),
+        description: "ExifTool tags writable in JPEG files (testable universe for a \
+                       read/write support matrix). group = ExifTool family-1 group."
+            .into(),
+        groups: groups.clone(),
+        tag_count: writable_tags.len(),
+        tags: writable_tags,
+        noop_note: None,
+    };
+
+    if args.flag_noops {
+        flag_noops(&mut manifest, &ver, &exiftool, &base_fixture, &work)?;
+    }
+
+    std::fs::write(
+        work.join("exiftool_jpeg_tags.json"),
+        serde_json::to_string_pretty(&manifest)?,
+    )?;
+
+    let readonly = ReadonlyFile {
+        generated_by: format!("exiftool {ver}"),
+        description: "JPEG-relevant ExifTool tags that are read-only (writable=false); \
+                       not testable via synthesis."
+            .into(),
+        tag_count: readonly_tags.len(),
+        tags: readonly_tags,
+    };
+    std::fs::write(
+        work.join("exiftool_jpeg_readonly_tags.json"),
+        serde_json::to_string_pretty(&readonly)?,
+    )?;
+
+    println!(
+        "{:<12} {:>8} {:>11} {:>8}",
+        "family0", "writable", "(protected)", "readonly"
+    );
+    let mut total = types::GroupCounts::default();
+    for (g, c) in &groups {
+        println!(
+            "{g:<12} {:>8} {:>11} {:>8}",
+            c.writable, c.protected_writable, c.readonly
+        );
+        total.writable += c.writable;
+        total.protected_writable += c.protected_writable;
+        total.readonly += c.readonly;
+    }
+    println!(
+        "{:<12} {:>8} {:>11} {:>8}",
+        "TOTAL", total.writable, total.protected_writable, total.readonly
+    );
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +540,14 @@ mod tests {
             make_sample("EXIF", "SomeWeirdTag", "unknowntype", &t, "ExifIFD"),
             "OxTest"
         );
+    }
+
+    #[test]
+    fn parses_minimal_listx_fixture() {
+        let xml =
+            std::fs::read_to_string("tests/fixtures/jpeg-tag-matrix/listx_sample.xml").unwrap();
+        let root: ListxRoot = quick_xml::de::from_str(&xml).unwrap();
+        assert_eq!(root.tables.len(), 1);
+        assert_eq!(root.tables[0].tags[0].name, "ISO");
     }
 }
