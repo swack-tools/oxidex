@@ -9,6 +9,7 @@ use oxidex::core::date_shift::{ExifDateTag, ShiftOperation, build_shift_spec};
 use oxidex::core::operations::read_metadata;
 use oxidex::writers::exif_inplace::shift_jpeg_exif_dates;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -238,6 +239,119 @@ fn shift_metadata_dates_missing_tag_errors() {
         err.to_string().contains("No date/time tags matching"),
         "got: {}",
         err
+    );
+
+    std::fs::remove_file(&dst).unwrap();
+}
+
+// ============================================================================
+// CLI-level tests: run the oxidex binary with the exact commands from issue #14
+// ============================================================================
+
+/// Runs the oxidex binary with one shift argument against a file.
+fn run_oxidex(shift_arg: &str, file: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg(shift_arg)
+        .arg(file)
+        .output()
+        .unwrap()
+}
+
+fn read_dto(path: &Path) -> String {
+    read_metadata(path)
+        .unwrap()
+        .get("ExifIFD:DateTimeOriginal")
+        .and_then(|v| v.as_datetime())
+        .copied()
+        .unwrap()
+        .to_rfc3339()
+}
+
+#[test]
+fn cli_issue_14_short_form() {
+    // The first command from the issue report, verbatim
+    let src = fixture("complex/synthetic_gps_001.jpg");
+    let dst = temp_copy(&src, "cli_short.jpg");
+
+    let output = run_oxidex("-DateTimeOriginal-=1:00:00", &dst);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(read_dto(&dst), "2024-02-01T13:30:00+00:00");
+
+    std::fs::remove_file(&dst).unwrap();
+}
+
+#[test]
+fn cli_issue_14_long_form() {
+    // The second command from the issue report, verbatim
+    let src = fixture("complex/synthetic_gps_001.jpg");
+    let dst = temp_copy(&src, "cli_long.jpg");
+
+    let output = run_oxidex("-DateTimeOriginal-=0:0:0 1:00:00", &dst);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(read_dto(&dst), "2024-02-01T13:30:00+00:00");
+
+    std::fs::remove_file(&dst).unwrap();
+}
+
+#[test]
+fn cli_exif_prefixed_add() {
+    let src = fixture("complex/synthetic_gps_001.jpg");
+    let dst = temp_copy(&src, "cli_prefixed.jpg");
+
+    let output = run_oxidex("-EXIF:DateTimeOriginal+=1:30", &dst);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(read_dto(&dst), "2024-02-01T16:00:00+00:00");
+
+    std::fs::remove_file(&dst).unwrap();
+}
+
+#[test]
+fn cli_modify_date_on_sample_fixture() {
+    // sample_with_exif.jpg: IFD0:ModifyDate = 2025-01-15T10:30:00
+    let src = fixture("sample_with_exif.jpg");
+    let dst = temp_copy(&src, "cli_modifydate.jpg");
+
+    let output = run_oxidex("-ModifyDate-=1", &dst);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let dt = read_metadata(&dst)
+        .unwrap()
+        .get("IFD0:ModifyDate")
+        .and_then(|v| v.as_datetime())
+        .copied()
+        .unwrap();
+    assert_eq!(dt.to_rfc3339(), "2025-01-15T09:30:00+00:00");
+
+    std::fs::remove_file(&dst).unwrap();
+}
+
+#[test]
+fn cli_failure_exits_nonzero_with_clear_message() {
+    let src = fixture("sample_with_exif.jpg"); // no DateTimeOriginal
+    let dst = temp_copy(&src, "cli_fail.jpg");
+
+    let output = run_oxidex("-DateTimeOriginal-=1:00:00", &dst);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No date/time tags matching"),
+        "stderr: {}",
+        stderr
     );
 
     std::fs::remove_file(&dst).unwrap();
