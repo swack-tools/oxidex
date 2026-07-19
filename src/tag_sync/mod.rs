@@ -219,6 +219,16 @@ pub fn generate_domain_yaml(domain: &str, tags: &[TagRecord]) -> String {
     yaml
 }
 
+/// Counts tag entries in a domain YAML file by counting `- id:` lines —
+/// matches the counting method `sync-exiftool-tags.yml` already uses via
+/// `grep -hE '^[[:space:]]+- id:'`, so sanity checks agree with CI reporting.
+pub fn count_ids_in_yaml(yaml_content: &str) -> usize {
+    yaml_content
+        .lines()
+        .filter(|line| line.trim_start().starts_with("- id:"))
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,6 +374,17 @@ mod tests {
     fn empty_domain_produces_minimal_valid_yaml() {
         let yaml = generate_domain_yaml("specialty", &[]);
         assert_eq!(yaml, "tables:\n");
+    }
+
+    #[test]
+    fn counts_id_lines_regardless_of_indentation() {
+        let yaml = "tables:\n  - name: Exif::Main\n    tags:\n      - id: \"271\"\n        name: \"Make\"\n      - id: \"272\"\n        name: \"Model\"\n";
+        assert_eq!(count_ids_in_yaml(yaml), 2);
+    }
+
+    #[test]
+    fn counts_zero_for_empty_yaml() {
+        assert_eq!(count_ids_in_yaml("tables:\n"), 0);
     }
 
     #[test]
