@@ -343,6 +343,14 @@ This document is automatically updated on each push to `main`. Last updated: **{
 
 *ExifTool officially documents ~{exiftool_tags:,} unique tags. OxiDex defines {total_tags:,} tags (including variant definitions).
 
+::: tip Empirical JPEG comparison
+The counts on this page are derived statically from the tag database. For JPEG
+specifically, an empirical per-tag comparison against ExifTool (read + write
+round-trips, regression-gated in CI) is available:
+[JPEG Tag Support](/reference/jpeg-tag-support) ·
+[JPEG Tag Matrix](/reference/jpeg-tag-matrix)
+:::
+
 ---
 
 ## Coverage by Domain
