@@ -16,6 +16,7 @@ from model_fix_loop import (
     git_apply,
     git_checkout_clean,
     git_commit,
+    review_verdict,
     run_loop,
 )
 
@@ -219,6 +220,41 @@ class ExtractReviewVerdictTests(unittest.TestCase):
         approved, reason = extract_review_verdict("I'm not sure about this one.")
         self.assertFalse(approved)
         self.assertIn("unparseable review verdict", reason)
+
+
+class ReviewVerdictTests(unittest.TestCase):
+    def test_parses_approval_from_call_model(self):
+        gap = make_gap()
+        approved, reason = review_verdict(
+            gap, "--- a/x\n+++ b/x\n",
+            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            call_model_fn=lambda messages, *a: "APPROVE",
+        )
+        self.assertTrue(approved)
+
+    def test_parses_rejection_from_call_model(self):
+        gap = make_gap()
+        approved, reason = review_verdict(
+            gap, "--- a/x\n+++ b/x\n",
+            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            call_model_fn=lambda messages, *a: "REJECT: hardcoded value",
+        )
+        self.assertFalse(approved)
+        self.assertEqual(reason, "hardcoded value")
+
+    def test_treats_call_failure_as_rejection(self):
+        gap = make_gap()
+
+        def raising(messages, *a):
+            raise TimeoutError("timed out")
+
+        approved, reason = review_verdict(
+            gap, "--- a/x\n+++ b/x\n",
+            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            call_model_fn=raising,
+        )
+        self.assertFalse(approved)
+        self.assertIn("review call failed", reason)
 
 
 class FixGapHappyPathTests(unittest.TestCase):

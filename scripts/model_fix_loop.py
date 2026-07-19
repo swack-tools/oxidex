@@ -213,6 +213,22 @@ def extract_review_verdict(response_text):
     return False, f"unparseable review verdict: {stripped[:200]!r}"
 
 
+def review_verdict(gap, diff, config, call_model_fn=call_model):
+    """Ask the model to review a diff for genuineness (not gaming the
+    sample file). Uses the same call_model_fn/config as the fixer --
+    reviewing is just another chat-completions call, same provider."""
+    prompt = build_review_prompt(gap, diff)
+    try:
+        reply = call_model_fn(
+            [{"role": "user", "content": prompt}],
+            config["base_url"], config["api_key"], config["model"],
+            config["max_tokens"], config["reasoning_effort"],
+        )
+    except Exception as e:
+        return False, f"review call failed: {e}"
+    return extract_review_verdict(reply)
+
+
 def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
             git_checkout_clean_fn=git_checkout_clean, git_commit_fn=git_commit,
             cargo_build_fn=cargo_build, cargo_test_workspace_fn=cargo_test_workspace,
