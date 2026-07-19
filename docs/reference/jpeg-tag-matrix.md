@@ -1,0 +1,5431 @@
+# JPEG Tag Matrix: Full ExifTool Tag Classification
+
+Every ExifTool-writable JPEG tag, classified by empirical test (`scripts/jpeg_tag_matrix.py`, exiftool 13.55, oxidex `target/release/oxidex`).
+
+
+## Summary
+
+| Classification | Tags |
+|---|---|
+| ❌ Unsupported | 2923 |
+| 📖 Read only | 1283 |
+| 🐛 Read OK, write broken | 240 |
+| ❔ Untestable | 219 |
+| ✅ Full (read + write) | 56 |
+| 🐛 Read broken | 48 |
+| ⚠️ Full (write non-standard encoding) | 42 |
+| ✍️ Write only | 1 |
+| 🚫 Not writable in ExifTool (no synthetic sample possible; untested) | 585 |
+
+## Per-group breakdown
+
+| Group | Full | Read-only | Write-broken | Read-broken | Write-only | Unsupported | Untestable | Total |
+|---|---|---|---|---|---|---|---|---|
+| All | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
+| ExifIFD | 26 | 0 | 51 | 11 | 0 | 2 | 98 | 196 |
+| File | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 1 |
+| GPS | 0 | 0 | 24 | 1 | 0 | 0 | 0 | 32 |
+| GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
+| IFD0 | 30 | 0 | 66 | 21 | 1 | 7 | 17 | 169 |
+| IFD1 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
+| IFD2 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
+| IPTC | 0 | 53 | 3 | 5 | 0 | 37 | 7 | 105 |
+| InteropIFD | 0 | 2 | 2 | 0 | 0 | 1 | 0 | 5 |
+| JFIF | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
+| MakerNotes | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
+| Photoshop | 0 | 0 | 0 | 0 | 0 | 6 | 6 | 12 |
+| SubIFD | 0 | 0 | 0 | 0 | 0 | 0 | 39 | 39 |
+| SubIFD1 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
+| SubIFD2 | 0 | 0 | 0 | 0 | 0 | 0 | 5 | 5 |
+| XMP-DICOM | 0 | 11 | 2 | 0 | 0 | 1 | 0 | 14 |
+| XMP-Device | 0 | 0 | 0 | 0 | 0 | 103 | 4 | 107 |
+| XMP-GAudio | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 2 |
+| XMP-GCamera | 0 | 15 | 0 | 0 | 0 | 3 | 0 | 18 |
+| XMP-GContainer | 0 | 0 | 0 | 0 | 0 | 7 | 1 | 8 |
+| XMP-GCreations | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
+| XMP-GDepth | 0 | 13 | 0 | 0 | 0 | 1 | 0 | 14 |
+| XMP-GFocus | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 4 |
+| XMP-GImage | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 2 |
+| XMP-GPano | 0 | 25 | 2 | 0 | 0 | 0 | 0 | 27 |
+| XMP-HDRGainMap | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| XMP-LImage | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
+| XMP-MP | 0 | 0 | 0 | 0 | 0 | 8 | 0 | 8 |
+| XMP-MP1 | 0 | 15 | 0 | 0 | 0 | 0 | 0 | 15 |
+| XMP-aas | 0 | 26 | 1 | 0 | 0 | 0 | 0 | 27 |
+| XMP-acdsee | 0 | 14 | 2 | 0 | 0 | 3 | 0 | 19 |
+| XMP-acdsee-rs | 0 | 0 | 0 | 0 | 0 | 19 | 0 | 19 |
+| XMP-album | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| XMP-apdi | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
+| XMP-apple-fi | 0 | 4 | 0 | 0 | 0 | 1 | 0 | 5 |
+| XMP-aux | 0 | 25 | 0 | 0 | 0 | 0 | 1 | 26 |
+| XMP-cc | 0 | 2 | 0 | 0 | 0 | 9 | 0 | 11 |
+| XMP-cell | 0 | 0 | 0 | 0 | 0 | 6 | 0 | 6 |
+| XMP-crd | 0 | 227 | 22 | 3 | 0 | 841 | 0 | 1093 |
+| XMP-creatorAtom | 0 | 0 | 0 | 0 | 0 | 14 | 0 | 14 |
+| XMP-crs | 0 | 227 | 22 | 3 | 0 | 841 | 0 | 1093 |
+| XMP-dc | 0 | 14 | 1 | 0 | 0 | 0 | 0 | 15 |
+| XMP-dex | 0 | 2 | 1 | 0 | 0 | 5 | 0 | 8 |
+| XMP-digiKam | 0 | 8 | 1 | 0 | 0 | 0 | 0 | 9 |
+| XMP-drone-dji | 0 | 25 | 0 | 0 | 0 | 3 | 0 | 28 |
+| XMP-dwc | 0 | 0 | 0 | 0 | 0 | 260 | 3 | 263 |
+| XMP-et | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
+| XMP-exif | 0 | 62 | 4 | 4 | 0 | 30 | 0 | 100 |
+| XMP-exifEX | 0 | 26 | 0 | 0 | 0 | 16 | 0 | 42 |
+| XMP-expressionmedia | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 4 |
+| XMP-extensis | 0 | 8 | 0 | 0 | 0 | 0 | 0 | 8 |
+| XMP-fpv | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| XMP-getty | 0 | 17 | 2 | 0 | 0 | 1 | 0 | 20 |
+| XMP-hdr | 0 | 0 | 0 | 0 | 0 | 6 | 0 | 6 |
+| XMP-hdrgm | 0 | 9 | 0 | 0 | 0 | 0 | 0 | 9 |
+| XMP-ics | 0 | 2 | 1 | 0 | 0 | 27 | 0 | 30 |
+| XMP-iptcCore | 0 | 7 | 0 | 0 | 0 | 9 | 0 | 16 |
+| XMP-iptcExt | 0 | 29 | 1 | 0 | 0 | 215 | 6 | 251 |
+| XMP-lr | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
+| XMP-mediapro | 0 | 6 | 0 | 0 | 0 | 0 | 0 | 6 |
+| XMP-microsoft | 0 | 9 | 1 | 0 | 0 | 2 | 0 | 12 |
+| XMP-mwg-coll | 0 | 0 | 0 | 0 | 0 | 3 | 0 | 3 |
+| XMP-mwg-kw | 0 | 0 | 0 | 0 | 0 | 19 | 0 | 19 |
+| XMP-mwg-rs | 0 | 0 | 0 | 0 | 0 | 21 | 0 | 21 |
+| XMP-panorama | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 4 |
+| XMP-pdf | 0 | 10 | 2 | 0 | 0 | 0 | 0 | 12 |
+| XMP-pdfx | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
+| XMP-photomech | 0 | 6 | 0 | 0 | 0 | 0 | 2 | 8 |
+| XMP-photoshop | 0 | 17 | 4 | 0 | 0 | 32 | 0 | 53 |
+| XMP-plus | 0 | 51 | 4 | 0 | 0 | 31 | 0 | 86 |
+| XMP-pmi | 0 | 34 | 0 | 0 | 0 | 0 | 0 | 34 |
+| XMP-prism | 0 | 67 | 6 | 0 | 0 | 39 | 0 | 112 |
+| XMP-prl | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
+| XMP-prm | 0 | 19 | 0 | 0 | 0 | 0 | 0 | 19 |
+| XMP-pur | 0 | 10 | 4 | 0 | 0 | 0 | 0 | 14 |
+| XMP-rdf | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
+| XMP-swf | 0 | 1 | 0 | 0 | 0 | 3 | 0 | 4 |
+| XMP-tiff | 0 | 24 | 1 | 0 | 0 | 1 | 0 | 26 |
+| XMP-x | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
+| XMP-xmp | 0 | 12 | 4 | 0 | 0 | 11 | 0 | 27 |
+| XMP-xmpBJ | 0 | 0 | 0 | 0 | 0 | 4 | 0 | 4 |
+| XMP-xmpDM | 0 | 57 | 5 | 0 | 0 | 99 | 0 | 161 |
+| XMP-xmpDSA | 0 | 10 | 0 | 0 | 0 | 0 | 0 | 10 |
+| XMP-xmpMM | 0 | 36 | 1 | 0 | 0 | 123 | 0 | 160 |
+| XMP-xmpNote | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
+| XMP-xmpPLUS | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
+| XMP-xmpRights | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
+| XMP-xmpTPg | 0 | 4 | 0 | 0 | 0 | 48 | 0 | 52 |
+
+## Known bugs (empirically confirmed, with root cause)
+
+All were reproduced with the release binary against exiftool 13.55; file:line
+references are into this repo.
+
+### Write path
+
+| # | Bug | Impact (tags) | Root cause |
+|---|---|---|---|
+| W1 | CLI cannot write any non-String EXIF tag: values reach the writer as `TagValue::String` and strict type validation rejects them ("Type mismatch: expected Integer/Rational/... but got String") | 191 | `src/main.rs:146` wraps all CLI values as strings; `src/core/validation.rs:109`. A fix exists on the `fix/wiring` branch (commit `2433c79`) but is not on this branch |
+| W2 | Datetime tags cannot be written: `-ExifIFD:DateTimeOriginal=...` is misrouted to the date-*shift* path, which fails whether or not the tag exists (re-serialization then trips W1 on binary tags like ComponentsConfiguration) | 82 | `src/cli/args.rs` `parse_date_shift` treats any `date/time`-named tag with a `Y:M:D H:M:S`-shaped value as a shift |
+| W3 | Silent no-op with false success: XMP, IPTC, JFIF, Photoshop, Comment, InteropIFD and bare tag names are dropped, yet the CLI prints "1 image files updated" and rewrites the file | ~4,300 (incl. 1,297 readable tags) | `src/writers/tiff_writer/tiff/validator.rs:110` `separate_by_ifd` routes only IFD0/IFD1/ExifIFD/GPS/EXIF; `ifd_builder.rs:93` skips silently; `src/main.rs:175` unconditional success message |
+| W4 | Type-blind serialization: registry-unknown tags are written as TIFF ASCII regardless of expected SHORT/LONG/RATIONAL/UNDEF type — produces non-standard files (`exiftool -validate` flags every one) | 32 | `src/writers/tiff_writer/tiff/ifd_entry.rs:95` picks TIFF type from the Rust value variant, never from the tag's spec |
+| W5 | No PrintConv inversion: human-readable values stored raw (e.g. `GPSSpeedRef=km/h` stores "km/h" instead of "K"; exiftool then reads "Unknown (km/h)") | 8 | no inverse-conversion layer exists (`src/core/operations.rs:291` inserts CLI strings untouched) |
+| W6 | Subdirectory-pointer poisoning: writing text into pointer tags (CurrentICCProfile, AsShotICCProfile, ...) corrupts downstream parsing ("Bad length ICC_Profile" on every later read) | 7 | `validator.rs:48` checks only family + numeric ID, not writability/subdirectory flags |
+| W7 | Every write flips EXIF byte order MM→II (big- to little-endian) even when only one tag changes | all writes | EXIF segment fully rebuilt by `src/writers/tiff_writer/mod.rs` in II order |
+| W8 | Write/read registry asymmetry: `IFD0:TargetPrinter` writes correctly but reads back as `IFD0:0x0151` | ≥1 | write resolves via manual `TAG_REGISTRY` (`src/tag_db/tag_registry.rs:1281`), read via YAML `TAG_ID_TO_NAME_INDEX` (`src/tag_db/mod.rs:302`) which lacks the ID |
+| W9 | Some write errors print `Error: ...` but exit 0 (e.g. GPS rational type mismatch) — scripts can't trust the exit code | — | inconsistent error propagation in `src/main.rs` write handling |
+| W10 | 57 of the 122 "successful" CLI writes actually serialize a non-standard encoding (string where numeric expected, wrong count) that exiftool tolerates on read but `-validate` flags — same root cause as W4 | 57 | `src/writers/tiff_writer/tiff/ifd_entry.rs:95` |
+| W11 | Creating a GPS IFD does not add the mandatory `GPSVersionID` tag (exiftool adds it automatically) — `exiftool -validate` flags every oxidex-created GPS IFD | GPS writes | GPS IFD builder in `src/writers/tiff_writer/` has no mandatory-tag logic |
+
+### Read path
+
+| # | Bug | Impact (tags) | Root cause |
+|---|---|---|---|
+| R1 | One malformed IFD entry silently discards the **entire EXIF block** (IFD0 + ExifIFD + GPS). Trigger found in the wild: exiftool 13.55 itself writes `IFD0:GeoTiffDoubleParams` with a bad offset | whole file | `src/parsers/tiff/ifd_parser.rs:274` aborts `parse_ifd` on one bad entry; `src/core/jpeg_helpers.rs:161` swallows the error (`if let Ok`) |
+| R2 | IPTC binary int16u datasets (FileFormat, FileVersion, ARMIdentifier, ARMVersion, ObjectPreviewFileFormat) decoded as strings → NUL-byte garbage | 5 | `src/parsers/jpeg/iptc_parser.rs:330-374`; a correct `parse_binary_u16` exists in `iptc_record1.rs:383` but isn't on the live path |
+| R3 | `-e` compat mode applies EXIF enum tables to XMP tags by bare name (namespace-blind): e.g. XMP-exif:SensingMethod `1` renders "Not defined" instead of "Monochrome area"; plain `-j` output is correct | 7 | `src/core/exiftool_compat.rs:172` strips the group before enum lookup |
+| R4 | APEX conversion missing: ApertureValue/MaxApertureValue/ShutterSpeedValue show the raw APEX number (or raw rational for XMP) instead of `2^(v/2)` / `2^(-v)` | 6 | no APEX code anywhere (`src/core/value_formatter.rs:425` only divides num/den) |
+| R5 | XMP struct properties concatenated into a single garbage scalar (e.g. Flash → "TrueTrue0True0"), flattened child tags dropped | 4+ | `src/parsers/xmp/rdf_parser.rs:181-191` appends nested text nodes without separators |
+| R6 | ACR-style `"TagName: value"` ValueConv prefix not stripped (Brightness, Shadows, ...) | 6+ | no equivalent of exiftool's ValueConv for these tags |
+| R7 | undef values undecoded: FileSource shows "(Binary, 1 bytes)" instead of "Film Scanner"; GPSAreaInformation opaque; XP* Windows tags show raw integers instead of UTF-16 text; float-typed DNG tags show raw IEEE-754 bits (e.g. 1069547520 for 1.5) | 24 | `src/core/exiftool_compat.rs:435` (FileSource requires as_integer), no UTF-16/float decode paths |
+| R8 | Dead code: JPEG COM comment, SPIFF and DQT-quality parsers exist but are never invoked from `parse_jpeg_metadata`; multi-chunk ICC profiles dropped with a warning | Comment + ICC | `src/core/operations.rs:483-497` dispatch list omits them; `src/core/jpeg_helpers.rs:351` single-chunk ICC only |
+
+
+## Full matrix
+
+
+### All
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `PreviewImageLength` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `PreviewImageStart` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+
+### ExifIFD
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Acceleration` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `AmbientTemperature` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ApertureValue` | 🐛 broken: APEX ValueConv (2^x) not applied | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `Brightness` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
+| `BrightnessValue` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `CFAPattern` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
+| `CameraElevationAngle` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `CameraFirmware` | ✅ ok | ✅ ok | `OxTest` |
+| `ColorSpace` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `sRGB` |
+| `ComponentsConfiguration` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `-` |
+| `CompositeImage` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Unknown` |
+| `CompositeImageCount` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3 3` |
+| `CompositeImageExposureTimes` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
+| `CompressedBitsPerPixel` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `Contrast` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Normal` |
+| `Converter` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
+| `CreateDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `CustomRendered` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Normal` |
+| `DateTimeOriginal` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `DigitalZoomRatio` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `ExifImageHeight` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
+| `ExifImageWidth` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
+| `ExifVersion` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `0100` |
+| `Exposure` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
+| `ExposureCompensation` | ✅ ok | 🐛 broken: written as ASCII where numeric/rational expected | `1.5` |
+| `ExposureIndex` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `ExposureMode` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Auto` |
+| `ExposureProgram` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Not Defined` |
+| `ExposureTime` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `FNumber` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `FileSource` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: type-validation rejects CLI string values | `Film Scanner` |
+| `Flash` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `No Flash` |
+| `FlashEnergy` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `FlashpixVersion` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `0100` |
+| `FocalLength` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `FocalLengthIn35mmFormat` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `FocalPlaneResolutionUnit` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `None` |
+| `FocalPlaneXResolution` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `FocalPlaneYResolution` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `GainControl` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `None` |
+| `Gamma` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `GooglePlusUploadCode` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
+| `Humidity` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `ISO` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ISOSpeed` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ISOSpeedLatitudeyyy` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ISOSpeedLatitudezzz` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ImageEditingSoftware` | ✅ ok | ✅ ok | `OxTest` |
+| `ImageEditor` | ✅ ok | ✅ ok | `OxTest` |
+| `ImageHistory` | ✅ ok | ✅ ok | `OxTest` |
+| `ImageNumber` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ImageTitle` | ✅ ok | ✅ ok | `OxTest` |
+| `ImageUniqueID` | ✅ ok | ✅ ok | `OxTest` |
+| `Lens` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
+| `LensInfo` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5 1.5 1.5 1.5` |
+| `LensMake` | ✅ ok | ✅ ok | `OxTest` |
+| `LensModel` | ✅ ok | ✅ ok | `OxTest` |
+| `LensSerialNumber` | ✅ ok | ✅ ok | `OxTest` |
+| `LightSource` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Unknown` |
+| `MakerNoteApple` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteCanon` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteCasio` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteCasio2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteDJI` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteDJIInfo` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteFLIR` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteFujiFilm` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteGE` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteGE2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteGoogle` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteHP` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteHP2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteHP4` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteHP6` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteHasselblad` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteISL` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteJVC` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteJVCText` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak10` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak11` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak12` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak1a` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak1b` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak4` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak5` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak6a` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak6b` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak7` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak8a` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak8b` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak8c` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodak9` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKodakUnknown` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteKyocera` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteLeica` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteLeica10` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteLeica2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteLeica3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteLeica4` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteLeica5` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteLeica6` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteLeica7` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteLeica8` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteLeica9` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteMinolta` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteMinolta2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteMinolta3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteMotorola` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteNikon` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteNikon2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteNikon3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteNintendo` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteOlympus` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteOlympus2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteOlympus3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNotePanasonic` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNotePanasonic2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNotePanasonic3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNotePentax` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNotePentax2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNotePentax3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNotePentax4` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNotePentax5` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNotePentax6` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNotePhaseOne` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteReconyxHyperFire` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteReconyxHyperFire2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteReconyxHyperFire4K` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteReconyxMicroFire` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteReconyxUltraFire` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteRicoh` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteRicoh2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteRicohPentax` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteRicohText` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSamsung1a` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSamsung1b` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSamsung2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSanyo` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSanyoC4` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSanyoPatch` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSigma` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSony` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSony2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSony3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSony4` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSony5` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSonyEricsson` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteSonySRF` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteUnknown` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteUnknownBinary` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteUnknownText` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaxApertureValue` | 🐛 broken: APEX ValueConv (2^x) not applied | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `MetadataEditingSoftware` | ✅ ok | ✅ ok | `OxTest` |
+| `MeteringMode` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Unknown` |
+| `MoireFilter` | ✅ ok (formatting differs from exiftool) | ✅ ok | `OxTest` |
+| `OffsetSchema` | ✅ ok | ✅ ok | `3` |
+| `OffsetTime` | ✅ ok | ✅ ok | `+05:30` |
+| `OffsetTimeDigitized` | ✅ ok | ✅ ok | `+05:30` |
+| `OffsetTimeOriginal` | ✅ ok | ✅ ok | `+05:30` |
+| `OwnerName` | ✅ ok | ✅ ok | `OxTest` |
+| `Padding` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
+| `Photographer` | ✅ ok | ✅ ok | `OxTest` |
+| `Pressure` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `RAWDevelopingSoftware` | ✅ ok | ✅ ok | `OxTest` |
+| `RawFile` | ✅ ok (formatting differs from exiftool) | ✅ ok | `OxTest` |
+| `RecommendedExposureIndex` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `RelatedSoundFile` | ✅ ok | ✅ ok | `OxTest` |
+| `Saturation` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Normal` |
+| `SceneCaptureType` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Standard` |
+| `SceneType` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Directly photographed` |
+| `SecurityClassification` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `Confidential` |
+| `SelfTimerMode` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `SensingMethod` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Not defined` |
+| `SensitivityType` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Unknown` |
+| `SerialNumber` | ✅ ok | ✅ ok | `OxTest` |
+| `Shadows` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
+| `Sharpness` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Normal` |
+| `ShutterSpeedValue` | 🐛 broken: APEX ValueConv (2^x) not applied | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `Smoothness` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
+| `SpectralSensitivity` | ✅ ok | ✅ ok | `OxTest` |
+| `StandardOutputSensitivity` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `SubSecTime` | ✅ ok | ✅ ok | `3` |
+| `SubSecTimeDigitized` | ✅ ok | ✅ ok | `3` |
+| `SubSecTimeOriginal` | ✅ ok | ✅ ok | `3` |
+| `SubjectArea` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `SubjectDistance` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `SubjectDistanceRange` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Unknown` |
+| `SubjectLocation` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3 3` |
+| `TimeZoneOffset` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `UserComment` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
+| `WaterDepth` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `WhiteBalance` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Auto` |
+| `XiaomiModel` | ✅ ok | ✅ ok | `OxTest` |
+| `XiaomiSettings` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
+
+### File
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Comment` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+
+### GPS
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `GPSAltitude` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `10.5` |
+| `GPSAltitudeRef` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Above Sea Level` |
+| `GPSAreaInformation` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
+| `GPSDOP` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `GPSDateStamp` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `2024:01:15` |
+| `GPSDestBearing` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `GPSDestBearingRef` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `Magnetic North` |
+| `GPSDestDistance` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `GPSDestDistanceRef` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `Kilometers` |
+| `GPSDestLatitude` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `37.7749` |
+| `GPSDestLatitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `N` |
+| `GPSDestLongitude` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `122.4194` |
+| `GPSDestLongitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `W` |
+| `GPSDifferential` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `No Correction` |
+| `GPSHPositioningError` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `GPSImgDirection` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `GPSImgDirectionRef` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `Magnetic North` |
+| `GPSLatitude` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `37.7749` |
+| `GPSLatitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `N` |
+| `GPSLongitude` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `122.4194` |
+| `GPSLongitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `W` |
+| `GPSMapDatum` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
+| `GPSMeasureMode` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `2-Dimensional Measurement` |
+| `GPSProcessingMethod` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
+| `GPSSatellites` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
+| `GPSSpeed` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `GPSSpeedRef` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `km/h` |
+| `GPSStatus` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `Measurement Active` |
+| `GPSTimeStamp` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `10:30:00` |
+| `GPSTrack` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `GPSTrackRef` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `Magnetic North` |
+| `GPSVersionID` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `2.3.0.0` |
+
+### GSpherical
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CroppedAreaImageHeightPixels` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `CroppedAreaImageWidthPixels` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `CroppedAreaLeftPixels` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `CroppedAreaTopPixels` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `FullPanoHeightPixels` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `FullPanoWidthPixels` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `InitialViewHeadingDegrees` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `1.5` |
+| `InitialViewPitchDegrees` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `1.5` |
+| `InitialViewRollDegrees` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `1.5` |
+| `ProjectionType` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `SourceCount` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `Spherical` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `True` |
+| `StereoMode` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `Stitched` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `True` |
+| `StitchingSoftware` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `TimeStamp` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+
+### IFD0
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AnalogBalance` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `ApplicationNotes` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Artist` | ✅ ok | ✅ ok | `OxTest` |
+| `AsShotICCProfile` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
+| `AsShotNeutral` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `AsShotPreProfileMatrix` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `AsShotProfileName` | ✅ ok | ✅ ok | `OxTest` |
+| `AsShotWhiteXY` | ✅ ok (formatting differs from exiftool) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5 1.5` |
+| `BaselineExposure` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `BaselineExposureOffset` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `BaselineNoise` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `BaselineSharpness` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `BitsPerSample` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `CalibrationIlluminant1` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
+| `CalibrationIlluminant2` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
+| `CalibrationIlluminant3` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
+| `CameraCalibration1` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `CameraCalibration2` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `CameraCalibration3` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `CameraCalibrationSig` | ✅ ok | ✅ ok | `OxTest` |
+| `CameraLabel` | ✅ ok | ✅ ok | `OxTest` |
+| `CameraSerialNumber` | ✅ ok | ✅ ok | `OxTest` |
+| `CellLength` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `CellWidth` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ColorMatrix1` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `ColorMatrix2` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `ColorMatrix3` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ColorimetricReference` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Scene-referred` |
+| `Compression` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Uncompressed` |
+| `Copyright` | ✅ ok | ✅ ok | `OxTest` |
+| `CurrentICCProfile` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
+| `CurrentPreProfileMatrix` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `DNGAdobeData` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `DNGBackwardVersion` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3` |
+| `DNGLensInfo` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `1.5 1.5 1.5 1.5` |
+| `DNGPrivateData` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DNGVersion` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3` |
+| `DefaultBlackRender` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Auto` |
+| `DepthFar` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `DepthFormat` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
+| `DepthMeasureType` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
+| `DepthNear` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `DepthUnits` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
+| `DocumentName` | ✅ ok | ✅ ok | `OxTest` |
+| `EnhanceParams` | ✅ ok | ✅ ok | `OxTest` |
+| `FillOrder` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Normal` |
+| `ForwardMatrix1` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ForwardMatrix2` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ForwardMatrix3` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `FrameRate` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `GDALMetadata` | ✅ ok | ✅ ok | `OxTest` |
+| `GDALNoData` | ✅ ok | ✅ ok | `OxTest` |
+| `GeoTiffAsciiParams` | ✅ ok | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
+| `GeoTiffDirectory` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `GeoTiffDoubleParams` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: written as ASCII where numeric/rational expected | `1.5` |
+| `GrayResponseUnit` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `0.1` |
+| `HalftoneHints` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3 3` |
+| `HostComputer` | ✅ ok | ✅ ok | `OxTest` |
+| `IPTC-NAA` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `IlluminantData1` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
+| `IlluminantData2` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
+| `IlluminantData3` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
+| `ImageDescription` | ✅ ok | ✅ ok | `OxTest` |
+| `ImageHeight` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ImageSequenceInfo` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
+| `ImageSourceData` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
+| `ImageStats` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
+| `ImageWidth` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `InkSet` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `CMYK` |
+| `IntergraphMatrix` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `JXLDecodeSpeed` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
+| `JXLDistance` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `JXLEffort` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
+| `LinearResponseLimit` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `LocalizedCameraModel` | ✅ ok | ✅ ok | `OxTest` |
+| `Make` | ✅ ok | ✅ ok | `OxTest` |
+| `MakerNoteSafety` | ✅ ok | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unsafe` |
+| `MaxSampleValue` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `MinSampleValue` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Model` | ✅ ok | ✅ ok | `OxTest` |
+| `ModelTiePoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ModelTransform` | — unsupported | — unsupported (silent no-op) | `1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 ` |
+| `ModifyDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `NewRawImageDigest` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
+| `OldSubfileType` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Full-resolution image` |
+| `Orientation` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Horizontal (normal)` |
+| `OriginalBestQualitySize` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3 3` |
+| `OriginalDefaultCropSize` | ✅ ok (formatting differs from exiftool) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5 1.5` |
+| `OriginalDefaultFinalSize` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3 3` |
+| `OriginalRawFileData` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
+| `OriginalRawFileDigest` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
+| `OriginalRawFileName` | ✅ ok | ✅ ok | `OxTest` |
+| `PageName` | ✅ ok | ✅ ok | `OxTest` |
+| `PageNumber` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3 3` |
+| `PanasonicTitle` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ✅ ok | `OxTest` |
+| `PanasonicTitle2` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ✅ ok | `OxTest` |
+| `PhotometricInterpretation` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `WhiteIsZero` |
+| `PixelScale` | — unsupported | — unsupported (silent no-op) | `1.5 1.5 1.5` |
+| `PlanarConfiguration` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Chunky` |
+| `Predictor` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `None` |
+| `PreviewApplicationName` | ✅ ok | ✅ ok | `OxTest` |
+| `PreviewApplicationVersion` | ✅ ok | ✅ ok | `OxTest` |
+| `PreviewColorSpace` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
+| `PreviewDateTime` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `PreviewImageLength` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `PreviewImageStart` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `PreviewSettingsDigest` | ✅ ok (formatting differs from exiftool) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
+| `PreviewSettingsName` | ✅ ok | ✅ ok | `OxTest` |
+| `PrimaryChromaticities` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `1.5 1.5 1.5 1.5 1.5 1.5` |
+| `PrintIM` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `ProcessingSoftware` | ✅ ok | ✅ ok | `OxTest` |
+| `ProfileCalibrationSig` | ✅ ok | ✅ ok | `OxTest` |
+| `ProfileCopyright` | ✅ ok | ✅ ok | `OxTest` |
+| `ProfileDynamicRange` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
+| `ProfileEmbedPolicy` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Allow Copying` |
+| `ProfileGainTableMap2` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
+| `ProfileGroupName` | ✅ ok | ✅ ok | `OxTest` |
+| `ProfileHueSatMapData1` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ProfileHueSatMapData2` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ProfileHueSatMapData3` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ProfileHueSatMapDims` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3 3 3` |
+| `ProfileHueSatMapEncoding` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Linear` |
+| `ProfileLookTableData` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ProfileLookTableDims` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3 3 3` |
+| `ProfileLookTableEncoding` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Linear` |
+| `ProfileName` | ✅ ok | ✅ ok | `OxTest` |
+| `ProfileToneCurve` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `RGBTables` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
+| `Rating` | ✅ ok | ✅ ok | `3` |
+| `RatingPercent` | ✅ ok | ✅ ok | `3` |
+| `RawDataUniqueID` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
+| `RawImageDigest` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
+| `RawToPreviewGain` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ReductionMatrix1` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `ReductionMatrix2` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `ReductionMatrix3` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ReelName` | ✅ ok | ✅ ok | `OxTest` |
+| `ReferenceBlackWhite` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5 1.5 1.5 1.5 1.5 1.5` |
+| `ResolutionUnit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `None` |
+| `RowsPerStrip` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `SEAL` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
+| `SEMInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SamplesPerPixel` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ShadowScale` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `Software` | ✅ ok | ✅ ok | `OxTest` |
+| `SubfileType` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Full-resolution image` |
+| `TStop` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `TargetPrinter` | — unsupported | ✅ ok (reads back under hex key) | `OxTest` |
+| `Thresholding` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `No dithering or halftoning` |
+| `ThumbnailLength` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ThumbnailOffset` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `TileLength` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `TileWidth` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `TimeCodes` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: written as ASCII where numeric/rational expected | `3` |
+| `TransferFunction` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 ` |
+| `UniqueCameraModel` | ✅ ok | ✅ ok | `OxTest` |
+| `WhitePoint` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `1.5 1.5` |
+| `XPAuthor` | 🐛 broken: XP* UTF-16 string shown as raw integer | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
+| `XPComment` | 🐛 broken: XP* UTF-16 string shown as raw integer | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
+| `XPKeywords` | 🐛 broken: XP* UTF-16 string shown as raw integer | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
+| `XPSubject` | 🐛 broken: XP* UTF-16 string shown as raw integer | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
+| `XPTitle` | 🐛 broken: XP* UTF-16 string shown as raw integer | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
+| `XPosition` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `XResolution` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `YCbCrCoefficients` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5 1.5 1.5` |
+| `YCbCrPositioning` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Centered` |
+| `YCbCrSubSampling` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `YCbCr4:4:4 (1 1)` |
+| `YPosition` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `YResolution` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+
+### IFD1
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `ThumbnailLength` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ThumbnailOffset` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `3` |
+
+### IFD2
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `JpgFromRawLength` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `JpgFromRawStart` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+
+### IPTC
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `ARMIdentifier` | 🐛 broken: IPTC binary int16u decoded as NUL-garbage string | — unsupported (silent no-op) | `3` |
+| `ARMVersion` | 🐛 broken: IPTC binary int16u decoded as NUL-garbage string | — unsupported (silent no-op) | `3` |
+| `ActionAdvised` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Object Kill` |
+| `ApplicationRecordVersion` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `AudioDuration` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3 3 3` |
+| `AudioOutcue` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AudioSamplingRate` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3 3 3` |
+| `AudioSamplingResolution` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3` |
+| `AudioType` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Text Only` |
+| `BitsPerComponent` | — unsupported | — unsupported (silent no-op) | `3` |
+| `By-line` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `By-lineTitle` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Caption-Abstract` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CatalogSets` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Category` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `City` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ClassifyState` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CodedCharacterSet` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `ColorRepresentation` | — unsupported | — unsupported (silent no-op) | `No Image, Single Frame` |
+| `ColorSequence` | — unsupported | — unsupported (silent no-op) | `3` |
+| `Contact` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ContentLocationCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ContentLocationName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CopyrightNotice` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Country-PrimaryLocationCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Country-PrimaryLocationName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Credit` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DataCompressionMethod` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DateCreated` | ✅ ok | — unsupported (silent no-op) | `2024:01:15` |
+| `DateSent` | ✅ ok | — unsupported (silent no-op) | `2024:01:15` |
+| `Destination` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DigitalCreationDate` | ✅ ok | — unsupported (silent no-op) | `2024:01:15` |
+| `DigitalCreationTime` | ✅ ok | — unsupported (silent no-op) | `10:30:00` |
+| `DocumentHistory` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DocumentNotes` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EditStatus` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EditorialUpdate` | — unsupported | — unsupported (silent no-op) | `Additional language` |
+| `EnvelopeNumber` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3 3 3 3 3` |
+| `EnvelopePriority` | ✅ ok | — unsupported (silent no-op) | `0 (reserved)` |
+| `EnvelopeRecordVersion` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ExcursionTolerance` | — unsupported | — unsupported (silent no-op) | `Not Allowed` |
+| `ExifCameraInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ExpirationDate` | ✅ ok | — unsupported (silent no-op) | `2024:01:15` |
+| `ExpirationTime` | ✅ ok | — unsupported (silent no-op) | `10:30:00` |
+| `FileFormat` | 🐛 broken: IPTC binary int16u decoded as NUL-garbage string | — unsupported (silent no-op) | `No ObjectData` |
+| `FileVersion` | 🐛 broken: IPTC binary int16u decoded as NUL-garbage string | — unsupported (silent no-op) | `3` |
+| `FixtureIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `GammaCompensatedValue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `Headline` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IPTCBitsPerSample` | — unsupported | — unsupported (silent no-op) | `3` |
+| `IPTCImageHeight` | — unsupported | — unsupported (silent no-op) | `3` |
+| `IPTCImageRotation` | — unsupported | — unsupported (silent no-op) | `0` |
+| `IPTCImageWidth` | — unsupported | — unsupported (silent no-op) | `3` |
+| `IPTCPictureNumber` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `IPTCPixelHeight` | — unsupported | — unsupported (silent no-op) | `3` |
+| `IPTCPixelWidth` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ImageOrientation` | ✅ ok | — unsupported (silent no-op) | `Landscape` |
+| `ImageType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `InterchangeColorSpace` | — unsupported | — unsupported (silent no-op) | `X,Y,Z CIE` |
+| `JobID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Keywords` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LanguageIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocalCaption` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `MasterDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaximumDensityRange` | — unsupported | — unsupported (silent no-op) | `3` |
+| `NewsPhotoVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `NumIndexEntries` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ObjectAttributeReference` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ObjectCycle` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Morning` |
+| `ObjectName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ObjectPreviewData` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
+| `ObjectPreviewFileFormat` | 🐛 broken: IPTC binary int16u decoded as NUL-garbage string | 🐛 broken: type-validation rejects CLI string values | `No ObjectData` |
+| `ObjectPreviewFileVersion` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ObjectTypeReference` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OriginalTransmissionReference` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OriginatingProgram` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OwnerID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Prefs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ProductID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ProgramVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Province-State` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `QuantizationMethod` | — unsupported | — unsupported (silent no-op) | `Linear Reflectance/Transmittance` |
+| `RasterizedCaption` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ReferenceDate` | ✅ ok | — unsupported (silent no-op) | `2024:01:15` |
+| `ReferenceNumber` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3 3 3 3 3` |
+| `ReferenceService` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ReleaseDate` | ✅ ok | — unsupported (silent no-op) | `2024:01:15` |
+| `ReleaseTime` | ✅ ok | — unsupported (silent no-op) | `10:30:00` |
+| `SampleStructure` | — unsupported | — unsupported (silent no-op) | `OrthogonalConstangSampling` |
+| `ScanningDirection` | — unsupported | — unsupported (silent no-op) | `L-R, Top-Bottom` |
+| `ServiceIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ShortDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SimilarityIndex` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Source` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SpecialInstructions` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Sub-location` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SubjectReference` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SupplementalCategories` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SupplementalType` | — unsupported | — unsupported (silent no-op) | `Main Image` |
+| `TimeCreated` | ✅ ok | — unsupported (silent no-op) | `10:30:00` |
+| `TimeSent` | ✅ ok | — unsupported (silent no-op) | `10:30:00` |
+| `UniqueDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `UniqueObjectName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Urgency` | ✅ ok | — unsupported (silent no-op) | `0 (reserved)` |
+| `Writer-Editor` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### InteropIFD
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `InteropIndex` | ✅ ok | — unsupported (silent no-op) | `R03 - DCF option file (Adobe RGB)` |
+| `InteropVersion` | ✅ ok | — unsupported (silent no-op) | `0100` |
+| `RelatedImageFileFormat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RelatedImageHeight` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `RelatedImageWidth` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+
+### JFIF
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `ResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `None` |
+| `XResolution` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `YResolution` | ✅ ok | — unsupported (silent no-op) | `3` |
+
+### MakerNotes
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `PreviewImageLength` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `PreviewImageStart` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+
+### Photoshop
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CopyrightFlag` | — unsupported | — unsupported (silent no-op) | `False` |
+| `DisplayedUnitsX` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `inches` |
+| `DisplayedUnitsY` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `inches` |
+| `GlobalAltitude` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GlobalAngle` | — unsupported | — unsupported (silent no-op) | `3` |
+| `IPTCDigest` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `new` |
+| `PhotoshopBGRThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/tmp/oxidex-tagmap/base.jpg` |
+| `PhotoshopQuality` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `PhotoshopThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/tmp/oxidex-tagmap/base.jpg` |
+| `URL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `XResolution` | — unsupported | — unsupported (silent no-op) | `3` |
+| `YResolution` | — unsupported | — unsupported (silent no-op) | `3` |
+
+### SubIFD
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `ActiveArea` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3` |
+| `AntiAliasStrength` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `1.5` |
+| `BayerGreenSplit` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `BestQualityScale` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `1.5` |
+| `BlackLevel` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3` |
+| `BlackLevelDeltaH` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `1.5` |
+| `BlackLevelDeltaV` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `1.5` |
+| `BlackLevelRepeatDim` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3` |
+| `CFAPattern2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `CFARepeatPatternDim` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3` |
+| `ChromaBlurRadius` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `1.5` |
+| `ChromaticAberrationCorrParams` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 ` |
+| `ChromaticAberrationCorrection` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `Off` |
+| `ColumnInterleaveFactor` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `DefaultCropOrigin` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3` |
+| `DefaultCropSize` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3` |
+| `DefaultScale` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `1.5 1.5` |
+| `DefaultUserCrop` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `1.5 1.5 1.5 1.5` |
+| `DistortionCorrParams` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
+| `DistortionCorrection` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `Off` |
+| `JpgFromRawLength` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `JpgFromRawStart` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `LinearizationTable` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `MaskedAreas` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `NoiseProfile` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `1.5` |
+| `NoiseReductionApplied` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `1.5` |
+| `OpcodeList1` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `WarpRectilinear` |
+| `OpcodeList2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `WarpRectilinear` |
+| `OpcodeList3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `WarpRectilinear` |
+| `ProfileGainTableMap` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `SonyCropSize` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3` |
+| `SonyCropTopLeft` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3` |
+| `SonyRawImageSize` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3` |
+| `ThumbnailLength` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `ThumbnailOffset` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `VignettingCorrParams` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
+| `VignettingCorrection` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `Off` |
+| `WB_RGGBLevels` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3` |
+| `WhiteLevel` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+
+### SubIFD1
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `OtherImageLength` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `OtherImageStart` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+
+### SubIFD2
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CacheVersion` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3` |
+| `JpgFromRawLength` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `JpgFromRawStart` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `OtherImageLength` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `OtherImageStart` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+
+### XMP-DICOM
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `EquipmentInstitution` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EquipmentManufacturer` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PatientBirthDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `PatientID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PatientName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PatientSex` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SeriesDateTime` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `SeriesDescription` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SeriesModality` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SeriesNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `StudyDateTime` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `StudyDescription` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `StudyID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `StudyPhysician` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-Device
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AppInfo` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `AppInfoApplication` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AppInfoItemURI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AppInfoVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Camera` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CameraAppInfo` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CameraAppInfoApplication` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraAppInfoItemURI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraAppInfoVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraDepthMap` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CameraDepthMapConfidenceURI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraDepthMapDepthURI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraDepthMapFar` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraDepthMapFocalTable` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraDepthMapFocalTableEntryCount` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CameraDepthMapFormat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraDepthMapItemSemantic` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraDepthMapMeasureType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraDepthMapNear` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraDepthMapSoftware` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraDepthMapUnits` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraImage` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CameraImageItemSemantic` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraImageItemURI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraImagingModel` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CameraImagingModelDistortion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraImagingModelDistortionCount` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CameraImagingModelFocalLengthX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraImagingModelFocalLengthY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraImagingModelImageHeight` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CameraImagingModelImageWidth` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CameraImagingModelPixelAspectRatio` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraImagingModelPrincipalPointX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraImagingModelPrincipalPointY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraImagingModelSkew` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraLightEstimate` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CameraLightEstimateColorCorrectionB` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraLightEstimateColorCorrectionG` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraLightEstimateColorCorrectionR` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraLightEstimatePixelIntensity` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraPointCloud` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CameraPointCloudMetric` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CameraPointCloudPointCloud` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CameraPointCloudPoints` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraPose` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CameraPosePositionX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraPosePositionY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraPosePositionZ` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraPoseRotationW` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraPoseRotationX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraPoseRotationY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraPoseRotationZ` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraPoseTimestamp` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `CameraTrait` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraVendorInfo` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CameraVendorInfoManufacturer` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraVendorInfoModel` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraVendorInfoNotes` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Cameras` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `Container` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ContainerDirectory` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ContainerDirectoryItem` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ContainerDirectoryItemDataURI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ContainerDirectoryItemLength` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ContainerDirectoryItemMime` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ContainerDirectoryItemPadding` | — unsupported | — unsupported (silent no-op) | `3` |
+| `EarthPos` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `EarthPosAltitude` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `EarthPosLatitude` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `EarthPosLongitude` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `EarthPosRotationW` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `EarthPosRotationX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `EarthPosRotationY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `EarthPosRotationZ` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `EarthPosTimestamp` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `Plane` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PlaneBoundary` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PlaneBoundaryVertexCount` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PlaneExtentX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PlaneExtentZ` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PlanePose` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PlanePosePositionX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PlanePosePositionY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PlanePosePositionZ` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PlanePoseRotationW` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PlanePoseRotationX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PlanePoseRotationY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PlanePoseRotationZ` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PlanePoseTimestamp` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `Planes` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `Pose` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PosePositionX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PosePositionY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PosePositionZ` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PoseRotationW` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PoseRotationX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PoseRotationY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PoseRotationZ` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PoseTimestamp` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `Profile` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ProfileCameraIndices` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ProfileType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Profiles` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `VendorInfo` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `VendorInfoManufacturer` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VendorInfoModel` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VendorInfoNotes` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-GAudio
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AudioData` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AudioMimeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-GCamera
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `BurstID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `BurstPrimary` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DisableAutoCreation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DisableSuggestedAction` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `HDRPMakerNote` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HDRPlusMakerNote` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MicroVideo` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `MicroVideoOffset` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `MicroVideoPresentationTimestampUs` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `MicroVideoVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `MotionPhoto` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `MotionPhotoPresentationTimestampUs` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `MotionPhotoVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PortraitNote` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PortraitRequest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PortraitVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ShotLogData` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SpecialTypeID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-GContainer
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `ContainerDirectory` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DirectoryItem` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DirectoryItemLabel` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DirectoryItemLength` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DirectoryItemMime` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DirectoryItemPadding` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DirectoryItemSemantic` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DirectoryItemURI` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-GCreations
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CameraBurstID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Type` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-GDepth
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Confidence` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `OxTest` |
+| `ConfidenceMime` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DepthImage` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Far` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Format` | ✅ ok | — unsupported (silent no-op) | `RangeInverse` |
+| `ImageHeight` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ImageWidth` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Manufacturer` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `MeasureType` | ✅ ok | — unsupported (silent no-op) | `OpticalAxis` |
+| `Mime` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Model` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Near` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Software` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Units` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-GFocus
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `BlurAtInfinity` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FocalDistance` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FocalPointX` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FocalPointY` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+
+### XMP-GImage
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `ImageData` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageMimeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-GPano
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CaptureSoftware` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CroppedAreaImageHeightPixels` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CroppedAreaImageWidthPixels` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CroppedAreaLeftPixels` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CroppedAreaTopPixels` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ExposureLockUsed` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `FirstPhotoDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `FullPanoHeightPixels` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FullPanoWidthPixels` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `InitialCameraDolly` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `InitialHorizontalFOVDegrees` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `InitialVerticalFOVDegrees` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `InitialViewHeadingDegrees` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `InitialViewPitchDegrees` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `InitialViewRollDegrees` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `LargestValidInteriorRectHeight` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `LargestValidInteriorRectLeft` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `LargestValidInteriorRectTop` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `LargestValidInteriorRectWidth` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `LastPhotoDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `PoseHeadingDegrees` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `PosePitchDegrees` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `PoseRollDegrees` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ProjectionType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SourcePhotosCount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `StitchingSoftware` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UsePanoramaViewer` | ✅ ok | — unsupported (silent no-op) | `True` |
+
+### XMP-HDRGainMap
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `HDRGainMapVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-LImage
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `MajorVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `MinorVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RightAlbedo` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-MP
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `RegionInfoDateRegionsValid` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `RegionInfoMP` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RegionInfoRegions` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RegionPersonDisplayName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegionPersonEmailDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegionPersonLiveIdCID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegionPersonSourceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegionRectangle` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-MP1
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Brightness` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraModelID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Contrast` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ExposureCompensation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PanoramicStitchCameraMotion` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `3D Rotation` |
+| `PanoramicStitchMapType` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Horizontal Cylindrical` |
+| `PanoramicStitchPhi0` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `PanoramicStitchPhi1` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `PanoramicStitchTheta0` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `PanoramicStitchTheta1` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `PipelineVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `StreamType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `WhiteBalance0` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `WhiteBalance1` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `WhiteBalance2` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+
+### XMP-aas
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AffineA` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `AffineB` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `AffineC` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `AffineD` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `AffineX` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `AffineY` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CropH` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CropW` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CropX` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CropY` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Curve0x` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Curve0y` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Curve1x` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Curve1y` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Curve2x` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Curve2y` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Curve3x` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Curve3y` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Curve4x` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Curve4y` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FaceBalanceOrigI` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FaceBalanceOrigQ` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FaceBalanceStrength` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FaceBalanceWarmth` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Highlights` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Shadows` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Vibrance` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+
+### XMP-acdsee
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Author` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Caption` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Categories` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Collections` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DPP` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DateTime` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `EditStatus` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `FixtureIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Keywords` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Notes` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ObjectCycle` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OriginatingProgram` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RPP` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Rating` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `Rawrppused` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `ReleaseDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ReleaseTime` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Snapshots` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Tagged` | ✅ ok | — unsupported (silent no-op) | `True` |
+
+### XMP-acdsee-rs
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `ACDSeeRegion` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ACDSeeRegionALGArea` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ACDSeeRegionALGAreaH` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ACDSeeRegionALGAreaW` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ACDSeeRegionALGAreaX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ACDSeeRegionALGAreaY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ACDSeeRegionAppliedToDimensions` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ACDSeeRegionAppliedToDimensionsH` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ACDSeeRegionAppliedToDimensionsUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ACDSeeRegionAppliedToDimensionsW` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ACDSeeRegionDLYArea` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ACDSeeRegionDLYAreaH` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ACDSeeRegionDLYAreaW` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ACDSeeRegionDLYAreaX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ACDSeeRegionDLYAreaY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ACDSeeRegionName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ACDSeeRegionNameAssignType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ACDSeeRegionType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegionInfoACDSee` | — unsupported | — unsupported (silent no-op) | `{}` |
+
+### XMP-album
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Notes` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-apdi
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AuxiliaryImageType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `NativeFormat` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `StoredFormat` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-apple-fi
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AngleInfoRoll` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `AngleInfoYaw` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ConfidenceLevel` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `FaceID` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `TimeStamp` | — unsupported | — unsupported (silent no-op) | `3` |
+
+### XMP-aux
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `ApproximateFocusDistance` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `infinity` |
+| `DistortionCorrectionAlreadyApplied` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `EnhanceDenoiseAlreadyApplied` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `EnhanceDenoiseLumaAmount` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EnhanceDenoiseVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EnhanceDetailsAlreadyApplied` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `EnhanceDetailsVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EnhanceSuperResolutionAlreadyApplied` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `EnhanceSuperResolutionScale` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `EnhanceSuperResolutionVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Firmware` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `FlashCompensation` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FujiRatingAlreadyApplied` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `ImageNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IsMergedHDR` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `IsMergedPanorama` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `LateralChromaticAberrationCorrectionAlreadyApplied` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Lens` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensDistortInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensID` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `LensInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensSerialNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `NeutralDensityFactor` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OwnerName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SerialNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VignetteCorrectionAlreadyApplied` | ✅ ok | — unsupported (silent no-op) | `True` |
+
+### XMP-cc
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AttributionName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AttributionURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DeprecatedOn` | ✅ ok | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
+| `Jurisdiction` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LegalCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `License` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MorePermissions` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Permits` | — unsupported | — unsupported (silent no-op) | `Derivative Works` |
+| `Prohibits` | — unsupported | — unsupported (silent no-op) | `Commercial Use` |
+| `Requires` | — unsupported | — unsupported (silent no-op) | `Attribution` |
+| `UseGuidelines` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-cell
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CellGlobalID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CellR` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CellTowerID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationAreaCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MobileCountryCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MobileNetworkCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-crd
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AlreadyApplied` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `AutoBrightness` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `AutoContrast` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `AutoExposure` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `AutoLateralCA` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `AutoShadows` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `AutoTone` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `AutoToneDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AutoToneDigestNoSat` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AutoWhiteVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Blacks2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `BlueHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `BlueSaturation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Brightness` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CameraModelRestriction` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfile` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfileDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ChromaticAberrationB` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ChromaticAberrationR` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrBlacks2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrBrightness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrClarity` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrClarity2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrContrast` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrContrast2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrCorrectionName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrCorrectionSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrDefringe` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrDehaze` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrExposure` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrExposure2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrHighlights2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrLuminanceNoise` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrMaskMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CircGradBasedCorrMaskMasksAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskMasksFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskMasksMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrMaskMasksMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskMasksMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrMaskMasksWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRange` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CircGradBasedCorrMaskRangeAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CircGradBasedCorrMaskRangeAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskRangeAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskRangeColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskRangeLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskRangeLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskRangeSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrMaskRangeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskRangeVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrMaskWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CircGradBasedCorrMoire` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CircGradBasedCorrRangeMaskAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CircGradBasedCorrRangeMaskAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrRangeMaskAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrRangeMaskColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrRangeMaskLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrRangeMaskLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrRangeMaskSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrRangeMaskType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrRangeMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrShadows2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrSharpness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrTemperature` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrTexture` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrTint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrToningHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrToningSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrWhites2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircularGradientBasedCorrections` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `Clarity` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Clarity2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ClipboardAspectRatio` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ClipboardOrientation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Cluster` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ColorGradeBlending` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeGlobalHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeGlobalLum` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeGlobalSat` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeHighlightLum` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeMidtoneHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeMidtoneLum` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeMidtoneSat` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeShadowLum` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorNoiseReduction` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ColorNoiseReductionDetail` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorNoiseReductionSmoothness` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorTemperature` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ColorVariance` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CompatibleVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ContactInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Contrast` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `3` |
+| `Contrast2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ConvertToGrayscale` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Converter` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Copyright` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CropAngle` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CropBottom` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CropConstrainToUnitSquare` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CropConstrainToWarp` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CropHeight` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CropLeft` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CropRight` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CropTop` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CropUnit` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `pixels` |
+| `CropUnits` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `pixels` |
+| `CropWidth` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `DNGIgnoreSidecars` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `DefaultAutoGray` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `DefaultAutoTone` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `DefaultsSpecificToISO` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `DefaultsSpecificToSerial` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Defringe` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DefringeGreenAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DefringeGreenHueHi` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DefringeGreenHueLo` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DefringePurpleAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DefringePurpleHueHi` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DefringePurpleHueLo` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Dehaze` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrCorrectionActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrCorrectionAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrCorrectionSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrLocalCorrectedDepth` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrLocalCurveRefineSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DepthBasedCorrMaskAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DepthBasedCorrMaskMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DepthBasedCorrMaskMasksAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskMasksFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskMasksMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DepthBasedCorrMaskMasksMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskMasksMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DepthBasedCorrMaskMasksWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRange` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DepthBasedCorrMaskRangeAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DepthBasedCorrMaskRangeAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskRangeAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskRangeColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskRangeLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskRangeLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskRangeSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DepthBasedCorrMaskRangeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskRangeVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DepthBasedCorrMaskWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrections` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DepthMapInfo` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DepthMapInfoBaseHighlightGuideInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseHighlightGuideTable` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseHighlightGuideVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseLayeredDepthInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseLayeredDepthTable` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseLayeredDepthVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseRawDepthInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseRawDepthTable` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseRawDepthVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoDepthSource` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Description` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Exposure` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Exposure2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `FillLight` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrBlacks2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrBrightness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrClarity` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrClarity2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrContrast` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrContrast2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrCorrectionName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrCorrectionSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrDefringe` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrDehaze` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrExposure` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrExposure2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrHighlights2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrLuminanceNoise` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrMaskMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GradientBasedCorrMaskMasksAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskMasksFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskMasksMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrMaskMasksMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskMasksMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrMaskMasksWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRange` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GradientBasedCorrMaskRangeAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GradientBasedCorrMaskRangeAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskRangeAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskRangeColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskRangeLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskRangeLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskRangeSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrMaskRangeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskRangeVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrMaskWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GradientBasedCorrMoire` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GradientBasedCorrRangeMaskAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GradientBasedCorrRangeMaskAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrRangeMaskAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrRangeMaskColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrRangeMaskLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrRangeMaskLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrRangeMaskSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrRangeMaskType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrRangeMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrShadows2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrSharpness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrTemperature` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrTexture` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrTint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrToningHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrToningSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrWhites2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrections` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GrainAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrainFrequency` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrainSeed` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrainSize` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerAqua` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerBlue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerGreen` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerMagenta` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerOrange` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerPurple` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerRed` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerYellow` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GreenHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GreenSaturation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Group` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `HDREditMode` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HDRMaxValue` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `HasCrop` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `HasSettings` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Highlight2012` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HighlightRecovery` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Highlights2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `HueAdjustmentAqua` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HueAdjustmentBlue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HueAdjustmentGreen` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HueAdjustmentMagenta` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HueAdjustmentOrange` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `HueAdjustmentPurple` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HueAdjustmentRed` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `HueAdjustmentYellow` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `IncrementalTemperature` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `IncrementalTint` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `JPEGHandling` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensBlur` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `LensBlurActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `LensBlurAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurBokehAspect` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurBokehRotation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurBokehShape` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurBokehShapeDetail` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurCatEyeAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurCatEyeScale` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurFocalRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LensBlurFocalRangeSource` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurHighlightsBoost` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurHighlightsThreshold` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurSampledArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LensBlurSampledRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LensBlurSphericalAberration` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurSubjectRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LensBlurVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LensManualDistortionAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LensProfileChromaticAberrationScale` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LensProfileDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileDistortionScale` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LensProfileEnable` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LensProfileFilename` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileIsEmbedded` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `LensProfileMatchKeyCameraModelName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileMatchKeyExifMake` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileMatchKeyExifModel` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileMatchKeyIsRaw` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `LensProfileMatchKeyLensID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileMatchKeyLensInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileMatchKeyLensName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileMatchKeySensorFormatFactor` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `LensProfileName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileSetup` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileVignettingScale` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Look` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `LookAmount` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookCluster` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookCopyright` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookGroup` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LookParameters` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `LookParametersCameraProfile` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersClarity2012` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersConvertToGrayscale` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersHighlights2012` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersLookTable` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersProcessVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersShadows2012` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersToneCurvePV2012` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersToneCurvePV2012Blue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersToneCurvePV2012Green` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersToneCurvePV2012Red` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookSupportsAmount` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookSupportsMonochrome` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookSupportsOutputReferred` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookUUID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LuminanceAdjustmentAqua` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentBlue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentGreen` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentMagenta` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentOrange` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentPurple` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentRed` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentYellow` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceNoiseReductionContrast` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceNoiseReductionDetail` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceSmoothing` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `MaskGroupBasedCorrActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrBlacks2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrBrightness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrClarity` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrClarity2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrContrast` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrContrast2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrCorrectionName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrCorrectionSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrDefringe` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrDehaze` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrExposure` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrExposure2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrHighlights2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrLuminanceNoise` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaskGroupBasedCorrMaskAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MaskGroupBasedCorrMaskMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaskGroupBasedCorrMaskMasksAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskMasksFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskMasksMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MaskGroupBasedCorrMaskMasksMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskMasksMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MaskGroupBasedCorrMaskMasksWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRange` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaskGroupBasedCorrMaskRangeAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaskGroupBasedCorrMaskRangeAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskRangeAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskRangeColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskRangeLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskRangeLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskRangeSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MaskGroupBasedCorrMaskRangeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskRangeVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MaskGroupBasedCorrMaskWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMoire` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaskGroupBasedCorrRangeMaskAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaskGroupBasedCorrRangeMaskAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrRangeMaskAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrRangeMaskColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrRangeMaskLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrRangeMaskLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrRangeMaskSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MaskGroupBasedCorrRangeMaskType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrRangeMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrShadows2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrSharpness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrTemperature` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrTexture` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrTint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrToningHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrToningSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrWhites2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrections` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MoireFilter` | ✅ ok | — unsupported (silent no-op) | `Off` |
+| `Name` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `NegativeCacheLargePreviewSize` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `NegativeCacheMaximumSize` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `NegativeCachePath` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OverrideLookVignette` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `PaintBasedCorrectionMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintBasedCorrections` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintCorrectionActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionBlacks2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionBrightness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionClarity` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionClarity2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionContrast` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionContrast2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionCorrectionName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionCorrectionSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionDefringe` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionDehaze` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionExposure` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionExposure2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionHighlights2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionLuminanceNoise` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PaintCorrectionMaskMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintCorrectionMaskMasksAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskMasksFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskMasksMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PaintCorrectionMaskMasksMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskMasksMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PaintCorrectionMaskMasksWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRange` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintCorrectionMaskRangeAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintCorrectionMaskRangeAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskRangeAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskRangeColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskRangeLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskRangeLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskRangeSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PaintCorrectionMaskRangeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskRangeVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PaintCorrectionMaskWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMoire` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintCorrectionRangeMaskAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintCorrectionRangeMaskAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionRangeMaskAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionRangeMaskColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionRangeMaskLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionRangeMaskLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionRangeMaskSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PaintCorrectionRangeMaskType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionRangeMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionShadows2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionSharpness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionTemperature` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionTexture` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionTint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionToningHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionToningSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionWhites2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ParametricDarks` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricHighlightSplit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricHighlights` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricLights` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricMidtoneSplit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricShadowSplit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricShadows` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `PerspectiveAspect` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PerspectiveHorizontal` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PerspectiveRotate` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `PerspectiveScale` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PerspectiveUpright` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Off` |
+| `PerspectiveVertical` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PerspectiveX` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `PerspectiveY` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `PointColors` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PostCropVignetteAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PostCropVignetteFeather` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PostCropVignetteHighlightContrast` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PostCropVignetteMidpoint` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PostCropVignetteRoundness` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PostCropVignetteStyle` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Highlight Priority` |
+| `PresetType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ProcessVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RangeMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RangeMaskMapInfo` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RangeMaskMapInfoLabMax` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RangeMaskMapInfoLabMin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RangeMaskMapInfoLumEq` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RangeMaskMapInfoRGBMax` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RangeMaskMapInfoRGBMin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RawFileName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RedEyeInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RedHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `RedSaturation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `RetouchAreaFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `RetouchAreaMaskMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RetouchAreaMaskMasksAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskMasksFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskMasksMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `RetouchAreaMaskMasksMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskMasksMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `RetouchAreaMaskMasksWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRange` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RetouchAreaMaskRangeAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RetouchAreaMaskRangeAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskRangeAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskRangeColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskRangeLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskRangeLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskRangeSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `RetouchAreaMaskRangeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskRangeVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `RetouchAreaMaskWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RetouchAreaMethod` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaOffsetY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaOpacity` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaSeed` | — unsupported | — unsupported (silent no-op) | `3` |
+| `RetouchAreaSourceState` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaSourceX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaSpotType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreas` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RetouchInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SDRBlend` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `SDRBrightness` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `SDRContrast` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `SDRHighlights` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `SDRShadows` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `SDRWhites` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Saturation` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `SaturationAdjustmentAqua` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SaturationAdjustmentBlue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SaturationAdjustmentGreen` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SaturationAdjustmentMagenta` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SaturationAdjustmentOrange` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SaturationAdjustmentPurple` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SaturationAdjustmentRed` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `SaturationAdjustmentYellow` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ShadowTint` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Shadows` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Shadows2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `SharpenDetail` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SharpenEdgeMasking` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SharpenRadius` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Sharpness` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ShortName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Smoothness` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SortName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SplitToningBalance` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SplitToningHighlightHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SplitToningHighlightSaturation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SplitToningShadowHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SplitToningShadowSaturation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SupportsAmount` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `SupportsColor` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `SupportsHighDynamicRange` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `SupportsMonochrome` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `SupportsNormalDynamicRange` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `SupportsOutputReferred` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `SupportsSceneReferred` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `TIFFHandling` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Texture` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Tint` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ToggleStyleAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ToggleStyleDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurve` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurveBlue` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurveGreen` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurveName` | ✅ ok | — unsupported (silent no-op) | `Custom` |
+| `ToneCurveName2012` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurvePV2012` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurvePV2012Blue` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurvePV2012Green` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurvePV2012Red` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurveRed` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneMapStrength` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `UUID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightCenterMode` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `UprightCenterNormX` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `UprightCenterNormY` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `UprightDependentDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightFocalLength35mm` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `UprightFocalMode` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `UprightFourSegmentsCount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `UprightFourSegments_0` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightFourSegments_1` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightFourSegments_2` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightFourSegments_3` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightGuidedDependentDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightPreview` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `UprightTransformCount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `UprightTransform_0` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightTransform_1` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightTransform_2` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightTransform_3` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightTransform_4` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightTransform_5` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Version` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Vibrance` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `VignetteAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `VignetteMidpoint` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `What` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `WhiteBalance` | ✅ ok | — unsupported (silent no-op) | `As Shot` |
+| `Whites2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+
+### XMP-creatorAtom
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AeProjectLink` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `AeProjectLinkCompositionID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AeProjectLinkFullPath` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AeProjectLinkRenderOutputModuleIndex` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AeProjectLinkRenderQueueItemID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AeProjectLinkRenderTimeStamp` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MacAtom` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MacAtomApplicationCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MacAtomInvocationAppleEvent` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MacAtomPosixProjectPath` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `WindowsAtom` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `WindowsAtomExtension` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `WindowsAtomInvocationFlags` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `WindowsAtomUncProjectPath` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-crs
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AlreadyApplied` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `AutoBrightness` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `AutoContrast` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `AutoExposure` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `AutoLateralCA` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `AutoShadows` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `AutoTone` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `AutoToneDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AutoToneDigestNoSat` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AutoWhiteVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Blacks2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `BlueHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `BlueSaturation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Brightness` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CameraModelRestriction` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfile` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfileDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ChromaticAberrationB` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ChromaticAberrationR` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrBlacks2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrBrightness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrClarity` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrClarity2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrContrast` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrContrast2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrCorrectionName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrCorrectionSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrDefringe` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrDehaze` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrExposure` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrExposure2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrHighlights2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrLuminanceNoise` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrMaskMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CircGradBasedCorrMaskMasksAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskMasksFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskMasksMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrMaskMasksMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskMasksMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrMaskMasksWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskMasksX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMasksZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRange` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CircGradBasedCorrMaskRangeAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CircGradBasedCorrMaskRangeAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskRangeAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskRangeColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrMaskRangeLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRangeLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskRangeLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskRangeSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrMaskRangeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskRangeVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrMaskWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrMaskX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMaskZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CircGradBasedCorrMoire` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CircGradBasedCorrRangeMaskAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CircGradBasedCorrRangeMaskAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrRangeMaskAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrRangeMaskColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CircGradBasedCorrRangeMaskLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrRangeMaskLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrRangeMaskLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrRangeMaskSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CircGradBasedCorrRangeMaskType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrRangeMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrShadows2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrSharpness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrTemperature` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrTexture` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrTint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrToningHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrToningSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircGradBasedCorrWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CircGradBasedCorrWhites2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CircularGradientBasedCorrections` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `Clarity` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Clarity2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ClipboardAspectRatio` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ClipboardOrientation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Cluster` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ColorGradeBlending` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeGlobalHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeGlobalLum` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeGlobalSat` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeHighlightLum` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeMidtoneHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeMidtoneLum` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeMidtoneSat` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorGradeShadowLum` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorNoiseReduction` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ColorNoiseReductionDetail` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorNoiseReductionSmoothness` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ColorTemperature` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ColorVariance` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CompatibleVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ContactInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Contrast` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `3` |
+| `Contrast2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ConvertToGrayscale` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Converter` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Copyright` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CropAngle` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CropBottom` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CropConstrainToUnitSquare` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CropConstrainToWarp` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CropHeight` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CropLeft` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CropRight` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CropTop` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CropUnit` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `pixels` |
+| `CropUnits` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `pixels` |
+| `CropWidth` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `DNGIgnoreSidecars` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `DefaultAutoGray` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `DefaultAutoTone` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `DefaultsSpecificToISO` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `DefaultsSpecificToSerial` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Defringe` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DefringeGreenAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DefringeGreenHueHi` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DefringeGreenHueLo` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DefringePurpleAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DefringePurpleHueHi` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DefringePurpleHueLo` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Dehaze` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrCorrectionActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrCorrectionAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrCorrectionSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrLocalCorrectedDepth` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrLocalCurveRefineSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DepthBasedCorrMaskAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DepthBasedCorrMaskMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DepthBasedCorrMaskMasksAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskMasksFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskMasksMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DepthBasedCorrMaskMasksMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskMasksMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DepthBasedCorrMaskMasksWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskMasksX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMasksZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRange` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DepthBasedCorrMaskRangeAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DepthBasedCorrMaskRangeAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskRangeAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskRangeColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `DepthBasedCorrMaskRangeLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRangeLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskRangeLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskRangeSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DepthBasedCorrMaskRangeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskRangeVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DepthBasedCorrMaskWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrMaskX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrMaskZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DepthBasedCorrWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthBasedCorrections` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DepthMapInfo` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DepthMapInfoBaseHighlightGuideInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseHighlightGuideTable` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseHighlightGuideVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseLayeredDepthInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseLayeredDepthTable` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseLayeredDepthVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseRawDepthInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseRawDepthTable` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoBaseRawDepthVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DepthMapInfoDepthSource` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Description` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Exposure` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Exposure2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `FillLight` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrBlacks2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrBrightness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrClarity` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrClarity2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrContrast` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrContrast2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrCorrectionName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrCorrectionSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrDefringe` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrDehaze` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrExposure` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrExposure2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrHighlights2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrLuminanceNoise` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrMaskMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GradientBasedCorrMaskMasksAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskMasksFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskMasksMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrMaskMasksMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskMasksMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrMaskMasksWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskMasksX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMasksZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRange` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GradientBasedCorrMaskRangeAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GradientBasedCorrMaskRangeAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskRangeAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskRangeColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrMaskRangeLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRangeLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskRangeLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskRangeSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrMaskRangeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskRangeVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrMaskWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrMaskX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMaskZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GradientBasedCorrMoire` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GradientBasedCorrRangeMaskAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GradientBasedCorrRangeMaskAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrRangeMaskAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrRangeMaskColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `GradientBasedCorrRangeMaskLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrRangeMaskLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrRangeMaskLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrRangeMaskSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GradientBasedCorrRangeMaskType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrRangeMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrShadows2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrSharpness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrTemperature` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrTexture` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrTint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrToningHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrToningSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GradientBasedCorrWhites2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GradientBasedCorrections` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GrainAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrainFrequency` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrainSeed` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrainSize` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerAqua` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerBlue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerGreen` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerMagenta` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerOrange` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerPurple` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerRed` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GrayMixerYellow` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GreenHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `GreenSaturation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Group` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `HDREditMode` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HDRMaxValue` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `HasCrop` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `HasSettings` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Highlight2012` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HighlightRecovery` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Highlights2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `HueAdjustmentAqua` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HueAdjustmentBlue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HueAdjustmentGreen` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HueAdjustmentMagenta` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HueAdjustmentOrange` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `HueAdjustmentPurple` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HueAdjustmentRed` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `HueAdjustmentYellow` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `IncrementalTemperature` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `IncrementalTint` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `JPEGHandling` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensBlur` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `LensBlurActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `LensBlurAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurBokehAspect` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurBokehRotation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurBokehShape` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurBokehShapeDetail` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurCatEyeAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurCatEyeScale` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurFocalRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LensBlurFocalRangeSource` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurHighlightsBoost` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurHighlightsThreshold` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurSampledArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LensBlurSampledRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LensBlurSphericalAberration` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensBlurSubjectRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LensBlurVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LensManualDistortionAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LensProfileChromaticAberrationScale` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LensProfileDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileDistortionScale` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LensProfileEnable` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LensProfileFilename` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileIsEmbedded` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `LensProfileMatchKeyCameraModelName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileMatchKeyExifMake` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileMatchKeyExifModel` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileMatchKeyIsRaw` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `LensProfileMatchKeyLensID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileMatchKeyLensInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileMatchKeyLensName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileMatchKeySensorFormatFactor` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `LensProfileName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileSetup` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensProfileVignettingScale` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Look` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `LookAmount` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookCluster` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookCopyright` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookGroup` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LookParameters` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `LookParametersCameraProfile` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersClarity2012` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersConvertToGrayscale` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersHighlights2012` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersLookTable` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersProcessVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersShadows2012` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersToneCurvePV2012` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersToneCurvePV2012Blue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersToneCurvePV2012Green` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersToneCurvePV2012Red` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookParametersVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookSupportsAmount` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookSupportsMonochrome` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookSupportsOutputReferred` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LookUUID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LuminanceAdjustmentAqua` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentBlue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentGreen` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentMagenta` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentOrange` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentPurple` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentRed` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceAdjustmentYellow` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceNoiseReductionContrast` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceNoiseReductionDetail` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `LuminanceSmoothing` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `MaskGroupBasedCorrActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrBlacks2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrBrightness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrClarity` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrClarity2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrContrast` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrContrast2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrCorrectionName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrCorrectionSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrDefringe` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrDehaze` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrExposure` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrExposure2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrHighlights2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrLuminanceNoise` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaskGroupBasedCorrMaskAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MaskGroupBasedCorrMaskMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaskGroupBasedCorrMaskMasksAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskMasksFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskMasksMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MaskGroupBasedCorrMaskMasksMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskMasksMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MaskGroupBasedCorrMaskMasksWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskMasksX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMasksZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRange` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaskGroupBasedCorrMaskRangeAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaskGroupBasedCorrMaskRangeAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskRangeAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskRangeColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrMaskRangeLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRangeLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskRangeLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskRangeSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MaskGroupBasedCorrMaskRangeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskRangeVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MaskGroupBasedCorrMaskWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrMaskX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMaskZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrMoire` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaskGroupBasedCorrRangeMaskAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaskGroupBasedCorrRangeMaskAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrRangeMaskAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrRangeMaskColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaskGroupBasedCorrRangeMaskLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrRangeMaskLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrRangeMaskLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrRangeMaskSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MaskGroupBasedCorrRangeMaskType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrRangeMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrShadows2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrSharpness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrTemperature` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrTexture` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrTint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrToningHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrToningSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaskGroupBasedCorrWhites2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaskGroupBasedCorrections` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MoireFilter` | ✅ ok | — unsupported (silent no-op) | `Off` |
+| `Name` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `NegativeCacheLargePreviewSize` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `NegativeCacheMaximumSize` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `NegativeCachePath` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OverrideLookVignette` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `PaintBasedCorrectionMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintBasedCorrections` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintCorrectionActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionBlacks2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionBrightness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionClarity` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionClarity2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionContrast` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionContrast2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionCorrectionName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionCorrectionSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionDefringe` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionDehaze` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionExposure` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionExposure2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionHighlights2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionLuminanceNoise` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PaintCorrectionMaskMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintCorrectionMaskMasksAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskMasksFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskMasksMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PaintCorrectionMaskMasksMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskMasksMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PaintCorrectionMaskMasksWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskMasksX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMasksZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRange` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintCorrectionMaskRangeAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintCorrectionMaskRangeAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskRangeAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskRangeColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionMaskRangeLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRangeLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskRangeLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskRangeSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PaintCorrectionMaskRangeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskRangeVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PaintCorrectionMaskWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionMaskX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMaskZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionMoire` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintCorrectionRangeMaskAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PaintCorrectionRangeMaskAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionRangeMaskAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionRangeMaskColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `PaintCorrectionRangeMaskLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionRangeMaskLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionRangeMaskLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionRangeMaskSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PaintCorrectionRangeMaskType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionRangeMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionShadows2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionSharpness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionTemperature` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionTexture` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionTint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionToningHue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionToningSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `PaintCorrectionWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PaintCorrectionWhites2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ParametricDarks` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricHighlightSplit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricHighlights` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricLights` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricMidtoneSplit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricShadowSplit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricShadows` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `PerspectiveAspect` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PerspectiveHorizontal` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PerspectiveRotate` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `PerspectiveScale` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PerspectiveUpright` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Off` |
+| `PerspectiveVertical` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PerspectiveX` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `PerspectiveY` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `PointColors` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PostCropVignetteAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PostCropVignetteFeather` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PostCropVignetteHighlightContrast` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PostCropVignetteMidpoint` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PostCropVignetteRoundness` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PostCropVignetteStyle` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Highlight Priority` |
+| `PresetType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ProcessVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RangeMask` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RangeMaskMapInfo` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RangeMaskMapInfoLabMax` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RangeMaskMapInfoLabMin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RangeMaskMapInfoLumEq` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RangeMaskMapInfoRGBMax` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RangeMaskMapInfoRGBMin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RawFileName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RedEyeInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RedHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `RedSaturation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `RetouchAreaFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `RetouchAreaMaskMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RetouchAreaMaskMasksAlpha` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksAngle` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksBottom` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksCenterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksCenterWeight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksDabs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksFlipped` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskMasksFlow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksFullX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksFullY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksInputDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksLeft` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksMaskActive` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskMasksMaskBlendMode` | — unsupported | — unsupported (silent no-op) | `3` |
+| `RetouchAreaMaskMasksMaskDigest` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksMaskInverted` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskMasksMaskName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksMaskSubType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksMaskSyncID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksMaskVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `RetouchAreaMaskMasksWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskMasksX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMasksZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskMidpoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskOrigin` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskPerimeterValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRadius` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRange` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RetouchAreaMaskRangeAreaModels` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RetouchAreaMaskRangeAreaModelsColorSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskRangeAreaModelsComponents` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskRangeColorAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeDepthFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeDepthMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeDepthMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeInvert` | — unsupported | — unsupported (silent no-op) | `True` |
+| `RetouchAreaMaskRangeLumFeather` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeLumMax` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeLumMin` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRangeLumRange` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskRangeLuminanceDepthSampleInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskRangeSampleType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `RetouchAreaMaskRangeType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskRangeVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskReferencePoint` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskRight` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskRoundness` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskSizeX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskSizeY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskTop` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskVersion` | — unsupported | — unsupported (silent no-op) | `3` |
+| `RetouchAreaMaskWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskWholeImageArea` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaMaskX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskZeroX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMaskZeroY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaMasks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RetouchAreaMethod` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaOffsetY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaOpacity` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaSeed` | — unsupported | — unsupported (silent no-op) | `3` |
+| `RetouchAreaSourceState` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreaSourceX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RetouchAreaSpotType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RetouchAreas` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RetouchInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SDRBlend` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `SDRBrightness` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `SDRContrast` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `SDRHighlights` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `SDRShadows` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `SDRWhites` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Saturation` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `SaturationAdjustmentAqua` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SaturationAdjustmentBlue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SaturationAdjustmentGreen` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SaturationAdjustmentMagenta` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SaturationAdjustmentOrange` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SaturationAdjustmentPurple` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SaturationAdjustmentRed` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `SaturationAdjustmentYellow` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ShadowTint` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Shadows` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Shadows2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `SharpenDetail` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SharpenEdgeMasking` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SharpenRadius` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Sharpness` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ShortName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Smoothness` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SortName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SplitToningBalance` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SplitToningHighlightHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SplitToningHighlightSaturation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SplitToningShadowHue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SplitToningShadowSaturation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SupportsAmount` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `SupportsColor` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `SupportsHighDynamicRange` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `SupportsMonochrome` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `SupportsNormalDynamicRange` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `SupportsOutputReferred` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `SupportsSceneReferred` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `TIFFHandling` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Texture` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Tint` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ToggleStyleAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ToggleStyleDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurve` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurveBlue` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurveGreen` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurveName` | ✅ ok | — unsupported (silent no-op) | `Custom` |
+| `ToneCurveName2012` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurvePV2012` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurvePV2012Blue` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurvePV2012Green` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurvePV2012Red` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneCurveRed` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ToneMapStrength` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `UUID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightCenterMode` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `UprightCenterNormX` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `UprightCenterNormY` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `UprightDependentDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightFocalLength35mm` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `UprightFocalMode` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `UprightFourSegmentsCount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `UprightFourSegments_0` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightFourSegments_1` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightFourSegments_2` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightFourSegments_3` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightGuidedDependentDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightPreview` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `UprightTransformCount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `UprightTransform_0` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightTransform_1` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightTransform_2` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightTransform_3` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightTransform_4` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightTransform_5` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UprightVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Version` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Vibrance` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `VignetteAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `VignetteMidpoint` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `What` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `WhiteBalance` | ✅ ok | — unsupported (silent no-op) | `As Shot` |
+| `Whites2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+
+### XMP-dc
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Contributor` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Coverage` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Creator` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Date` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `Description` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Format` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Identifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Language` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Publisher` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Relation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Rights` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Source` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Subject` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Title` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Type` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-dex
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CRC32` | — unsupported | — unsupported (silent no-op) | `3` |
+| `FFID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicenseType` | — unsupported | — unsupported (silent no-op) | `Adware` |
+| `OS` | — unsupported | — unsupported (silent no-op) | `3` |
+| `Rating` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
+| `Revision` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ShortDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Source` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-digiKam
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CaptionsAuthorNames` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CaptionsDateTimeStamps` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ColorLabel` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageHistory` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageUniqueID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensCorrectionSettings` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PicasawebGPhotoId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PickLabel` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `TagsList` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-drone-dji
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AbsoluteAltitude` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CalibratedFocalLength` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CalibratedOpticalCenterX` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CalibratedOpticalCenterY` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CamReverse` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DewarpData` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DewarpFlag` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `FlightPitchDegree` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FlightRollDegree` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FlightXSpeed` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FlightYSpeed` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FlightYawDegree` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FlightZSpeed` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `GPSLatitude` | — unsupported | — unsupported (silent no-op) | `37.7749` |
+| `GPSLongitude` | — unsupported | — unsupported (silent no-op) | `122.4194` |
+| `GPSLongtitude` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `GimbalPitchDegree` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `GimbalReverse` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `GimbalRollDegree` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `GimbalYawDegree` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Latitude` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Longitude` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `RelativeAltitude` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `RtkFlag` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RtkStdHgt` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `RtkStdLat` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `RtkStdLon` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `SelfData` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-dwc
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `DCContinent` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCCoordinatePrecision` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCCoordinateUncertaintyInMeters` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCCountry` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCCountryCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCCounty` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCDecimalLatitude` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCDecimalLongitude` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCEvent` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DCFootprintSRS` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCFootprintSpatialFit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCFootprintWKT` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCGeodeticDatum` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCGeoreferenceProtocol` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCGeoreferenceRemarks` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCGeoreferenceSources` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCGeoreferenceVerificationStatus` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCGeoreferencedBy` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCGeoreferencedDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `DCHigherGeography` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCHigherGeographyID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCIsland` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCIslandGroup` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCLocality` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCLocationAccordingTo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCLocationID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCLocationRemarks` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCMaximumDepthInMeters` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCMaximumDistanceAboveSurfaceInMeters` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCMaximumElevationInMeters` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCMinimumDepthInMeters` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCMinimumDistanceAboveSurfaceInMeters` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCMinimumElevationInMeters` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCMunicipality` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCPointRadiusSpatialFit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCStateProvince` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCTermsLocation` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DCVerbatimCoordinateSystem` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCVerbatimCoordinates` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCVerbatimDepth` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCVerbatimElevation` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCVerbatimLatitude` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCVerbatimLocality` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCVerbatimLongitude` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCVerbatimSRS` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCVerticalDatum` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DCWaterBody` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DateIdentified` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `EarliestAgeOrLowestStage` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EarliestEonOrLowestEonothem` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EarliestEpochOrLowestSeries` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EarliestEraOrLowestErathem` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EarliestPeriodOrLowestSystem` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EventDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `EventDay` | — unsupported | — unsupported (silent no-op) | `3` |
+| `EventEarliestDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `EventEndDayOfYear` | — unsupported | — unsupported (silent no-op) | `3` |
+| `EventEventType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EventFieldNotes` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EventFieldNumber` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EventHabitat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EventID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EventLatestDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `EventMonth` | — unsupported | — unsupported (silent no-op) | `3` |
+| `EventParentEventID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EventRemarks` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EventSampleSizeUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EventSampleSizeValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EventSamplingEffort` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EventSamplingProtocol` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EventStartDayOfYear` | — unsupported | — unsupported (silent no-op) | `3` |
+| `EventTime` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `EventVerbatimEventDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `EventYear` | — unsupported | — unsupported (silent no-op) | `3` |
+| `FossilSpecimen` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `FossilSpecimenMaterialSampleID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GeologicalContext` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GeologicalContextBed` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GeologicalContextFormation` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GeologicalContextGroup` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GeologicalContextID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GeologicalContextMember` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HighestBiostratigraphicZone` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HumanObservation` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `HumanObservationDay` | — unsupported | — unsupported (silent no-op) | `3` |
+| `HumanObservationEarliestDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `HumanObservationEndDayOfYear` | — unsupported | — unsupported (silent no-op) | `3` |
+| `HumanObservationEventDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `HumanObservationEventID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HumanObservationEventRemarks` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HumanObservationEventTime` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `HumanObservationEventType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HumanObservationFieldNotes` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HumanObservationFieldNumber` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HumanObservationHabitat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HumanObservationLatestDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `HumanObservationMonth` | — unsupported | — unsupported (silent no-op) | `3` |
+| `HumanObservationParentEventID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HumanObservationSampleSizeUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HumanObservationSampleSizeValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HumanObservationSamplingEffort` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HumanObservationSamplingProtocol` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HumanObservationStartDayOfYear` | — unsupported | — unsupported (silent no-op) | `3` |
+| `HumanObservationVerbatimEventDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `HumanObservationYear` | — unsupported | — unsupported (silent no-op) | `3` |
+| `Identification` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `IdentificationID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IdentificationQualifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IdentificationReferences` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IdentificationRemarks` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IdentificationVerificationStatus` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IdentifiedBy` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IdentifiedByID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LatestAgeOrHighestStage` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LatestEonOrHighestEonothem` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LatestEpochOrHighestSeries` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LatestEraOrHighestErathem` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LatestPeriodOrHighestSystem` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LithostratigraphicTerms` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LivingSpecimen` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `LivingSpecimenMaterialSampleID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LowestBiostratigraphicZone` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MachineObservation` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MachineObservationDay` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MachineObservationEarliestDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `MachineObservationEndDayOfYear` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MachineObservationEventDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `MachineObservationEventID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MachineObservationEventRemarks` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MachineObservationEventTime` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `MachineObservationEventType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MachineObservationFieldNotes` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MachineObservationFieldNumber` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MachineObservationHabitat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MachineObservationLatestDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `MachineObservationMonth` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MachineObservationParentEventID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MachineObservationSampleSizeUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MachineObservationSampleSizeValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MachineObservationSamplingEffort` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MachineObservationSamplingProtocol` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MachineObservationStartDayOfYear` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MachineObservationVerbatimEventDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `MachineObservationYear` | — unsupported | — unsupported (silent no-op) | `3` |
+| `MaterialSample` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaterialSampleID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MeasurementAccuracy` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MeasurementDeterminedBy` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MeasurementDeterminedDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `MeasurementID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MeasurementMethod` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MeasurementOrFact` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MeasurementRemarks` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MeasurementType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MeasurementUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MeasurementValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Occurrence` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `OccurrenceAssociatedMedia` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceAssociatedOccurrences` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceAssociatedReferences` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceAssociatedSequences` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceAssociatedTaxa` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceBehavior` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceCaste` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceCatalogNumber` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceDegreeOfEstablishment` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceDetails` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceDisposition` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceEstablishmentMeans` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceGeoreferenceVerificationStatus` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceIndividualCount` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceIndividualID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceLifeStage` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceOrganismQuantity` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceOrganismQuantityType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceOtherCatalogNumbers` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrencePathway` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrencePreparations` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrencePreviousIdentifications` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceRecordNumber` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceRecordedBy` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceRecordedByID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceRemarks` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceReproductiveCondition` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceSex` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceStatus` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OccurrenceVitality` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Organism` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `OrganismAssociatedOccurrences` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OrganismAssociatedOrganisms` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OrganismID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OrganismName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OrganismPreviousIdentifications` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OrganismRemarks` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OrganismScope` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ParentMeasurementID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PreservedSpecimen` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PreservedSpecimenMaterialSampleID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Record` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RecordBasisOfRecord` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecordCollectionCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecordCollectionID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecordDataGeneralizations` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecordDatasetID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecordDatasetName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecordDynamicProperties` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecordInformationWithheld` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecordInstitutionCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecordInstitutionID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecordOwnerInstitutionCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RelatedResourceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RelationshipAccordingTo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RelationshipEstablishedDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `RelationshipOfResource` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RelationshipOfResourceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RelationshipRemarks` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ResourceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ResourceRelationship` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ResourceRelationshipID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Taxon` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `TaxonAcceptedNameUsage` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonAcceptedNameUsageID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonClass` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonConceptID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonCultivarEpithet` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonFamily` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonGenericName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonGenus` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonHigherClassification` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonInfragenericEpithet` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonInfraspecificEpithet` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonKingdom` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonNameAccordingTo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonNameAccordingToID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonNamePublishedIn` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonNamePublishedInID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonNamePublishedInYear` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonNomenclaturalCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonNomenclaturalStatus` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonOrder` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonOriginalNameUsage` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonOriginalNameUsageID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonParentNameUsage` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonParentNameUsageID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonPhylum` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonRank` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonRemarks` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonScientificName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonScientificNameAuthorship` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonScientificNameID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonSpecificEpithet` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonSubFamily` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonSubTribe` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonSubgenus` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonSuperFamily` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonTaxonomicStatus` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonTribe` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonVerbatimTaxonRank` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TaxonVernacularName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TypeStatus` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VerbatimIdentification` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-et
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `OriginalImageHash` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OriginalImageHashType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OriginalImageMD5` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-exif
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `ApertureValue` | 🐛 broken: APEX ValueConv (2^x) not applied | — unsupported (silent no-op) | `1.5` |
+| `BrightnessValue` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CFAPattern` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CFAPatternColumns` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CFAPatternRows` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CFAPatternValues` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ColorSpace` | ✅ ok | — unsupported (silent no-op) | `sRGB` |
+| `ComponentsConfiguration` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `-` |
+| `CompressedBitsPerPixel` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Contrast` | ✅ ok | — unsupported (silent no-op) | `Normal` |
+| `CustomRendered` | ✅ ok | — unsupported (silent no-op) | `Normal` |
+| `DateTimeDigitized` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `DateTimeOriginal` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `DeviceSettingDescription` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DeviceSettingDescriptionColumns` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DeviceSettingDescriptionRows` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DeviceSettingDescriptionSettings` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DigitalZoomRatio` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ExifImageHeight` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ExifImageWidth` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ExifVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ExposureCompensation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ExposureIndex` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ExposureMode` | ✅ ok | — unsupported (silent no-op) | `Auto` |
+| `ExposureProgram` | ✅ ok | — unsupported (silent no-op) | `Not Defined` |
+| `ExposureTime` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FNumber` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FileSource` | ✅ ok | — unsupported (silent no-op) | `Film Scanner` |
+| `Flash` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `FlashEnergy` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FlashFired` | — unsupported | — unsupported (silent no-op) | `True` |
+| `FlashFunction` | — unsupported | — unsupported (silent no-op) | `True` |
+| `FlashMode` | — unsupported | — unsupported (silent no-op) | `Unknown` |
+| `FlashRedEyeMode` | — unsupported | — unsupported (silent no-op) | `True` |
+| `FlashReturn` | — unsupported | — unsupported (silent no-op) | `No return detection` |
+| `FlashpixVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `FocalLength` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FocalLengthIn35mmFormat` | — unsupported | — unsupported (silent no-op) | `3` |
+| `FocalPlaneResolutionUnit` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `None` |
+| `FocalPlaneXResolution` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `FocalPlaneYResolution` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `GPSAltitude` | ✅ ok | — unsupported (silent no-op) | `10.5` |
+| `GPSAltitudeRef` | ✅ ok | — unsupported (silent no-op) | `Above Sea Level` |
+| `GPSAreaInformation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `GPSDOP` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `GPSDateTime` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `GPSDestBearing` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `GPSDestBearingRef` | ✅ ok | — unsupported (silent no-op) | `Magnetic North` |
+| `GPSDestDistance` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `GPSDestDistanceRef` | ✅ ok | — unsupported (silent no-op) | `Kilometers` |
+| `GPSDestLatitude` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `37.7749` |
+| `GPSDestLongitude` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `122.4194` |
+| `GPSDifferential` | ✅ ok | — unsupported (silent no-op) | `No Correction` |
+| `GPSHPositioningError` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `GPSImgDirection` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `GPSImgDirectionRef` | ✅ ok | — unsupported (silent no-op) | `Magnetic North` |
+| `GPSLatitude` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `37.7749` |
+| `GPSLongitude` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `122.4194` |
+| `GPSMapDatum` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `GPSMeasureMode` | ✅ ok | — unsupported (silent no-op) | `2-Dimensional Measurement` |
+| `GPSProcessingMethod` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `GPSSatellites` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `GPSSpeed` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `GPSSpeedRef` | ✅ ok | — unsupported (silent no-op) | `km/h` |
+| `GPSStatus` | ✅ ok | — unsupported (silent no-op) | `Measurement Active` |
+| `GPSTrack` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `GPSTrackRef` | ✅ ok | — unsupported (silent no-op) | `Magnetic North` |
+| `GPSVersionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `GainControl` | ✅ ok | — unsupported (silent no-op) | `None` |
+| `ISO` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ImageUniqueID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LightSource` | ✅ ok | — unsupported (silent no-op) | `Unknown` |
+| `MakerNote` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `MaxApertureValue` | 🐛 broken: APEX ValueConv (2^x) not applied | — unsupported (silent no-op) | `1.5` |
+| `MeteringMode` | ✅ ok | — unsupported (silent no-op) | `Average` |
+| `NativeDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OECFColumns` | — unsupported | — unsupported (silent no-op) | `3` |
+| `OECFNames` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OECFRows` | — unsupported | — unsupported (silent no-op) | `3` |
+| `OECFValues` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `Opto-ElectricConvFactor` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RelatedSoundFile` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Saturation` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Normal` |
+| `SceneCaptureType` | ✅ ok | — unsupported (silent no-op) | `Standard` |
+| `SceneType` | ✅ ok | — unsupported (silent no-op) | `Directly photographed` |
+| `SensingMethod` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `Monochrome area` |
+| `Sharpness` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Normal` |
+| `ShutterSpeedValue` | 🐛 broken: APEX ValueConv (2^x) not applied | — unsupported (silent no-op) | `1.5` |
+| `SpatialFrequencyResponse` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `SpatialFrequencyResponseColumns` | — unsupported | — unsupported (silent no-op) | `3` |
+| `SpatialFrequencyResponseNames` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SpatialFrequencyResponseRows` | — unsupported | — unsupported (silent no-op) | `3` |
+| `SpatialFrequencyResponseValues` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `SpectralSensitivity` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SubjectArea` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SubjectDistance` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `SubjectDistanceRange` | ✅ ok | — unsupported (silent no-op) | `Unknown` |
+| `SubjectLocation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `UserComment` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `WhiteBalance` | ✅ ok | — unsupported (silent no-op) | `Auto` |
+
+### XMP-exifEX
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Acceleration` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `AmbientTemperature` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraElevationAngle` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraFirmware` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CompImageImagesPerSequence` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CompImageMaxExposureAll` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CompImageMaxExposureUsed` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CompImageMinExposureAll` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CompImageMinExposureUsed` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CompImageNumSequences` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CompImageSumExposureAll` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CompImageSumExposureUsed` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CompImageTotalExposurePeriod` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CompImageValues` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CompositeImage` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Unknown` |
+| `CompositeImageCount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CompositeImageExposureTimes` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `Gamma` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Humidity` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ISOSpeed` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ISOSpeedLatitudeyyy` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ISOSpeedLatitudezzz` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ImageEditingSoftware` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageEditor` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageTitle` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageUniqueID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `InteropIndex` | — unsupported | — unsupported (silent no-op) | `R03 - DCF option file (Adobe RGB)` |
+| `LensInfo` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LensMake` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensModel` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensSerialNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `MetadataEditingSoftware` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OwnerName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Photographer` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PhotographicSensitivity` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Pressure` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `RAWDevelopingSoftware` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RecommendedExposureIndex` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SensitivityType` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Unknown` |
+| `SerialNumber` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `StandardOutputSensitivity` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `WaterDepth` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+
+### XMP-expressionmedia
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CatalogSets` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Event` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `People` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Status` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-extensis
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Approved` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `ApprovedBy` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ClientName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `JobName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `JobStatus` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RoutedTo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RoutingNotes` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `WorkToDo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-fpv
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `RichTextComment` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-getty
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AssetID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CallForImage` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraFilename` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraMakeModel` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraSerialNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Composition` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ExclusiveCoverage` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `GIFTFtpPriority` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageRank` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `MediaEventIdDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `OriginalCreateDateTime` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `OriginalFileName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ParentMEID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ParentMediaEventID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Personality` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PrimaryFTP` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RoutingDestinations` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RoutingExclusions` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SecondaryFTP` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `TimeShot` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-hdr
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CCVAvgLuminanceNits` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CCVMaxLuminanceNits` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CCVMinLuminanceNits` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CCVPrimariesXY` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CCVWhiteXY` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SceneReferred` | — unsupported | — unsupported (silent no-op) | `True` |
+
+### XMP-hdrgm
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `BaseRenditionIsHDR` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `GainMapMax` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `GainMapMin` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Gamma` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `HDRCapacityMax` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `HDRCapacityMin` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `OffsetHDR` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `OffsetSDR` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Version` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-ics
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AppVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageRef` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LabelName1` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LabelName2` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LabelName3` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LabelName4` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LabelName5` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LabelName6` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ParentReference1` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ParentReference2` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ParentReference3` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ParentReference4` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ParentReference5` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ParentReference6` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Reference1` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Reference2` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Reference3` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Reference4` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Reference5` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Reference6` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SubLabels1` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `SubLabels2` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `SubLabels3` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `SubLabels4` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `SubLabels5` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `SubVersionFileName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SubVersionReference` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SubVersions` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `TagStructure` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `TimeStamp` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+
+### XMP-iptcCore
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AltTextAccessibility` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CountryCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreatorAddress` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CreatorCity` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CreatorContactInfo` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `{}` |
+| `CreatorCountry` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CreatorPostalCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CreatorRegion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CreatorWorkEmail` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CreatorWorkTelephone` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CreatorWorkURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ExtDescrAccessibility` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IntellectualGenre` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Location` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Scene` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SubjectCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-iptcExt
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AIPromptInformation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AIPromptWriterName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AISystemUsed` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AISystemVersionUsed` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AboutCvTerm` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `AboutCvTermCvId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AboutCvTermId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AboutCvTermName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AboutCvTermRefinedAbout` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AdditionalModelInformation` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkCircaDateCreated` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ArtworkContentDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkContributionDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkCopyrightNotice` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkCopyrightOwnerID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkCopyrightOwnerName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkCreator` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkCreatorID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkDateCreated` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ArtworkLicensorID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkLicensorName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkOrObject` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ArtworkPhysicalDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkSource` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkSourceInvURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkSourceInventoryNo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkStylePeriod` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkTitle` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AudioBitrate` | — unsupported | — unsupported (silent no-op) | `3` |
+| `AudioBitrateMode` | — unsupported | — unsupported (silent no-op) | `Fixed` |
+| `AudioBitsPerSample` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `AudioChannelCount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CircaDateCreated` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ContainerFormat` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ContainerFormatIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ContainerFormatName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Contributor` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ContributorIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ContributorName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ContributorRole` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ControlledVocabularyTerm` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CopyrightYear` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Creator` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CreatorIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CreatorName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CreatorRole` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DataOnScreen` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DataOnScreenRegion` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DataOnScreenRegionD` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DataOnScreenRegionH` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DataOnScreenRegionText` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DataOnScreenRegionUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DataOnScreenRegionW` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DataOnScreenRegionX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DataOnScreenRegionY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DigitalImageGUID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DigitalSourceFileType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DigitalSourceType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Dopesheet` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DopesheetLink` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DopesheetLinkLink` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DopesheetLinkLinkQualifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EmbdEncRightsExpr` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `EmbeddedEncodedRightsExpr` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EmbeddedEncodedRightsExprLangID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EmbeddedEncodedRightsExprType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Episode` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `EpisodeIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EpisodeName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EpisodeNumber` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Event` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EventID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ExternalMetadataLink` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `FeedIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Genre` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `GenreCvId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GenreCvTermId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GenreCvTermName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GenreCvTermRefinedAbout` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Headline` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IPTCLastEdited` | — unsupported | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
+| `ImageRegion` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ImageRegionBoundary` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ImageRegionBoundaryH` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionBoundaryRx` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionBoundaryShape` | — unsupported | — unsupported (silent no-op) | `Circle` |
+| `ImageRegionBoundaryUnit` | — unsupported | — unsupported (silent no-op) | `Pixel` |
+| `ImageRegionBoundaryVertices` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ImageRegionBoundaryVerticesX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionBoundaryVerticesY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionBoundaryW` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionBoundaryX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionBoundaryY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionCtype` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ImageRegionCtypeIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageRegionCtypeName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageRegionID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageRegionName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageRegionRole` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ImageRegionRoleIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageRegionRoleName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LinkedEncRightsExpr` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `LinkedEncodedRightsExpr` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LinkedEncodedRightsExprLangID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LinkedEncodedRightsExprType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreated` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `LocationCreatedCity` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedCountryCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedCountryName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedGPSAltitude` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LocationCreatedGPSAltitudeRef` | — unsupported | — unsupported (silent no-op) | `Above Sea Level` |
+| `LocationCreatedGPSLatitude` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedGPSLongitude` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedLocationId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedLocationName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedProvinceState` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedSublocation` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedWorldRegion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationShown` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `LocationShownCity` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownCountryCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownCountryName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownGPSAltitude` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LocationShownGPSAltitudeRef` | — unsupported | — unsupported (silent no-op) | `Above Sea Level` |
+| `LocationShownGPSLatitude` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownGPSLongitude` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownLocationId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownLocationName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownProvinceState` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownSublocation` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownWorldRegion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaxAvailHeight` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `MaxAvailWidth` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `MetadataAuthority` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MetadataAuthorityIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MetadataAuthorityName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MetadataLastEdited` | ✅ ok | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
+| `MetadataLastEditor` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MetadataLastEditorIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MetadataLastEditorName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ModelAge` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `OrganisationInImageCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OrganisationInImageName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ParentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PersonHeard` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PersonHeardIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PersonHeardName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImage` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageCharacteristic` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PersonInImageCvTermCvId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageCvTermId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageCvTermName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageCvTermRefinedAbout` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageWDetails` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PlanningRef` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PlanningRefIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PlanningRefName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PlanningRefRole` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ProductInImage` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ProductInImageDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ProductInImageGTIN` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ProductInImageName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ProductInImageProductId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PublicationEvent` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PublicationEventDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `PublicationEventIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PublicationEventName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Rating` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `{}` |
+| `RatingRegion` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RatingRegionCity` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionCountryCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionCountryName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionGPSAltitude` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RatingRegionGPSAltitudeRef` | — unsupported | — unsupported (silent no-op) | `Above Sea Level` |
+| `RatingRegionGPSLatitude` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionGPSLongitude` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionLocationId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionLocationName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionProvinceState` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionSublocation` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionWorldRegion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingScaleMaxValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingScaleMinValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingSourceLink` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingValueLogoLink` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecDevice` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RecDeviceAttLensDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecDeviceManufacturer` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecDeviceModelName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecDeviceOwnersDeviceId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecDeviceSerialNumber` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegistryEntryRole` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegistryID` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RegistryItemID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegistryOrganisationID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ReleaseReady` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Season` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `SeasonIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SeasonName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SeasonNumber` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Series` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `SeriesIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SeriesName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ShownEvent` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ShownEventIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ShownEventName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Snapshot` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `SnapshotFormat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SnapshotHeightPixels` | — unsupported | — unsupported (silent no-op) | `3` |
+| `SnapshotImageRole` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SnapshotLink` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SnapshotLinkQualifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SnapshotUsedVideoFrame` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `SnapshotUsedVideoFrameTimeFormat` | — unsupported | — unsupported (silent no-op) | `23.976 fps` |
+| `SnapshotUsedVideoFrameTimeValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SnapshotUsedVideoFrameValue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `SnapshotWidthPixels` | — unsupported | — unsupported (silent no-op) | `3` |
+| `StorylineIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `StreamReady` | ✅ ok | — unsupported (silent no-op) | `False` |
+| `StylePeriod` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SupplyChainSource` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `SupplyChainSourceIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SupplyChainSourceName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TemporalCoverage` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `TemporalCoverageFrom` | — unsupported | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
+| `TemporalCoverageTo` | — unsupported | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
+| `Transcript` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `TranscriptLink` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `TranscriptLinkLink` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TranscriptLinkLinkQualifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VideoBitrate` | — unsupported | — unsupported (silent no-op) | `3` |
+| `VideoBitrateMode` | — unsupported | — unsupported (silent no-op) | `Fixed` |
+| `VideoDisplayAspectRatio` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `VideoEncodingProfile` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VideoShotType` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `VideoShotTypeIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VideoShotTypeName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VideoStreamsCount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `VisualColor` | — unsupported | — unsupported (silent no-op) | `Monochrome` |
+| `WorkflowTag` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `WorkflowTagCvId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `WorkflowTagCvTermId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `WorkflowTagCvTermName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `WorkflowTagCvTermRefinedAbout` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-lr
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `HierarchicalSubject` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PrivateRTKInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `WeightedFlatSubject` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-mediapro
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CatalogSets` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Event` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Location` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `People` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Status` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UserFields` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-microsoft
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CameraSerialNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreatorAppID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CreatorOpenWithUIOptions` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DateAcquired` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `FlashManufacturer` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `FlashModel` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ItemSubType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LastKeywordIPTC` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LastKeywordXMP` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensManufacturer` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LensModel` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingPercent` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-mwg-coll
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CollectionName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CollectionURI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Collections` | — unsupported | — unsupported (silent no-op) | `{}` |
+
+### XMP-mwg-kw
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `HierarchicalKeywords` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `HierarchicalKeywords1` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HierarchicalKeywords1Applied` | — unsupported | — unsupported (silent no-op) | `True` |
+| `HierarchicalKeywords1Children` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `HierarchicalKeywords2` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HierarchicalKeywords2Applied` | — unsupported | — unsupported (silent no-op) | `True` |
+| `HierarchicalKeywords2Children` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `HierarchicalKeywords3` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HierarchicalKeywords3Applied` | — unsupported | — unsupported (silent no-op) | `True` |
+| `HierarchicalKeywords3Children` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `HierarchicalKeywords4` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HierarchicalKeywords4Applied` | — unsupported | — unsupported (silent no-op) | `True` |
+| `HierarchicalKeywords4Children` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `HierarchicalKeywords5` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HierarchicalKeywords5Applied` | — unsupported | — unsupported (silent no-op) | `True` |
+| `HierarchicalKeywords5Children` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `HierarchicalKeywords6` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HierarchicalKeywords6Applied` | — unsupported | — unsupported (silent no-op) | `True` |
+| `KeywordInfo` | — unsupported | — unsupported (silent no-op) | `{}` |
+
+### XMP-mwg-rs
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `RegionAppliedToDimensions` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RegionAppliedToDimensionsH` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RegionAppliedToDimensionsUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegionAppliedToDimensionsW` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RegionArea` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RegionAreaD` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RegionAreaH` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RegionAreaUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegionAreaW` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RegionAreaX` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RegionAreaY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RegionBarCodeValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegionDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegionExtensions` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RegionFocusUsage` | — unsupported | — unsupported (silent no-op) | `Evaluated, Not Used` |
+| `RegionInfo` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RegionList` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RegionName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegionRotation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RegionSeeAlso` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegionType` | — unsupported | — unsupported (silent no-op) | `BarCode` |
+
+### XMP-panorama
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Transformation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VirtualFocalLength` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `VirtualImageXCenter` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `VirtualImageYCenter` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+
+### XMP-pdf
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Author` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Copyright` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreationDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `Creator` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Keywords` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Marked` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `ModDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `PDFVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Producer` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Subject` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Title` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Trapped` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `False` |
+
+### XMP-pdfx
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `SourceModified` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-photomech
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `ColorClass` | ✅ ok | — unsupported (silent no-op) | `0 (None)` |
+| `CountryCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreatorIdentity` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EditStatus` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PMVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Prefs` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Tagged` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `True` |
+| `TimeCreated` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-photoshop
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AuthorsPosition` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfiles` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CameraProfilesApertureValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesAuthor` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesAutoScale` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CameraProfilesCameraPrettyName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesCameraRawProfile` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CameraProfilesFocalLength` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesFocusDistance` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesLens` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesLensPrettyName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesMake` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesModel` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesPerspectiveModel` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CameraProfilesPerspectiveModelImageXCenter` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelImageYCenter` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelRadialDistortParam1` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelRadialDistortParam2` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelRadialDistortParam3` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelScaleFactor` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesPerspectiveModelVignetteModel` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CameraProfilesPerspectiveModelVignetteModelImageXCenter` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelVignetteModelImageYCenter` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelVignetteModelParam1` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelVignetteModelPiecewiseParam` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesProfileName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesSensorFormatFactor` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesUniqueCameraModel` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CaptionWriter` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Category` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `City` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ColorMode` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Bitmap` |
+| `Country` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Credit` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DateCreated` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `DocumentAncestors` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EmbeddedXMPDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Headline` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `History` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
+| `ICCProfileName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Instructions` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LabelColor` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LegacyIPTCDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SidecarForExtension` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Source` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `State` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SupplementalCategories` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `TextLayerName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TextLayerText` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TextLayers` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `TransmissionReference` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Urgency` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `0 (reserved)` |
+
+### XMP-plus
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AdultContentWarning` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Adult Content Warning Required` |
+| `CopyrightOwner` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `CopyrightOwnerID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CopyrightOwnerImageID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CopyrightOwnerName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CopyrightRegistrationNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CopyrightStatus` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Protected` |
+| `CreditLineRequired` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Credit Adjacent To Image` |
+| `Custom1` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Custom10` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Custom2` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Custom3` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Custom4` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Custom5` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Custom6` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Custom7` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Custom8` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Custom9` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DataMining` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Allowed` |
+| `EndUser` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `EndUserID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EndUserName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `FileNameAsDelivered` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `FirstPublicationDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ImageAlterationConstraints` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `No Colorization` |
+| `ImageCreator` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ImageCreatorID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageCreatorImageID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageCreatorName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageDuplicationConstraints` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Duplication Only as Necessary Under License` |
+| `ImageFileConstraints` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Maintain File Name` |
+| `ImageFileFormatAsDelivered` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Windows Bitmap (BMP)` |
+| `ImageFileSizeAsDelivered` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Greater than 50 MB` |
+| `ImageSupplier` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ImageSupplierID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageSupplierImageID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageSupplierName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageType` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Illustrated Image` |
+| `LicenseEndDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `LicenseID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicenseStartDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `LicenseTransactionDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `Licensee` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `LicenseeID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicenseeImageID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicenseeImageNotes` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicenseeName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicenseeProjectReference` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicenseeTransactionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Licensor` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `LicensorCity` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorCountry` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorEmail` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorExtendedAddress` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorImageID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicensorName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorNotes` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicensorPostalCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorRegion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorStreetAddress` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorTelephone1` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorTelephone2` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorTelephoneType1` | — unsupported | — unsupported (silent no-op) | `Cell` |
+| `LicensorTelephoneType2` | — unsupported | — unsupported (silent no-op) | `Cell` |
+| `LicensorTransactionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicensorURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MediaConstraints` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `MediaSummaryCode` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `1 Usage Item:` |
+| `MinorModelAgeDisclosure` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Age 15` |
+| `ModelReleaseID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ModelReleaseStatus` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Limited or Incomplete Model Releases` |
+| `OtherConditions` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OtherConstraints` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OtherImageInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OtherLicenseDocuments` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OtherLicenseInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OtherLicenseRequirements` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PLUSVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ProductOrServiceConstraints` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PropertyReleaseID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PropertyReleaseStatus` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Limited or Incomplete Property Releases` |
+| `RegionConstraints` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Reuse` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Not Applicable` |
+| `TermsAndConditionsText` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `TermsAndConditionsURL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-pmi
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Color` | ✅ ok | — unsupported (silent no-op) | `BW` |
+| `ContactInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DisplayName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DistributorProductID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EventAlias` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EventEnd` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EventStart` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EventSubtype` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EventType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Field` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Framing` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Location` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Make` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Manufacturer` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Model` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ModelYear` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ObjectDescription` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ObjectSubtype` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ObjectType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Orientation` | ✅ ok | — unsupported (silent no-op) | `Horizontal` |
+| `PositionDescriptor` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ProductID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ProductIDType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Season` | ✅ ok | — unsupported (silent no-op) | `Fall` |
+| `SequenceName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SequenceNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SequenceTotalNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Setting` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ShootID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SlideshowName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SlideshowNumber` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SlideshowTotalNumber` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Viewpoint` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VisualTechnique` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-prism
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AcademicField` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AggregateIssueNumber` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `AggregationType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AlternateTitle` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `AlternateTitleA-lang` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AlternateTitleA-platform` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AlternateTitleText` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `BlogTitle` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `BlogURL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `BookEdition` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ByteCount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Channel` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ChannelA-lang` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ChannelChannel` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ChannelSubchannel1` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ChannelSubchannel2` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ChannelSubchannel3` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ChannelSubchannel4` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ComplianceProfile` | ✅ ok | — unsupported (silent no-op) | `Three` |
+| `ContentType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CopyrightYear` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CorporateEntity` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CoverDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `CoverDisplayDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `CreationDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `DOI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DateRecieved` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `Device` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Distributor` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EIssn` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Edition` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EndingPage` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Event` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Genre` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `HasAlternative` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `HasCorrection` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `HasCorrectionA-lang` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HasCorrectionA-platform` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HasCorrectionText` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HasTranslation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ISBN` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ISSN` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Industry` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IsAlternativeOf` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IsCorrectionOf` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IsTranslationOf` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IssueIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IssueName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IssueTeaser` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IssueType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Keyword` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `KillDate` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `KillDateA-platform` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `KillDateDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `Link` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Location` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ModificationDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `NationalCatalogNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Number` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Object` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OffSaleDate` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `OffSaleDateA-platform` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `OffSaleDateDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `OnSaleDate` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `OnSaleDateA-platform` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `OnSaleDateDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `OnSaleDay` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `OnSaleDayA-platform` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OnSaleDayDay` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Organization` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OriginPlatform` | ✅ ok | — unsupported (silent no-op) | `Broadcast` |
+| `PageCount` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PageProgressionDirection` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Left to Right` |
+| `PageRange` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Person` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Platform` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ProductCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Profession` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PublicationDate` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PublicationDateA-platform` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `PublicationDateDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `PublicationDisplayDate` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PublicationDisplayDateA-platform` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `PublicationDisplayDateDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `PublicationName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PublishingFrequency` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Rating` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
+| `SamplePageRange` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Section` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SellingAgency` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SeriesNumber` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SeriesTitle` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Sport` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `StartingPage` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Subsection1` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Subsection2` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Subsection3` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Subsection4` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Subtitle` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SupplementDisplayID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SupplementStartingPage` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SupplementTitle` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Teaser` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Ticker` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `TimePeriod` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `URL` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `URLA-platform` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `URLUrl` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `UspsNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VersionIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Volume` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `WordCount` | ✅ ok | — unsupported (silent no-op) | `3` |
+
+### XMP-prl
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Geography` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Industry` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Usage` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-prm
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CookingEquipment` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CookingMethod` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Course` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Cuisine` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DietaryNeeds` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DishType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Duration` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientExclusion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `MainIngredient` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Meal` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RecipeEndingPage` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RecipePageRange` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RecipeSource` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RecipeStartingPage` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RecipeTitle` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ServingSize` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SkillLevel` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SpecialOccasion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Yield` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-pur
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AdultContentWarning` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Agreement` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Copyright` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreditLine` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EmbargoDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ExclusivityEndDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ExpirationDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ImageSizeRestriction` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OptionEndDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `Permissions` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Restrictions` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ReuseProhibited` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `RightsAgent` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RightsOwner` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-rdf
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `About` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-swf
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `BackgroundAlpha` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ForwardLock` | — unsupported | — unsupported (silent no-op) | `True` |
+| `MaxStorage` | — unsupported | — unsupported (silent no-op) | `3` |
+| `Type` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-tiff
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Artist` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `BitsPerSample` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Compression` | ✅ ok | — unsupported (silent no-op) | `Uncompressed` |
+| `Copyright` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DateTime` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ImageDescription` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageHeight` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ImageWidth` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Make` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Model` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `NativeDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Orientation` | ✅ ok | — unsupported (silent no-op) | `Horizontal (normal)` |
+| `PhotometricInterpretation` | ✅ ok | — unsupported (silent no-op) | `WhiteIsZero` |
+| `PlanarConfiguration` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Chunky` |
+| `PrimaryChromaticities` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ReferenceBlackWhite` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `None` |
+| `SamplesPerPixel` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Software` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `TransferFunction` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `WhitePoint` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `XResolution` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `YCbCrCoefficients` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `YCbCrPositioning` | ✅ ok | — unsupported (silent no-op) | `Centered` |
+| `YCbCrSubSampling` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `YCbCr4:4:4 (1 1)` |
+| `YResolution` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+
+### XMP-x
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `XMPToolkit` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-xmp
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Advisory` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Author` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `BaseURL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreateDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `CreatorTool` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Description` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Format` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Identifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Keywords` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Label` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `MetadataDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ModifyDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `Nickname` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PageImage` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PageImageFormat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PageImageHeight` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PageImagePageNumber` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PageImageWidth` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PageInfo` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `Rating` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `RatingPercent` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ThumbnailFormat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ThumbnailHeight` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ThumbnailImage` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ThumbnailWidth` | — unsupported | — unsupported (silent no-op) | `3` |
+| `Thumbnails` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `{}` |
+| `Title` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-xmpBJ
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `JobRef` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `JobRefId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `JobRefName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `JobRefUrl` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-xmpDM
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `AbsPeakAudioFilePath` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Album` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AltTapeName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AltTimecode` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `AltTimecodeTimeFormat` | — unsupported | — unsupported (silent no-op) | `23.976 fps` |
+| `AltTimecodeTimeValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AltTimecodeValue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `Artist` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AudioChannelType` | ✅ ok | — unsupported (silent no-op) | `5.1` |
+| `AudioCompressor` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AudioModDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `AudioSampleRate` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `AudioSampleType` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `16-bit integer` |
+| `BeatSpliceParams` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `BeatSpliceParamsRiseInDecibel` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `BeatSpliceParamsRiseInTimeDuration` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `BeatSpliceParamsRiseInTimeDurationScale` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `BeatSpliceParamsRiseInTimeDurationValue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `BeatSpliceParamsUseFileBeatsMarker` | — unsupported | — unsupported (silent no-op) | `True` |
+| `CameraAngle` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraLabel` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraModel` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraMove` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Client` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Composer` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ContributedMedia` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ContributedMediaDuration` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ContributedMediaDurationScale` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ContributedMediaDurationValue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ContributedMediaManaged` | — unsupported | — unsupported (silent no-op) | `True` |
+| `ContributedMediaPath` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ContributedMediaStartTime` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ContributedMediaStartTimeScale` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ContributedMediaStartTimeValue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ContributedMediaTrack` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ContributedMediaWebStatement` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Copyright` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DMComment` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Director` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DirectorPhotography` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DiscNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Duration` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `DurationScale` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `DurationValue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `Engineer` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `FileDataRate` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `Genre` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Good` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Instrument` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IntroTime` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `IntroTimeScale` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `IntroTimeValue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `Key` | ✅ ok | — unsupported (silent no-op) | `A` |
+| `LogComment` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Loop` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Lyrics` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Markers` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MarkersComment` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MarkersCuePointParams` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MarkersCuePointParamsKey` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MarkersCuePointParamsValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MarkersCuePointType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MarkersDuration` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MarkersLocation` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MarkersName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MarkersProbability` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MarkersSpeaker` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MarkersStartTime` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MarkersTarget` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MarkersType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MetadataModDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `NumberOfBeats` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `OutCue` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `OutCueScale` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `OutCueValue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `PartOfCompilation` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Pick` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ProjectName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ProjectRef` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ProjectRefPath` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ProjectRefType` | — unsupported | — unsupported (silent no-op) | `Audio` |
+| `PullDown` | ✅ ok | — unsupported (silent no-op) | `SSWWW` |
+| `RelativePeakAudioFilePath` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RelativeTimestamp` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RelativeTimestampScale` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RelativeTimestampValue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ReleaseDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ResampleParams` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ResampleParamsQuality` | — unsupported | — unsupported (silent no-op) | `High` |
+| `ScaleType` | ✅ ok | — unsupported (silent no-op) | `Both` |
+| `Scene` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ShotDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ShotDay` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ShotLocation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ShotName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ShotNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ShotSize` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SpeakerPlacement` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `StartTimeSampleSize` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `StartTimeScale` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `StartTimecode` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `StartTimecodeTimeFormat` | — unsupported | — unsupported (silent no-op) | `23.976 fps` |
+| `StartTimecodeTimeValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `StartTimecodeValue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `StretchMode` | ✅ ok | — unsupported (silent no-op) | `Beat Splice` |
+| `TakeNumber` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `TapeName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Tempo` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `TimeScaleParams` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `TimeScaleParamsFrameOverlappingPercentage` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `TimeScaleParamsFrameSize` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `TimeScaleParamsQuality` | — unsupported | — unsupported (silent no-op) | `High` |
+| `TimeSignature` | ✅ ok | — unsupported (silent no-op) | `12/8` |
+| `TrackNumber` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Tracks` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `TracksFrameRate` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TracksMarkers` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `TracksMarkersComment` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TracksMarkersCuePointParams` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `TracksMarkersCuePointParamsKey` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TracksMarkersCuePointParamsValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TracksMarkersCuePointType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TracksMarkersDuration` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TracksMarkersLocation` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TracksMarkersName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TracksMarkersProbability` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `TracksMarkersSpeaker` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TracksMarkersStartTime` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TracksMarkersTarget` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TracksMarkersType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TracksTrackName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TracksTrackType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VideoAlphaMode` | ✅ ok | — unsupported (silent no-op) | `None` |
+| `VideoAlphaPremultipleColor` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `VideoAlphaPremultipleColorA` | — unsupported | — unsupported (silent no-op) | `3` |
+| `VideoAlphaPremultipleColorB` | — unsupported | — unsupported (silent no-op) | `3` |
+| `VideoAlphaPremultipleColorBlack` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `VideoAlphaPremultipleColorBlue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `VideoAlphaPremultipleColorCyan` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `VideoAlphaPremultipleColorGray` | — unsupported | — unsupported (silent no-op) | `3` |
+| `VideoAlphaPremultipleColorGreen` | — unsupported | — unsupported (silent no-op) | `3` |
+| `VideoAlphaPremultipleColorL` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `VideoAlphaPremultipleColorMagenta` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `VideoAlphaPremultipleColorMode` | — unsupported | — unsupported (silent no-op) | `CMYK` |
+| `VideoAlphaPremultipleColorRed` | — unsupported | — unsupported (silent no-op) | `3` |
+| `VideoAlphaPremultipleColorSwatchName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VideoAlphaPremultipleColorTint` | — unsupported | — unsupported (silent no-op) | `3` |
+| `VideoAlphaPremultipleColorType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VideoAlphaPremultipleColorYellow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `VideoAlphaUnityIsTransparent` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `VideoColorSpace` | ✅ ok | — unsupported (silent no-op) | `CCIR-601` |
+| `VideoCompressor` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VideoFieldOrder` | ✅ ok | — unsupported (silent no-op) | `Lower` |
+| `VideoFrameRate` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `VideoFrameSize` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `VideoFrameSizeH` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `VideoFrameSizeUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VideoFrameSizeW` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `VideoModDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `VideoPixelAspectRatio` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `VideoPixelDepth` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `16-bit integer` |
+
+### XMP-xmpDSA
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `ApplyAutomatically` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `CorrectionAlreadyApplied` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `FocalLength35mm` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `NormalizedCropCorners` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `PitchAngle` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `RollAngle` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ScalingFactorHeight` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `TargetAspectRatio` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ValidCropCorners` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Version` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-xmpMM
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `DerivedFrom` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `{}` |
+| `DerivedFromAlternatePaths` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromFilePath` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromFromPart` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromInstanceID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromLastModifyDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `DerivedFromLastURL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromLinkCategory` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromLinkForm` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromManageTo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromManageUI` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromManager` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromManagerVariant` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromMaskMarkers` | ✅ ok | — unsupported (silent no-op) | `All` |
+| `DerivedFromOriginalDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromPartMapping` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromPlacedResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromPlacedXResolution` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromPlacedYResolution` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromRenditionClass` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromRenditionParams` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromToPart` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DerivedFromVersionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `History` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `{}` |
+| `HistoryAction` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HistoryChanged` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HistoryInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HistoryParameters` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HistorySoftwareAgent` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `HistoryWhen` | — unsupported | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
+| `Ingredients` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `IngredientsAlternatePaths` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsFilePath` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsFromPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsLastModifyDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `IngredientsLastURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsLinkCategory` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsLinkForm` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsManageTo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsManageUI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsManager` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsManagerVariant` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsMaskMarkers` | — unsupported | — unsupported (silent no-op) | `All` |
+| `IngredientsOriginalDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsPartMapping` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsPlacedResolutionUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsPlacedXResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsPlacedYResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsRenditionClass` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsRenditionParams` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsToPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsVersionID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `InstanceID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LastURL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManageTo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManageUI` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFrom` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ManagedFromAlternatePaths` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromFilePath` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromFromPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromLastModifyDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ManagedFromLastURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromLinkCategory` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromLinkForm` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromManageTo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromManageUI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromManager` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromManagerVariant` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromMaskMarkers` | — unsupported | — unsupported (silent no-op) | `All` |
+| `ManagedFromOriginalDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromPartMapping` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromPlacedResolutionUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromPlacedXResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromPlacedYResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromRenditionClass` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromRenditionParams` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromToPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromVersionID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Manager` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagerVariant` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Manifest` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ManifestLinkForm` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestPlacedResolutionUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestPlacedXResolution` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ManifestPlacedYResolution` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ManifestReference` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `ManifestReferenceAlternatePaths` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceFilePath` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceFromPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceLastModifyDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ManifestReferenceLastURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceLinkCategory` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceLinkForm` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceManageTo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceManageUI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceManager` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceManagerVariant` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceMaskMarkers` | — unsupported | — unsupported (silent no-op) | `All` |
+| `ManifestReferenceOriginalDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferencePartMapping` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferencePlacedResolutionUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferencePlacedXResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferencePlacedYResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceRenditionClass` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceRenditionParams` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceToPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceVersionID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OriginalDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Pantry` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `PantryInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PreservedFileName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionClass` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOf` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `RenditionOfAlternatePaths` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfFilePath` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfFromPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfLastModifyDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `RenditionOfLastURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfLinkCategory` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfLinkForm` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfManageTo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfManageUI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfManager` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfManagerVariant` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfMaskMarkers` | — unsupported | — unsupported (silent no-op) | `All` |
+| `RenditionOfOriginalDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfPartMapping` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfPlacedResolutionUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfPlacedXResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfPlacedYResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfRenditionClass` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfRenditionParams` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfToPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfVersionID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionParams` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SaveID` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `Subject` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VersionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Versions` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `VersionsComments` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VersionsEvent` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `VersionsEventAction` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VersionsEventChanged` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VersionsEventInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VersionsEventParameters` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VersionsEventSoftwareAgent` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VersionsEventWhen` | — unsupported | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
+| `VersionsModifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VersionsModifyDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `VersionsVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-xmpNote
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `HasExtendedXMP` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-xmpPLUS
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `CreditLineReq` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `ReuseAllowed` | ✅ ok | — unsupported (silent no-op) | `True` |
+
+### XMP-xmpRights
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `Certificate` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Marked` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Owner` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `UsageTerms` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `WebStatement` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+
+### XMP-xmpTPg
+
+| ExifTool tag | Read | Write | Example |
+|---|---|---|---|
+| `ChildFontFiles` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ColorantA` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ColorantB` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ColorantBlack` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ColorantBlue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ColorantCyan` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ColorantGray` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ColorantGreen` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ColorantL` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ColorantMagenta` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ColorantMode` | — unsupported | — unsupported (silent no-op) | `CMYK` |
+| `ColorantRed` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ColorantSwatchName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ColorantTint` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ColorantType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ColorantYellow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `Colorants` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `FontComposite` | — unsupported | — unsupported (silent no-op) | `True` |
+| `FontFace` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `FontFamily` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `FontFileName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `FontName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `FontType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `FontVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Fonts` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `HasVisibleOverprint` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `HasVisibleTransparency` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `MaxPageSize` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `MaxPageSizeH` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `MaxPageSizeUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MaxPageSizeW` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `NPages` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `PlateNames` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SwatchColorantA` | — unsupported | — unsupported (silent no-op) | `3` |
+| `SwatchColorantB` | — unsupported | — unsupported (silent no-op) | `3` |
+| `SwatchColorantBlack` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `SwatchColorantBlue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `SwatchColorantCyan` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `SwatchColorantGray` | — unsupported | — unsupported (silent no-op) | `3` |
+| `SwatchColorantGreen` | — unsupported | — unsupported (silent no-op) | `3` |
+| `SwatchColorantL` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `SwatchColorantMagenta` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `SwatchColorantMode` | — unsupported | — unsupported (silent no-op) | `CMYK` |
+| `SwatchColorantRed` | — unsupported | — unsupported (silent no-op) | `3` |
+| `SwatchColorantSwatchName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SwatchColorantTint` | — unsupported | — unsupported (silent no-op) | `3` |
+| `SwatchColorantType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SwatchColorantYellow` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `SwatchGroupName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SwatchGroupType` | — unsupported | — unsupported (silent no-op) | `3` |
+| `SwatchGroups` | — unsupported | — unsupported (silent no-op) | `{}` |
+| `SwatchGroupsColorants` | — unsupported | — unsupported (silent no-op) | `{}` |
+
+### Not writable in ExifTool (read-only universe, untested)
+
+These exist in JPEG-relevant groups but ExifTool itself cannot write them, so no synthetic test file could be produced.
+
+- **ExifIFD** (239): `AdventRevision`, `AdventScale`, `AffineTransformMat`, `AliasLayerMetadata`, `AlphaByteCount`, `AlphaDataDiscard`, `AlphaOffset`, `Annotations`, `BackgroundColorIndicator`, `BackgroundColorValue`, `BadFaxLines`, `BatteryLevel`, `BitsPerExtendedRunLength`, `BitsPerRunLength`, `CIP3DataFile`, `CIP3Sheet`, `CIP3Side`, `CMYKEquivalent`, `CR2CFAPattern`, `ChrominanceTable`, `CleanFaxData`, `ClipPath`, `CodingMethods`, `ColorCharacterization`, `ColorMap`, `ColorResponseUnit`, `ColorSequence`, `ColorTable`, `ColorTransferFunction`, `ConsecutiveBadFaxLines`, `DataType`, `Decode`, `DefaultImageColor`, `DeviceSettingDescription`, `DotRange`, `ExpandFilm`, `ExpandFilterLens`, `ExpandFlashLamp`, `ExpandLens`, `ExpandScanner` … +199 more
+- **ICC-chrm** (6): `ChromaticityChannel1`, `ChromaticityChannel2`, `ChromaticityChannel3`, `ChromaticityChannel4`, `ChromaticityChannels`, `ChromaticityColorant`
+- **ICC-cicp** (4): `ColorPrimaries`, `MatrixCoefficients`, `TransferCharacteristics`, `VideoFullRangeFlag`
+- **ICC-clrt** (7): `Colorant1Coordinates`, `Colorant1Name`, `Colorant2Coordinates`, `Colorant2Name`, `Colorant3Coordinates`, `Colorant3Name`, `ColorantCount`
+- **ICC-header** (16): `CMMFlags`, `ColorSpaceData`, `ConnectionSpaceIlluminant`, `DeviceAttributes`, `DeviceManufacturer`, `DeviceModel`, `PrimaryPlatform`, `ProfileCMMType`, `ProfileClass`, `ProfileConnectionSpace`, `ProfileCreator`, `ProfileDateTime`, `ProfileFileSignature`, `ProfileID`, `ProfileVersion`, `RenderingIntent`
+- **ICC-meas** (5): `MeasurementBacking`, `MeasurementFlare`, `MeasurementGeometry`, `MeasurementIlluminant`, `MeasurementObserver`
+- **ICC-meta** (4): `CreatorApp`, `ManufacturerName`, `MediaColor`, `MediaWeight`
+- **ICC-view** (3): `ViewingCondIlluminant`, `ViewingCondIlluminantType`, `ViewingCondSurround`
+- **ICC_Profile** (150): `AToB0`, `AToB1`, `AToB2`, `AToB3`, `AToM0`, `BRDFAToB0`, `BRDFAToB1`, `BRDFAToB2`, `BRDFAToB3`, `BRDFBToA0`, `BRDFBToA1`, `BRDFBToA2`, `BRDFBToA3`, `BRDFBToD0`, `BRDFBToD1`, `BRDFBToD2`, `BRDFBToD3`, `BRDFColorimetricParam0`, `BRDFColorimetricParam1`, `BRDFColorimetricParam2`, `BRDFColorimetricParam3`, `BRDFDToB0`, `BRDFDToB1`, `BRDFDToB2`, `BRDFDToB3`, `BRDFMToB0`, `BRDFMToB1`, `BRDFMToB2`, `BRDFMToB3`, `BRDFMToS0`, `BRDFMToS1`, `BRDFMToS2`, `BRDFMToS3`, `BRDFSpectralParam0`, `BRDFSpectralParam1`, `BRDFSpectralParam2`, `BRDFSpectralParam3`, `BToA0`, `BToA1`, `BToA2` … +110 more
+- **IFD0** (2): `A100DataOffset`, `SRawType`
+- **IPTC** (11): `ColorCalibrationMatrix`, `ColorPalette`, `ConfirmedObjectSize`, `EndPoints`, `ICC_Profile`, `LookupTable`, `MaxSubfileSize`, `MaximumObjectSize`, `ObjectSizeAnnounced`, `SizeMode`, `SubFile`
+- **JFIF** (4): `JFIFVersion`, `ThumbnailHeight`, `ThumbnailTIFF`, `ThumbnailWidth`
+- **JFXX** (2): `ThumbnailImage`, `ThumbnailTIFF`
+- **Photoshop** (99): `AlphaChannelsNames`, `AlphaIdentifiers`, `AlternateDuotoneColors`, `AlternateSpotColors`, `AutoSaveFilePath`, `AutoSaveFormat`, `BW_HalftoningInfo`, `BW_TransferFunc`, `BackgroundColor`, `BitDepth`, `BorderInformation`, `ChannelColorData`, `ChannelColorIndicates`, `ChannelColorSpace`, `ChannelOpacity`, `ClippingPathName`, `ColorHalftoningInfo`, `ColorMode`, `ColorSamplersResource`, `ColorSamplersResource2`, `ColorTransferFuncs`, `Compression`, `CountInfo`, `DisplayInfo`, `DuotoneHalftoningInfo`, `DuotoneImageInfo`, `DuotoneTransferFuncs`, `EPSOptions`, `EffectiveBW`, `EffectsVisible`, `ExifInfo2`, `GridGuidesInfo`, `HDRToningInfo`, `HasRealMergedData`, `ICC_Untagged`, `IDsBaseValue`, `ImageHeight`, `ImageReadyDataSets`, `ImageReadyVariables`, `ImageWidth` … +59 more
+- **SubIFD** (6): `CFALayout`, `CFAPlaneColor`, `MaskSubArea`, `SampleFormat`, `SemanticInstanceID`, `SemanticName`
+- **XMP-PixelLive** (6): `Author`, `Comments`, `Copyright`, `Date`, `Genre`, `Title`
+- **XMP-ast** (12): `About`, `GPSAltitude`, `GPSAltitudeRef`, `GPSImgDirection`, `GPSImgDirectionRef`, `GPSLatitude`, `GPSLatitudeRef`, `GPSLongitude`, `GPSLongitudeRef`, `GPSMapDatum`, `GPSVersionID`, `Version`
+- **XMP-nine** (5): `About`, `Label`, `Rating`, `Trim`, `Version`
+- **XMP-sdc** (4): `About`, `AppName`, `AppVersion`, `Version`
