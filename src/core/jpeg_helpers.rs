@@ -342,6 +342,17 @@ pub fn process_icc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     for segment in &icc_segments {
         if let Err(e) = assembler.add_chunk(segment.data) {
             eprintln!("Warning: Invalid ICC profile chunk: {}", e);
+            // ExifTool warns and keeps the FIRST profile when duplicate
+            // "chunk 1 of 1" segments collide (the previous oxidex release
+            // kept the last). Approximate that by falling back to the
+            // first segment whose header marks it chunk 1 of 1, instead of
+            // dropping every ICC tag.
+            if let Some(seg) = icc_segments
+                .iter()
+                .find(|s| s.data[12] == 1 && s.data[13] == 1)
+            {
+                insert_icc_tags(&seg.data[14..], metadata);
+            }
             return;
         }
     }
@@ -407,7 +418,7 @@ pub fn process_sof_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 ///
 /// APP6 segments (marker 0xFFE6) are dispatched on the same identifier
 /// conditions ExifTool uses: GoPro GPMF ("GoPro\0"), HP/Toshiba TDHD
-/// ("TDHD\x01\0\0\0"), and NITF ("NTIF\0"). GoPro tags are emitted under the
+/// ("TDHD\x01\0\0\0"), and NITF ("NITF\0"). GoPro tags are emitted under the
 /// GoPro: family with ExifTool tag names (e.g. GoPro:Model,
 /// GoPro:CameraSerialNumber). Unrecognized APP6 payloads extract nothing.
 ///
@@ -793,6 +804,10 @@ pub fn process_dqt_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 pub fn process_spiff_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     const APP8_MARKER: u16 = 0xFFE8;
     for segment in segments.iter().filter(|s| s.marker == APP8_MARKER) {
+        // The 32-byte/"SPIFF\0" gate is intentionally duplicated in
+        // parse_spiff_segment as defense-in-depth; its own length/identifier
+        // error paths are therefore unreachable from production callers by
+        // design, not dead code.
         if segment.data.len() == 32 && segment.data.starts_with(b"SPIFF\0") {
             let _ = crate::parsers::jpeg::app_parsers::parse_spiff_segment(segment.data, metadata);
         }

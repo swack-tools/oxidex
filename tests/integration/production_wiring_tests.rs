@@ -1909,6 +1909,35 @@ fn jpeg_multichunk_icc_profile_reassembles() {
 }
 
 #[test]
+fn jpeg_duplicate_single_chunk_icc_profiles_keeps_first() {
+    // Two APP2 segments each marked "chunk 1 of 1" collide in the chunk
+    // assembler (duplicate chunk 1). ExifTool warns and keeps the first
+    // profile; approximate that instead of dropping every ICC tag.
+    let profile1 = icc_header_128();
+    let mut profile2 = icc_header_128();
+    profile2[16..20].copy_from_slice(b"GRAY"); // differ from profile1's "RGB "
+
+    let jpeg_dup = jpeg_with_segments(&[
+        jpeg_segment(0xE2, &icc_chunk(1, 1, &profile1)),
+        jpeg_segment(0xE2, &icc_chunk(1, 1, &profile2)),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let jpeg_control = jpeg_with_segments(&[
+        jpeg_segment(0xE2, &icc_chunk(1, 1, &profile1)),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+
+    let dup = read_temp_file(&jpeg_dup, ".jpg");
+    let control = read_temp_file(&jpeg_control, ".jpg");
+    let key = "ICC_Profile:ColorSpaceData";
+    assert!(
+        dup.get(key).is_some(),
+        "duplicate single-chunk ICC profiles produced no {key}"
+    );
+    assert_eq!(dup.get(key), control.get(key));
+}
+
+#[test]
 fn jpeg_incomplete_multichunk_icc_profile_degrades_gracefully() {
     let profile = icc_header_128();
     let (part1, _part2) = profile.split_at(64);

@@ -51,7 +51,7 @@ use crate::io::EndianReader;
 /// identifier, using the same conditions as ExifTool's JPEG.pm APP6 table:
 /// - GoPro GPMF data - starts with "GoPro\0"
 /// - TDHD data (HP/Toshiba) - starts with "TDHD\x01\0\0\0"
-/// - NITF data - starts with "NTIF\0"
+/// - NITF data - starts with "NITF\0"
 /// - Other formats extract nothing (matching ExifTool without -u)
 ///
 /// # Arguments
@@ -87,18 +87,22 @@ pub fn parse_app6(data: &[u8]) -> Result<MetadataMap> {
         ));
     }
 
-    // Dispatch on the same identifier conditions ExifTool uses (JPEG.pm APP6):
-    // GoPro: /^GoPro\0/, HP TDHD: /^TDHD\x01\0\0\0/, NITF: /^NTIF\0/.
+    // Dispatch on the same identifier conditions ExifTool's actual READ path
+    // uses (ExifTool.pm's ProcessJPEG APP6 handling, not JPEG.pm's table
+    // Condition which is never consulted for reads):
+    // GoPro: /^GoPro\0/, HP TDHD: /^TDHD\x01\0\0\0/ with length > 12, NITF: /^NITF\0/.
 
     if data.starts_with(b"GoPro\0") {
         return parse_gpmf(&data[6..]);
     }
 
-    if data.starts_with(b"TDHD\x01\0\0\0") {
+    // ExifTool also requires segment length > 12 for TDHD (ExifTool.pm:8146);
+    // an 8-byte bare identifier extracts nothing.
+    if data.starts_with(b"TDHD\x01\0\0\0") && data.len() > 12 {
         return parse_tdhd(data);
     }
 
-    if data.starts_with(b"NTIF\0") {
+    if data.starts_with(b"NITF\0") {
         return parse_nitf(data);
     }
 
@@ -263,16 +267,22 @@ fn gopro_print_conv(fourcc: &str, value: TagValue) -> TagValue {
 /// - CAMD: Camera metadata
 fn parse_gpmf(data: &[u8]) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
-    parse_gpmf_records(data, &mut metadata);
+    parse_gpmf_records(data, &mut metadata, 0);
     Ok(metadata)
 }
+
+/// Maximum nesting depth for GPMF container records (format 0). Guards
+/// against pathological/malicious streams driving unbounded recursion;
+/// containers nested beyond this depth are skipped rather than recursed
+/// into, but sibling records at the current level continue to be walked.
+const MAX_GPMF_DEPTH: u8 = 16;
 
 /// Walks GPMF TLV records, inserting known tags into the metadata map.
 ///
 /// Mirrors ExifTool's ProcessGoPro: stops at the null tag ("\0\0\0\0") or at
 /// a FourCC containing characters outside [-_a-zA-Z0-9 ]; skips FourCCs
 /// without a known tag name; recurses into container records (format 0).
-fn parse_gpmf_records(data: &[u8], metadata: &mut MetadataMap) {
+fn parse_gpmf_records(data: &[u8], metadata: &mut MetadataMap, depth: u8) {
     let mut offset = 0;
 
     while offset + 8 <= data.len() {
@@ -304,9 +314,13 @@ fn parse_gpmf_records(data: &[u8], metadata: &mut MetadataMap) {
 
         let fourcc = std::str::from_utf8(fourcc_bytes).unwrap_or_default();
 
-        // Containers (format 0, e.g. DEVC/STRM) nest further GPMF records
+        // Containers (format 0, e.g. DEVC/STRM) nest further GPMF records.
+        // Beyond MAX_GPMF_DEPTH, skip recursing into the container but keep
+        // walking its siblings at the current level.
         if format == 0 {
-            parse_gpmf_records(value_data, metadata);
+            if depth < MAX_GPMF_DEPTH {
+                parse_gpmf_records(value_data, metadata, depth + 1);
+            }
             continue;
         }
 
@@ -431,7 +445,7 @@ fn parse_tdhd(data: &[u8]) -> Result<MetadataMap> {
 fn parse_nitf(data: &[u8]) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
 
-    // Caller has verified the "NTIF\0" identifier (5 bytes).
+    // Caller has verified the "NITF\0" identifier (5 bytes).
     // Detailed field parsing (ExifTool JPEG.pm %JPEG::NITF) is not yet
     // ported; expose the raw payload for now.
     metadata.insert(
@@ -549,32 +563,72 @@ mod tests {
         assert!(metadata.get("GoPro:CameraSerialNumber").is_none());
     }
 
-    #[test]
-    fn test_parse_app6_nitf_requires_ntif_identifier() {
-        // Real NITF APP6 segments start with "NTIF\0" (ExifTool JPEG.pm)
-        let mut ntif = b"NTIF\0".to_vec();
-        ntif.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
-        let metadata = parse_app6(&ntif).unwrap();
-        assert!(metadata.contains_key("APP6:NITFData"));
+    /// Wraps `inner` in `levels` nested DEVC container records (format 0).
+    fn nest_gpmf(levels: usize, inner: Vec<u8>) -> Vec<u8> {
+        let mut cur = inner;
+        for _ in 0..levels {
+            cur = gpmf_record(b"DEVC", 0, 1, cur.len() as u16, &cur);
+        }
+        cur
+    }
 
-        // The misspelled "NITF" prefix must NOT match
+    #[test]
+    fn test_parse_app6_gpmf_recursion_depth_capped() {
+        let rate = gpmf_record(b"RATE", b'c', 1, 6, b"4_1SEC");
+
+        // RATE nested 40 DEVC containers deep, well beyond the recursion
+        // cap (16) — parsing must complete (no stack overflow) and the
+        // innermost record must NOT be extracted since it's unreachable.
+        let deep = nest_gpmf(40, rate.clone());
+        let deep_payload = gopro_payload(&[deep]);
+        let deep_metadata = parse_app6(&deep_payload).unwrap();
+        assert_eq!(deep_metadata.get_string("GoPro:Rate"), None);
+
+        // Shallow control: RATE nested only 2 levels deep, well within the
+        // cap — must still be extracted normally.
+        let shallow = nest_gpmf(2, rate);
+        let shallow_payload = gopro_payload(&[shallow]);
+        let shallow_metadata = parse_app6(&shallow_payload).unwrap();
+        assert_eq!(shallow_metadata.get_string("GoPro:Rate"), Some("4_1SEC"));
+    }
+
+    #[test]
+    fn test_parse_app6_nitf_requires_nitf_identifier() {
+        // ExifTool's actual READ dispatch (ExifTool.pm:8140) matches
+        // `/^NITF\0/` with DirStart=5; JPEG.pm's table Condition ("NTIF\0")
+        // never governs reads. Verified empirically against exiftool 13.55:
+        // a "NITF\0" APP6 payload yields NITF:* tags; a "NTIF\0" payload
+        // yields only an "Unknown APP6 'NTIF' segment" warning, no tags.
         let mut nitf = b"NITF\0".to_vec();
         nitf.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
         let metadata = parse_app6(&nitf).unwrap();
+        assert!(metadata.contains_key("APP6:NITFData"));
+
+        // "NTIF\0" must NOT match the real dispatch condition
+        let mut ntif = b"NTIF\0".to_vec();
+        ntif.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
+        let metadata = parse_app6(&ntif).unwrap();
         assert!(metadata.is_empty());
     }
 
     #[test]
-    fn test_parse_app6_tdhd_requires_version_bytes() {
-        // ExifTool's gate is "TDHD\x01\0\0\0"
-        let mut tdhd = b"TDHD\x01\0\0\0".to_vec();
-        tdhd.extend_from_slice(&[0xAA, 0xBB]);
+    fn test_parse_app6_tdhd_requires_version_bytes_and_length_over_12() {
+        // ExifTool's gate is "TDHD\x01\0\0\0" AND segment length > 12
+        // (ExifTool.pm:8146: `/^TDHD\x01\0\0\0/ and $length > 12`).
+        let mut tdhd = b"TDHD\x01\0\0\0".to_vec(); // 8-byte identifier
+        tdhd.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE]); // 13 bytes total, > 12
         let metadata = parse_app6(&tdhd).unwrap();
         assert!(metadata.contains_key("APP6:TDHDData"));
 
         // Bare "TDHD" without the version bytes must NOT match
         let bare = b"TDHDxxxx".to_vec();
         let metadata = parse_app6(&bare).unwrap();
+        assert!(metadata.is_empty());
+
+        // Exactly 12 bytes (identifier + 4 more) fails the "length > 12" gate
+        let mut exactly_12 = b"TDHD\x01\0\0\0".to_vec();
+        exactly_12.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]); // 12 bytes total
+        let metadata = parse_app6(&exactly_12).unwrap();
         assert!(metadata.is_empty());
     }
 
