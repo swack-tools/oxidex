@@ -150,3 +150,95 @@ fn inplace_shift_beyond_year_range_errors_cleanly() {
 
     std::fs::remove_file(&dst).unwrap();
 }
+
+#[test]
+fn shift_metadata_dates_bare_name_on_jpeg() {
+    let src = fixture("complex/synthetic_gps_001.jpg");
+    let dst = temp_copy(&src, "public_api.jpg");
+
+    // The exact tag pattern and offset string from issue #14
+    oxidex::core::date_shift::shift_metadata_dates(
+        &dst,
+        "DateTimeOriginal",
+        "1:00:00",
+        ShiftOperation::Subtract,
+    )
+    .unwrap();
+
+    let metadata = read_metadata(&dst).unwrap();
+    let dt = metadata
+        .get("ExifIFD:DateTimeOriginal")
+        .and_then(|v| v.as_datetime())
+        .copied()
+        .unwrap();
+    assert_eq!(dt.to_rfc3339(), "2024-02-01T13:30:00+00:00");
+
+    std::fs::remove_file(&dst).unwrap();
+}
+
+#[test]
+fn shift_metadata_dates_alldates_on_jpeg() {
+    // The fixture's only canonical date tag is ExifIFD:DateTimeOriginal,
+    // so AllDates shifts exactly that one
+    let src = fixture("complex/synthetic_gps_001.jpg");
+    let dst = temp_copy(&src, "alldates.jpg");
+
+    oxidex::core::date_shift::shift_metadata_dates(
+        &dst,
+        "AllDates",
+        "0:0:0 1:00:00",
+        ShiftOperation::Subtract,
+    )
+    .unwrap();
+
+    let metadata = read_metadata(&dst).unwrap();
+    let dt = metadata
+        .get("ExifIFD:DateTimeOriginal")
+        .and_then(|v| v.as_datetime())
+        .copied()
+        .unwrap();
+    assert_eq!(dt.to_rfc3339(), "2024-02-01T13:30:00+00:00");
+
+    std::fs::remove_file(&dst).unwrap();
+}
+
+#[test]
+fn shift_metadata_dates_unsupported_jpeg_tag_errors_cleanly() {
+    let src = fixture("complex/synthetic_gps_001.jpg");
+    let dst = temp_copy(&src, "unsupported.jpg");
+
+    let err = oxidex::core::date_shift::shift_metadata_dates(
+        &dst,
+        "XMP:CreateDate",
+        "1",
+        ShiftOperation::Subtract,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("not supported"), "got: {}", err);
+    // Must not have touched the file
+    assert!(diff_indices(&src, &dst).is_empty());
+
+    std::fs::remove_file(&dst).unwrap();
+}
+
+#[test]
+fn shift_metadata_dates_missing_tag_errors() {
+    // sample_with_exif.jpg has no DateTimeOriginal
+    let src = fixture("sample_with_exif.jpg");
+    let dst = temp_copy(&src, "missing_err.jpg");
+
+    let err = oxidex::core::date_shift::shift_metadata_dates(
+        &dst,
+        "DateTimeOriginal",
+        "1",
+        ShiftOperation::Subtract,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("No date/time tags matching"),
+        "got: {}",
+        err
+    );
+
+    std::fs::remove_file(&dst).unwrap();
+}

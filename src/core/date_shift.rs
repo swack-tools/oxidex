@@ -7,7 +7,10 @@
 
 use super::operations::{read_metadata, write_metadata};
 use super::tag_value::TagValue;
+use crate::core::FileFormat;
 use crate::error::{ExifToolError, Result};
+use crate::io::MMapReader;
+use crate::parsers::detection::detect_format;
 use chrono::{DateTime, Duration, Months, NaiveDateTime, Utc};
 use std::path::Path;
 
@@ -343,28 +346,54 @@ pub fn apply_shift(
     }
 }
 
-/// Common DateTime tags that are shifted when using "AllDates" pattern
-const ALL_DATES_TAGS: &[&str] = &[
-    "EXIF:DateTime",
-    "EXIF:DateTimeOriginal",
-    "EXIF:DateTimeDigitized",
-    "XMP:CreateDate",
-    "XMP:ModifyDate",
-    "PDF:CreateDate",
-    "PDF:ModifyDate",
-    "QuickTime:ContentCreateDate",
-    "QuickTime:CreateDate",
-    "QuickTime:ModifyDate",
+/// Canonical date/time tag names shifted by the "AllDates" pattern on
+/// formats that use the metadata-map write path (PNG, PDF). Lowercase.
+const ALL_DATES_NAMES: &[&str] = &[
+    "modifydate",
+    "datetime",
+    "datetimeoriginal",
+    "createdate",
+    "datetimedigitized",
+    "creationtime",
+    "contentcreatedate",
 ];
 
-/// Shifts date/time tags in a file's metadata
+/// Returns true when a metadata key matches a user-supplied tag pattern.
+///
+/// A bare pattern ("DateTimeOriginal") matches the name part of any
+/// group-prefixed key; a prefixed pattern ("XMP:CreateDate") must match the
+/// full key. Comparison is ASCII case-insensitive.
+fn key_matches_pattern(key: &str, pattern: &str) -> bool {
+    if key.eq_ignore_ascii_case(pattern) {
+        return true;
+    }
+    if !pattern.contains(':')
+        && let Some((_, name)) = key.split_once(':')
+    {
+        return name.eq_ignore_ascii_case(pattern);
+    }
+    false
+}
+
+/// Shifts date/time tags in a file's metadata.
 ///
 /// # Arguments
 ///
 /// * `path` - Path to the file to modify
-/// * `tag_pattern` - Tag pattern to match ("AllDates" for all DateTime tags, or specific tag name)
-/// * `offset_or_value` - Offset string in "Y:M:D H:M:S" format, or absolute datetime for Set operation
+/// * `tag_pattern` - "AllDates", a bare tag name ("DateTimeOriginal"), or a
+///   group-prefixed name ("EXIF:DateTimeOriginal", "IFD0:ModifyDate")
+/// * `offset_or_value` - ExifTool-style shift string (see [`parse_offset`]),
+///   or an absolute "YYYY:MM:DD HH:MM:SS" for the Set operation
 /// * `op` - Operation type (Add, Subtract, or Set)
+///
+/// # Behavior by format
+///
+/// * **JPEG**: the EXIF date values are patched in place — only the 19 ASCII
+///   characters of each target value change, every other byte of the file is
+///   preserved. Supported tags: AllDates, ModifyDate (DateTime),
+///   DateTimeOriginal, CreateDate (DateTimeDigitized).
+/// * **Other formats** (PNG, PDF): tags are shifted through the metadata map
+///   and rewritten with [`write_metadata`].
 ///
 /// # Examples
 ///
@@ -373,29 +402,16 @@ const ALL_DATES_TAGS: &[&str] = &[
 /// use std::path::Path;
 ///
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// // Add 1 day to all date tags
+/// // Subtract 1 hour from DateTimeOriginal (ExifTool: -DateTimeOriginal-=1:00:00)
 /// shift_metadata_dates(
 ///     Path::new("photo.jpg"),
-///     "AllDates",
-///     "0:0:1 0:0:0",
-///     ShiftOperation::Add
-/// )?;
-///
-/// // Subtract 1 month from DateTimeOriginal only
-/// shift_metadata_dates(
-///     Path::new("photo.jpg"),
-///     "EXIF:DateTimeOriginal",
-///     "0:1:0 0:0:0",
+///     "DateTimeOriginal",
+///     "1:00:00",
 ///     ShiftOperation::Subtract
 /// )?;
 ///
-/// // Set DateTime to specific value
-/// shift_metadata_dates(
-///     Path::new("photo.jpg"),
-///     "EXIF:DateTime",
-///     "2025:01:15 10:30:00",
-///     ShiftOperation::Set
-/// )?;
+/// // Add 1 day to all date tags
+/// shift_metadata_dates(Path::new("photo.jpg"), "AllDates", "0:0:1 0", ShiftOperation::Add)?;
 /// # Ok(())
 /// # }
 /// ```
@@ -405,112 +421,81 @@ pub fn shift_metadata_dates(
     offset_or_value: &str,
     op: ShiftOperation,
 ) -> Result<()> {
-    // Step 1: Read existing metadata from file
-    let mut metadata = read_metadata(path)?;
+    let spec = build_shift_spec(offset_or_value, op)?;
 
-    // Step 2: Parse offset or absolute value based on operation
-    let (offset, op) = if op == ShiftOperation::Set {
-        (None, op)
-    } else {
-        let (parsed, negated) = parse_offset(offset_or_value)?;
-        let effective = match (op, negated) {
-            (ShiftOperation::Add, true) => ShiftOperation::Subtract,
-            (ShiftOperation::Subtract, true) => ShiftOperation::Add,
-            (other, _) => other,
-        };
-        (Some(parsed), effective)
+    let format = {
+        let reader = MMapReader::new(path)?;
+        detect_format(&reader)?
     };
 
-    let absolute_value = if op == ShiftOperation::Set {
-        Some(parse_absolute_datetime(offset_or_value)?)
-    } else {
-        None
-    };
-
-    // Step 3: Determine which tags to shift
-    let mut modified_count = 0;
-
-    if tag_pattern.eq_ignore_ascii_case("AllDates") {
-        // Shift all DateTime tags that exist in the metadata
-        for tag_name in ALL_DATES_TAGS {
-            if let Some(tag_value) = metadata.get(tag_name)
-                && let Some(dt) = tag_value.as_datetime()
-            {
-                // Apply shift
-                let new_dt = if let Some(abs) = absolute_value {
-                    abs
-                } else {
-                    apply_shift(*dt, offset.as_ref().unwrap(), op)?
-                };
-
-                // Update the tag
-                metadata.insert((*tag_name).to_string(), TagValue::new_datetime(new_dt));
-                modified_count += 1;
-            }
-        }
-
-        // Also check for any other DateTime tags in the metadata
-        let all_keys: Vec<String> = metadata.iter().map(|(k, _)| k.clone()).collect();
-        for tag_name in all_keys {
-            // Skip tags we already processed
-            if ALL_DATES_TAGS.contains(&tag_name.as_str()) {
-                continue;
-            }
-
-            if let Some(tag_value) = metadata.get(&tag_name)
-                && let Some(dt) = tag_value.as_datetime()
-            {
-                // Apply shift
-                let new_dt = if let Some(abs) = absolute_value {
-                    abs
-                } else {
-                    apply_shift(*dt, offset.as_ref().unwrap(), op)?
-                };
-
-                // Update the tag
-                metadata.insert(tag_name, TagValue::new_datetime(new_dt));
-                modified_count += 1;
-            }
-        }
-    } else {
-        // Shift specific tag only
-        if let Some(tag_value) = metadata.get(tag_pattern) {
-            if let Some(dt) = tag_value.as_datetime() {
-                // Apply shift
-                let new_dt = if let Some(abs) = absolute_value {
-                    abs
-                } else {
-                    apply_shift(*dt, offset.as_ref().unwrap(), op)?
-                };
-
-                // Update the tag
-                metadata.insert(tag_pattern.to_string(), TagValue::new_datetime(new_dt));
-                modified_count += 1;
-            } else {
-                return Err(ExifToolError::parse_error(format!(
-                    "Tag '{}' is not a DateTime tag",
-                    tag_pattern
-                )));
-            }
-        } else {
-            return Err(ExifToolError::parse_error(format!(
-                "Tag '{}' not found in metadata",
-                tag_pattern
-            )));
-        }
+    if format == FileFormat::JPEG {
+        return shift_jpeg_dates(path, tag_pattern, &spec);
     }
+    shift_map_dates(path, tag_pattern, &spec)
+}
 
-    // Check if any tags were modified
-    if modified_count == 0 {
+/// JPEG path: patch EXIF date/time values in place. Never rewrites the EXIF
+/// segment, so binary tags are preserved byte-for-byte.
+fn shift_jpeg_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<()> {
+    let Some(targets) = resolve_exif_targets(tag_pattern) else {
         return Err(ExifToolError::parse_error(format!(
-            "No DateTime tags found matching pattern '{}'",
+            "Shifting tag '{}' is not supported for JPEG. Supported: AllDates, \
+             ModifyDate (DateTime), DateTimeOriginal, CreateDate (DateTimeDigitized)",
+            tag_pattern
+        )));
+    };
+    let modified = crate::writers::exif_inplace::shift_jpeg_exif_dates(path, &targets, spec)?;
+    if modified == 0 {
+        return Err(ExifToolError::parse_error(format!(
+            "No date/time tags matching '{}' found in EXIF data",
             tag_pattern
         )));
     }
+    Ok(())
+}
 
-    // Step 4: Write modified metadata back to file
+/// Non-JPEG path: shift date/time tags through the metadata map (PNG, PDF).
+fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<()> {
+    let mut metadata = read_metadata(path)?;
+    let all_dates = tag_pattern.eq_ignore_ascii_case("AllDates");
+
+    let keys: Vec<String> = metadata.iter().map(|(k, _)| k.clone()).collect();
+    let mut modified = 0;
+    for key in keys {
+        let matches = if all_dates {
+            // Filesystem dates are never shifted by AllDates
+            !key.starts_with("File:")
+                && key.split_once(':').map_or_else(
+                    || ALL_DATES_NAMES.contains(&key.to_ascii_lowercase().as_str()),
+                    |(_, name)| ALL_DATES_NAMES.contains(&name.to_ascii_lowercase().as_str()),
+                )
+        } else {
+            key_matches_pattern(&key, tag_pattern)
+        };
+        if !matches {
+            continue;
+        }
+        let Some(dt) = metadata.get(&key).and_then(|v| v.as_datetime()).copied() else {
+            if !all_dates {
+                return Err(ExifToolError::parse_error(format!(
+                    "Tag '{}' is not a DateTime tag",
+                    key
+                )));
+            }
+            continue;
+        };
+        let new_dt = apply_spec(dt, spec)?;
+        metadata.insert(key, TagValue::new_datetime(new_dt));
+        modified += 1;
+    }
+
+    if modified == 0 {
+        return Err(ExifToolError::parse_error(format!(
+            "Tag '{}' not found in metadata",
+            tag_pattern
+        )));
+    }
     write_metadata(path, &metadata)?;
-
     Ok(())
 }
 
@@ -800,6 +785,18 @@ mod tests {
             }
             other => panic!("expected Absolute, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_key_matches_pattern() {
+        // Bare pattern matches any family, case-insensitively
+        assert!(key_matches_pattern("XMP:CreateDate", "createdate"));
+        assert!(key_matches_pattern("PDF:CreateDate", "CreateDate"));
+        // Prefixed pattern must match the whole key
+        assert!(key_matches_pattern("XMP:CreateDate", "xmp:createdate"));
+        assert!(!key_matches_pattern("PDF:CreateDate", "XMP:CreateDate"));
+        // Name-only mismatch
+        assert!(!key_matches_pattern("XMP:ModifyDate", "CreateDate"));
     }
 
     #[test]
