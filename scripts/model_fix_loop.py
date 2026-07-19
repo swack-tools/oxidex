@@ -19,7 +19,6 @@ import os
 import re
 import subprocess
 import sys
-import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -31,7 +30,7 @@ from find_tag_gaps import (
     run_full_comparison,
 )
 
-DIFF_BLOCK_RE = re.compile(r"```diff\n(.*?)```", re.DOTALL)
+DIFF_BLOCK_RE = re.compile(r"```diff[ \t]*\r?\n(.*?)```", re.DOTALL)
 
 
 def extract_diff(response_text):
@@ -106,7 +105,7 @@ def cargo_test_workspace(repo_root):
     return result.returncode == 0
 
 
-def build_prompt(gap):
+def build_prompt(gap, repo_root=REPO_ROOT):
     missing = "\n".join(
         f"  - {t['family']}:{t['name']} = {t['value']} (sample: {t.get('source_file') or 'n/a'})"
         for t in gap["missing_tags"]
@@ -118,7 +117,7 @@ def build_prompt(gap):
     file_blocks = []
     for f in gap["parser_files"]:
         try:
-            file_blocks.append(f"--- {f} ---\n{Path(f).read_text()}")
+            file_blocks.append(f"--- {f} ---\n{(repo_root / f).read_text()}")
         except OSError:
             continue
     files = "\n\n".join(file_blocks) or "(no parser files located -- search src/ yourself)"
@@ -146,7 +145,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
     the "gap count did not decrease" check.
     """
     repo_root = repo_root or REPO_ROOT
-    messages = [{"role": "user", "content": build_prompt(gap)}]
+    messages = [{"role": "user", "content": build_prompt(gap, repo_root=repo_root)}]
 
     built = False
     for _attempt in range(2):  # one initial attempt + one repair round-trip
@@ -220,12 +219,11 @@ def run_loop(config, find_gaps_fn, fix_gap_fn, max_dry_rounds=2):
                 fixed.append(result)
                 closed_this_round += 1
             else:
+                failed.append(result)
                 fail_counts[gap["format"]] = fail_counts.get(gap["format"], 0) + 1
                 if fail_counts[gap["format"]] >= 2:
                     skip_list.add(gap["format"])
                     skipped.append(gap["format"])
-                else:
-                    failed.append(result)
 
         dry_rounds = 0 if closed_this_round else dry_rounds + 1
 

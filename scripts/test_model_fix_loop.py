@@ -33,6 +33,12 @@ class ExtractDiffTests(unittest.TestCase):
     def test_returns_none_when_no_diff_present(self):
         self.assertIsNone(extract_diff("I don't know how to fix this."))
 
+    def test_tolerates_trailing_space_and_crlf_after_fence(self):
+        text = "```diff \r\n--- a/foo.rs\r\n+++ b/foo.rs\r\n```\n"
+        diff = extract_diff(text)
+        self.assertIsNotNone(diff)
+        self.assertTrue(diff.startswith("--- a/foo.rs"))
+
 
 class CallModelTests(unittest.TestCase):
     @patch("model_fix_loop.urllib.request.urlopen")
@@ -188,6 +194,32 @@ class FixGapRepairRoundTripTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "fixed")
         self.assertEqual(len(build_attempts), 2)
+
+    def test_retries_once_on_apply_failure_then_succeeds(self):
+        gap = make_gap(gap_count=1)
+        apply_attempts = []
+
+        def fake_git_apply(diff, root):
+            apply_attempts.append(1)
+            if len(apply_attempts) == 1:
+                return False, "patch does not apply"
+            return True, "ok"
+
+        result = fix_gap(
+            gap,
+            {"base_url": "u", "api_key": "k", "model": "glm-5.2"},
+            call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
+            git_apply_fn=fake_git_apply,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            cargo_test_workspace_fn=lambda root: True,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(len(apply_attempts), 2)
 
 
 class FixGapFailureTests(unittest.TestCase):
