@@ -773,3 +773,17 @@ pub fn process_dqt_segments(segments: &[Segment], metadata: &mut MetadataMap) {
         );
     }
 }
+
+/// Processes APP8 SPIFF segments.
+///
+/// Matching ExifTool, only 32-byte payloads starting with "SPIFF\0" are
+/// treated as SPIFF headers; other APP8 payloads (InfiRay, SEAL, ...) are
+/// left alone.
+pub fn process_spiff_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const APP8_MARKER: u16 = 0xFFE8;
+    for segment in segments.iter().filter(|s| s.marker == APP8_MARKER) {
+        if segment.data.len() == 32 && segment.data.starts_with(b"SPIFF\0") {
+            let _ = crate::parsers::jpeg::app_parsers::parse_spiff_segment(segment.data, metadata);
+        }
+    }
+}

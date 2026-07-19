@@ -445,71 +445,114 @@ pub fn parse_sof_segment(
 
 /// Parse APP8 (SPIFF) segment
 ///
-/// APP8 segments (marker 0xFFE8) contain SPIFF (Still Picture Interchange File Format) metadata.
-/// SPIFF is used primarily by lossless JPEG implementations and includes compression and
-/// color space information.
+/// SPIFF (Still Picture Interchange File Format, ISO/IEC 10918-3) stores basic
+/// image parameters in the first APP8 segment. ExifTool processes APP8 as
+/// SPIFF only when the payload starts with "SPIFF\0" AND is exactly 32 bytes;
+/// real-world v1.2 samples carry 2 pad bytes after ColorComponents that the
+/// spec does not mention, and the offsets below follow those samples
+/// (ExifTool JPEG.pm %SPIFF table).
 pub fn parse_spiff_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    if data.len() < 6 {
-        return Err("APP8 SPIFF segment too short".to_string());
+    if data.len() != 32 {
+        return Err(format!(
+            "APP8 SPIFF payload must be 32 bytes, got {}",
+            data.len()
+        ));
     }
-
-    // Check SPIFF identifier (6 bytes: "SPIFF\0")
     if &data[0..6] != b"SPIFF\0" {
         return Err("Invalid SPIFF identifier".to_string());
     }
 
-    // SPIFF structure after identifier:
-    // Byte 6: SPIFF version major
-    // Byte 7: SPIFF version minor
-    // Byte 8: Profile ID
-    // Byte 9: Components
-    // Bytes 10-13: Height (big-endian u32)
-    // Bytes 14-17: Width (big-endian u32)
+    // Offsets are relative to the byte after the 6-byte identifier.
+    let body = &data[6..];
+    let reader = EndianReader::big_endian(body);
 
-    if data.len() >= 8 {
-        let version_major = data[6];
-        let version_minor = data[7];
-        metadata.insert(
-            "APP8:SPIFFVersion".to_string(),
-            TagValue::String(format!("{}.{}", version_major, version_minor)),
-        );
-    }
+    metadata.insert(
+        "SPIFF:SPIFFVersion".to_string(),
+        TagValue::String(format!("{}.{}", body[0], body[1])),
+    );
 
-    if data.len() >= 9 {
-        let profile_id = data[8];
-        let profile_name = match profile_id {
-            0 => "Baseline",
-            1 => "Progressive",
-            2 => "Lossless",
-            _ => "Unknown",
-        };
-        metadata.insert(
-            "APP8:SPIFFProfile".to_string(),
-            TagValue::String(profile_name.to_string()),
-        );
-    }
+    let profile_id = match body[2] {
+        0 => "Not Specified".to_string(),
+        1 => "Continuous-tone Base".to_string(),
+        2 => "Continuous-tone Progressive".to_string(),
+        3 => "Bi-level Facsimile".to_string(),
+        4 => "Continuous-tone Facsimile".to_string(),
+        other => format!("Unknown ({})", other),
+    };
+    metadata.insert("SPIFF:ProfileID".to_string(), TagValue::String(profile_id));
 
-    if data.len() >= 10 {
-        let components = data[9];
-        metadata.insert(
-            "APP8:SPIFFComponents".to_string(),
-            TagValue::Integer(components as i64),
-        );
-    }
+    metadata.insert(
+        "SPIFF:ColorComponents".to_string(),
+        TagValue::Integer(body[3] as i64),
+    );
 
-    if data.len() >= 18 {
-        let reader = EndianReader::big_endian(data);
-        let height = reader.u32_at(10).unwrap_or(0);
-        let width = reader.u32_at(14).unwrap_or(0);
-        metadata.insert(
-            "APP8:SPIFFHeight".to_string(),
-            TagValue::Integer(height as i64),
-        );
-        metadata.insert(
-            "APP8:SPIFFWidth".to_string(),
-            TagValue::Integer(width as i64),
-        );
-    }
+    metadata.insert(
+        "SPIFF:ImageHeight".to_string(),
+        TagValue::Integer(reader.u32_at(6).unwrap_or(0) as i64),
+    );
+    metadata.insert(
+        "SPIFF:ImageWidth".to_string(),
+        TagValue::Integer(reader.u32_at(10).unwrap_or(0) as i64),
+    );
+
+    let color_space = match body[14] {
+        0 => "Bi-level".to_string(),
+        1 => "YCbCr, ITU-R BT 709, video".to_string(),
+        2 => "No color space specified".to_string(),
+        3 => "YCbCr, ITU-R BT 601-1, RGB".to_string(),
+        4 => "YCbCr, ITU-R BT 601-1, video".to_string(),
+        8 => "Gray-scale".to_string(),
+        9 => "PhotoYCC".to_string(),
+        10 => "RGB".to_string(),
+        11 => "CMY".to_string(),
+        12 => "CMYK".to_string(),
+        13 => "YCCK".to_string(),
+        14 => "CIELab".to_string(),
+        other => format!("Unknown ({})", other),
+    };
+    metadata.insert(
+        "SPIFF:ColorSpace".to_string(),
+        TagValue::String(color_space),
+    );
+
+    metadata.insert(
+        "SPIFF:BitsPerSample".to_string(),
+        TagValue::Integer(body[15] as i64),
+    );
+
+    let compression = match body[16] {
+        0 => "Uncompressed, interleaved, 8 bits per sample".to_string(),
+        1 => "Modified Huffman".to_string(),
+        2 => "Modified READ".to_string(),
+        3 => "Modified Modified READ".to_string(),
+        4 => "JBIG".to_string(),
+        5 => "JPEG".to_string(),
+        other => format!("Unknown ({})", other),
+    };
+    metadata.insert(
+        "SPIFF:Compression".to_string(),
+        TagValue::String(compression),
+    );
+
+    let resolution_unit = match body[17] {
+        0 => "None".to_string(),
+        1 => "inches".to_string(),
+        2 => "cm".to_string(),
+        other => format!("Unknown ({})", other),
+    };
+    metadata.insert(
+        "SPIFF:ResolutionUnit".to_string(),
+        TagValue::String(resolution_unit),
+    );
+
+    metadata.insert(
+        "SPIFF:YResolution".to_string(),
+        TagValue::Integer(reader.u32_at(18).unwrap_or(0) as i64),
+    );
+    metadata.insert(
+        "SPIFF:XResolution".to_string(),
+        TagValue::Integer(reader.u32_at(22).unwrap_or(0) as i64),
+    );
 
     Ok(())
 }
@@ -766,63 +809,57 @@ mod tests {
         assert_eq!(metadata.get_string("JPEG:ComponentID_1"), Some("Y"));
     }
 
-    #[test]
-    fn test_parse_spiff_segment() {
-        let mut data = Vec::new();
-        data.extend_from_slice(b"SPIFF\0");
-        data.push(1); // Version major
-        data.push(0); // Version minor
-        data.push(0); // Profile: Baseline
-        data.push(3); // Components: 3
-
-        let mut metadata = MetadataMap::new();
-        let result = parse_spiff_segment(&data, &mut metadata);
-
-        assert!(result.is_ok());
-        assert_eq!(
-            metadata.get_string("APP8:SPIFFVersion"),
-            Some("1.0"),
-            "Should parse SPIFF version"
-        );
-        assert_eq!(
-            metadata.get_string("APP8:SPIFFProfile"),
-            Some("Baseline"),
-            "Should identify Baseline profile"
-        );
-        assert_eq!(
-            metadata.get_integer("APP8:SPIFFComponents"),
-            Some(3),
-            "Should parse components"
-        );
+    /// Builds the 32-byte APP8 SPIFF payload ExifTool recognizes
+    /// (identifier + version + profile + components + 2 pad bytes +
+    /// dimensions + colorspace/bps/compression/unit + resolutions).
+    fn spiff_payload_32() -> Vec<u8> {
+        let mut p = b"SPIFF\0".to_vec();
+        p.extend_from_slice(&[1, 0]); // version 1.0
+        p.push(1); // ProfileID: Continuous-tone Base
+        p.push(3); // 3 color components
+        p.extend_from_slice(&[0, 0]); // pad bytes seen in real v1.2 samples
+        p.extend_from_slice(&480u32.to_be_bytes()); // height
+        p.extend_from_slice(&640u32.to_be_bytes()); // width
+        p.extend_from_slice(&[3, 8, 5, 1]); // BT601 RGB, 8 bits, JPEG, inches
+        p.extend_from_slice(&72u32.to_be_bytes()); // Y resolution
+        p.extend_from_slice(&72u32.to_be_bytes()); // X resolution
+        assert_eq!(p.len(), 32);
+        p
     }
 
     #[test]
-    fn test_parse_spiff_with_dimensions() {
-        let mut data = Vec::new();
-        data.extend_from_slice(b"SPIFF\0");
-        data.push(1); // Version major
-        data.push(0); // Version minor
-        data.push(1); // Profile: Progressive
-        data.push(3); // Components
-        // Height: 2048 (0x00000800 big-endian)
-        data.extend_from_slice(&[0x00, 0x00, 0x08, 0x00]);
-        // Width: 1536 (0x00000600 big-endian)
-        data.extend_from_slice(&[0x00, 0x00, 0x06, 0x00]);
-
+    fn test_parse_spiff_segment_full() {
         let mut metadata = MetadataMap::new();
-        let result = parse_spiff_segment(&data, &mut metadata);
-
+        let result = parse_spiff_segment(&spiff_payload_32(), &mut metadata);
         assert!(result.is_ok());
+        assert_eq!(metadata.get_string("SPIFF:SPIFFVersion"), Some("1.0"));
         assert_eq!(
-            metadata.get_integer("APP8:SPIFFHeight"),
-            Some(2048),
-            "Should parse height"
+            metadata.get_string("SPIFF:ProfileID"),
+            Some("Continuous-tone Base")
         );
+        assert_eq!(metadata.get_integer("SPIFF:ColorComponents"), Some(3));
+        assert_eq!(metadata.get_integer("SPIFF:ImageHeight"), Some(480));
+        assert_eq!(metadata.get_integer("SPIFF:ImageWidth"), Some(640));
         assert_eq!(
-            metadata.get_integer("APP8:SPIFFWidth"),
-            Some(1536),
-            "Should parse width"
+            metadata.get_string("SPIFF:ColorSpace"),
+            Some("YCbCr, ITU-R BT 601-1, RGB")
         );
+        assert_eq!(metadata.get_integer("SPIFF:BitsPerSample"), Some(8));
+        assert_eq!(metadata.get_string("SPIFF:Compression"), Some("JPEG"));
+        assert_eq!(metadata.get_string("SPIFF:ResolutionUnit"), Some("inches"));
+        assert_eq!(metadata.get_integer("SPIFF:YResolution"), Some(72));
+        assert_eq!(metadata.get_integer("SPIFF:XResolution"), Some(72));
+    }
+
+    #[test]
+    fn test_parse_spiff_segment_rejects_non_32_byte_payload() {
+        // ExifTool only recognizes 32-byte SPIFF payloads; a 30-byte
+        // spec-shaped payload must extract nothing.
+        let mut payload = spiff_payload_32();
+        payload.truncate(30);
+        let mut metadata = MetadataMap::new();
+        assert!(parse_spiff_segment(&payload, &mut metadata).is_err());
+        assert!(metadata.get("SPIFF:SPIFFVersion").is_none());
     }
 
     #[test]

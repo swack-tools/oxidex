@@ -1816,3 +1816,46 @@ fn jpeg_dqt_yields_exiftool_quality_estimate() {
     // ExifTool 13.55 reports 87 for this quantization table
     assert_eq!(metadata.get_integer("File:JPEGQualityEstimate"), Some(87));
 }
+
+// ---------------------------------------------------------------------------
+// JPEG APP8 SPIFF wiring
+// ---------------------------------------------------------------------------
+
+fn spiff_payload() -> Vec<u8> {
+    let mut p = b"SPIFF\0".to_vec();
+    p.extend_from_slice(&[1, 0]);
+    p.push(1);
+    p.push(3);
+    p.extend_from_slice(&[0, 0]);
+    p.extend_from_slice(&480u32.to_be_bytes());
+    p.extend_from_slice(&640u32.to_be_bytes());
+    p.extend_from_slice(&[3, 8, 5, 1]);
+    p.extend_from_slice(&72u32.to_be_bytes());
+    p.extend_from_slice(&72u32.to_be_bytes());
+    assert_eq!(p.len(), 32);
+    p
+}
+
+#[test]
+fn jpeg_spiff_segment_yields_spiff_tags() {
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xE8, &spiff_payload()),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    assert_eq!(metadata.get_string("SPIFF:SPIFFVersion"), Some("1.0"));
+    assert_eq!(metadata.get_integer("SPIFF:ImageWidth"), Some(640));
+    assert_eq!(metadata.get_string("SPIFF:Compression"), Some("JPEG"));
+}
+
+#[test]
+fn jpeg_spiff_segment_wrong_length_is_ignored() {
+    let mut short = spiff_payload();
+    short.truncate(30);
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xE8, &short),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    assert!(metadata.get("SPIFF:SPIFFVersion").is_none());
+}
