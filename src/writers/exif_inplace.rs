@@ -193,31 +193,49 @@ pub fn shift_jpeg_exif_dates(
             continue;
         };
         let value_start = tiff_start + location.value_offset;
-        let current =
-            std::str::from_utf8(&file_bytes[value_start..value_start + 19]).map_err(|_| {
-                ExifToolError::parse_error(format!(
-                    "Tag '{}' has a non-ASCII date value",
-                    target.key()
-                ))
-            })?;
-        let dt = parse_absolute_datetime(current)?;
-        let new_dt = apply_spec(dt, spec)?;
-        let formatted = format_exif_datetime(&new_dt);
-        if formatted.len() != 19 {
-            return Err(ExifToolError::parse_error(format!(
-                "Shifted date '{}' for tag '{}' is outside the representable EXIF range (year must be 4 digits)",
-                formatted,
-                target.key()
-            )));
+        match patch_datetime_value(&mut file_bytes, value_start, *target, spec) {
+            Ok(()) => modified += 1,
+            // Multi-target shifts (AllDates) skip values that cannot be
+            // shifted — matching ExifTool, which warns and continues when
+            // e.g. an unset camera clock wrote "0000:00:00 00:00:00"
+            Err(e) if targets.len() > 1 => {
+                eprintln!("Warning: skipping {}: {}", target.key(), e);
+            }
+            Err(e) => return Err(e),
         }
-        file_bytes[value_start..value_start + 19].copy_from_slice(formatted.as_bytes());
-        modified += 1;
     }
 
     if modified > 0 {
         write_atomic(path, &file_bytes)?;
     }
     Ok(modified)
+}
+
+/// Shifts the single 20-byte ASCII datetime value at `value_start`, patching
+/// the buffer in place. Fails without modifying anything when the current
+/// value does not parse or the shifted value cannot be represented.
+fn patch_datetime_value(
+    file_bytes: &mut [u8],
+    value_start: usize,
+    target: ExifDateTag,
+    spec: &ShiftSpec,
+) -> Result<()> {
+    let current =
+        std::str::from_utf8(&file_bytes[value_start..value_start + 19]).map_err(|_| {
+            ExifToolError::parse_error(format!("Tag '{}' has a non-ASCII date value", target.key()))
+        })?;
+    let dt = parse_absolute_datetime(current)?;
+    let new_dt = apply_spec(dt, spec)?;
+    let formatted = format_exif_datetime(&new_dt);
+    if formatted.len() != 19 {
+        return Err(ExifToolError::parse_error(format!(
+            "Shifted date '{}' for tag '{}' is outside the representable EXIF range (year must be 4 digits)",
+            formatted,
+            target.key()
+        )));
+    }
+    file_bytes[value_start..value_start + 19].copy_from_slice(formatted.as_bytes());
+    Ok(())
 }
 
 #[cfg(test)]

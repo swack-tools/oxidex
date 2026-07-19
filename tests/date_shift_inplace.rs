@@ -178,6 +178,54 @@ fn shift_metadata_dates_bare_name_on_jpeg() {
 }
 
 #[test]
+fn alldates_skips_unparseable_sibling_value() {
+    // canon_sample.jpg has ModifyDate, DateTimeOriginal, and CreateDate all
+    // equal to "2003:12:14 12:01:44" (three occurrences of that ASCII string)
+    let src = fixture("makernotes/canon_sample.jpg");
+    let dst = temp_copy(&src, "alldates_skip.jpg");
+
+    // Corrupt the first occurrence in place to an unset-camera-clock value,
+    // as real cameras write when the clock was never set
+    let mut bytes = std::fs::read(&dst).unwrap();
+    let needle = b"2003:12:14 12:01:44";
+    let pos = bytes
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .unwrap();
+    bytes[pos..pos + needle.len()].copy_from_slice(b"0000:00:00 00:00:00");
+    std::fs::write(&dst, &bytes).unwrap();
+
+    // AllDates must shift the two parseable tags and skip the corrupt one
+    oxidex::core::date_shift::shift_metadata_dates(
+        &dst,
+        "AllDates",
+        "1:00:00",
+        ShiftOperation::Subtract,
+    )
+    .unwrap();
+
+    let after = std::fs::read(&dst).unwrap();
+    let count = |needle: &[u8]| after.windows(needle.len()).filter(|w| *w == needle).count();
+    assert_eq!(
+        count(b"2003:12:14 11:01:44"),
+        2,
+        "both valid tags must be shifted"
+    );
+    assert_eq!(
+        count(b"0000:00:00 00:00:00"),
+        1,
+        "the corrupt tag must be left untouched"
+    );
+    assert_eq!(
+        count(b"2003:12:14 12:01:44"),
+        0,
+        "no unshifted valid value may remain"
+    );
+
+    std::fs::remove_file(&dst).unwrap();
+}
+
+#[test]
 fn shift_metadata_dates_alldates_on_jpeg() {
     // The fixture's only canonical date tag is ExifIFD:DateTimeOriginal,
     // so AllDates shifts exactly that one

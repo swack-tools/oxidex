@@ -395,6 +395,13 @@ fn key_matches_pattern(key: &str, pattern: &str) -> bool {
 /// * **Other formats** (PNG, PDF): tags are shifted through the metadata map
 ///   and rewritten with [`write_metadata`].
 ///
+/// # Divergences from ExifTool
+///
+/// * A shift that matches no tags is an error (nonzero CLI exit), where
+///   exiftool reports "0 image files updated" and exits 0.
+/// * During a multi-tag shift (AllDates), tags whose current value cannot be
+///   parsed or shifted are skipped with a warning, matching ExifTool.
+///
 /// # Examples
 ///
 /// ```no_run
