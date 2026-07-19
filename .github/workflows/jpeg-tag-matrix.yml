@@ -61,14 +61,6 @@ jobs:
         with:
           shared-key: jpeg-tag-matrix
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f # v4
-
       - name: Install pinned ExifTool
         run: |
           git clone -q --depth 1 --branch "${EXIFTOOL_VERSION}" \
@@ -76,20 +68,22 @@ jobs:
           echo "/tmp/exiftool" >> "$GITHUB_PATH"
           /tmp/exiftool/exiftool -ver
 
-      - name: Build oxidex (release)
-        run: cargo build --release --bin oxidex
+      - name: Build oxidex and jpeg-tag-matrix (release)
+        run: |
+          cargo build --release --bin oxidex
+          cargo build --release --features jpeg-tag-matrix-binary --bin jpeg-tag-matrix
 
       - name: Generate ExifTool tag manifest
-        run: uv run scripts/generate_exiftool_manifest.py --flag-noops
+        run: ./target/release/jpeg-tag-matrix manifest --flag-noops
 
       - name: Run tag matrix (read + write round-trips)
-        run: uv run scripts/jpeg_tag_matrix.py --workers 8
+        run: ./target/release/jpeg-tag-matrix run --workers 8
 
       - name: Generate reports and check baseline
-        run: uv run scripts/jpeg_tag_report.py --check-baseline
+        run: ./target/release/jpeg-tag-matrix report --check-baseline
 
       - name: Ratchet baseline on improvement
-        run: uv run scripts/jpeg_tag_report.py --update-baseline
+        run: ./target/release/jpeg-tag-matrix report --update-baseline
 
       - name: Upload raw results
         uses: actions/upload-artifact@v4

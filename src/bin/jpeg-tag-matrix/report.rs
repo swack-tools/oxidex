@@ -242,7 +242,7 @@ fn autogen_callout(work: &Path) -> String {
          [JPEG Tag Matrix workflow]\
          (https://github.com/swack-tools/oxidex/actions/workflows/\
          jpeg-tag-matrix.yml) \
-         (`scripts/jpeg_tag_matrix.py`) against **{ver}**. \
+         (`jpeg-tag-matrix` binary) against **{ver}**. \
          Last updated: **{today}**\n\
          :::\n"
     )
