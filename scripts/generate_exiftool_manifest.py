@@ -41,6 +41,18 @@ WORK = Path(os.environ.get("TAGMATRIX_WORK")
 REPO = Path(__file__).resolve().parent.parent
 BASE_FIXTURE = REPO / "tests/fixtures/jpeg/tag_matrix_base.jpg"
 
+
+def _run_exiftool(args, **kwargs):
+    """Run exiftool with the given argv tail; the sole subprocess call site.
+
+    List-argv, no shell=True; EXIFTOOL is a local tool path from an env
+    var, and every caller below passes only fixed flags or values this
+    same script synthesized locally from exiftool's own -listx XML dump
+    moments earlier -- never externally-controlled input.
+    """
+    return subprocess.run([EXIFTOOL, *args], capture_output=True, text=True, **kwargs)  # nosec B603 # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+
+
 # (listx group arg, family0 bucket, table filter predicate)
 SOURCES = [
     ("EXIF", "EXIF", lambda t: t.get("name") in ("Exif::Main", "GPS::Main")),
@@ -148,14 +160,9 @@ def make_sample(family0, name, vtype, tag_el, group1):
 def dump_listx(group):
     """Run exiftool -f -listx for one group, return parsed XML root.
 
-    List-argv, no shell=True; EXIFTOOL is a local tool path from an env
-    var and `group` is one of the fixed strings in SOURCES below -- not
-    externally controlled.
+    `group` is one of the fixed strings in SOURCES below.
     """
-    # See docstring above: list-argv, no shell, locally-trusted inputs.
-    out = subprocess.run(  # nosec B603 # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-        [EXIFTOOL, "-f", "-listx", f"-{group}:all"],
-        capture_output=True, text=True, timeout=300)
+    out = _run_exiftool(["-f", "-listx", f"-{group}:all"], timeout=300)
     path = WORK / f"listx_{group}.xml"
     path.write_text(out.stdout)
     root = ET.parse(str(path)).getroot()
@@ -167,9 +174,9 @@ def dump_listx(group):
 def flag_noops(manifest, exiftool_ver):
     """Write-test suspect tags on the base fixture; mark silent no-ops.
 
-    List-argv, no shell=True; `t['sample']` is a value this same script
-    synthesized (a fixed literal, or an enum string parsed moments earlier
-    from exiftool's own local -listx XML dump) -- not externally supplied.
+    `t['sample']` is a value this same script synthesized (a fixed
+    literal, or an enum string parsed moments earlier from exiftool's own
+    local -listx XML dump) -- not externally supplied.
     """
     suspects = [t for t in manifest["tags"]
                 if (t["name"].startswith("MakerNote") and t["family0"] == "EXIF")
@@ -180,10 +187,8 @@ def flag_noops(manifest, exiftool_ver):
         dst = WORK / "noop_tmp.jpg"
         shutil.copyfile(BASE_FIXTURE, dst)
         op = "<=" if t.get("sample_is_file") else "="
-        w = subprocess.run(  # nosec B603 # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-            [EXIFTOOL, "-overwrite_original", f"-{spec}{op}{t['sample']}",
-             str(dst)],
-            capture_output=True, text=True)
+        w = _run_exiftool(["-overwrite_original",
+                           f"-{spec}{op}{t['sample']}", str(dst)])
         if w.returncode == 0 and "1 image files updated" in w.stdout:
             t.pop("noop", None)
         else:
@@ -202,10 +207,7 @@ def main():
     args = ap.parse_args()
 
     WORK.mkdir(parents=True, exist_ok=True)
-    # List-argv, no shell; EXIFTOOL is a local tool path from an env var.
-    ver = subprocess.run(  # nosec B603 # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-        [EXIFTOOL, "-ver"], capture_output=True,
-        text=True).stdout.strip()
+    ver = _run_exiftool(["-ver"]).stdout.strip()
     print(f"exiftool {ver}; work dir {WORK}")
 
     all_entries = {}  # (group1, name) -> entry
