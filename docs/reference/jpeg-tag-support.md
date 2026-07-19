@@ -9,7 +9,7 @@ Empirical OxiDex ↔ ExifTool tag mapping for JPEG: for each tag, ExifTool write
 Only tags OxiDex can **read** from JPEG are listed here (including those whose value formatting differs from ExifTool). The full classification of all tested tags — including unsupported and broken ones — is in the [JPEG Tag Matrix](/reference/jpeg-tag-matrix). See also [ExifTool Coverage](/reference/tag-coverage-analysis) for the tag-database view and the [Compatibility overview](/reference/comparison/) for fixture-based comparisons across formats.
 
 
-**2028** ExifTool tags readable, **122** writable via the CLI (of 4812 ExifTool-writable JPEG tags tested).
+**2029** ExifTool tags readable, **122** writable via the CLI (of 4812 ExifTool-writable JPEG tags tested).
 
 
 ## ExifIFD (87 readable tags)
@@ -103,6 +103,12 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:WaterDepth` | `ExifIFD:WaterDepth` | — | `1.5` |
 | `ExifIFD:WhiteBalance` | `ExifIFD:WhiteBalance` | — | `Auto` |
 | `ExifIFD:XiaomiModel` | `ExifIFD:XiaomiModel` | ✅ `-ExifIFD:XiaomiModel=` | `OxTest` |
+
+## File (1 readable tags)
+
+| ExifTool tag | OxiDex key | OxiDex write | Example value |
+|---|---|---|---|
+| `File:Comment` | `File:Comment` | — | `OxTest` |
 
 ## GPS (31 readable tags)
 

@@ -15,8 +15,8 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 
 | Classification | Tags |
 |---|---|
-| ❌ Unsupported | 2517 |
-| 📖 Read only | 1677 |
+| ❌ Unsupported | 2516 |
+| 📖 Read only | 1678 |
 | 🐛 Read OK, write broken | 252 |
 | ❔ Untestable | 219 |
 | ✅ Full (read + write) | 57 |
@@ -30,7 +30,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 |---|---|---|---|---|---|---|---|---|
 | All | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | ExifIFD | 26 | 1 | 52 | 11 | 0 | 0 | 98 | 196 |
-| File | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 1 |
+| File | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | GPS | 0 | 0 | 24 | 1 | 0 | 0 | 0 | 32 |
 | GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
 | IFD0 | 31 | 6 | 67 | 21 | 0 | 0 | 17 | 169 |
@@ -150,7 +150,7 @@ references are into this repo.
 | R5 | XMP struct properties concatenated into a single garbage scalar (e.g. Flash → "TrueTrue0True0"), flattened child tags dropped | 4+ | `src/parsers/xmp/rdf_parser.rs:181-191` appends nested text nodes without separators |
 | R6 | ACR-style `"TagName: value"` ValueConv prefix not stripped (Brightness, Shadows, ...) | 6+ | no equivalent of exiftool's ValueConv for these tags |
 | R7 | undef values undecoded: FileSource shows "(Binary, 1 bytes)" instead of "Film Scanner"; GPSAreaInformation opaque; XP* Windows tags show raw integers instead of UTF-16 text; float-typed DNG tags show raw IEEE-754 bits (e.g. 1069547520 for 1.5) | 24 | `src/core/exiftool_compat.rs:435` (FileSource requires as_integer), no UTF-16/float decode paths |
-| R8 | Dead code: JPEG COM comment, SPIFF and DQT-quality parsers exist but are never invoked from `parse_jpeg_metadata`; multi-chunk ICC profiles dropped with a warning | Comment + ICC | `src/core/operations.rs:483-497` dispatch list omits them; `src/core/jpeg_helpers.rs:351` single-chunk ICC only |
+| R8 | **Fixed by [#22](https://github.com/swack-tools/oxidex/pull/22).** Previously: JPEG COM comment, SPIFF and DQT-quality parsers existed but were never invoked from `parse_jpeg_metadata`, and multi-chunk ICC profiles were dropped with a warning. COM comment reading is now verified working (`File:Comment` reads correctly); SPIFF, DQT-derived quality, multi-chunk ICC, and APP6/GoPro are also wired in per #22 but aren't ExifTool-writable tags (or fall outside the EXIF/XMP/IPTC/JFIF/Photoshop/ICC_Profile groups this matrix synthesizes samples for), so this empirical harness can't independently confirm them | Comment (confirmed); SPIFF/DQT/ICC/APP6 (out of this harness's testable scope) | was `src/core/operations.rs:483-497`; see #22 for the fix |
 
 
 ## Full matrix
@@ -368,7 +368,7 @@ references are into this repo.
 
 | ExifTool tag | Read | Write | Example |
 |---|---|---|---|
-| `Comment` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `Comment` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 
 ### GPS
 
