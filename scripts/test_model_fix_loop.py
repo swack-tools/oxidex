@@ -289,6 +289,24 @@ class FixGapFailureTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["reason"], "no diff in model response")
 
+    def test_fails_gracefully_when_model_call_raises(self):
+        gap = make_gap()
+
+        def raising_call_model(messages, *a):
+            raise TimeoutError("The read operation timed out")
+
+        result = fix_gap(
+            gap,
+            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            call_model_fn=raising_call_model,
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("model call failed", result["reason"])
+        self.assertIn("timed out", result["reason"])
+
 
 class RunLoopTests(unittest.TestCase):
     def test_stops_after_two_consecutive_dry_rounds(self):

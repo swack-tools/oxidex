@@ -156,10 +156,20 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
 
     built = False
     for _attempt in range(2):  # one initial attempt + one repair round-trip
-        reply = call_model_fn(
-            messages, config["base_url"], config["api_key"], config["model"],
-            config["max_tokens"], config["reasoning_effort"],
-        )
+        try:
+            reply = call_model_fn(
+                messages, config["base_url"], config["api_key"], config["model"],
+                config["max_tokens"], config["reasoning_effort"],
+            )
+        except Exception as e:
+            # Network/timeout/HTTP/malformed-response failures are a normal
+            # cost of "any model" -- a single bad call must not kill the
+            # whole loop. No repair round-trip here: retrying the same
+            # oversized/slow request immediately is unlikely to help: the
+            # cross-round 2-strikes skip-list is what handles this format
+            # long-term if it keeps failing.
+            return {"format": gap["format"], "status": "failed", "reason": f"model call failed: {e}"}
+
         diff = extract_diff(reply)
         if diff is None:
             return {"format": gap["format"], "status": "failed", "reason": "no diff in model response"}
