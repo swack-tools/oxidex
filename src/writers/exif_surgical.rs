@@ -37,6 +37,36 @@ const THUMBNAIL_LENGTH: u16 = 0x0202;
 /// ExifIFD MakerNote blob
 const MAKERNOTE: u16 = 0x927C;
 
+/// Reconstructs every metadata-map key the reader could plausibly have
+/// produced for one raw-carried entry in an always-carried IFD class
+/// (InteropIFD, IFD1, MakerNote — see the Design Rule table). These classes
+/// are carried byte-for-byte in the per-entry loop without ever being
+/// diffed against `desired`, but the reader still independently surfaces
+/// some of them under a metadata-map key:
+///   - MakerNote/IFD1 tags (and any tag with no registry name) use the
+///     generic `lookup_tag_name(tag_id, ifd_prefix)` scheme — the same
+///     function this writer already calls for surfaced classes, so it
+///     reproduces the reader's key exactly (including its "IFD:0xNNNN"
+///     hex fallback for unregistered tags, e.g. "ExifIFD:0x927C" for a
+///     MakerNote blob).
+///   - InteropIFD tags are additionally special-cased by
+///     `parse_interop_subifd` (`src/core/tiff_helpers.rs`) under a
+///     hard-coded "EXIF:" prefix with its own name table, distinct from
+///     `lookup_tag_name(tag_id, "InteropIFD")`.
+/// Returns both candidate keys so the Added-tag loop can recognize a
+/// collision precisely instead of treating every key already present in
+/// `original_map` as carried.
+fn carried_class_reader_keys(entry: &RawEntry) -> Vec<String> {
+    let mut keys = vec![lookup_tag_name(entry.tag_id, entry.ifd.prefix())];
+    if entry.ifd == IfdKind::Interop {
+        let name = crate::core::tiff_helpers::interop_tag_to_name(entry.tag_id);
+        if name != "Unknown" {
+            keys.push(format!("EXIF:{}", name));
+        }
+    }
+    keys
+}
+
 /// Which physical IFD an entry belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IfdKind {
@@ -236,6 +266,9 @@ pub fn plan_exif_write(
     plan.makernote_pin = scan.makernote_offset;
 
     let mut consumed_keys: Vec<String> = Vec::new();
+    // Reader keys that map back to an always-carried entry (Interop/IFD1/
+    // MakerNote); see `carried_class_reader_keys`.
+    let mut carried_reader_keys: Vec<String> = Vec::new();
 
     for entry in &scan.entries {
         let bucket = |plan: &mut WritePlan, e: OutEntry| match entry.ifd {
@@ -255,6 +288,7 @@ pub fn plan_exif_write(
 
         // Unsurfaced classes: always carry
         if matches!(entry.ifd, IfdKind::Interop | IfdKind::Ifd1) || entry.tag_id == MAKERNOTE {
+            carried_reader_keys.extend(carried_class_reader_keys(entry));
             bucket(&mut plan, carry);
             continue;
         }
@@ -294,21 +328,29 @@ pub fn plan_exif_write(
         if consumed_keys.iter().any(|k| *k == key) {
             continue;
         }
-        // Keys the reader already surfaced from an "unsurfaced" (always-carry)
-        // class — e.g. InteropIFD tags reported under the "EXIF:" prefix by
-        // parse_interop_subifd — are not tracked in consumed_keys (their raw
-        // entries never enter the per-key diff loop above) but are already
-        // preserved byte-for-byte by the unconditional carry. Treat them as
-        // handled rather than misreading them as brand-new tags: they often
-        // aren't even registered under this literal prefix (e.g.
-        // "EXIF:InteropIndex"), and even when they are, the reader's display
-        // form (e.g. "R98 - DCF basic file (sRGB)") is not the raw type the
-        // registry expects, so re-adding them would fail validation or
-        // corrupt the carried bytes. This is a known limitation: unsurfaced
-        // classes are preserved as-is but not yet independently editable
-        // through this path.
-        if original_map.contains_key(&key) {
-            continue;
+        // Keys whose physical entry lives in an always-carried IFD class
+        // (InteropIFD, IFD1, MakerNote — Design Rule: "unsurfaced classes")
+        // are carried byte-for-byte above without ever being diffed against
+        // `desired`. The reader can still surface some of them under a
+        // metadata-map key (e.g. "EXIF:InteropIndex", or a MakerNote blob's
+        // "ExifIFD:0x927C" hex fallback). If the caller left such a key
+        // unchanged, it's already handled by the carry-over. If the caller
+        // genuinely changed it, editing that tag isn't supported by the
+        // raw-preservation writer yet — error loudly rather than silently
+        // discarding the edit.
+        if carried_reader_keys.iter().any(|k| *k == key)
+            && let Some(original_value) = original_map.get(&key)
+        {
+            let value = desired.get(&key).unwrap();
+            if value == original_value {
+                continue;
+            }
+            return Err(ExifToolError::unsupported_format(format!(
+                "Editing tag '{}' is not yet supported: it belongs to an \
+                 unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
+                 writer always raw-carries",
+                key
+            )));
         }
         let value = desired.get(&key).unwrap();
         let Some(descriptor) = get_tag_descriptor(&key) else {
@@ -1190,6 +1232,71 @@ mod tests {
         let mut bad = original.clone();
         bad.insert("IFD0:NoSuchTagName", TagValue::new_string("x"));
         assert!(plan_exif_write(&scan, &original, &bad).is_err());
+    }
+
+    /// Loads the real Canon fixture, which has an actual InteropIFD whose
+    /// entries the reader surfaces under "EXIF:InteropIndex" /
+    /// "EXIF:InteropVersion" (see `parse_interop_subifd`). Builds
+    /// `original_map` the same way `rewrite_jpeg_exif` does in production
+    /// (the full JPEG reader), not the synthetic `scan_and_maps` helper,
+    /// since only the real reader surfaces the "EXIF:"-prefixed Interop keys.
+    fn canon_scan_and_maps() -> (ExifScan, MetadataMap, Vec<u8>) {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/jpeg/makernotes/canon_sample.jpg"
+        ))
+        .unwrap();
+        let tiff = super::super::exif_surgical_test_support::tiff_slice(&bytes).to_vec();
+        let scan = scan_exif_entries(&tiff).unwrap();
+        let reader = SliceReader(&bytes);
+        let original = crate::core::operations::parse_jpeg_metadata(&reader).unwrap();
+        assert!(
+            original.contains_key("EXIF:InteropIndex"),
+            "fixture must surface an InteropIFD tag for this test to be meaningful"
+        );
+        (scan, original, tiff)
+    }
+
+    #[test]
+    fn plan_unchanged_interop_key_is_noop() {
+        let (scan, original, _tiff) = canon_scan_and_maps();
+        let desired = original.clone();
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        // The Interop bucket is carried unchanged (raw entries preserved
+        // byte-for-byte, matching what scan_exif_entries found).
+        let interop_tag_ids: Vec<u16> = scan
+            .entries
+            .iter()
+            .filter(|e| e.ifd == IfdKind::Interop)
+            .map(|e| e.tag_id)
+            .collect();
+        assert!(!interop_tag_ids.is_empty());
+        for tag_id in interop_tag_ids {
+            assert!(
+                plan.interop.iter().any(|e| e.tag_id == tag_id),
+                "Interop tag {:#06x} must be carried when unchanged",
+                tag_id
+            );
+        }
+    }
+
+    #[test]
+    fn plan_changed_interop_key_errors_instead_of_silently_dropping() {
+        let (scan, original, _tiff) = canon_scan_and_maps();
+        let mut desired = original.clone();
+        let original_value = original.get("EXIF:InteropIndex").unwrap().clone();
+        let new_value = TagValue::new_string("R03 - DCF option file (Adobe RGB)");
+        assert_ne!(
+            original_value, new_value,
+            "test setup must actually change the value"
+        );
+        desired.insert("EXIF:InteropIndex", new_value);
+        let err = plan_exif_write(&scan, &original, &desired).unwrap_err();
+        assert!(
+            err.to_string().contains("InteropIFD") || err.to_string().contains("Interop"),
+            "expected a clear error about unsupported Interop edits, got: {}",
+            err
+        );
     }
 
     #[test]
