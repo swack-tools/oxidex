@@ -141,6 +141,28 @@ function gapGroupsFrom(report, onlyFormats) {
     .filter(f => !onlyFormats || onlyFormats.includes(f.format))
 }
 
+const MERGE_RESULT_SCHEMA = {
+  type: 'object',
+  properties: {
+    format: { type: 'string' },
+    success: { type: 'boolean' },
+    summary: { type: 'string' },
+  },
+  required: ['format', 'success', 'summary'],
+}
+
+function mergePrompt(result) {
+  return `You are in the oxidex repository's main (non-worktree) working tree. A subagent working in git ` +
+    `branch "${result.branch}" verified a coverage fix for format "${result.format}": ${result.summary}\n\n` +
+    `1. Run: git merge --no-ff "${result.branch}" -m "merge: ${result.format} coverage fix"\n` +
+    `   If it conflicts, run "git merge --abort", report success: false, and explain the conflict in summary.\n` +
+    `2. If the merge succeeded, run: cargo test --workspace\n` +
+    `3. If tests fail, run "git reset --hard HEAD~1" to undo only the merge commit you just made, report ` +
+    `success: false, and explain the regression in summary.\n` +
+    `4. If tests pass, the merge stands. Report success: true.\n\n` +
+    `Report: format ("${result.format}"), success (bool), summary.`
+}
+
 function findGapsPrompt() {
   return `Run \`EXIFTOOL_CACHE_DIR=${CACHE_DIR} just compare-exiftool-full\` from the oxidex repository root. ` +
     `This builds the tag-comparison binary, downloads or reuses a cached ExifTool release plus its t/images ` +
@@ -154,44 +176,79 @@ function findGapsPrompt() {
     `exhaustive. Do not modify or commit anything -- this is a read-only discovery step.`
 }
 
-phase('Find')
-const report = await agent(findGapsPrompt(), {
-  label: 'find-gaps',
-  schema: COMPARISON_REPORT_SCHEMA,
-})
+const MAX_DRY_ROUNDS = 2
+let dryRounds = 0
+let round = 0
 
-log(`find stage: ${Object.keys(report.by_format || {}).length} formats in report`)
+while (dryRounds < MAX_DRY_ROUNDS) {
+  round++
+  log(`--- round ${round} (dry streak: ${dryRounds}/${MAX_DRY_ROUNDS}) ---`)
 
-const gapGroups = gapGroupsFrom(report, args && args.onlyFormats)
-log(`found gaps in ${gapGroups.length} formats${args && args.onlyFormats ? ` (scoped to ${args.onlyFormats.join(', ')})` : ''}`)
+  phase('Find')
+  const report = await agent(findGapsPrompt(), {
+    label: `find-gaps-round-${round}`,
+    schema: COMPARISON_REPORT_SCHEMA,
+  })
 
-if (gapGroups.length === 0) {
-  log('no gaps to fix')
-  return { report, fixResults: [] }
+  if (!report) {
+    // agent() returns null on a terminal failure after retries (e.g. the sandbox
+    // blocks the curl calls just-compare-exiftool-full needs, or the report never
+    // validates against the schema). This must abort loudly, not silently count as
+    // a dry round -- "couldn't check for gaps" and "checked and found none" are
+    // different failure modes.
+    throw new Error(`round ${round}: Find stage failed -- aborting without counting it as dry`)
+  }
+
+  const gapGroups = gapGroupsFrom(report, args && args.onlyFormats)
+  log(`round ${round}: found gaps in ${gapGroups.length} formats`)
+
+  if (gapGroups.length === 0) {
+    dryRounds++
+    continue
+  }
+
+  phase('Fix')
+  const rawFixResults = await parallel(gapGroups.map(g => () =>
+    agent(fixPrompt(g), {
+      label: `fix-${g.format}`,
+      phase: 'Fix',
+      isolation: 'worktree',
+      schema: FIX_RESULT_SCHEMA,
+    })
+  ))
+
+  // See the format-enforcement note where this pattern was introduced (Task 3):
+  // parallel() preserves input order, so gapGroups[i] is the ground truth for
+  // rawFixResults[i]'s format regardless of what the agent self-reports.
+  const fixResults = rawFixResults.map((r, i) => {
+    if (!r) return r
+    if (r.format !== gapGroups[i].format) {
+      log(`round ${round}: fix-${gapGroups[i].format} agent reported format "${r.format}", overriding to match the input group`)
+    }
+    return { ...r, format: gapGroups[i].format }
+  })
+
+  const verified = fixResults.filter(Boolean).filter(r => r.verified)
+  log(`round ${round}: ${verified.length}/${fixResults.filter(Boolean).length} fix attempts verified`)
+
+  phase('Merge')
+  let closedCount = 0
+  for (const r of verified) {
+    const merged = await agent(mergePrompt(r), {
+      label: `merge-${r.format}`,
+      phase: 'Merge',
+      schema: MERGE_RESULT_SCHEMA,
+    })
+    if (merged && merged.success) {
+      closedCount += r.gapsClosed
+    } else {
+      log(`round ${round}: merge discarded for ${r.format} (${merged ? merged.summary : 'merge agent failed'})`)
+    }
+  }
+
+  log(`round ${round}: closed ${closedCount} gaps`)
+  dryRounds = closedCount === 0 ? dryRounds + 1 : 0
 }
 
-phase('Fix')
-const rawFixResults = await parallel(gapGroups.map(g => () =>
-  agent(fixPrompt(g), {
-    label: `fix-${g.format}`,
-    phase: 'Fix',
-    isolation: 'worktree',
-    schema: FIX_RESULT_SCHEMA,
-  })
-))
-
-// The prompt asks the agent to report `format` verbatim, but LLM compliance isn't
-// guaranteed (observed once: an agent reported "mp4-coverage-gap-fix" instead of
-// "MP4"). parallel() preserves input order, so gapGroups[i] is the ground truth for
-// rawFixResults[i]'s format regardless of what the agent claims -- enforce it here
-// rather than trusting the prompt alone, since the merge stage is format-keyed.
-const fixResults = rawFixResults.map((r, i) => {
-  if (!r) return r
-  if (r.format !== gapGroups[i].format) {
-    log(`fix-${gapGroups[i].format}: agent reported format "${r.format}", overriding to match the input group`)
-  }
-  return { ...r, format: gapGroups[i].format }
-})
-
-log(`${fixResults.filter(Boolean).filter(r => r.verified).length}/${fixResults.filter(Boolean).length} fix attempts verified`)
-return { report, fixResults }
+log(`stopped after ${round} rounds (${dryRounds} consecutive dry rounds)`)
+return { rounds: round }

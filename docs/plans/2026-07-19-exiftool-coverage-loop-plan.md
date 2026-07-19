@@ -433,7 +433,7 @@ while (dryRounds < MAX_DRY_ROUNDS) {
   }
 
   phase('Fix')
-  const fixResults = await parallel(gapGroups.map(g => () =>
+  const rawFixResults = await parallel(gapGroups.map(g => () =>
     agent(fixPrompt(g), {
       label: `fix-${g.format}`,
       phase: 'Fix',
@@ -441,6 +441,17 @@ while (dryRounds < MAX_DRY_ROUNDS) {
       schema: FIX_RESULT_SCHEMA,
     })
   ))
+
+  // See the format-enforcement note where this pattern was introduced (Task 3):
+  // parallel() preserves input order, so gapGroups[i] is the ground truth for
+  // rawFixResults[i]'s format regardless of what the agent self-reports.
+  const fixResults = rawFixResults.map((r, i) => {
+    if (!r) return r
+    if (r.format !== gapGroups[i].format) {
+      log(`round ${round}: fix-${gapGroups[i].format} agent reported format "${r.format}", overriding to match the input group`)
+    }
+    return { ...r, format: gapGroups[i].format }
+  })
 
   const verified = fixResults.filter(Boolean).filter(r => r.verified)
   log(`round ${round}: ${verified.length}/${fixResults.filter(Boolean).length} fix attempts verified`)
