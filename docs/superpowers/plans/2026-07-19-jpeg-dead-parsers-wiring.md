@@ -101,35 +101,12 @@ Expected: PASS (2 tests).
 
 - [ ] **Step 5: Add the failing integration test**
 
-Add to `tests/integration/production_wiring_tests.rs` (helpers are shared by Tasks 2–4; add them here):
+`tests/integration/production_wiring_tests.rs` already contains the JPEG
+fixture helpers `jpeg_segment`, `jpeg_with_segments`, `sof0_payload`, and
+`gpmf_record` (added with the APP6 wiring, commit 55a3c5c) — do NOT re-add
+them. Add only the test:
 
 ```rust
-fn jpeg_segment(marker: u8, payload: &[u8]) -> Vec<u8> {
-    let mut seg = vec![0xFF, marker];
-    seg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
-    seg.extend_from_slice(payload);
-    seg
-}
-
-fn jpeg_with_segments(segments: &[Vec<u8>]) -> Vec<u8> {
-    let mut data = vec![0xFF, 0xD8];
-    for seg in segments {
-        data.extend_from_slice(seg);
-    }
-    data.extend_from_slice(&[0xFF, 0xD9]);
-    data
-}
-
-fn sof0_payload() -> Vec<u8> {
-    // 8-bit precision, 480x640, 3 components: Y 2x2 q0, Cb 1x1 q1, Cr 1x1 q1
-    let mut p = vec![8];
-    p.extend_from_slice(&480u16.to_be_bytes());
-    p.extend_from_slice(&640u16.to_be_bytes());
-    p.push(3);
-    p.extend_from_slice(&[1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
-    p
-}
-
 #[test]
 fn jpeg_com_segment_yields_file_comment() {
     let jpeg = jpeg_with_segments(&[

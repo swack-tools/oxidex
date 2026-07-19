@@ -26,7 +26,7 @@ Additional dead code found during validation (same file, zero external refs):
 | `parse_adobe_segment` | Redundant duplicate of live `app_segments::parse_app14_adobe`. Delete. |
 | `parse_activephoto_segment` | Speculative format; ExifTool's APP10 handling is PhotoStudio Unicode comments, not "ActivePhoto". Delete. |
 | `parse_jpeg_ls_segment` | Speculative; JPEG-LS is signalled via SOF55, not an APP segment. Delete. |
-| `process_app6_segments` stub | Stale TODO says "re-enable when parse_app6 is implemented" but `parse_app6` exists and is exported. **Out of scope** — separate follow-up. |
+| `process_app6_segments` stub | Stale TODO says "re-enable when parse_app6 is implemented" but `parse_app6` exists and is exported. **Resolved separately** — wired with ExifTool-parity GoPro GPMF support in commit 55a3c5c. |
 
 Root cause: `parse_jpeg_metadata` (`src/core/operations.rs:476`) dispatches via
 an explicit list of `process_*` helper calls in `src/core/jpeg_helpers.rs`;
@@ -46,7 +46,7 @@ these parsers were written but never got a `process_*` helper or dispatch line.
 ## 3. Non-Goals
 
 - `JPEGDigest` (MD5 of DQT tables + large known-digest lookup DB) — follow-up.
-- APP6/GoPro GPMF wiring — follow-up (stale TODO noted above).
+- APP6/GoPro GPMF wiring — already landed separately (commit 55a3c5c).
 - Write-path support for any of these segments.
 - Post-SOS trailer parsing or segment-parser hardening (pre-existing behavior:
   `parse_segments` reads garbage pseudo-segments after SOS; unchanged here).
