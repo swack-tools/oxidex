@@ -243,20 +243,32 @@ const FIX_RESULT_SCHEMA = {
 }
 
 function fixPrompt(group) {
-  const missingList = (group.missing_in_oxidex || [])
-    .map(t => `  - ${t.family}:${t.name} = ${t.value} (sample: ${t.source_file || 'n/a'})`)
-    .join('\n') || '  (none)'
-  const diffList = (group.value_differences || [])
-    .map(d => `  - ${d.tag_key}: exiftool="${d.exiftool_value}" oxidex="${d.oxidex_value}" (sample: ${d.source_file})`)
-    .join('\n') || '  (none)'
-  const gapCount = (group.missing_in_oxidex || []).length + (group.value_differences || []).length
+  // The find-stage report's inline missing_in_oxidex/value_differences arrays may be
+  // truncated for large formats (see COMPARISON_REPORT_SCHEMA's _truncated/_total_count
+  // fields) -- they're illustrative here, not authoritative. The agent re-derives its own
+  // complete, current gap list directly from tag-comparison before doing any work.
+  const approxCount = (group.missing_in_oxidex_total_count ?? (group.missing_in_oxidex || []).length) +
+    (group.value_differences_total_count ?? (group.value_differences || []).length)
+  const sampleMissing = (group.missing_in_oxidex || []).slice(0, 10)
+    .map(t => `  - ${t.family}:${t.name} = ${t.value}`).join('\n') || '  (none in the inline sample)'
+  const sampleDiffs = (group.value_differences || []).slice(0, 10)
+    .map(d => `  - ${d.tag_key}: exiftool="${d.exiftool_value}" oxidex="${d.oxidex_value}"`).join('\n') || '  (none in the inline sample)'
 
   return `You are working in the oxidex repository (a Rust ExifTool reimplementation), on format "${group.format}". ` +
-    `The tag-comparison tool (src/bin/tag-comparison) found these gaps against real ExifTool for this format:\n\n` +
-    `Missing entirely (ExifTool extracts it, oxidex doesn't):\n${missingList}\n\n` +
-    `Value differences (both extract it, values disagree):\n${diffList}\n\n` +
-    `Find the relevant parser code yourself (grep src/parsers and src/core for "${group.format}" and the tag ` +
-    `names above -- there is no static format-to-file map to hand you). Implement as many of these gaps as ` +
+    `The find stage reported roughly ${approxCount} coverage gaps for this format. A few examples (this inline ` +
+    `list may be truncated for large formats, so treat it as illustrative, not authoritative):\n\n` +
+    `Missing entirely, a sample:\n${sampleMissing}\n\n` +
+    `Value differences, a sample:\n${sampleDiffs}\n\n` +
+    `Before doing anything else, get your OWN complete, current gap list for this format:\n` +
+    `1. cargo build --release --bin tag-comparison --features tag-comparison-binary (if not already built)\n` +
+    `2. ./target/release/tag-comparison --exiftool ${CACHE_DIR}/exiftool/exiftool ` +
+    `--samples ${CACHE_DIR}/combined-samples --format ${group.format} ` +
+    `-o /tmp/tagcmp-${group.format}-start.json --markdown-dir /tmp/tagcmp-${group.format}-start-md\n` +
+    `Read /tmp/tagcmp-${group.format}-start.json -- its missing_in_oxidex and value_differences arrays for ` +
+    `"${group.format}" are the complete, authoritative gap list (this file comes straight from the comparison ` +
+    `tool, not through an agent relay that may truncate it).\n\n` +
+    `Find the relevant parser code yourself (grep src/parsers and src/core for "${group.format}" and tag names ` +
+    `from that file -- there is no static format-to-file map to hand you). Implement as many of these gaps as ` +
     `you can correctly verify in this pass. You do not need to close all of them -- large formats won't close ` +
     `in one round, and that's expected; whatever remains will resurface next round. For value differences, ` +
     `use judgment: only "fix" genuine bugs, not benign formatting differences. oxidex already runs its own ` +
@@ -265,20 +277,20 @@ function fixPrompt(group) {
     `documented semantics.\n\n` +
     `When you believe you've made progress:\n` +
     `1. cargo build --release --bin oxidex\n` +
-    `2. cargo build --release --bin tag-comparison --features tag-comparison-binary\n` +
-    `3. ./target/release/tag-comparison --exiftool ${CACHE_DIR}/exiftool/exiftool ` +
+    `2. Re-run: ./target/release/tag-comparison --exiftool ${CACHE_DIR}/exiftool/exiftool ` +
     `--samples ${CACHE_DIR}/combined-samples --format ${group.format} ` +
-    `-o /tmp/tagcmp-${group.format}.json --markdown-dir /tmp/tagcmp-${group.format}-md\n` +
-    `4. Read /tmp/tagcmp-${group.format}.json and confirm the combined ` +
-    `missing_in_oxidex + value_differences count for "${group.format}" is strictly lower than ${gapCount} ` +
-    `(the count you started with) and that regressions is empty.\n` +
-    `5. cargo test --workspace\n\n` +
-    `If both checks 4 and 5 pass, commit your changes on your current git branch with a descriptive commit ` +
-    `message. Report: format ("${group.format}"), verified (true only if you committed after both checks ` +
-    `passed), gapsClosed (the count reduction you confirmed in step 4), branch (run "git branch --show-current" ` +
-    `and report that name if verified, else null), and a one-paragraph summary. If you cannot verify a real, ` +
-    `regression-free improvement, do NOT commit -- run "git checkout -- ." and "git clean -fd" to leave your ` +
-    `worktree clean, and report verified: false, gapsClosed: 0, branch: null.`
+    `-o /tmp/tagcmp-${group.format}-end.json --markdown-dir /tmp/tagcmp-${group.format}-end-md\n` +
+    `3. Read /tmp/tagcmp-${group.format}-end.json and confirm the combined missing_in_oxidex + ` +
+    `value_differences count for "${group.format}" is strictly lower than in the "-start.json" file from ` +
+    `step 2 above, and that regressions is empty.\n` +
+    `4. cargo test --workspace\n\n` +
+    `If both checks pass, commit on your current git branch with a descriptive message. Report: format -- ` +
+    `use exactly the string "${group.format}" verbatim, not a slug or description of your own choosing, since ` +
+    `the caller matches on it programmatically -- verified (true only if you committed after both checks ` +
+    `passed), gapsClosed (the count reduction between the start and end files you confirmed), branch (run ` +
+    `"git branch --show-current" and report it if verified, else null), and a one-paragraph summary. If you ` +
+    `cannot verify a real, regression-free improvement, do NOT commit -- run "git checkout -- ." and ` +
+    `"git clean -fd" to leave your worktree clean, and report verified: false, gapsClosed: 0, branch: null.`
 }
 
 function gapGroupsFrom(report, onlyFormats) {

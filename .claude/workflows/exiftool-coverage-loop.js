@@ -72,6 +72,75 @@ const COMPARISON_REPORT_SCHEMA = {
   required: ['by_format'],
 }
 
+const FIX_RESULT_SCHEMA = {
+  type: 'object',
+  properties: {
+    format: { type: 'string' },
+    verified: { type: 'boolean' },
+    gapsClosed: { type: 'number' },
+    branch: { type: ['string', 'null'] },
+    summary: { type: 'string' },
+  },
+  required: ['format', 'verified', 'gapsClosed', 'summary'],
+}
+
+function fixPrompt(group) {
+  // The find-stage report's inline missing_in_oxidex/value_differences arrays may be
+  // truncated for large formats (see COMPARISON_REPORT_SCHEMA's _truncated/_total_count
+  // fields) -- they're illustrative here, not authoritative. The agent re-derives its own
+  // complete, current gap list directly from tag-comparison before doing any work.
+  const approxCount = (group.missing_in_oxidex_total_count ?? (group.missing_in_oxidex || []).length) +
+    (group.value_differences_total_count ?? (group.value_differences || []).length)
+  const sampleMissing = (group.missing_in_oxidex || []).slice(0, 10)
+    .map(t => `  - ${t.family}:${t.name} = ${t.value}`).join('\n') || '  (none in the inline sample)'
+  const sampleDiffs = (group.value_differences || []).slice(0, 10)
+    .map(d => `  - ${d.tag_key}: exiftool="${d.exiftool_value}" oxidex="${d.oxidex_value}"`).join('\n') || '  (none in the inline sample)'
+
+  return `You are working in the oxidex repository (a Rust ExifTool reimplementation), on format "${group.format}". ` +
+    `The find stage reported roughly ${approxCount} coverage gaps for this format. A few examples (this inline ` +
+    `list may be truncated for large formats, so treat it as illustrative, not authoritative):\n\n` +
+    `Missing entirely, a sample:\n${sampleMissing}\n\n` +
+    `Value differences, a sample:\n${sampleDiffs}\n\n` +
+    `Before doing anything else, get your OWN complete, current gap list for this format:\n` +
+    `1. cargo build --release --bin tag-comparison --features tag-comparison-binary (if not already built)\n` +
+    `2. ./target/release/tag-comparison --exiftool ${CACHE_DIR}/exiftool/exiftool ` +
+    `--samples ${CACHE_DIR}/combined-samples --format ${group.format} ` +
+    `-o /tmp/tagcmp-${group.format}-start.json --markdown-dir /tmp/tagcmp-${group.format}-start-md\n` +
+    `Read /tmp/tagcmp-${group.format}-start.json -- its missing_in_oxidex and value_differences arrays for ` +
+    `"${group.format}" are the complete, authoritative gap list (this file comes straight from the comparison ` +
+    `tool, not through an agent relay that may truncate it).\n\n` +
+    `Find the relevant parser code yourself (grep src/parsers and src/core for "${group.format}" and tag names ` +
+    `from that file -- there is no static format-to-file map to hand you). Implement as many of these gaps as ` +
+    `you can correctly verify in this pass. You do not need to close all of them -- large formats won't close ` +
+    `in one round, and that's expected; whatever remains will resurface next round. For value differences, ` +
+    `use judgment: only "fix" genuine bugs, not benign formatting differences. oxidex already runs its own ` +
+    `format_for_exiftool/normalize_tag_family layer before this comparison runs, so gross PrintConv-vs-raw ` +
+    `noise is already filtered out -- don't chase incidental ExifTool quirks that aren't part of the tag's ` +
+    `documented semantics.\n\n` +
+    `When you believe you've made progress:\n` +
+    `1. cargo build --release --bin oxidex\n` +
+    `2. Re-run: ./target/release/tag-comparison --exiftool ${CACHE_DIR}/exiftool/exiftool ` +
+    `--samples ${CACHE_DIR}/combined-samples --format ${group.format} ` +
+    `-o /tmp/tagcmp-${group.format}-end.json --markdown-dir /tmp/tagcmp-${group.format}-end-md\n` +
+    `3. Read /tmp/tagcmp-${group.format}-end.json and confirm the combined missing_in_oxidex + ` +
+    `value_differences count for "${group.format}" is strictly lower than in the "-start.json" file from ` +
+    `step 2 above, and that regressions is empty.\n` +
+    `4. cargo test --workspace\n\n` +
+    `If both checks pass, commit on your current git branch with a descriptive message. Report: format -- ` +
+    `use exactly the string "${group.format}" verbatim, not a slug or description of your own choosing, since ` +
+    `the caller matches on it programmatically -- verified (true only if you committed after both checks ` +
+    `passed), gapsClosed (the count reduction between the start and end files you confirmed), branch (run ` +
+    `"git branch --show-current" and report it if verified, else null), and a one-paragraph summary. If you ` +
+    `cannot verify a real, regression-free improvement, do NOT commit -- run "git checkout -- ." and ` +
+    `"git clean -fd" to leave your worktree clean, and report verified: false, gapsClosed: 0, branch: null.`
+}
+
+function gapGroupsFrom(report, onlyFormats) {
+  return Object.values(report.by_format || {})
+    .filter(f => (f.missing_in_oxidex && f.missing_in_oxidex.length) || (f.value_differences && f.value_differences.length))
+    .filter(f => !onlyFormats || onlyFormats.includes(f.format))
+}
+
 function findGapsPrompt() {
   return `Run \`EXIFTOOL_CACHE_DIR=${CACHE_DIR} just compare-exiftool-full\` from the oxidex repository root. ` +
     `This builds the tag-comparison binary, downloads or reuses a cached ExifTool release plus its t/images ` +
@@ -92,4 +161,24 @@ const report = await agent(findGapsPrompt(), {
 })
 
 log(`find stage: ${Object.keys(report.by_format || {}).length} formats in report`)
-return report
+
+const gapGroups = gapGroupsFrom(report, args && args.onlyFormats)
+log(`found gaps in ${gapGroups.length} formats${args && args.onlyFormats ? ` (scoped to ${args.onlyFormats.join(', ')})` : ''}`)
+
+if (gapGroups.length === 0) {
+  log('no gaps to fix')
+  return { report, fixResults: [] }
+}
+
+phase('Fix')
+const fixResults = await parallel(gapGroups.map(g => () =>
+  agent(fixPrompt(g), {
+    label: `fix-${g.format}`,
+    phase: 'Fix',
+    isolation: 'worktree',
+    schema: FIX_RESULT_SCHEMA,
+  })
+))
+
+log(`${fixResults.filter(Boolean).filter(r => r.verified).length}/${fixResults.filter(Boolean).length} fix attempts verified`)
+return { report, fixResults }
