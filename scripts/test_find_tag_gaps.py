@@ -1,8 +1,9 @@
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
-from find_tag_gaps import group_gaps_by_format, locate_parser_files
+from find_tag_gaps import group_gaps_by_format, locate_parser_files, run_full_comparison, run_format_comparison
 
 FIXTURE = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "comparison_report_sample.json"
 
@@ -44,6 +45,33 @@ class LocateParserFilesTests(unittest.TestCase):
     def test_unknown_format_with_no_matching_directory_returns_empty(self):
         files = locate_parser_files("TotallyMadeUpFormat")
         self.assertEqual(files, [])
+
+
+class RunFullComparisonTests(unittest.TestCase):
+    @patch("find_tag_gaps.subprocess.run")
+    def test_invokes_just_with_cache_dir_env(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        result = run_full_comparison("/tmp/fake-cache", repo_root=Path("/fake/repo"))
+        args, kwargs = mock_run.call_args
+        self.assertEqual(args[0], ["just", "compare-exiftool-full"])
+        self.assertEqual(kwargs["cwd"], Path("/fake/repo"))
+        self.assertEqual(kwargs["env"]["EXIFTOOL_CACHE_DIR"], "/tmp/fake-cache")
+        self.assertEqual(result, Path("/fake/repo/comparison.json"))
+
+
+class RunFormatComparisonTests(unittest.TestCase):
+    @patch("find_tag_gaps.ensure_tag_comparison_built")
+    @patch("find_tag_gaps.subprocess.run")
+    def test_invokes_tag_comparison_with_format_flag(self, mock_run, mock_ensure):
+        mock_run.return_value = MagicMock(returncode=0)
+        result = run_format_comparison("NEF", "/tmp/fake-cache", repo_root=Path("/fake/repo"))
+        mock_ensure.assert_called_once_with(Path("/fake/repo"))
+        args, kwargs = mock_run.call_args
+        self.assertIn("--format", args[0])
+        self.assertIn("NEF", args[0])
+        self.assertIn("--samples", args[0])
+        self.assertIn("/tmp/fake-cache/combined-samples", args[0])
+        self.assertEqual(result, Path("/tmp/tagcmp-NEF.json"))
 
 
 if __name__ == "__main__":

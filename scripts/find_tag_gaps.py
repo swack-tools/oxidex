@@ -120,3 +120,72 @@ def group_gaps_by_format(report, repo_root=REPO_ROOT):
         })
     gaps.sort(key=lambda g: g["gap_count"], reverse=True)
     return gaps
+
+
+def ensure_tag_comparison_built(repo_root=REPO_ROOT):
+    subprocess.run(
+        ["cargo", "build", "--release", "--bin", "tag-comparison", "--features", "tag-comparison-binary"],
+        cwd=repo_root, check=True,
+    )
+
+
+def run_full_comparison(cache_dir, repo_root=REPO_ROOT):
+    """Run `just compare-exiftool-full` and return the path to comparison.json."""
+    subprocess.run(
+        ["just", "compare-exiftool-full"],
+        cwd=repo_root,
+        env={**os.environ, "EXIFTOOL_CACHE_DIR": str(cache_dir)},
+        check=True,
+    )
+    return repo_root / "comparison.json"
+
+
+def run_format_comparison(format_name, cache_dir, repo_root=REPO_ROOT):
+    """Re-run tag-comparison for a single format against the cached samples.
+
+    Requires run_full_comparison to have populated cache_dir at least once
+    (this does not download or build the combined samples itself).
+    """
+    ensure_tag_comparison_built(repo_root)
+    output = Path(f"/tmp/tagcmp-{format_name}.json")
+    subprocess.run(
+        [
+            str(repo_root / "target/release/tag-comparison"),
+            "--exiftool", f"{cache_dir}/exiftool/exiftool",
+            "--samples", f"{cache_dir}/combined-samples",
+            "--format", format_name,
+            "-o", str(output),
+            "--markdown-dir", f"/tmp/tagcmp-{format_name}-md",
+        ],
+        cwd=repo_root, check=True,
+    )
+    return output
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", default="gaps.json")
+    parser.add_argument("--only-format")
+    parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
+    args = parser.parse_args(argv)
+
+    if args.only_format:
+        report_path = run_format_comparison(args.only_format, args.cache_dir)
+    else:
+        report_path = run_full_comparison(args.cache_dir)
+
+    report = load_comparison_report(report_path)
+    gaps = group_gaps_by_format(report)
+    if args.only_format:
+        gaps = [g for g in gaps if g["format"] == args.only_format]
+
+    with open(args.output, "w") as f:
+        json.dump(gaps, f, indent=2)
+
+    total = sum(g["gap_count"] for g in gaps)
+    print(f"{len(gaps)} formats with gaps, {total} total gaps -> {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
