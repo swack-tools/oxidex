@@ -1,95 +1,15 @@
-//! JPEG APP segment parsers (APP2, APP12, APP14, COM, SOF)
+//! JPEG APP segment parsers (APP0, APP8, APP11, APP12, COM, SOF)
 //!
 //! This module provides parsers for various JPEG application-specific segments:
-//! - APP2: ICC Profile
+//! - APP0: JFIF/JFXX
+//! - APP8: SPIFF
+//! - APP11: JPEG-HDR
 //! - APP12: Picture Info (Ducky)
-//! - APP14: Adobe segment
 //! - COM: JPEG Comment
 //! - SOF: Start of Frame (component information)
 
 use crate::core::{MetadataMap, TagValue};
 use crate::io::EndianReader;
-
-/// Parse ICC Profile (APP2) segment
-///
-/// ICC Profile segments start with "ICC_PROFILE\0"
-pub fn parse_icc_profile_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    if data.len() < 14 {
-        return Err("ICC Profile segment too short".to_string());
-    }
-
-    // Check for ICC_PROFILE identifier
-    if &data[0..12] != b"ICC_PROFILE\0" {
-        return Err("Invalid ICC Profile identifier".to_string());
-    }
-
-    // Sequence number (1-based)
-    let sequence = data[12];
-    // Total number of APP2 segments
-    let total = data[13];
-
-    metadata.insert(
-        "ICC_Profile:ProfileSequence".to_string(),
-        TagValue::String(format!("{} of {}", sequence, total)),
-    );
-
-    // If this is the first segment, extract profile header info
-    if sequence == 1 && data.len() >= 128 + 14 {
-        let profile_data = &data[14..];
-
-        // Profile size (bytes 0-3)
-        if profile_data.len() >= 4 {
-            let reader = EndianReader::big_endian(profile_data);
-            let size = reader.u32_at(0).unwrap_or(0);
-            metadata.insert(
-                "ICC_Profile:ProfileSize".to_string(),
-                TagValue::Integer(size as i64),
-            );
-        }
-
-        // Profile version (bytes 8-11)
-        if profile_data.len() >= 11 {
-            let version_major = profile_data[8];
-            let version_minor = (profile_data[9] >> 4) & 0x0F;
-            metadata.insert(
-                "ICC_Profile:ProfileVersion".to_string(),
-                TagValue::String(format!("{}.{}", version_major, version_minor)),
-            );
-        }
-
-        // Profile class (bytes 12-15)
-        if profile_data.len() >= 16
-            && let Ok(class) = std::str::from_utf8(&profile_data[12..16])
-        {
-            let class_desc = match class {
-                "scnr" => "Input Device Profile",
-                "mntr" => "Display Device Profile",
-                "prtr" => "Output Device Profile",
-                "link" => "DeviceLink Profile",
-                "spac" => "ColorSpace Conversion Profile",
-                "abst" => "Abstract Profile",
-                "nmcl" => "Named Color Profile",
-                _ => class,
-            };
-            metadata.insert(
-                "ICC_Profile:ProfileClass".to_string(),
-                TagValue::String(class_desc.to_string()),
-            );
-        }
-
-        // Color space (bytes 16-19)
-        if profile_data.len() >= 20
-            && let Ok(color_space) = std::str::from_utf8(&profile_data[16..20])
-        {
-            metadata.insert(
-                "ICC_Profile:ColorSpace".to_string(),
-                TagValue::String(color_space.trim().to_string()),
-            );
-        }
-    }
-
-    Ok(())
-}
 
 /// Parse Picture Info (Ducky) segment (APP12)
 ///
@@ -159,57 +79,6 @@ pub fn parse_ducky_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<()
 
         offset += length;
     }
-
-    Ok(())
-}
-
-/// Parse Adobe segment (APP14)
-///
-/// Adobe segments start with "Adobe"
-pub fn parse_adobe_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    if data.len() < 12 {
-        return Err("Adobe segment too short".to_string());
-    }
-
-    if &data[0..5] != b"Adobe" {
-        return Err("Invalid Adobe identifier".to_string());
-    }
-
-    let reader = EndianReader::big_endian(data);
-
-    // DCT Encode Version (2 bytes at offset 5)
-    let dct_encode_version = reader.u16_at(5).unwrap_or(0);
-    metadata.insert(
-        "Adobe:DCTEncodeVersion".to_string(),
-        TagValue::Integer(dct_encode_version as i64),
-    );
-
-    // APP14 Flags0 (2 bytes at offset 7)
-    let flags0 = reader.u16_at(7).unwrap_or(0);
-    metadata.insert(
-        "Adobe:APP14Flags0".to_string(),
-        TagValue::Integer(flags0 as i64),
-    );
-
-    // APP14 Flags1 (2 bytes at offset 9)
-    let flags1 = reader.u16_at(9).unwrap_or(0);
-    metadata.insert(
-        "Adobe:APP14Flags1".to_string(),
-        TagValue::Integer(flags1 as i64),
-    );
-
-    // Color Transform (1 byte at offset 11)
-    let color_transform = data[11];
-    let transform_desc = match color_transform {
-        0 => "Unknown (RGB or CMYK)",
-        1 => "YCbCr",
-        2 => "YCCK",
-        _ => "Unknown",
-    };
-    metadata.insert(
-        "Adobe:ColorTransform".to_string(),
-        TagValue::String(transform_desc.to_string()),
-    );
 
     Ok(())
 }
@@ -557,51 +426,6 @@ pub fn parse_spiff_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<()
     Ok(())
 }
 
-/// Parse APP10 (ActivePhoto) segment
-///
-/// APP10 segments (marker 0xFFEA) contain Apple ActivePhoto metadata for Live Photos
-/// and other dynamic content. The segment contains XML or binary metadata describing
-/// motion and interaction capabilities.
-pub fn parse_activephoto_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    if data.is_empty() {
-        return Err("APP10 ActivePhoto segment is empty".to_string());
-    }
-
-    // Check for known identifier patterns
-    if data.len() >= 20 && &data[0..7] == b"ActiveP" {
-        // Apple ActivePhoto marker (may be followed by version/type data)
-        metadata.insert(
-            "APP10:Format".to_string(),
-            TagValue::String("ActivePhoto".to_string()),
-        );
-
-        // Try to extract version if present
-        if data.len() >= 10 {
-            let version = data[7];
-            metadata.insert(
-                "APP10:Version".to_string(),
-                TagValue::Integer(version as i64),
-            );
-        }
-    } else {
-        // Generic APP10 data
-        metadata.insert(
-            "APP10:DataSize".to_string(),
-            TagValue::Integer(data.len() as i64),
-        );
-    }
-
-    // Try to parse as text if possible
-    if let Ok(text) = std::str::from_utf8(data) {
-        if text.len() < 200 {
-            // Only include as text if reasonably short
-            metadata.insert("APP10:Data".to_string(), TagValue::String(text.to_string()));
-        }
-    }
-
-    Ok(())
-}
-
 /// Parse APP11 (JPEG-HDR) segment
 ///
 /// APP11 segments (marker 0xFFEB) contain HDR (High Dynamic Range) metadata.
@@ -647,113 +471,9 @@ pub fn parse_jpeg_hdr_segment(data: &[u8], metadata: &mut MetadataMap) -> Result
     Ok(())
 }
 
-/// Parse APP15 (JPEG-LS) segment
-///
-/// APP15 segments (marker 0xFFEF) contain metadata for JPEG-LS (lossless JPEG)
-/// compression. JPEG-LS is defined in ITU-T T.87 and provides better compression
-/// than Huffman-based lossless JPEG.
-pub fn parse_jpeg_ls_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    if data.is_empty() {
-        return Err("APP15 JPEG-LS segment is empty".to_string());
-    }
-
-    // Check for JPEGLS identifier (if present)
-    if data.len() >= 6 && &data[0..6] == b"JPEGLS" {
-        metadata.insert(
-            "APP15:Format".to_string(),
-            TagValue::String("JPEG-LS".to_string()),
-        );
-    }
-
-    // JPEG-LS specific parsing
-    // Byte 0-1: Application-specific data (typically SOF or parameter markers)
-    if data.len() >= 2 {
-        let marker_byte1 = data[0];
-        let marker_byte2 = data[1];
-
-        // Check for common JPEG-LS markers
-        if marker_byte1 == 0xFF {
-            let marker_type = match marker_byte2 {
-                0xF7 => "SOF-LS (Start of Frame for JPEG-LS)",
-                0xF8 => "LSE (JPEG-LS Parameters Extension)",
-                0xF9 => "RES (Reserved)",
-                _ => "Unknown marker",
-            };
-            metadata.insert(
-                "APP15:MarkerType".to_string(),
-                TagValue::String(marker_type.to_string()),
-            );
-        }
-    }
-
-    // Record data size for diagnostic purposes
-    metadata.insert(
-        "APP15:DataSize".to_string(),
-        TagValue::Integer(data.len() as i64),
-    );
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_icc_profile() {
-        let mut data = Vec::new();
-        data.extend_from_slice(b"ICC_PROFILE\0");
-        data.push(1); // Sequence 1
-        data.push(1); // Total 1
-
-        // Minimal ICC profile header
-        let mut profile_header = vec![0u8; 128];
-        // Profile size
-        profile_header[0..4].copy_from_slice(&[0x00, 0x00, 0x02, 0x00]);
-        // Version 4.0
-        profile_header[8] = 0x04;
-        profile_header[9] = 0x00;
-        // Profile class "mntr" (display)
-        profile_header[12..16].copy_from_slice(b"mntr");
-        // Color space "RGB "
-        profile_header[16..20].copy_from_slice(b"RGB ");
-
-        data.extend_from_slice(&profile_header);
-
-        let mut metadata = MetadataMap::new();
-        let result = parse_icc_profile_segment(&data, &mut metadata);
-
-        assert!(result.is_ok());
-        assert_eq!(
-            metadata.get_string("ICC_Profile:ProfileClass").as_deref(),
-            Some("Display Device Profile")
-        );
-        assert_eq!(
-            metadata.get_string("ICC_Profile:ColorSpace").as_deref(),
-            Some("RGB")
-        );
-    }
-
-    #[test]
-    fn test_parse_adobe_segment() {
-        let data = [
-            b'A', b'd', b'o', b'b', b'e', // Identifier
-            0x00, 0x64, // DCT Encode Version: 100
-            0x00, 0x00, // Flags0
-            0x00, 0x00, // Flags1
-            0x01, // Color Transform: YCbCr
-        ];
-
-        let mut metadata = MetadataMap::new();
-        let result = parse_adobe_segment(&data, &mut metadata);
-
-        assert!(result.is_ok());
-        assert_eq!(metadata.get_integer("Adobe:DCTEncodeVersion"), Some(100));
-        assert_eq!(
-            metadata.get_string("Adobe:ColorTransform").as_deref(),
-            Some("YCbCr")
-        );
-    }
 
     #[test]
     fn test_parse_comment_segment() {
@@ -863,31 +583,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_activephoto_segment() {
-        let data = b"ActivePhoto metadata here";
-
-        let mut metadata = MetadataMap::new();
-        let result = parse_activephoto_segment(data, &mut metadata);
-
-        assert!(result.is_ok());
-        assert_eq!(
-            metadata.get_string("APP10:Format"),
-            Some("ActivePhoto"),
-            "Should identify ActivePhoto format"
-        );
-    }
-
-    #[test]
-    fn test_parse_activephoto_empty() {
-        let data = b"";
-
-        let mut metadata = MetadataMap::new();
-        let result = parse_activephoto_segment(data, &mut metadata);
-
-        assert!(result.is_err(), "Should error on empty segment");
-    }
-
-    #[test]
     fn test_parse_jpeg_hdr_segment() {
         let data = b"HDR_RI\x01";
 
@@ -904,39 +599,6 @@ mod tests {
             metadata.get_string("APP11:RenderingIntent"),
             Some("Relative Colorimetric"),
             "Should parse rendering intent"
-        );
-    }
-
-    #[test]
-    fn test_parse_jpeg_ls_segment() {
-        let data = b"JPEGLS metadata";
-
-        let mut metadata = MetadataMap::new();
-        let result = parse_jpeg_ls_segment(data, &mut metadata);
-
-        assert!(result.is_ok());
-        assert_eq!(
-            metadata.get_string("APP15:Format"),
-            Some("JPEG-LS"),
-            "Should identify JPEG-LS format"
-        );
-    }
-
-    #[test]
-    fn test_parse_jpeg_ls_with_marker() {
-        let mut data = Vec::new();
-        data.push(0xFF);
-        data.push(0xF7); // SOF-LS marker
-        data.extend_from_slice(b"remaining data");
-
-        let mut metadata = MetadataMap::new();
-        let result = parse_jpeg_ls_segment(&data, &mut metadata);
-
-        assert!(result.is_ok());
-        assert_eq!(
-            metadata.get_string("APP15:MarkerType"),
-            Some("SOF-LS (Start of Frame for JPEG-LS)"),
-            "Should parse marker type"
         );
     }
 }
