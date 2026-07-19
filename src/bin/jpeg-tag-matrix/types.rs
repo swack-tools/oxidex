@@ -1,4 +1,5 @@
 //! Shared JSON schema for the JPEG tag matrix pipeline (manifest -> run -> report).
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 
