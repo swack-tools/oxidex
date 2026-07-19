@@ -95,6 +95,11 @@ pub struct OutEntry {
     pub field_type: u16,
     pub count: u32,
     pub value: Vec<u8>,
+    /// True when `value` is a native-endian placeholder produced by
+    /// `tag_value_to_field` (needs re-encoding into the plan's byte order
+    /// during serialization). False for raw carry-over bytes, which are
+    /// already in the original file's byte order and must not be touched.
+    native_endian: bool,
 }
 
 /// A fully diffed EXIF write: per-IFD entries plus preserved blobs.
@@ -240,6 +245,7 @@ pub fn plan_exif_write(
             field_type: entry.field_type,
             count: entry.count,
             value: entry.value.clone(),
+            native_endian: false,
         };
 
         // Unsurfaced classes: always carry
@@ -273,6 +279,7 @@ pub fn plan_exif_write(
                 field_type: ft,
                 count,
                 value: bytes,
+                native_endian: true,
             },
         );
     }
@@ -299,6 +306,7 @@ pub fn plan_exif_write(
             field_type: ft,
             count,
             value: bytes,
+            native_endian: true,
         };
         // Route by prefix; "EXIF:" keys land in IFD0 (compat with the old writer).
         // Guard against duplicate tag ids: aliased keys (e.g. "IFD0:Make" and
@@ -501,6 +509,301 @@ fn walk_ifd(
         }
     }
     result
+}
+
+/// Emits v in the plan's byte order.
+fn put_u16(out: &mut [u8], v: u16, bo: ByteOrder) {
+    out.copy_from_slice(&match bo {
+        ByteOrder::LittleEndian => v.to_le_bytes(),
+        ByteOrder::BigEndian => v.to_be_bytes(),
+    });
+}
+fn put_u32(out: &mut [u8], v: u32, bo: ByteOrder) {
+    out.copy_from_slice(&match bo {
+        ByteOrder::LittleEndian => v.to_le_bytes(),
+        ByteOrder::BigEndian => v.to_be_bytes(),
+    });
+}
+
+/// Re-encodes an OutEntry's value into the target byte order when the field
+/// type is multi-byte numeric AND the value came from tag_value_to_field's
+/// native-endian placeholder. Carried raw values are already in the file's
+/// byte order (the plan preserves it), so this only converts per-element for
+/// freshly serialized numeric values; it is a no-op for 1-byte element types.
+fn value_in_byte_order(entry: &OutEntry, bo: ByteOrder) -> Vec<u8> {
+    // Carried raw values are already encoded in the target byte order (the
+    // plan never changes byte order); only freshly typed placeholders from
+    // tag_value_to_field are native-endian and need re-encoding here.
+    if !entry.native_endian {
+        return entry.value.clone();
+    }
+    let elem = type_size(entry.field_type);
+    if elem == 1 {
+        return entry.value.clone();
+    }
+    // Elements inside RATIONAL/SRATIONAL are two 4-byte halves
+    let unit = match entry.field_type {
+        5 | 10 => 4,
+        _ => elem,
+    };
+    let mut out = Vec::with_capacity(entry.value.len());
+    for chunk in entry.value.chunks(unit) {
+        let mut c = chunk.to_vec();
+        let native_le = cfg!(target_endian = "little");
+        let want_le = bo == ByteOrder::LittleEndian;
+        if native_le != want_le {
+            c.reverse();
+        }
+        out.extend_from_slice(&c);
+    }
+    out
+}
+
+/// Offset allocator that flows around one reserved window.
+struct Allocator {
+    cursor: usize,
+    reserved: Option<(usize, usize)>, // (start, len)
+}
+
+impl Allocator {
+    fn alloc(&mut self, len: usize) -> usize {
+        // TIFF values should start on even offsets
+        if self.cursor % 2 == 1 {
+            self.cursor += 1;
+        }
+        if let Some((rs, rl)) = self.reserved
+            && self.cursor < rs + rl
+            && self.cursor + len > rs
+        {
+            self.cursor = rs + rl;
+            if self.cursor % 2 == 1 {
+                self.cursor += 1;
+            }
+        }
+        let at = self.cursor;
+        self.cursor += len;
+        at
+    }
+}
+
+/// Emits one IFD table: entries (sorted, with synthesized pointers merged in
+/// tag-id order), then next-IFD pointer, then oversized values (which are
+/// written directly at their pre-allocated offsets).
+#[allow(clippy::too_many_arguments)]
+fn emit_ifd(
+    out: &mut [u8],
+    bo: ByteOrder,
+    table_at: usize,
+    entries: &[OutEntry],
+    offsets: &[usize],
+    pointers: &[(u16, u32)],
+    next_ifd: u32,
+) {
+    let mut rows: Vec<(u16, u16, u32, [u8; 4])> = Vec::new(); // tag, type, count, valfield
+    for (e, off) in entries.iter().zip(offsets) {
+        let mut val = [0u8; 4];
+        if e.value.len() > 4 {
+            put_u32(&mut val, *off as u32, bo);
+            let bytes = value_in_byte_order(e, bo);
+            out[*off..*off + bytes.len()].copy_from_slice(&bytes);
+        } else {
+            let bytes = value_in_byte_order(e, bo);
+            val[..bytes.len()].copy_from_slice(&bytes);
+        }
+        rows.push((e.tag_id, e.field_type, e.count, val));
+    }
+    for (tag, target) in pointers {
+        let mut val = [0u8; 4];
+        put_u32(&mut val, *target, bo);
+        rows.push((*tag, 4, 1, val)); // LONG count 1
+    }
+    rows.sort_by_key(|r| r.0);
+    put_u16(&mut out[table_at..table_at + 2], rows.len() as u16, bo);
+    for (i, (tag, ft, count, val)) in rows.iter().enumerate() {
+        let at = table_at + 2 + i * 12;
+        put_u16(&mut out[at..at + 2], *tag, bo);
+        put_u16(&mut out[at + 2..at + 4], *ft, bo);
+        put_u32(&mut out[at + 4..at + 8], *count, bo);
+        out[at + 8..at + 12].copy_from_slice(val);
+    }
+    let next_at = table_at + 2 + rows.len() * 12;
+    put_u32(&mut out[next_at..next_at + 4], next_ifd, bo);
+}
+
+/// Serializes a WritePlan into complete TIFF bytes. An empty plan yields an
+/// empty Vec (the caller omits the EXIF segment entirely).
+pub fn serialize_exif(plan: &WritePlan) -> Result<Vec<u8>> {
+    let has_entries = !(plan.ifd0.is_empty()
+        && plan.exif_ifd.is_empty()
+        && plan.gps.is_empty()
+        && plan.interop.is_empty()
+        && plan.ifd1.is_empty());
+    if !has_entries {
+        return Ok(Vec::new());
+    }
+    let bo = plan.byte_order;
+
+    // Sorted copies (TIFF requires ascending tag ids per IFD)
+    let mut ifd0 = plan.ifd0.clone();
+    let mut exif_ifd = plan.exif_ifd.clone();
+    let mut gps = plan.gps.clone();
+    let mut interop = plan.interop.clone();
+    let mut ifd1 = plan.ifd1.clone();
+    for list in [&mut ifd0, &mut exif_ifd, &mut gps, &mut interop, &mut ifd1] {
+        list.sort_by_key(|e| e.tag_id);
+        list.dedup_by_key(|e| e.tag_id); // defensive: one entry per tag id
+    }
+
+    // Pointer entries the tables will contain (synthesized during emit)
+    let ifd0_pointers = usize::from(!exif_ifd.is_empty()) + usize::from(!gps.is_empty());
+    let exif_pointers = usize::from(!interop.is_empty());
+    let ifd1_pointers = if plan.thumbnail.is_some() { 2 } else { 0 };
+
+    let table_size = |n: usize| 2 + n * 12 + 4;
+
+    // Pass 1: allocate tables, then oversized values, honoring the pin
+    let mut alloc = Allocator {
+        cursor: 8,
+        reserved: None,
+    };
+    let makernote_len = exif_ifd
+        .iter()
+        .find(|e| e.tag_id == MAKERNOTE)
+        .map(|e| e.value.len())
+        .filter(|len| *len > 4);
+    let mut pinned = None;
+    if let (Some(pin), Some(len)) = (plan.makernote_pin, makernote_len) {
+        if pin >= 8 {
+            alloc.reserved = Some((pin, len));
+            pinned = Some(pin);
+        } else {
+            eprintln!(
+                "Warning: MakerNote original offset {} cannot be honored; \
+                 manufacturer-internal offsets may be invalidated",
+                pin
+            );
+        }
+    }
+
+    let ifd0_at = alloc.alloc(table_size(ifd0.len() + ifd0_pointers));
+    let exif_at = if exif_ifd.is_empty() {
+        0
+    } else {
+        alloc.alloc(table_size(exif_ifd.len() + exif_pointers))
+    };
+    let interop_at = if interop.is_empty() {
+        0
+    } else {
+        alloc.alloc(table_size(interop.len()))
+    };
+    let gps_at = if gps.is_empty() {
+        0
+    } else {
+        alloc.alloc(table_size(gps.len()))
+    };
+    let ifd1_at = if ifd1.is_empty() && plan.thumbnail.is_none() {
+        0
+    } else {
+        alloc.alloc(table_size(ifd1.len() + ifd1_pointers))
+    };
+
+    // Value offsets for every oversized value, deterministic order
+    let mut value_offsets: Vec<Vec<usize>> = Vec::new();
+    for list in [&ifd0, &exif_ifd, &interop, &gps, &ifd1] {
+        let mut offsets = Vec::with_capacity(list.len());
+        for e in list.iter() {
+            if e.value.len() > 4 {
+                if e.tag_id == MAKERNOTE && pinned.is_some() {
+                    offsets.push(pinned.unwrap());
+                } else {
+                    offsets.push(alloc.alloc(e.value.len()));
+                }
+            } else {
+                offsets.push(0); // inline
+            }
+        }
+        value_offsets.push(offsets);
+    }
+    let thumb_at = plan.thumbnail.as_ref().map(|t| alloc.alloc(t.len()));
+
+    let total = alloc
+        .cursor
+        .max(pinned.map_or(0, |p| p + makernote_len.unwrap_or(0)));
+    let mut out = vec![0u8; total];
+
+    // Header
+    out[0..2].copy_from_slice(match bo {
+        ByteOrder::LittleEndian => b"II",
+        ByteOrder::BigEndian => b"MM",
+    });
+    put_u16(&mut out[2..4], 42, bo);
+    put_u32(&mut out[4..8], ifd0_at as u32, bo);
+
+    // ExifIFD (with Interop pointer), Interop, GPS, IFD1, then IFD0 last so
+    // its pointer values are all known
+    if exif_at != 0 {
+        let mut ptrs = Vec::new();
+        if interop_at != 0 {
+            ptrs.push((INTEROP_POINTER, interop_at as u32));
+        }
+        emit_ifd(
+            &mut out,
+            bo,
+            exif_at,
+            &exif_ifd,
+            &value_offsets[1],
+            &ptrs,
+            0,
+        );
+    }
+    if interop_at != 0 {
+        emit_ifd(
+            &mut out,
+            bo,
+            interop_at,
+            &interop,
+            &value_offsets[2],
+            &[],
+            0,
+        );
+    }
+    if gps_at != 0 {
+        emit_ifd(&mut out, bo, gps_at, &gps, &value_offsets[3], &[], 0);
+    }
+    if ifd1_at != 0 {
+        let mut ptrs = Vec::new();
+        if let Some(t_at) = thumb_at {
+            ptrs.push((THUMBNAIL_OFFSET, t_at as u32));
+            ptrs.push((
+                THUMBNAIL_LENGTH,
+                plan.thumbnail.as_ref().unwrap().len() as u32,
+            ));
+        }
+        emit_ifd(&mut out, bo, ifd1_at, &ifd1, &value_offsets[4], &ptrs, 0);
+    }
+    {
+        let mut ptrs = Vec::new();
+        if exif_at != 0 {
+            ptrs.push((EXIF_IFD_POINTER, exif_at as u32));
+        }
+        if gps_at != 0 {
+            ptrs.push((GPS_IFD_POINTER, gps_at as u32));
+        }
+        emit_ifd(
+            &mut out,
+            bo,
+            ifd0_at,
+            &ifd0,
+            &value_offsets[0],
+            &ptrs,
+            ifd1_at as u32,
+        );
+    }
+    if let (Some(t_at), Some(thumb)) = (thumb_at, plan.thumbnail.as_ref()) {
+        out[t_at..t_at + thumb.len()].copy_from_slice(thumb);
+    }
+
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -844,5 +1147,97 @@ mod tests {
         let (field_type_none, _, _) = tag_value_to_field(&TagValue::new_integer(5), None).unwrap();
         assert_eq!(field_type_none, 3, "no hint: smallest-fit still applies");
         let _ = (scan, original); // silence unused if not otherwise referenced
+    }
+
+    /// The strongest possible property: serialize then rescan must reproduce
+    /// the plan exactly (entries, blobs, byte order).
+    fn assert_roundtrip(plan: &WritePlan) {
+        let bytes = serialize_exif(plan).unwrap();
+        let rescan = scan_exif_entries(&bytes).unwrap();
+        assert_eq!(rescan.byte_order, plan.byte_order);
+        let mut expected: Vec<(IfdKind, &OutEntry)> = Vec::new();
+        for (ifd, list) in [
+            (IfdKind::Ifd0, &plan.ifd0),
+            (IfdKind::ExifIfd, &plan.exif_ifd),
+            (IfdKind::Gps, &plan.gps),
+            (IfdKind::Interop, &plan.interop),
+            (IfdKind::Ifd1, &plan.ifd1),
+        ] {
+            for e in list {
+                expected.push((ifd, e));
+            }
+        }
+        assert_eq!(rescan.entries.len(), expected.len());
+        for (ifd, e) in expected {
+            let got = rescan
+                .entries
+                .iter()
+                .find(|r| r.ifd == ifd && r.tag_id == e.tag_id)
+                .unwrap_or_else(|| panic!("missing {:?}:{:#06x}", ifd, e.tag_id));
+            assert_eq!(got.field_type, e.field_type, "type for {:#06x}", e.tag_id);
+            assert_eq!(got.count, e.count, "count for {:#06x}", e.tag_id);
+            assert_eq!(got.value, e.value, "value for {:#06x}", e.tag_id);
+        }
+        assert_eq!(rescan.thumbnail, plan.thumbnail);
+    }
+
+    #[test]
+    fn serialize_roundtrips_noop_plan_le() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let plan = plan_exif_write(&scan, &original, &original.clone()).unwrap();
+        assert_roundtrip(&plan);
+    }
+
+    #[test]
+    fn serialize_roundtrips_noop_plan_be() {
+        let tiff = build_full_tiff(ByteOrder::BigEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let plan = plan_exif_write(&scan, &original, &original.clone()).unwrap();
+        assert_roundtrip(&plan);
+    }
+
+    #[test]
+    fn serialize_honors_makernote_pin() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let plan = plan_exif_write(&scan, &original, &original.clone()).unwrap();
+        assert_eq!(plan.makernote_pin, Some(116));
+        let bytes = serialize_exif(&plan).unwrap();
+        // The makernote payload must sit at its original offset
+        assert_eq!(
+            &bytes[116..124],
+            &[0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04]
+        );
+    }
+
+    #[test]
+    fn serialize_empty_plan_is_empty() {
+        let plan = WritePlan {
+            byte_order: ByteOrder::LittleEndian,
+            ifd0: vec![],
+            exif_ifd: vec![],
+            gps: vec![],
+            interop: vec![],
+            ifd1: vec![],
+            thumbnail: None,
+            makernote_pin: None,
+        };
+        assert!(serialize_exif(&plan).unwrap().is_empty());
+    }
+
+    #[test]
+    fn serialize_real_fixture_noop_roundtrip() {
+        for fixture in [
+            "/tests/fixtures/jpeg/complex/synthetic_gps_001.jpg",
+            "/tests/fixtures/jpeg/makernotes/canon_sample.jpg",
+        ] {
+            let bytes =
+                std::fs::read(format!("{}{}", env!("CARGO_MANIFEST_DIR"), fixture)).unwrap();
+            let tiff = crate::writers::exif_surgical_test_support::tiff_slice(&bytes);
+            let (scan, original) = scan_and_maps(tiff);
+            let plan = plan_exif_write(&scan, &original, &original.clone()).unwrap();
+            assert_roundtrip(&plan);
+        }
     }
 }
