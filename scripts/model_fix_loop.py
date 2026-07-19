@@ -20,7 +20,6 @@ import re
 import subprocess
 import sys
 import urllib.request
-from pathlib import Path
 
 from find_tag_gaps import (
     REPO_ROOT,
