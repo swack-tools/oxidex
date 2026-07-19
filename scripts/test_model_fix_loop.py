@@ -1,9 +1,11 @@
 import json
+import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from model_fix_loop import (
+    build_prompt,
     cargo_build,
     cargo_test_workspace,
     call_model,
@@ -146,6 +148,48 @@ def make_gap(gap_count=2):
     }
 
 
+class BuildPromptTests(unittest.TestCase):
+    def test_caps_missing_tags_and_notes_the_omitted_count(self):
+        gap = {
+            "format": "JPEG",
+            "missing_tags": [
+                {"family": "EXIF", "name": f"Tag{i}", "value": "x", "tag_id": None, "source_file": None}
+                for i in range(5)
+            ],
+            "value_differences": [],
+            "gap_count": 5,
+            "parser_files": [],
+        }
+        prompt = build_prompt(gap, max_tags=2, max_file_bytes=1000)
+        self.assertIn("Tag0", prompt)
+        self.assertIn("Tag1", prompt)
+        self.assertNotIn("Tag2", prompt)
+        self.assertIn("3 more, not shown", prompt)
+
+    def test_caps_parser_file_bytes_but_always_includes_at_least_one_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            (tmp / "big.rs").write_text("x" * 100)
+            (tmp / "small.rs").write_text("y" * 10)
+            gap = {
+                "format": "JPEG",
+                "missing_tags": [],
+                "value_differences": [],
+                "gap_count": 0,
+                "parser_files": ["big.rs", "small.rs"],
+            }
+            prompt = build_prompt(gap, repo_root=tmp, max_tags=40, max_file_bytes=50)
+            self.assertIn("big.rs", prompt)
+            self.assertNotIn("small.rs", prompt)
+            self.assertIn("1 additional file(s) omitted", prompt)
+
+    def test_no_truncation_notes_when_everything_fits(self):
+        gap = make_gap(gap_count=2)
+        prompt = build_prompt(gap, max_tags=40, max_file_bytes=60_000)
+        self.assertNotIn("more, not shown", prompt)
+        self.assertNotIn("additional file(s) omitted", prompt)
+
+
 class FixGapHappyPathTests(unittest.TestCase):
     def test_commits_when_build_and_tests_pass_and_gaps_shrink(self):
         gap = make_gap(gap_count=2)
@@ -154,7 +198,11 @@ class FixGapHappyPathTests(unittest.TestCase):
 
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            {
+                "base_url": "u", "api_key": "k", "model": "glm-5.2",
+                "max_tokens": 4096, "reasoning_effort": "max",
+                "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
+            },
             call_model_fn=lambda messages, *a: (model_calls.append(1), "```diff\n--- a/x\n+++ b/x\n```\n")[1],
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
@@ -185,7 +233,11 @@ class FixGapRepairRoundTripTests(unittest.TestCase):
 
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            {
+                "base_url": "u", "api_key": "k", "model": "glm-5.2",
+                "max_tokens": 4096, "reasoning_effort": "max",
+                "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
+            },
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
@@ -211,7 +263,11 @@ class FixGapRepairRoundTripTests(unittest.TestCase):
 
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            {
+                "base_url": "u", "api_key": "k", "model": "glm-5.2",
+                "max_tokens": 4096, "reasoning_effort": "max",
+                "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
+            },
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=fake_git_apply,
             git_checkout_clean_fn=lambda root: None,
@@ -231,7 +287,11 @@ class FixGapFailureTests(unittest.TestCase):
         gap = make_gap()
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            {
+                "base_url": "u", "api_key": "k", "model": "glm-5.2",
+                "max_tokens": 4096, "reasoning_effort": "max",
+                "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
+            },
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
@@ -246,7 +306,11 @@ class FixGapFailureTests(unittest.TestCase):
         gap = make_gap(gap_count=2)
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            {
+                "base_url": "u", "api_key": "k", "model": "glm-5.2",
+                "max_tokens": 4096, "reasoning_effort": "max",
+                "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
+            },
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
@@ -263,7 +327,11 @@ class FixGapFailureTests(unittest.TestCase):
         gap = make_gap(gap_count=2)
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            {
+                "base_url": "u", "api_key": "k", "model": "glm-5.2",
+                "max_tokens": 4096, "reasoning_effort": "max",
+                "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
+            },
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
@@ -280,7 +348,11 @@ class FixGapFailureTests(unittest.TestCase):
         gap = make_gap()
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            {
+                "base_url": "u", "api_key": "k", "model": "glm-5.2",
+                "max_tokens": 4096, "reasoning_effort": "max",
+                "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
+            },
             call_model_fn=lambda messages, *a: "I could not find a fix.",
             git_apply_fn=lambda diff, root: self.fail("should not apply"),
             cargo_build_fn=lambda root: self.fail("should not build"),
@@ -297,7 +369,11 @@ class FixGapFailureTests(unittest.TestCase):
 
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            {
+                "base_url": "u", "api_key": "k", "model": "glm-5.2",
+                "max_tokens": 4096, "reasoning_effort": "max",
+                "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
+            },
             call_model_fn=raising_call_model,
             git_apply_fn=lambda diff, root: self.fail("should not apply"),
             cargo_build_fn=lambda root: self.fail("should not build"),

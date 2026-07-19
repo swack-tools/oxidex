@@ -11,6 +11,11 @@ Config (env vars, or matching --flags):
     MODEL_FIX_MODEL                e.g. "glm-5.2"
     MODEL_FIX_MAX_TOKENS           default 4096
     MODEL_FIX_REASONING_EFFORT     default "max"
+    MODEL_FIX_MAX_PROMPT_TAGS      default 40 (per-attempt cap on missing_tags/
+                                    value_differences shown; the rest resurface
+                                    in later rounds automatically)
+    MODEL_FIX_MAX_PROMPT_FILE_BYTES default 60000 (per-attempt cap on total
+                                    parser-file source bytes included)
 
 Usage:
     uv run scripts/model_fix_loop.py
@@ -112,22 +117,54 @@ def cargo_test_workspace(repo_root):
     return result.returncode == 0
 
 
-def build_prompt(gap, repo_root=REPO_ROOT):
+DEFAULT_MAX_PROMPT_TAGS = 40
+DEFAULT_MAX_PROMPT_FILE_BYTES = 60_000
+
+
+def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
+                  max_file_bytes=DEFAULT_MAX_PROMPT_FILE_BYTES):
+    """Format one gap into a model prompt, capped so a huge format (e.g.
+    JPEG with thousands of gaps and dozens of parser files) becomes an
+    iterative, tractable request instead of one impossibly large prompt.
+    Whatever's omitted here resurfaces in a later round automatically,
+    since gap["gap_count"] (used by fix_gap's verification) always
+    reflects the format's real total, not just what's shown below.
+    """
+    missing_shown = gap["missing_tags"][:max_tags]
+    missing_omitted = len(gap["missing_tags"]) - len(missing_shown)
     missing = "\n".join(
         f"  - {t['family']}:{t['name']} = {t['value']} (sample: {t.get('source_file') or 'n/a'})"
-        for t in gap["missing_tags"]
+        for t in missing_shown
     ) or "  (none)"
+    if missing_omitted > 0:
+        missing += f"\n  ... and {missing_omitted} more, not shown (will resurface in a later round)"
+
+    diffs_shown = gap["value_differences"][:max_tags]
+    diffs_omitted = len(gap["value_differences"]) - len(diffs_shown)
     diffs = "\n".join(
         f"  - {d['tag_key']}: exiftool=\"{d['exiftool_value']}\" oxidex=\"{d['oxidex_value']}\" (sample: {d['source_file']})"
-        for d in gap["value_differences"]
+        for d in diffs_shown
     ) or "  (none)"
+    if diffs_omitted > 0:
+        diffs += f"\n  ... and {diffs_omitted} more, not shown (will resurface in a later round)"
+
     file_blocks = []
+    bytes_used = 0
+    files_omitted = 0
     for f in gap["parser_files"]:
         try:
-            file_blocks.append(f"--- {f} ---\n{(repo_root / f).read_text()}")
+            content = (repo_root / f).read_text()
         except OSError:
             continue
+        if bytes_used + len(content) > max_file_bytes and file_blocks:
+            files_omitted += 1
+            continue
+        file_blocks.append(f"--- {f} ---\n{content}")
+        bytes_used += len(content)
     files = "\n\n".join(file_blocks) or "(no parser files located -- search src/ yourself)"
+    if files_omitted > 0:
+        files += f"\n\n({files_omitted} additional file(s) omitted to keep this prompt a reasonable size)"
+
     return (
         f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
         f"Missing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
@@ -135,7 +172,8 @@ def build_prompt(gap, repo_root=REPO_ROOT):
         f"Likely relevant source files:\n{files}\n\n"
         "Respond with a single unified diff (in a ```diff fenced block) that fixes as many of these gaps "
         "as you can correctly verify. For value differences, only fix genuine bugs, not benign formatting "
-        "differences. Do not include any explanation outside the diff."
+        "differences. Do not include any explanation outside the diff. If more gaps exist than are shown "
+        "above, that's expected -- just fix what's shown here, and future rounds will address the rest."
     )
 
 
@@ -152,7 +190,11 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
     the "gap count did not decrease" check.
     """
     repo_root = repo_root or REPO_ROOT
-    messages = [{"role": "user", "content": build_prompt(gap, repo_root=repo_root)}]
+    messages = [{"role": "user", "content": build_prompt(
+        gap, repo_root=repo_root,
+        max_tags=config["max_prompt_tags"],
+        max_file_bytes=config["max_prompt_file_bytes"],
+    )}]
 
     built = False
     for _attempt in range(2):  # one initial attempt + one repair round-trip
@@ -268,6 +310,14 @@ def main(argv=None):
         "--reasoning-effort",
         default=os.environ.get("MODEL_FIX_REASONING_EFFORT", "max"),
     )
+    parser.add_argument(
+        "--max-prompt-tags", type=int,
+        default=int(os.environ.get("MODEL_FIX_MAX_PROMPT_TAGS", str(DEFAULT_MAX_PROMPT_TAGS))),
+    )
+    parser.add_argument(
+        "--max-prompt-file-bytes", type=int,
+        default=int(os.environ.get("MODEL_FIX_MAX_PROMPT_FILE_BYTES", str(DEFAULT_MAX_PROMPT_FILE_BYTES))),
+    )
     parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
     args = parser.parse_args(argv)
 
@@ -285,6 +335,8 @@ def main(argv=None):
         "model": args.model,
         "max_tokens": args.max_tokens,
         "reasoning_effort": args.reasoning_effort,
+        "max_prompt_tags": args.max_prompt_tags,
+        "max_prompt_file_bytes": args.max_prompt_file_bytes,
     }
 
     def find_gaps_fn():
