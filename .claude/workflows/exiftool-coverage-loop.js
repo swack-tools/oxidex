@@ -171,7 +171,7 @@ if (gapGroups.length === 0) {
 }
 
 phase('Fix')
-const fixResults = await parallel(gapGroups.map(g => () =>
+const rawFixResults = await parallel(gapGroups.map(g => () =>
   agent(fixPrompt(g), {
     label: `fix-${g.format}`,
     phase: 'Fix',
@@ -179,6 +179,19 @@ const fixResults = await parallel(gapGroups.map(g => () =>
     schema: FIX_RESULT_SCHEMA,
   })
 ))
+
+// The prompt asks the agent to report `format` verbatim, but LLM compliance isn't
+// guaranteed (observed once: an agent reported "mp4-coverage-gap-fix" instead of
+// "MP4"). parallel() preserves input order, so gapGroups[i] is the ground truth for
+// rawFixResults[i]'s format regardless of what the agent claims -- enforce it here
+// rather than trusting the prompt alone, since the merge stage is format-keyed.
+const fixResults = rawFixResults.map((r, i) => {
+  if (!r) return r
+  if (r.format !== gapGroups[i].format) {
+    log(`fix-${gapGroups[i].format}: agent reported format "${r.format}", overriding to match the input group`)
+  }
+  return { ...r, format: gapGroups[i].format }
+})
 
 log(`${fixResults.filter(Boolean).filter(r => r.verified).length}/${fixResults.filter(Boolean).length} fix attempts verified`)
 return { report, fixResults }
