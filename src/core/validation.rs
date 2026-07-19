@@ -119,19 +119,7 @@ pub fn validate_tag_value_with_name(
 
     match value {
         TagValue::String(_) => {
-            // A String is the canonical printable/serialized form for textual and for
-            // "undefined"/binary, date-time, and rational EXIF tags. Parsers surface those
-            // tags as formatted strings (e.g. ComponentsConfiguration -> Binary,
-            // DateTimeOriginal -> DateTime "YYYY:MM:DD HH:MM:SS", ExposureTime -> Rational
-            // "1/100"), so accepting String for those descriptor types is what makes
-            // read->write round-trips succeed; the writer coerces to the storage form.
-            // Integer/Float tags are surfaced as Integer/Float, so a String against an
-            // Integer/Float descriptor (or Struct) still indicates a real type error and
-            // is rejected. These coercions are exactly those observed across real fixtures.
-            if !matches!(
-                expected_type,
-                ValueType::String | ValueType::Binary | ValueType::DateTime | ValueType::Rational
-            ) {
+            if expected_type != ValueType::String {
                 return Err(ExifToolError::invalid_tag_value(
                     tag_name,
                     format!("Type mismatch: expected {:?} but got String", expected_type),
@@ -139,11 +127,7 @@ pub fn validate_tag_value_with_name(
             }
         }
         TagValue::Integer(_) => {
-            // An integer N is exactly the rational N/1, and parsers surface whole-number
-            // Rational tags (e.g. FNumber "2") as Integer, so accept Integer for Rational
-            // descriptors in addition to Integer. Float remains rejected to preserve strict
-            // numeric typing (not needed for round-trips).
-            if !matches!(expected_type, ValueType::Integer | ValueType::Rational) {
+            if expected_type != ValueType::Integer {
                 return Err(ExifToolError::invalid_tag_value(
                     tag_name,
                     format!(
@@ -403,15 +387,22 @@ mod tests {
         }
     }
 
-    // Test 11: String is accepted for a Rational descriptor (round-trip coercion).
-    // Parsers surface rational tags like ExposureTime as strings ("1/100"); the writer
-    // coerces back to a rational, so validation must allow it.
+    // Test 11: Type mismatch - Rational expected, String provided
     #[test]
-    fn test_validate_string_coerces_to_rational() {
+    fn test_validate_type_mismatch_rational_string() {
         let descriptor = create_descriptor(ValueType::Rational);
         let value = TagValue::new_string("1/100");
 
-        assert!(validate_tag_value(&descriptor, &value).is_ok());
+        let result = validate_tag_value(&descriptor, &value);
+        assert!(result.is_err());
+
+        if let Err(ExifToolError::InvalidTagValue { reason, .. }) = result {
+            assert!(reason.contains("Type mismatch"));
+            assert!(reason.contains("Rational"));
+            assert!(reason.contains("String"));
+        } else {
+            panic!("Expected InvalidTagValue error");
+        }
     }
 
     // Test 12: Rational with zero denominator fails validation
@@ -442,25 +433,38 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // Test 14: String is accepted for a Binary descriptor (round-trip coercion).
-    // EXIF "undefined"/binary tags (e.g. ComponentsConfiguration) are surfaced as printable
-    // strings by the parser; validation must allow writing them back.
+    // Test 14: Type mismatch - Binary expected, String provided
     #[test]
-    fn test_validate_string_coerces_to_binary() {
+    fn test_validate_type_mismatch_binary_string() {
         let descriptor = create_descriptor(ValueType::Binary);
         let value = TagValue::new_string("binary data");
 
-        assert!(validate_tag_value(&descriptor, &value).is_ok());
+        let result = validate_tag_value(&descriptor, &value);
+        assert!(result.is_err());
+
+        if let Err(ExifToolError::InvalidTagValue { reason, .. }) = result {
+            assert!(reason.contains("Type mismatch"));
+            assert!(reason.contains("Binary"));
+        } else {
+            panic!("Expected InvalidTagValue error");
+        }
     }
 
-    // Test 15: String is accepted for a DateTime descriptor (round-trip coercion).
-    // DateTime tags are surfaced as canonical "YYYY:MM:DD HH:MM:SS" strings.
+    // Test 15: Type mismatch - DateTime expected, String provided
     #[test]
-    fn test_validate_string_coerces_to_datetime() {
+    fn test_validate_type_mismatch_datetime_string() {
         let descriptor = create_descriptor(ValueType::DateTime);
         let value = TagValue::new_string("2023:06:15 14:30:00");
 
-        assert!(validate_tag_value(&descriptor, &value).is_ok());
+        let result = validate_tag_value(&descriptor, &value);
+        assert!(result.is_err());
+
+        if let Err(ExifToolError::InvalidTagValue { reason, .. }) = result {
+            assert!(reason.contains("Type mismatch"));
+            assert!(reason.contains("DateTime"));
+        } else {
+            panic!("Expected InvalidTagValue error");
+        }
     }
 
     // Test 16: Empty string is valid for String type
@@ -566,10 +570,9 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // Test 24: Real-world example - GPS Latitude as a decimal string is accepted for the
-    // Rational descriptor (round-trip coercion; ExifTool accepts decimal-string GPS input).
+    // Test 24: Real-world example - GPS Latitude (should fail with wrong type)
     #[test]
-    fn test_validate_real_world_gps_latitude_string_coerces() {
+    fn test_validate_real_world_gps_latitude_wrong_type() {
         let descriptor = TagDescriptor::new(
             TagId::new_numeric(0x0002),
             "GPS:GPSLatitude".to_string(),
@@ -581,29 +584,7 @@ mod tests {
         );
 
         let value = TagValue::new_string("37.7749");
-        assert!(validate_tag_value(&descriptor, &value).is_ok());
-    }
-
-    // Test 25: Integer is accepted for a Rational descriptor (N == N/1 round-trip coercion).
-    #[test]
-    fn test_validate_integer_coerces_to_rational() {
-        let descriptor = create_descriptor(ValueType::Rational);
-        assert!(validate_tag_value(&descriptor, &TagValue::new_integer(2)).is_ok());
-    }
-
-    // Test 26: Boundary - validation strength preserved. String is still rejected for
-    // Integer/Float descriptors (parsers never surface those as strings), as is Integer
-    // for Float and String for Struct.
-    #[test]
-    fn test_validate_strict_boundaries_preserved() {
-        let int_desc = create_descriptor(ValueType::Integer);
-        assert!(validate_tag_value(&int_desc, &TagValue::new_string("123")).is_err());
-
-        let float_desc = create_descriptor(ValueType::Float);
-        assert!(validate_tag_value(&float_desc, &TagValue::new_string("1.5")).is_err());
-        assert!(validate_tag_value(&float_desc, &TagValue::new_integer(42)).is_err());
-
-        let struct_desc = create_descriptor(ValueType::Struct);
-        assert!(validate_tag_value(&struct_desc, &TagValue::new_string("x")).is_err());
+        let result = validate_tag_value(&descriptor, &value);
+        assert!(result.is_err());
     }
 }
