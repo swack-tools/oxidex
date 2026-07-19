@@ -25,6 +25,7 @@ fn generated_tags_stub_still_delegates_to_active_registry() {
 #[test]
 fn build_rs_no_longer_exists() {
     let build_rs = Path::new(env!("CARGO_MANIFEST_DIR")).join("build.rs");
+
     assert!(
         !build_rs.exists(),
         "build.rs should stay deleted — tag generation lives in src/tag_sync/ + \
