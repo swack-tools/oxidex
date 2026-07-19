@@ -143,8 +143,7 @@ fn inplace_shift_beyond_year_range_errors_cleanly() {
     // 8000 years past 2024 formats as a 5-digit year, which cannot fit the
     // fixed 19-byte EXIF value; must be a clean error, not a panic
     let spec = build_shift_spec("8000:0:0 0:0:0", ShiftOperation::Add).unwrap();
-    let err = shift_jpeg_exif_dates(&dst, &[ExifDateTag::DateTimeOriginal], &spec)
-        .unwrap_err();
+    let err = shift_jpeg_exif_dates(&dst, &[ExifDateTag::DateTimeOriginal], &spec).unwrap_err();
     assert!(err.to_string().contains("representable"), "got: {}", err);
     // File untouched
     assert!(diff_indices(&src, &dst).is_empty());
