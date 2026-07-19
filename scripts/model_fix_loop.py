@@ -104,3 +104,90 @@ def cargo_test_workspace(repo_root):
         capture_output=True, text=True, cwd=repo_root,
     )
     return result.returncode == 0
+
+
+def build_prompt(gap):
+    missing = "\n".join(
+        f"  - {t['family']}:{t['name']} = {t['value']} (sample: {t.get('source_file') or 'n/a'})"
+        for t in gap["missing_tags"]
+    ) or "  (none)"
+    diffs = "\n".join(
+        f"  - {d['tag_key']}: exiftool=\"{d['exiftool_value']}\" oxidex=\"{d['oxidex_value']}\" (sample: {d['source_file']})"
+        for d in gap["value_differences"]
+    ) or "  (none)"
+    file_blocks = []
+    for f in gap["parser_files"]:
+        try:
+            file_blocks.append(f"--- {f} ---\n{Path(f).read_text()}")
+        except OSError:
+            continue
+    files = "\n\n".join(file_blocks) or "(no parser files located -- search src/ yourself)"
+    return (
+        f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
+        f"Missing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
+        f"Value differences (both extract it, values disagree):\n{diffs}\n\n"
+        f"Likely relevant source files:\n{files}\n\n"
+        "Respond with a single unified diff (in a ```diff fenced block) that fixes as many of these gaps "
+        "as you can correctly verify. For value differences, only fix genuine bugs, not benign formatting "
+        "differences. Do not include any explanation outside the diff."
+    )
+
+
+def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
+            git_checkout_clean_fn=git_checkout_clean, git_commit_fn=git_commit,
+            cargo_build_fn=cargo_build, cargo_test_workspace_fn=cargo_test_workspace,
+            recheck_fn=None, repo_root=None):
+    """Attempt to close one format's gaps via a single-shot patch, with one
+    repair round-trip on build failure. Returns a result dict.
+
+    recheck_fn(format_name) -> int must return the gap count for that
+    format after the attempted fix (used to confirm real progress). If not
+    provided, progress can never be confirmed and the attempt always fails
+    the "gap count did not decrease" check.
+    """
+    repo_root = repo_root or REPO_ROOT
+    messages = [{"role": "user", "content": build_prompt(gap)}]
+
+    built = False
+    for _attempt in range(2):  # one initial attempt + one repair round-trip
+        reply = call_model_fn(messages, config["base_url"], config["api_key"], config["model"])
+        diff = extract_diff(reply)
+        if diff is None:
+            return {"format": gap["format"], "status": "failed", "reason": "no diff in model response"}
+
+        messages.append({"role": "assistant", "content": reply})
+
+        applied, apply_msg = git_apply_fn(diff, repo_root)
+        if not applied:
+            git_checkout_clean_fn(repo_root)
+            messages.append({
+                "role": "user",
+                "content": f"That diff did not apply: {apply_msg}\nPlease resend a corrected diff.",
+            })
+            continue
+
+        built, build_err = cargo_build_fn(repo_root)
+        if built:
+            break
+
+        git_checkout_clean_fn(repo_root)
+        messages.append({
+            "role": "user",
+            "content": f"The build failed:\n{build_err}\nPlease resend a corrected diff.",
+        })
+
+    if not built:
+        return {"format": gap["format"], "status": "failed", "reason": "no working fix after repair attempt"}
+
+    remaining = recheck_fn(gap["format"]) if recheck_fn else gap["gap_count"]
+    if remaining >= gap["gap_count"]:
+        git_checkout_clean_fn(repo_root)
+        return {"format": gap["format"], "status": "failed", "reason": "gap count did not decrease"}
+
+    if not cargo_test_workspace_fn(repo_root):
+        git_checkout_clean_fn(repo_root)
+        return {"format": gap["format"], "status": "failed", "reason": "cargo test --workspace regressed"}
+
+    closed = gap["gap_count"] - remaining
+    git_commit_fn(f"fix({gap['format'].lower()}): wire {closed} missing tags (via {config['model']})", repo_root)
+    return {"format": gap["format"], "status": "fixed", "gaps_closed": closed}
