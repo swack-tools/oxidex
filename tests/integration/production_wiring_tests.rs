@@ -1731,7 +1731,7 @@ fn gpmf_record(fourcc: &[u8; 4], fmt: u8, size: u8, count: u16, data: &[u8]) -> 
     rec.push(size);
     rec.extend_from_slice(&count.to_be_bytes());
     rec.extend_from_slice(data);
-    while rec.len() % 4 != 0 {
+    while !rec.len().is_multiple_of(4) {
         rec.push(0);
     }
     rec
