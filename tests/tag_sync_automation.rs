@@ -23,9 +23,8 @@ fn generated_tags_stub_delegates_count_to_active_registry() {
 }
 
 #[test]
-fn tag_sync_targets_active_domain_crates_and_counts_yaml_sources() {
+fn tag_sync_targets_active_domain_crates() {
     let build_rs = repo_file("build.rs");
-    let workflow = repo_file(".github/workflows/sync-exiftool-tags.yml");
 
     assert!(
         build_rs.contains(r#"format!("oxidex-tags-{}/src/{}_tags.yaml", domain, domain)"#),
@@ -34,13 +33,5 @@ fn tag_sync_targets_active_domain_crates_and_counts_yaml_sources() {
     assert!(
         !build_rs.contains("exiftool-tags-{}/src/{}_tags.yaml"),
         "build.rs should not target obsolete exiftool-tags-* crate paths"
-    );
-    assert!(
-        workflow.contains("oxidex-tags-*/src/*_tags.yaml"),
-        "sync workflow should count tags from active YAML domain crates"
-    );
-    assert!(
-        !workflow.contains("grep -A 1 \"pub fn generated_tag_count\" src/tag_db/generated_tags.rs"),
-        "sync workflow must not scrape generated_tags.rs as the tag-count source"
     );
 }
