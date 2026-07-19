@@ -65,82 +65,73 @@ impl DateOffset {
     }
 }
 
-/// Parses offset string in format "years:months:days hours:minutes:seconds"
+/// Parses an ExifTool-style shift string.
+///
+/// Grammar (matches `Image::ExifTool::Shift.pl`, verified against ExifTool 13.55):
+/// - Optional leading `+` or `-`; `-` negates the whole shift (the returned
+///   bool is `true`), which callers apply by flipping Add and Subtract.
+/// - One or two space-separated parts, each 1-3 colon-separated non-negative
+///   integers.
+/// - Two parts are `DATE TIME`. DATE is right-justified: `D`, `M:D`, or
+///   `Y:M:D`. TIME is left-justified: `H`, `H:M`, or `H:M:S`.
+/// - A single part is a TIME shift (`H`, `H:M`, or `H:M:S`) because every tag
+///   this module shifts is a full date-time value.
 ///
 /// # Examples
 ///
-/// - "1:2:3 4:5:6" -> 1 year, 2 months, 3 days, 4 hours, 5 minutes, 6 seconds
-/// - "0:0:1 0:0:0" -> 1 day
-/// - "0:0:0 6:30:0" -> 6 hours and 30 minutes
-///
-/// # Format
-///
-/// The format is: `Y:M:D H:M:S` where:
-/// - Y = years (non-negative integer)
-/// - M = months (non-negative integer)
-/// - D = days (integer)
-/// - H = hours (integer)
-/// - M = minutes (integer)
-/// - S = seconds (integer)
-///
-/// Date and time components are separated by a space.
-pub fn parse_offset(s: &str) -> Result<DateOffset> {
-    // Split by space to separate date and time components
-    let parts: Vec<&str> = s.split_whitespace().collect();
-
-    if parts.len() != 2 {
-        return Err(ExifToolError::parse_error(format!(
-            "Invalid offset format '{}': expected 'Y:M:D H:M:S' (e.g., '1:2:3 4:5:6')",
+/// - `"1:00:00"` -> 1 hour
+/// - `"1:30"` -> 1 hour 30 minutes
+/// - `"0:0:1 0:0:0"` -> 1 day
+/// - `"1:2 3"` -> 1 month, 2 days, 3 hours
+/// - `"-1"` -> 1 hour, negated
+pub fn parse_offset(s: &str) -> Result<(DateOffset, bool)> {
+    let invalid = || {
+        ExifToolError::parse_error(format!(
+            "Invalid shift string '{}': expected 'TIME' or 'DATE TIME' with 1-3 \
+             numbers per part (e.g., '1:30' for 1.5 hours, '0:0:1 12' for 1 day 12 hours)",
             s
-        )));
+        ))
+    };
+
+    let trimmed = s.trim();
+    let (negated, rest) = match trimmed.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+
+    let parts: Vec<&str> = rest.split_whitespace().collect();
+    let (date_part, time_part) = match parts.as_slice() {
+        [time] => (None, *time),
+        [date, time] => (Some(*date), *time),
+        _ => return Err(invalid()),
+    };
+
+    let parse_components = |part: &str| -> Result<Vec<u32>> {
+        let fields: Vec<&str> = part.split(':').collect();
+        if fields.is_empty() || fields.len() > 3 {
+            return Err(invalid());
+        }
+        fields
+            .iter()
+            .map(|f| f.parse::<u32>().map_err(|_| invalid()))
+            .collect()
+    };
+
+    let mut offset = DateOffset::zero();
+    if let Some(date) = date_part {
+        // Right-justified: the last number is always days
+        let mut values = parse_components(date)?.into_iter().rev();
+        offset.days = values.next().unwrap_or(0) as i64;
+        offset.months = values.next().unwrap_or(0);
+        offset.years = values.next().unwrap_or(0);
     }
+    // Left-justified: the first number is always hours
+    let mut values = parse_components(time_part)?.into_iter();
+    offset.hours = values.next().unwrap_or(0) as i64;
+    offset.minutes = values.next().unwrap_or(0) as i64;
+    offset.seconds = values.next().unwrap_or(0) as i64;
 
-    // Parse date component (Y:M:D)
-    let date_parts: Vec<&str> = parts[0].split(':').collect();
-    if date_parts.len() != 3 {
-        return Err(ExifToolError::parse_error(format!(
-            "Invalid date component '{}': expected 'Y:M:D' format",
-            parts[0]
-        )));
-    }
-
-    // Parse time component (H:M:S)
-    let time_parts: Vec<&str> = parts[1].split(':').collect();
-    if time_parts.len() != 3 {
-        return Err(ExifToolError::parse_error(format!(
-            "Invalid time component '{}': expected 'H:M:S' format",
-            parts[1]
-        )));
-    }
-
-    // Parse each component with error handling
-    let years = date_parts[0].parse::<u32>().map_err(|_| {
-        ExifToolError::parse_error(format!("Invalid years value '{}'", date_parts[0]))
-    })?;
-
-    let months = date_parts[1].parse::<u32>().map_err(|_| {
-        ExifToolError::parse_error(format!("Invalid months value '{}'", date_parts[1]))
-    })?;
-
-    let days = date_parts[2].parse::<i64>().map_err(|_| {
-        ExifToolError::parse_error(format!("Invalid days value '{}'", date_parts[2]))
-    })?;
-
-    let hours = time_parts[0].parse::<i64>().map_err(|_| {
-        ExifToolError::parse_error(format!("Invalid hours value '{}'", time_parts[0]))
-    })?;
-
-    let minutes = time_parts[1].parse::<i64>().map_err(|_| {
-        ExifToolError::parse_error(format!("Invalid minutes value '{}'", time_parts[1]))
-    })?;
-
-    let seconds = time_parts[2].parse::<i64>().map_err(|_| {
-        ExifToolError::parse_error(format!("Invalid seconds value '{}'", time_parts[2]))
-    })?;
-
-    Ok(DateOffset::new(
-        years, months, days, hours, minutes, seconds,
-    ))
+    Ok((offset, negated))
 }
 
 /// Parses an EXIF DateTime string into a chrono::DateTime<Utc>
@@ -303,10 +294,16 @@ pub fn shift_metadata_dates(
     let mut metadata = read_metadata(path)?;
 
     // Step 2: Parse offset or absolute value based on operation
-    let offset = if op == ShiftOperation::Set {
-        None
+    let (offset, op) = if op == ShiftOperation::Set {
+        (None, op)
     } else {
-        Some(parse_offset(offset_or_value)?)
+        let (parsed, negated) = parse_offset(offset_or_value)?;
+        let effective = match (op, negated) {
+            (ShiftOperation::Add, true) => ShiftOperation::Subtract,
+            (ShiftOperation::Subtract, true) => ShiftOperation::Add,
+            (other, _) => other,
+        };
+        (Some(parsed), effective)
     };
 
     let absolute_value = if op == ShiftOperation::Set {
@@ -408,49 +405,76 @@ mod tests {
     use chrono::{Datelike, TimeZone, Timelike};
 
     #[test]
-    fn test_parse_offset_valid() {
-        let offset = parse_offset("1:2:3 4:5:6").unwrap();
-        assert_eq!(offset.years, 1);
-        assert_eq!(offset.months, 2);
-        assert_eq!(offset.days, 3);
-        assert_eq!(offset.hours, 4);
-        assert_eq!(offset.minutes, 5);
-        assert_eq!(offset.seconds, 6);
+    fn test_parse_offset_full_form() {
+        let (offset, neg) = parse_offset("1:2:3 4:5:6").unwrap();
+        assert!(!neg);
+        assert_eq!(offset, DateOffset::new(1, 2, 3, 4, 5, 6));
     }
 
     #[test]
-    fn test_parse_offset_zero() {
-        let offset = parse_offset("0:0:0 0:0:0").unwrap();
-        assert_eq!(offset, DateOffset::zero());
+    fn test_parse_offset_single_number_is_hours() {
+        let (offset, neg) = parse_offset("1").unwrap();
+        assert!(!neg);
+        assert_eq!(offset, DateOffset::new(0, 0, 0, 1, 0, 0));
     }
 
     #[test]
-    fn test_parse_offset_one_day() {
-        let offset = parse_offset("0:0:1 0:0:0").unwrap();
-        assert_eq!(offset.years, 0);
-        assert_eq!(offset.months, 0);
-        assert_eq!(offset.days, 1);
-        assert_eq!(offset.hours, 0);
-        assert_eq!(offset.minutes, 0);
-        assert_eq!(offset.seconds, 0);
+    fn test_parse_offset_time_is_left_justified() {
+        // ExifTool: '1:30' means 1 hour 30 minutes, NOT 1 minute 30 seconds
+        let (offset, _) = parse_offset("1:30").unwrap();
+        assert_eq!(offset, DateOffset::new(0, 0, 0, 1, 30, 0));
     }
 
     #[test]
-    fn test_parse_offset_invalid_format_no_space() {
-        let result = parse_offset("1:2:3:4:5:6");
-        assert!(result.is_err());
+    fn test_parse_offset_three_part_time() {
+        let (offset, _) = parse_offset("0:0:30").unwrap();
+        assert_eq!(offset, DateOffset::new(0, 0, 0, 0, 0, 30));
     }
 
     #[test]
-    fn test_parse_offset_invalid_format_too_few_components() {
-        let result = parse_offset("1:2 3:4");
-        assert!(result.is_err());
+    fn test_parse_offset_issue_14_form() {
+        // The exact string from GitHub issue #14
+        let (offset, neg) = parse_offset("1:00:00").unwrap();
+        assert!(!neg);
+        assert_eq!(offset, DateOffset::new(0, 0, 0, 1, 0, 0));
     }
 
     #[test]
-    fn test_parse_offset_invalid_number() {
-        let result = parse_offset("abc:2:3 4:5:6");
-        assert!(result.is_err());
+    fn test_parse_offset_date_is_right_justified() {
+        // ExifTool: date part '1:2' means 1 month 2 days, NOT 1 year 2 months
+        let (offset, _) = parse_offset("1:2 3").unwrap();
+        assert_eq!(offset, DateOffset::new(0, 1, 2, 3, 0, 0));
+    }
+
+    #[test]
+    fn test_parse_offset_two_arg_full_date() {
+        let (offset, _) = parse_offset("1:0:0 0:0:0").unwrap();
+        assert_eq!(offset, DateOffset::new(1, 0, 0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_parse_offset_leading_minus_sets_negated() {
+        let (offset, neg) = parse_offset("-1").unwrap();
+        assert!(neg);
+        assert_eq!(offset, DateOffset::new(0, 0, 0, 1, 0, 0));
+    }
+
+    #[test]
+    fn test_parse_offset_leading_plus_ignored() {
+        let (offset, neg) = parse_offset("+1:30").unwrap();
+        assert!(!neg);
+        assert_eq!(offset, DateOffset::new(0, 0, 0, 1, 30, 0));
+    }
+
+    #[test]
+    fn test_parse_offset_invalid() {
+        assert!(parse_offset("").is_err());
+        assert!(parse_offset("1:2:3:4").is_err()); // too many numbers in one part
+        assert!(parse_offset("1:2:3:4:5:6").is_err());
+        assert!(parse_offset("1:2:3 4:5:6 7").is_err()); // three parts
+        assert!(parse_offset("abc").is_err());
+        assert!(parse_offset("1:2:3 4:x").is_err());
+        assert!(parse_offset("1:").is_err()); // empty component
     }
 
     #[test]
