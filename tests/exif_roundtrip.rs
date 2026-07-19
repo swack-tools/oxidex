@@ -1,9 +1,12 @@
 //! Round-trip regression suite for issue #20: read -> write must never
 //! corrupt or silently drop EXIF data.
 
-use oxidex::core::operations::{modify_tag, read_metadata, remove_tag, write_metadata};
+use oxidex::core::operations::{
+    clear_all_metadata, copy_metadata, modify_tag, read_metadata, remove_tag, write_metadata,
+};
 use oxidex::core::tag_value::TagValue;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -110,4 +113,54 @@ fn changed_binary_display_string_still_rejected() {
     // And the file was not touched
     let orig = std::fs::read(fixture("complex/synthetic_gps_001.jpg")).unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), orig);
+}
+
+#[test]
+fn copy_metadata_between_real_files() {
+    let (_d1, src) = temp_copy(&fixture("makernotes/canon_sample.jpg"), "copy_src.jpg");
+    let (_d2, dst) = temp_copy(&fixture("complex/synthetic_gps_001.jpg"), "copy_dst.jpg");
+    // was: hard validation failure on the merged map
+    copy_metadata(&src, &dst, Some(&["IFD0:Make".to_string()])).unwrap();
+    let after = read_metadata(&dst).unwrap();
+    assert_eq!(
+        after.get("IFD0:Make").and_then(|v| v.as_string()),
+        Some("Canon")
+    );
+    // Destination's own binary canaries untouched
+    let before = read_metadata(&fixture("complex/synthetic_gps_001.jpg")).unwrap();
+    assert_eq!(
+        before.get("ExifIFD:ComponentsConfiguration"),
+        after.get("ExifIFD:ComponentsConfiguration")
+    );
+}
+
+#[test]
+fn clear_all_metadata_drops_exif_entirely() {
+    let (_d, path) = temp_copy(&fixture("complex/synthetic_gps_001.jpg"), "clear.jpg");
+    clear_all_metadata(&path).unwrap();
+    let after = read_metadata(&path).unwrap();
+    assert!(after.get("ExifIFD:ComponentsConfiguration").is_none());
+    assert!(after.get("GPS:GPSVersionID").is_none());
+    assert!(after.get("ExifIFD:DateTimeOriginal").is_none());
+}
+
+#[test]
+fn cli_tag_write_on_real_gps_jpeg() {
+    let (_d, path) = temp_copy(&fixture("complex/synthetic_gps_001.jpg"), "cli_write.jpg");
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg("-IFD0:Artist=CLI Writer")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let after = read_metadata(&path).unwrap();
+    assert_eq!(
+        after.get("IFD0:Artist").and_then(|v| v.as_string()),
+        Some("CLI Writer")
+    );
+    assert!(after.get("GPS:GPSVersionID").is_some());
 }
