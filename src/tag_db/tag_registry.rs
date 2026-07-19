@@ -4,7 +4,7 @@
 //! GPS (30+), XMP (100+), IPTC (50+), PDF (10+), and QuickTime (10+) formats.
 //! This is a manual implementation. Automated tag generation now lives in
 //! `src/tag_sync/` and `src/bin/sync_tags.rs` (run explicitly via
-//! `cargo run --bin sync-tags`, not as part of the build).
+//! `cargo run --bin sync_tags`, not as part of the build).
 
 use crate::core::{FormatFamily, TagDescriptor, TagId, ValueType};
 use oxidex_tags::GENERATED_TAG_REGISTRY;
