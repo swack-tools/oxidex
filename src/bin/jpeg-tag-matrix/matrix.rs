@@ -554,8 +554,23 @@ pub struct Tools<'a> {
 /// `wait_timeout` crate dependency, since this binary otherwise doesn't
 /// need one): poll `try_wait` every 20ms, killing the child and returning
 /// a synthetic `-1`/`"TIMEOUT"` result if the deadline passes.
+///
+/// stdout/stderr are drained continuously by two background threads (each
+/// blocked on `Read::read_to_string` until the pipe closes at child exit),
+/// handed back to this function over a channel once the child exits. This
+/// mirrors Python's `Popen.communicate()`, which reads concurrently with
+/// waiting: if the child writes more than the OS pipe buffer holds (~64KB)
+/// before exiting, and nothing is draining the pipe meanwhile, the child
+/// blocks on the full pipe write while this loop just keeps polling
+/// `try_wait` (which can never see the child exit, since it's stuck
+/// writing) -- a deadlock-adjacent false "TIMEOUT" on what would otherwise
+/// be a fast, successful call. Reading only after `try_wait` reports exit
+/// (the prior approach) doesn't drain anything until it's too late.
 fn run_cmd(prog: &str, args: &[String], timeout_secs: u64) -> (i32, String, String) {
+    use std::io::Read;
     use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+
     let mut child = match Command::new(prog)
         .args(args)
         .stdout(Stdio::piped())
@@ -565,15 +580,28 @@ fn run_cmd(prog: &str, args: &[String], timeout_secs: u64) -> (i32, String, Stri
         Ok(c) => c,
         Err(e) => return (-2, String::new(), e.to_string()),
     };
+
+    let mut stdout_pipe = child.stdout.take().unwrap();
+    let mut stderr_pipe = child.stderr.take().unwrap();
+    let (stdout_tx, stdout_rx) = mpsc::channel();
+    let (stderr_tx, stderr_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = stdout_pipe.read_to_string(&mut buf);
+        let _ = stdout_tx.send(buf);
+    });
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = stderr_pipe.read_to_string(&mut buf);
+        let _ = stderr_tx.send(buf);
+    });
+
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                use std::io::Read;
-                let mut out = String::new();
-                let mut err = String::new();
-                child.stdout.take().unwrap().read_to_string(&mut out).ok();
-                child.stderr.take().unwrap().read_to_string(&mut err).ok();
+                let out = stdout_rx.recv().unwrap_or_default();
+                let err = stderr_rx.recv().unwrap_or_default();
                 return (status.code().unwrap_or(-1), out, err);
             }
             Ok(None) => {
@@ -955,5 +983,33 @@ mod read_phase_tests {
         };
         let res = read_test_group(&tools, &base, std::slice::from_ref(&tag));
         assert_eq!(res["ExifIFD:ISO"].read.as_deref(), Some("OK"));
+    }
+}
+
+#[cfg(test)]
+mod run_cmd_tests {
+    use super::*;
+
+    /// Regression test for a deadlock-adjacent bug: `run_cmd` used to only
+    /// read stdout/stderr *after* `try_wait()` reported the child had
+    /// exited. If a child writes more than the OS pipe buffer holds
+    /// (~64KB on macOS/Linux) before exiting, and nothing is draining the
+    /// pipe while it runs, the child blocks on the full pipe write and
+    /// `try_wait()` never observes an exit -- producing a spurious TIMEOUT
+    /// on what should be a fast, successful call. This spawns a child that
+    /// writes ~200KB to stdout (well over any realistic pipe buffer size)
+    /// before exiting, with a timeout far longer than the child needs, and
+    /// asserts the full output comes back with no timeout.
+    #[test]
+    fn large_stdout_does_not_deadlock_or_timeout() {
+        let n: usize = 200_000;
+        let (code, out, err) = run_cmd(
+            "sh",
+            &["-c".into(), format!("yes | head -c {n}")],
+            10,
+        );
+        assert_eq!(code, 0, "expected clean exit, got stderr={err:?}");
+        assert_eq!(out.len(), n, "expected full {n}-byte output to be captured, got {} bytes", out.len());
+        assert_ne!(err, "TIMEOUT", "run_cmd incorrectly reported a timeout on large stdout output");
     }
 }
