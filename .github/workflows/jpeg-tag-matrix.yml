@@ -29,7 +29,6 @@ concurrency:
 
 env:
   EXIFTOOL_VERSION: '13.55'
-  TAGMATRIX_WORK: ${{ runner.temp }}/oxidex-tagmap
 
 jobs:
   tag-matrix:
@@ -43,6 +42,16 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The `runner` context (runner.temp) is only available inside a step,
+      # not in any `env:` block (workflow- or job-level) -- referencing it
+      # there fails to parse ("This run likely failed because of a workflow
+      # file issue", zero jobs scheduled). Route it through $GITHUB_ENV from
+      # a shell step instead, using the plain $RUNNER_TEMP env var GitHub
+      # Actions provides (no expression syntax needed).
+      # https://docs.github.com/actions/learn-github-actions/contexts#context-availability
+      - name: Set TAGMATRIX_WORK
+        run: echo "TAGMATRIX_WORK=$RUNNER_TEMP/oxidex-tagmap" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable (2026-07)
         with:
