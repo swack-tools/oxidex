@@ -203,6 +203,13 @@ pub fn shift_jpeg_exif_dates(
         let dt = parse_absolute_datetime(current)?;
         let new_dt = apply_spec(dt, spec)?;
         let formatted = format_exif_datetime(&new_dt);
+        if formatted.len() != 19 {
+            return Err(ExifToolError::parse_error(format!(
+                "Shifted date '{}' for tag '{}' is outside the representable EXIF range (year must be 4 digits)",
+                formatted,
+                target.key()
+            )));
+        }
         file_bytes[value_start..value_start + 19].copy_from_slice(formatted.as_bytes());
         modified += 1;
     }
