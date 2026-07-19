@@ -3140,20 +3140,34 @@ fn raw_bytes_to_tag_value(
     }
 }
 
-/// Extract Pentax MakerNotes from TAGS atom in QuickTime files
-/// The TAGS atom contains camera-specific metadata like exposure settings
+/// Formats an exposure time in seconds the way ExifTool's `PrintExposureTime`
+/// does: as a `1/N` fraction for sub-quarter-second exposures, otherwise as a
+/// decimal number of seconds (with a trailing `.0` stripped).
+fn format_exposure_time_seconds(secs: f64) -> String {
+    if secs > 0.0 && secs < 0.25001 {
+        format!("1/{}", (0.5 + 1.0 / secs) as i64)
+    } else {
+        let s = format!("{:.1}", secs);
+        s.strip_suffix(".0").map(str::to_string).unwrap_or(s)
+    }
+}
+
+/// Extract Pentax MakerNotes from the TAGS atom in QuickTime/MOV files.
+///
+/// This mirrors ExifTool's `Image::ExifTool::Pentax::MOV` table (a
+/// `ProcessBinaryData` block, little-endian, found in movies such as the
+/// Optio WP): a fixed-size layout keyed off absolute byte offsets from the
+/// start of the atom payload, not relative to the end of the maker string.
 fn extract_pentax_maker_notes(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    // TAGS structure: MakerString (null-terminated), then tag entries
-    // First, find the null terminator after the maker string
-    let null_pos = data.iter().position(|&b| b == 0);
-    if null_pos.is_none() || data.len() < 32 {
+    // ExifTool only recognizes this sub-format when the payload starts with
+    // this exact maker string (see QuickTime.pm's `TAGS` tag definition).
+    if !data.starts_with(b"PENTAX DIGITAL CAMERA\0") || data.len() < 24 {
         return Ok(());
     }
 
-    // Extract maker string (e.g., "PENTAX DIGITAL CAMERA")
-    let null_pos = null_pos.unwrap();
-    if let Ok(make) = std::str::from_utf8(&data[..null_pos]) {
-        let make_trimmed = make.trim();
+    // 0x00: Make, string[24]
+    if let Ok(make) = std::str::from_utf8(&data[0..24]) {
+        let make_trimmed = make.trim_end_matches('\0').trim();
         if !make_trimmed.is_empty() {
             metadata.insert(
                 "MakerNotes:Make".to_string(),
@@ -3162,107 +3176,79 @@ fn extract_pentax_maker_notes(data: &[u8], metadata: &mut MetadataMap) -> Result
         }
     }
 
-    // After the null terminator, tags are at specific offsets
-    // Structure appears to be: tag entries with 4-byte type + 4-byte data
-    // Based on the hex dump: entries start after maker string padding
-    let entry_start = null_pos + 1;
+    let r = EndianReader::little_endian(data);
 
-    // Pentax TAGS format: after maker string, there's padding then:
-    // 4 bytes of zeroes, then 4 bytes: entry count and flags
-    // Then: tag data in sequence
-    if data.len() < entry_start + 24 {
-        return Ok(());
-    }
-
-    // Looking at the hex dump, the structure appears to be:
-    // offset 0-3: zeros
-    // offset 4-5: num entries (0x0001)
-    // offset 6-7: exposure time numerator
-    // offset 8-9: exposure time denominator
-    // etc.
-
-    // Simplified parsing based on observed structure:
-    // After maker string + padding, data at specific offsets
-
-    // Try to find exposure data - Pentax stores these at fixed offsets
-    // This is a simplified parser that may need adjustment based on actual format
-    let tag_data = &data[entry_start..];
-    if tag_data.len() >= 48 {
-        let r = EndianReader::big_endian(tag_data);
-
-        // Try reading exposure data at common offsets
-        // The exact offsets depend on the Pentax version, so we check the hex pattern
-
-        // Look for pattern: 00 00 00 00 00 01 00 0a ... (exposure time 1/xx)
-        // Offset 6: exposure time numerator (2 bytes)
-        // Offset 8: exposure time denominator (2 bytes)
-        // Offset 16: F-number (4 bytes fixed point)
-        // Offset 24: ISO (2 bytes)
-        // Offset 32: focal length (fixed point)
-
-        // Parse exposure time at offset 6-10
-        if tag_data.len() >= 12 {
-            if let (Some(num), Some(den)) = (r.u16_at(6), r.u16_at(8)) {
-                if num > 0 && den > 0 && den < 10000 {
-                    let exposure_str = format!("1/{}", den / num.max(1));
-                    metadata.insert(
-                        "MakerNotes:ExposureTime".to_string(),
-                        TagValue::new_string(exposure_str),
-                    );
-                }
-            }
-        }
-
-        // Parse F-number (typically at offset 16, fixed-point 8.8 or stored as integer)
-        if tag_data.len() >= 20 {
-            // Looking at hex: 00 80 01 00 00 28 - suggests F4.0 (0x0028 = 40 -> 4.0)
-            // Try reading at various possible positions
-            if let Some(fnum) = r.u16_at(18) {
-                let fnumber = fnum as f64 / 10.0;
-                if (1.0..=64.0).contains(&fnumber) {
-                    metadata.insert("MakerNotes:FNumber".to_string(), TagValue::Float(fnumber));
-                }
-            }
-        }
-
-        // Parse ISO (typically around offset 24)
-        if tag_data.len() >= 28 {
-            if let Some(iso) = r.u16_at(26) {
-                if iso > 0 {
-                    metadata.insert("MakerNotes:ISO".to_string(), TagValue::Integer(iso as i64));
-                }
-            }
-        }
-
-        // Parse focal length (typically around offset 32)
-        if tag_data.len() >= 40 {
-            // Focal length often stored as fixed-point 16.8 or similar
-            if let Some(fl_raw) = r.u16_at(34) {
-                let focal_length = fl_raw as f64 / 10.0;
-                if (1.0..=2000.0).contains(&focal_length) {
-                    metadata.insert(
-                        "MakerNotes:FocalLength".to_string(),
-                        TagValue::new_string(format!("{:.1} mm", focal_length)),
-                    );
-                }
-            }
+    // 0x26: ExposureTime, int32u; ValueConv: $val ? 10/$val : 0
+    if let Some(raw) = r.u32_at(0x26) {
+        if raw != 0 {
+            let secs = 10.0 / raw as f64;
+            metadata.insert(
+                "MakerNotes:ExposureTime".to_string(),
+                TagValue::new_string(format_exposure_time_seconds(secs)),
+            );
         }
     }
 
-    // Also try to parse white balance and exposure compensation
-    // These are stored at later offsets in the TAGS data
-    if data.len() > 64 {
-        // Exposure compensation is often 0 for auto
-        metadata.insert(
-            "MakerNotes:ExposureCompensation".to_string(),
-            TagValue::Integer(0),
-        );
+    // 0x2a: FNumber, rational64u; PrintConv: sprintf("%.1f", $val)
+    if let Some((num, den)) = r.rational_at(0x2a) {
+        if den != 0 {
+            let fnumber = num as f64 / den as f64;
+            metadata.insert(
+                "MakerNotes:FNumber".to_string(),
+                TagValue::new_string(format!("{:.1}", fnumber)),
+            );
+        }
+    }
 
-        // White balance - default to Auto
-        metadata.insert(
-            "MakerNotes:WhiteBalance".to_string(),
-            TagValue::new_string("Auto".to_string()),
-        );
+    // 0x32: ExposureCompensation, rational64s; PrintConv: $val ? "+X.X" : 0
+    if let Some((num, den)) = r.srational_at(0x32) {
+        if den != 0 {
+            let val = num as f64 / den as f64;
+            let ec_str = if val != 0.0 {
+                format!("{:+.1}", val)
+            } else {
+                "0".to_string()
+            };
+            metadata.insert(
+                "MakerNotes:ExposureCompensation".to_string(),
+                TagValue::new_string(ec_str),
+            );
+        }
+    }
+
+    // 0x44: WhiteBalance, int16u
+    if let Some(wb) = r.u16_at(0x44) {
+        let wb_str = match wb {
+            0 => Some("Auto"),
+            1 => Some("Daylight"),
+            2 => Some("Shade"),
+            3 => Some("Fluorescent"),
+            4 => Some("Tungsten"),
+            5 => Some("Manual"),
+            _ => None,
+        };
+        if let Some(wb_str) = wb_str {
+            metadata.insert(
+                "MakerNotes:WhiteBalance".to_string(),
+                TagValue::new_string(wb_str.to_string()),
+            );
+        }
+    }
+
+    // 0x48: FocalLength, rational64u; PrintConv: sprintf("%.1f mm", $val)
+    if let Some((num, den)) = r.rational_at(0x48) {
+        if den != 0 {
+            let focal_length = num as f64 / den as f64;
+            metadata.insert(
+                "MakerNotes:FocalLength".to_string(),
+                TagValue::new_string(format!("{:.1} mm", focal_length)),
+            );
+        }
+    }
+
+    // 0xaf: ISO, int16u
+    if let Some(iso) = r.u16_at(0xaf) {
+        metadata.insert("MakerNotes:ISO".to_string(), TagValue::Integer(iso as i64));
     }
 
     Ok(())
