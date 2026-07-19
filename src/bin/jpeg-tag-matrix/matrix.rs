@@ -505,7 +505,11 @@ pub fn find_in_exiftool_json<'a>(
     }
     data.as_object()?
         .iter()
-        .find(|(key, _)| key.split(':').next_back() == Some(tag.name.as_str()))
+        // splitn(2, ..) matches Python's key.split(":", 1)[-1] exactly (split
+        // on the first colon only), not split(':').next_back() (last colon) --
+        // equivalent for today's single-colon "Group:Name" keys, but this is
+        // the byte-faithful form.
+        .find(|(key, _)| key.splitn(2, ':').last() == Some(tag.name.as_str()))
         .map(|(_, v)| v)
 }
 
