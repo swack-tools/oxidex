@@ -29,6 +29,7 @@ concurrency:
 
 env:
   EXIFTOOL_VERSION: '13.55'
+  TAGMATRIX_WORK: ${{ runner.temp }}/oxidex-tagmap
 
 jobs:
   tag-matrix:
@@ -43,9 +44,11 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable (2026-07)
+        with:
+          toolchain: stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2.9.1
         with:
           shared-key: jpeg-tag-matrix
 
@@ -54,8 +57,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install defusedxml (hardened XML parsing)
-        run: pip install defusedxml
+      - name: Install uv
+        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f # v4
 
       - name: Install pinned ExifTool
         run: |
@@ -68,25 +71,25 @@ jobs:
         run: cargo build --release --bin oxidex
 
       - name: Generate ExifTool tag manifest
-        run: python3 scripts/generate_exiftool_manifest.py --flag-noops
+        run: uv run scripts/generate_exiftool_manifest.py --flag-noops
 
       - name: Run tag matrix (read + write round-trips)
-        run: python3 scripts/jpeg_tag_matrix.py --workers 8
+        run: uv run scripts/jpeg_tag_matrix.py --workers 8
 
       - name: Generate reports and check baseline
-        run: python3 scripts/jpeg_tag_report.py --check-baseline
+        run: uv run scripts/jpeg_tag_report.py --check-baseline
 
       - name: Ratchet baseline on improvement
-        run: python3 scripts/jpeg_tag_report.py --update-baseline
+        run: uv run scripts/jpeg_tag_report.py --update-baseline
 
       - name: Upload raw results
         uses: actions/upload-artifact@v4
         with:
           name: jpeg-tag-matrix-results
           path: |
-            /tmp/oxidex-tagmap/results.json
-            /tmp/oxidex-tagmap/exiftool_jpeg_tags.json
-            /tmp/oxidex-tagmap/exiftool_jpeg_readonly_tags.json
+            ${{ env.TAGMATRIX_WORK }}/results.json
+            ${{ env.TAGMATRIX_WORK }}/exiftool_jpeg_tags.json
+            ${{ env.TAGMATRIX_WORK }}/exiftool_jpeg_readonly_tags.json
           retention-days: 90
 
       - name: Check for docs changes

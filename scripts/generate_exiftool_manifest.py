@@ -1,4 +1,10 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#     "defusedxml>=0.7.1",
+# ]
+# ///
 """Build the ExifTool JPEG tag manifest used by scripts/jpeg_tag_matrix.py.
 
 Dumps ExifTool's tag database (`exiftool -f -listx`) for the JPEG-relevant
@@ -9,9 +15,9 @@ groups, and emits:
 
 Environment overrides:
   EXIFTOOL       exiftool executable (default: exiftool)
-  TAGMATRIX_WORK work dir (default: /tmp/oxidex-tagmap)
+  TAGMATRIX_WORK work dir (default: <system temp dir>/oxidex-tagmap)
 
-Usage: python3 scripts/generate_exiftool_manifest.py [--flag-noops]
+Usage: uv run scripts/generate_exiftool_manifest.py [--flag-noops]
 
 --flag-noops additionally write-tests suspect tags (MakerNote*/Photoshop/JFIF)
 against the base fixture and marks silent no-ops with noop:true.
@@ -21,18 +27,17 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
+import tempfile
 from pathlib import Path
 
-try:
-    # Preferred: hardened parser (XXE / entity-expansion safe)
-    import defusedxml.ElementTree as ET
-except ImportError:
-    # Fallback acceptable here: input XML is generated locally by exiftool itself
-    import xml.etree.ElementTree as ET
+# Hardened against XXE / entity-expansion; declared as a uv inline dependency
+# above (see the "dependencies" script block at the top of this file).
+import defusedxml.ElementTree as ET
 
 EXIFTOOL = os.environ.get("EXIFTOOL", "exiftool")
-WORK = Path(os.environ.get("TAGMATRIX_WORK", "/tmp/oxidex-tagmap"))
+WORK = Path(os.environ.get("TAGMATRIX_WORK")
+           or (Path(tempfile.gettempdir()) / "oxidex-tagmap"))
 REPO = Path(__file__).resolve().parent.parent
 BASE_FIXTURE = REPO / "tests/fixtures/jpeg/tag_matrix_base.jpg"
 
@@ -141,9 +146,16 @@ def make_sample(family0, name, vtype, tag_el, group1):
 
 
 def dump_listx(group):
-    """Run exiftool -f -listx for one group, return parsed XML root."""
-    out = subprocess.run([EXIFTOOL, "-f", "-listx", f"-{group}:all"],
-                         capture_output=True, text=True, timeout=300)
+    """Run exiftool -f -listx for one group, return parsed XML root.
+
+    List-argv, no shell=True; EXIFTOOL is a local tool path from an env
+    var and `group` is one of the fixed strings in SOURCES below -- not
+    externally controlled.
+    """
+    # See docstring above: list-argv, no shell, locally-trusted inputs.
+    out = subprocess.run(  # nosec B603 # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+        [EXIFTOOL, "-f", "-listx", f"-{group}:all"],
+        capture_output=True, text=True, timeout=300)
     path = WORK / f"listx_{group}.xml"
     path.write_text(out.stdout)
     root = ET.parse(str(path)).getroot()
@@ -153,7 +165,12 @@ def dump_listx(group):
 
 
 def flag_noops(manifest, exiftool_ver):
-    """Write-test suspect tags on the base fixture; mark silent no-ops."""
+    """Write-test suspect tags on the base fixture; mark silent no-ops.
+
+    List-argv, no shell=True; `t['sample']` is a value this same script
+    synthesized (a fixed literal, or an enum string parsed moments earlier
+    from exiftool's own local -listx XML dump) -- not externally supplied.
+    """
     suspects = [t for t in manifest["tags"]
                 if (t["name"].startswith("MakerNote") and t["family0"] == "EXIF")
                 or t["family0"] in ("Photoshop", "JFIF")]
@@ -163,7 +180,7 @@ def flag_noops(manifest, exiftool_ver):
         dst = WORK / "noop_tmp.jpg"
         shutil.copyfile(BASE_FIXTURE, dst)
         op = "<=" if t.get("sample_is_file") else "="
-        w = subprocess.run(
+        w = subprocess.run(  # nosec B603 # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
             [EXIFTOOL, "-overwrite_original", f"-{spec}{op}{t['sample']}",
              str(dst)],
             capture_output=True, text=True)
@@ -185,8 +202,10 @@ def main():
     args = ap.parse_args()
 
     WORK.mkdir(parents=True, exist_ok=True)
-    ver = subprocess.run([EXIFTOOL, "-ver"], capture_output=True,
-                         text=True).stdout.strip()
+    # List-argv, no shell; EXIFTOOL is a local tool path from an env var.
+    ver = subprocess.run(  # nosec B603 # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+        [EXIFTOOL, "-ver"], capture_output=True,
+        text=True).stdout.strip()
     print(f"exiftool {ver}; work dir {WORK}")
 
     all_entries = {}  # (group1, name) -> entry

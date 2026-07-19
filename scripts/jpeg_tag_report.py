@@ -1,7 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# requires-python = ">=3.9"
+# dependencies = []
+# ///
 """Generate JPEG tag support reports from jpeg_tag_matrix.py results.
 
-Inputs:  /tmp/oxidex-tagmap/results.json  (+ readonly manifest if present)
+Inputs:  <TAGMATRIX_WORK>/results.json  (+ readonly manifest if present)
 Outputs: docs/reference/jpeg-tag-support.md   (supported-tag mapping)
          docs/reference/jpeg-tag-matrix.md    (full classification matrix + bugs)
 """
@@ -10,11 +14,13 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
-WORK = Path(os.environ.get("TAGMATRIX_WORK", "/tmp/oxidex-tagmap"))
+WORK = Path(os.environ.get("TAGMATRIX_WORK")
+           or (Path(tempfile.gettempdir()) / "oxidex-tagmap"))
 REPO = Path(__file__).resolve().parent.parent
 RESULTS = WORK / "results.json"
 READONLY = WORK / "exiftool_jpeg_readonly_tags.json"

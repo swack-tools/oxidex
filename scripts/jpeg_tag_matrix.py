@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# requires-python = ">=3.9"
+# dependencies = []
+# ///
 """JPEG tag support matrix: empirical exiftool <-> oxidex read/write testing.
 
 For every ExifTool-writable JPEG tag (manifest built from `exiftool -listx`):
@@ -7,9 +11,10 @@ For every ExifTool-writable JPEG tag (manifest built from `exiftool -listx`):
   WRITE test: oxidex writes the tag into a fresh JPEG -> oxidex -j reads it
               back AND exiftool -j -G1 reads it -> values compared.
 
-Emits /tmp/oxidex-tagmap/results.json for report generation.
+Emits <TAGMATRIX_WORK>/results.json (default: <system temp dir>/oxidex-tagmap)
+for report generation.
 
-Usage: python3 scripts/jpeg_tag_matrix.py [--only-group GROUP] [--limit N]
+Usage: uv run scripts/jpeg_tag_matrix.py [--only-group GROUP] [--limit N]
 """
 
 import argparse
@@ -17,7 +22,7 @@ import json
 import os
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -25,7 +30,8 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parent.parent
 EXIFTOOL = os.environ.get("EXIFTOOL", "exiftool")
 OXIDEX = os.environ.get("OXIDEX", str(_REPO / "target/release/oxidex"))
-WORK = Path(os.environ.get("TAGMATRIX_WORK", "/tmp/oxidex-tagmap"))
+WORK = Path(os.environ.get("TAGMATRIX_WORK")
+           or (Path(tempfile.gettempdir()) / "oxidex-tagmap"))
 MANIFEST = WORK / "exiftool_jpeg_tags.json"
 BASE = Path(os.environ.get("TAGMATRIX_BASE",
                            str(_REPO / "tests/fixtures/jpeg/tag_matrix_base.jpg")))
@@ -42,9 +48,19 @@ BATCH_POISON = {"IFD0:GeoTiffDoubleParams"}
 
 
 def run(cmd, timeout=30):
-    """Run a command, returning (exit_code, stdout, stderr)."""
+    """Run a command, returning (exit_code, stdout, stderr).
+
+    `cmd` is always a list built from EXIFTOOL/OXIDEX (local tool paths,
+    developer/CI-controlled env vars) plus fixed flags or values drawn from
+    the manifest this same run generated locally from `exiftool -listx` --
+    never from untrusted network input. No shell is invoked (no
+    shell=True), so shell metacharacters in any argument cannot be
+    interpreted; this is standard argv-list subprocess usage, not string
+    concatenation into a shell command.
+    """
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(  # nosec B603 # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+            cmd, capture_output=True, text=True, timeout=timeout)
         return p.returncode, p.stdout, p.stderr
     except subprocess.TimeoutExpired:
         return -1, "", "TIMEOUT"
