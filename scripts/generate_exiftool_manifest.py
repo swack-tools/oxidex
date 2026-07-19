@@ -244,7 +244,7 @@ def main():
                     try:
                         entry["count"] = int(count_attr)
                     except ValueError:
-                        pass
+                        pass  # non-numeric count (e.g. "?"); leave count unset
                 if writable:
                     entry["sample"] = make_sample(family0, name, vtype, tag_el,
                                                   g1)
