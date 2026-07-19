@@ -1859,3 +1859,65 @@ fn jpeg_spiff_segment_wrong_length_is_ignored() {
     let metadata = read_temp_file(&jpeg, ".jpg");
     assert!(metadata.get("SPIFF:SPIFFVersion").is_none());
 }
+
+// ---------------------------------------------------------------------------
+// JPEG multi-chunk ICC profile reassembly wiring
+// ---------------------------------------------------------------------------
+
+fn icc_header_128() -> Vec<u8> {
+    let mut h = vec![0u8; 128];
+    h[0..4].copy_from_slice(&128u32.to_be_bytes()); // profile size
+    h[4..8].copy_from_slice(b"ADBE"); // CMM type
+    h[8] = 4; // version 4.0
+    h[12..16].copy_from_slice(b"mntr"); // display device profile
+    h[16..20].copy_from_slice(b"RGB "); // color space
+    h[20..24].copy_from_slice(b"XYZ "); // PCS
+    h[36..40].copy_from_slice(b"acsp"); // profile file signature
+    h
+}
+
+fn icc_chunk(chunk_num: u8, total: u8, data: &[u8]) -> Vec<u8> {
+    let mut p = b"ICC_PROFILE\0".to_vec();
+    p.push(chunk_num);
+    p.push(total);
+    p.extend_from_slice(data);
+    p
+}
+
+#[test]
+fn jpeg_multichunk_icc_profile_reassembles() {
+    let profile = icc_header_128();
+    let (part1, part2) = profile.split_at(64);
+    // Chunks arrive out of order to exercise reassembly rather than luck.
+    let jpeg_multi = jpeg_with_segments(&[
+        jpeg_segment(0xE2, &icc_chunk(2, 2, part2)),
+        jpeg_segment(0xE2, &icc_chunk(1, 2, part1)),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let jpeg_single = jpeg_with_segments(&[
+        jpeg_segment(0xE2, &icc_chunk(1, 1, &profile)),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let multi = read_temp_file(&jpeg_multi, ".jpg");
+    let single = read_temp_file(&jpeg_single, ".jpg");
+    let key = "ICC_Profile:ColorSpaceData";
+    assert!(
+        multi.get(key).is_some(),
+        "multi-chunk ICC profile produced no {key}"
+    );
+    assert_eq!(multi.get(key), single.get(key));
+}
+
+#[test]
+fn jpeg_incomplete_multichunk_icc_profile_degrades_gracefully() {
+    let profile = icc_header_128();
+    let (part1, _part2) = profile.split_at(64);
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xE2, &icc_chunk(1, 2, part1)), // chunk 2 of 2 missing
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    assert!(metadata.get("ICC_Profile:ColorSpaceData").is_none());
+    // File-level tags still parse; the read never hard-fails.
+    assert_eq!(metadata.get_integer("File:ImageWidth"), Some(640));
+}

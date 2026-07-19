@@ -12,6 +12,7 @@ use crate::parsers::jpeg::app_segments::{
     parse_app6, parse_app10_hdr, parse_app11_jpeg_hdr, parse_app12_agfa, parse_app12_olympus,
     parse_app14_adobe,
 };
+use crate::parsers::jpeg::icc_chunk_assembler::IccChunkAssembler;
 use crate::parsers::jpeg::quality_estimate::estimate_quality_from_dqt_tables;
 use crate::parsers::jpeg::segment_parser::Segment;
 use crate::parsers::jpeg::xmp_parser::extract_xmp_from_segments;
@@ -314,50 +315,60 @@ pub fn process_mpf_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 /// Processes ICC profile APP2 segments and extracts color profile metadata.
 ///
 /// ICC (International Color Consortium) profiles describe the color
-/// characteristics of an image and are stored in APP2 segments.
+/// characteristics of an image. Profiles larger than one APP2 segment
+/// (~64KB) are split into chunks carrying a 1-based sequence number and a
+/// total count; chunks are reassembled with IccChunkAssembler before parsing.
 ///
 /// # Arguments
 ///
 /// * `segments` - Parsed JPEG segments
 /// * `metadata` - MetadataMap to populate with ICC profile tags
 pub fn process_icc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
-    for segment in segments.iter().filter(|s| s.marker == 0xFFE2) {
-        // Check if this is an ICC profile segment (starts with "ICC_PROFILE\0")
-        if segment.data.len() >= 14 && &segment.data[0..12] == b"ICC_PROFILE\0" {
-            // ICC profile structure in JPEG APP2:
-            // Bytes 0-11: "ICC_PROFILE\0" identifier
-            // Byte 12: Chunk number (1-based)
-            // Byte 13: Total chunks
-            // Bytes 14+: ICC profile data
+    let icc_segments: Vec<&Segment> = segments
+        .iter()
+        .filter(|s| s.marker == 0xFFE2 && s.data.len() >= 14 && &s.data[0..12] == b"ICC_PROFILE\0")
+        .collect();
+    if icc_segments.is_empty() {
+        return;
+    }
 
-            // For now, only handle single-chunk ICC profiles (most common)
-            let chunk_num = segment.data[12];
-            let total_chunks = segment.data[13];
+    // Fast path: single-chunk profile parses in place, no reassembly copy.
+    if icc_segments.len() == 1 && icc_segments[0].data[12] == 1 && icc_segments[0].data[13] == 1 {
+        insert_icc_tags(&icc_segments[0].data[14..], metadata);
+        return;
+    }
 
-            if chunk_num == 1 && total_chunks == 1 {
-                // Single chunk - parse ICC profile directly
-                let icc_data = &segment.data[14..];
-                match crate::parsers::icc::parse_icc_profile_data(icc_data) {
-                    Ok(icc_tags) => {
-                        // Add all ICC tags to metadata with "ICC_Profile:" prefix
-                        // to match ExifTool's family naming
-                        for (tag_name, value) in icc_tags {
-                            metadata.insert(format!("ICC_Profile:{}", tag_name), value);
-                        }
-                    }
-                    Err(e) => {
-                        // Log error but continue processing
-                        eprintln!("Warning: Failed to parse ICC profile: {}", e);
-                    }
-                }
-            } else {
-                // Multi-chunk ICC profile - would need to reassemble chunks
-                // This is less common, so we'll skip for now
-                eprintln!(
-                    "Warning: Multi-chunk ICC profile detected ({}/{}), not yet supported",
-                    chunk_num, total_chunks
-                );
+    let mut assembler = IccChunkAssembler::new();
+    for segment in &icc_segments {
+        if let Err(e) = assembler.add_chunk(segment.data) {
+            eprintln!("Warning: Invalid ICC profile chunk: {}", e);
+            return;
+        }
+    }
+    if !assembler.is_complete() {
+        eprintln!(
+            "Warning: Incomplete multi-chunk ICC profile ({} of {:?} chunks), skipping",
+            assembler.chunk_count(),
+            assembler.expected_total()
+        );
+        return;
+    }
+    match assembler.assemble() {
+        Ok(profile) => insert_icc_tags(&profile, metadata),
+        Err(e) => eprintln!("Warning: Failed to assemble ICC profile: {}", e),
+    }
+}
+
+/// Parses raw ICC profile bytes and inserts ICC_Profile-prefixed tags.
+fn insert_icc_tags(icc_data: &[u8], metadata: &mut MetadataMap) {
+    match crate::parsers::icc::parse_icc_profile_data(icc_data) {
+        Ok(icc_tags) => {
+            for (tag_name, value) in icc_tags {
+                metadata.insert(format!("ICC_Profile:{}", tag_name), value);
             }
+        }
+        Err(e) => {
+            eprintln!("Warning: Failed to parse ICC profile: {}", e);
         }
     }
 }
