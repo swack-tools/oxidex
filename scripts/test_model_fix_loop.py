@@ -280,21 +280,44 @@ class RunLoopTests(unittest.TestCase):
         self.assertEqual(len(result["fixed"]), 1)
 
     def test_skips_a_format_that_fails_twice(self):
-        gap = make_gap()
+        nef_gap = make_gap()  # format "NEF"
+        other_gap = {
+            "format": "PNG",
+            "missing_tags": [],
+            "value_differences": [],
+            "gap_count": 1,
+            "parser_files": [],
+        }
         attempts = []
-        rounds = [[gap], [gap]]
+        # Round 1: NEF fails (1st failure). Round 2: NEF fails again (2nd
+        # failure -> skip-listed) and PNG closes (keeps dry_rounds at 0, so
+        # the loop survives into round 3). Round 3: NEF must be filtered
+        # out by the skip-list and never dispatched again; PNG has nothing
+        # left, so round 3 is dry and the loop stops after round 4 (dry
+        # again) via the 2-consecutive-dry-round rule.
+        rounds = [
+            [nef_gap],
+            [nef_gap, other_gap],
+            [nef_gap],  # would only appear here if the skip-list filter is broken
+            [],
+        ]
 
         def fake_find_gaps():
             return rounds.pop(0) if rounds else []
 
         def fake_fix_gap(g, config):
             attempts.append(g["format"])
+            if g["format"] == "PNG":
+                return {"format": "PNG", "status": "fixed", "gaps_closed": g["gap_count"]}
             return {"format": g["format"], "status": "failed", "reason": "still broken"}
 
         result = run_loop({"model": "x"}, fake_find_gaps, fake_fix_gap)
-        self.assertEqual(attempts, ["NEF", "NEF"])
+
+        # NEF attempted exactly twice (rounds 1 and 2), never a third time,
+        # even though round 3's fake data includes it -- proving the
+        # skip-list filter in run_loop actually removes it before dispatch.
+        self.assertEqual(attempts.count("NEF"), 2)
         self.assertEqual(result["skipped"], ["NEF"])
-        self.assertEqual(result["rounds"], 2)
 
 
 if __name__ == "__main__":
