@@ -64,32 +64,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
     }
 
     let read_res = run_read_phase(&tools, &base, &tags);
-    for t in &tags {
-        let entry = results.entry(key_of(t)).or_default();
-        // drop stale read fields before merging fresh read results
-        *entry = ResultEntry {
-            write: entry.write.clone(),
-            wkey: entry.wkey.clone(),
-            detail: entry.detail.clone(),
-            write_ox_val: entry.write_ox_val.clone(),
-            write_et_val: entry.write_et_val.clone(),
-            write_ox_key: entry.write_ox_key.clone(),
-            bug_cluster: entry.bug_cluster.clone(),
-            write_quality: entry.write_quality.clone(),
-            write_warnings: entry.write_warnings.clone(),
-            ..Default::default()
-        };
-        if let Some(r) = read_res.get(&key_of(t)) {
-            entry.read = r.read.clone();
-            entry.read_batch = r.read_batch.clone();
-            entry.read_detail = r.read_detail.clone();
-            entry.read_bug = r.read_bug.clone();
-            entry.read_note = r.read_note.clone();
-            entry.ox_key = r.ox_key.clone();
-            entry.ox_val = r.ox_val.clone();
-            entry.et_val = r.et_val.clone();
-        }
-    }
+    merge_read_phase_results(&mut results, &tags, &read_res);
 
     if !skip_write {
         let base_ox = oxidex_json(&tools, &base).0.unwrap_or_else(|| Value::Object(Default::default()));
@@ -104,18 +79,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
             .par_iter()
             .map(|t| (key_of(t), write_test_tag(&tools, &base, t, &ctx)))
             .collect();
-        for (k, wr) in write_results {
-            let entry = results.entry(k).or_default();
-            entry.write = wr.write;
-            entry.wkey = wr.wkey;
-            entry.detail = wr.detail;
-            entry.write_ox_val = wr.write_ox_val;
-            entry.write_et_val = wr.write_et_val;
-            entry.write_ox_key = wr.write_ox_key;
-            entry.bug_cluster = wr.bug_cluster;
-            entry.write_quality = wr.write_quality;
-            entry.write_warnings = wr.write_warnings;
-        }
+        merge_write_phase_results(&mut results, write_results);
     }
 
     for t in &tags {
@@ -141,6 +105,216 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
     }
     println!("Results: {}", results_path.display());
     Ok(())
+}
+
+/// Merge the read phase's per-tag results into the accumulated `results`
+/// map, clearing stale read-owned fields first. Port of
+/// `scripts/jpeg_tag_matrix.py:604-612`.
+///
+/// `bug_cluster` is dual-owned: the read phase sets it only on the
+/// registry-asymmetry fallback branch (`resolve_read`), otherwise the
+/// per-tag read result simply omits it. Python's `dict.update()` only
+/// overwrites keys that are *present* in the source dict, so an absent
+/// `bug_cluster` there leaves whatever was already in `results[key]`
+/// untouched (e.g. a value the write phase or a prior --reread pass set).
+/// The unconditional-field-assignment translation of that in Rust has to
+/// mirror "only overwrite when present" explicitly, hence the `is_some()`
+/// guard below -- an unconditional `entry.bug_cluster = r.bug_cluster.clone()`
+/// would silently null out a previously-preserved value on every tag that
+/// isn't hitting the fallback branch on this particular pass.
+fn merge_read_phase_results(
+    results: &mut HashMap<String, ResultEntry>,
+    tags: &[ManifestTag],
+    read_res: &HashMap<String, ResultEntry>,
+) {
+    for t in tags {
+        let entry = results.entry(key_of(t)).or_default();
+        // drop stale read fields before merging fresh read results
+        *entry = ResultEntry {
+            write: entry.write.clone(),
+            wkey: entry.wkey.clone(),
+            detail: entry.detail.clone(),
+            write_ox_val: entry.write_ox_val.clone(),
+            write_et_val: entry.write_et_val.clone(),
+            write_ox_key: entry.write_ox_key.clone(),
+            bug_cluster: entry.bug_cluster.clone(),
+            write_quality: entry.write_quality.clone(),
+            write_warnings: entry.write_warnings.clone(),
+            ..Default::default()
+        };
+        if let Some(r) = read_res.get(&key_of(t)) {
+            entry.read = r.read.clone();
+            entry.read_batch = r.read_batch.clone();
+            entry.read_detail = r.read_detail.clone();
+            entry.read_bug = r.read_bug.clone();
+            entry.read_note = r.read_note.clone();
+            entry.ox_key = r.ox_key.clone();
+            entry.ox_val = r.ox_val.clone();
+            entry.et_val = r.et_val.clone();
+            if r.bug_cluster.is_some() {
+                entry.bug_cluster = r.bug_cluster.clone();
+            }
+        }
+    }
+}
+
+/// Merge the write phase's per-tag results into the accumulated `results`
+/// map. Port of `scripts/jpeg_tag_matrix.py:619-624`
+/// (`results.setdefault(key, {}).update(fut.result())`).
+///
+/// Every field here except `bug_cluster` is write-phase-owned in both
+/// Python and Rust, so an unconditional overwrite is correct for them.
+/// `bug_cluster` is dual-owned (see `merge_read_phase_results`): the write
+/// phase's per-tag result only carries a `bug_cluster` value on its own
+/// registry-asymmetry branch (`write_test_tag`), so like Python's
+/// `dict.update()`, we must only overwrite when the write phase actually
+/// produced one -- otherwise this would clobber a value the read-phase
+/// merge (run moments earlier on the very same `entry`) had just set.
+fn merge_write_phase_results(
+    results: &mut HashMap<String, ResultEntry>,
+    write_results: Vec<(String, ResultEntry)>,
+) {
+    for (k, wr) in write_results {
+        let entry = results.entry(k).or_default();
+        entry.write = wr.write;
+        entry.wkey = wr.wkey;
+        entry.detail = wr.detail;
+        entry.write_ox_val = wr.write_ox_val;
+        entry.write_et_val = wr.write_et_val;
+        entry.write_ox_key = wr.write_ox_key;
+        if wr.bug_cluster.is_some() {
+            entry.bug_cluster = wr.bug_cluster;
+        }
+        entry.write_quality = wr.write_quality;
+        entry.write_warnings = wr.write_warnings;
+    }
+}
+
+#[cfg(test)]
+mod merge_phase_tests {
+    use super::*;
+    use crate::types::ManifestTag;
+
+    fn tag(group: &str, name: &str) -> ManifestTag {
+        ManifestTag {
+            group: group.into(),
+            name: name.into(),
+            family0: "IPTC".into(),
+            writable: true,
+            vtype: "int16u".into(),
+            protected: false,
+            flags: None,
+            count: None,
+            sample: Some("8".into()),
+            sample_is_file: None,
+            noop: None,
+        }
+    }
+
+    /// Regression test for the merge bug found during Task 10's dry run: a
+    /// tag whose read phase resolves via the registry-asymmetry fallback
+    /// (`resolve_read`'s `bug_cluster: Some("R4-registry-asymmetry")`
+    /// branch) must have that `bug_cluster` survive both merge steps, even
+    /// though the write phase's own result for that same tag carries no
+    /// `bug_cluster` (e.g. `write: NOT_WRITTEN`). Before the fix: the
+    /// read-phase merge hardcoded a copy of only 8 named fields and
+    /// silently dropped `bug_cluster`, and the write-phase merge
+    /// unconditionally assigned `entry.bug_cluster = wr.bug_cluster`
+    /// (`None` here), clobbering whatever the read phase had just set.
+    #[test]
+    fn bug_cluster_from_read_phase_survives_write_phase_merge() {
+        let t = tag("IPTC", "BitsPerComponent");
+        let key = key_of(&t);
+
+        let mut read_res = HashMap::new();
+        read_res.insert(
+            key.clone(),
+            ResultEntry {
+                read: Some("OK".into()),
+                ox_key: Some("IPTC:0x0016".into()),
+                ox_val: Some("8".into()),
+                et_val: Some("8".into()),
+                bug_cluster: Some("R4-registry-asymmetry".into()),
+                ..Default::default()
+            },
+        );
+
+        let mut results: HashMap<String, ResultEntry> = HashMap::new();
+        merge_read_phase_results(&mut results, std::slice::from_ref(&t), &read_res);
+        assert_eq!(
+            results[&key].bug_cluster.as_deref(),
+            Some("R4-registry-asymmetry"),
+            "read-phase merge must copy bug_cluster from the read result"
+        );
+
+        let write_results = vec![(
+            key.clone(),
+            ResultEntry { write: Some("NOT_WRITTEN".into()), bug_cluster: None, ..Default::default() },
+        )];
+        merge_write_phase_results(&mut results, write_results);
+
+        assert_eq!(
+            results[&key].bug_cluster.as_deref(),
+            Some("R4-registry-asymmetry"),
+            "write-phase merge must not clobber a bug_cluster the write phase itself didn't set"
+        );
+        assert_eq!(results[&key].write.as_deref(), Some("NOT_WRITTEN"));
+    }
+
+    /// A tag whose write phase *does* determine its own bug_cluster (its
+    /// own registry-asymmetry-on-write branch in `write_test_tag`) must
+    /// still have that value applied -- the write-phase guard only skips
+    /// the assignment when `wr.bug_cluster` is `None`, not always.
+    #[test]
+    fn write_phase_bug_cluster_still_applies_when_present() {
+        let t = tag("ExifIFD", "ISO");
+        let key = key_of(&t);
+        let mut results: HashMap<String, ResultEntry> = HashMap::new();
+        results.insert(key.clone(), ResultEntry::default());
+
+        let write_results = vec![(
+            key.clone(),
+            ResultEntry {
+                write: Some("OK".into()),
+                bug_cluster: Some("R4-registry-asymmetry".into()),
+                ..Default::default()
+            },
+        )];
+        merge_write_phase_results(&mut results, write_results);
+
+        assert_eq!(results[&key].bug_cluster.as_deref(), Some("R4-registry-asymmetry"));
+    }
+
+    /// On a --reread pass (skip_write forced true, write-phase merge never
+    /// runs), a tag that previously had a bug_cluster set (e.g. by an
+    /// earlier full run's write phase) but doesn't hit the fallback branch
+    /// on this particular read must keep its previously-persisted value --
+    /// mirroring Python's `dict.update()`, which never touches a key absent
+    /// from the source dict.
+    #[test]
+    fn read_phase_merge_preserves_prior_bug_cluster_when_read_result_has_none() {
+        let t = tag("EXIF", "SomeTag");
+        let key = key_of(&t);
+
+        let mut results: HashMap<String, ResultEntry> = HashMap::new();
+        results.insert(
+            key.clone(),
+            ResultEntry { bug_cluster: Some("R4-registry-asymmetry".into()), ..Default::default() },
+        );
+
+        let mut read_res = HashMap::new();
+        read_res.insert(
+            key.clone(),
+            ResultEntry { read: Some("OK".into()), bug_cluster: None, ..Default::default() },
+        );
+        merge_read_phase_results(&mut results, std::slice::from_ref(&t), &read_res);
+
+        assert_eq!(
+            results[&key].bug_cluster.as_deref(),
+            Some("R4-registry-asymmetry"),
+            "read-phase merge must not null out a preserved bug_cluster when the fresh read result has none"
+        );
+    }
 }
 
 // ---------------------------------------------------------------- value compare
