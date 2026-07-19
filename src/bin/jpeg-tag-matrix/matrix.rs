@@ -2,9 +2,12 @@
 
 use clap::Args;
 use once_cell::sync::Lazy;
+use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::time::Duration;
 
 use crate::types::{ManifestTag, ResultEntry};
 
@@ -533,6 +536,339 @@ pub fn find_same_group_fallback<'a>(
     (None, None)
 }
 
+// ------------------------------------------------------------- read phase
+//
+// Subprocess-driving read testing: exiftool writes a sample value into a
+// fresh JPEG, then oxidex -j reads it back and the value is compared
+// (normalized). Port of `scripts/jpeg_tag_matrix.py:50-88` (subprocess
+// wrappers), `:357-420` (read functions), and `:580-613` (two-phase
+// batch+individual-retest orchestration).
+
+pub struct Tools<'a> {
+    pub exiftool: &'a str,
+    pub oxidex: &'a str,
+}
+
+/// Run `prog` with `args`, waiting up to `timeout_secs` for it to exit.
+/// Returns `(exit_code, stdout, stderr)`. Uses spawn + poll (no
+/// `wait_timeout` crate dependency, since this binary otherwise doesn't
+/// need one): poll `try_wait` every 20ms, killing the child and returning
+/// a synthetic `-1`/`"TIMEOUT"` result if the deadline passes.
+fn run_cmd(prog: &str, args: &[String], timeout_secs: u64) -> (i32, String, String) {
+    use std::process::{Command, Stdio};
+    let mut child = match Command::new(prog)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return (-2, String::new(), e.to_string()),
+    };
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                use std::io::Read;
+                let mut out = String::new();
+                let mut err = String::new();
+                child.stdout.take().unwrap().read_to_string(&mut out).ok();
+                child.stderr.take().unwrap().read_to_string(&mut err).ok();
+                return (status.code().unwrap_or(-1), out, err);
+            }
+            Ok(None) => {
+                if start.elapsed() > Duration::from_secs(timeout_secs) {
+                    // Python's subprocess.run(timeout=X) kills *and* waits on
+                    // TimeoutExpired internally (Popen.communicate() reaps
+                    // before re-raising), so the child never lingers as a
+                    // zombie. `Child::kill()` alone only sends SIGKILL; the
+                    // kernel won't release the process table entry until
+                    // something calls wait() on it. Since the child is being
+                    // forcibly killed, wait() here cannot block on the
+                    // pipes -- it only waits for exit status, matching
+                    // Python's behavior and avoiding a defunct process for
+                    // however long this run_cmd caller's process keeps running.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return (-1, String::new(), "TIMEOUT".into());
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => return (-2, String::new(), e.to_string()),
+        }
+    }
+}
+
+pub fn exiftool_json(tools: &Tools, path: &Path) -> Value {
+    let (code, out, _) = run_cmd(
+        tools.exiftool,
+        &[
+            "-j".into(),
+            "-G1".into(),
+            "-charset".into(),
+            "utf8".into(),
+            path.display().to_string(),
+        ],
+        30,
+    );
+    if code != 0 || out.trim().is_empty() {
+        return Value::Object(Default::default());
+    }
+    serde_json::from_str::<Vec<Value>>(&out)
+        .ok()
+        .and_then(|mut v| v.pop())
+        .unwrap_or_else(|| Value::Object(Default::default()))
+}
+
+pub fn oxidex_json(tools: &Tools, path: &Path) -> (Option<Value>, Option<String>) {
+    // -e (exiftool-compat) gives PrintConv-style values closest to exiftool -j -G1
+    let (code, out, err) = run_cmd(
+        tools.oxidex,
+        &["-j".into(), "-e".into(), path.display().to_string()],
+        30,
+    );
+    if code != 0 || out.trim().is_empty() {
+        return (None, Some(err));
+    }
+    match serde_json::from_str::<Vec<Value>>(&out) {
+        Ok(mut v) => (v.pop(), None),
+        Err(_) => (None, Some("unparseable JSON".into())),
+    }
+}
+
+fn value_to_str(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn resolve_read(ox: &Value, tag: &ManifestTag, et_val: &Value) -> ResultEntry {
+    let keys = oxidex_read_keys(tag);
+    let (k, v) = find_in_json(ox, &keys);
+    let et_str = value_to_str(et_val);
+    match (k, v) {
+        (None, _) => {
+            let sample = tag.sample.clone().unwrap_or_default();
+            let (fk, fv) = find_same_group_fallback(ox, tag, &sample);
+            if let (Some(fk), Some(fv)) = (fk, fv) {
+                return ResultEntry {
+                    read: Some("OK".into()),
+                    ox_key: Some(fk),
+                    ox_val: Some(value_to_str(fv)),
+                    et_val: Some(et_str),
+                    bug_cluster: Some("R4-registry-asymmetry".into()),
+                    ..Default::default()
+                };
+            }
+            ResultEntry {
+                read: Some("MISSING".into()),
+                et_val: Some(et_str),
+                ..Default::default()
+            }
+        }
+        (Some(k), Some(v)) => {
+            let vs = value_to_str(v);
+            let sample = tag.sample.clone().unwrap_or_default();
+            if values_match(&et_str, &vs) || values_match(&sample, &vs) {
+                ResultEntry {
+                    read: Some("OK".into()),
+                    ox_key: Some(k),
+                    ox_val: Some(vs),
+                    et_val: Some(et_str),
+                    ..Default::default()
+                }
+            } else {
+                ResultEntry {
+                    read: Some("MISMATCH".into()),
+                    ox_key: Some(k),
+                    ox_val: Some(vs),
+                    et_val: Some(et_str),
+                    ..Default::default()
+                }
+            }
+        }
+        _ => unreachable!("find_in_json returns matching Some/Some or None/None"),
+    }
+}
+
+pub fn read_test_single(tools: &Tools, base: &Path, tag: &ManifestTag) -> ResultEntry {
+    let td = tempfile::tempdir().unwrap();
+    let img = td.path().join("t.jpg");
+    std::fs::copy(base, &img).unwrap();
+    let spec = format!(
+        "-{}:{}={}",
+        tag.group,
+        tag.name,
+        tag.sample.as_deref().unwrap_or("")
+    );
+    run_cmd(
+        tools.exiftool,
+        &[
+            "-m".into(),
+            "-q".into(),
+            "-overwrite_original".into(),
+            spec,
+            img.display().to_string(),
+        ],
+        60,
+    );
+    let et = exiftool_json(tools, &img);
+    let et_val = find_in_exiftool_json(&et, tag, false);
+    let Some(et_val) = et_val else {
+        return ResultEntry {
+            read: Some("NO_SAMPLE".into()),
+            ..Default::default()
+        };
+    };
+    let (ox, oxerr) = oxidex_json(tools, &img);
+    let Some(ox) = ox else {
+        return ResultEntry {
+            read: Some("OXIDEX_PARSE_FAIL".into()),
+            et_val: Some(value_to_str(et_val)),
+            read_detail: oxerr.map(|e| e.chars().take(200).collect()),
+            ..Default::default()
+        };
+    };
+    resolve_read(&ox, tag, et_val)
+}
+
+// exiftool 13.55 itself serializes this tag with a malformed value offset
+// (ASCII "1.5\0" in the offset field), which poisons the whole file for
+// oxidex (drops the entire EXIF block) and aborts subsequent exiftool write
+// chunks. Excluded from batch writes; tested individually only.
+const BATCH_POISON: &[(&str, &str)] = &[("IFD0", "GeoTiffDoubleParams")];
+
+fn key_of(t: &ManifestTag) -> String {
+    format!("{}:{}", t.group, t.name)
+}
+
+pub fn read_test_group(
+    tools: &Tools,
+    base: &Path,
+    tags: &[ManifestTag],
+) -> HashMap<String, ResultEntry> {
+    let mut results = HashMap::new();
+    let td = tempfile::tempdir().unwrap();
+    let img = td.path().join("t.jpg");
+    std::fs::copy(base, &img).unwrap();
+
+    let chunk = 80;
+    let batch_tags: Vec<&ManifestTag> = tags
+        .iter()
+        .filter(|t| !BATCH_POISON.contains(&(t.group.as_str(), t.name.as_str())))
+        .collect();
+    for group in batch_tags.chunks(chunk) {
+        let mut args = vec![
+            "-m".to_string(),
+            "-q".to_string(),
+            "-overwrite_original".to_string(),
+        ];
+        for t in group {
+            args.push(format!(
+                "-{}:{}={}",
+                t.group,
+                t.name,
+                t.sample.as_deref().unwrap_or("")
+            ));
+        }
+        args.push(img.display().to_string());
+        run_cmd(tools.exiftool, &args, 120);
+    }
+
+    let et = exiftool_json(tools, &img);
+    let (ox, oxerr) = oxidex_json(tools, &img);
+
+    for t in tags {
+        let et_val = find_in_exiftool_json(&et, t, false);
+        let Some(et_val) = et_val else {
+            results.insert(
+                key_of(t),
+                ResultEntry {
+                    read: Some("NO_SAMPLE".into()),
+                    ..Default::default()
+                },
+            );
+            continue;
+        };
+        match &ox {
+            None => {
+                results.insert(
+                    key_of(t),
+                    ResultEntry {
+                        read: Some("OXIDEX_PARSE_FAIL".into()),
+                        et_val: Some(value_to_str(et_val)),
+                        read_detail: oxerr.clone().map(|e| e.chars().take(200).collect()),
+                        ..Default::default()
+                    },
+                );
+            }
+            Some(ox) => {
+                results.insert(key_of(t), resolve_read(ox, t, et_val));
+            }
+        }
+    }
+    results
+}
+
+/// Two-phase read orchestration: one batch write+read per group (in
+/// parallel across groups), then an individual retest of every non-OK tag
+/// so a poison tag / aborted chunk / mandatory-tag interaction in one
+/// group's batch can't misclassify other tags in that batch. Port of
+/// `scripts/jpeg_tag_matrix.py:580-613`.
+pub fn run_read_phase(
+    tools: &Tools,
+    base: &Path,
+    tags: &[ManifestTag],
+) -> HashMap<String, ResultEntry> {
+    let mut by_group: HashMap<String, Vec<ManifestTag>> = HashMap::new();
+    for t in tags {
+        by_group.entry(t.group.clone()).or_default().push(t.clone());
+    }
+    println!("Testing {} tags across {} groups", tags.len(), by_group.len());
+
+    // READ phase 1: one batch per group, groups in parallel
+    let group_results: Vec<HashMap<String, ResultEntry>> = by_group
+        .par_iter()
+        .map(|(_, ts)| read_test_group(tools, base, ts))
+        .collect();
+    let mut read_res: HashMap<String, ResultEntry> = HashMap::new();
+    for gr in group_results {
+        read_res.extend(gr);
+    }
+    println!("READ batch phase done");
+
+    // READ phase 2: individually retest every non-OK tag so one poison tag /
+    // aborted chunk / mandatory-tag interaction can't contaminate a group.
+    let retest: Vec<&ManifestTag> = tags
+        .iter()
+        .filter(|t| {
+            matches!(
+                read_res.get(&key_of(t)).and_then(|r| r.read.as_deref()),
+                Some("MISSING") | Some("MISMATCH") | Some("NO_SAMPLE") | Some("OXIDEX_PARSE_FAIL")
+            )
+        })
+        .collect();
+    println!("READ retest phase: {} tags individually", retest.len());
+
+    let retested: Vec<(String, ResultEntry, Option<String>)> = retest
+        .par_iter()
+        .map(|t| {
+            let mut single = read_test_single(tools, base, t);
+            let batch_status = read_res.get(&key_of(t)).and_then(|r| r.read.clone());
+            if single.read != batch_status {
+                single.read_batch = batch_status.clone();
+            }
+            (key_of(t), single, batch_status)
+        })
+        .collect();
+    for (k, single, _) in retested {
+        read_res.insert(k, single);
+    }
+    println!("READ phase done");
+    read_res
+}
+
 #[cfg(test)]
 mod key_mapping_tests {
     use super::*;
@@ -585,5 +921,39 @@ mod key_mapping_tests {
         let t = tag("XMP-exif", "ColorSpace");
         assert_eq!(find_in_exiftool_json(&data, &t, true), None);
         assert_eq!(find_in_exiftool_json(&data, &t, false), Some(&json!("1")));
+    }
+}
+
+#[cfg(test)]
+mod read_phase_tests {
+    use super::*;
+    use crate::types::ManifestTag;
+
+    #[test]
+    fn read_test_group_marks_readable_tag_ok() {
+        let td = tempfile::tempdir().unwrap();
+        let base = td.path().join("base.jpg");
+        std::fs::write(&base, b"fake").unwrap();
+        // fake-exiftool-read.sh: `-j -G1 ...` prints a fixed JSON with the tag present.
+        // fake-oxidex-read.sh: `-j -e ...` prints matching JSON.
+        let tools = Tools {
+            exiftool: "tests/fixtures/jpeg-tag-matrix/fake-exiftool-read.sh",
+            oxidex: "tests/fixtures/jpeg-tag-matrix/fake-oxidex-read.sh",
+        };
+        let tag = ManifestTag {
+            group: "ExifIFD".into(),
+            name: "ISO".into(),
+            family0: "EXIF".into(),
+            writable: true,
+            vtype: "int16u".into(),
+            protected: false,
+            flags: None,
+            count: None,
+            sample: Some("200".into()),
+            sample_is_file: None,
+            noop: None,
+        };
+        let res = read_test_group(&tools, &base, std::slice::from_ref(&tag));
+        assert_eq!(res["ExifIFD:ISO"].read.as_deref(), Some("OK"));
     }
 }
