@@ -9,7 +9,8 @@ use crate::core::tag_conversion::{parse_string_to_tag_value, raw_bytes_to_tag_va
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
 use crate::io::EndianReader;
 use crate::parsers::jpeg::app_segments::{
-    parse_app10_hdr, parse_app11_jpeg_hdr, parse_app12_agfa, parse_app12_olympus, parse_app14_adobe,
+    parse_app6, parse_app10_hdr, parse_app11_jpeg_hdr, parse_app12_agfa, parse_app12_olympus,
+    parse_app14_adobe,
 };
 use crate::parsers::jpeg::segment_parser::Segment;
 use crate::parsers::jpeg::xmp_parser::extract_xmp_from_segments;
@@ -390,36 +391,33 @@ pub fn process_sof_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     }
 }
 
-/// Processes APP10 segments and extracts HDR gain curve metadata.
+/// Processes APP6 segments and extracts GoPro GPMF, TDHD, or NITF metadata.
 ///
-/// APP10 segments (marker 0xFFEA) may contain HDR (High Dynamic Range) gain curve
-/// data used for tone mapping and HDR image reconstruction.
+/// APP6 segments (marker 0xFFE6) are dispatched on the same identifier
+/// conditions ExifTool uses: GoPro GPMF ("GoPro\0"), HP/Toshiba TDHD
+/// ("TDHD\x01\0\0\0"), and NITF ("NTIF\0"). GoPro tags are emitted under the
+/// GoPro: family with ExifTool tag names (e.g. GoPro:Model,
+/// GoPro:CameraSerialNumber). Unrecognized APP6 payloads extract nothing.
 ///
 /// # Arguments
 ///
 /// * `segments` - Parsed JPEG segments
-/// * `metadata` - MetadataMap to populate with HDR tags
-///
-/// # HDR Formats Supported
-///
-/// - Standard HDR with "HDR\0" prefix
-/// - Android AROT gain map format
-/// - Generic/unknown HDR formats (stored as raw data)
-pub fn process_app6_segments(_segments: &[Segment], _metadata: &mut MetadataMap) {
-    // TODO: implement parse_app6
-    // const APP6_MARKER: u16 = 0xFFE6;
-    // for segment in segments.iter().filter(|s| s.marker == APP6_MARKER) {
-    //     match parse_app6(segment.data) {
-    //         Ok(app6_metadata) => {
-    //             for (key, value) in app6_metadata.iter() {
-    //                 metadata.insert(key.clone(), value.clone());
-    //             }
-    //         }
-    //         Err(e) => {
-    //             eprintln!("Warning: Failed to parse APP6 segment: {}", e);
-    //         }
-    //     }
-    // }
+/// * `metadata` - MetadataMap to populate with APP6 tags
+pub fn process_app6_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const APP6_MARKER: u16 = 0xFFE6;
+    for segment in segments.iter().filter(|s| s.marker == APP6_MARKER) {
+        match parse_app6(segment.data) {
+            Ok(app6_metadata) => {
+                for (key, value) in app6_metadata.iter() {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+            Err(e) => {
+                // APP6 data is optional; parse failures are not fatal
+                eprintln!("Warning: Failed to parse APP6 segment: {}", e);
+            }
+        }
+    }
 }
 
 /// Process APP10 segments to extract HDR gain curve data

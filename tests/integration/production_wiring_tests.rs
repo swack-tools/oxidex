@@ -1694,3 +1694,93 @@ trailer<</Size 5/Root 1 0 R/Info 4 0 R/Prev {base_xref_off}>>\nstartxref\n{upd_x
         "rejected PDF write must leave the file untouched"
     );
 }
+
+// ---------------------------------------------------------------------------
+// JPEG APP6 (GoPro GPMF) wiring
+// ---------------------------------------------------------------------------
+
+fn jpeg_segment(marker: u8, payload: &[u8]) -> Vec<u8> {
+    let mut seg = vec![0xFF, marker];
+    seg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+    seg.extend_from_slice(payload);
+    seg
+}
+
+fn jpeg_with_segments(segments: &[Vec<u8>]) -> Vec<u8> {
+    let mut data = vec![0xFF, 0xD8];
+    for seg in segments {
+        data.extend_from_slice(seg);
+    }
+    data.extend_from_slice(&[0xFF, 0xD9]);
+    data
+}
+
+fn sof0_payload() -> Vec<u8> {
+    // 8-bit precision, 480x640, 3 components: Y 2x2 q0, Cb 1x1 q1, Cr 1x1 q1
+    let mut p = vec![8];
+    p.extend_from_slice(&480u16.to_be_bytes());
+    p.extend_from_slice(&640u16.to_be_bytes());
+    p.push(3);
+    p.extend_from_slice(&[1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+    p
+}
+
+fn gpmf_record(fourcc: &[u8; 4], fmt: u8, size: u8, count: u16, data: &[u8]) -> Vec<u8> {
+    let mut rec = fourcc.to_vec();
+    rec.push(fmt);
+    rec.push(size);
+    rec.extend_from_slice(&count.to_be_bytes());
+    rec.extend_from_slice(data);
+    while rec.len() % 4 != 0 {
+        rec.push(0);
+    }
+    rec
+}
+
+fn gopro_app6_payload() -> Vec<u8> {
+    let mut p = b"GoPro\0".to_vec();
+    p.extend_from_slice(&gpmf_record(b"MINF", b'c', 1, 11, b"HERO8 Black"));
+    p.extend_from_slice(&gpmf_record(b"CASN", b'c', 1, 14, b"C3221324545448"));
+    p.extend_from_slice(&gpmf_record(b"FMWR", b'c', 1, 15, b"HD8.01.01.60.00"));
+    p.extend_from_slice(&gpmf_record(b"RATE", b'c', 1, 6, b"4_1SEC"));
+    p
+}
+
+#[test]
+fn jpeg_app6_gopro_segment_yields_gopro_tags() {
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xE6, &gopro_app6_payload()),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    // Parity target captured from ExifTool 13.55 (-G1: group GoPro)
+    assert_eq!(metadata.get_string("GoPro:Model"), Some("HERO8 Black"));
+    assert_eq!(
+        metadata.get_string("GoPro:CameraSerialNumber"),
+        Some("C3221324545448")
+    );
+    assert_eq!(
+        metadata.get_string("GoPro:FirmwareVersion"),
+        Some("HD8.01.01.60.00")
+    );
+    assert_eq!(metadata.get_string("GoPro:Rate"), Some("4_1SEC"));
+}
+
+#[test]
+fn jpeg_app6_unknown_format_extracts_nothing() {
+    let mut payload = b"MMIMETA\0".to_vec();
+    payload.extend_from_slice(&[0x01; 16]);
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xE6, &payload),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    assert!(
+        !metadata
+            .iter()
+            .any(|(k, _)| k.starts_with("GoPro:") || k.starts_with("APP6:")),
+        "unknown APP6 payloads must not produce GoPro/APP6 tags"
+    );
+    // The rest of the file still parses normally.
+    assert_eq!(metadata.get_integer("File:ImageWidth"), Some(640));
+}
