@@ -64,3 +64,43 @@ def call_model(messages, base_url, api_key, model):
     with urllib.request.urlopen(req, timeout=120) as resp:
         payload = json.loads(resp.read())
     return payload["choices"][0]["message"]["content"]
+
+
+def git_apply(diff_text, repo_root):
+    """Apply a unified diff to the working tree. Returns (success, message)."""
+    result = subprocess.run(
+        ["git", "apply", "--reject", "-"],
+        input=diff_text, capture_output=True, text=True, cwd=repo_root,
+    )
+    if result.returncode == 0:
+        return True, "applied"
+    return False, result.stderr
+
+
+def git_checkout_clean(repo_root):
+    """Discard all uncommitted changes, including untracked files."""
+    subprocess.run(["git", "checkout", "--", "."], cwd=repo_root, check=True)
+    subprocess.run(["git", "clean", "-fd"], cwd=repo_root, check=True)
+
+
+def git_commit(message, repo_root):
+    subprocess.run(["git", "add", "-A"], cwd=repo_root, check=True)
+    subprocess.run(["git", "commit", "-m", message], cwd=repo_root, check=True)
+
+
+def cargo_build(repo_root):
+    """Build the oxidex binary. Returns (success, stderr)."""
+    result = subprocess.run(
+        ["cargo", "build", "--release", "--bin", "oxidex"],
+        capture_output=True, text=True, cwd=repo_root,
+    )
+    return result.returncode == 0, result.stderr
+
+
+def cargo_test_workspace(repo_root):
+    """Run the full workspace test suite. Returns True if all tests pass."""
+    result = subprocess.run(
+        ["cargo", "test", "--workspace"],
+        capture_output=True, text=True, cwd=repo_root,
+    )
+    return result.returncode == 0
