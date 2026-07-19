@@ -3,9 +3,10 @@
 use clap::Args;
 use once_cell::sync::Lazy;
 use regex::Regex;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-use crate::types::ResultEntry;
+use crate::types::{ManifestTag, ResultEntry};
 
 #[derive(Args)]
 pub struct RunArgs {
@@ -423,5 +424,162 @@ mod bug_classification_tests {
             Some("I3-wrong-type-numeric")
         );
         assert_eq!(write_bug_cluster_for("SomeUnclusteredTag"), None);
+    }
+}
+
+// ------------------------------------------------------------- key mapping
+//
+// Translate between ExifTool's `group:name` tag identifiers and the various
+// key spellings oxidex's CLI/JSON output actually uses. Port of
+// `scripts/jpeg_tag_matrix.py:270-351`.
+
+const EXIF_GROUPS: &[&str] = &["IFD0", "IFD1", "ExifIFD", "GPS", "InteropIFD", "SubIFD"];
+
+/// Candidate keys under which oxidex -j may expose this exiftool tag.
+pub fn oxidex_read_keys(tag: &ManifestTag) -> Vec<String> {
+    let (g, n) = (tag.group.as_str(), tag.name.as_str());
+    let mut keys = Vec::new();
+    if g == "InteropIFD" {
+        keys.push(format!("EXIF:{n}"));
+        keys.push(format!("InteropIFD:{n}"));
+    } else if EXIF_GROUPS.contains(&g) {
+        keys.push(format!("{g}:{n}"));
+    } else if g.starts_with("XMP") {
+        keys.push(format!("XMP:{n}"));
+        keys.push(format!("{g}:{n}"));
+    } else if g == "IPTC" {
+        keys.push(format!("IPTC:{n}"));
+    } else if g == "Photoshop" {
+        keys.push(format!("Photoshop:{n}"));
+        keys.push(format!("IPTC:{n}"));
+    } else if g == "JFIF" {
+        keys.push(format!("JFIF:{n}"));
+    } else {
+        keys.push(format!("{g}:{n}"));
+    }
+    keys.push(n.to_string());
+    keys
+}
+
+/// Write routing (validator.rs separate_by_ifd) only honors IFD0:/IFD1:/
+/// ExifIFD:/GPS:/EXIF: prefixes; EXIF: lands in IFD0 (wrong IFD for ExifIFD
+/// tags) so we use the exact family-1 prefix only. Other families are
+/// dropped silently -- one spelling suffices to prove NOT_WRITTEN.
+pub fn oxidex_write_keys(tag: &ManifestTag) -> Vec<String> {
+    let (g, n) = (tag.group.as_str(), tag.name.as_str());
+    if EXIF_GROUPS.contains(&g) {
+        vec![format!("{g}:{n}")]
+    } else if g.starts_with("XMP") {
+        vec![format!("XMP:{n}")]
+    } else {
+        vec![format!("{g}:{n}")]
+    }
+}
+
+pub fn find_in_json<'a>(data: &'a Value, keys: &[String]) -> (Option<String>, Option<&'a Value>) {
+    for k in keys {
+        if let Some(v) = data.get(k) {
+            return (Some(k.clone()), Some(v));
+        }
+    }
+    (None, None)
+}
+
+/// Find tag in exiftool -j -G1 output (exact group:name, then name-only).
+///
+/// strict_group: require the exact family-1 group, with no bare-name
+/// fallback to a different group at all. Used for write-test read-back:
+/// without this, a tag we never actually wrote can spuriously "match" an
+/// unrelated pre-existing tag of the same bare name in a different group.
+pub fn find_in_exiftool_json<'a>(
+    data: &'a Value,
+    tag: &ManifestTag,
+    strict_group: bool,
+) -> Option<&'a Value> {
+    let k = format!("{}:{}", tag.group, tag.name);
+    if let Some(v) = data.get(&k) {
+        return Some(v);
+    }
+    if strict_group {
+        return None;
+    }
+    data.as_object()?
+        .iter()
+        .find(|(key, _)| key.split(':').next_back() == Some(tag.name.as_str()))
+        .map(|(_, v)| v)
+}
+
+/// Scan for `sample` under any key sharing this tag's group prefix. Catches
+/// write/read registry asymmetries without hardcoding specific tag names.
+pub fn find_same_group_fallback<'a>(
+    data: &'a Value,
+    tag: &ManifestTag,
+    sample: &str,
+) -> (Option<String>, Option<&'a Value>) {
+    let prefix = format!("{}:", tag.group);
+    if let Some(obj) = data.as_object() {
+        for (key, v) in obj {
+            if key.starts_with(&prefix)
+                && v.as_str().map(|s| values_match(sample, s)).unwrap_or(false)
+            {
+                return (Some(key.clone()), Some(v));
+            }
+        }
+    }
+    (None, None)
+}
+
+#[cfg(test)]
+mod key_mapping_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn tag(group: &str, name: &str) -> ManifestTag {
+        ManifestTag {
+            group: group.into(), name: name.into(), family0: "EXIF".into(),
+            writable: true, vtype: "string".into(), protected: false,
+            flags: None, count: None, sample: Some("x".into()),
+            sample_is_file: None, noop: None,
+        }
+    }
+
+    #[test]
+    fn interop_ifd_gets_exif_prefixed_first() {
+        let keys = oxidex_read_keys(&tag("InteropIFD", "InteropIndex"));
+        assert_eq!(keys, vec!["EXIF:InteropIndex", "InteropIFD:InteropIndex", "InteropIndex"]);
+    }
+
+    #[test]
+    fn xmp_group_gets_flattened_and_full_variants() {
+        let keys = oxidex_read_keys(&tag("XMP-dc", "Creator"));
+        assert_eq!(keys, vec!["XMP:Creator", "XMP-dc:Creator", "Creator"]);
+    }
+
+    #[test]
+    fn photoshop_falls_back_to_iptc() {
+        let keys = oxidex_read_keys(&tag("Photoshop", "IPTCDigest"));
+        assert_eq!(keys, vec!["Photoshop:IPTCDigest", "IPTC:IPTCDigest", "IPTCDigest"]);
+    }
+
+    #[test]
+    fn exif_group_write_key_uses_exact_family1_prefix() {
+        let keys = oxidex_write_keys(&tag("ExifIFD", "ISO"));
+        assert_eq!(keys, vec!["ExifIFD:ISO"]);
+    }
+
+    #[test]
+    fn find_in_json_returns_first_present_key() {
+        let data = json!({"InteropIFD:InteropIndex": "R98"});
+        let (k, v) = find_in_json(&data, &["EXIF:InteropIndex".into(), "InteropIFD:InteropIndex".into()]);
+        assert_eq!(k.as_deref(), Some("InteropIFD:InteropIndex"));
+        assert_eq!(v, Some(&json!("R98")));
+    }
+
+    #[test]
+    fn find_in_exiftool_json_strict_group_has_no_bare_name_fallback() {
+        let data = json!({"ExifIFD:ColorSpace": "1"});
+        let t = tag("XMP-exif", "ColorSpace");
+        assert_eq!(find_in_exiftool_json(&data, &t, true), None);
+        assert_eq!(find_in_exiftool_json(&data, &t, false), Some(&json!("1")));
     }
 }
