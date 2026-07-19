@@ -73,31 +73,14 @@ old Perl-regex parser missed for the vast majority of tags.
 
 ### Generated Code Structure
 
-Each format family gets its own module:
+Each domain crate pre-compiles its YAML tag definitions to binary format at build time. The `build.rs` script eliminates the cold-start YAML parsing penalty by:
 
-```rust
-// oxidex-tags-camera/src/canon.rs
-static TAGS: Lazy<Vec<TagDescriptor>> = Lazy::new(|| vec![
-    TagDescriptor {
-        tag_id: TagId::Numeric(0x0001),
-        tag_name: "Canon:CameraSettings",
-        format_family: "Canon",
-        // ...
-    },
-    // ... 930 Canon tags
-]);
+1. Reading the YAML source file (e.g. `oxidex-tags-camera/src/camera_tags.yaml`)
+2. Deserializing with `serde_yaml::from_str` into `TagDatabase` structures
+3. Serializing to efficient binary format with `bincode::serde`
+4. Writing the binary blob to `OUT_DIR` for embedding via `include_bytes!`
 
-pub fn get_tags() -> &'static HashMap<String, TagDescriptor> {
-    static MAP: Lazy<HashMap<String, TagDescriptor>> = Lazy::new(|| {
-        let mut map = HashMap::with_capacity(TAGS.len());
-        for tag in TAGS.iter() {
-            map.insert(tag.tag_name.clone(), tag.clone());
-        }
-        map
-    });
-    &MAP
-}
-```
+This converts one-time deserialization work from runtime to compile time, avoiding repeated YAML parsing on every program start while keeping the source readable and maintainable.
 
 ## Supported Formats
 
