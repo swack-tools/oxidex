@@ -11,9 +11,14 @@
 //! the MakerNotes blob keeps its original offset so manufacturer-internal
 //! absolute offsets stay valid.
 
+use crate::core::metadata_map::MetadataMap;
 use crate::core::operations_helpers::{read_u16, read_u32};
+use crate::core::tag_value::TagValue;
+use crate::core::validation::{validate_tag_value_intrinsics, validate_tag_value_with_name};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
+use crate::tag_db::lookup_tag_name;
+use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 
 /// IFD0 tag pointing to the ExifIFD
 const EXIF_IFD_POINTER: u16 = 0x8769;
@@ -83,6 +88,245 @@ pub(crate) fn type_size(field_type: u16) -> usize {
     }
 }
 
+/// One entry ready for serialization (raw carry-over or freshly typed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutEntry {
+    pub tag_id: u16,
+    pub field_type: u16,
+    pub count: u32,
+    pub value: Vec<u8>,
+}
+
+/// A fully diffed EXIF write: per-IFD entries plus preserved blobs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WritePlan {
+    pub byte_order: ByteOrder,
+    pub ifd0: Vec<OutEntry>,
+    pub exif_ifd: Vec<OutEntry>,
+    pub gps: Vec<OutEntry>,
+    pub interop: Vec<OutEntry>,
+    pub ifd1: Vec<OutEntry>,
+    pub thumbnail: Option<Vec<u8>>,
+    /// Original MakerNote value offset to honor during layout
+    pub makernote_pin: Option<usize>,
+}
+
+/// Serializes a caller-supplied TagValue into (field_type, count, bytes).
+/// `hint` is the original entry's field type, used to keep BYTE vs UNDEFINED
+/// and SHORT vs LONG stable across an edit.
+fn tag_value_to_field(value: &TagValue, hint: Option<u16>) -> Result<(u16, u32, Vec<u8>)> {
+    match value {
+        TagValue::String(s) => {
+            let mut bytes = s.as_bytes().to_vec();
+            bytes.push(0);
+            Ok((2, bytes.len() as u32, bytes))
+        }
+        TagValue::Integer(i) => {
+            let i = *i;
+            match hint {
+                Some(3) if (0..=0xFFFF).contains(&i) => {
+                    Ok((3, 1, (i as u16).to_ne_bytes().to_vec()))
+                }
+                _ if (0..=0xFFFF).contains(&i) => Ok((3, 1, (i as u16).to_ne_bytes().to_vec())),
+                _ if (0..=0xFFFF_FFFF).contains(&i) => {
+                    Ok((4, 1, (i as u32).to_ne_bytes().to_vec()))
+                }
+                _ if (i32::MIN as i64..=i32::MAX as i64).contains(&i) => {
+                    Ok((9, 1, (i as i32).to_ne_bytes().to_vec()))
+                }
+                _ => Err(ExifToolError::parse_error(format!(
+                    "Integer value {} does not fit any TIFF integer type",
+                    i
+                ))),
+            }
+        }
+        TagValue::Rational {
+            numerator,
+            denominator,
+        } => {
+            if *numerator >= 0 && *denominator >= 0 {
+                let mut b = (*numerator as u32).to_ne_bytes().to_vec();
+                b.extend_from_slice(&(*denominator as u32).to_ne_bytes());
+                Ok((5, 1, b))
+            } else {
+                let mut b = numerator.to_ne_bytes().to_vec();
+                b.extend_from_slice(&denominator.to_ne_bytes());
+                Ok((10, 1, b))
+            }
+        }
+        TagValue::Binary(bytes) => {
+            let ft = match hint {
+                Some(1) => 1, // keep BYTE if it was BYTE
+                _ => 7,       // UNDEFINED
+            };
+            Ok((ft, bytes.len() as u32, bytes.clone()))
+        }
+        TagValue::DateTime(dt) => {
+            let mut bytes = crate::core::date_shift::format_exif_datetime(dt).into_bytes();
+            bytes.push(0);
+            Ok((2, bytes.len() as u32, bytes)) // always 20
+        }
+        TagValue::Float(f) => Ok((12, 1, f.to_ne_bytes().to_vec())),
+        TagValue::Array(_) | TagValue::Struct(_) => Err(ExifToolError::parse_error(
+            "Array/Struct values are not supported for EXIF write",
+        )),
+    }
+}
+
+/// NOTE on multi-byte native-endian buffers: tag_value_to_field intentionally
+/// emits native-endian placeholder bytes for Integer/Rational/Float; the
+/// serializer (Task 4) re-emits multi-byte numeric values in the plan's byte
+/// order using field_type/count, so these placeholders never reach the file
+/// for numeric types. ASCII/BYTE/UNDEFINED bytes are endian-neutral.
+///
+/// Diffs the original scan + reader-produced map against the desired map.
+/// See the Design Rules table in the plan document for the exact contract.
+pub fn plan_exif_write(
+    scan: &ExifScan,
+    original_map: &MetadataMap,
+    desired: &MetadataMap,
+) -> Result<WritePlan> {
+    let exif_family_keys = |m: &MetadataMap| -> Vec<String> {
+        m.iter()
+            .map(|(k, _)| k.clone())
+            .filter(|k| {
+                k.starts_with("IFD0:")
+                    || k.starts_with("ExifIFD:")
+                    || k.starts_with("GPS:")
+                    || k.starts_with("EXIF:")
+            })
+            .collect()
+    };
+
+    let mut plan = WritePlan {
+        byte_order: scan.byte_order,
+        ifd0: Vec::new(),
+        exif_ifd: Vec::new(),
+        gps: Vec::new(),
+        interop: Vec::new(),
+        ifd1: Vec::new(),
+        thumbnail: None,
+        makernote_pin: None,
+    };
+
+    // clear_all_metadata semantics: no EXIF-family keys desired -> drop all
+    if exif_family_keys(desired).is_empty() {
+        return Ok(plan);
+    }
+
+    plan.thumbnail = scan.thumbnail.clone();
+    plan.makernote_pin = scan.makernote_offset;
+
+    let mut consumed_keys: Vec<String> = Vec::new();
+
+    for entry in &scan.entries {
+        let bucket = |plan: &mut WritePlan, e: OutEntry| match entry.ifd {
+            IfdKind::Ifd0 => plan.ifd0.push(e),
+            IfdKind::ExifIfd => plan.exif_ifd.push(e),
+            IfdKind::Gps => plan.gps.push(e),
+            IfdKind::Interop => plan.interop.push(e),
+            IfdKind::Ifd1 => plan.ifd1.push(e),
+        };
+        let carry = OutEntry {
+            tag_id: entry.tag_id,
+            field_type: entry.field_type,
+            count: entry.count,
+            value: entry.value.clone(),
+        };
+
+        // Unsurfaced classes: always carry
+        if matches!(entry.ifd, IfdKind::Interop | IfdKind::Ifd1) || entry.tag_id == MAKERNOTE {
+            bucket(&mut plan, carry);
+            continue;
+        }
+
+        let key = lookup_tag_name(entry.tag_id, entry.ifd.prefix());
+        let Some(original_value) = original_map.get(&key) else {
+            // Reader didn't surface this entry: never drop what it hides
+            bucket(&mut plan, carry);
+            continue;
+        };
+        let Some(desired_value) = desired.get(&key) else {
+            continue; // removal by absence
+        };
+        consumed_keys.push(key.clone());
+        if desired_value == original_value {
+            bucket(&mut plan, carry);
+            continue;
+        }
+
+        // Changed: strict validation, then true-typed serialization
+        validate_changed(&key, desired_value)?;
+        let (ft, count, bytes) = tag_value_to_field(desired_value, Some(entry.field_type))?;
+        bucket(
+            &mut plan,
+            OutEntry {
+                tag_id: entry.tag_id,
+                field_type: ft,
+                count,
+                value: bytes,
+            },
+        );
+    }
+
+    // Added: desired EXIF-family keys not matched to any original entry
+    for key in exif_family_keys(desired) {
+        if consumed_keys.iter().any(|k| *k == key) {
+            continue;
+        }
+        let value = desired.get(&key).unwrap();
+        let Some(descriptor) = get_tag_descriptor(&key) else {
+            return Err(ExifToolError::parse_error(format!(
+                "Cannot add tag '{}': not a known EXIF tag",
+                key
+            )));
+        };
+        validate_changed(&key, value)?;
+        let tag_id = descriptor_tag_id(descriptor).ok_or_else(|| {
+            ExifToolError::parse_error(format!("Tag '{}' has no numeric EXIF id", key))
+        })?;
+        let (ft, count, bytes) = tag_value_to_field(value, None)?;
+        let out = OutEntry {
+            tag_id,
+            field_type: ft,
+            count,
+            value: bytes,
+        };
+        // Route by prefix; "EXIF:" keys land in IFD0 (compat with the old writer)
+        if key.starts_with("ExifIFD:") {
+            plan.exif_ifd.push(out);
+        } else if key.starts_with("GPS:") {
+            plan.gps.push(out);
+        } else {
+            plan.ifd0.push(out);
+        }
+    }
+
+    Ok(plan)
+}
+
+/// Strict validation for values the caller changed or added — identical
+/// policy to write_metadata's PHASE 1 (reliable type match, else intrinsics).
+fn validate_changed(key: &str, value: &TagValue) -> Result<()> {
+    if let Some(descriptor) = get_tag_descriptor(key) {
+        if has_reliable_value_type(key) {
+            validate_tag_value_with_name(key, descriptor, value)?;
+        } else {
+            validate_tag_value_intrinsics(key, value)?;
+        }
+    }
+    Ok(())
+}
+
+/// Extracts the numeric tag id from a descriptor, mirroring
+/// `validate_tag_for_tiff` (`src/writers/tiff_writer/tiff/validator.rs:48-69`).
+fn descriptor_tag_id(descriptor: &crate::core::TagDescriptor) -> Option<u16> {
+    match &descriptor.tag_id {
+        crate::core::TagId::Numeric(id) => Some(*id),
+        crate::core::TagId::Named(_) => None,
+    }
+}
+
 /// Walks IFD0 (and ExifIFD, GPS, InteropIFD, IFD1) and returns every entry
 /// with its raw value bytes. Pointer tags are consumed structurally, not
 /// returned. Corrupt sub-structures degrade gracefully: an out-of-bounds
@@ -128,7 +372,9 @@ pub fn scan_exif_entries(tiff: &[u8]) -> Result<ExifScan> {
     if let Some(ifd1_off) = ifd0.next_ifd {
         let ifd1 = walk_ifd(tiff, ifd1_off, byte_order, IfdKind::Ifd1, &mut scan);
         if let (Some(t_off), Some(t_len)) = (ifd1.thumb_offset, ifd1.thumb_length)
-            && t_off.checked_add(t_len).is_some_and(|end| end <= tiff.len())
+            && t_off
+                .checked_add(t_len)
+                .is_some_and(|end| end <= tiff.len())
         {
             scan.thumbnail = Some(tiff[t_off..t_off + t_len].to_vec());
         }
@@ -227,9 +473,7 @@ fn walk_ifd(
 
     // Next-IFD offset follows the entry table
     let next_at = entries_start + entry_count * 12;
-    if which == IfdKind::Ifd0
-        && next_at + 4 <= tiff.len()
-    {
+    if which == IfdKind::Ifd0 && next_at + 4 <= tiff.len() {
         let next = read_u32(&tiff[next_at..next_at + 4], byte_order) as usize;
         if next != 0 {
             result.next_ifd = Some(next);
@@ -241,6 +485,8 @@ fn walk_ifd(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::metadata_map::MetadataMap;
+    use crate::core::tag_value::TagValue;
 
     fn u16b(v: u16, bo: ByteOrder) -> [u8; 2] {
         match bo {
@@ -381,9 +627,12 @@ mod tests {
             Some(&[0xFF, 0xD8, 0xAA, 0xBB, 0xFF, 0xD9][..])
         );
         // Pointer tags are structural, not entries
-        assert!(!scan.entries.iter().any(|e| {
-            matches!(e.tag_id, 0x8769 | 0x8825 | 0x0201 | 0x0202)
-        }));
+        assert!(
+            !scan
+                .entries
+                .iter()
+                .any(|e| { matches!(e.tag_id, 0x8769 | 0x8825 | 0x0201 | 0x0202) })
+        );
     }
 
     #[test]
@@ -424,7 +673,120 @@ mod tests {
         .unwrap();
         let tiff = super::super::exif_surgical_test_support::tiff_slice(&bytes);
         let scan = scan_exif_entries(tiff).unwrap();
-        assert!(scan.entries.iter().any(|e| e.ifd == IfdKind::Ifd0 && e.tag_id == 0x0132));
-        assert!(scan.entries.iter().any(|e| e.ifd == IfdKind::ExifIfd && e.tag_id == MAKERNOTE));
+        assert!(
+            scan.entries
+                .iter()
+                .any(|e| e.ifd == IfdKind::Ifd0 && e.tag_id == 0x0132)
+        );
+        assert!(
+            scan.entries
+                .iter()
+                .any(|e| e.ifd == IfdKind::ExifIfd && e.tag_id == MAKERNOTE)
+        );
+    }
+
+    /// Runs scan + reader-symmetric conversion to build the original map the
+    /// way plan_exif_write's callers do in production.
+    fn scan_and_maps(tiff: &[u8]) -> (ExifScan, MetadataMap) {
+        let scan = scan_exif_entries(tiff).unwrap();
+        let mut map = MetadataMap::new();
+        for e in &scan.entries {
+            if matches!(e.ifd, IfdKind::Interop | IfdKind::Ifd1) || e.tag_id == MAKERNOTE {
+                continue;
+            }
+            let key = crate::tag_db::lookup_tag_name(e.tag_id, e.ifd.prefix());
+            let value = crate::core::tag_conversion::raw_bytes_to_tag_value(
+                &e.value,
+                e.field_type,
+                e.count,
+                e.tag_id,
+                scan.byte_order,
+            );
+            map.insert(key, value);
+        }
+        (scan, map)
+    }
+
+    #[test]
+    fn plan_noop_carries_everything() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let desired = original.clone();
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        // Every surfaced entry carried with identical raw bytes
+        let cc = plan.exif_ifd.iter().find(|e| e.tag_id == 0x9101).unwrap();
+        assert_eq!(cc.field_type, 7);
+        assert_eq!(cc.value, [1, 2, 3, 0]);
+        let gps = plan.gps.iter().find(|e| e.tag_id == 0x0000).unwrap();
+        assert_eq!(gps.value, [2, 3, 0, 0]);
+        // Unsurfaced classes carried too
+        assert!(plan.exif_ifd.iter().any(|e| e.tag_id == MAKERNOTE));
+        assert!(plan.ifd1.iter().any(|e| e.tag_id == 0x0103));
+        assert_eq!(plan.makernote_pin, Some(116));
+        assert!(plan.thumbnail.is_some());
+    }
+
+    #[test]
+    fn plan_removal_by_absence() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.remove("IFD0:Orientation");
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        assert!(!plan.ifd0.iter().any(|e| e.tag_id == 0x0112));
+        assert!(plan.ifd0.iter().any(|e| e.tag_id == 0x010F)); // Make survives
+    }
+
+    #[test]
+    fn plan_changed_value_is_revalidated_and_retyped() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.insert("IFD0:Make", TagValue::new_string("Nikon"));
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let make = plan.ifd0.iter().find(|e| e.tag_id == 0x010F).unwrap();
+        assert_eq!(make.field_type, 2);
+        assert_eq!(make.value, b"Nikon\0");
+        assert_eq!(make.count, 6);
+    }
+
+    #[test]
+    fn plan_rejects_display_string_write_to_binary_tag() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        // User "modifies" ComponentsConfiguration with a display string:
+        // strict validation must reject, exactly as before this change
+        desired.insert(
+            "ExifIFD:ComponentsConfiguration",
+            TagValue::new_string("R, G, B, -"),
+        );
+        let err = plan_exif_write(&scan, &original, &desired).unwrap_err();
+        assert!(err.to_string().contains("Type mismatch"), "got: {}", err);
+    }
+
+    #[test]
+    fn plan_added_tag_and_unknown_added_tag() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.insert("IFD0:Artist", TagValue::new_string("A. Person"));
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let artist = plan.ifd0.iter().find(|e| e.tag_id == 0x013B).unwrap();
+        assert_eq!(artist.value, b"A. Person\0");
+
+        let mut bad = original.clone();
+        bad.insert("IFD0:NoSuchTagName", TagValue::new_string("x"));
+        assert!(plan_exif_write(&scan, &original, &bad).is_err());
+    }
+
+    #[test]
+    fn plan_clear_semantics() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let desired = MetadataMap::new();
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        assert!(plan.ifd0.is_empty() && plan.exif_ifd.is_empty() && plan.gps.is_empty());
+        assert!(plan.ifd1.is_empty() && plan.thumbnail.is_none());
     }
 }
