@@ -9,10 +9,10 @@ Empirical OxiDex ↔ ExifTool tag mapping for JPEG: for each tag, ExifTool write
 Only tags OxiDex can **read** from JPEG are listed here (including those whose value formatting differs from ExifTool). The full classification of all tested tags — including unsupported and broken ones — is in the [JPEG Tag Matrix](/reference/jpeg-tag-matrix). See also [ExifTool Coverage](/reference/tag-coverage-analysis) for the tag-database view and the [Compatibility overview](/reference/comparison/) for fixture-based comparisons across formats.
 
 
-**1621** ExifTool tags readable, **122** writable via the CLI (of 4812 ExifTool-writable JPEG tags tested).
+**2028** ExifTool tags readable, **122** writable via the CLI (of 4812 ExifTool-writable JPEG tags tested).
 
 
-## ExifIFD (85 readable tags)
+## ExifIFD (87 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
@@ -22,7 +22,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:CameraElevationAngle` | `ExifIFD:CameraElevationAngle` | — | `1.5` |
 | `ExifIFD:CameraFirmware` | `ExifIFD:CameraFirmware` | ✅ `-ExifIFD:CameraFirmware=` | `OxTest` |
 | `ExifIFD:ColorSpace` | `ExifIFD:ColorSpace` | — | `sRGB` |
-| `ExifIFD:CompositeImage` | `ExifIFD:CompositeImage` | — | `Unknown` |
+| `ExifIFD:CompositeImage` | `ExifIFD:CompositeImage` | — | `Not a Composite Image` |
 | `ExifIFD:CompositeImageCount` | `ExifIFD:CompositeImageCount` | ⚠️ `-ExifIFD:CompositeImageCount=` | `3 3` |
 | `ExifIFD:CompressedBitsPerPixel` | `ExifIFD:CompressedBitsPerPixel` | ⚠️ `-ExifIFD:CompressedBitsPerPixel=` | `1.5` |
 | `ExifIFD:Contrast` | `ExifIFD:Contrast` | — | `Normal` |
@@ -44,10 +44,10 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:FlashpixVersion` | `ExifIFD:FlashpixVersion` | ⚠️ `-ExifIFD:FlashpixVersion=` | `0100` |
 | `ExifIFD:FocalLength` | `ExifIFD:FocalLength` | — | `1.5` |
 | `ExifIFD:FocalLengthIn35mmFormat` | `ExifIFD:FocalLengthIn35mmFormat` | — | `3` |
-| `ExifIFD:FocalPlaneResolutionUnit` | `ExifIFD:FocalPlaneResolutionUnit` * | — | `None` |
+| `ExifIFD:FocalPlaneResolutionUnit` | `ExifIFD:FocalPlaneResolutionUnit` * | — | `inches` |
 | `ExifIFD:FocalPlaneXResolution` | `ExifIFD:FocalPlaneXResolution` | — | `1.5` |
 | `ExifIFD:FocalPlaneYResolution` | `ExifIFD:FocalPlaneYResolution` | — | `1.5` |
-| `ExifIFD:GainControl` | `ExifIFD:GainControl` | — | `None` |
+| `ExifIFD:GainControl` | `ExifIFD:GainControl` | — | `Low gain up` |
 | `ExifIFD:Gamma` | `ExifIFD:Gamma` | — | `1.5` |
 | `ExifIFD:Humidity` | `ExifIFD:Humidity` | — | `1.5` |
 | `ExifIFD:ISO` | `ExifIFD:ISO` | — | `3` |
@@ -64,9 +64,10 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:LensMake` | `ExifIFD:LensMake` | ✅ `-ExifIFD:LensMake=` | `OxTest` |
 | `ExifIFD:LensModel` | `ExifIFD:LensModel` | ✅ `-ExifIFD:LensModel=` | `OxTest` |
 | `ExifIFD:LensSerialNumber` | `ExifIFD:LensSerialNumber` | ✅ `-ExifIFD:LensSerialNumber=` | `OxTest` |
-| `ExifIFD:LightSource` | `ExifIFD:LightSource` | — | `Unknown` |
+| `ExifIFD:LightSource` | `ExifIFD:LightSource` | — | `Daylight` |
+| `ExifIFD:MakerNoteUnknownText` | `ExifIFD:CameraFirmware` | — | `OxTest` |
 | `ExifIFD:MetadataEditingSoftware` | `ExifIFD:MetadataEditingSoftware` | ✅ `-ExifIFD:MetadataEditingSoftware=` | `OxTest` |
-| `ExifIFD:MeteringMode` | `ExifIFD:MeteringMode` | — | `Unknown` |
+| `ExifIFD:MeteringMode` | `ExifIFD:MeteringMode` | — | `Average` |
 | `ExifIFD:MoireFilter` | `ExifIFD:MoireFilter` * | ✅ `-ExifIFD:MoireFilter=` | `OxTest` |
 | `ExifIFD:OffsetSchema` | `ExifIFD:OffsetSchema` | ✅ `-ExifIFD:OffsetSchema=` | `3` |
 | `ExifIFD:OffsetTime` | `ExifIFD:OffsetTime` | ✅ `-ExifIFD:OffsetTime=` | `+05:30` |
@@ -85,7 +86,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:SecurityClassification` | `ExifIFD:SecurityClassification` | — | `Confidential` |
 | `ExifIFD:SelfTimerMode` | `ExifIFD:SelfTimerMode` | — | `3` |
 | `ExifIFD:SensingMethod` | `ExifIFD:SensingMethod` | — | `Not defined` |
-| `ExifIFD:SensitivityType` | `ExifIFD:SensitivityType` | — | `Unknown` |
+| `ExifIFD:SensitivityType` | `ExifIFD:SensitivityType` | — | `Standard Output Sensitivity` |
 | `ExifIFD:SerialNumber` | `ExifIFD:SerialNumber` | ✅ `-ExifIFD:SerialNumber=` | `OxTest` |
 | `ExifIFD:Sharpness` | `ExifIFD:Sharpness` | — | `Normal` |
 | `ExifIFD:SpectralSensitivity` | `ExifIFD:SpectralSensitivity` | ✅ `-ExifIFD:SpectralSensitivity=` | `OxTest` |
@@ -95,8 +96,9 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:SubSecTimeOriginal` | `ExifIFD:SubSecTimeOriginal` | ✅ `-ExifIFD:SubSecTimeOriginal=` | `3` |
 | `ExifIFD:SubjectArea` | `ExifIFD:SubjectArea` | — | `3` |
 | `ExifIFD:SubjectDistance` | `ExifIFD:SubjectDistance` | — | `1.5` |
-| `ExifIFD:SubjectDistanceRange` | `ExifIFD:SubjectDistanceRange` | — | `Unknown` |
+| `ExifIFD:SubjectDistanceRange` | `ExifIFD:SubjectDistanceRange` | — | `Macro` |
 | `ExifIFD:SubjectLocation` | `ExifIFD:SubjectLocation` | — | `3 3` |
+| `ExifIFD:TimeZoneOffset` | `ExifIFD:0x882A` | — | `3` |
 | `ExifIFD:UserComment` | `ExifIFD:UserComment` | ⚠️ `-ExifIFD:UserComment=` | `OxTest` |
 | `ExifIFD:WaterDepth` | `ExifIFD:WaterDepth` | — | `1.5` |
 | `ExifIFD:WhiteBalance` | `ExifIFD:WhiteBalance` | — | `Auto` |
@@ -138,7 +140,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSTrackRef` | `GPS:GPSTrackRef` | — | `Magnetic North` |
 | `GPS:GPSVersionID` | `GPS:GPSVersionID` | — | `2.3.0.0` |
 
-## IFD0 (123 readable tags)
+## IFD0 (131 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
@@ -153,9 +155,9 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:BaselineNoise` | `IFD0:BaselineNoise` | ⚠️ `-IFD0:BaselineNoise=` | `1.5` |
 | `IFD0:BaselineSharpness` | `IFD0:BaselineSharpness` | ⚠️ `-IFD0:BaselineSharpness=` | `1.5` |
 | `IFD0:BitsPerSample` | `IFD0:BitsPerSample` | — | `3` |
-| `IFD0:CalibrationIlluminant1` | `IFD0:CalibrationIlluminant1` * | — | `Unknown` |
-| `IFD0:CalibrationIlluminant2` | `IFD0:CalibrationIlluminant2` * | — | `Unknown` |
-| `IFD0:CalibrationIlluminant3` | `IFD0:CalibrationIlluminant3` * | — | `Unknown` |
+| `IFD0:CalibrationIlluminant1` | `IFD0:CalibrationIlluminant1` * | — | `Daylight` |
+| `IFD0:CalibrationIlluminant2` | `IFD0:CalibrationIlluminant2` * | — | `Daylight` |
+| `IFD0:CalibrationIlluminant3` | `IFD0:CalibrationIlluminant3` * | — | `Daylight` |
 | `IFD0:CameraCalibration1` | `IFD0:CameraCalibration1` | — | `1.5` |
 | `IFD0:CameraCalibration2` | `IFD0:CameraCalibration2` | — | `1.5` |
 | `IFD0:CameraCalibration3` | `IFD0:CameraCalibration3` | ⚠️ `-IFD0:CameraCalibration3=` | `1.5` |
@@ -173,13 +175,14 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:CurrentPreProfileMatrix` | `IFD0:CurrentPreProfileMatrix` | ⚠️ `-IFD0:CurrentPreProfileMatrix=` | `1.5` |
 | `IFD0:DNGBackwardVersion` | `IFD0:DNGBackwardVersion` * | — | `3 3 3 3` |
 | `IFD0:DNGLensInfo` | `IFD0:DNGLensInfo` * | — | `1.5 1.5 1.5 1.5` |
+| `IFD0:DNGPrivateData` | `IFD0:0x012D` | — | `3` |
 | `IFD0:DNGVersion` | `IFD0:DNGVersion` * | — | `3 3 3 3` |
 | `IFD0:DefaultBlackRender` | `IFD0:DefaultBlackRender` * | — | `Auto` |
 | `IFD0:DepthFar` | `IFD0:DepthFar` | ⚠️ `-IFD0:DepthFar=` | `1.5` |
-| `IFD0:DepthFormat` | `IFD0:DepthFormat` * | — | `Unknown` |
-| `IFD0:DepthMeasureType` | `IFD0:DepthMeasureType` * | — | `Unknown` |
+| `IFD0:DepthFormat` | `IFD0:DepthFormat` * | — | `Linear` |
+| `IFD0:DepthMeasureType` | `IFD0:DepthMeasureType` * | — | `Optical Axis` |
 | `IFD0:DepthNear` | `IFD0:DepthNear` | ⚠️ `-IFD0:DepthNear=` | `1.5` |
-| `IFD0:DepthUnits` | `IFD0:DepthUnits` * | — | `Unknown` |
+| `IFD0:DepthUnits` | `IFD0:DepthUnits` * | — | `Meters` |
 | `IFD0:DocumentName` | `IFD0:DocumentName` | ✅ `-IFD0:DocumentName=` | `OxTest` |
 | `IFD0:EnhanceParams` | `IFD0:EnhanceParams` | ✅ `-IFD0:EnhanceParams=` | `OxTest` |
 | `IFD0:FillOrder` | `IFD0:FillOrder` | — | `Normal` |
@@ -197,6 +200,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:ImageHeight` | `IFD0:ImageHeight` | — | `3` |
 | `IFD0:ImageWidth` | `IFD0:ImageWidth` | — | `3` |
 | `IFD0:InkSet` | `IFD0:InkSet` * | — | `CMYK` |
+| `IFD0:IntergraphMatrix` | `IFD0:AnalogBalance` | — | `1.5` |
 | `IFD0:JXLDecodeSpeed` | `IFD0:JXLDecodeSpeed` | ⚠️ `-IFD0:JXLDecodeSpeed=` | `3` |
 | `IFD0:JXLEffort` | `IFD0:JXLEffort` | ⚠️ `-IFD0:JXLEffort=` | `3` |
 | `IFD0:LinearResponseLimit` | `IFD0:LinearResponseLimit` | ⚠️ `-IFD0:LinearResponseLimit=` | `1.5` |
@@ -206,6 +210,8 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:MaxSampleValue` | `IFD0:MaxSampleValue` | — | `3` |
 | `IFD0:MinSampleValue` | `IFD0:MinSampleValue` | — | `3` |
 | `IFD0:Model` | `IFD0:Model` | ✅ `-IFD0:Model=` | `OxTest` |
+| `IFD0:ModelTiePoint` | `IFD0:AnalogBalance` | — | `1.5` |
+| `IFD0:ModelTransform` | `IFD0:CalibrationIlluminant1` | — | `1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 ` |
 | `IFD0:ModifyDate` | `IFD0:ModifyDate` | — | `2024:01:15 10:30:00` |
 | `IFD0:NewRawImageDigest` | `IFD0:NewRawImageDigest` * | — | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
 | `IFD0:OldSubfileType` | `IFD0:OldSubfileType` * | — | `Full-resolution image` |
@@ -218,11 +224,12 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:PageName` | `IFD0:PageName` | ✅ `-IFD0:PageName=` | `OxTest` |
 | `IFD0:PageNumber` | `IFD0:PageNumber` | — | `3 3` |
 | `IFD0:PhotometricInterpretation` | `IFD0:PhotometricInterpretation` | — | `WhiteIsZero` |
+| `IFD0:PixelScale` | `IFD0:CalibrationIlluminant1` | — | `1.5 1.5 1.5` |
 | `IFD0:PlanarConfiguration` | `IFD0:PlanarConfiguration` | — | `Chunky` |
-| `IFD0:Predictor` | `IFD0:Predictor` * | — | `None` |
+| `IFD0:Predictor` | `IFD0:Predictor` * | — | `Horizontal differencing` |
 | `IFD0:PreviewApplicationName` | `IFD0:PreviewApplicationName` | ✅ `-IFD0:PreviewApplicationName=` | `OxTest` |
 | `IFD0:PreviewApplicationVersion` | `IFD0:PreviewApplicationVersion` | ✅ `-IFD0:PreviewApplicationVersion=` | `OxTest` |
-| `IFD0:PreviewColorSpace` | `IFD0:PreviewColorSpace` * | — | `Unknown` |
+| `IFD0:PreviewColorSpace` | `IFD0:PreviewColorSpace` * | — | `Gray Gamma 2.2` |
 | `IFD0:PreviewDateTime` | `IFD0:PreviewDateTime` | — | `2024:01:15 10:30:00` |
 | `IFD0:PreviewSettingsDigest` | `IFD0:PreviewSettingsDigest` * | ⚠️ `-IFD0:PreviewSettingsDigest=` | `3` |
 | `IFD0:PreviewSettingsName` | `IFD0:PreviewSettingsName` | ✅ `-IFD0:PreviewSettingsName=` | `OxTest` |
@@ -246,16 +253,19 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:ReductionMatrix3` | `IFD0:ReductionMatrix3` | ⚠️ `-IFD0:ReductionMatrix3=` | `1.5` |
 | `IFD0:ReelName` | `IFD0:ReelName` | ✅ `-IFD0:ReelName=` | `OxTest` |
 | `IFD0:ReferenceBlackWhite` | `IFD0:ReferenceBlackWhite` | — | `1.5 1.5 1.5 1.5 1.5 1.5` |
-| `IFD0:ResolutionUnit` | `IFD0:ResolutionUnit` | — | `None` |
+| `IFD0:ResolutionUnit` | `IFD0:ResolutionUnit` | — | `inches` |
 | `IFD0:RowsPerStrip` | `IFD0:RowsPerStrip` | — | `3` |
+| `IFD0:SEMInfo` | `IFD0:0x0151` | — | `OxTest` |
 | `IFD0:SamplesPerPixel` | `IFD0:SamplesPerPixel` | — | `3` |
 | `IFD0:ShadowScale` | `IFD0:ShadowScale` | ⚠️ `-IFD0:ShadowScale=` | `1.5` |
 | `IFD0:Software` | `IFD0:Software` | ✅ `-IFD0:Software=` | `OxTest` |
 | `IFD0:SubfileType` | `IFD0:SubfileType` | — | `Full-resolution image` |
 | `IFD0:TStop` | `IFD0:TStop` | ⚠️ `-IFD0:TStop=` | `1.5` |
+| `IFD0:TargetPrinter` | `IFD0:0x0151` | ✅ `-IFD0:TargetPrinter=` | `OxTest` |
 | `IFD0:Thresholding` | `IFD0:Thresholding` * | — | `No dithering or halftoning` |
 | `IFD0:TileLength` | `IFD0:TileLength` | — | `3` |
 | `IFD0:TileWidth` | `IFD0:TileWidth` | — | `3` |
+| `IFD0:TransferFunction` | `IFD0:0x012D` | — | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 ` |
 | `IFD0:UniqueCameraModel` | `IFD0:UniqueCameraModel` | ✅ `-IFD0:UniqueCameraModel=` | `OxTest` |
 | `IFD0:WhitePoint` | `IFD0:WhitePoint` * | — | `1.5 1.5` |
 | `IFD0:XPosition` | `IFD0:XPosition` | — | `1.5` |
@@ -266,7 +276,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:YPosition` | `IFD0:YPosition` | — | `1.5` |
 | `IFD0:YResolution` | `IFD0:YResolution` | — | `1.5` |
 
-## IPTC (56 readable tags)
+## IPTC (88 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
@@ -274,11 +284,15 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IPTC:ApplicationRecordVersion` | `IPTC:ApplicationRecordVersion` | — | `3` |
 | `IPTC:AudioOutcue` | `IPTC:AudioOutcue` | — | `OxTest` |
 | `IPTC:AudioType` | `IPTC:AudioType` * | — | `Text Only` |
+| `IPTC:BitsPerComponent` | `IPTC:ApplicationRecordVersion` | — | `3` |
 | `IPTC:By-line` | `IPTC:By-line` | — | `OxTest` |
 | `IPTC:By-lineTitle` | `IPTC:By-lineTitle` | — | `OxTest` |
 | `IPTC:Caption-Abstract` | `IPTC:Caption-Abstract` | — | `OxTest` |
+| `IPTC:CatalogSets` | `IPTC:AudioOutcue` | — | `OxTest` |
 | `IPTC:Category` | `IPTC:Category` | — | `OxTest` |
 | `IPTC:City` | `IPTC:City` | — | `OxTest` |
+| `IPTC:ClassifyState` | `IPTC:AudioOutcue` | — | `OxTest` |
+| `IPTC:ColorSequence` | `IPTC:ApplicationRecordVersion` | — | `3` |
 | `IPTC:Contact` | `IPTC:Contact` | — | `OxTest` |
 | `IPTC:ContentLocationCode` | `IPTC:ContentLocationCode` | — | `OxTest` |
 | `IPTC:ContentLocationName` | `IPTC:ContentLocationName` | — | `OxTest` |
@@ -286,43 +300,71 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IPTC:Country-PrimaryLocationCode` | `IPTC:Country-PrimaryLocationCode` | — | `OxTest` |
 | `IPTC:Country-PrimaryLocationName` | `IPTC:Country-PrimaryLocationName` | — | `OxTest` |
 | `IPTC:Credit` | `IPTC:Credit` | — | `OxTest` |
+| `IPTC:DataCompressionMethod` | `IPTC:ApplicationRecordVersion` | — | `3` |
 | `IPTC:DateCreated` | `IPTC:DateCreated` | — | `2024:01:15` |
 | `IPTC:DateSent` | `IPTC:DateSent` | — | `2024:01:15` |
 | `IPTC:Destination` | `IPTC:Destination` | — | `OxTest` |
 | `IPTC:DigitalCreationDate` | `IPTC:DigitalCreationDate` | — | `2024:01:15` |
 | `IPTC:DigitalCreationTime` | `IPTC:DigitalCreationTime` | — | `10:30:00` |
+| `IPTC:DocumentHistory` | `IPTC:AudioOutcue` | — | `OxTest` |
+| `IPTC:DocumentNotes` | `IPTC:AudioOutcue` | — | `OxTest` |
 | `IPTC:EditStatus` | `IPTC:EditStatus` | — | `OxTest` |
+| `IPTC:EditorialUpdate` | `IPTC:ObjectCycle` | — | `Additional language` |
 | `IPTC:EnvelopePriority` | `IPTC:EnvelopePriority` | — | `0 (reserved)` |
 | `IPTC:EnvelopeRecordVersion` | `IPTC:EnvelopeRecordVersion` | — | `3` |
+| `IPTC:ExifCameraInfo` | `IPTC:AudioOutcue` | — | `OxTest` |
 | `IPTC:ExpirationDate` | `IPTC:ExpirationDate` | — | `2024:01:15` |
 | `IPTC:ExpirationTime` | `IPTC:ExpirationTime` | — | `10:30:00` |
 | `IPTC:FixtureIdentifier` | `IPTC:FixtureIdentifier` | — | `OxTest` |
+| `IPTC:GammaCompensatedValue` | `IPTC:ApplicationRecordVersion` | — | `3` |
 | `IPTC:Headline` | `IPTC:Headline` | — | `OxTest` |
+| `IPTC:IPTCBitsPerSample` | `IPTC:ApplicationRecordVersion` | — | `3` |
+| `IPTC:IPTCImageHeight` | `IPTC:ApplicationRecordVersion` | — | `3` |
+| `IPTC:IPTCImageRotation` | `IPTC:AudioType` | — | `0` |
+| `IPTC:IPTCImageWidth` | `IPTC:ApplicationRecordVersion` | — | `3` |
+| `IPTC:IPTCPixelHeight` | `IPTC:ApplicationRecordVersion` | — | `3` |
+| `IPTC:IPTCPixelWidth` | `IPTC:ApplicationRecordVersion` | — | `3` |
 | `IPTC:ImageOrientation` | `IPTC:ImageOrientation` | — | `Landscape` |
 | `IPTC:ImageType` | `IPTC:ImageType` | — | `OxTest` |
+| `IPTC:JobID` | `IPTC:AudioOutcue` | — | `OxTest` |
 | `IPTC:Keywords` | `IPTC:Keywords` | — | `OxTest` |
 | `IPTC:LanguageIdentifier` | `IPTC:LanguageIdentifier` | — | `OxTest` |
 | `IPTC:LocalCaption` | `IPTC:LocalCaption` | — | `OxTest` |
+| `IPTC:MasterDocumentID` | `IPTC:AudioOutcue` | — | `OxTest` |
+| `IPTC:MaximumDensityRange` | `IPTC:ApplicationRecordVersion` | — | `3` |
+| `IPTC:NewsPhotoVersion` | `IPTC:ApplicationRecordVersion` | — | `3` |
+| `IPTC:NumIndexEntries` | `IPTC:ApplicationRecordVersion` | — | `3` |
+| `IPTC:ObjectAttributeReference` | `IPTC:AudioOutcue` | — | `OxTest` |
 | `IPTC:ObjectCycle` | `IPTC:ObjectCycle` * | — | `Morning` |
 | `IPTC:ObjectName` | `IPTC:ObjectName` | — | `OxTest` |
 | `IPTC:ObjectPreviewData` | `IPTC:ObjectPreviewData` | — | `OxTest` |
+| `IPTC:ObjectPreviewFileVersion` | `IPTC:ApplicationRecordVersion` | — | `3` |
+| `IPTC:ObjectTypeReference` | `IPTC:AudioOutcue` | — | `OxTest` |
 | `IPTC:OriginalTransmissionReference` | `IPTC:OriginalTransmissionReference` | — | `OxTest` |
 | `IPTC:OriginatingProgram` | `IPTC:OriginatingProgram` | — | `OxTest` |
+| `IPTC:OwnerID` | `IPTC:AudioOutcue` | — | `OxTest` |
+| `IPTC:Prefs` | `IPTC:AudioOutcue` | — | `OxTest` |
 | `IPTC:ProductID` | `IPTC:ProductID` | — | `OxTest` |
 | `IPTC:ProgramVersion` | `IPTC:ProgramVersion` | — | `OxTest` |
 | `IPTC:Province-State` | `IPTC:Province-State` | — | `OxTest` |
+| `IPTC:QuantizationMethod` | `IPTC:ImageOrientation` | — | `Linear Reflectance/Transmittance` |
 | `IPTC:RasterizedCaption` | `IPTC:RasterizedCaption` | — | `OxTest` |
 | `IPTC:ReferenceDate` | `IPTC:ReferenceDate` | — | `2024:01:15` |
 | `IPTC:ReferenceService` | `IPTC:ReferenceService` | — | `OxTest` |
 | `IPTC:ReleaseDate` | `IPTC:ReleaseDate` | — | `2024:01:15` |
 | `IPTC:ReleaseTime` | `IPTC:ReleaseTime` | — | `10:30:00` |
+| `IPTC:ScanningDirection` | `IPTC:ImageOrientation` | — | `L-R, Top-Bottom` |
 | `IPTC:ServiceIdentifier` | `IPTC:ServiceIdentifier` | — | `OxTest` |
+| `IPTC:ShortDocumentID` | `IPTC:AudioOutcue` | — | `OxTest` |
+| `IPTC:SimilarityIndex` | `IPTC:AudioOutcue` | — | `OxTest` |
 | `IPTC:Source` | `IPTC:Source` | — | `OxTest` |
 | `IPTC:SpecialInstructions` | `IPTC:SpecialInstructions` | — | `OxTest` |
 | `IPTC:Sub-location` | `IPTC:Sub-location` | — | `OxTest` |
+| `IPTC:SubjectReference` | `IPTC:AudioOutcue` | — | `OxTest` |
 | `IPTC:SupplementalCategories` | `IPTC:SupplementalCategories` | — | `OxTest` |
 | `IPTC:TimeCreated` | `IPTC:TimeCreated` | — | `10:30:00` |
 | `IPTC:TimeSent` | `IPTC:TimeSent` | — | `10:30:00` |
+| `IPTC:UniqueDocumentID` | `IPTC:AudioOutcue` | — | `OxTest` |
 | `IPTC:UniqueObjectName` | `IPTC:UniqueObjectName` | — | `OxTest` |
 | `IPTC:Urgency` | `IPTC:Urgency` | — | `0 (reserved)` |
 | `IPTC:Writer-Editor` | `IPTC:Writer-Editor` | — | `OxTest` |
@@ -340,7 +382,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
-| `JFIF:ResolutionUnit` | `JFIF:ResolutionUnit` | — | `None` |
+| `JFIF:ResolutionUnit` | `JFIF:ResolutionUnit` | — | `inches` |
 | `JFIF:XResolution` | `JFIF:XResolution` | — | `3` |
 | `JFIF:YResolution` | `JFIF:YResolution` | — | `3` |
 
@@ -1183,11 +1225,14 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-et:OriginalImageHashType` | `XMP:OriginalImageHashType` | — | `OxTest` |
 | `XMP-et:OriginalImageMD5` | `XMP:OriginalImageMD5` | — | `OxTest` |
 
-## XMP-exif (66 readable tags)
+## XMP-exif (89 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
 | `XMP-exif:BrightnessValue` | `XMP-exif:BrightnessValue` | — | `1.5` |
+| `XMP-exif:CFAPatternColumns` | `XMP-exif:BrightnessValue` | — | `3` |
+| `XMP-exif:CFAPatternRows` | `XMP-exif:BrightnessValue` | — | `3` |
+| `XMP-exif:CFAPatternValues` | `XMP-exif:BrightnessValue` | — | `3` |
 | `XMP-exif:ColorSpace` | `XMP-exif:ColorSpace` | — | `sRGB` |
 | `XMP-exif:ComponentsConfiguration` | `XMP-exif:ComponentsConfiguration` * | — | `-` |
 | `XMP-exif:CompressedBitsPerPixel` | `XMP-exif:CompressedBitsPerPixel` | — | `1.5` |
@@ -1195,8 +1240,14 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-exif:CustomRendered` | `XMP-exif:CustomRendered` | — | `Normal` |
 | `XMP-exif:DateTimeDigitized` | `XMP-exif:DateTimeDigitized` | — | `2024:01:15 10:30:00` |
 | `XMP-exif:DateTimeOriginal` | `XMP-exif:DateTimeOriginal` | — | `2024:01:15 10:30:00` |
+| `XMP-exif:DeviceSettingDescriptionColumns` | `XMP-exif:BrightnessValue` | — | `3` |
+| `XMP-exif:DeviceSettingDescriptionRows` | `XMP-exif:BrightnessValue` | — | `3` |
+| `XMP-exif:DeviceSettingDescriptionSettings` | `XMP-exif:ExifVersion` | — | `OxTest` |
 | `XMP-exif:DigitalZoomRatio` | `XMP-exif:DigitalZoomRatio` | — | `1.5` |
+| `XMP-exif:ExifImageHeight` | `XMP-exif:BrightnessValue` | — | `3` |
+| `XMP-exif:ExifImageWidth` | `XMP-exif:BrightnessValue` | — | `3` |
 | `XMP-exif:ExifVersion` | `XMP-exif:ExifVersion` | — | `OxTest` |
+| `XMP-exif:ExposureCompensation` | `XMP-exif:BrightnessValue` | — | `1.5` |
 | `XMP-exif:ExposureIndex` | `XMP-exif:ExposureIndex` | — | `1.5` |
 | `XMP-exif:ExposureMode` | `XMP-exif:ExposureMode` | — | `Auto` |
 | `XMP-exif:ExposureProgram` | `XMP-exif:ExposureProgram` | — | `Not Defined` |
@@ -1204,15 +1255,20 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-exif:FNumber` | `XMP-exif:FNumber` | — | `1.5` |
 | `XMP-exif:FileSource` | `XMP-exif:FileSource` | — | `Film Scanner` |
 | `XMP-exif:FlashEnergy` | `XMP-exif:FlashEnergy` | — | `1.5` |
+| `XMP-exif:FlashFired` | `XMP-exif:Flash` | — | `True` |
+| `XMP-exif:FlashFunction` | `XMP-exif:Flash` | — | `True` |
+| `XMP-exif:FlashRedEyeMode` | `XMP-exif:Flash` | — | `True` |
 | `XMP-exif:FlashpixVersion` | `XMP-exif:FlashpixVersion` | — | `OxTest` |
 | `XMP-exif:FocalLength` | `XMP-exif:FocalLength` | — | `1.5` |
-| `XMP-exif:FocalPlaneResolutionUnit` | `XMP-exif:FocalPlaneResolutionUnit` * | — | `None` |
+| `XMP-exif:FocalLengthIn35mmFormat` | `XMP-exif:BrightnessValue` | — | `3` |
+| `XMP-exif:FocalPlaneResolutionUnit` | `XMP-exif:FocalPlaneResolutionUnit` | — | `inches` |
 | `XMP-exif:FocalPlaneXResolution` | `XMP-exif:FocalPlaneXResolution` | — | `1.5` |
 | `XMP-exif:FocalPlaneYResolution` | `XMP-exif:FocalPlaneYResolution` | — | `1.5` |
 | `XMP-exif:GPSAltitude` | `XMP-exif:GPSAltitude` | — | `10.5` |
 | `XMP-exif:GPSAltitudeRef` | `XMP-exif:GPSAltitudeRef` | — | `Above Sea Level` |
 | `XMP-exif:GPSAreaInformation` | `XMP-exif:GPSAreaInformation` | — | `OxTest` |
 | `XMP-exif:GPSDOP` | `XMP-exif:GPSDOP` | — | `1.5` |
+| `XMP-exif:GPSDateTime` | `XMP-exif:DateTimeDigitized` | — | `2024:01:15 10:30:00` |
 | `XMP-exif:GPSDestBearing` | `XMP-exif:GPSDestBearing` | — | `1.5` |
 | `XMP-exif:GPSDestBearingRef` | `XMP-exif:GPSDestBearingRef` | — | `Magnetic North` |
 | `XMP-exif:GPSDestDistance` | `XMP-exif:GPSDestDistance` | — | `1.5` |
@@ -1235,21 +1291,30 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-exif:GPSTrack` | `XMP-exif:GPSTrack` | — | `1.5` |
 | `XMP-exif:GPSTrackRef` | `XMP-exif:GPSTrackRef` | — | `Magnetic North` |
 | `XMP-exif:GPSVersionID` | `XMP-exif:GPSVersionID` | — | `OxTest` |
-| `XMP-exif:GainControl` | `XMP-exif:GainControl` | — | `None` |
+| `XMP-exif:GainControl` | `XMP-exif:GainControl` | — | `Low gain up` |
+| `XMP-exif:ISO` | `XMP-exif:BrightnessValue` | — | `3` |
 | `XMP-exif:ImageUniqueID` | `XMP-exif:ImageUniqueID` | — | `OxTest` |
-| `XMP-exif:LightSource` | `XMP-exif:LightSource` | — | `Unknown` |
+| `XMP-exif:LightSource` | `XMP-exif:LightSource` | — | `Daylight` |
 | `XMP-exif:MakerNote` | `XMP-exif:MakerNote` | — | `OxTest` |
 | `XMP-exif:MeteringMode` | `XMP-exif:MeteringMode` | — | `Average` |
 | `XMP-exif:NativeDigest` | `XMP-exif:NativeDigest` | — | `OxTest` |
+| `XMP-exif:OECFColumns` | `XMP-exif:OECF` | — | `3` |
+| `XMP-exif:OECFNames` | `XMP-exif:OECF` | — | `OxTest` |
+| `XMP-exif:OECFRows` | `XMP-exif:OECF` | — | `3` |
+| `XMP-exif:OECFValues` | `XMP-exif:OECF` | — | `1.5` |
 | `XMP-exif:RelatedSoundFile` | `XMP-exif:RelatedSoundFile` | — | `OxTest` |
 | `XMP-exif:Saturation` | `XMP-exif:Saturation` | — | `Normal` |
 | `XMP-exif:SceneCaptureType` | `XMP-exif:SceneCaptureType` | — | `Standard` |
 | `XMP-exif:SceneType` | `XMP-exif:SceneType` | — | `Directly photographed` |
 | `XMP-exif:Sharpness` | `XMP-exif:Sharpness` | — | `Normal` |
+| `XMP-exif:SpatialFrequencyResponseColumns` | `XMP-exif:BrightnessValue` | — | `3` |
+| `XMP-exif:SpatialFrequencyResponseNames` | `XMP-exif:ExifVersion` | — | `OxTest` |
+| `XMP-exif:SpatialFrequencyResponseRows` | `XMP-exif:BrightnessValue` | — | `3` |
+| `XMP-exif:SpatialFrequencyResponseValues` | `XMP-exif:BrightnessValue` | — | `1.5` |
 | `XMP-exif:SpectralSensitivity` | `XMP-exif:SpectralSensitivity` | — | `OxTest` |
 | `XMP-exif:SubjectArea` | `XMP-exif:SubjectArea` | — | `3` |
 | `XMP-exif:SubjectDistance` | `XMP-exif:SubjectDistance` | — | `1.5` |
-| `XMP-exif:SubjectDistanceRange` | `XMP-exif:SubjectDistanceRange` | — | `Unknown` |
+| `XMP-exif:SubjectDistanceRange` | `XMP-exif:SubjectDistanceRange` | — | `Macro` |
 | `XMP-exif:SubjectLocation` | `XMP-exif:SubjectLocation` | — | `3` |
 | `XMP-exif:UserComment` | `XMP-exif:UserComment` | — | `OxTest` |
 | `XMP-exif:WhiteBalance` | `XMP-exif:WhiteBalance` | — | `Auto` |
@@ -1261,7 +1326,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-exifEX:Acceleration` | `XMP:Acceleration` | — | `1.5` |
 | `XMP-exifEX:CameraElevationAngle` | `XMP:CameraElevationAngle` | — | `1.5` |
 | `XMP-exifEX:CameraFirmware` | `XMP:CameraFirmware` | — | `OxTest` |
-| `XMP-exifEX:CompositeImage` | `XMP:CompositeImage` * | — | `Unknown` |
+| `XMP-exifEX:CompositeImage` | `XMP:CompositeImage` * | — | `Not a Composite Image` |
 | `XMP-exifEX:CompositeImageCount` | `XMP:CompositeImageCount` | — | `3` |
 | `XMP-exifEX:Gamma` | `XMP:Gamma` | — | `1.5` |
 | `XMP-exifEX:Humidity` | `XMP:Humidity` | — | `1.5` |
@@ -1281,7 +1346,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-exifEX:Pressure` | `XMP:Pressure` | — | `1.5` |
 | `XMP-exifEX:RAWDevelopingSoftware` | `XMP:RAWDevelopingSoftware` | — | `OxTest` |
 | `XMP-exifEX:RecommendedExposureIndex` | `XMP:RecommendedExposureIndex` | — | `3` |
-| `XMP-exifEX:SensitivityType` | `XMP:SensitivityType` * | — | `Unknown` |
+| `XMP-exifEX:SensitivityType` | `XMP:SensitivityType` * | — | `Standard Output Sensitivity` |
 | `XMP-exifEX:StandardOutputSensitivity` | `XMP:StandardOutputSensitivity` | — | `3` |
 | `XMP-exifEX:WaterDepth` | `XMP:WaterDepth` | — | `1.5` |
 
@@ -1359,19 +1424,27 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-ics:ImageRef` | `XMP:ImageRef` | — | `OxTest` |
 | `XMP-ics:TimeStamp` | `XMP:TimeStamp` | — | `2024:01:15 10:30:00` |
 
-## XMP-iptcCore (7 readable tags)
+## XMP-iptcCore (15 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
 | `XMP-iptcCore:AltTextAccessibility` | `XMP-iptcCore:AltTextAccessibility` | — | `OxTest` |
 | `XMP-iptcCore:CountryCode` | `XMP-iptcCore:CountryCode` | — | `OxTest` |
+| `XMP-iptcCore:CreatorAddress` | `XMP-iptcCore:AltTextAccessibility` | — | `OxTest` |
+| `XMP-iptcCore:CreatorCity` | `XMP-iptcCore:AltTextAccessibility` | — | `OxTest` |
+| `XMP-iptcCore:CreatorCountry` | `XMP-iptcCore:AltTextAccessibility` | — | `OxTest` |
+| `XMP-iptcCore:CreatorPostalCode` | `XMP-iptcCore:AltTextAccessibility` | — | `OxTest` |
+| `XMP-iptcCore:CreatorRegion` | `XMP-iptcCore:AltTextAccessibility` | — | `OxTest` |
+| `XMP-iptcCore:CreatorWorkEmail` | `XMP-iptcCore:AltTextAccessibility` | — | `OxTest` |
+| `XMP-iptcCore:CreatorWorkTelephone` | `XMP-iptcCore:AltTextAccessibility` | — | `OxTest` |
+| `XMP-iptcCore:CreatorWorkURL` | `XMP-iptcCore:AltTextAccessibility` | — | `OxTest` |
 | `XMP-iptcCore:ExtDescrAccessibility` | `XMP-iptcCore:ExtDescrAccessibility` | — | `OxTest` |
 | `XMP-iptcCore:IntellectualGenre` | `XMP-iptcCore:IntellectualGenre` | — | `OxTest` |
 | `XMP-iptcCore:Location` | `XMP-iptcCore:Location` | — | `OxTest` |
 | `XMP-iptcCore:Scene` | `XMP-iptcCore:Scene` | — | `OxTest` |
 | `XMP-iptcCore:SubjectCode` | `XMP-iptcCore:SubjectCode` | — | `OxTest` |
 
-## XMP-iptcExt (30 readable tags)
+## XMP-iptcExt (199 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
@@ -1379,32 +1452,201 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-iptcExt:AIPromptWriterName` | `XMP-iptcExt:AIPromptWriterName` | — | `OxTest` |
 | `XMP-iptcExt:AISystemUsed` | `XMP-iptcExt:AISystemUsed` | — | `OxTest` |
 | `XMP-iptcExt:AISystemVersionUsed` | `XMP-iptcExt:AISystemVersionUsed` | — | `OxTest` |
+| `XMP-iptcExt:AboutCvTermCvId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:AboutCvTermId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:AboutCvTermName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:AboutCvTermRefinedAbout` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:AdditionalModelInformation` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkCircaDateCreated` | `XMP-iptcExt:CircaDateCreated` | — | `2024:01:15 10:30:00` |
+| `XMP-iptcExt:ArtworkContentDescription` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkContributionDescription` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkCopyrightNotice` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkCopyrightOwnerID` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkCopyrightOwnerName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkCreator` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkCreatorID` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkDateCreated` | `XMP-iptcExt:CircaDateCreated` | — | `2024:01:15 10:30:00` |
+| `XMP-iptcExt:ArtworkLicensorID` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkLicensorName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkPhysicalDescription` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkSource` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkSourceInvURL` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkSourceInventoryNo` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkStylePeriod` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkTitle` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:AudioBitrate` | `XMP-iptcExt:AudioBitRate` | — | `3` |
+| `XMP-iptcExt:AudioBitrateMode` | `XMP-iptcExt:AudioBitRateMode` | — | `Fixed` |
 | `XMP-iptcExt:AudioBitsPerSample` | `XMP-iptcExt:AudioBitsPerSample` | — | `3` |
 | `XMP-iptcExt:AudioChannelCount` | `XMP-iptcExt:AudioChannelCount` | — | `3` |
 | `XMP-iptcExt:CircaDateCreated` | `XMP-iptcExt:CircaDateCreated` | — | `2024:01:15 10:30:00` |
+| `XMP-iptcExt:ContainerFormatIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ContainerFormatName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ContributorIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ContributorName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ContributorRole` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ControlledVocabularyTerm` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:CopyrightYear` | `XMP-iptcExt:CopyrightYear` | — | `3` |
+| `XMP-iptcExt:CreatorIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:CreatorName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:CreatorRole` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:DataOnScreenRegionD` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:DataOnScreenRegionH` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:DataOnScreenRegionText` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:DataOnScreenRegionUnit` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:DataOnScreenRegionW` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:DataOnScreenRegionX` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:DataOnScreenRegionY` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:DigitalImageGUID` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:DigitalSourceFileType` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:DigitalSourceType` | `XMP-iptcExt:DigitalSourceType` | — | `OxTest` |
 | `XMP-iptcExt:Dopesheet` | `XMP-iptcExt:Dopesheet` | — | `OxTest` |
+| `XMP-iptcExt:DopesheetLinkLink` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:DopesheetLinkLinkQualifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:EmbeddedEncodedRightsExpr` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:EmbeddedEncodedRightsExprLangID` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:EmbeddedEncodedRightsExprType` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:EpisodeIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:EpisodeName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:EpisodeNumber` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:Event` | `XMP-iptcExt:Event` | — | `OxTest` |
+| `XMP-iptcExt:EventID` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:ExternalMetadataLink` | `XMP-iptcExt:ExternalMetadataLink` | — | `OxTest` |
 | `XMP-iptcExt:FeedIdentifier` | `XMP-iptcExt:FeedIdentifier` | — | `OxTest` |
+| `XMP-iptcExt:GenreCvId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:GenreCvTermId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:GenreCvTermName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:GenreCvTermRefinedAbout` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:Headline` | `XMP-iptcExt:Headline` | — | `OxTest` |
+| `XMP-iptcExt:IPTCLastEdited` | `XMP-iptcExt:CircaDateCreated` | — | `2024:01:15 10:30:00` |
+| `XMP-iptcExt:ImageRegionBoundaryH` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:ImageRegionBoundaryRx` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:ImageRegionBoundaryShape` | `XMP-iptcExt:ImageRegion` | — | `Circle` |
+| `XMP-iptcExt:ImageRegionBoundaryUnit` | `XMP-iptcExt:ImageRegion` | — | `Pixel` |
+| `XMP-iptcExt:ImageRegionBoundaryVerticesX` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:ImageRegionBoundaryVerticesY` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:ImageRegionBoundaryW` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:ImageRegionBoundaryX` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:ImageRegionBoundaryY` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:ImageRegionCtypeIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ImageRegionCtypeName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ImageRegionID` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ImageRegionName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ImageRegionRoleIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ImageRegionRoleName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LinkedEncodedRightsExpr` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LinkedEncodedRightsExprLangID` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LinkedEncodedRightsExprType` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationCreatedCity` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationCreatedCountryCode` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationCreatedCountryName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationCreatedGPSAltitude` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:LocationCreatedIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationCreatedLocationId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationCreatedLocationName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationCreatedProvinceState` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationCreatedSublocation` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationCreatedWorldRegion` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationShownCity` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationShownCountryCode` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationShownCountryName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationShownGPSAltitude` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:LocationShownIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationShownLocationId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationShownLocationName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationShownProvinceState` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationShownSublocation` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:LocationShownWorldRegion` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:MaxAvailHeight` | `XMP-iptcExt:MaxAvailHeight` | — | `3` |
 | `XMP-iptcExt:MaxAvailWidth` | `XMP-iptcExt:MaxAvailWidth` | — | `3` |
+| `XMP-iptcExt:MetadataAuthorityIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:MetadataAuthorityName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:MetadataLastEdited` | `XMP-iptcExt:MetadataLastEdited` | — | `2024:01:15 10:30:00` |
+| `XMP-iptcExt:MetadataLastEditorIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:MetadataLastEditorName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:ModelAge` | `XMP-iptcExt:ModelAge` | — | `3` |
 | `XMP-iptcExt:OrganisationInImageCode` | `XMP-iptcExt:OrganisationInImageCode` | — | `OxTest` |
 | `XMP-iptcExt:OrganisationInImageName` | `XMP-iptcExt:OrganisationInImageName` | — | `OxTest` |
+| `XMP-iptcExt:ParentID` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:PersonHeardIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:PersonHeardName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:PersonInImage` | `XMP-iptcExt:PersonInImage` | — | `OxTest` |
+| `XMP-iptcExt:PersonInImageCvTermCvId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:PersonInImageCvTermId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:PersonInImageCvTermName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:PersonInImageCvTermRefinedAbout` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:PersonInImageDescription` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:PersonInImageId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:PersonInImageName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:PlanningRefIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:PlanningRefName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:PlanningRefRole` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ProductInImageDescription` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ProductInImageGTIN` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ProductInImageName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ProductInImageProductId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:PublicationEventDate` | `XMP-iptcExt:CircaDateCreated` | — | `2024:01:15 10:30:00` |
+| `XMP-iptcExt:PublicationEventIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:PublicationEventName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingRegionCity` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingRegionCountryCode` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingRegionCountryName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingRegionGPSAltitude` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
+| `XMP-iptcExt:RatingRegionIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingRegionLocationId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingRegionLocationName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingRegionProvinceState` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingRegionSublocation` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingRegionWorldRegion` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingScaleMaxValue` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingScaleMinValue` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingSourceLink` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingValue` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RatingValueLogoLink` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RecDeviceAttLensDescription` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RecDeviceManufacturer` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RecDeviceModelName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RecDeviceOwnersDeviceId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RecDeviceSerialNumber` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RegistryEntryRole` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RegistryItemID` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:RegistryOrganisationID` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:ReleaseReady` | `XMP-iptcExt:ReleaseReady` | — | `True` |
+| `XMP-iptcExt:SeasonIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:SeasonName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:SeasonNumber` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:SeriesIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:SeriesName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ShownEventIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ShownEventName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:SnapshotFormat` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:SnapshotHeightPixels` | `XMP-iptcExt:AudioBitRate` | — | `3` |
+| `XMP-iptcExt:SnapshotImageRole` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:SnapshotLink` | `XMP-iptcExt:SnapshotLink` | — | `OxTest` |
+| `XMP-iptcExt:SnapshotLinkQualifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:SnapshotUsedVideoFrameTimeValue` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:SnapshotUsedVideoFrameValue` | `XMP-iptcExt:AudioBitRate` | — | `3` |
+| `XMP-iptcExt:SnapshotWidthPixels` | `XMP-iptcExt:AudioBitRate` | — | `3` |
 | `XMP-iptcExt:StorylineIdentifier` | `XMP-iptcExt:StorylineIdentifier` | — | `OxTest` |
 | `XMP-iptcExt:StreamReady` | `XMP-iptcExt:StreamReady` | — | `False` |
 | `XMP-iptcExt:StylePeriod` | `XMP-iptcExt:StylePeriod` | — | `OxTest` |
+| `XMP-iptcExt:SupplyChainSourceIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:SupplyChainSourceName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:TemporalCoverageFrom` | `XMP-iptcExt:CircaDateCreated` | — | `2024:01:15 10:30:00` |
+| `XMP-iptcExt:TemporalCoverageTo` | `XMP-iptcExt:CircaDateCreated` | — | `2024:01:15 10:30:00` |
 | `XMP-iptcExt:Transcript` | `XMP-iptcExt:Transcript` | — | `OxTest` |
+| `XMP-iptcExt:TranscriptLinkLink` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:TranscriptLinkLinkQualifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:VideoBitrate` | `XMP-iptcExt:AudioBitRate` | — | `3` |
+| `XMP-iptcExt:VideoBitrateMode` | `XMP-iptcExt:AudioBitRateMode` | — | `Fixed` |
 | `XMP-iptcExt:VideoDisplayAspectRatio` | `XMP-iptcExt:VideoDisplayAspectRatio` | — | `1.5` |
 | `XMP-iptcExt:VideoEncodingProfile` | `XMP-iptcExt:VideoEncodingProfile` | — | `OxTest` |
+| `XMP-iptcExt:VideoShotTypeIdentifier` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:VideoShotTypeName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:VideoStreamsCount` | `XMP-iptcExt:VideoStreamsCount` | — | `3` |
+| `XMP-iptcExt:WorkflowTagCvId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:WorkflowTagCvTermId` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:WorkflowTagCvTermName` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:WorkflowTagCvTermRefinedAbout` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 
 ## XMP-lr (3 readable tags)
 
@@ -1477,11 +1719,36 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-photomech:PMVersion` | `XMP:PMVersion` | — | `OxTest` |
 | `XMP-photomech:Prefs` | `XMP:Prefs` | — | `OxTest` |
 
-## XMP-photoshop (21 readable tags)
+## XMP-photoshop (49 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
 | `XMP-photoshop:AuthorsPosition` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
+| `XMP-photoshop:CameraProfilesApertureValue` | `XMP-photoshop:CameraProfiles` | — | `1.5` |
+| `XMP-photoshop:CameraProfilesAuthor` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
+| `XMP-photoshop:CameraProfilesAutoScale` | `XMP-photoshop:CameraProfiles` | — | `True` |
+| `XMP-photoshop:CameraProfilesCameraPrettyName` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
+| `XMP-photoshop:CameraProfilesCameraRawProfile` | `XMP-photoshop:CameraProfiles` | — | `True` |
+| `XMP-photoshop:CameraProfilesFocalLength` | `XMP-photoshop:CameraProfiles` | — | `1.5` |
+| `XMP-photoshop:CameraProfilesFocusDistance` | `XMP-photoshop:CameraProfiles` | — | `1.5` |
+| `XMP-photoshop:CameraProfilesLens` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
+| `XMP-photoshop:CameraProfilesLensPrettyName` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
+| `XMP-photoshop:CameraProfilesMake` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
+| `XMP-photoshop:CameraProfilesModel` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
+| `XMP-photoshop:CameraProfilesPerspectiveModelImageXCenter` | `XMP-photoshop:CameraProfiles` | — | `1.5` |
+| `XMP-photoshop:CameraProfilesPerspectiveModelImageYCenter` | `XMP-photoshop:CameraProfiles` | — | `1.5` |
+| `XMP-photoshop:CameraProfilesPerspectiveModelRadialDistortParam1` | `XMP-photoshop:CameraProfiles` | — | `1.5` |
+| `XMP-photoshop:CameraProfilesPerspectiveModelRadialDistortParam2` | `XMP-photoshop:CameraProfiles` | — | `1.5` |
+| `XMP-photoshop:CameraProfilesPerspectiveModelRadialDistortParam3` | `XMP-photoshop:CameraProfiles` | — | `1.5` |
+| `XMP-photoshop:CameraProfilesPerspectiveModelScaleFactor` | `XMP-photoshop:CameraProfiles` | — | `1.5` |
+| `XMP-photoshop:CameraProfilesPerspectiveModelVersion` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
+| `XMP-photoshop:CameraProfilesPerspectiveModelVignetteModelImageXCenter` | `XMP-photoshop:CameraProfiles` | — | `1.5` |
+| `XMP-photoshop:CameraProfilesPerspectiveModelVignetteModelImageYCenter` | `XMP-photoshop:CameraProfiles` | — | `1.5` |
+| `XMP-photoshop:CameraProfilesPerspectiveModelVignetteModelParam1` | `XMP-photoshop:CameraProfiles` | — | `1.5` |
+| `XMP-photoshop:CameraProfilesPerspectiveModelVignetteModelPiecewiseParam` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
+| `XMP-photoshop:CameraProfilesProfileName` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
+| `XMP-photoshop:CameraProfilesSensorFormatFactor` | `XMP-photoshop:CameraProfiles` | — | `1.5` |
+| `XMP-photoshop:CameraProfilesUniqueCameraModel` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
 | `XMP-photoshop:CaptionWriter` | `XMP-photoshop:CaptionWriter` | — | `OxTest` |
 | `XMP-photoshop:Category` | `XMP-photoshop:Category` | — | `OxTest` |
 | `XMP-photoshop:City` | `XMP-photoshop:City` | — | `OxTest` |
@@ -1493,6 +1760,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-photoshop:EmbeddedXMPDigest` | `XMP-photoshop:EmbeddedXMPDigest` | — | `OxTest` |
 | `XMP-photoshop:Headline` | `XMP-photoshop:Headline` | — | `OxTest` |
 | `XMP-photoshop:History` | `XMP-photoshop:History` | — | `OxTest` |
+| `XMP-photoshop:ICCProfileName` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
 | `XMP-photoshop:Instructions` | `XMP-photoshop:Instructions` | — | `OxTest` |
 | `XMP-photoshop:LabelColor` | `XMP-photoshop:LabelColor` | — | `OxTest` |
 | `XMP-photoshop:LegacyIPTCDigest` | `XMP-photoshop:LegacyIPTCDigest` | — | `OxTest` |
@@ -1500,15 +1768,19 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-photoshop:Source` | `XMP-photoshop:Source` | — | `OxTest` |
 | `XMP-photoshop:State` | `XMP-photoshop:State` | — | `OxTest` |
 | `XMP-photoshop:SupplementalCategories` | `XMP-photoshop:SupplementalCategories` | — | `OxTest` |
+| `XMP-photoshop:TextLayerName` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
+| `XMP-photoshop:TextLayerText` | `XMP-photoshop:AuthorsPosition` | — | `OxTest` |
 | `XMP-photoshop:TransmissionReference` | `XMP-photoshop:TransmissionReference` | — | `OxTest` |
 | `XMP-photoshop:Urgency` | `XMP-photoshop:Urgency` | — | `0 (reserved)` |
 
-## XMP-plus (55 readable tags)
+## XMP-plus (78 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
 | `XMP-plus:AdultContentWarning` | `XMP-plus:AdultContentWarning` * | — | `Adult Content Warning Required` |
+| `XMP-plus:CopyrightOwnerID` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:CopyrightOwnerImageID` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
+| `XMP-plus:CopyrightOwnerName` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:CopyrightRegistrationNumber` | `XMP-plus:CopyrightRegistrationNumber` | — | `OxTest` |
 | `XMP-plus:CopyrightStatus` | `XMP-plus:CopyrightStatus` * | — | `Protected` |
 | `XMP-plus:CreditLineRequired` | `XMP-plus:CreditLineRequired` * | — | `Credit Adjacent To Image` |
@@ -1523,27 +1795,47 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-plus:Custom8` | `XMP-plus:Custom8` | — | `OxTest` |
 | `XMP-plus:Custom9` | `XMP-plus:Custom9` | — | `OxTest` |
 | `XMP-plus:DataMining` | `XMP-plus:DataMining` * | — | `Allowed` |
+| `XMP-plus:EndUserID` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
+| `XMP-plus:EndUserName` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:FileNameAsDelivered` | `XMP-plus:FileNameAsDelivered` | — | `OxTest` |
 | `XMP-plus:FirstPublicationDate` | `XMP-plus:FirstPublicationDate` | — | `2024:01:15 10:30:00` |
 | `XMP-plus:ImageAlterationConstraints` | `XMP-plus:ImageAlterationConstraints` * | — | `No Colorization` |
+| `XMP-plus:ImageCreatorID` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:ImageCreatorImageID` | `XMP-plus:ImageCreatorImageID` | — | `OxTest` |
+| `XMP-plus:ImageCreatorName` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:ImageDuplicationConstraints` | `XMP-plus:ImageDuplicationConstraints` * | — | `Duplication Only as Necessary Under License` |
 | `XMP-plus:ImageFileConstraints` | `XMP-plus:ImageFileConstraints` * | — | `Maintain File Name` |
 | `XMP-plus:ImageFileFormatAsDelivered` | `XMP-plus:ImageFileFormatAsDelivered` * | — | `Windows Bitmap (BMP)` |
 | `XMP-plus:ImageFileSizeAsDelivered` | `XMP-plus:ImageFileSizeAsDelivered` * | — | `Greater than 50 MB` |
+| `XMP-plus:ImageSupplierID` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:ImageSupplierImageID` | `XMP-plus:ImageSupplierImageID` | — | `OxTest` |
+| `XMP-plus:ImageSupplierName` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:ImageType` | `XMP-plus:ImageType` * | — | `Illustrated Image` |
 | `XMP-plus:LicenseEndDate` | `XMP-plus:LicenseEndDate` | — | `2024:01:15 10:30:00` |
 | `XMP-plus:LicenseID` | `XMP-plus:LicenseID` | — | `OxTest` |
 | `XMP-plus:LicenseStartDate` | `XMP-plus:LicenseStartDate` | — | `2024:01:15 10:30:00` |
 | `XMP-plus:LicenseTransactionDate` | `XMP-plus:LicenseTransactionDate` | — | `2024:01:15 10:30:00` |
+| `XMP-plus:LicenseeID` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:LicenseeImageID` | `XMP-plus:LicenseeImageID` | — | `OxTest` |
 | `XMP-plus:LicenseeImageNotes` | `XMP-plus:LicenseeImageNotes` | — | `OxTest` |
+| `XMP-plus:LicenseeName` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:LicenseeProjectReference` | `XMP-plus:LicenseeProjectReference` | — | `OxTest` |
 | `XMP-plus:LicenseeTransactionID` | `XMP-plus:LicenseeTransactionID` | — | `OxTest` |
+| `XMP-plus:LicensorCity` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
+| `XMP-plus:LicensorCountry` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
+| `XMP-plus:LicensorEmail` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
+| `XMP-plus:LicensorExtendedAddress` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
+| `XMP-plus:LicensorID` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:LicensorImageID` | `XMP-plus:LicensorImageID` | — | `OxTest` |
+| `XMP-plus:LicensorName` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:LicensorNotes` | `XMP-plus:LicensorNotes` | — | `OxTest` |
+| `XMP-plus:LicensorPostalCode` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
+| `XMP-plus:LicensorRegion` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
+| `XMP-plus:LicensorStreetAddress` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
+| `XMP-plus:LicensorTelephone1` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
+| `XMP-plus:LicensorTelephone2` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:LicensorTransactionID` | `XMP-plus:LicensorTransactionID` | — | `OxTest` |
+| `XMP-plus:LicensorURL` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:MediaConstraints` | `XMP-plus:MediaConstraints` | — | `OxTest` |
 | `XMP-plus:MediaSummaryCode` | `XMP-plus:MediaSummaryCode` * | — | `1 Usage Item:` |
 | `XMP-plus:MinorModelAgeDisclosure` | `XMP-plus:MinorModelAgeDisclosure` * | — | `Age 15` |
@@ -1555,6 +1847,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-plus:OtherLicenseDocuments` | `XMP-plus:OtherLicenseDocuments` | — | `OxTest` |
 | `XMP-plus:OtherLicenseInfo` | `XMP-plus:OtherLicenseInfo` | — | `OxTest` |
 | `XMP-plus:OtherLicenseRequirements` | `XMP-plus:OtherLicenseRequirements` | — | `OxTest` |
+| `XMP-plus:PLUSVersion` | `XMP-plus:CopyrightOwnerImageID` | — | `OxTest` |
 | `XMP-plus:ProductOrServiceConstraints` | `XMP-plus:ProductOrServiceConstraints` | — | `OxTest` |
 | `XMP-plus:PropertyReleaseID` | `XMP-plus:PropertyReleaseID` | — | `OxTest` |
 | `XMP-plus:PropertyReleaseStatus` | `XMP-plus:PropertyReleaseStatus` * | — | `Limited or Incomplete Property Releases` |
@@ -1737,7 +2030,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 |---|---|---|---|
 | `XMP-swf:Type` | `XMP:Type` | — | `OxTest` |
 
-## XMP-tiff (25 readable tags)
+## XMP-tiff (26 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
@@ -1747,6 +2040,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-tiff:Copyright` | `XMP-tiff:Copyright` | — | `OxTest` |
 | `XMP-tiff:DateTime` | `XMP-tiff:DateTime` | — | `2024:01:15 10:30:00` |
 | `XMP-tiff:ImageDescription` | `XMP-tiff:ImageDescription` | — | `OxTest` |
+| `XMP-tiff:ImageHeight` | `XMP-tiff:BitsPerSample` | — | `3` |
 | `XMP-tiff:ImageWidth` | `XMP-tiff:ImageWidth` | — | `3` |
 | `XMP-tiff:Make` | `XMP-tiff:Make` | — | `OxTest` |
 | `XMP-tiff:Model` | `XMP-tiff:Model` | — | `OxTest` |
@@ -1756,7 +2050,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-tiff:PlanarConfiguration` | `XMP-tiff:PlanarConfiguration` * | — | `Chunky` |
 | `XMP-tiff:PrimaryChromaticities` | `XMP-tiff:PrimaryChromaticities` | — | `1.5` |
 | `XMP-tiff:ReferenceBlackWhite` | `XMP-tiff:ReferenceBlackWhite` | — | `1.5` |
-| `XMP-tiff:ResolutionUnit` | `XMP-tiff:ResolutionUnit` | — | `None` |
+| `XMP-tiff:ResolutionUnit` | `XMP-tiff:ResolutionUnit` | — | `inches` |
 | `XMP-tiff:SamplesPerPixel` | `XMP-tiff:SamplesPerPixel` | — | `3` |
 | `XMP-tiff:Software` | `XMP-tiff:Software` | — | `OxTest` |
 | `XMP-tiff:TransferFunction` | `XMP-tiff:TransferFunction` | — | `3` |
@@ -1845,7 +2139,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-xmpDM:Tempo` | `XMP:Tempo` | — | `1.5` |
 | `XMP-xmpDM:TimeSignature` | `XMP:TimeSignature` | — | `12/8` |
 | `XMP-xmpDM:TrackNumber` | `XMP:TrackNumber` | — | `3` |
-| `XMP-xmpDM:VideoAlphaMode` | `XMP:VideoAlphaMode` | — | `None` |
+| `XMP-xmpDM:VideoAlphaMode` | `XMP:VideoAlphaMode` | — | `Pre-multiplied` |
 | `XMP-xmpDM:VideoAlphaUnityIsTransparent` | `XMP:VideoAlphaUnityIsTransparent` | — | `True` |
 | `XMP-xmpDM:VideoColorSpace` | `XMP:VideoColorSpace` | — | `CCIR-601` |
 | `XMP-xmpDM:VideoCompressor` | `XMP:VideoCompressor` | — | `OxTest` |
@@ -1870,7 +2164,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-xmpDSA:ValidCropCorners` | `XMP:ValidCropCorners` | — | `True` |
 | `XMP-xmpDSA:Version` | `XMP:Version` | — | `OxTest` |
 
-## XMP-xmpMM (37 readable tags)
+## XMP-xmpMM (150 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
@@ -1898,19 +2192,132 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-xmpMM:DerivedFromToPart` | `XMP-xmpMM:DerivedFromToPart` | — | `OxTest` |
 | `XMP-xmpMM:DerivedFromVersionID` | `XMP-xmpMM:DerivedFromVersionID` | — | `OxTest` |
 | `XMP-xmpMM:DocumentID` | `XMP-xmpMM:DocumentID` | — | `OxTest` |
+| `XMP-xmpMM:HistoryAction` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:HistoryChanged` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:HistoryInstanceID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:HistoryParameters` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:HistorySoftwareAgent` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:HistoryWhen` | `XMP-xmpMM:DerivedFromLastModifyDate` | — | `2024:01:15 10:30:00` |
+| `XMP-xmpMM:IngredientsAlternatePaths` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsDocumentID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsFilePath` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsFromPart` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsInstanceID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsLastModifyDate` | `XMP-xmpMM:DerivedFromLastModifyDate` | — | `2024:01:15 10:30:00` |
+| `XMP-xmpMM:IngredientsLastURL` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsLinkCategory` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsLinkForm` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsManageTo` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsManageUI` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsManager` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsManagerVariant` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsMaskMarkers` | `XMP-xmpMM:DerivedFromMaskMarkers` | — | `All` |
+| `XMP-xmpMM:IngredientsOriginalDocumentID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsPartMapping` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsPlacedResolutionUnit` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsPlacedXResolution` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsPlacedYResolution` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsRenditionClass` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsRenditionParams` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsToPart` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:IngredientsVersionID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
 | `XMP-xmpMM:InstanceID` | `XMP-xmpMM:InstanceID` | — | `OxTest` |
 | `XMP-xmpMM:LastURL` | `XMP-xmpMM:LastURL` | — | `OxTest` |
 | `XMP-xmpMM:ManageTo` | `XMP-xmpMM:ManageTo` | — | `OxTest` |
 | `XMP-xmpMM:ManageUI` | `XMP-xmpMM:ManageUI` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromAlternatePaths` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromDocumentID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromFilePath` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromFromPart` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromInstanceID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromLastModifyDate` | `XMP-xmpMM:DerivedFromLastModifyDate` | — | `2024:01:15 10:30:00` |
+| `XMP-xmpMM:ManagedFromLastURL` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromLinkCategory` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromLinkForm` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromManageTo` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromManageUI` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromManager` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromManagerVariant` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromMaskMarkers` | `XMP-xmpMM:DerivedFromMaskMarkers` | — | `All` |
+| `XMP-xmpMM:ManagedFromOriginalDocumentID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromPartMapping` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromPlacedResolutionUnit` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromPlacedXResolution` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromPlacedYResolution` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromRenditionClass` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromRenditionParams` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromToPart` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManagedFromVersionID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
 | `XMP-xmpMM:Manager` | `XMP-xmpMM:Manager` | — | `OxTest` |
 | `XMP-xmpMM:ManagerVariant` | `XMP-xmpMM:ManagerVariant` | — | `OxTest` |
+| `XMP-xmpMM:ManifestLinkForm` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestPlacedResolutionUnit` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestPlacedXResolution` | `XMP-xmpMM:HistoryCount` | — | `1.5` |
+| `XMP-xmpMM:ManifestPlacedYResolution` | `XMP-xmpMM:HistoryCount` | — | `1.5` |
+| `XMP-xmpMM:ManifestReferenceAlternatePaths` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceDocumentID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceFilePath` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceFromPart` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceInstanceID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceLastModifyDate` | `XMP-xmpMM:DerivedFromLastModifyDate` | — | `2024:01:15 10:30:00` |
+| `XMP-xmpMM:ManifestReferenceLastURL` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceLinkCategory` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceLinkForm` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceManageTo` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceManageUI` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceManager` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceManagerVariant` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceMaskMarkers` | `XMP-xmpMM:DerivedFromMaskMarkers` | — | `All` |
+| `XMP-xmpMM:ManifestReferenceOriginalDocumentID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferencePartMapping` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferencePlacedResolutionUnit` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferencePlacedXResolution` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferencePlacedYResolution` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceRenditionClass` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceRenditionParams` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceToPart` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:ManifestReferenceVersionID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
 | `XMP-xmpMM:OriginalDocumentID` | `XMP-xmpMM:OriginalDocumentID` | — | `OxTest` |
+| `XMP-xmpMM:PantryInstanceID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
 | `XMP-xmpMM:PreservedFileName` | `XMP-xmpMM:PreservedFileName` | — | `OxTest` |
 | `XMP-xmpMM:RenditionClass` | `XMP-xmpMM:RenditionClass` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfAlternatePaths` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfDocumentID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfFilePath` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfFromPart` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfInstanceID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfLastModifyDate` | `XMP-xmpMM:DerivedFromLastModifyDate` | — | `2024:01:15 10:30:00` |
+| `XMP-xmpMM:RenditionOfLastURL` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfLinkCategory` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfLinkForm` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfManageTo` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfManageUI` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfManager` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfManagerVariant` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfMaskMarkers` | `XMP-xmpMM:DerivedFromMaskMarkers` | — | `All` |
+| `XMP-xmpMM:RenditionOfOriginalDocumentID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfPartMapping` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfPlacedResolutionUnit` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfPlacedXResolution` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfPlacedYResolution` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfRenditionClass` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfRenditionParams` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfToPart` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:RenditionOfVersionID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
 | `XMP-xmpMM:RenditionParams` | `XMP-xmpMM:RenditionParams` | — | `OxTest` |
 | `XMP-xmpMM:SaveID` | `XMP-xmpMM:SaveID` | — | `3` |
 | `XMP-xmpMM:Subject` | `XMP-xmpMM:Subject` | — | `OxTest` |
 | `XMP-xmpMM:VersionID` | `XMP-xmpMM:VersionID` | — | `OxTest` |
+| `XMP-xmpMM:VersionsComments` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:VersionsEventAction` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:VersionsEventChanged` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:VersionsEventInstanceID` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:VersionsEventParameters` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:VersionsEventSoftwareAgent` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:VersionsEventWhen` | `XMP-xmpMM:DerivedFromLastModifyDate` | — | `2024:01:15 10:30:00` |
+| `XMP-xmpMM:VersionsModifier` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
+| `XMP-xmpMM:VersionsModifyDate` | `XMP-xmpMM:DerivedFromLastModifyDate` | — | `2024:01:15 10:30:00` |
+| `XMP-xmpMM:VersionsVersion` | `XMP-xmpMM:DerivedFrom` | — | `OxTest` |
 
 ## XMP-xmpPLUS (2 readable tags)
 

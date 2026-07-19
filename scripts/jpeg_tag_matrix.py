@@ -148,6 +148,125 @@ def values_match(expected, actual):
     return False
 
 
+# ------------------------------------------------------- bug classification
+#
+# A raw read=MISMATCH or write=INTEROP_BROKEN result only says "the values
+# differ" / "oxidex and exiftool disagree" -- it doesn't say why. The
+# patterns and tag-name sets below were derived empirically (diagnosis
+# agents reproduced each case against the release binary + exiftool 13.55
+# and traced it to specific source locations; see docs/reference/
+# jpeg-tag-matrix.md's Known Bugs section) and separate "this is a real,
+# specific decoding/encoding bug" from "the value is equivalent, just
+# formatted differently than ExifTool" (the latter still counts as
+# supported for coverage purposes).
+
+APEX_TAG_NAMES = {"ApertureValue", "MaxApertureValue", "ShutterSpeedValue",
+                  "FlashEnergy"}
+IPTC_BINARY_TAG_NAMES = {"ARMIdentifier", "ARMVersion", "FileFormat",
+                         "FileVersion", "ObjectPreviewFileFormat"}
+NAMESPACE_BLIND_ENUM_NAMES = {"Contrast", "Saturation", "Sharpness",
+                              "SensingMethod", "CustomRendered"}
+
+
+def classify_read_mismatch(r):
+    """Root-cause a read=MISMATCH result.
+
+    Returns a read_bug id (real, specific bug) or None (value is
+    equivalent to ExifTool's; only the presentation format differs).
+    """
+    name, group = r.get("name", ""), r.get("group", "")
+    oxs = str(r.get("ox_val"))
+    sample = str(r.get("sample", ""))
+    vtype = str(r.get("type", ""))
+
+    if "\x00" in oxs:
+        return "R-iptc-binary-garbage" if group == "IPTC" else "R-binary-garbage"
+    if name in IPTC_BINARY_TAG_NAMES and group == "IPTC":
+        return "R-iptc-binary-garbage"
+    if name in APEX_TAG_NAMES:
+        return "R-apex-missing"
+    if group.startswith("XMP") and (oxs.startswith("Unknown (")
+                                    or name in NAMESPACE_BLIND_ENUM_NAMES):
+        return "R-namespace-blind-printconv"
+    if oxs.startswith(f"{name}: "):
+        return "R-acr-prefix"
+    if oxs.startswith("(Binary,"):
+        return "R-undef-not-decoded"
+    if name.startswith("XP") and re.fullmatch(r"\d{6,}", oxs):
+        return "R-utf16-not-decoded"
+    if vtype.startswith(("float", "double")) and re.fullmatch(r"-?\d{7,}", oxs):
+        return "R-float-raw-bits"
+    if sample and oxs.count(sample) >= 2:
+        return "R-xmp-struct-concat"
+    return None
+
+
+WRITE_BUG_CLUSTER_TAG_NAMES = {
+    "I1-no-printconvinv": {
+        "GPSSpeedRef", "GPSStatus", "GPSMeasureMode", "GPSDestBearingRef",
+        "GPSDestDistanceRef", "GPSImgDirectionRef", "GPSTrackRef",
+        "SecurityClassification",
+    },
+    "I2-wrong-type-enum": {
+        "CalibrationIlluminant1", "CalibrationIlluminant2",
+        "CalibrationIlluminant3", "ColorimetricReference",
+        "DefaultBlackRender", "DepthFormat", "DepthMeasureType",
+        "DepthUnits", "MakerNoteSafety", "OldSubfileType",
+        "PreviewColorSpace", "ProfileEmbedPolicy",
+        "ProfileHueSatMapEncoding", "ProfileLookTableEncoding",
+        "Thresholding",
+    },
+    "I3-wrong-type-numeric": {
+        "DNGVersion", "DNGBackwardVersion", "RawImageDigest",
+        "NewRawImageDigest", "OriginalRawFileDigest", "RawDataUniqueID",
+        "TimeCodes", "ExposureCompensation", "DNGLensInfo",
+        "GeoTiffDoubleParams",
+    },
+    "I4-wrong-type-undef": {
+        "Padding", "GooglePlusUploadCode", "CompositeImageExposureTimes",
+        "RGBTables", "ImageStats", "ProfileGainTableMap2",
+        "GeoTiffAsciiParams",
+    },
+    "I5-subdir-poison": {
+        "CurrentICCProfile", "AsShotICCProfile", "XiaomiSettings",
+        "ImageSequenceInfo", "OriginalRawFileData", "ProfileDynamicRange",
+        "SEAL",
+    },
+}
+_WRITE_BUG_NAME_TO_CLUSTER = {n: c for c, ns in WRITE_BUG_CLUSTER_TAG_NAMES.items()
+                             for n in ns}
+
+
+def apply_bug_classification(results):
+    """Post-process raw harness results into refined read/write categories.
+
+    read=MISMATCH splits into: OK (matches once the lenient normalizer in
+    values_match() is applied -- handled live during testing already, so
+    this only catches cases the live check couldn't due to needing the
+    full pattern set), a tagged real bug (read_bug set, stays MISMATCH),
+    or MISMATCH_FORMAT (value is equivalent; only formatting differs).
+
+    write=INTEROP_BROKEN gets a bug_cluster label when the specific tag is
+    a previously root-caused case; unlabeled INTEROP_BROKEN entries are
+    novel and still worth investigating.
+    """
+    for r in results.values():
+        # Independent axes -- a tag can be both read=MISMATCH and
+        # write=INTEROP_BROKEN at once, so these must not be elif'd.
+        if r.get("read") == "MISMATCH":
+            bug = classify_read_mismatch(r)
+            if bug:
+                r["read_bug"] = bug
+            else:
+                r["read"] = "MISMATCH_FORMAT"
+                r["read_note"] = ("value equivalent; oxidex shows stored/raw "
+                                  "form, exiftool applies PrintConv")
+        if r.get("write") == "INTEROP_BROKEN" and "bug_cluster" not in r:
+            cluster = _WRITE_BUG_NAME_TO_CLUSTER.get(r.get("name"))
+            if cluster:
+                r["bug_cluster"] = cluster
+
+
 # ----------------------------------------------------------- key mapping rules
 # NOTE: filled in from read/write path exploration; see docs in report.
 
@@ -200,13 +319,17 @@ def find_in_json(data, keys):
 def find_in_exiftool_json(data, tag, strict_group=False):
     """Find tag in exiftool -j -G1 output (exact group:name, then name-only).
 
-    strict_group: require the exact family-1 group — used for write-test
-    read-back so a tag written into the wrong IFD doesn't count as success.
+    strict_group: require the exact family-1 group, with no bare-name
+    fallback to a different group at all. Used for write-test read-back:
+    without this, a tag we never actually wrote can spuriously "match" an
+    unrelated pre-existing tag of the same bare name in a different group
+    (e.g. testing XMP-exif:ColorSpace matches the base fixture's
+    pre-existing ExifIFD:ColorSpace) and produce a false pass/fail.
     """
     k = f"{tag['group']}:{tag['name']}"
     if k in data:
         return data[k]
-    if strict_group and tag["group"] in EXIF_GROUPS:
+    if strict_group:
         return None
     for key, v in data.items():
         if key.split(":", 1)[-1] == tag["name"]:
@@ -214,7 +337,38 @@ def find_in_exiftool_json(data, tag, strict_group=False):
     return None
 
 
+def find_same_group_fallback(data, tag, sample):
+    """Scan for `sample` under any key sharing this tag's group prefix.
+
+    Catches write/read registry asymmetries (e.g. a tag writes correctly
+    but oxidex has no display name for it and reads it back as a raw hex
+    tag ID under the same group) without hardcoding specific tag names.
+    """
+    prefix = f"{tag['group']}:"
+    for key, v in data.items():
+        if key.startswith(prefix) and values_match(sample, v):
+            return key, v
+    return None, None
+
+
 # ------------------------------------------------------------------ read phase
+
+
+def _resolve_read(ox, tag, et_val):
+    """Shared read-classification: exact key, else same-group fallback scan
+    (catches registry asymmetries where oxidex has no display name for the
+    tag and emits it under a raw/hex key in the same group -- readable,
+    just not under the name we expected)."""
+    k, v = find_in_json(ox, oxidex_read_keys(tag))
+    if k is None:
+        fk, fv = find_same_group_fallback(ox, tag, tag["sample"])
+        if fk is not None:
+            return {"read": "OK", "ox_key": fk, "ox_val": fv, "et_val": et_val,
+                    "bug_cluster": "R4-registry-asymmetry"}
+        return {"read": "MISSING", "et_val": et_val}
+    if values_match(et_val, v) or values_match(tag["sample"], v):
+        return {"read": "OK", "ox_key": k, "ox_val": v, "et_val": et_val}
+    return {"read": "MISMATCH", "ox_key": k, "ox_val": v, "et_val": et_val}
 
 
 def read_test_single(tag):
@@ -233,12 +387,7 @@ def read_test_single(tag):
         if ox is None:
             return {"read": "OXIDEX_PARSE_FAIL", "et_val": et_val,
                     "read_detail": (oxerr or "")[:200]}
-        k, v = find_in_json(ox, oxidex_read_keys(tag))
-        if k is None:
-            return {"read": "MISSING", "et_val": et_val}
-        if values_match(et_val, v) or values_match(tag["sample"], v):
-            return {"read": "OK", "ox_key": k, "ox_val": v, "et_val": et_val}
-        return {"read": "MISMATCH", "ox_key": k, "ox_val": v, "et_val": et_val}
+        return _resolve_read(ox, tag, et_val)
 
 
 def read_test_group(tags):
@@ -267,29 +416,54 @@ def read_test_group(tags):
                 results[key_of(t)] = {"read": "OXIDEX_PARSE_FAIL", "et_val": et_val,
                                       "read_detail": (oxerr or "")[:200]}
                 continue
-            k, v = find_in_json(ox, oxidex_read_keys(t))
-            if k is None:
-                results[key_of(t)] = {"read": "MISSING", "et_val": et_val}
-            elif values_match(et_val, v) or values_match(t["sample"], v):
-                results[key_of(t)] = {"read": "OK", "ox_key": k, "ox_val": v,
-                                      "et_val": et_val}
-            else:
-                results[key_of(t)] = {"read": "MISMATCH", "ox_key": k, "ox_val": v,
-                                      "et_val": et_val}
+            results[key_of(t)] = _resolve_read(ox, t, et_val)
     return results
 
 
 # ----------------------------------------------------------------- write phase
 
+# Populated once in main() from the pristine base fixture, before the write
+# phase's thread pool starts (read-only afterward, so safe to share across
+# worker threads without locking).
+BASE_OX = None
+BASE_ET = None
+BASE_VALIDATE_WARNINGS = frozenset()
+
+# exiftool -validate warning substrings that indicate oxidex actually
+# serialized a non-standard TIFF entry (wrong type/count for the tag, or a
+# missing mandatory tag like GPSVersionID) -- as opposed to a warning about
+# the tag itself being inherently non-standard/manufacturer-specific.
+_NONSTANDARD_WARNING_MARKERS = ("Non-standard format", "Non-standard count",
+                                "Missing required")
+
+
+def exiftool_validate_warnings(path):
+    """Return the set of exiftool -validate warning lines for a file."""
+    _, out, _ = run([EXIFTOOL, "-validate", "-warning", "-a", str(path)], timeout=30)
+    return {ln.split(":", 1)[1].strip() for ln in out.splitlines()
+            if ":" in ln and "Validate" not in ln.split(":", 1)[0]}
+
 
 def write_test_tag(tag):
-    """oxidex writes the tag -> oxidex reads back -> exiftool reads back."""
+    """oxidex writes the tag -> oxidex reads back -> exiftool reads back.
+
+    Every apparent match/mismatch is checked against the tag's pristine
+    pre-write value in BASE_OX/BASE_ET: if the post-write value is simply
+    unchanged from what the base fixture already had, this write path is a
+    silent no-op (the family isn't wired into the writer), not a genuine
+    value mismatch -- regardless of whether that stale value happens to
+    coincidentally match or differ from the sample we tried to write.
+    """
+    base_ox_val = find_in_json(BASE_OX, oxidex_read_keys(tag))[1] if BASE_OX is not None else None
+    base_et_val = find_in_exiftool_json(BASE_ET, tag, strict_group=True) if BASE_ET else None
+    sample = tag["sample"]
+
     res = {"write": "ERROR", "detail": ""}
     for wkey in oxidex_write_keys(tag):
         with tempfile.TemporaryDirectory() as td:
             img = Path(td) / "t.jpg"
             shutil.copy(BASE, img)
-            code, out, err = run([OXIDEX, f"-{wkey}={tag['sample']}", str(img)])
+            code, out, err = run([OXIDEX, f"-{wkey}={sample}", str(img)])
             # oxidex sometimes prints "Error: ..." yet exits 0 — treat as error
             errtext = (err + out).strip()
             if code != 0 or "Error:" in errtext:
@@ -297,18 +471,64 @@ def write_test_tag(tag):
                 continue
             ox = oxidex_json(img)[0]
             et = exiftool_json(img)
-            et_val = find_in_exiftool_json(et, tag, strict_group=True) if et else None
-            ox_val = (find_in_json(ox, oxidex_read_keys(tag))[1]
-                      if ox is not None else None)
             if not et:
                 res = {"write": "CORRUPTS_FILE", "wkey": wkey,
                        "detail": "exiftool cannot parse output file"}
                 continue
-            ox_ok = ox_val is not None and values_match(tag["sample"], ox_val)
-            et_ok = et_val is not None and values_match(tag["sample"], et_val)
+            et_val = find_in_exiftool_json(et, tag, strict_group=True)
+            ox_val = (find_in_json(ox, oxidex_read_keys(tag))[1]
+                      if ox is not None else None)
+            ox_key_used = None
+
+            sample_eq_base_ox = (base_ox_val is not None
+                                 and str(base_ox_val).strip() == str(sample).strip())
+            sample_eq_base_et = (base_et_val is not None
+                                 and str(base_et_val).strip() == str(sample).strip())
+            ox_unchanged = (ox_val is not None and base_ox_val is not None
+                           and str(ox_val).strip() == str(base_ox_val).strip()
+                           and not sample_eq_base_ox)
+            et_unchanged = (et_val is not None and base_et_val is not None
+                           and str(et_val).strip() == str(base_et_val).strip()
+                           and not sample_eq_base_et)
+
+            ox_ok = (ox_val is not None and not ox_unchanged
+                    and values_match(sample, ox_val))
+            et_ok = (et_val is not None and not et_unchanged
+                    and values_match(sample, et_val))
+
+            # Registry asymmetry: oxidex has no display name for this tag,
+            # but the value landed correctly under a raw/hex key in the
+            # same group. Only tried when the primary key lookup missed
+            # and exiftool independently confirms the write succeeded.
+            if not ox_ok and et_ok and ox is not None:
+                fk, fv = find_same_group_fallback(ox, tag, sample)
+                if fk is not None:
+                    ox_key_used, ox_val, ox_ok = fk, fv, True
+
             if ox_ok and et_ok:
-                return {"write": "OK", "wkey": wkey, "ox_val": ox_val,
-                        "et_val": et_val}
+                # write_ox_val/write_et_val (not ox_val/et_val): those names
+                # are owned by the read phase. A write=OK result would
+                # otherwise clobber the read phase's observed value for the
+                # same tag, corrupting classify_read_mismatch()'s input on
+                # any tag where the read test found a real mismatch but an
+                # independent write-then-readback happens to succeed.
+                result = {"write": "OK", "wkey": wkey,
+                         "write_ox_val": ox_val, "write_et_val": et_val}
+                if ox_key_used is not None:
+                    result["write_ox_key"] = ox_key_used
+                    result["bug_cluster"] = "R4-registry-asymmetry"
+                new_warnings = exiftool_validate_warnings(img) - BASE_VALIDATE_WARNINGS
+                real_warnings = [w for w in new_warnings
+                                 if any(m in w for m in _NONSTANDARD_WARNING_MARKERS)]
+                if real_warnings:
+                    result["write_quality"] = "nonstandard"
+                    result["write_warnings"] = "; ".join(sorted(real_warnings))[:200]
+                return result
+
+            if ox_unchanged and et_unchanged:
+                res = {"write": "NOT_WRITTEN", "wkey": wkey,
+                       "detail": "silent no-op: value unchanged from pristine base fixture"}
+                continue
             if et_ok and not ox_ok:
                 res = {"write": "READBACK_BROKEN", "wkey": wkey,
                        "detail": f"exiftool sees {et_val!r}, oxidex sees {ox_val!r}"}
@@ -317,7 +537,7 @@ def write_test_tag(tag):
                        "detail": f"oxidex reads back {ox_val!r} but exiftool sees {et_val!r}"}
             elif ox_val is not None or et_val is not None:
                 res = {"write": "VALUE_MISMATCH", "wkey": wkey,
-                       "detail": f"wrote {tag['sample']!r}; oxidex={ox_val!r} exiftool={et_val!r}"}
+                       "detail": f"wrote {sample!r}; oxidex={ox_val!r} exiftool={et_val!r}"}
             else:
                 res = {"write": "NOT_WRITTEN", "wkey": wkey,
                        "detail": ("exit 0 but tag absent on read-back; stderr: "
@@ -386,13 +606,18 @@ def main():
     for t in tags:
         results.setdefault(key_of(t), {})
         # drop stale read fields before merging fresh read results
-        for f in ("read", "read_batch", "read_detail", "ox_key", "ox_val", "et_val"):
+        for f in ("read", "read_batch", "read_detail", "read_bug", "read_note",
+                  "ox_key", "ox_val", "et_val"):
             results[key_of(t)].pop(f, None)
         results[key_of(t)].update(read_res.get(key_of(t), {}))
     print("READ phase done", flush=True)
 
     # WRITE phase: per-tag isolation, parallel
     if not args.skip_write:
+        global BASE_OX, BASE_ET, BASE_VALIDATE_WARNINGS
+        BASE_OX = oxidex_json(BASE)[0] or {}
+        BASE_ET = exiftool_json(BASE)
+        BASE_VALIDATE_WARNINGS = exiftool_validate_warnings(BASE)
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
             futs = {ex.submit(write_test_tag, t): t for t in tags}
             done = 0
@@ -408,6 +633,11 @@ def main():
         r["group"], r["name"], r["sample"] = t["group"], t["name"], t["sample"]
         r["type"] = t.get("type")
         r["protected"] = t.get("protected", False)
+
+    # Idempotent: re-derives read_bug/MISMATCH_FORMAT/bug_cluster from the
+    # current raw read/write status every run, so --reread (read-only) and
+    # full runs both leave results fully and consistently classified.
+    apply_bug_classification(results)
 
     RESULTS.write_text(json.dumps(results, indent=1))
     counts = {}

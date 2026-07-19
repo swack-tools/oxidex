@@ -107,14 +107,23 @@ T = "10:30:00"
 
 
 def first_en_value(tag_el):
+    """First English enum label, preferring a distinctive one over a bare
+    "None"/"Unknown" sentinel: those are frequently a tag's own unset
+    default, so writing that exact value as the sample makes a genuine
+    write indistinguishable from a no-op that left the default untouched
+    (harness can no longer tell the two apart by diffing against base)."""
     values = tag_el.find("values")
     if values is None:
         return None
+    labels = []
     for key in values.findall("key"):
         for val in key.findall("val"):
             if val.get("lang") == "en":
-                return val.text
-    return None
+                labels.append(val.text)
+    for label in labels:
+        if label not in ("None", "Unknown"):
+            return label
+    return labels[0] if labels else None
 
 
 def make_sample(family0, name, vtype, tag_el, group1):

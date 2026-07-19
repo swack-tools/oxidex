@@ -15,14 +15,13 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 
 | Classification | Tags |
 |---|---|
-| ❌ Unsupported | 2923 |
-| 📖 Read only | 1283 |
-| 🐛 Read OK, write broken | 240 |
+| ❌ Unsupported | 2517 |
+| 📖 Read only | 1677 |
+| 🐛 Read OK, write broken | 252 |
 | ❔ Untestable | 219 |
-| ✅ Full (read + write) | 56 |
+| ✅ Full (read + write) | 57 |
 | 🐛 Read broken | 48 |
 | ⚠️ Full (write non-standard encoding) | 42 |
-| ✍️ Write only | 1 |
 | 🚫 Not writable in ExifTool (no synthetic sample possible; untested) | 585 |
 
 ## Per-group breakdown
@@ -30,14 +29,14 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | Group | Full | Read-only | Write-broken | Read-broken | Write-only | Unsupported | Untestable | Total |
 |---|---|---|---|---|---|---|---|---|
 | All | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
-| ExifIFD | 26 | 0 | 51 | 11 | 0 | 2 | 98 | 196 |
+| ExifIFD | 26 | 1 | 52 | 11 | 0 | 0 | 98 | 196 |
 | File | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 1 |
 | GPS | 0 | 0 | 24 | 1 | 0 | 0 | 0 | 32 |
 | GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
-| IFD0 | 30 | 0 | 66 | 21 | 1 | 7 | 17 | 169 |
+| IFD0 | 31 | 6 | 67 | 21 | 0 | 0 | 17 | 169 |
 | IFD1 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | IFD2 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
-| IPTC | 0 | 53 | 3 | 5 | 0 | 37 | 7 | 105 |
+| IPTC | 0 | 84 | 4 | 5 | 0 | 5 | 7 | 105 |
 | InteropIFD | 0 | 2 | 2 | 0 | 0 | 1 | 0 | 5 |
 | JFIF | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
 | MakerNotes | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
@@ -77,7 +76,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | XMP-drone-dji | 0 | 25 | 0 | 0 | 0 | 3 | 0 | 28 |
 | XMP-dwc | 0 | 0 | 0 | 0 | 0 | 260 | 3 | 263 |
 | XMP-et | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
-| XMP-exif | 0 | 62 | 4 | 4 | 0 | 30 | 0 | 100 |
+| XMP-exif | 0 | 84 | 5 | 4 | 0 | 7 | 0 | 100 |
 | XMP-exifEX | 0 | 26 | 0 | 0 | 0 | 16 | 0 | 42 |
 | XMP-expressionmedia | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 4 |
 | XMP-extensis | 0 | 8 | 0 | 0 | 0 | 0 | 0 | 8 |
@@ -86,8 +85,8 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | XMP-hdr | 0 | 0 | 0 | 0 | 0 | 6 | 0 | 6 |
 | XMP-hdrgm | 0 | 9 | 0 | 0 | 0 | 0 | 0 | 9 |
 | XMP-ics | 0 | 2 | 1 | 0 | 0 | 27 | 0 | 30 |
-| XMP-iptcCore | 0 | 7 | 0 | 0 | 0 | 9 | 0 | 16 |
-| XMP-iptcExt | 0 | 29 | 1 | 0 | 0 | 215 | 6 | 251 |
+| XMP-iptcCore | 0 | 15 | 0 | 0 | 0 | 1 | 0 | 16 |
+| XMP-iptcExt | 0 | 195 | 4 | 0 | 0 | 46 | 6 | 251 |
 | XMP-lr | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
 | XMP-mediapro | 0 | 6 | 0 | 0 | 0 | 0 | 0 | 6 |
 | XMP-microsoft | 0 | 9 | 1 | 0 | 0 | 2 | 0 | 12 |
@@ -98,8 +97,8 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | XMP-pdf | 0 | 10 | 2 | 0 | 0 | 0 | 0 | 12 |
 | XMP-pdfx | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
 | XMP-photomech | 0 | 6 | 0 | 0 | 0 | 0 | 2 | 8 |
-| XMP-photoshop | 0 | 17 | 4 | 0 | 0 | 32 | 0 | 53 |
-| XMP-plus | 0 | 51 | 4 | 0 | 0 | 31 | 0 | 86 |
+| XMP-photoshop | 0 | 45 | 4 | 0 | 0 | 4 | 0 | 53 |
+| XMP-plus | 0 | 74 | 4 | 0 | 0 | 8 | 0 | 86 |
 | XMP-pmi | 0 | 34 | 0 | 0 | 0 | 0 | 0 | 34 |
 | XMP-prism | 0 | 67 | 6 | 0 | 0 | 39 | 0 | 112 |
 | XMP-prl | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
@@ -107,13 +106,13 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | XMP-pur | 0 | 10 | 4 | 0 | 0 | 0 | 0 | 14 |
 | XMP-rdf | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
 | XMP-swf | 0 | 1 | 0 | 0 | 0 | 3 | 0 | 4 |
-| XMP-tiff | 0 | 24 | 1 | 0 | 0 | 1 | 0 | 26 |
+| XMP-tiff | 0 | 25 | 1 | 0 | 0 | 0 | 0 | 26 |
 | XMP-x | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
 | XMP-xmp | 0 | 12 | 4 | 0 | 0 | 11 | 0 | 27 |
 | XMP-xmpBJ | 0 | 0 | 0 | 0 | 0 | 4 | 0 | 4 |
 | XMP-xmpDM | 0 | 57 | 5 | 0 | 0 | 99 | 0 | 161 |
 | XMP-xmpDSA | 0 | 10 | 0 | 0 | 0 | 0 | 0 | 10 |
-| XMP-xmpMM | 0 | 36 | 1 | 0 | 0 | 123 | 0 | 160 |
+| XMP-xmpMM | 0 | 144 | 6 | 0 | 0 | 10 | 0 | 160 |
 | XMP-xmpNote | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
 | XMP-xmpPLUS | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
 | XMP-xmpRights | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
@@ -129,7 +128,7 @@ references are into this repo.
 | # | Bug | Impact (tags) | Root cause |
 |---|---|---|---|
 | W1 | CLI cannot write any non-String EXIF tag: values reach the writer as `TagValue::String` and strict type validation rejects them ("Type mismatch: expected Integer/Rational/... but got String") | 191 | `src/main.rs:146` wraps all CLI values as strings; `src/core/validation.rs:109`. A fix exists on the `fix/wiring` branch (commit `2433c79`) but is not on this branch |
-| W2 | Datetime tags cannot be written: `-ExifIFD:DateTimeOriginal=...` is misrouted to the date-*shift* path, which fails whether or not the tag exists (re-serialization then trips W1 on binary tags like ComponentsConfiguration) | 82 | `src/cli/args.rs` `parse_date_shift` treats any `date/time`-named tag with a `Y:M:D H:M:S`-shaped value as a shift |
+| W2 | Datetime tags cannot be *created* on a JPEG with no pre-existing value for that tag: `-ExifIFD:DateTimeOriginal=...` is misrouted to the date-*shift* path (`src/core/date_shift.rs`), which requires a matching tag to already exist ("No date/time tags matching ... found in EXIF data" otherwise). This is what the empirical matrix measures, since the base fixture has no pre-existing date tags. **Update-in-place now works** (fixed by [#18](https://github.com/swack-tools/oxidex/pull/18)): `-ExifIFD:DateTimeOriginal=...` against a file that already has the tag set succeeds and round-trips correctly through both oxidex and exiftool | 82 (fresh-creation case only) | `src/cli/args.rs` `parse_date_shift` treats any `date/time`-named tag with a `Y:M:D H:M:S`-shaped value as a shift; the shift path itself only rewrites existing entries |
 | W3 | Silent no-op with false success: XMP, IPTC, JFIF, Photoshop, Comment, InteropIFD and bare tag names are dropped, yet the CLI prints "1 image files updated" and rewrites the file | ~4,300 (incl. 1,297 readable tags) | `src/writers/tiff_writer/tiff/validator.rs:110` `separate_by_ifd` routes only IFD0/IFD1/ExifIFD/GPS/EXIF; `ifd_builder.rs:93` skips silently; `src/main.rs:175` unconditional success message |
 | W4 | Type-blind serialization: registry-unknown tags are written as TIFF ASCII regardless of expected SHORT/LONG/RATIONAL/UNDEF type — produces non-standard files (`exiftool -validate` flags every one) | 32 | `src/writers/tiff_writer/tiff/ifd_entry.rs:95` picks TIFF type from the Rust value variant, never from the tag's spec |
 | W5 | No PrintConv inversion: human-readable values stored raw (e.g. `GPSSpeedRef=km/h` stores "km/h" instead of "K"; exiftool then reads "Unknown (km/h)") | 8 | no inverse-conversion layer exists (`src/core/operations.rs:291` inserts CLI strings untouched) |
@@ -178,7 +177,7 @@ references are into this repo.
 | `CameraFirmware` | ✅ ok | ✅ ok | `OxTest` |
 | `ColorSpace` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `sRGB` |
 | `ComponentsConfiguration` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `-` |
-| `CompositeImage` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Unknown` |
+| `CompositeImage` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Not a Composite Image` |
 | `CompositeImageCount` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3 3` |
 | `CompositeImageExposureTimes` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
 | `CompressedBitsPerPixel` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
@@ -204,10 +203,10 @@ references are into this repo.
 | `FlashpixVersion` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `0100` |
 | `FocalLength` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `FocalLengthIn35mmFormat` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `FocalPlaneResolutionUnit` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `None` |
+| `FocalPlaneResolutionUnit` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `inches` |
 | `FocalPlaneXResolution` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `FocalPlaneYResolution` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
-| `GainControl` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `None` |
+| `GainControl` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Low gain up` |
 | `Gamma` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `GooglePlusUploadCode` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
 | `Humidity` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
@@ -226,7 +225,7 @@ references are into this repo.
 | `LensMake` | ✅ ok | ✅ ok | `OxTest` |
 | `LensModel` | ✅ ok | ✅ ok | `OxTest` |
 | `LensSerialNumber` | ✅ ok | ✅ ok | `OxTest` |
-| `LightSource` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Unknown` |
+| `LightSource` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Daylight` |
 | `MakerNoteApple` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
 | `MakerNoteCanon` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
 | `MakerNoteCasio` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
@@ -320,10 +319,10 @@ references are into this repo.
 | `MakerNoteSonySRF` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
 | `MakerNoteUnknown` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
 | `MakerNoteUnknownBinary` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteUnknownText` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteUnknownText` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `MaxApertureValue` | 🐛 broken: APEX ValueConv (2^x) not applied | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `MetadataEditingSoftware` | ✅ ok | ✅ ok | `OxTest` |
-| `MeteringMode` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Unknown` |
+| `MeteringMode` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Average` |
 | `MoireFilter` | ✅ ok (formatting differs from exiftool) | ✅ ok | `OxTest` |
 | `OffsetSchema` | ✅ ok | ✅ ok | `3` |
 | `OffsetTime` | ✅ ok | ✅ ok | `+05:30` |
@@ -343,7 +342,7 @@ references are into this repo.
 | `SecurityClassification` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `Confidential` |
 | `SelfTimerMode` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `SensingMethod` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Not defined` |
-| `SensitivityType` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Unknown` |
+| `SensitivityType` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Standard Output Sensitivity` |
 | `SerialNumber` | ✅ ok | ✅ ok | `OxTest` |
 | `Shadows` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
 | `Sharpness` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Normal` |
@@ -356,9 +355,9 @@ references are into this repo.
 | `SubSecTimeOriginal` | ✅ ok | ✅ ok | `3` |
 | `SubjectArea` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `SubjectDistance` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
-| `SubjectDistanceRange` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Unknown` |
+| `SubjectDistanceRange` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Macro` |
 | `SubjectLocation` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3 3` |
-| `TimeZoneOffset` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `TimeZoneOffset` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `UserComment` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
 | `WaterDepth` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `WhiteBalance` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Auto` |
@@ -446,9 +445,9 @@ references are into this repo.
 | `BaselineNoise` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `BaselineSharpness` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `BitsPerSample` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `CalibrationIlluminant1` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
-| `CalibrationIlluminant2` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
-| `CalibrationIlluminant3` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
+| `CalibrationIlluminant1` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Daylight` |
+| `CalibrationIlluminant2` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Daylight` |
+| `CalibrationIlluminant3` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Daylight` |
 | `CameraCalibration1` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `CameraCalibration2` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `CameraCalibration3` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
@@ -468,14 +467,14 @@ references are into this repo.
 | `DNGAdobeData` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
 | `DNGBackwardVersion` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3` |
 | `DNGLensInfo` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `1.5 1.5 1.5 1.5` |
-| `DNGPrivateData` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DNGPrivateData` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `DNGVersion` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3` |
 | `DefaultBlackRender` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Auto` |
 | `DepthFar` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
-| `DepthFormat` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
-| `DepthMeasureType` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
+| `DepthFormat` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Linear` |
+| `DepthMeasureType` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Optical Axis` |
 | `DepthNear` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
-| `DepthUnits` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
+| `DepthUnits` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Meters` |
 | `DocumentName` | ✅ ok | ✅ ok | `OxTest` |
 | `EnhanceParams` | ✅ ok | ✅ ok | `OxTest` |
 | `FillOrder` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Normal` |
@@ -502,7 +501,7 @@ references are into this repo.
 | `ImageStats` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
 | `ImageWidth` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `InkSet` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `CMYK` |
-| `IntergraphMatrix` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `IntergraphMatrix` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `JXLDecodeSpeed` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
 | `JXLDistance` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `JXLEffort` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
@@ -513,8 +512,8 @@ references are into this repo.
 | `MaxSampleValue` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `MinSampleValue` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `Model` | ✅ ok | ✅ ok | `OxTest` |
-| `ModelTiePoint` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `ModelTransform` | — unsupported | — unsupported (silent no-op) | `1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 ` |
+| `ModelTiePoint` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ModelTransform` | ✅ ok | — unsupported (silent no-op) | `1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 ` |
 | `ModifyDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `NewRawImageDigest` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
 | `OldSubfileType` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Full-resolution image` |
@@ -530,12 +529,12 @@ references are into this repo.
 | `PanasonicTitle` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ✅ ok | `OxTest` |
 | `PanasonicTitle2` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ✅ ok | `OxTest` |
 | `PhotometricInterpretation` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `WhiteIsZero` |
-| `PixelScale` | — unsupported | — unsupported (silent no-op) | `1.5 1.5 1.5` |
+| `PixelScale` | ✅ ok | — unsupported (silent no-op) | `1.5 1.5 1.5` |
 | `PlanarConfiguration` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Chunky` |
-| `Predictor` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `None` |
+| `Predictor` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `Horizontal differencing` |
 | `PreviewApplicationName` | ✅ ok | ✅ ok | `OxTest` |
 | `PreviewApplicationVersion` | ✅ ok | ✅ ok | `OxTest` |
-| `PreviewColorSpace` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Unknown` |
+| `PreviewColorSpace` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Gray Gamma 2.2` |
 | `PreviewDateTime` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `PreviewImageLength` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
 | `PreviewImageStart` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
@@ -571,23 +570,23 @@ references are into this repo.
 | `ReductionMatrix3` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `ReelName` | ✅ ok | ✅ ok | `OxTest` |
 | `ReferenceBlackWhite` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5 1.5 1.5 1.5 1.5 1.5` |
-| `ResolutionUnit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `None` |
+| `ResolutionUnit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `inches` |
 | `RowsPerStrip` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `SEAL` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
-| `SEMInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SEMInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `SamplesPerPixel` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `ShadowScale` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `Software` | ✅ ok | ✅ ok | `OxTest` |
 | `SubfileType` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Full-resolution image` |
 | `TStop` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
-| `TargetPrinter` | — unsupported | ✅ ok (reads back under hex key) | `OxTest` |
+| `TargetPrinter` | ✅ ok | ✅ ok (reads back under hex key) | `OxTest` |
 | `Thresholding` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `No dithering or halftoning` |
 | `ThumbnailLength` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `ThumbnailOffset` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `TileLength` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `TileWidth` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `TimeCodes` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: written as ASCII where numeric/rational expected | `3` |
-| `TransferFunction` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 ` |
+| `TransferFunction` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 ` |
 | `UniqueCameraModel` | ✅ ok | ✅ ok | `OxTest` |
 | `WhitePoint` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `1.5 1.5` |
 | `XPAuthor` | 🐛 broken: XP* UTF-16 string shown as raw integer | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
@@ -630,17 +629,17 @@ references are into this repo.
 | `AudioSamplingRate` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3 3 3` |
 | `AudioSamplingResolution` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3` |
 | `AudioType` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Text Only` |
-| `BitsPerComponent` | — unsupported | — unsupported (silent no-op) | `3` |
+| `BitsPerComponent` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `By-line` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `By-lineTitle` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Caption-Abstract` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `CatalogSets` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CatalogSets` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Category` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `City` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `ClassifyState` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ClassifyState` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CodedCharacterSet` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
 | `ColorRepresentation` | — unsupported | — unsupported (silent no-op) | `No Image, Single Frame` |
-| `ColorSequence` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ColorSequence` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Contact` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ContentLocationCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ContentLocationName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -648,61 +647,61 @@ references are into this repo.
 | `Country-PrimaryLocationCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Country-PrimaryLocationName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Credit` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `DataCompressionMethod` | — unsupported | — unsupported (silent no-op) | `3` |
+| `DataCompressionMethod` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `DateCreated` | ✅ ok | — unsupported (silent no-op) | `2024:01:15` |
 | `DateSent` | ✅ ok | — unsupported (silent no-op) | `2024:01:15` |
 | `Destination` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `DigitalCreationDate` | ✅ ok | — unsupported (silent no-op) | `2024:01:15` |
 | `DigitalCreationTime` | ✅ ok | — unsupported (silent no-op) | `10:30:00` |
-| `DocumentHistory` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `DocumentNotes` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DocumentHistory` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DocumentNotes` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `EditStatus` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `EditorialUpdate` | — unsupported | — unsupported (silent no-op) | `Additional language` |
+| `EditorialUpdate` | ✅ ok | — unsupported (silent no-op) | `Additional language` |
 | `EnvelopeNumber` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3 3 3 3 3` |
 | `EnvelopePriority` | ✅ ok | — unsupported (silent no-op) | `0 (reserved)` |
 | `EnvelopeRecordVersion` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `ExcursionTolerance` | — unsupported | — unsupported (silent no-op) | `Not Allowed` |
-| `ExifCameraInfo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ExifCameraInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ExpirationDate` | ✅ ok | — unsupported (silent no-op) | `2024:01:15` |
 | `ExpirationTime` | ✅ ok | — unsupported (silent no-op) | `10:30:00` |
 | `FileFormat` | 🐛 broken: IPTC binary int16u decoded as NUL-garbage string | — unsupported (silent no-op) | `No ObjectData` |
 | `FileVersion` | 🐛 broken: IPTC binary int16u decoded as NUL-garbage string | — unsupported (silent no-op) | `3` |
 | `FixtureIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `GammaCompensatedValue` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GammaCompensatedValue` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Headline` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `IPTCBitsPerSample` | — unsupported | — unsupported (silent no-op) | `3` |
-| `IPTCImageHeight` | — unsupported | — unsupported (silent no-op) | `3` |
-| `IPTCImageRotation` | — unsupported | — unsupported (silent no-op) | `0` |
-| `IPTCImageWidth` | — unsupported | — unsupported (silent no-op) | `3` |
+| `IPTCBitsPerSample` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `IPTCImageHeight` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `IPTCImageRotation` | ✅ ok | — unsupported (silent no-op) | `0` |
+| `IPTCImageWidth` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `IPTCPictureNumber` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `IPTCPixelHeight` | — unsupported | — unsupported (silent no-op) | `3` |
-| `IPTCPixelWidth` | — unsupported | — unsupported (silent no-op) | `3` |
+| `IPTCPixelHeight` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `IPTCPixelWidth` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ImageOrientation` | ✅ ok | — unsupported (silent no-op) | `Landscape` |
 | `ImageType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `InterchangeColorSpace` | — unsupported | — unsupported (silent no-op) | `X,Y,Z CIE` |
-| `JobID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `JobID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Keywords` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LanguageIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LocalCaption` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `MasterDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `MaximumDensityRange` | — unsupported | — unsupported (silent no-op) | `3` |
-| `NewsPhotoVersion` | — unsupported | — unsupported (silent no-op) | `3` |
-| `NumIndexEntries` | — unsupported | — unsupported (silent no-op) | `3` |
-| `ObjectAttributeReference` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MasterDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `MaximumDensityRange` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `NewsPhotoVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `NumIndexEntries` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ObjectAttributeReference` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ObjectCycle` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Morning` |
 | `ObjectName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ObjectPreviewData` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
 | `ObjectPreviewFileFormat` | 🐛 broken: IPTC binary int16u decoded as NUL-garbage string | 🐛 broken: type-validation rejects CLI string values | `No ObjectData` |
-| `ObjectPreviewFileVersion` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ObjectTypeReference` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ObjectPreviewFileVersion` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ObjectTypeReference` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `OriginalTransmissionReference` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `OriginatingProgram` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `OwnerID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `Prefs` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `OwnerID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Prefs` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ProductID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ProgramVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Province-State` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `QuantizationMethod` | — unsupported | — unsupported (silent no-op) | `Linear Reflectance/Transmittance` |
+| `QuantizationMethod` | ✅ ok | — unsupported (silent no-op) | `Linear Reflectance/Transmittance` |
 | `RasterizedCaption` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ReferenceDate` | ✅ ok | — unsupported (silent no-op) | `2024:01:15` |
 | `ReferenceNumber` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3 3 3 3 3` |
@@ -710,19 +709,19 @@ references are into this repo.
 | `ReleaseDate` | ✅ ok | — unsupported (silent no-op) | `2024:01:15` |
 | `ReleaseTime` | ✅ ok | — unsupported (silent no-op) | `10:30:00` |
 | `SampleStructure` | — unsupported | — unsupported (silent no-op) | `OrthogonalConstangSampling` |
-| `ScanningDirection` | — unsupported | — unsupported (silent no-op) | `L-R, Top-Bottom` |
+| `ScanningDirection` | ✅ ok | — unsupported (silent no-op) | `L-R, Top-Bottom` |
 | `ServiceIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `ShortDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `SimilarityIndex` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ShortDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SimilarityIndex` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Source` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `SpecialInstructions` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Sub-location` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `SubjectReference` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SubjectReference` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `SupplementalCategories` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `SupplementalType` | — unsupported | — unsupported (silent no-op) | `Main Image` |
 | `TimeCreated` | ✅ ok | — unsupported (silent no-op) | `10:30:00` |
 | `TimeSent` | ✅ ok | — unsupported (silent no-op) | `10:30:00` |
-| `UniqueDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `UniqueDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `UniqueObjectName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Urgency` | ✅ ok | — unsupported (silent no-op) | `0 (reserved)` |
 | `Writer-Editor` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -741,7 +740,7 @@ references are into this repo.
 
 | ExifTool tag | Read | Write | Example |
 |---|---|---|---|
-| `ResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `None` |
+| `ResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `inches` |
 | `XResolution` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `YResolution` | ✅ ok | — unsupported (silent no-op) | `3` |
 
@@ -761,10 +760,10 @@ references are into this repo.
 | `DisplayedUnitsY` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `inches` |
 | `GlobalAltitude` | — unsupported | — unsupported (silent no-op) | `3` |
 | `GlobalAngle` | — unsupported | — unsupported (silent no-op) | `3` |
-| `IPTCDigest` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `new` |
-| `PhotoshopBGRThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/tmp/oxidex-tagmap/base.jpg` |
+| `IPTCDigest` | ❔ untestable (exiftool could not synthesize a sample) | value_mismatch | `new` |
+| `PhotoshopBGRThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/Users/allen/git/oxidex/.claude/worktrees/oxidex-pr-15-revie` |
 | `PhotoshopQuality` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
-| `PhotoshopThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/tmp/oxidex-tagmap/base.jpg` |
+| `PhotoshopThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/Users/allen/git/oxidex/.claude/worktrees/oxidex-pr-15-revie` |
 | `URL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
 | `XResolution` | — unsupported | — unsupported (silent no-op) | `3` |
 | `YResolution` | — unsupported | — unsupported (silent no-op) | `3` |
@@ -3865,9 +3864,9 @@ references are into this repo.
 | `ApertureValue` | 🐛 broken: APEX ValueConv (2^x) not applied | — unsupported (silent no-op) | `1.5` |
 | `BrightnessValue` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `CFAPattern` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `CFAPatternColumns` | — unsupported | — unsupported (silent no-op) | `3` |
-| `CFAPatternRows` | — unsupported | — unsupported (silent no-op) | `3` |
-| `CFAPatternValues` | — unsupported | — unsupported (silent no-op) | `3` |
+| `CFAPatternColumns` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CFAPatternRows` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `CFAPatternValues` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ColorSpace` | ✅ ok | — unsupported (silent no-op) | `sRGB` |
 | `ComponentsConfiguration` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `-` |
 | `CompressedBitsPerPixel` | ✅ ok | — unsupported (silent no-op) | `1.5` |
@@ -3876,14 +3875,14 @@ references are into this repo.
 | `DateTimeDigitized` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `DateTimeOriginal` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `DeviceSettingDescription` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `DeviceSettingDescriptionColumns` | — unsupported | — unsupported (silent no-op) | `3` |
-| `DeviceSettingDescriptionRows` | — unsupported | — unsupported (silent no-op) | `3` |
-| `DeviceSettingDescriptionSettings` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DeviceSettingDescriptionColumns` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DeviceSettingDescriptionRows` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DeviceSettingDescriptionSettings` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `DigitalZoomRatio` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `ExifImageHeight` | — unsupported | — unsupported (silent no-op) | `3` |
-| `ExifImageWidth` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ExifImageHeight` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ExifImageWidth` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ExifVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `ExposureCompensation` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ExposureCompensation` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `ExposureIndex` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `ExposureMode` | ✅ ok | — unsupported (silent no-op) | `Auto` |
 | `ExposureProgram` | ✅ ok | — unsupported (silent no-op) | `Not Defined` |
@@ -3892,22 +3891,22 @@ references are into this repo.
 | `FileSource` | ✅ ok | — unsupported (silent no-op) | `Film Scanner` |
 | `Flash` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `FlashEnergy` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `FlashFired` | — unsupported | — unsupported (silent no-op) | `True` |
-| `FlashFunction` | — unsupported | — unsupported (silent no-op) | `True` |
-| `FlashMode` | — unsupported | — unsupported (silent no-op) | `Unknown` |
-| `FlashRedEyeMode` | — unsupported | — unsupported (silent no-op) | `True` |
+| `FlashFired` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `FlashFunction` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `FlashMode` | — unsupported | — unsupported (silent no-op) | `On` |
+| `FlashRedEyeMode` | ✅ ok | — unsupported (silent no-op) | `True` |
 | `FlashReturn` | — unsupported | — unsupported (silent no-op) | `No return detection` |
 | `FlashpixVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `FocalLength` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `FocalLengthIn35mmFormat` | — unsupported | — unsupported (silent no-op) | `3` |
-| `FocalPlaneResolutionUnit` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `None` |
+| `FocalLengthIn35mmFormat` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `FocalPlaneResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `inches` |
 | `FocalPlaneXResolution` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `FocalPlaneYResolution` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `GPSAltitude` | ✅ ok | — unsupported (silent no-op) | `10.5` |
 | `GPSAltitudeRef` | ✅ ok | — unsupported (silent no-op) | `Above Sea Level` |
 | `GPSAreaInformation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `GPSDOP` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `GPSDateTime` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `GPSDateTime` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `GPSDestBearing` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `GPSDestBearingRef` | ✅ ok | — unsupported (silent no-op) | `Magnetic North` |
 | `GPSDestDistance` | ✅ ok | — unsupported (silent no-op) | `1.5` |
@@ -3930,18 +3929,18 @@ references are into this repo.
 | `GPSTrack` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `GPSTrackRef` | ✅ ok | — unsupported (silent no-op) | `Magnetic North` |
 | `GPSVersionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `GainControl` | ✅ ok | — unsupported (silent no-op) | `None` |
-| `ISO` | — unsupported | — unsupported (silent no-op) | `3` |
+| `GainControl` | ✅ ok | — unsupported (silent no-op) | `Low gain up` |
+| `ISO` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ImageUniqueID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `LightSource` | ✅ ok | — unsupported (silent no-op) | `Unknown` |
+| `LightSource` | ✅ ok | — unsupported (silent no-op) | `Daylight` |
 | `MakerNote` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `MaxApertureValue` | 🐛 broken: APEX ValueConv (2^x) not applied | — unsupported (silent no-op) | `1.5` |
 | `MeteringMode` | ✅ ok | — unsupported (silent no-op) | `Average` |
 | `NativeDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `OECFColumns` | — unsupported | — unsupported (silent no-op) | `3` |
-| `OECFNames` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `OECFRows` | — unsupported | — unsupported (silent no-op) | `3` |
-| `OECFValues` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `OECFColumns` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `OECFNames` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `OECFRows` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `OECFValues` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `Opto-ElectricConvFactor` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `RelatedSoundFile` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Saturation` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Normal` |
@@ -3951,14 +3950,14 @@ references are into this repo.
 | `Sharpness` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Normal` |
 | `ShutterSpeedValue` | 🐛 broken: APEX ValueConv (2^x) not applied | — unsupported (silent no-op) | `1.5` |
 | `SpatialFrequencyResponse` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `SpatialFrequencyResponseColumns` | — unsupported | — unsupported (silent no-op) | `3` |
-| `SpatialFrequencyResponseNames` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `SpatialFrequencyResponseRows` | — unsupported | — unsupported (silent no-op) | `3` |
-| `SpatialFrequencyResponseValues` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `SpatialFrequencyResponseColumns` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SpatialFrequencyResponseNames` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SpatialFrequencyResponseRows` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SpatialFrequencyResponseValues` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `SpectralSensitivity` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `SubjectArea` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SubjectDistance` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `SubjectDistanceRange` | ✅ ok | — unsupported (silent no-op) | `Unknown` |
+| `SubjectDistanceRange` | ✅ ok | — unsupported (silent no-op) | `Macro` |
 | `SubjectLocation` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `UserComment` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `WhiteBalance` | ✅ ok | — unsupported (silent no-op) | `Auto` |
@@ -3981,7 +3980,7 @@ references are into this repo.
 | `CompImageSumExposureUsed` | — unsupported | — unsupported (silent no-op) | `1.5` |
 | `CompImageTotalExposurePeriod` | — unsupported | — unsupported (silent no-op) | `1.5` |
 | `CompImageValues` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CompositeImage` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Unknown` |
+| `CompositeImage` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Not a Composite Image` |
 | `CompositeImageCount` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `CompositeImageExposureTimes` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `Gamma` | ✅ ok | — unsupported (silent no-op) | `1.5` |
@@ -4005,7 +4004,7 @@ references are into this repo.
 | `Pressure` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `RAWDevelopingSoftware` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `RecommendedExposureIndex` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `SensitivityType` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Unknown` |
+| `SensitivityType` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Standard Output Sensitivity` |
 | `SerialNumber` | — unsupported | — unsupported (silent no-op) | `OxTest` |
 | `StandardOutputSensitivity` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `WaterDepth` | ✅ ok | — unsupported (silent no-op) | `1.5` |
@@ -4129,15 +4128,15 @@ references are into this repo.
 |---|---|---|---|
 | `AltTextAccessibility` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CountryCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `CreatorAddress` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CreatorCity` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CreatorAddress` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreatorCity` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CreatorContactInfo` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `{}` |
-| `CreatorCountry` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CreatorPostalCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CreatorRegion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CreatorWorkEmail` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CreatorWorkTelephone` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CreatorWorkURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CreatorCountry` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreatorPostalCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreatorRegion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreatorWorkEmail` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreatorWorkTelephone` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreatorWorkURL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ExtDescrAccessibility` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `IntellectualGenre` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Location` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -4153,252 +4152,252 @@ references are into this repo.
 | `AISystemUsed` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `AISystemVersionUsed` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `AboutCvTerm` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `AboutCvTermCvId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `AboutCvTermId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `AboutCvTermName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `AboutCvTermRefinedAbout` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `AdditionalModelInformation` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkCircaDateCreated` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
-| `ArtworkContentDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkContributionDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkCopyrightNotice` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkCopyrightOwnerID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkCopyrightOwnerName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkCreator` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkCreatorID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkDateCreated` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
-| `ArtworkLicensorID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkLicensorName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `AboutCvTermCvId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AboutCvTermId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AboutCvTermName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AboutCvTermRefinedAbout` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AdditionalModelInformation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkCircaDateCreated` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ArtworkContentDescription` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkContributionDescription` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkCopyrightNotice` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkCopyrightOwnerID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkCopyrightOwnerName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkCreator` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkCreatorID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkDateCreated` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ArtworkLicensorID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkLicensorName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ArtworkOrObject` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ArtworkPhysicalDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkSource` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkSourceInvURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkSourceInventoryNo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkStylePeriod` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ArtworkTitle` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `AudioBitrate` | — unsupported | — unsupported (silent no-op) | `3` |
-| `AudioBitrateMode` | — unsupported | — unsupported (silent no-op) | `Fixed` |
+| `ArtworkPhysicalDescription` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkSource` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkSourceInvURL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkSourceInventoryNo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkStylePeriod` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ArtworkTitle` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AudioBitrate` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `AudioBitrateMode` | ✅ ok | — unsupported (silent no-op) | `Fixed` |
 | `AudioBitsPerSample` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `AudioChannelCount` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `CircaDateCreated` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `ContainerFormat` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ContainerFormatIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ContainerFormatName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ContainerFormatIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ContainerFormatName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Contributor` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ContributorIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ContributorName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ContributorRole` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ControlledVocabularyTerm` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ContributorIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ContributorName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ContributorRole` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ControlledVocabularyTerm` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CopyrightYear` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Creator` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `CreatorIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CreatorName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CreatorRole` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CreatorIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreatorName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CreatorRole` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `DataOnScreen` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `DataOnScreenRegion` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `DataOnScreenRegionD` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `DataOnScreenRegionH` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `DataOnScreenRegionText` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `DataOnScreenRegionUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `DataOnScreenRegionW` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `DataOnScreenRegionX` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `DataOnScreenRegionY` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `DigitalImageGUID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `DigitalSourceFileType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DataOnScreenRegionD` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `DataOnScreenRegionH` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `DataOnScreenRegionText` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DataOnScreenRegionUnit` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DataOnScreenRegionW` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `DataOnScreenRegionX` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `DataOnScreenRegionY` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `DigitalImageGUID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DigitalSourceFileType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `DigitalSourceType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Dopesheet` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `DopesheetLink` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `DopesheetLinkLink` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `DopesheetLinkLinkQualifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `DopesheetLinkLink` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `DopesheetLinkLinkQualifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `EmbdEncRightsExpr` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `EmbeddedEncodedRightsExpr` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `EmbeddedEncodedRightsExprLangID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `EmbeddedEncodedRightsExprType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EmbeddedEncodedRightsExpr` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EmbeddedEncodedRightsExprLangID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EmbeddedEncodedRightsExprType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Episode` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `EpisodeIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `EpisodeName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `EpisodeNumber` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EpisodeIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EpisodeName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EpisodeNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Event` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `EventID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EventID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ExternalMetadataLink` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `FeedIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Genre` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `GenreCvId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `GenreCvTermId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `GenreCvTermName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `GenreCvTermRefinedAbout` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `GenreCvId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `GenreCvTermId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `GenreCvTermName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `GenreCvTermRefinedAbout` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Headline` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `IPTCLastEdited` | — unsupported | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
+| `IPTCLastEdited` | ✅ ok | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
 | `ImageRegion` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `ImageRegionBoundary` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ImageRegionBoundaryH` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `ImageRegionBoundaryRx` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `ImageRegionBoundaryShape` | — unsupported | — unsupported (silent no-op) | `Circle` |
-| `ImageRegionBoundaryUnit` | — unsupported | — unsupported (silent no-op) | `Pixel` |
+| `ImageRegionBoundaryH` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionBoundaryRx` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionBoundaryShape` | ✅ ok | — unsupported (silent no-op) | `Circle` |
+| `ImageRegionBoundaryUnit` | ✅ ok | — unsupported (silent no-op) | `Pixel` |
 | `ImageRegionBoundaryVertices` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ImageRegionBoundaryVerticesX` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `ImageRegionBoundaryVerticesY` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `ImageRegionBoundaryW` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `ImageRegionBoundaryX` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `ImageRegionBoundaryY` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionBoundaryVerticesX` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionBoundaryVerticesY` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionBoundaryW` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionBoundaryX` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ImageRegionBoundaryY` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `ImageRegionCtype` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ImageRegionCtypeIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ImageRegionCtypeName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ImageRegionID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ImageRegionName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageRegionCtypeIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageRegionCtypeName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageRegionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageRegionName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ImageRegionRole` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ImageRegionRoleIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ImageRegionRoleName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageRegionRoleIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ImageRegionRoleName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LinkedEncRightsExpr` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `LinkedEncodedRightsExpr` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LinkedEncodedRightsExprLangID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LinkedEncodedRightsExprType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LinkedEncodedRightsExpr` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LinkedEncodedRightsExprLangID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LinkedEncodedRightsExprType` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LocationCreated` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `LocationCreatedCity` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationCreatedCountryCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationCreatedCountryName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationCreatedGPSAltitude` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LocationCreatedCity` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedCountryCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedCountryName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedGPSAltitude` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `LocationCreatedGPSAltitudeRef` | — unsupported | — unsupported (silent no-op) | `Above Sea Level` |
 | `LocationCreatedGPSLatitude` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
 | `LocationCreatedGPSLongitude` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `LocationCreatedIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationCreatedLocationId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationCreatedLocationName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationCreatedProvinceState` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationCreatedSublocation` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationCreatedWorldRegion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedLocationId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedLocationName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedProvinceState` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedSublocation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationCreatedWorldRegion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LocationShown` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `LocationShownCity` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationShownCountryCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationShownCountryName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationShownGPSAltitude` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `LocationShownCity` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownCountryCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownCountryName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownGPSAltitude` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `LocationShownGPSAltitudeRef` | — unsupported | — unsupported (silent no-op) | `Above Sea Level` |
 | `LocationShownGPSLatitude` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
 | `LocationShownGPSLongitude` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `LocationShownIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationShownLocationId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationShownLocationName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationShownProvinceState` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationShownSublocation` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LocationShownWorldRegion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownLocationId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownLocationName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownProvinceState` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownSublocation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LocationShownWorldRegion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `MaxAvailHeight` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `MaxAvailWidth` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `MetadataAuthority` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `MetadataAuthorityIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `MetadataAuthorityName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MetadataAuthorityIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `MetadataAuthorityName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `MetadataLastEdited` | ✅ ok | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
 | `MetadataLastEditor` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `MetadataLastEditorIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `MetadataLastEditorName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `MetadataLastEditorIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `MetadataLastEditorName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ModelAge` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `OrganisationInImageCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `OrganisationInImageName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `ParentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ParentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `PersonHeard` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `PersonHeardIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `PersonHeardName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PersonHeardIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PersonHeardName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `PersonInImage` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `PersonInImageCharacteristic` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `PersonInImageCvTermCvId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `PersonInImageCvTermId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `PersonInImageCvTermName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `PersonInImageCvTermRefinedAbout` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `PersonInImageDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `PersonInImageId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `PersonInImageName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageCvTermCvId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageCvTermId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageCvTermName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageCvTermRefinedAbout` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageDescription` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PersonInImageName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `PersonInImageWDetails` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `PlanningRef` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `PlanningRefIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `PlanningRefName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `PlanningRefRole` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PlanningRefIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PlanningRefName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PlanningRefRole` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ProductInImage` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ProductInImageDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ProductInImageGTIN` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ProductInImageName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ProductInImageProductId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ProductInImageDescription` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ProductInImageGTIN` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ProductInImageName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ProductInImageProductId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `PublicationEvent` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `PublicationEventDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
-| `PublicationEventIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `PublicationEventName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PublicationEventDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `PublicationEventIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `PublicationEventName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Rating` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `{}` |
 | `RatingRegion` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `RatingRegionCity` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RatingRegionCountryCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RatingRegionCountryName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RatingRegionGPSAltitude` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `RatingRegionCity` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionCountryCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionCountryName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionGPSAltitude` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `RatingRegionGPSAltitudeRef` | — unsupported | — unsupported (silent no-op) | `Above Sea Level` |
 | `RatingRegionGPSLatitude` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
 | `RatingRegionGPSLongitude` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `RatingRegionIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RatingRegionLocationId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RatingRegionLocationName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RatingRegionProvinceState` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RatingRegionSublocation` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RatingRegionWorldRegion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RatingScaleMaxValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RatingScaleMinValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RatingSourceLink` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RatingValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RatingValueLogoLink` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionLocationId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionLocationName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionProvinceState` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionSublocation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingRegionWorldRegion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingScaleMaxValue` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingScaleMinValue` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingSourceLink` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingValue` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RatingValueLogoLink` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `RecDevice` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `RecDeviceAttLensDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RecDeviceManufacturer` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RecDeviceModelName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RecDeviceOwnersDeviceId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RecDeviceSerialNumber` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RegistryEntryRole` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RecDeviceAttLensDescription` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RecDeviceManufacturer` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RecDeviceModelName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RecDeviceOwnersDeviceId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RecDeviceSerialNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RegistryEntryRole` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `RegistryID` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `RegistryItemID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RegistryOrganisationID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RegistryItemID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RegistryOrganisationID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ReleaseReady` | ✅ ok | — unsupported (silent no-op) | `True` |
 | `Season` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `SeasonIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `SeasonName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `SeasonNumber` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SeasonIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SeasonName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SeasonNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Series` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `SeriesIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `SeriesName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SeriesIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SeriesName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ShownEvent` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ShownEventIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ShownEventName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ShownEventIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ShownEventName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Snapshot` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `SnapshotFormat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `SnapshotHeightPixels` | — unsupported | — unsupported (silent no-op) | `3` |
-| `SnapshotImageRole` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SnapshotFormat` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SnapshotHeightPixels` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SnapshotImageRole` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `SnapshotLink` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `SnapshotLinkQualifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SnapshotLinkQualifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `SnapshotUsedVideoFrame` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `SnapshotUsedVideoFrameTimeFormat` | — unsupported | — unsupported (silent no-op) | `23.976 fps` |
-| `SnapshotUsedVideoFrameTimeValue` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `SnapshotUsedVideoFrameValue` | — unsupported | — unsupported (silent no-op) | `3` |
-| `SnapshotWidthPixels` | — unsupported | — unsupported (silent no-op) | `3` |
+| `SnapshotUsedVideoFrameTimeValue` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SnapshotUsedVideoFrameValue` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SnapshotWidthPixels` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `StorylineIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `StreamReady` | ✅ ok | — unsupported (silent no-op) | `False` |
 | `StylePeriod` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `SupplyChainSource` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `SupplyChainSourceIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `SupplyChainSourceName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `SupplyChainSourceIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SupplyChainSourceName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `TemporalCoverage` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `TemporalCoverageFrom` | — unsupported | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
-| `TemporalCoverageTo` | — unsupported | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
+| `TemporalCoverageFrom` | ✅ ok | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
+| `TemporalCoverageTo` | ✅ ok | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
 | `Transcript` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `TranscriptLink` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `TranscriptLinkLink` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `TranscriptLinkLinkQualifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `VideoBitrate` | — unsupported | — unsupported (silent no-op) | `3` |
-| `VideoBitrateMode` | — unsupported | — unsupported (silent no-op) | `Fixed` |
+| `TranscriptLinkLink` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `TranscriptLinkLinkQualifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VideoBitrate` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `VideoBitrateMode` | ✅ ok | — unsupported (silent no-op) | `Fixed` |
 | `VideoDisplayAspectRatio` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `VideoEncodingProfile` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `VideoShotType` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `VideoShotTypeIdentifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `VideoShotTypeName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VideoShotTypeIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VideoShotTypeName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `VideoStreamsCount` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `VisualColor` | — unsupported | — unsupported (silent no-op) | `Monochrome` |
 | `WorkflowTag` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `WorkflowTagCvId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `WorkflowTagCvTermId` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `WorkflowTagCvTermName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `WorkflowTagCvTermRefinedAbout` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `WorkflowTagCvId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `WorkflowTagCvTermId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `WorkflowTagCvTermName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `WorkflowTagCvTermRefinedAbout` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 
 ### XMP-lr
 
@@ -4545,33 +4544,33 @@ references are into this repo.
 |---|---|---|---|
 | `AuthorsPosition` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CameraProfiles` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `CameraProfilesApertureValue` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CameraProfilesAuthor` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CameraProfilesAutoScale` | — unsupported | — unsupported (silent no-op) | `True` |
-| `CameraProfilesCameraPrettyName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CameraProfilesCameraRawProfile` | — unsupported | — unsupported (silent no-op) | `True` |
-| `CameraProfilesFocalLength` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CameraProfilesFocusDistance` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CameraProfilesLens` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CameraProfilesLensPrettyName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CameraProfilesMake` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CameraProfilesModel` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesApertureValue` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesAuthor` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesAutoScale` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `CameraProfilesCameraPrettyName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesCameraRawProfile` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `CameraProfilesFocalLength` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesFocusDistance` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesLens` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesLensPrettyName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesMake` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesModel` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CameraProfilesPerspectiveModel` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `CameraProfilesPerspectiveModelImageXCenter` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CameraProfilesPerspectiveModelImageYCenter` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CameraProfilesPerspectiveModelRadialDistortParam1` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CameraProfilesPerspectiveModelRadialDistortParam2` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CameraProfilesPerspectiveModelRadialDistortParam3` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CameraProfilesPerspectiveModelScaleFactor` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CameraProfilesPerspectiveModelVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesPerspectiveModelImageXCenter` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelImageYCenter` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelRadialDistortParam1` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelRadialDistortParam2` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelRadialDistortParam3` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelScaleFactor` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CameraProfilesPerspectiveModelVignetteModel` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `CameraProfilesPerspectiveModelVignetteModelImageXCenter` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CameraProfilesPerspectiveModelVignetteModelImageYCenter` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CameraProfilesPerspectiveModelVignetteModelParam1` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CameraProfilesPerspectiveModelVignetteModelPiecewiseParam` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CameraProfilesProfileName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `CameraProfilesSensorFormatFactor` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `CameraProfilesUniqueCameraModel` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesPerspectiveModelVignetteModelImageXCenter` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelVignetteModelImageYCenter` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelVignetteModelParam1` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesPerspectiveModelVignetteModelPiecewiseParam` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesProfileName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `CameraProfilesSensorFormatFactor` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `CameraProfilesUniqueCameraModel` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CaptionWriter` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Category` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `City` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -4583,7 +4582,7 @@ references are into this repo.
 | `EmbeddedXMPDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Headline` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `History` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
-| `ICCProfileName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ICCProfileName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Instructions` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LabelColor` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LegacyIPTCDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -4591,8 +4590,8 @@ references are into this repo.
 | `Source` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `State` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `SupplementalCategories` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `TextLayerName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `TextLayerText` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `TextLayerName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `TextLayerText` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `TextLayers` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `TransmissionReference` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Urgency` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `0 (reserved)` |
@@ -4603,9 +4602,9 @@ references are into this repo.
 |---|---|---|---|
 | `AdultContentWarning` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Adult Content Warning Required` |
 | `CopyrightOwner` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `CopyrightOwnerID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CopyrightOwnerID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CopyrightOwnerImageID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `CopyrightOwnerName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `CopyrightOwnerName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CopyrightRegistrationNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CopyrightStatus` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Protected` |
 | `CreditLineRequired` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Credit Adjacent To Image` |
@@ -4621,53 +4620,53 @@ references are into this repo.
 | `Custom9` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `DataMining` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Allowed` |
 | `EndUser` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `EndUserID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `EndUserName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `EndUserID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `EndUserName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `FileNameAsDelivered` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `FirstPublicationDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `ImageAlterationConstraints` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `No Colorization` |
 | `ImageCreator` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ImageCreatorID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageCreatorID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ImageCreatorImageID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `ImageCreatorName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageCreatorName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ImageDuplicationConstraints` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Duplication Only as Necessary Under License` |
 | `ImageFileConstraints` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Maintain File Name` |
 | `ImageFileFormatAsDelivered` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Windows Bitmap (BMP)` |
 | `ImageFileSizeAsDelivered` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Greater than 50 MB` |
 | `ImageSupplier` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ImageSupplierID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageSupplierID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ImageSupplierImageID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `ImageSupplierName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ImageSupplierName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ImageType` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Illustrated Image` |
 | `LicenseEndDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `LicenseID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LicenseStartDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `LicenseTransactionDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `Licensee` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `LicenseeID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicenseeID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LicenseeImageID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LicenseeImageNotes` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `LicenseeName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicenseeName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LicenseeProjectReference` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LicenseeTransactionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Licensor` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `LicensorCity` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LicensorCountry` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LicensorEmail` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LicensorExtendedAddress` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LicensorID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorCity` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicensorCountry` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicensorEmail` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicensorExtendedAddress` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicensorID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LicensorImageID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `LicensorName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LicensorNotes` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `LicensorPostalCode` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LicensorRegion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LicensorStreetAddress` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LicensorTelephone1` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `LicensorTelephone2` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorPostalCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicensorRegion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicensorStreetAddress` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicensorTelephone1` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `LicensorTelephone2` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LicensorTelephoneType1` | — unsupported | — unsupported (silent no-op) | `Cell` |
 | `LicensorTelephoneType2` | — unsupported | — unsupported (silent no-op) | `Cell` |
 | `LicensorTransactionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `LicensorURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `LicensorURL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `MediaConstraints` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `MediaSummaryCode` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `1 Usage Item:` |
 | `MinorModelAgeDisclosure` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Age 15` |
@@ -4679,7 +4678,7 @@ references are into this repo.
 | `OtherLicenseDocuments` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `OtherLicenseInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `OtherLicenseRequirements` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `PLUSVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PLUSVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ProductOrServiceConstraints` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `PropertyReleaseID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `PropertyReleaseStatus` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Limited or Incomplete Property Releases` |
@@ -4920,7 +4919,7 @@ references are into this repo.
 | `Copyright` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `DateTime` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `ImageDescription` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `ImageHeight` | — unsupported | — unsupported (silent no-op) | `3` |
+| `ImageHeight` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ImageWidth` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Make` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Model` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -4930,7 +4929,7 @@ references are into this repo.
 | `PlanarConfiguration` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Chunky` |
 | `PrimaryChromaticities` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `ReferenceBlackWhite` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `ResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `None` |
+| `ResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `inches` |
 | `SamplesPerPixel` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Software` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `TransferFunction` | ✅ ok | — unsupported (silent no-op) | `3` |
@@ -5124,7 +5123,7 @@ references are into this repo.
 | `TracksMarkersType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
 | `TracksTrackName` | — unsupported | — unsupported (silent no-op) | `OxTest` |
 | `TracksTrackType` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `VideoAlphaMode` | ✅ ok | — unsupported (silent no-op) | `None` |
+| `VideoAlphaMode` | ✅ ok | — unsupported (silent no-op) | `Pre-multiplied` |
 | `VideoAlphaPremultipleColor` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `VideoAlphaPremultipleColorA` | — unsupported | — unsupported (silent no-op) | `3` |
 | `VideoAlphaPremultipleColorB` | — unsupported | — unsupported (silent no-op) | `3` |
@@ -5199,140 +5198,140 @@ references are into this repo.
 | `DerivedFromVersionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `DocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `History` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `{}` |
-| `HistoryAction` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `HistoryChanged` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `HistoryInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `HistoryParameters` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `HistorySoftwareAgent` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `HistoryWhen` | — unsupported | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
+| `HistoryAction` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `HistoryChanged` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `HistoryInstanceID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `HistoryParameters` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `HistorySoftwareAgent` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `HistoryWhen` | ✅ ok | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
 | `Ingredients` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `IngredientsAlternatePaths` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsFilePath` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsFromPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsLastModifyDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
-| `IngredientsLastURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsLinkCategory` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsLinkForm` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsManageTo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsManageUI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsManager` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsManagerVariant` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsMaskMarkers` | — unsupported | — unsupported (silent no-op) | `All` |
-| `IngredientsOriginalDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsPartMapping` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsPlacedResolutionUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsPlacedXResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsPlacedYResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsRenditionClass` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsRenditionParams` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsToPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `IngredientsVersionID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsAlternatePaths` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsFilePath` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsFromPart` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsInstanceID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsLastModifyDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `IngredientsLastURL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsLinkCategory` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsLinkForm` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsManageTo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsManageUI` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsManager` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsManagerVariant` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsMaskMarkers` | ✅ ok | — unsupported (silent no-op) | `All` |
+| `IngredientsOriginalDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsPartMapping` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsPlacedResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsPlacedXResolution` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsPlacedYResolution` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsRenditionClass` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsRenditionParams` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsToPart` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `IngredientsVersionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `InstanceID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LastURL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ManageTo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ManageUI` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ManagedFrom` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ManagedFromAlternatePaths` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromFilePath` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromFromPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromLastModifyDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
-| `ManagedFromLastURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromLinkCategory` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromLinkForm` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromManageTo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromManageUI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromManager` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromManagerVariant` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromMaskMarkers` | — unsupported | — unsupported (silent no-op) | `All` |
-| `ManagedFromOriginalDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromPartMapping` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromPlacedResolutionUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromPlacedXResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromPlacedYResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromRenditionClass` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromRenditionParams` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromToPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManagedFromVersionID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromAlternatePaths` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromFilePath` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromFromPart` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromInstanceID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromLastModifyDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ManagedFromLastURL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromLinkCategory` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromLinkForm` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromManageTo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromManageUI` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromManager` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromManagerVariant` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromMaskMarkers` | ✅ ok | — unsupported (silent no-op) | `All` |
+| `ManagedFromOriginalDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromPartMapping` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromPlacedResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromPlacedXResolution` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromPlacedYResolution` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromRenditionClass` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromRenditionParams` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromToPart` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManagedFromVersionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Manager` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ManagerVariant` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Manifest` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ManifestLinkForm` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestPlacedResolutionUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestPlacedXResolution` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `ManifestPlacedYResolution` | — unsupported | — unsupported (silent no-op) | `1.5` |
+| `ManifestLinkForm` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestPlacedResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestPlacedXResolution` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `ManifestPlacedYResolution` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `ManifestReference` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `ManifestReferenceAlternatePaths` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceFilePath` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceFromPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceLastModifyDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
-| `ManifestReferenceLastURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceLinkCategory` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceLinkForm` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceManageTo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceManageUI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceManager` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceManagerVariant` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceMaskMarkers` | — unsupported | — unsupported (silent no-op) | `All` |
-| `ManifestReferenceOriginalDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferencePartMapping` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferencePlacedResolutionUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferencePlacedXResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferencePlacedYResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceRenditionClass` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceRenditionParams` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceToPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `ManifestReferenceVersionID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceAlternatePaths` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceFilePath` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceFromPart` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceInstanceID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceLastModifyDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `ManifestReferenceLastURL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceLinkCategory` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceLinkForm` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceManageTo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceManageUI` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceManager` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceManagerVariant` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceMaskMarkers` | ✅ ok | — unsupported (silent no-op) | `All` |
+| `ManifestReferenceOriginalDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferencePartMapping` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferencePlacedResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferencePlacedXResolution` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferencePlacedYResolution` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceRenditionClass` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceRenditionParams` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceToPart` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ManifestReferenceVersionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `OriginalDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Pantry` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `PantryInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `PantryInstanceID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `PreservedFileName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `RenditionClass` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `RenditionOf` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `RenditionOfAlternatePaths` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfFilePath` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfFromPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfLastModifyDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
-| `RenditionOfLastURL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfLinkCategory` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfLinkForm` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfManageTo` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfManageUI` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfManager` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfManagerVariant` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfMaskMarkers` | — unsupported | — unsupported (silent no-op) | `All` |
-| `RenditionOfOriginalDocumentID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfPartMapping` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfPlacedResolutionUnit` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfPlacedXResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfPlacedYResolution` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfRenditionClass` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfRenditionParams` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfToPart` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RenditionOfVersionID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfAlternatePaths` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfFilePath` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfFromPart` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfInstanceID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfLastModifyDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `RenditionOfLastURL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfLinkCategory` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfLinkForm` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfManageTo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfManageUI` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfManager` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfManagerVariant` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfMaskMarkers` | ✅ ok | — unsupported (silent no-op) | `All` |
+| `RenditionOfOriginalDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfPartMapping` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfPlacedResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfPlacedXResolution` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfPlacedYResolution` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfRenditionClass` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfRenditionParams` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfToPart` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `RenditionOfVersionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `RenditionParams` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `SaveID` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Subject` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `VersionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Versions` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `VersionsComments` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VersionsComments` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `VersionsEvent` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `VersionsEventAction` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `VersionsEventChanged` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `VersionsEventInstanceID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `VersionsEventParameters` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `VersionsEventSoftwareAgent` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `VersionsEventWhen` | — unsupported | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
-| `VersionsModifier` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `VersionsModifyDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
-| `VersionsVersion` | — unsupported | — unsupported (silent no-op) | `OxTest` |
+| `VersionsEventAction` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VersionsEventChanged` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VersionsEventInstanceID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VersionsEventParameters` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VersionsEventSoftwareAgent` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VersionsEventWhen` | ✅ ok | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
+| `VersionsModifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `VersionsModifyDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
+| `VersionsVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 
 ### XMP-xmpNote
 

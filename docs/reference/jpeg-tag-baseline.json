@@ -1,12 +1,12 @@
 {
  "total_tested": 4812,
- "readable": 1621,
+ "readable": 2028,
  "writable_cli": 122,
- "full": 56,
+ "full": 57,
  "full_nonstandard": 42,
- "read_only": 1283,
+ "read_only": 1677,
  "read_broken": 48,
- "write_broken": 240,
- "unsupported": 2923,
+ "write_broken": 252,
+ "unsupported": 2517,
  "untestable": 219
 }
