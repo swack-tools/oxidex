@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
-use crate::types::{ManifestTag, ResultEntry};
+use crate::types::{ManifestFile, ManifestTag, ResultEntry};
 
 #[derive(Args)]
 pub struct RunArgs {
@@ -19,13 +19,127 @@ pub struct RunArgs {
     pub limit: Option<usize>,
     #[arg(long)]
     pub skip_write: bool,
-    #[arg(long)]
+    #[arg(long, help = "redo READ phase only; merge into existing results.json")]
     pub reread: bool,
     #[arg(long, default_value_t = 8)]
     pub workers: usize,
 }
 
-pub fn run(_args: RunArgs) -> anyhow::Result<()> {
+/// Subcommand entry point: load the manifest, run the read + write phases,
+/// classify bugs, and write `results.json`. Port of
+/// `scripts/jpeg_tag_matrix.py:552-648`'s `main`.
+pub fn run(args: RunArgs) -> anyhow::Result<()> {
+    let exiftool = std::env::var("EXIFTOOL").unwrap_or_else(|_| "exiftool".into());
+    let repo = std::env::current_dir()?;
+    let oxidex = std::env::var("OXIDEX")
+        .unwrap_or_else(|_| repo.join("target/release/oxidex").display().to_string());
+    let work = std::env::var("TAGMATRIX_WORK")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir().join("oxidex-tagmap"));
+    let base = std::env::var("TAGMATRIX_BASE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| repo.join("tests/fixtures/jpeg/tag_matrix_base.jpg"));
+    let results_path = work.join("results.json");
+    let tools = Tools { exiftool: &exiftool, oxidex: &oxidex };
+
+    // Bounds the previously-unbounded rayon parallelism used by both the
+    // read phase (Task 7's run_read_phase) and the write phase below.
+    rayon::ThreadPoolBuilder::new().num_threads(args.workers).build_global().ok();
+
+    let manifest: ManifestFile =
+        serde_json::from_str(&std::fs::read_to_string(work.join("exiftool_jpeg_tags.json"))?)?;
+    let mut tags: Vec<ManifestTag> = manifest.tags.into_iter().filter(|t| t.writable).collect();
+    if let Some(g) = &args.only_group {
+        tags.retain(|t| &t.group == g);
+    }
+    if let Some(limit) = args.limit {
+        tags.truncate(limit);
+    }
+
+    let mut results: HashMap<String, ResultEntry> = HashMap::new();
+    let mut skip_write = args.skip_write;
+    if args.reread && results_path.exists() {
+        results = serde_json::from_str(&std::fs::read_to_string(&results_path)?)?;
+        skip_write = true;
+    }
+
+    let read_res = run_read_phase(&tools, &base, &tags);
+    for t in &tags {
+        let entry = results.entry(key_of(t)).or_default();
+        // drop stale read fields before merging fresh read results
+        *entry = ResultEntry {
+            write: entry.write.clone(),
+            wkey: entry.wkey.clone(),
+            detail: entry.detail.clone(),
+            write_ox_val: entry.write_ox_val.clone(),
+            write_et_val: entry.write_et_val.clone(),
+            write_ox_key: entry.write_ox_key.clone(),
+            bug_cluster: entry.bug_cluster.clone(),
+            write_quality: entry.write_quality.clone(),
+            write_warnings: entry.write_warnings.clone(),
+            ..Default::default()
+        };
+        if let Some(r) = read_res.get(&key_of(t)) {
+            entry.read = r.read.clone();
+            entry.read_batch = r.read_batch.clone();
+            entry.read_detail = r.read_detail.clone();
+            entry.read_bug = r.read_bug.clone();
+            entry.read_note = r.read_note.clone();
+            entry.ox_key = r.ox_key.clone();
+            entry.ox_val = r.ox_val.clone();
+            entry.et_val = r.et_val.clone();
+        }
+    }
+
+    if !skip_write {
+        let base_ox = oxidex_json(&tools, &base).0.unwrap_or_else(|| Value::Object(Default::default()));
+        let base_et = exiftool_json(&tools, &base);
+        let base_validate_warnings = exiftool_validate_warnings(&tools, &base);
+        let ctx = WriteContext {
+            base_ox: &base_ox,
+            base_et: &base_et,
+            base_validate_warnings: &base_validate_warnings,
+        };
+        let write_results: Vec<(String, ResultEntry)> = tags
+            .par_iter()
+            .map(|t| (key_of(t), write_test_tag(&tools, &base, t, &ctx)))
+            .collect();
+        for (k, wr) in write_results {
+            let entry = results.entry(k).or_default();
+            entry.write = wr.write;
+            entry.wkey = wr.wkey;
+            entry.detail = wr.detail;
+            entry.write_ox_val = wr.write_ox_val;
+            entry.write_et_val = wr.write_et_val;
+            entry.write_ox_key = wr.write_ox_key;
+            entry.bug_cluster = wr.bug_cluster;
+            entry.write_quality = wr.write_quality;
+            entry.write_warnings = wr.write_warnings;
+        }
+    }
+
+    for t in &tags {
+        let r = results.entry(key_of(t)).or_default();
+        r.group = t.group.clone();
+        r.name = t.name.clone();
+        r.sample = t.sample.clone().unwrap_or_default();
+        r.vtype = Some(t.vtype.clone());
+        r.protected = t.protected;
+    }
+
+    apply_bug_classification(&mut results);
+
+    std::fs::write(&results_path, serde_json::to_string_pretty(&results)?)?;
+    let mut counts: HashMap<(Option<String>, Option<String>), u32> = HashMap::new();
+    for r in results.values() {
+        *counts.entry((r.read.clone(), r.write.clone())).or_insert(0) += 1;
+    }
+    let mut sorted: Vec<_> = counts.into_iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    for ((rd, wr), n) in sorted {
+        println!("  read={:<18} write={:<18} {n}", rd.unwrap_or_default(), wr.unwrap_or_default());
+    }
+    println!("Results: {}", results_path.display());
     Ok(())
 }
 
@@ -312,6 +426,37 @@ static WRITE_BUG_CLUSTER_TAG_NAMES: Lazy<HashMap<&'static str, &'static str>> = 
 
 pub fn write_bug_cluster_for(name: &str) -> Option<&'static str> {
     WRITE_BUG_CLUSTER_TAG_NAMES.get(name).copied()
+}
+
+/// Post-process raw harness results into refined read/write categories.
+///
+/// read=MISMATCH splits into: a tagged real bug (read_bug set, stays
+/// MISMATCH), or MISMATCH_FORMAT (value is equivalent; only formatting
+/// differs). write=INTEROP_BROKEN gets a bug_cluster label when the specific
+/// tag is a previously root-caused case. Port of
+/// `scripts/jpeg_tag_matrix.py:240-267`.
+pub fn apply_bug_classification(results: &mut HashMap<String, ResultEntry>) {
+    for r in results.values_mut() {
+        // Independent axes -- a tag can be both read=MISMATCH and
+        // write=INTEROP_BROKEN at once, so these must not be if/else'd.
+        if r.read.as_deref() == Some("MISMATCH") {
+            if let Some(bug) = classify_read_mismatch(r) {
+                r.read_bug = Some(bug.to_string());
+            } else {
+                r.read = Some("MISMATCH_FORMAT".into());
+                r.read_note = Some(
+                    "value equivalent; oxidex shows stored/raw form, exiftool applies PrintConv"
+                        .into(),
+                );
+            }
+        }
+        if r.write.as_deref() == Some("INTEROP_BROKEN")
+            && r.bug_cluster.is_none()
+            && let Some(cluster) = write_bug_cluster_for(&r.name)
+        {
+            r.bug_cluster = Some(cluster.to_string());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -897,6 +1042,203 @@ pub fn run_read_phase(
     read_res
 }
 
+// ------------------------------------------------------------ write phase
+//
+// oxidex writes the tag into a fresh JPEG, then both oxidex -j and
+// exiftool -j -G1 read it back and each value is compared against the
+// sample -- but only after checking each side against its pristine
+// pre-write value (BASE_OX/BASE_ET) to detect a silent no-op (the write
+// path exists and exits 0, but the tag family isn't actually wired into
+// the writer, so the file comes back byte-identical to the base fixture).
+// Port of `scripts/jpeg_tag_matrix.py:440-545`.
+
+static NONSTANDARD_WARNING_MARKERS: &[&str] =
+    &["Non-standard format", "Non-standard count", "Missing required"];
+
+/// Return the set of exiftool `-validate` warning lines for a file.
+fn exiftool_validate_warnings(tools: &Tools, path: &Path) -> HashSet<String> {
+    let (_, out, _) = run_cmd(
+        tools.exiftool,
+        &[
+            "-validate".into(),
+            "-warning".into(),
+            "-a".into(),
+            path.display().to_string(),
+        ],
+        30,
+    );
+    out.lines()
+        .filter_map(|ln| {
+            let (prefix, rest) = ln.split_once(':')?;
+            if prefix.contains("Validate") {
+                return None;
+            }
+            Some(rest.trim().to_string())
+        })
+        .collect()
+}
+
+/// Read-only pristine base-fixture values, computed once before the write
+/// phase's parallel workers start and shared across them.
+pub struct WriteContext<'a> {
+    pub base_ox: &'a Value,
+    pub base_et: &'a Value,
+    pub base_validate_warnings: &'a HashSet<String>,
+}
+
+/// oxidex writes the tag -> oxidex reads back -> exiftool reads back.
+///
+/// Every apparent match/mismatch is checked against the tag's pristine
+/// pre-write value in `ctx.base_ox`/`ctx.base_et`: if the post-write value
+/// is simply unchanged from what the base fixture already had, this write
+/// path is a silent no-op (the family isn't wired into the writer), not a
+/// genuine value mismatch -- regardless of whether that stale value
+/// happens to coincidentally match or differ from the sample we tried to
+/// write. Port of `scripts/jpeg_tag_matrix.py:447-545`'s `write_test_tag`;
+/// kept as a single function rather than decomposed further, matching why
+/// the Python keeps it as one function (its internal state doesn't factor
+/// cleanly into smaller pieces).
+pub fn write_test_tag(tools: &Tools, base: &Path, tag: &ManifestTag, ctx: &WriteContext) -> ResultEntry {
+    let base_ox_val = find_in_json(ctx.base_ox, &oxidex_read_keys(tag)).1.map(value_to_str);
+    let base_et_val = find_in_exiftool_json(ctx.base_et, tag, true).map(value_to_str);
+    let sample = tag.sample.clone().unwrap_or_default();
+
+    let mut res = ResultEntry { write: Some("ERROR".into()), detail: Some(String::new()), ..Default::default() };
+
+    for wkey in oxidex_write_keys(tag) {
+        let td = tempfile::tempdir().unwrap();
+        let img = td.path().join("t.jpg");
+        std::fs::copy(base, &img).unwrap();
+        let spec = format!("-{wkey}={sample}");
+        let (code, out, err) = run_cmd(tools.oxidex, &[spec, img.display().to_string()], 30);
+        let errtext = format!("{err}{out}").trim().to_string();
+        if code != 0 || errtext.contains("Error:") {
+            res = ResultEntry {
+                write: Some("ERROR".into()),
+                wkey: Some(wkey),
+                detail: Some(errtext.chars().take(200).collect()),
+                ..Default::default()
+            };
+            continue;
+        }
+        let ox = oxidex_json(tools, &img).0;
+        let et = exiftool_json(tools, &img);
+        if et.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            res = ResultEntry {
+                write: Some("CORRUPTS_FILE".into()),
+                wkey: Some(wkey),
+                detail: Some("exiftool cannot parse output file".into()),
+                ..Default::default()
+            };
+            continue;
+        }
+        let et_val = find_in_exiftool_json(&et, tag, true).map(value_to_str);
+        let ox_val = ox.as_ref().and_then(|ox| find_in_json(ox, &oxidex_read_keys(tag)).1).map(value_to_str);
+        let mut ox_key_used: Option<String> = None;
+
+        let sample_eq_base_ox = base_ox_val.as_deref().map(|b| b.trim() == sample.trim()).unwrap_or(false);
+        let sample_eq_base_et = base_et_val.as_deref().map(|b| b.trim() == sample.trim()).unwrap_or(false);
+        let ox_unchanged = ox_val.is_some()
+            && base_ox_val.is_some()
+            && ox_val.as_deref().unwrap().trim() == base_ox_val.as_deref().unwrap().trim()
+            && !sample_eq_base_ox;
+        let et_unchanged = et_val.is_some()
+            && base_et_val.is_some()
+            && et_val.as_deref().unwrap().trim() == base_et_val.as_deref().unwrap().trim()
+            && !sample_eq_base_et;
+
+        let mut ox_ok = ox_val.is_some() && !ox_unchanged && values_match(&sample, ox_val.as_deref().unwrap_or(""));
+        let et_ok = et_val.is_some() && !et_unchanged && values_match(&sample, et_val.as_deref().unwrap_or(""));
+
+        // Registry asymmetry: oxidex has no display name for this tag, but the
+        // value landed correctly under a raw/hex key in the same group.
+        let mut ox_val = ox_val;
+        if !ox_ok
+            && et_ok
+            && let Some(ox_ref) = &ox
+        {
+            let (fk, fv) = find_same_group_fallback(ox_ref, tag, &sample);
+            if let (Some(fk), Some(fv)) = (fk, fv) {
+                ox_key_used = Some(fk);
+                ox_val = Some(value_to_str(fv));
+                ox_ok = true;
+            }
+        }
+
+        if ox_ok && et_ok {
+            let mut result = ResultEntry {
+                write: Some("OK".into()),
+                wkey: Some(wkey),
+                write_ox_val: ox_val.clone(),
+                write_et_val: et_val.clone(),
+                ..Default::default()
+            };
+            if let Some(k) = ox_key_used {
+                result.write_ox_key = Some(k);
+                result.bug_cluster = Some("R4-registry-asymmetry".into());
+            }
+            let new_warnings: HashSet<String> = exiftool_validate_warnings(tools, &img)
+                .difference(ctx.base_validate_warnings)
+                .cloned()
+                .collect();
+            let real_warnings: Vec<&String> = new_warnings
+                .iter()
+                .filter(|w| NONSTANDARD_WARNING_MARKERS.iter().any(|m| w.contains(m)))
+                .collect();
+            if !real_warnings.is_empty() {
+                result.write_quality = Some("nonstandard".into());
+                let mut sorted: Vec<&str> = real_warnings.iter().map(|s| s.as_str()).collect();
+                sorted.sort();
+                result.write_warnings = Some(sorted.join("; ").chars().take(200).collect());
+            }
+            return result;
+        }
+
+        if ox_unchanged && et_unchanged {
+            res = ResultEntry {
+                write: Some("NOT_WRITTEN".into()),
+                wkey: Some(wkey),
+                detail: Some("silent no-op: value unchanged from pristine base fixture".into()),
+                ..Default::default()
+            };
+            continue;
+        }
+        if et_ok && !ox_ok {
+            res = ResultEntry {
+                write: Some("READBACK_BROKEN".into()),
+                wkey: Some(wkey),
+                detail: Some(format!("exiftool sees {et_val:?}, oxidex sees {ox_val:?}")),
+                ..Default::default()
+            };
+        } else if ox_ok && !et_ok {
+            res = ResultEntry {
+                write: Some("INTEROP_BROKEN".into()),
+                wkey: Some(wkey),
+                detail: Some(format!("oxidex reads back {ox_val:?} but exiftool sees {et_val:?}")),
+                ..Default::default()
+            };
+        } else if ox_val.is_some() || et_val.is_some() {
+            res = ResultEntry {
+                write: Some("VALUE_MISMATCH".into()),
+                wkey: Some(wkey),
+                detail: Some(format!("wrote {sample:?}; oxidex={ox_val:?} exiftool={et_val:?}")),
+                ..Default::default()
+            };
+        } else {
+            res = ResultEntry {
+                write: Some("NOT_WRITTEN".into()),
+                wkey: Some(wkey),
+                detail: Some(format!(
+                    "exit 0 but tag absent on read-back; stderr: {}",
+                    errtext.chars().take(150).collect::<String>()
+                )),
+                ..Default::default()
+            };
+        }
+    }
+    res
+}
+
 #[cfg(test)]
 mod key_mapping_tests {
     use super::*;
@@ -1011,5 +1353,265 @@ mod run_cmd_tests {
         assert_eq!(code, 0, "expected clean exit, got stderr={err:?}");
         assert_eq!(out.len(), n, "expected full {n}-byte output to be captured, got {} bytes", out.len());
         assert_ne!(err, "TIMEOUT", "run_cmd incorrectly reported a timeout on large stdout output");
+    }
+}
+
+#[cfg(test)]
+mod write_phase_tests {
+    use super::*;
+    use crate::types::ManifestTag;
+    use serde_json::json;
+
+    /// All scenarios below share group=ExifIFD name=ISO sample="400" and a
+    /// pristine base fixture value of "100", so each fake-tool script only
+    /// has to encode one canned post-write JSON response.
+    fn iso_tag() -> ManifestTag {
+        ManifestTag {
+            group: "ExifIFD".into(),
+            name: "ISO".into(),
+            family0: "EXIF".into(),
+            writable: true,
+            vtype: "int16u".into(),
+            protected: false,
+            flags: None,
+            count: None,
+            sample: Some("400".into()),
+            sample_is_file: None,
+            noop: None,
+        }
+    }
+
+    fn base_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
+        let td = tempfile::tempdir().unwrap();
+        let base = td.path().join("base.jpg");
+        std::fs::write(&base, b"fake").unwrap();
+        (td, base)
+    }
+
+    const FIXTURE_DIR: &str = "tests/fixtures/jpeg-tag-matrix";
+
+    #[test]
+    fn ok_write_readback_matches_both_sides() {
+        let (_td, base) = base_fixture();
+        let tools = Tools {
+            oxidex: &format!("{FIXTURE_DIR}/fake-oxidex-write-ok.sh"),
+            exiftool: &format!("{FIXTURE_DIR}/fake-exiftool-write-ok.sh"),
+        };
+        let base_ox = json!({"ExifIFD:ISO": "100"});
+        let base_et = json!({"ExifIFD:ISO": "100"});
+        let base_warnings = HashSet::new();
+        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
+        assert_eq!(r.write.as_deref(), Some("OK"));
+        assert_eq!(r.write_ox_val.as_deref(), Some("400"));
+        assert_eq!(r.write_et_val.as_deref(), Some("400"));
+        assert!(r.bug_cluster.is_none());
+        assert!(r.write_quality.is_none());
+    }
+
+    #[test]
+    fn ok_write_with_nonstandard_validate_warning_sets_write_quality() {
+        let (_td, base) = base_fixture();
+        let tools = Tools {
+            oxidex: &format!("{FIXTURE_DIR}/fake-oxidex-write-ok.sh"),
+            exiftool: &format!("{FIXTURE_DIR}/fake-exiftool-write-ok-warn.sh"),
+        };
+        let base_ox = json!({"ExifIFD:ISO": "100"});
+        let base_et = json!({"ExifIFD:ISO": "100"});
+        let base_warnings = HashSet::new();
+        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
+        assert_eq!(r.write.as_deref(), Some("OK"));
+        assert_eq!(r.write_quality.as_deref(), Some("nonstandard"));
+        assert!(r.write_warnings.as_deref().unwrap().contains("Non-standard count"));
+    }
+
+    #[test]
+    fn silent_noop_detected_against_pristine_base_value() {
+        let (_td, base) = base_fixture();
+        let tools = Tools {
+            oxidex: &format!("{FIXTURE_DIR}/fake-oxidex-write-noop.sh"),
+            exiftool: &format!("{FIXTURE_DIR}/fake-exiftool-write-noop.sh"),
+        };
+        let base_ox = json!({"ExifIFD:ISO": "100"});
+        let base_et = json!({"ExifIFD:ISO": "100"});
+        let base_warnings = HashSet::new();
+        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
+        assert_eq!(r.write.as_deref(), Some("NOT_WRITTEN"));
+        assert!(r.detail.unwrap().contains("silent no-op"));
+    }
+
+    #[test]
+    fn oxidex_write_error_reported_verbatim() {
+        let (_td, base) = base_fixture();
+        let tools = Tools {
+            oxidex: &format!("{FIXTURE_DIR}/fake-oxidex-write-error.sh"),
+            exiftool: &format!("{FIXTURE_DIR}/fake-exiftool-write-ok.sh"),
+        };
+        let base_ox = json!({"ExifIFD:ISO": "100"});
+        let base_et = json!({"ExifIFD:ISO": "100"});
+        let base_warnings = HashSet::new();
+        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
+        assert_eq!(r.write.as_deref(), Some("ERROR"));
+        assert!(r.detail.unwrap().contains("Error: cannot write tag"));
+    }
+
+    #[test]
+    fn corrupted_output_file_reported_as_corrupts_file() {
+        let (_td, base) = base_fixture();
+        let tools = Tools {
+            oxidex: &format!("{FIXTURE_DIR}/fake-oxidex-write-ok.sh"),
+            exiftool: &format!("{FIXTURE_DIR}/fake-exiftool-write-empty.sh"),
+        };
+        let base_ox = json!({"ExifIFD:ISO": "100"});
+        let base_et = json!({"ExifIFD:ISO": "100"});
+        let base_warnings = HashSet::new();
+        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
+        assert_eq!(r.write.as_deref(), Some("CORRUPTS_FILE"));
+    }
+
+    #[test]
+    fn registry_asymmetry_fallback_finds_value_under_raw_key() {
+        let (_td, base) = base_fixture();
+        let tools = Tools {
+            oxidex: &format!("{FIXTURE_DIR}/fake-oxidex-write-fallback.sh"),
+            exiftool: &format!("{FIXTURE_DIR}/fake-exiftool-write-ok.sh"),
+        };
+        let base_ox = json!({"ExifIFD:ISO": "100"});
+        let base_et = json!({"ExifIFD:ISO": "100"});
+        let base_warnings = HashSet::new();
+        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
+        assert_eq!(r.write.as_deref(), Some("OK"));
+        assert_eq!(r.write_ox_key.as_deref(), Some("ExifIFD:0x8827"));
+        assert_eq!(r.bug_cluster.as_deref(), Some("R4-registry-asymmetry"));
+    }
+
+    #[test]
+    fn readback_broken_when_exiftool_ok_but_oxidex_missing_no_fallback() {
+        let (_td, base) = base_fixture();
+        let tools = Tools {
+            oxidex: &format!("{FIXTURE_DIR}/fake-oxidex-write-missing.sh"),
+            exiftool: &format!("{FIXTURE_DIR}/fake-exiftool-write-ok.sh"),
+        };
+        let base_ox = json!({"ExifIFD:ISO": "100"});
+        let base_et = json!({"ExifIFD:ISO": "100"});
+        let base_warnings = HashSet::new();
+        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
+        assert_eq!(r.write.as_deref(), Some("READBACK_BROKEN"));
+    }
+
+    #[test]
+    fn interop_broken_when_oxidex_ok_but_exiftool_disagrees() {
+        let (_td, base) = base_fixture();
+        let tools = Tools {
+            oxidex: &format!("{FIXTURE_DIR}/fake-oxidex-write-ok.sh"),
+            exiftool: &format!("{FIXTURE_DIR}/fake-exiftool-write-mismatch.sh"),
+        };
+        let base_ox = json!({"ExifIFD:ISO": "100"});
+        let base_et = json!({"ExifIFD:ISO": "100"});
+        let base_warnings = HashSet::new();
+        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
+        assert_eq!(r.write.as_deref(), Some("INTEROP_BROKEN"));
+    }
+
+    #[test]
+    fn value_mismatch_when_both_sides_disagree_with_sample() {
+        let (_td, base) = base_fixture();
+        let tools = Tools {
+            oxidex: &format!("{FIXTURE_DIR}/fake-oxidex-write-mismatch.sh"),
+            exiftool: &format!("{FIXTURE_DIR}/fake-exiftool-write-mismatch.sh"),
+        };
+        let base_ox = json!({"ExifIFD:ISO": "100"});
+        let base_et = json!({"ExifIFD:ISO": "100"});
+        let base_warnings = HashSet::new();
+        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
+        assert_eq!(r.write.as_deref(), Some("VALUE_MISMATCH"));
+    }
+}
+
+#[cfg(test)]
+mod bug_classification_post_process_tests {
+    use super::*;
+    use crate::types::ResultEntry;
+
+    fn entry() -> ResultEntry {
+        ResultEntry { group: "EXIF".into(), name: "SomeTag".into(), sample: "x".into(), ..Default::default() }
+    }
+
+    #[test]
+    fn unclassifiable_read_mismatch_becomes_mismatch_format() {
+        let mut e = entry();
+        e.read = Some("MISMATCH".into());
+        e.ox_val = Some("totally different".into());
+        e.vtype = Some("string".into());
+        let mut results = HashMap::new();
+        results.insert("k".to_string(), e);
+        apply_bug_classification(&mut results);
+        let r = &results["k"];
+        assert_eq!(r.read.as_deref(), Some("MISMATCH_FORMAT"));
+        assert!(r.read_note.is_some());
+        assert!(r.read_bug.is_none());
+    }
+
+    #[test]
+    fn classifiable_read_mismatch_keeps_mismatch_and_sets_read_bug() {
+        let mut e = entry();
+        e.name = "ApertureValue".into();
+        e.read = Some("MISMATCH".into());
+        e.ox_val = Some("4.0".into());
+        e.vtype = Some("rational64u".into());
+        let mut results = HashMap::new();
+        results.insert("k".to_string(), e);
+        apply_bug_classification(&mut results);
+        let r = &results["k"];
+        assert_eq!(r.read.as_deref(), Some("MISMATCH"));
+        assert_eq!(r.read_bug.as_deref(), Some("R-apex-missing"));
+        assert!(r.read_note.is_none());
+    }
+
+    #[test]
+    fn interop_broken_gets_bug_cluster_when_name_matches() {
+        let mut e = entry();
+        e.name = "GPSSpeedRef".into();
+        e.write = Some("INTEROP_BROKEN".into());
+        let mut results = HashMap::new();
+        results.insert("k".to_string(), e);
+        apply_bug_classification(&mut results);
+        assert_eq!(results["k"].bug_cluster.as_deref(), Some("I1-no-printconvinv"));
+    }
+
+    #[test]
+    fn interop_broken_does_not_overwrite_existing_bug_cluster() {
+        let mut e = entry();
+        e.name = "GPSSpeedRef".into();
+        e.write = Some("INTEROP_BROKEN".into());
+        e.bug_cluster = Some("R4-registry-asymmetry".into());
+        let mut results = HashMap::new();
+        results.insert("k".to_string(), e);
+        apply_bug_classification(&mut results);
+        assert_eq!(results["k"].bug_cluster.as_deref(), Some("R4-registry-asymmetry"));
+    }
+
+    #[test]
+    fn read_and_write_axes_are_classified_independently() {
+        let mut e = entry();
+        e.name = "GPSSpeedRef".into();
+        e.read = Some("MISMATCH".into());
+        e.ox_val = Some("unrelated".into());
+        e.vtype = Some("string".into());
+        e.write = Some("INTEROP_BROKEN".into());
+        let mut results = HashMap::new();
+        results.insert("k".to_string(), e);
+        apply_bug_classification(&mut results);
+        let r = &results["k"];
+        assert_eq!(r.read.as_deref(), Some("MISMATCH_FORMAT"));
+        assert_eq!(r.bug_cluster.as_deref(), Some("I1-no-printconvinv"));
     }
 }
