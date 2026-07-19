@@ -111,6 +111,47 @@ pub fn parse_listx(xml: &str) -> Result<Vec<TagRecord>> {
     Ok(tags)
 }
 
+/// Routes an ExifTool table name (e.g. `Canon::AFConfig`, `Exif::Main`) to
+/// the `oxidex-tags-*` domain crate that should own it. Matching is
+/// case-insensitive: `-listx` table names use ExifTool's own mixed casing
+/// (`Exif`, `Jpeg2000`), which does not consistently match any single case
+/// convention.
+pub fn get_domain_for_table(table_name: &str) -> &'static str {
+    let base_name = table_name.split("::").next().unwrap_or(table_name);
+    match base_name.to_ascii_uppercase().as_str() {
+        "EXIF" | "XMP" | "IPTC" | "GPS" | "ICC_PROFILE" | "MWG" | "PHOTOSHOP" | "FLASHPIX"
+        | "GEOTIFF" | "COMPOSITE" | "TRAILER" | "MAKERNOTES" => "core",
+
+        "CANON" | "CANONCUSTOM" | "CANONRAW" | "NIKON" | "NIKONCAPTURE" | "NIKONCUSTOM"
+        | "NIKONSETTINGS" | "SONY" | "SONYIDC" | "PANASONIC" | "PANASONICRAW" | "OLYMPUS"
+        | "FUJIFILM" | "PENTAX" | "CASIO" | "MINOLTA" | "MINOLTARAW" | "RICOH" | "SIGMA"
+        | "SIGMARAW" | "PHASEONE" | "KODAK" | "KYOCERARAW" | "SAMSUNG" | "SANYO" | "HP" | "GE"
+        | "RECONYX" | "JVC" | "MOTOROLA" | "APPLE" | "DJI" | "GOPRO" | "PARROT" | "INFIRAY"
+        | "FLIR" => "camera",
+
+        "QUICKTIME" | "MATROSKA" | "MPEG" | "M2TS" | "MXF" | "FLAC" | "AAC" | "AIFF" | "VORBIS"
+        | "OPUS" | "ID3" | "APE" | "ASF" | "FLASH" | "REAL" | "THEORA" | "H264" | "WAVPACK"
+        | "MPC" | "DSF" | "WTV" => "media",
+
+        "PNG" | "GIF" | "JPEG" | "JPEG2000" | "BMP" | "TIFF" | "DNG" | "MNG" | "PGF" | "PICT"
+        | "OPENEXR" | "FLIF" | "BPG" | "WEBP" | "DPX" | "PSP" | "PCX" | "MIFF" | "PHOTOCD"
+        | "ICO" | "PALM" => "image",
+
+        "PDF" | "POSTSCRIPT" | "FONT" | "PLIST" | "HTML" | "TORRENT" | "ZIP" | "TNEF" | "VCARD"
+        | "MICROSOFT" | "MACOS" | "EXE" | "LNK" | "RSRC" | "FOTOSTATION" | "PHOTOMECHANIC"
+        | "ITC" | "GIMP" | "GM" | "GOOGLE" => "document",
+
+        "DICOM" | "FITS" | "MRC" | "STIM" | "PCAP" | "XISF" | "MISB" | "DJVU" | "ISO"
+        | "NINTENDO" => "specialty",
+
+        _ => "core",
+    }
+}
+
+/// The six `oxidex-tags-*` domain crates, in the order YAML files are
+/// written.
+pub const DOMAINS: [&str; 6] = ["core", "camera", "media", "image", "document", "specialty"];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +215,32 @@ mod tests {
     fn rejects_malformed_xml() {
         let result = parse_listx("<taginfo><table name='X'><tag id='1'");
         assert!(result.is_err(), "truncated XML must return an error, not panic");
+    }
+
+    #[test]
+    fn routes_core_standards_case_insensitively() {
+        assert_eq!(get_domain_for_table("Exif::Main"), "core");
+        assert_eq!(get_domain_for_table("GPS::Main"), "core");
+        assert_eq!(get_domain_for_table("Composite"), "core");
+        assert_eq!(get_domain_for_table("ICC_Profile::Main"), "core");
+    }
+
+    #[test]
+    fn routes_camera_makernotes() {
+        assert_eq!(get_domain_for_table("Canon::AFConfig"), "camera");
+        assert_eq!(get_domain_for_table("Nikon::Main"), "camera");
+    }
+
+    #[test]
+    fn routes_media_and_image_and_document_and_specialty() {
+        assert_eq!(get_domain_for_table("QuickTime::Main"), "media");
+        assert_eq!(get_domain_for_table("Jpeg2000::Main"), "image");
+        assert_eq!(get_domain_for_table("PDF::Main"), "document");
+        assert_eq!(get_domain_for_table("DICOM::Main"), "specialty");
+    }
+
+    #[test]
+    fn routes_unknown_tables_to_core_by_default() {
+        assert_eq!(get_domain_for_table("SomeBrandNewVendor::Main"), "core");
     }
 }
