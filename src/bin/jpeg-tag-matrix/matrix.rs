@@ -671,9 +671,7 @@ pub fn find_same_group_fallback<'a>(
     let prefix = format!("{}:", tag.group);
     if let Some(obj) = data.as_object() {
         for (key, v) in obj {
-            if key.starts_with(&prefix)
-                && v.as_str().map(|s| values_match(sample, s)).unwrap_or(false)
-            {
+            if key.starts_with(&prefix) && values_match(sample, &value_to_str(v)) {
                 return (Some(key.clone()), Some(v));
             }
         }
@@ -1291,6 +1289,24 @@ mod key_mapping_tests {
         let t = tag("XMP-exif", "ColorSpace");
         assert_eq!(find_in_exiftool_json(&data, &t, true), None);
         assert_eq!(find_in_exiftool_json(&data, &t, false), Some(&json!("1")));
+    }
+
+    /// Regression test: `find_same_group_fallback` used to call
+    /// `v.as_str()` directly, which returns `None` for any JSON value that
+    /// isn't already a JSON string -- so a candidate emitted as a JSON
+    /// number (e.g. real `oxidex -j -e` output for `IPTC:BitsPerComponent`)
+    /// was silently skipped even when its stringified form matched the
+    /// sample. This mirrors the confirmed real-world case where
+    /// `IPTC:ApplicationRecordVersion`'s sample `"3"` should coincidentally
+    /// match a same-group `BitsPerComponent` candidate serialized as the
+    /// JSON integer `3`.
+    #[test]
+    fn find_same_group_fallback_matches_json_numeric_value() {
+        let data = json!({"IPTC:BitsPerComponent": 3});
+        let t = tag("IPTC", "ApplicationRecordVersion");
+        let (k, v) = find_same_group_fallback(&data, &t, "3");
+        assert_eq!(k.as_deref(), Some("IPTC:BitsPerComponent"));
+        assert_eq!(v, Some(&json!(3)));
     }
 }
 
