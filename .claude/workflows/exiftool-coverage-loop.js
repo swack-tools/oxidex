@@ -77,8 +77,12 @@ function findGapsPrompt() {
     `This builds the tag-comparison binary, downloads or reuses a cached ExifTool release plus its t/images ` +
     `test corpus and camera sample set, and writes comparison.json in the repo root. Read comparison.json and ` +
     `return its contents as your structured output verbatim: the by_format map keyed by format name, each ` +
-    `with missing_in_oxidex, value_differences, and regressions. Do not modify or commit anything -- this is ` +
-    `a read-only discovery step.`
+    `with missing_in_oxidex, value_differences, and regressions. If a format's missing_in_oxidex or ` +
+    `value_differences array is large (roughly 50+ entries), truncate it to a representative sample and set ` +
+    `the corresponding missing_in_oxidex_truncated / value_differences_truncated to true and ` +
+    `missing_in_oxidex_total_count / value_differences_total_count to the real total count -- don't silently ` +
+    `truncate without those markers, since downstream consumers rely on them to know the list isn't ` +
+    `exhaustive. Do not modify or commit anything -- this is a read-only discovery step.`
 }
 
 phase('Find')
