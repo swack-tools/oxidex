@@ -127,6 +127,14 @@ fn tag_value_to_field(value: &TagValue, hint: Option<u16>) -> Result<(u16, u32, 
                 Some(3) if (0..=0xFFFF).contains(&i) => {
                     Ok((3, 1, (i as u16).to_ne_bytes().to_vec()))
                 }
+                Some(4) if (0..=0xFFFF_FFFF).contains(&i) => {
+                    Ok((4, 1, (i as u32).to_ne_bytes().to_vec()))
+                }
+                Some(9) if (i32::MIN as i64..=i32::MAX as i64).contains(&i) => {
+                    Ok((9, 1, (i as i32).to_ne_bytes().to_vec()))
+                }
+                // No hint, or value doesn't fit the hinted type: pick the
+                // smallest TIFF integer type that fits
                 _ if (0..=0xFFFF).contains(&i) => Ok((3, 1, (i as u16).to_ne_bytes().to_vec())),
                 _ if (0..=0xFFFF_FFFF).contains(&i) => {
                     Ok((4, 1, (i as u32).to_ne_bytes().to_vec()))
@@ -292,12 +300,25 @@ pub fn plan_exif_write(
             count,
             value: bytes,
         };
-        // Route by prefix; "EXIF:" keys land in IFD0 (compat with the old writer)
+        // Route by prefix; "EXIF:" keys land in IFD0 (compat with the old writer).
+        // Guard against duplicate tag ids: aliased keys (e.g. "IFD0:Make" and
+        // "EXIF:Make") resolve to the same numeric tag id via get_tag_descriptor's
+        // prefix normalization but are distinct MetadataMap keys, so consumed_keys
+        // (tracked by literal key string) cannot catch the collision.
         if key.starts_with("ExifIFD:") {
+            if plan.exif_ifd.iter().any(|e| e.tag_id == tag_id) {
+                continue;
+            }
             plan.exif_ifd.push(out);
         } else if key.starts_with("GPS:") {
+            if plan.gps.iter().any(|e| e.tag_id == tag_id) {
+                continue;
+            }
             plan.gps.push(out);
         } else {
+            if plan.ifd0.iter().any(|e| e.tag_id == tag_id) {
+                continue;
+            }
             plan.ifd0.push(out);
         }
     }
@@ -788,5 +809,40 @@ mod tests {
         let plan = plan_exif_write(&scan, &original, &desired).unwrap();
         assert!(plan.ifd0.is_empty() && plan.exif_ifd.is_empty() && plan.gps.is_empty());
         assert!(plan.ifd1.is_empty() && plan.thumbnail.is_none());
+    }
+
+    #[test]
+    fn plan_deduplicates_alias_keys_for_same_tag() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        // Same tag under both its native key and the EXIF: alias
+        desired.insert("EXIF:Make", TagValue::new_string("Canon"));
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let make_count = plan.ifd0.iter().filter(|e| e.tag_id == 0x010F).count();
+        assert_eq!(
+            make_count, 1,
+            "must not emit duplicate entries for the same tag id"
+        );
+    }
+
+    #[test]
+    fn plan_preserves_long_type_hint_for_small_value() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        // Orientation is stored SHORT in the fixture; use tag_value_to_field
+        // directly to test the LONG-hint path in isolation
+        let (field_type, _count, _bytes) =
+            tag_value_to_field(&TagValue::new_integer(5), Some(4)).unwrap();
+        assert_eq!(
+            field_type, 4,
+            "a LONG-hinted small value must stay LONG, not downcast to SHORT"
+        );
+        let (field_type_short, _, _) =
+            tag_value_to_field(&TagValue::new_integer(5), Some(3)).unwrap();
+        assert_eq!(field_type_short, 3);
+        let (field_type_none, _, _) = tag_value_to_field(&TagValue::new_integer(5), None).unwrap();
+        assert_eq!(field_type_none, 3, "no hint: smallest-fit still applies");
+        let _ = (scan, original); // silence unused if not otherwise referenced
     }
 }
