@@ -262,6 +262,37 @@ pub fn plan_exif_write(
         return Ok(plan);
     }
 
+    // Normalize "EXIF:"-prefixed aliases onto their native per-entry key so
+    // the per-entry loop below (which looks up `desired` by the reader's
+    // literal key, e.g. "IFD0:Make") sees edits made via the alias spelling
+    // (e.g. "EXIF:Make", the CLI's own documented -EXIF:Tag=value syntax)
+    // instead of silently missing them. Only folds when the native key is
+    // itself untouched in `desired` -- if the caller already staged an
+    // explicit (different) value under the native key, that explicit value
+    // wins and the alias is left for the pre-existing duplicate-tag-id guard
+    // in the Added loop below to reconcile (skip if equal, once serialized).
+    let mut desired = desired.clone();
+    for entry in &scan.entries {
+        if matches!(entry.ifd, IfdKind::Interop | IfdKind::Ifd1) || entry.tag_id == MAKERNOTE {
+            continue;
+        }
+        let native_key = lookup_tag_name(entry.tag_id, entry.ifd.prefix());
+        let Some((_, suffix)) = native_key.split_once(':') else {
+            continue;
+        };
+        let alias_key = format!("EXIF:{}", suffix);
+        if alias_key == native_key {
+            continue;
+        }
+        if let Some(alias_value) = desired.get(&alias_key).cloned() {
+            let native_untouched = desired.get(&native_key) == original_map.get(&native_key);
+            if native_untouched {
+                desired.insert(native_key, alias_value);
+            }
+        }
+    }
+    let desired = &desired;
+
     plan.thumbnail = scan.thumbnail.clone();
     plan.makernote_pin = scan.makernote_offset;
 
@@ -286,9 +317,28 @@ pub fn plan_exif_write(
             native_endian: false,
         };
 
-        // Unsurfaced classes: always carry
+        // Unsurfaced classes: always carry, UNLESS the caller genuinely
+        // removed the tag (its reader-equivalent key was present in
+        // original_map but is now absent from desired). Carrying it
+        // unconditionally in that case would make remove_tag silently no-op
+        // while still reporting success -- error loudly instead. Keys that
+        // were never surfaced by the reader in the first place (absent from
+        // original_map too) are unaffected and stay silently carried, which
+        // is correct: the caller never had a chance to remove what it never
+        // saw.
         if matches!(entry.ifd, IfdKind::Interop | IfdKind::Ifd1) || entry.tag_id == MAKERNOTE {
-            carried_reader_keys.extend(carried_class_reader_keys(entry));
+            let reader_keys = carried_class_reader_keys(entry);
+            for reader_key in &reader_keys {
+                if original_map.contains_key(reader_key) && !desired.contains_key(reader_key) {
+                    return Err(ExifToolError::unsupported_format(format!(
+                        "Removing tag '{}' is not yet supported: it belongs to an \
+                         unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
+                         writer always raw-carries",
+                        reader_key
+                    )));
+                }
+            }
+            carried_reader_keys.extend(reader_keys);
             bucket(&mut plan, carry);
             continue;
         }
@@ -1371,6 +1421,47 @@ mod tests {
         assert_eq!(
             make_count, 1,
             "must not emit duplicate entries for the same tag id"
+        );
+    }
+
+    #[test]
+    fn plan_edit_via_exif_alias_is_applied_not_dropped() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        // Caller edits via the "EXIF:" alias while the native key is untouched
+        desired.insert("EXIF:Make", TagValue::new_string("Nikon"));
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let make_entries: Vec<_> = plan.ifd0.iter().filter(|e| e.tag_id == 0x010F).collect();
+        assert_eq!(make_entries.len(), 1, "must not duplicate the tag");
+        assert_eq!(
+            make_entries[0].value, b"Nikon\0",
+            "the alias edit must actually be applied"
+        );
+    }
+
+    #[test]
+    fn plan_removing_interop_key_errors_instead_of_silent_noop() {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/jpeg/makernotes/canon_sample.jpg"
+        ))
+        .unwrap();
+        let tiff = super::super::exif_surgical_test_support::tiff_slice(&bytes).to_vec();
+        let scan = scan_exif_entries(&tiff).unwrap();
+        let reader = SliceReader(&bytes);
+        let original = crate::core::operations::parse_jpeg_metadata(&reader).unwrap();
+        assert!(
+            original.get("ExifIFD:0x927C").is_some(),
+            "fixture must surface the MakerNote hex-fallback key"
+        );
+        let mut desired = original.clone();
+        desired.remove("ExifIFD:0x927C"); // caller intends to remove the MakerNote
+        let err = plan_exif_write(&scan, &original, &desired).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("not"),
+            "got: {}",
+            err
         );
     }
 

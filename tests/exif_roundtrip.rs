@@ -145,6 +145,35 @@ fn clear_all_metadata_drops_exif_entirely() {
 }
 
 #[test]
+fn cli_edit_via_exif_alias_actually_changes_the_value() {
+    let (_d, path) = temp_copy(&fixture("sample_with_exif.jpg"), "alias_edit.jpg");
+    let before = read_metadata(&path).unwrap();
+    let original_make = before
+        .get("IFD0:Make")
+        .and_then(|v| v.as_string())
+        .map(str::to_string);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg("-EXIF:Make=Nikon")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let after = read_metadata(&path).unwrap();
+    assert_eq!(
+        after.get("IFD0:Make").and_then(|v| v.as_string()),
+        Some("Nikon"),
+        "the edit via the EXIF: alias must actually take effect, not silently no-op (was: {:?})",
+        original_make
+    );
+}
+
+#[test]
 fn cli_tag_write_on_real_gps_jpeg() {
     let (_d, path) = temp_copy(&fixture("complex/synthetic_gps_001.jpg"), "cli_write.jpg");
     let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
