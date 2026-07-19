@@ -11,14 +11,19 @@
 //! the MakerNotes blob keeps its original offset so manufacturer-internal
 //! absolute offsets stay valid.
 
+use crate::core::FileReader;
 use crate::core::metadata_map::MetadataMap;
 use crate::core::operations_helpers::{read_u16, read_u32};
 use crate::core::tag_value::TagValue;
 use crate::core::validation::{validate_tag_value_intrinsics, validate_tag_value_with_name};
 use crate::error::{ExifToolError, Result};
+use crate::parsers::jpeg::parse_segments;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::tag_db::lookup_tag_name;
 use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
+
+/// EXIF identifier at the start of an EXIF APP1 segment
+const EXIF_IDENTIFIER: &[u8] = b"Exif\0\0";
 
 /// IFD0 tag pointing to the ExifIFD
 const EXIF_IFD_POINTER: u16 = 0x8769;
@@ -287,6 +292,22 @@ pub fn plan_exif_write(
     // Added: desired EXIF-family keys not matched to any original entry
     for key in exif_family_keys(desired) {
         if consumed_keys.iter().any(|k| *k == key) {
+            continue;
+        }
+        // Keys the reader already surfaced from an "unsurfaced" (always-carry)
+        // class — e.g. InteropIFD tags reported under the "EXIF:" prefix by
+        // parse_interop_subifd — are not tracked in consumed_keys (their raw
+        // entries never enter the per-key diff loop above) but are already
+        // preserved byte-for-byte by the unconditional carry. Treat them as
+        // handled rather than misreading them as brand-new tags: they often
+        // aren't even registered under this literal prefix (e.g.
+        // "EXIF:InteropIndex"), and even when they are, the reader's display
+        // form (e.g. "R98 - DCF basic file (sRGB)") is not the raw type the
+        // registry expects, so re-adding them would fail validation or
+        // corrupt the carried bytes. This is a known limitation: unsurfaced
+        // classes are preserved as-is but not yet independently editable
+        // through this path.
+        if original_map.contains_key(&key) {
             continue;
         }
         let value = desired.get(&key).unwrap();
@@ -804,6 +825,73 @@ pub fn serialize_exif(plan: &WritePlan) -> Result<Vec<u8>> {
     }
 
     Ok(out)
+}
+
+/// A FileReader over an in-memory byte slice (same shape as exif_inplace's).
+struct SliceReader<'a>(&'a [u8]);
+
+impl FileReader for SliceReader<'_> {
+    fn read(&self, offset: u64, length: usize) -> std::io::Result<&[u8]> {
+        let start = offset as usize;
+        let end = start.checked_add(length).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "read overflow")
+        })?;
+        if end > self.0.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "read beyond end of buffer",
+            ));
+        }
+        Ok(&self.0[start..end])
+    }
+    fn size(&self) -> u64 {
+        self.0.len() as u64
+    }
+}
+
+/// Builds the new EXIF APP1 segment data ("Exif\0\0" + TIFF) for a JPEG,
+/// preserving everything the caller did not change. Returns an empty Vec
+/// when the EXIF segment should be dropped entirely.
+pub fn rewrite_jpeg_exif(file_bytes: &[u8], desired: &MetadataMap) -> Result<Vec<u8>> {
+    // Locate the original EXIF TIFF slice, if any
+    let tiff: Option<Vec<u8>> = {
+        let reader = SliceReader(file_bytes);
+        let segments = parse_segments(&reader)?;
+        segments
+            .iter()
+            .find(|s| s.is_app1() && s.data.starts_with(EXIF_IDENTIFIER))
+            .map(|s| s.data[EXIF_IDENTIFIER.len()..].to_vec())
+    };
+
+    let (scan, original_map) = match &tiff {
+        Some(tiff_bytes) => {
+            let scan = scan_exif_entries(tiff_bytes)?;
+            // The exact reader the diff must mirror: parse the whole JPEG the
+            // same way read_metadata does (includes tag-name normalization)
+            let reader = SliceReader(file_bytes);
+            let original_map = crate::core::operations::parse_jpeg_metadata(&reader)?;
+            (scan, original_map)
+        }
+        None => (
+            ExifScan {
+                byte_order: ByteOrder::LittleEndian,
+                entries: Vec::new(),
+                thumbnail: None,
+                makernote_offset: None,
+            },
+            MetadataMap::new(),
+        ),
+    };
+
+    let plan = plan_exif_write(&scan, &original_map, desired)?;
+    let tiff_out = serialize_exif(&plan)?;
+    if tiff_out.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut segment = Vec::with_capacity(EXIF_IDENTIFIER.len() + tiff_out.len());
+    segment.extend_from_slice(EXIF_IDENTIFIER);
+    segment.extend_from_slice(&tiff_out);
+    Ok(segment)
 }
 
 #[cfg(test)]
