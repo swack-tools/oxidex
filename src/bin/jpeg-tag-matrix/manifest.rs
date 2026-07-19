@@ -279,16 +279,68 @@ const FILE_SAMPLES: &[(&str, &str)] = &[
 ];
 
 /// Write-test suspect tags (MakerNote*/Photoshop/JFIF) against the base
-/// fixture and mark silent no-ops with `noop: true`. This is a wiring-only
-/// stub: the behavioral write-test itself is implemented in a later task.
+/// fixture and mark silent no-ops with `noop: true`.
+///
+/// This performs a REAL write test per suspect tag: copy the base fixture,
+/// shell out to `exiftool -overwrite_original -{group}:{name}={sample} dst`
+/// (or `<=` for file-path samples), and check whether exiftool's own stdout
+/// reports "1 image files updated". If it doesn't, the write was a silent
+/// no-op (a tag `-listx` claims is writable but which exiftool actually
+/// leaves untouched), so we flag it. This is intentionally NOT static
+/// parsing -- it is a faithful port of
+/// `scripts/generate_exiftool_manifest.py:183-211`'s `flag_noops()`.
 fn flag_noops(
     manifest: &mut ManifestFile,
-    _ver: &str,
-    _exiftool: &str,
-    _base_fixture: &Path,
-    _work: &Path,
+    exiftool_ver: &str,
+    exiftool: &str,
+    base_fixture: &Path,
+    work: &Path,
 ) -> anyhow::Result<()> {
-    let _ = manifest;
+    let suspects: Vec<usize> = manifest
+        .tags
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| {
+            (t.name.starts_with("MakerNote") && t.family0 == "EXIF")
+                || t.family0 == "Photoshop"
+                || t.family0 == "JFIF"
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    let mut noop_count = 0;
+    for &i in &suspects {
+        let (group, name, sample, sample_is_file) = {
+            let t = &manifest.tags[i];
+            (
+                t.group.clone(),
+                t.name.clone(),
+                t.sample.clone().unwrap_or_default(),
+                t.sample_is_file.unwrap_or(false),
+            )
+        };
+        let dst = work.join("noop_tmp.jpg");
+        std::fs::copy(base_fixture, &dst)?;
+        let op = if sample_is_file { "<=" } else { "=" };
+        let spec = format!("-{group}:{name}{op}{sample}");
+        let out = Command::new(exiftool)
+            .args(["-overwrite_original", &spec])
+            .arg(&dst)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if out.status.success() && stdout.contains("1 image files updated") {
+            manifest.tags[i].noop = None;
+        } else {
+            manifest.tags[i].noop = Some(true);
+            noop_count += 1;
+        }
+    }
+    manifest.noop_note = Some(format!(
+        "Tags with noop:true are listed writable by exiftool -listx but were \
+         behaviorally verified to be silent no-ops when written to a bare JPEG \
+         (exiftool {exiftool_ver})."
+    ));
+    println!("flag-noops: {} suspects tested, {noop_count} no-ops", suspects.len());
     Ok(())
 }
 
@@ -546,6 +598,106 @@ mod tests {
             make_sample("EXIF", "SomeWeirdTag", "unknowntype", &t, "ExifIFD"),
             "OxTest"
         );
+    }
+
+    #[test]
+    fn flag_noops_marks_failing_writes_as_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = dir.path().join("base.jpg");
+        std::fs::write(&fixture, b"fake jpeg bytes").unwrap();
+        let fake_exiftool = "tests/fixtures/jpeg-tag-matrix/fake-exiftool-fail.sh";
+
+        let mut manifest = ManifestFile {
+            generated_by: "test".into(),
+            description: "test".into(),
+            groups: Default::default(),
+            tag_count: 1,
+            tags: vec![ManifestTag {
+                group: "MakerNotes".into(),
+                name: "MakerNoteFoo".into(),
+                family0: "EXIF".into(),
+                writable: true,
+                vtype: "string".into(),
+                protected: false,
+                flags: None,
+                count: None,
+                sample: Some("x".into()),
+                sample_is_file: None,
+                noop: None,
+            }],
+            noop_note: None,
+        };
+        flag_noops(&mut manifest, "13.55", fake_exiftool, &fixture, dir.path()).unwrap();
+        assert_eq!(manifest.tags[0].noop, Some(true));
+        assert!(manifest.noop_note.unwrap().contains("13.55"));
+    }
+
+    #[test]
+    fn flag_noops_leaves_successful_writes_unmarked() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = dir.path().join("base.jpg");
+        std::fs::write(&fixture, b"fake jpeg bytes").unwrap();
+        let fake_exiftool = "tests/fixtures/jpeg-tag-matrix/fake-exiftool-noop.sh";
+
+        let mut manifest = ManifestFile {
+            generated_by: "test".into(),
+            description: "test".into(),
+            groups: Default::default(),
+            tag_count: 1,
+            tags: vec![ManifestTag {
+                group: "Photoshop".into(),
+                name: "IPTCDigest".into(),
+                family0: "Photoshop".into(),
+                writable: true,
+                vtype: "string".into(),
+                protected: false,
+                flags: None,
+                count: None,
+                sample: Some("new".into()),
+                sample_is_file: None,
+                noop: Some(true), // pre-set to verify it gets cleared on success
+            }],
+            noop_note: None,
+        };
+        flag_noops(&mut manifest, "13.55", fake_exiftool, &fixture, dir.path()).unwrap();
+        assert_eq!(manifest.tags[0].noop, None);
+    }
+
+    #[test]
+    fn flag_noops_only_tests_suspect_tags() {
+        // A non-suspect tag (EXIF family0, not MakerNote*) must not be
+        // touched at all -- not even copied/tested -- and must keep
+        // whatever noop value it already had.
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = dir.path().join("base.jpg");
+        std::fs::write(&fixture, b"fake jpeg bytes").unwrap();
+        // Intentionally non-executable/missing path: if flag_noops tried to
+        // invoke this as a command it would error out, proving the tag was
+        // (correctly) skipped as a non-suspect.
+        let fake_exiftool = "tests/fixtures/jpeg-tag-matrix/does-not-exist.sh";
+
+        let mut manifest = ManifestFile {
+            generated_by: "test".into(),
+            description: "test".into(),
+            groups: Default::default(),
+            tag_count: 1,
+            tags: vec![ManifestTag {
+                group: "ExifIFD".into(),
+                name: "ISO".into(),
+                family0: "EXIF".into(),
+                writable: true,
+                vtype: "int16u".into(),
+                protected: false,
+                flags: None,
+                count: None,
+                sample: Some("100".into()),
+                sample_is_file: None,
+                noop: None,
+            }],
+            noop_note: None,
+        };
+        flag_noops(&mut manifest, "13.55", fake_exiftool, &fixture, dir.path()).unwrap();
+        assert_eq!(manifest.tags[0].noop, None);
     }
 
     #[test]
