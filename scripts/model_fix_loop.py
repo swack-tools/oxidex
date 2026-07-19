@@ -191,3 +191,90 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
     closed = gap["gap_count"] - remaining
     git_commit_fn(f"fix({gap['format'].lower()}): wire {closed} missing tags (via {config['model']})", repo_root)
     return {"format": gap["format"], "status": "fixed", "gaps_closed": closed}
+
+
+def run_loop(config, find_gaps_fn, fix_gap_fn, max_dry_rounds=2):
+    """Loop-until-dry driver. Returns a summary dict.
+
+    A round is dry iff it closes zero gaps (not "discovers nothing new").
+    A format that fails twice across rounds is skipped for the rest of
+    the run.
+    """
+    skip_list = set()
+    fail_counts = {}
+    fixed, failed, skipped = [], [], []
+    dry_rounds = 0
+    round_num = 0
+
+    while dry_rounds < max_dry_rounds:
+        round_num += 1
+        gaps = [g for g in find_gaps_fn() if g["format"] not in skip_list]
+        if not gaps:
+            dry_rounds += 1
+            continue
+
+        closed_this_round = 0
+        for gap in gaps:
+            result = fix_gap_fn(gap, config)
+            if result["status"] == "fixed":
+                fixed.append(result)
+                closed_this_round += 1
+            else:
+                fail_counts[gap["format"]] = fail_counts.get(gap["format"], 0) + 1
+                if fail_counts[gap["format"]] >= 2:
+                    skip_list.add(gap["format"])
+                    skipped.append(gap["format"])
+                else:
+                    failed.append(result)
+
+        dry_rounds = 0 if closed_this_round else dry_rounds + 1
+
+    return {
+        "rounds": round_num,
+        "fixed": fixed,
+        "failed": failed,
+        "skipped": sorted(set(skipped)),
+    }
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base-url", default=os.environ.get("MODEL_FIX_BASE_URL"))
+    parser.add_argument("--api-key", default=os.environ.get("MODEL_FIX_API_KEY"))
+    parser.add_argument("--model", default=os.environ.get("MODEL_FIX_MODEL"))
+    parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
+    args = parser.parse_args(argv)
+
+    if not (args.base_url and args.api_key and args.model):
+        print(
+            "MODEL_FIX_BASE_URL, MODEL_FIX_API_KEY, and MODEL_FIX_MODEL "
+            "(or --base-url/--api-key/--model) are all required",
+            file=sys.stderr,
+        )
+        return 1
+
+    config = {"base_url": args.base_url, "api_key": args.api_key, "model": args.model}
+
+    def find_gaps_fn():
+        report_path = run_full_comparison(args.cache_dir)
+        return group_gaps_by_format(load_comparison_report(report_path))
+
+    def real_fix_gap(gap, cfg):
+        def recheck(fmt):
+            path = run_format_comparison(fmt, args.cache_dir)
+            regrouped = group_gaps_by_format(load_comparison_report(path))
+            match = next((g for g in regrouped if g["format"] == fmt), None)
+            return match["gap_count"] if match else 0
+
+        return fix_gap(gap, cfg, recheck_fn=recheck)
+
+    summary = run_loop(config, find_gaps_fn, real_fix_gap)
+    print(f"stopped after {summary['rounds']} rounds")
+    print(f"  fixed:   {len(summary['fixed'])} formats")
+    print(f"  failed:  {len(summary['failed'])} attempts")
+    print(f"  skipped: {', '.join(summary['skipped']) or '(none)'}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

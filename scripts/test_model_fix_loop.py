@@ -12,6 +12,7 @@ from model_fix_loop import (
     git_apply,
     git_checkout_clean,
     git_commit,
+    run_loop,
 )
 
 
@@ -251,6 +252,49 @@ class FixGapFailureTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["reason"], "no diff in model response")
+
+
+class RunLoopTests(unittest.TestCase):
+    def test_stops_after_two_consecutive_dry_rounds(self):
+        find_calls = []
+
+        def fake_find_gaps():
+            find_calls.append(1)
+            return []
+
+        result = run_loop({"model": "x"}, fake_find_gaps, fix_gap_fn=lambda g, c: self.fail("should not fix"))
+        self.assertEqual(result["rounds"], 2)
+        self.assertEqual(len(find_calls), 2)
+
+    def test_resets_dry_streak_when_a_gap_closes(self):
+        rounds = [[make_gap()], [], []]
+
+        def fake_find_gaps():
+            return rounds.pop(0)
+
+        def fake_fix_gap(gap, config):
+            return {"format": gap["format"], "status": "fixed", "gaps_closed": gap["gap_count"]}
+
+        result = run_loop({"model": "x"}, fake_find_gaps, fake_fix_gap)
+        self.assertEqual(result["rounds"], 3)
+        self.assertEqual(len(result["fixed"]), 1)
+
+    def test_skips_a_format_that_fails_twice(self):
+        gap = make_gap()
+        attempts = []
+        rounds = [[gap], [gap]]
+
+        def fake_find_gaps():
+            return rounds.pop(0) if rounds else []
+
+        def fake_fix_gap(g, config):
+            attempts.append(g["format"])
+            return {"format": g["format"], "status": "failed", "reason": "still broken"}
+
+        result = run_loop({"model": "x"}, fake_find_gaps, fake_fix_gap)
+        self.assertEqual(attempts, ["NEF", "NEF"])
+        self.assertEqual(result["skipped"], ["NEF"])
+        self.assertEqual(result["rounds"], 2)
 
 
 if __name__ == "__main__":
