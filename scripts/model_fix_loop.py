@@ -229,10 +229,61 @@ def review_verdict(gap, diff, config, call_model_fn=call_model):
     return extract_review_verdict(reply)
 
 
+def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_fn,
+                   cargo_build_fn, config, repo_root):
+    """Try to get a working build via up to 2 model calls (initial + one
+    apply/build repair round-trip), extending the given messages
+    conversation in place. Returns (built, reason, diff, messages) --
+    reason is None when built is True; diff is the successfully-applied
+    diff (None if not built).
+    """
+    for _attempt in range(2):  # one initial attempt + one repair round-trip
+        try:
+            reply = call_model_fn(
+                messages, config["base_url"], config["api_key"], config["model"],
+                config["max_tokens"], config["reasoning_effort"],
+            )
+        except Exception as e:
+            # Network/timeout/HTTP/malformed-response failures are a normal
+            # cost of "any model" -- a single bad call must not kill the
+            # whole loop. No repair round-trip here: retrying the same
+            # oversized/slow request immediately is unlikely to help; the
+            # cross-round 2-strikes skip-list is what handles this format
+            # long-term if it keeps failing.
+            return False, f"model call failed: {e}", None, messages
+
+        diff = extract_diff(reply)
+        if diff is None:
+            return False, "no diff in model response", None, messages
+
+        messages.append({"role": "assistant", "content": reply})
+
+        applied, apply_msg = git_apply_fn(diff, repo_root)
+        if not applied:
+            git_checkout_clean_fn(repo_root)
+            messages.append({
+                "role": "user",
+                "content": f"That diff did not apply: {apply_msg}\nPlease resend a corrected diff.",
+            })
+            continue
+
+        built, build_err = cargo_build_fn(repo_root)
+        if built:
+            return True, None, diff, messages
+
+        git_checkout_clean_fn(repo_root)
+        messages.append({
+            "role": "user",
+            "content": f"The build failed:\n{build_err}\nPlease resend a corrected diff.",
+        })
+
+    return False, "no working fix after repair attempt", None, messages
+
+
 def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
             git_checkout_clean_fn=git_checkout_clean, git_commit_fn=git_commit,
             cargo_build_fn=cargo_build, cargo_test_workspace_fn=cargo_test_workspace,
-            recheck_fn=None, repo_root=None):
+            attempt_build_fn=attempt_build, recheck_fn=None, repo_root=None):
     """Attempt to close one format's gaps via a single-shot patch, with one
     repair round-trip on build failure. Returns a result dict.
 
@@ -248,49 +299,14 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
         max_file_bytes=config["max_prompt_file_bytes"],
     )}]
 
-    built = False
-    for _attempt in range(2):  # one initial attempt + one repair round-trip
-        try:
-            reply = call_model_fn(
-                messages, config["base_url"], config["api_key"], config["model"],
-                config["max_tokens"], config["reasoning_effort"],
-            )
-        except Exception as e:
-            # Network/timeout/HTTP/malformed-response failures are a normal
-            # cost of "any model" -- a single bad call must not kill the
-            # whole loop. No repair round-trip here: retrying the same
-            # oversized/slow request immediately is unlikely to help: the
-            # cross-round 2-strikes skip-list is what handles this format
-            # long-term if it keeps failing.
-            return {"format": gap["format"], "status": "failed", "reason": f"model call failed: {e}"}
-
-        diff = extract_diff(reply)
-        if diff is None:
-            return {"format": gap["format"], "status": "failed", "reason": "no diff in model response"}
-
-        messages.append({"role": "assistant", "content": reply})
-
-        applied, apply_msg = git_apply_fn(diff, repo_root)
-        if not applied:
-            git_checkout_clean_fn(repo_root)
-            messages.append({
-                "role": "user",
-                "content": f"That diff did not apply: {apply_msg}\nPlease resend a corrected diff.",
-            })
-            continue
-
-        built, build_err = cargo_build_fn(repo_root)
-        if built:
-            break
-
-        git_checkout_clean_fn(repo_root)
-        messages.append({
-            "role": "user",
-            "content": f"The build failed:\n{build_err}\nPlease resend a corrected diff.",
-        })
-
+    built, reason, diff, messages = attempt_build_fn(
+        messages,
+        call_model_fn=call_model_fn, git_apply_fn=git_apply_fn,
+        git_checkout_clean_fn=git_checkout_clean_fn, cargo_build_fn=cargo_build_fn,
+        config=config, repo_root=repo_root,
+    )
     if not built:
-        return {"format": gap["format"], "status": "failed", "reason": "no working fix after repair attempt"}
+        return {"format": gap["format"], "status": "failed", "reason": reason}
 
     remaining = recheck_fn(gap["format"]) if recheck_fn else gap["gap_count"]
     if remaining >= gap["gap_count"]:

@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from model_fix_loop import (
+    attempt_build,
     build_prompt,
     build_review_prompt,
     cargo_build,
@@ -287,9 +288,29 @@ class FixGapHappyPathTests(unittest.TestCase):
         self.assertIn("glm-5.2", commit_calls[0])
 
 
-class FixGapRepairRoundTripTests(unittest.TestCase):
+CONFIG = {
+    "base_url": "u", "api_key": "k", "model": "glm-5.2",
+    "max_tokens": 4096, "reasoning_effort": "max",
+    "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
+}
+
+
+class AttemptBuildTests(unittest.TestCase):
+    def test_builds_on_first_attempt(self):
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
+        self.assertIsNone(reason)
+        self.assertTrue(diff.startswith("--- a/x"))
+
     def test_retries_once_on_build_failure_then_succeeds(self):
-        gap = make_gap(gap_count=1)
         build_attempts = []
 
         def fake_cargo_build(root):
@@ -298,28 +319,19 @@ class FixGapRepairRoundTripTests(unittest.TestCase):
                 return False, "error[E0308]: mismatched types"
             return True, ""
 
-        result = fix_gap(
-            gap,
-            {
-                "base_url": "u", "api_key": "k", "model": "glm-5.2",
-                "max_tokens": 4096, "reasoning_effort": "max",
-                "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
-            },
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: None,
             cargo_build_fn=fake_cargo_build,
-            cargo_test_workspace_fn=lambda root: True,
-            recheck_fn=lambda fmt: 0,
+            config=CONFIG,
             repo_root=Path("/fake/repo"),
         )
-
-        self.assertEqual(result["status"], "fixed")
+        self.assertTrue(built)
         self.assertEqual(len(build_attempts), 2)
 
     def test_retries_once_on_apply_failure_then_succeeds(self):
-        gap = make_gap(gap_count=1)
         apply_attempts = []
 
         def fake_git_apply(diff, root):
@@ -328,47 +340,64 @@ class FixGapRepairRoundTripTests(unittest.TestCase):
                 return False, "patch does not apply"
             return True, "ok"
 
-        result = fix_gap(
-            gap,
-            {
-                "base_url": "u", "api_key": "k", "model": "glm-5.2",
-                "max_tokens": 4096, "reasoning_effort": "max",
-                "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
-            },
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=fake_git_apply,
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: None,
             cargo_build_fn=lambda root: (True, ""),
-            cargo_test_workspace_fn=lambda root: True,
-            recheck_fn=lambda fmt: 0,
+            config=CONFIG,
             repo_root=Path("/fake/repo"),
         )
-
-        self.assertEqual(result["status"], "fixed")
+        self.assertTrue(built)
         self.assertEqual(len(apply_attempts), 2)
 
-
-class FixGapFailureTests(unittest.TestCase):
     def test_fails_after_two_build_failures(self):
-        gap = make_gap()
-        result = fix_gap(
-            gap,
-            {
-                "base_url": "u", "api_key": "k", "model": "glm-5.2",
-                "max_tokens": 4096, "reasoning_effort": "max",
-                "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
-            },
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: self.fail("should not commit"),
             cargo_build_fn=lambda root: (False, "still broken"),
-            cargo_test_workspace_fn=lambda root: True,
+            config=CONFIG,
             repo_root=Path("/fake/repo"),
         )
-        self.assertEqual(result["status"], "failed")
+        self.assertFalse(built)
+        self.assertEqual(reason, "no working fix after repair attempt")
+        self.assertIsNone(diff)
 
+    def test_fails_when_no_diff_in_response(self):
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=lambda messages, *a: "I could not find a fix.",
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertEqual(reason, "no diff in model response")
+
+    def test_fails_gracefully_when_model_call_raises(self):
+        def raising_call_model(messages, *a):
+            raise TimeoutError("The read operation timed out")
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=raising_call_model,
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertIn("model call failed", reason)
+        self.assertIn("timed out", reason)
+
+
+class FixGapFailureTests(unittest.TestCase):
     def test_fails_when_gap_count_does_not_decrease(self):
         gap = make_gap(gap_count=2)
         result = fix_gap(
@@ -410,45 +439,6 @@ class FixGapFailureTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["reason"], "cargo test --workspace regressed")
-
-    def test_fails_when_no_diff_in_response(self):
-        gap = make_gap()
-        result = fix_gap(
-            gap,
-            {
-                "base_url": "u", "api_key": "k", "model": "glm-5.2",
-                "max_tokens": 4096, "reasoning_effort": "max",
-                "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
-            },
-            call_model_fn=lambda messages, *a: "I could not find a fix.",
-            git_apply_fn=lambda diff, root: self.fail("should not apply"),
-            cargo_build_fn=lambda root: self.fail("should not build"),
-            repo_root=Path("/fake/repo"),
-        )
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["reason"], "no diff in model response")
-
-    def test_fails_gracefully_when_model_call_raises(self):
-        gap = make_gap()
-
-        def raising_call_model(messages, *a):
-            raise TimeoutError("The read operation timed out")
-
-        result = fix_gap(
-            gap,
-            {
-                "base_url": "u", "api_key": "k", "model": "glm-5.2",
-                "max_tokens": 4096, "reasoning_effort": "max",
-                "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
-            },
-            call_model_fn=raising_call_model,
-            git_apply_fn=lambda diff, root: self.fail("should not apply"),
-            cargo_build_fn=lambda root: self.fail("should not build"),
-            repo_root=Path("/fake/repo"),
-        )
-        self.assertEqual(result["status"], "failed")
-        self.assertIn("model call failed", result["reason"])
-        self.assertIn("timed out", result["reason"])
 
 
 class RunLoopTests(unittest.TestCase):
