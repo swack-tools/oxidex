@@ -1,7 +1,7 @@
 //! Regenerates `oxidex-tags-*/src/*_tags.yaml` from a locally-installed
 //! `exiftool` binary's own `-f -listx` tag dump.
 //!
-//! Usage: `cargo run --release --bin sync-tags`
+//! Usage: `cargo run --release --bin sync_tags`
 //!
 //! Requires `exiftool` on `PATH` (override with the `EXIFTOOL` env var).
 //! Never invoked from `build.rs` or `cargo build` — this tool is run
@@ -55,6 +55,10 @@ fn main() -> Result<()> {
     }
     println!("Parsed {} tags from exiftool -listx", tags.len());
 
+    // First pass: generate and check all domains, collecting results in memory.
+    // If any domain fails its retention check, we bail here before writing anything to disk.
+    let mut writes: Vec<(&str, String, String, usize, usize)> = Vec::new();
+
     for domain in DOMAINS {
         let path_str = format!("oxidex-tags-{domain}/src/{domain}_tags.yaml");
         let path = Path::new(&path_str);
@@ -83,6 +87,12 @@ fn main() -> Result<()> {
             }
         }
 
+        writes.push((domain, path_str, new_yaml, previous_count, new_count));
+    }
+
+    // Second pass: write all domains to disk only after every domain has passed its check.
+    for (domain, path_str, new_yaml, previous_count, new_count) in writes {
+        let path = Path::new(&path_str);
         fs::write(path, &new_yaml).with_context(|| format!("failed to write {path_str}"))?;
         println!("  {domain:12} -> {path_str} ({previous_count} -> {new_count} tags)");
     }
