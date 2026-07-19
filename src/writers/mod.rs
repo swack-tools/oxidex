@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 pub mod atomic_writer;
+pub mod exif_inplace;
 pub mod jpeg_writer;
 pub mod pdf_writer;
 pub mod png_writer;

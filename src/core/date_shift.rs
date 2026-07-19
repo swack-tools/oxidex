@@ -7,7 +7,10 @@
 
 use super::operations::{read_metadata, write_metadata};
 use super::tag_value::TagValue;
+use crate::core::FileFormat;
 use crate::error::{ExifToolError, Result};
+use crate::io::MMapReader;
+use crate::parsers::detection::detect_format;
 use chrono::{DateTime, Duration, Months, NaiveDateTime, Utc};
 use std::path::Path;
 
@@ -65,82 +68,188 @@ impl DateOffset {
     }
 }
 
-/// Parses offset string in format "years:months:days hours:minutes:seconds"
+/// EXIF date/time tags that oxidex can shift in place.
+///
+/// These are exactly the three tags ExifTool's "AllDates" shortcut covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExifDateTag {
+    /// IFD0 tag 0x0132 — ExifTool name "ModifyDate" (EXIF spec: "DateTime")
+    ModifyDate,
+    /// ExifIFD tag 0x9003 — "DateTimeOriginal"
+    DateTimeOriginal,
+    /// ExifIFD tag 0x9004 — ExifTool name "CreateDate" (EXIF spec: "DateTimeDigitized")
+    CreateDate,
+}
+
+impl ExifDateTag {
+    /// The EXIF/TIFF tag ID.
+    pub fn tag_id(self) -> u16 {
+        match self {
+            ExifDateTag::ModifyDate => 0x0132,
+            ExifDateTag::DateTimeOriginal => 0x9003,
+            ExifDateTag::CreateDate => 0x9004,
+        }
+    }
+
+    /// The group-prefixed key oxidex uses for this tag in a MetadataMap.
+    pub fn key(self) -> &'static str {
+        match self {
+            ExifDateTag::ModifyDate => "IFD0:ModifyDate",
+            ExifDateTag::DateTimeOriginal => "ExifIFD:DateTimeOriginal",
+            ExifDateTag::CreateDate => "ExifIFD:DateTimeDigitized",
+        }
+    }
+}
+
+/// Resolves a user-supplied tag pattern to the EXIF date tags it names.
+///
+/// Accepts ExifTool conventions: bare names ("DateTimeOriginal"), name
+/// aliases ("DateTime" for ModifyDate, "DateTimeDigitized" for CreateDate),
+/// the "EXIF:" family, oxidex's internal groups ("IFD0:", "ExifIFD:"), and
+/// the "AllDates" shortcut. Matching is ASCII case-insensitive.
+///
+/// Returns `None` when the pattern does not name a known EXIF date/time tag.
+pub fn resolve_exif_targets(pattern: &str) -> Option<Vec<ExifDateTag>> {
+    let lowered = pattern.to_ascii_lowercase();
+    if lowered == "alldates" {
+        return Some(vec![
+            ExifDateTag::ModifyDate,
+            ExifDateTag::DateTimeOriginal,
+            ExifDateTag::CreateDate,
+        ]);
+    }
+
+    let (family, name) = match lowered.split_once(':') {
+        Some((f, n)) => (Some(f), n),
+        None => (None, lowered.as_str()),
+    };
+
+    let tag = match name {
+        "modifydate" | "datetime" => ExifDateTag::ModifyDate,
+        "datetimeoriginal" => ExifDateTag::DateTimeOriginal,
+        "createdate" | "datetimedigitized" => ExifDateTag::CreateDate,
+        _ => return None,
+    };
+
+    let family_ok = match family {
+        None => true,
+        Some("exif") => true,
+        Some("ifd0") => tag == ExifDateTag::ModifyDate,
+        Some("exififd") => tag != ExifDateTag::ModifyDate,
+        Some(_) => false,
+    };
+    if family_ok { Some(vec![tag]) } else { None }
+}
+
+/// A fully parsed shift request: a relative offset or an absolute value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShiftSpec {
+    /// Add or subtract a relative offset. `op` is only ever Add or Subtract.
+    Relative {
+        /// The parsed offset amount
+        offset: DateOffset,
+        /// The effective direction after folding in any leading sign
+        op: ShiftOperation,
+    },
+    /// Set to an absolute date/time (the `=` operation).
+    Absolute(DateTime<Utc>),
+}
+
+/// Builds a ShiftSpec from an operation and its argument string, folding a
+/// leading `-` on the shift string into the operation direction.
+pub fn build_shift_spec(offset_or_value: &str, op: ShiftOperation) -> Result<ShiftSpec> {
+    if op == ShiftOperation::Set {
+        return Ok(ShiftSpec::Absolute(parse_absolute_datetime(
+            offset_or_value,
+        )?));
+    }
+    let (offset, negated) = parse_offset(offset_or_value)?;
+    let effective = match (op, negated) {
+        (ShiftOperation::Add, true) => ShiftOperation::Subtract,
+        (ShiftOperation::Subtract, true) => ShiftOperation::Add,
+        (other, _) => other,
+    };
+    Ok(ShiftSpec::Relative {
+        offset,
+        op: effective,
+    })
+}
+
+/// Applies a ShiftSpec to a date/time value.
+pub fn apply_spec(dt: DateTime<Utc>, spec: &ShiftSpec) -> Result<DateTime<Utc>> {
+    match spec {
+        ShiftSpec::Absolute(value) => Ok(*value),
+        ShiftSpec::Relative { offset, op } => apply_shift(dt, offset, *op),
+    }
+}
+
+/// Parses an ExifTool-style shift string.
+///
+/// Grammar (matches `Image::ExifTool::Shift.pl`, verified against ExifTool 13.55):
+/// - Optional leading `+` or `-`; `-` negates the whole shift (the returned
+///   bool is `true`), which callers apply by flipping Add and Subtract.
+/// - One or two space-separated parts, each 1-3 colon-separated non-negative
+///   integers.
+/// - Two parts are `DATE TIME`. DATE is right-justified: `D`, `M:D`, or
+///   `Y:M:D`. TIME is left-justified: `H`, `H:M`, or `H:M:S`.
+/// - A single part is a TIME shift (`H`, `H:M`, or `H:M:S`) because every tag
+///   this module shifts is a full date-time value.
 ///
 /// # Examples
 ///
-/// - "1:2:3 4:5:6" -> 1 year, 2 months, 3 days, 4 hours, 5 minutes, 6 seconds
-/// - "0:0:1 0:0:0" -> 1 day
-/// - "0:0:0 6:30:0" -> 6 hours and 30 minutes
-///
-/// # Format
-///
-/// The format is: `Y:M:D H:M:S` where:
-/// - Y = years (non-negative integer)
-/// - M = months (non-negative integer)
-/// - D = days (integer)
-/// - H = hours (integer)
-/// - M = minutes (integer)
-/// - S = seconds (integer)
-///
-/// Date and time components are separated by a space.
-pub fn parse_offset(s: &str) -> Result<DateOffset> {
-    // Split by space to separate date and time components
-    let parts: Vec<&str> = s.split_whitespace().collect();
-
-    if parts.len() != 2 {
-        return Err(ExifToolError::parse_error(format!(
-            "Invalid offset format '{}': expected 'Y:M:D H:M:S' (e.g., '1:2:3 4:5:6')",
+/// - `"1:00:00"` -> 1 hour
+/// - `"1:30"` -> 1 hour 30 minutes
+/// - `"0:0:1 0:0:0"` -> 1 day
+/// - `"1:2 3"` -> 1 month, 2 days, 3 hours
+/// - `"-1"` -> 1 hour, negated
+pub fn parse_offset(s: &str) -> Result<(DateOffset, bool)> {
+    let invalid = || {
+        ExifToolError::parse_error(format!(
+            "Invalid shift string '{}': expected 'TIME' or 'DATE TIME' with 1-3 \
+             numbers per part (e.g., '1:30' for 1.5 hours, '0:0:1 12' for 1 day 12 hours)",
             s
-        )));
+        ))
+    };
+
+    let trimmed = s.trim();
+    let (negated, rest) = match trimmed.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+
+    let parts: Vec<&str> = rest.split_whitespace().collect();
+    let (date_part, time_part) = match parts.as_slice() {
+        [time] => (None, *time),
+        [date, time] => (Some(*date), *time),
+        _ => return Err(invalid()),
+    };
+
+    let parse_components = |part: &str| -> Result<Vec<u32>> {
+        let fields: Vec<&str> = part.split(':').collect();
+        if fields.is_empty() || fields.len() > 3 {
+            return Err(invalid());
+        }
+        fields
+            .iter()
+            .map(|f| f.parse::<u32>().map_err(|_| invalid()))
+            .collect()
+    };
+
+    let mut offset = DateOffset::zero();
+    if let Some(date) = date_part {
+        // Right-justified: the last number is always days
+        let mut values = parse_components(date)?.into_iter().rev();
+        offset.days = values.next().unwrap_or(0) as i64;
+        offset.months = values.next().unwrap_or(0);
+        offset.years = values.next().unwrap_or(0);
     }
+    // Left-justified: the first number is always hours
+    let mut values = parse_components(time_part)?.into_iter();
+    offset.hours = values.next().unwrap_or(0) as i64;
+    offset.minutes = values.next().unwrap_or(0) as i64;
+    offset.seconds = values.next().unwrap_or(0) as i64;
 
-    // Parse date component (Y:M:D)
-    let date_parts: Vec<&str> = parts[0].split(':').collect();
-    if date_parts.len() != 3 {
-        return Err(ExifToolError::parse_error(format!(
-            "Invalid date component '{}': expected 'Y:M:D' format",
-            parts[0]
-        )));
-    }
-
-    // Parse time component (H:M:S)
-    let time_parts: Vec<&str> = parts[1].split(':').collect();
-    if time_parts.len() != 3 {
-        return Err(ExifToolError::parse_error(format!(
-            "Invalid time component '{}': expected 'H:M:S' format",
-            parts[1]
-        )));
-    }
-
-    // Parse each component with error handling
-    let years = date_parts[0].parse::<u32>().map_err(|_| {
-        ExifToolError::parse_error(format!("Invalid years value '{}'", date_parts[0]))
-    })?;
-
-    let months = date_parts[1].parse::<u32>().map_err(|_| {
-        ExifToolError::parse_error(format!("Invalid months value '{}'", date_parts[1]))
-    })?;
-
-    let days = date_parts[2].parse::<i64>().map_err(|_| {
-        ExifToolError::parse_error(format!("Invalid days value '{}'", date_parts[2]))
-    })?;
-
-    let hours = time_parts[0].parse::<i64>().map_err(|_| {
-        ExifToolError::parse_error(format!("Invalid hours value '{}'", time_parts[0]))
-    })?;
-
-    let minutes = time_parts[1].parse::<i64>().map_err(|_| {
-        ExifToolError::parse_error(format!("Invalid minutes value '{}'", time_parts[1]))
-    })?;
-
-    let seconds = time_parts[2].parse::<i64>().map_err(|_| {
-        ExifToolError::parse_error(format!("Invalid seconds value '{}'", time_parts[2]))
-    })?;
-
-    Ok(DateOffset::new(
-        years, months, days, hours, minutes, seconds,
-    ))
+    Ok((offset, negated))
 }
 
 /// Parses an EXIF DateTime string into a chrono::DateTime<Utc>
@@ -237,28 +346,61 @@ pub fn apply_shift(
     }
 }
 
-/// Common DateTime tags that are shifted when using "AllDates" pattern
-const ALL_DATES_TAGS: &[&str] = &[
-    "EXIF:DateTime",
-    "EXIF:DateTimeOriginal",
-    "EXIF:DateTimeDigitized",
-    "XMP:CreateDate",
-    "XMP:ModifyDate",
-    "PDF:CreateDate",
-    "PDF:ModifyDate",
-    "QuickTime:ContentCreateDate",
-    "QuickTime:CreateDate",
-    "QuickTime:ModifyDate",
+/// Canonical date/time tag names shifted by the "AllDates" pattern on
+/// formats that use the metadata-map write path (PNG, PDF). Lowercase.
+const ALL_DATES_NAMES: &[&str] = &[
+    "modifydate",
+    "datetime",
+    "datetimeoriginal",
+    "createdate",
+    "datetimedigitized",
+    "creationtime",
+    "contentcreatedate",
 ];
 
-/// Shifts date/time tags in a file's metadata
+/// Returns true when a metadata key matches a user-supplied tag pattern.
+///
+/// A bare pattern ("DateTimeOriginal") matches the name part of any
+/// group-prefixed key; a prefixed pattern ("XMP:CreateDate") must match the
+/// full key. Comparison is ASCII case-insensitive.
+fn key_matches_pattern(key: &str, pattern: &str) -> bool {
+    if key.eq_ignore_ascii_case(pattern) {
+        return true;
+    }
+    if !pattern.contains(':')
+        && let Some((_, name)) = key.split_once(':')
+    {
+        return name.eq_ignore_ascii_case(pattern);
+    }
+    false
+}
+
+/// Shifts date/time tags in a file's metadata.
 ///
 /// # Arguments
 ///
 /// * `path` - Path to the file to modify
-/// * `tag_pattern` - Tag pattern to match ("AllDates" for all DateTime tags, or specific tag name)
-/// * `offset_or_value` - Offset string in "Y:M:D H:M:S" format, or absolute datetime for Set operation
+/// * `tag_pattern` - "AllDates", a bare tag name ("DateTimeOriginal"), or a
+///   group-prefixed name ("EXIF:DateTimeOriginal", "IFD0:ModifyDate")
+/// * `offset_or_value` - ExifTool-style shift string (see [`parse_offset`]),
+///   or an absolute "YYYY:MM:DD HH:MM:SS" for the Set operation
 /// * `op` - Operation type (Add, Subtract, or Set)
+///
+/// # Behavior by format
+///
+/// * **JPEG**: the EXIF date values are patched in place — only the 19 ASCII
+///   characters of each target value change, every other byte of the file is
+///   preserved. Supported tags: AllDates, ModifyDate (DateTime),
+///   DateTimeOriginal, CreateDate (DateTimeDigitized).
+/// * **Other formats** (PNG, PDF): tags are shifted through the metadata map
+///   and rewritten with [`write_metadata`].
+///
+/// # Divergences from ExifTool
+///
+/// * A shift that matches no tags is an error (nonzero CLI exit), where
+///   exiftool reports "0 image files updated" and exits 0.
+/// * During a multi-tag shift (AllDates), tags whose current value cannot be
+///   parsed or shifted are skipped with a warning, matching ExifTool.
 ///
 /// # Examples
 ///
@@ -267,29 +409,16 @@ const ALL_DATES_TAGS: &[&str] = &[
 /// use std::path::Path;
 ///
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// // Add 1 day to all date tags
+/// // Subtract 1 hour from DateTimeOriginal (ExifTool: -DateTimeOriginal-=1:00:00)
 /// shift_metadata_dates(
 ///     Path::new("photo.jpg"),
-///     "AllDates",
-///     "0:0:1 0:0:0",
-///     ShiftOperation::Add
-/// )?;
-///
-/// // Subtract 1 month from DateTimeOriginal only
-/// shift_metadata_dates(
-///     Path::new("photo.jpg"),
-///     "EXIF:DateTimeOriginal",
-///     "0:1:0 0:0:0",
+///     "DateTimeOriginal",
+///     "1:00:00",
 ///     ShiftOperation::Subtract
 /// )?;
 ///
-/// // Set DateTime to specific value
-/// shift_metadata_dates(
-///     Path::new("photo.jpg"),
-///     "EXIF:DateTime",
-///     "2025:01:15 10:30:00",
-///     ShiftOperation::Set
-/// )?;
+/// // Add 1 day to all date tags
+/// shift_metadata_dates(Path::new("photo.jpg"), "AllDates", "0:0:1 0", ShiftOperation::Add)?;
 /// # Ok(())
 /// # }
 /// ```
@@ -299,106 +428,81 @@ pub fn shift_metadata_dates(
     offset_or_value: &str,
     op: ShiftOperation,
 ) -> Result<()> {
-    // Step 1: Read existing metadata from file
-    let mut metadata = read_metadata(path)?;
+    let spec = build_shift_spec(offset_or_value, op)?;
 
-    // Step 2: Parse offset or absolute value based on operation
-    let offset = if op == ShiftOperation::Set {
-        None
-    } else {
-        Some(parse_offset(offset_or_value)?)
+    let format = {
+        let reader = MMapReader::new(path)?;
+        detect_format(&reader)?
     };
 
-    let absolute_value = if op == ShiftOperation::Set {
-        Some(parse_absolute_datetime(offset_or_value)?)
-    } else {
-        None
-    };
-
-    // Step 3: Determine which tags to shift
-    let mut modified_count = 0;
-
-    if tag_pattern.eq_ignore_ascii_case("AllDates") {
-        // Shift all DateTime tags that exist in the metadata
-        for tag_name in ALL_DATES_TAGS {
-            if let Some(tag_value) = metadata.get(tag_name)
-                && let Some(dt) = tag_value.as_datetime()
-            {
-                // Apply shift
-                let new_dt = if let Some(abs) = absolute_value {
-                    abs
-                } else {
-                    apply_shift(*dt, offset.as_ref().unwrap(), op)?
-                };
-
-                // Update the tag
-                metadata.insert((*tag_name).to_string(), TagValue::new_datetime(new_dt));
-                modified_count += 1;
-            }
-        }
-
-        // Also check for any other DateTime tags in the metadata
-        let all_keys: Vec<String> = metadata.iter().map(|(k, _)| k.clone()).collect();
-        for tag_name in all_keys {
-            // Skip tags we already processed
-            if ALL_DATES_TAGS.contains(&tag_name.as_str()) {
-                continue;
-            }
-
-            if let Some(tag_value) = metadata.get(&tag_name)
-                && let Some(dt) = tag_value.as_datetime()
-            {
-                // Apply shift
-                let new_dt = if let Some(abs) = absolute_value {
-                    abs
-                } else {
-                    apply_shift(*dt, offset.as_ref().unwrap(), op)?
-                };
-
-                // Update the tag
-                metadata.insert(tag_name, TagValue::new_datetime(new_dt));
-                modified_count += 1;
-            }
-        }
-    } else {
-        // Shift specific tag only
-        if let Some(tag_value) = metadata.get(tag_pattern) {
-            if let Some(dt) = tag_value.as_datetime() {
-                // Apply shift
-                let new_dt = if let Some(abs) = absolute_value {
-                    abs
-                } else {
-                    apply_shift(*dt, offset.as_ref().unwrap(), op)?
-                };
-
-                // Update the tag
-                metadata.insert(tag_pattern.to_string(), TagValue::new_datetime(new_dt));
-                modified_count += 1;
-            } else {
-                return Err(ExifToolError::parse_error(format!(
-                    "Tag '{}' is not a DateTime tag",
-                    tag_pattern
-                )));
-            }
-        } else {
-            return Err(ExifToolError::parse_error(format!(
-                "Tag '{}' not found in metadata",
-                tag_pattern
-            )));
-        }
+    if format == FileFormat::JPEG {
+        return shift_jpeg_dates(path, tag_pattern, &spec);
     }
+    shift_map_dates(path, tag_pattern, &spec)
+}
 
-    // Check if any tags were modified
-    if modified_count == 0 {
+/// JPEG path: patch EXIF date/time values in place. Never rewrites the EXIF
+/// segment, so binary tags are preserved byte-for-byte.
+fn shift_jpeg_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<()> {
+    let Some(targets) = resolve_exif_targets(tag_pattern) else {
         return Err(ExifToolError::parse_error(format!(
-            "No DateTime tags found matching pattern '{}'",
+            "Shifting tag '{}' is not supported for JPEG. Supported: AllDates, \
+             ModifyDate (DateTime), DateTimeOriginal, CreateDate (DateTimeDigitized)",
+            tag_pattern
+        )));
+    };
+    let modified = crate::writers::exif_inplace::shift_jpeg_exif_dates(path, &targets, spec)?;
+    if modified == 0 {
+        return Err(ExifToolError::parse_error(format!(
+            "No date/time tags matching '{}' found in EXIF data",
             tag_pattern
         )));
     }
+    Ok(())
+}
 
-    // Step 4: Write modified metadata back to file
+/// Non-JPEG path: shift date/time tags through the metadata map (PNG, PDF).
+fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<()> {
+    let mut metadata = read_metadata(path)?;
+    let all_dates = tag_pattern.eq_ignore_ascii_case("AllDates");
+
+    let keys: Vec<String> = metadata.iter().map(|(k, _)| k.clone()).collect();
+    let mut modified = 0;
+    for key in keys {
+        let matches = if all_dates {
+            // Filesystem dates are never shifted by AllDates
+            !key.starts_with("File:")
+                && key.split_once(':').map_or_else(
+                    || ALL_DATES_NAMES.contains(&key.to_ascii_lowercase().as_str()),
+                    |(_, name)| ALL_DATES_NAMES.contains(&name.to_ascii_lowercase().as_str()),
+                )
+        } else {
+            key_matches_pattern(&key, tag_pattern)
+        };
+        if !matches {
+            continue;
+        }
+        let Some(dt) = metadata.get(&key).and_then(|v| v.as_datetime()).copied() else {
+            if !all_dates {
+                return Err(ExifToolError::parse_error(format!(
+                    "Tag '{}' is not a DateTime tag",
+                    key
+                )));
+            }
+            continue;
+        };
+        let new_dt = apply_spec(dt, spec)?;
+        metadata.insert(key, TagValue::new_datetime(new_dt));
+        modified += 1;
+    }
+
+    if modified == 0 {
+        return Err(ExifToolError::parse_error(format!(
+            "Tag '{}' not found in metadata",
+            tag_pattern
+        )));
+    }
     write_metadata(path, &metadata)?;
-
     Ok(())
 }
 
@@ -408,49 +512,76 @@ mod tests {
     use chrono::{Datelike, TimeZone, Timelike};
 
     #[test]
-    fn test_parse_offset_valid() {
-        let offset = parse_offset("1:2:3 4:5:6").unwrap();
-        assert_eq!(offset.years, 1);
-        assert_eq!(offset.months, 2);
-        assert_eq!(offset.days, 3);
-        assert_eq!(offset.hours, 4);
-        assert_eq!(offset.minutes, 5);
-        assert_eq!(offset.seconds, 6);
+    fn test_parse_offset_full_form() {
+        let (offset, neg) = parse_offset("1:2:3 4:5:6").unwrap();
+        assert!(!neg);
+        assert_eq!(offset, DateOffset::new(1, 2, 3, 4, 5, 6));
     }
 
     #[test]
-    fn test_parse_offset_zero() {
-        let offset = parse_offset("0:0:0 0:0:0").unwrap();
-        assert_eq!(offset, DateOffset::zero());
+    fn test_parse_offset_single_number_is_hours() {
+        let (offset, neg) = parse_offset("1").unwrap();
+        assert!(!neg);
+        assert_eq!(offset, DateOffset::new(0, 0, 0, 1, 0, 0));
     }
 
     #[test]
-    fn test_parse_offset_one_day() {
-        let offset = parse_offset("0:0:1 0:0:0").unwrap();
-        assert_eq!(offset.years, 0);
-        assert_eq!(offset.months, 0);
-        assert_eq!(offset.days, 1);
-        assert_eq!(offset.hours, 0);
-        assert_eq!(offset.minutes, 0);
-        assert_eq!(offset.seconds, 0);
+    fn test_parse_offset_time_is_left_justified() {
+        // ExifTool: '1:30' means 1 hour 30 minutes, NOT 1 minute 30 seconds
+        let (offset, _) = parse_offset("1:30").unwrap();
+        assert_eq!(offset, DateOffset::new(0, 0, 0, 1, 30, 0));
     }
 
     #[test]
-    fn test_parse_offset_invalid_format_no_space() {
-        let result = parse_offset("1:2:3:4:5:6");
-        assert!(result.is_err());
+    fn test_parse_offset_three_part_time() {
+        let (offset, _) = parse_offset("0:0:30").unwrap();
+        assert_eq!(offset, DateOffset::new(0, 0, 0, 0, 0, 30));
     }
 
     #[test]
-    fn test_parse_offset_invalid_format_too_few_components() {
-        let result = parse_offset("1:2 3:4");
-        assert!(result.is_err());
+    fn test_parse_offset_issue_14_form() {
+        // The exact string from GitHub issue #14
+        let (offset, neg) = parse_offset("1:00:00").unwrap();
+        assert!(!neg);
+        assert_eq!(offset, DateOffset::new(0, 0, 0, 1, 0, 0));
     }
 
     #[test]
-    fn test_parse_offset_invalid_number() {
-        let result = parse_offset("abc:2:3 4:5:6");
-        assert!(result.is_err());
+    fn test_parse_offset_date_is_right_justified() {
+        // ExifTool: date part '1:2' means 1 month 2 days, NOT 1 year 2 months
+        let (offset, _) = parse_offset("1:2 3").unwrap();
+        assert_eq!(offset, DateOffset::new(0, 1, 2, 3, 0, 0));
+    }
+
+    #[test]
+    fn test_parse_offset_two_arg_full_date() {
+        let (offset, _) = parse_offset("1:0:0 0:0:0").unwrap();
+        assert_eq!(offset, DateOffset::new(1, 0, 0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_parse_offset_leading_minus_sets_negated() {
+        let (offset, neg) = parse_offset("-1").unwrap();
+        assert!(neg);
+        assert_eq!(offset, DateOffset::new(0, 0, 0, 1, 0, 0));
+    }
+
+    #[test]
+    fn test_parse_offset_leading_plus_ignored() {
+        let (offset, neg) = parse_offset("+1:30").unwrap();
+        assert!(!neg);
+        assert_eq!(offset, DateOffset::new(0, 0, 0, 1, 30, 0));
+    }
+
+    #[test]
+    fn test_parse_offset_invalid() {
+        assert!(parse_offset("").is_err());
+        assert!(parse_offset("1:2:3:4").is_err()); // too many numbers in one part
+        assert!(parse_offset("1:2:3:4:5:6").is_err());
+        assert!(parse_offset("1:2:3 4:5:6 7").is_err()); // three parts
+        assert!(parse_offset("abc").is_err());
+        assert!(parse_offset("1:2:3 4:x").is_err());
+        assert!(parse_offset("1:").is_err()); // empty component
     }
 
     #[test]
@@ -562,5 +693,134 @@ mod tests {
         assert_eq!(result.hour(), 14);
         assert_eq!(result.minute(), 35);
         assert_eq!(result.second(), 6);
+    }
+
+    #[test]
+    fn test_resolve_bare_name() {
+        assert_eq!(
+            resolve_exif_targets("DateTimeOriginal"),
+            Some(vec![ExifDateTag::DateTimeOriginal])
+        );
+        assert_eq!(
+            resolve_exif_targets("datetimeoriginal"),
+            Some(vec![ExifDateTag::DateTimeOriginal])
+        );
+    }
+
+    #[test]
+    fn test_resolve_aliases() {
+        // ExifTool's names and the EXIF spec's names both resolve
+        assert_eq!(
+            resolve_exif_targets("ModifyDate"),
+            Some(vec![ExifDateTag::ModifyDate])
+        );
+        assert_eq!(
+            resolve_exif_targets("DateTime"),
+            Some(vec![ExifDateTag::ModifyDate])
+        );
+        assert_eq!(
+            resolve_exif_targets("CreateDate"),
+            Some(vec![ExifDateTag::CreateDate])
+        );
+        assert_eq!(
+            resolve_exif_targets("DateTimeDigitized"),
+            Some(vec![ExifDateTag::CreateDate])
+        );
+    }
+
+    #[test]
+    fn test_resolve_group_prefixes() {
+        assert_eq!(
+            resolve_exif_targets("EXIF:DateTimeOriginal"),
+            Some(vec![ExifDateTag::DateTimeOriginal])
+        );
+        assert_eq!(
+            resolve_exif_targets("ExifIFD:DateTimeOriginal"),
+            Some(vec![ExifDateTag::DateTimeOriginal])
+        );
+        assert_eq!(
+            resolve_exif_targets("IFD0:ModifyDate"),
+            Some(vec![ExifDateTag::ModifyDate])
+        );
+        // Wrong group for the tag: DateTimeOriginal lives in ExifIFD, not IFD0
+        assert_eq!(resolve_exif_targets("IFD0:DateTimeOriginal"), None);
+        // Unknown group
+        assert_eq!(resolve_exif_targets("XMP:CreateDate"), None);
+    }
+
+    #[test]
+    fn test_resolve_alldates() {
+        assert_eq!(
+            resolve_exif_targets("AllDates"),
+            Some(vec![
+                ExifDateTag::ModifyDate,
+                ExifDateTag::DateTimeOriginal,
+                ExifDateTag::CreateDate,
+            ])
+        );
+        assert_eq!(
+            resolve_exif_targets("alldates"),
+            resolve_exif_targets("AllDates")
+        );
+    }
+
+    #[test]
+    fn test_resolve_unknown_returns_none() {
+        assert_eq!(resolve_exif_targets("Artist"), None);
+        assert_eq!(resolve_exif_targets("GPSDateStamp"), None);
+    }
+
+    #[test]
+    fn test_build_shift_spec_relative_negated() {
+        let spec = build_shift_spec("-1", ShiftOperation::Subtract).unwrap();
+        // Subtracting a negative shift adds
+        match spec {
+            ShiftSpec::Relative { offset, op } => {
+                assert_eq!(op, ShiftOperation::Add);
+                assert_eq!(offset, DateOffset::new(0, 0, 0, 1, 0, 0));
+            }
+            other => panic!("expected Relative, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_build_shift_spec_absolute() {
+        let spec = build_shift_spec("2030:01:02 03:04:05", ShiftOperation::Set).unwrap();
+        match spec {
+            ShiftSpec::Absolute(dt) => {
+                assert_eq!(format_exif_datetime(&dt), "2030:01:02 03:04:05");
+            }
+            other => panic!("expected Absolute, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_key_matches_pattern() {
+        // Bare pattern matches any family, case-insensitively
+        assert!(key_matches_pattern("XMP:CreateDate", "createdate"));
+        assert!(key_matches_pattern("PDF:CreateDate", "CreateDate"));
+        // Prefixed pattern must match the whole key
+        assert!(key_matches_pattern("XMP:CreateDate", "xmp:createdate"));
+        assert!(!key_matches_pattern("PDF:CreateDate", "XMP:CreateDate"));
+        // Name-only mismatch
+        assert!(!key_matches_pattern("XMP:ModifyDate", "CreateDate"));
+    }
+
+    #[test]
+    fn test_apply_spec_relative_and_absolute() {
+        let dt = Utc.with_ymd_and_hms(2025, 6, 10, 12, 0, 0).unwrap();
+        let relative = ShiftSpec::Relative {
+            offset: DateOffset::new(0, 0, 0, 1, 0, 0),
+            op: ShiftOperation::Subtract,
+        };
+        assert_eq!(
+            format_exif_datetime(&apply_spec(dt, &relative).unwrap()),
+            "2025:06:10 11:00:00"
+        );
+        let absolute = ShiftSpec::Absolute(Utc.with_ymd_and_hms(2030, 1, 2, 3, 4, 5).unwrap());
+        assert_eq!(
+            format_exif_datetime(&apply_spec(dt, &absolute).unwrap()),
+            "2030:01:02 03:04:05"
+        );
     }
 }
