@@ -687,14 +687,13 @@ compare-exiftool-full:
     # Use fixed cache directory for reuse across runs
     CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/tmp/oxidex-exiftool-cache}"
     EXIFTOOL_DIR="$CACHE_DIR/exiftool"
-    COMBINED_DIR="/tmp/exiftool-combined-$$"
+    # Persistent, not ephemeral: the coverage-loop workflow re-runs
+    # tag-comparison directly against this same path from separate agent
+    # invocations after this recipe has already exited, so it must survive
+    # past this shell's lifetime (unlike the old `/tmp/exiftool-combined-$$`
+    # + `trap cleanup EXIT`, which deleted it on exit).
+    COMBINED_DIR="$CACHE_DIR/combined-samples"
     GCS_BUCKET="https://storage.googleapis.com/oxidex-samples/exiftool"
-
-    cleanup() {
-        echo "🧹 Cleaning up temp files..."
-        rm -rf "$COMBINED_DIR"
-    }
-    trap cleanup EXIT
 
     mkdir -p "$CACHE_DIR"
 
