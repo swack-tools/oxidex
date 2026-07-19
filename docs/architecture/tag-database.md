@@ -207,17 +207,16 @@ cargo build --release
 cargo test --release --workspace
 ```
 
-## Parser Features
+## XML Parser Features
 
-The Perl tag definition parser handles:
+The XML tag parser (`parse_listx` in `src/tag_sync/mod.rs`) handles:
 
-- Hash-based definitions: `0x0100 => { Name => 'ImageWidth', ... }`
-- Simple definitions: `0x0100 => 'ImageWidth'`
-- String-based tag IDs (hashed to numeric)
-- Nested subdirectory references
-- Writable type specifications
-- Value type inference
-- Multi-line definitions
+- XML element parsing: `<table>` (table group) and `<tag>` (individual tag definitions)
+- Tag attributes: `id`, `name`, `writable` (boolean), `type` (optional)
+- Both element forms: self-closing tags (`<tag/>`) and full tags (`<tag>...</tag>`)
+- Nested descriptions: `<desc lang='en'>` text extraction (English locale only)
+- XML entity unescaping: `&amp;`, `&#39;`, etc. in description text
+- Writable inheritance resolution: ExifTool pre-resolves table-level inheritance in `-listx` output
 
 ## Known Limitations
 
