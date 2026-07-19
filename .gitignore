@@ -46,7 +46,14 @@ fuzz/corpus/*/*
 benches/target/
 
 # Claude Code config
-.claude/
+# A directory pattern ending in "/" prunes the directory from traversal
+# entirely, so per-file "!" negations below it never get evaluated -- hence
+# ".claude/*" (matching only direct entries) rather than ".claude/", so the
+# workflows negation below actually takes effect.
+.claude/*
+# ...except saved Workflow scripts, which are checked-in tooling, not local config
+!.claude/workflows/
+!.claude/workflows/**
 
 # Git worktrees
 .worktrees/
