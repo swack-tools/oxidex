@@ -65,6 +65,121 @@ impl DateOffset {
     }
 }
 
+/// EXIF date/time tags that oxidex can shift in place.
+///
+/// These are exactly the three tags ExifTool's "AllDates" shortcut covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExifDateTag {
+    /// IFD0 tag 0x0132 — ExifTool name "ModifyDate" (EXIF spec: "DateTime")
+    ModifyDate,
+    /// ExifIFD tag 0x9003 — "DateTimeOriginal"
+    DateTimeOriginal,
+    /// ExifIFD tag 0x9004 — ExifTool name "CreateDate" (EXIF spec: "DateTimeDigitized")
+    CreateDate,
+}
+
+impl ExifDateTag {
+    /// The EXIF/TIFF tag ID.
+    pub fn tag_id(self) -> u16 {
+        match self {
+            ExifDateTag::ModifyDate => 0x0132,
+            ExifDateTag::DateTimeOriginal => 0x9003,
+            ExifDateTag::CreateDate => 0x9004,
+        }
+    }
+
+    /// The group-prefixed key oxidex uses for this tag in a MetadataMap.
+    pub fn key(self) -> &'static str {
+        match self {
+            ExifDateTag::ModifyDate => "IFD0:ModifyDate",
+            ExifDateTag::DateTimeOriginal => "ExifIFD:DateTimeOriginal",
+            ExifDateTag::CreateDate => "ExifIFD:DateTimeDigitized",
+        }
+    }
+}
+
+/// Resolves a user-supplied tag pattern to the EXIF date tags it names.
+///
+/// Accepts ExifTool conventions: bare names ("DateTimeOriginal"), name
+/// aliases ("DateTime" for ModifyDate, "DateTimeDigitized" for CreateDate),
+/// the "EXIF:" family, oxidex's internal groups ("IFD0:", "ExifIFD:"), and
+/// the "AllDates" shortcut. Matching is ASCII case-insensitive.
+///
+/// Returns `None` when the pattern does not name a known EXIF date/time tag.
+pub fn resolve_exif_targets(pattern: &str) -> Option<Vec<ExifDateTag>> {
+    let lowered = pattern.to_ascii_lowercase();
+    if lowered == "alldates" {
+        return Some(vec![
+            ExifDateTag::ModifyDate,
+            ExifDateTag::DateTimeOriginal,
+            ExifDateTag::CreateDate,
+        ]);
+    }
+
+    let (family, name) = match lowered.split_once(':') {
+        Some((f, n)) => (Some(f), n),
+        None => (None, lowered.as_str()),
+    };
+
+    let tag = match name {
+        "modifydate" | "datetime" => ExifDateTag::ModifyDate,
+        "datetimeoriginal" => ExifDateTag::DateTimeOriginal,
+        "createdate" | "datetimedigitized" => ExifDateTag::CreateDate,
+        _ => return None,
+    };
+
+    let family_ok = match family {
+        None => true,
+        Some("exif") => true,
+        Some("ifd0") => tag == ExifDateTag::ModifyDate,
+        Some("exififd") => tag != ExifDateTag::ModifyDate,
+        Some(_) => false,
+    };
+    if family_ok { Some(vec![tag]) } else { None }
+}
+
+/// A fully parsed shift request: a relative offset or an absolute value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShiftSpec {
+    /// Add or subtract a relative offset. `op` is only ever Add or Subtract.
+    Relative {
+        /// The parsed offset amount
+        offset: DateOffset,
+        /// The effective direction after folding in any leading sign
+        op: ShiftOperation,
+    },
+    /// Set to an absolute date/time (the `=` operation).
+    Absolute(DateTime<Utc>),
+}
+
+/// Builds a ShiftSpec from an operation and its argument string, folding a
+/// leading `-` on the shift string into the operation direction.
+pub fn build_shift_spec(offset_or_value: &str, op: ShiftOperation) -> Result<ShiftSpec> {
+    if op == ShiftOperation::Set {
+        return Ok(ShiftSpec::Absolute(parse_absolute_datetime(
+            offset_or_value,
+        )?));
+    }
+    let (offset, negated) = parse_offset(offset_or_value)?;
+    let effective = match (op, negated) {
+        (ShiftOperation::Add, true) => ShiftOperation::Subtract,
+        (ShiftOperation::Subtract, true) => ShiftOperation::Add,
+        (other, _) => other,
+    };
+    Ok(ShiftSpec::Relative {
+        offset,
+        op: effective,
+    })
+}
+
+/// Applies a ShiftSpec to a date/time value.
+pub fn apply_spec(dt: DateTime<Utc>, spec: &ShiftSpec) -> Result<DateTime<Utc>> {
+    match spec {
+        ShiftSpec::Absolute(value) => Ok(*value),
+        ShiftSpec::Relative { offset, op } => apply_shift(dt, offset, *op),
+    }
+}
+
 /// Parses an ExifTool-style shift string.
 ///
 /// Grammar (matches `Image::ExifTool::Shift.pl`, verified against ExifTool 13.55):
@@ -586,5 +701,122 @@ mod tests {
         assert_eq!(result.hour(), 14);
         assert_eq!(result.minute(), 35);
         assert_eq!(result.second(), 6);
+    }
+
+    #[test]
+    fn test_resolve_bare_name() {
+        assert_eq!(
+            resolve_exif_targets("DateTimeOriginal"),
+            Some(vec![ExifDateTag::DateTimeOriginal])
+        );
+        assert_eq!(
+            resolve_exif_targets("datetimeoriginal"),
+            Some(vec![ExifDateTag::DateTimeOriginal])
+        );
+    }
+
+    #[test]
+    fn test_resolve_aliases() {
+        // ExifTool's names and the EXIF spec's names both resolve
+        assert_eq!(
+            resolve_exif_targets("ModifyDate"),
+            Some(vec![ExifDateTag::ModifyDate])
+        );
+        assert_eq!(
+            resolve_exif_targets("DateTime"),
+            Some(vec![ExifDateTag::ModifyDate])
+        );
+        assert_eq!(
+            resolve_exif_targets("CreateDate"),
+            Some(vec![ExifDateTag::CreateDate])
+        );
+        assert_eq!(
+            resolve_exif_targets("DateTimeDigitized"),
+            Some(vec![ExifDateTag::CreateDate])
+        );
+    }
+
+    #[test]
+    fn test_resolve_group_prefixes() {
+        assert_eq!(
+            resolve_exif_targets("EXIF:DateTimeOriginal"),
+            Some(vec![ExifDateTag::DateTimeOriginal])
+        );
+        assert_eq!(
+            resolve_exif_targets("ExifIFD:DateTimeOriginal"),
+            Some(vec![ExifDateTag::DateTimeOriginal])
+        );
+        assert_eq!(
+            resolve_exif_targets("IFD0:ModifyDate"),
+            Some(vec![ExifDateTag::ModifyDate])
+        );
+        // Wrong group for the tag: DateTimeOriginal lives in ExifIFD, not IFD0
+        assert_eq!(resolve_exif_targets("IFD0:DateTimeOriginal"), None);
+        // Unknown group
+        assert_eq!(resolve_exif_targets("XMP:CreateDate"), None);
+    }
+
+    #[test]
+    fn test_resolve_alldates() {
+        assert_eq!(
+            resolve_exif_targets("AllDates"),
+            Some(vec![
+                ExifDateTag::ModifyDate,
+                ExifDateTag::DateTimeOriginal,
+                ExifDateTag::CreateDate,
+            ])
+        );
+        assert_eq!(
+            resolve_exif_targets("alldates"),
+            resolve_exif_targets("AllDates")
+        );
+    }
+
+    #[test]
+    fn test_resolve_unknown_returns_none() {
+        assert_eq!(resolve_exif_targets("Artist"), None);
+        assert_eq!(resolve_exif_targets("GPSDateStamp"), None);
+    }
+
+    #[test]
+    fn test_build_shift_spec_relative_negated() {
+        let spec = build_shift_spec("-1", ShiftOperation::Subtract).unwrap();
+        // Subtracting a negative shift adds
+        match spec {
+            ShiftSpec::Relative { offset, op } => {
+                assert_eq!(op, ShiftOperation::Add);
+                assert_eq!(offset, DateOffset::new(0, 0, 0, 1, 0, 0));
+            }
+            other => panic!("expected Relative, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_build_shift_spec_absolute() {
+        let spec = build_shift_spec("2030:01:02 03:04:05", ShiftOperation::Set).unwrap();
+        match spec {
+            ShiftSpec::Absolute(dt) => {
+                assert_eq!(format_exif_datetime(&dt), "2030:01:02 03:04:05");
+            }
+            other => panic!("expected Absolute, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_apply_spec_relative_and_absolute() {
+        let dt = Utc.with_ymd_and_hms(2025, 6, 10, 12, 0, 0).unwrap();
+        let relative = ShiftSpec::Relative {
+            offset: DateOffset::new(0, 0, 0, 1, 0, 0),
+            op: ShiftOperation::Subtract,
+        };
+        assert_eq!(
+            format_exif_datetime(&apply_spec(dt, &relative).unwrap()),
+            "2025:06:10 11:00:00"
+        );
+        let absolute = ShiftSpec::Absolute(Utc.with_ymd_and_hms(2030, 1, 2, 3, 4, 5).unwrap());
+        assert_eq!(
+            format_exif_datetime(&apply_spec(dt, &absolute).unwrap()),
+            "2030:01:02 03:04:05"
+        );
     }
 }
