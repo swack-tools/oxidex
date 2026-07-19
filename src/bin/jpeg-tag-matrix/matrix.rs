@@ -1534,6 +1534,33 @@ mod write_phase_tests {
         let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
         assert_eq!(r.write.as_deref(), Some("VALUE_MISMATCH"));
     }
+
+    /// Distinct from `silent_noop_detected_against_pristine_base_value`: here
+    /// there is no pristine base value at all (base_ox/base_et lack the tag
+    /// entirely, so base_ox_val/base_et_val are both None -- ox_unchanged
+    /// and et_unchanged can never be true). oxidex's write command exits 0
+    /// with no "Error:" text, but on read-back both oxidex's and exiftool's
+    /// JSON come back with the tag simply absent (not merely unchanged).
+    /// This must fall through every other `write_test_tag` branch and land
+    /// in the final `else` arm ("exit 0 but tag absent on read-back"), not
+    /// the pristine-base no-op arm.
+    #[test]
+    fn exit_zero_but_tag_absent_on_both_sides_with_no_base_value() {
+        let (_td, base) = base_fixture();
+        let tools = Tools {
+            oxidex: &format!("{FIXTURE_DIR}/fake-oxidex-write-missing.sh"),
+            exiftool: &format!("{FIXTURE_DIR}/fake-exiftool-write-tag-absent.sh"),
+        };
+        let base_ox = json!({});
+        let base_et = json!({});
+        let base_warnings = HashSet::new();
+        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
+        assert_eq!(r.write.as_deref(), Some("NOT_WRITTEN"));
+        let detail = r.detail.unwrap();
+        assert!(detail.contains("exit 0 but tag absent on read-back"), "detail was: {detail:?}");
+        assert!(!detail.contains("silent no-op"), "detail was: {detail:?}");
+    }
 }
 
 #[cfg(test)]
