@@ -49,7 +49,7 @@ pub struct ListxTag {
     #[serde(rename = "@count", default)]
     pub count: String,
     #[serde(rename = "values", default)]
-    pub values: Option<ListxValues>,
+    pub values: Vec<ListxValues>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -77,7 +77,13 @@ pub struct ListxVal {
 /// default, so writing that exact value as the sample makes a genuine
 /// write indistinguishable from a no-op that left the default untouched.
 fn first_en_value(tag: &ListxTag) -> Option<String> {
-    let values = tag.values.as_ref()?;
+    // ExifTool's `-listx` output can emit multiple <values index="N"> blocks
+    // per tag (e.g. SampleFormat under Exif::Main). The Python this is
+    // ported from used ElementTree's `.find("values")`, which only ever
+    // returns the first match and silently ignores the rest -- so we
+    // deliberately look at only `values.first()` here to stay behaviorally
+    // faithful to that, not aggregate across all index blocks.
+    let values = tag.values.first()?;
     let labels: Vec<&str> = values
         .keys
         .iter()
@@ -466,7 +472,7 @@ mod tests {
             writable: "true".to_string(),
             flags: String::new(),
             count: count.to_string(),
-            values: None,
+            values: Vec::new(),
         }
     }
 
@@ -549,5 +555,49 @@ mod tests {
         let root: ListxRoot = quick_xml::de::from_str(&xml).unwrap();
         assert_eq!(root.tables.len(), 1);
         assert_eq!(root.tables[0].tags[0].name, "ISO");
+    }
+
+    /// Regression test: real ExifTool `-listx` output can emit multiple
+    /// `<values index="N">` blocks under one `<tag>` for tags whose enum
+    /// meaning depends on an index (confirmed real example: `SampleFormat`
+    /// under `Exif::Main` has `index="0"` and `index="1"` blocks). Before
+    /// this fix `ListxTag::values` was `Option<ListxValues>`, and quick-xml's
+    /// serde deserializer errored with `Custom("duplicate field
+    /// \"values\"")` on the second occurrence. It must now parse cleanly,
+    /// and `first_en_value` must only look at the FIRST block -- matching
+    /// the Python original's `ElementTree.find("values")`, which silently
+    /// ignores every subsequent match.
+    #[test]
+    fn parses_multiple_values_blocks_and_uses_only_first() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<taginfo>
+ <table name="Exif::Main" g0="EXIF" g1="ExifIFD">
+  <tag name="SampleFormat" g1="ExifIFD" type="int16u" writable="true" count="1">
+   <values index="0">
+    <key val="1"><val lang="en">Unsigned integer</val></key>
+    <key val="2"><val lang="en">Signed integer</val></key>
+   </values>
+   <values index="1">
+    <key val="1"><val lang="en">SecondBlockOnlyValue</val></key>
+   </values>
+  </tag>
+ </table>
+</taginfo>"#;
+
+        let root: ListxRoot = quick_xml::de::from_str(xml)
+            .expect("multiple <values> blocks must parse without error");
+        let tag_el = &root.tables[0].tags[0];
+        assert_eq!(
+            tag_el.values.len(),
+            2,
+            "both <values> blocks should be captured"
+        );
+
+        let sample = make_sample("EXIF", "SampleFormat", "int16u", tag_el, "ExifIFD");
+        assert_eq!(
+            sample, "Unsigned integer",
+            "must use the first <values> block only, ignoring the second"
+        );
+        assert_ne!(sample, "SecondBlockOnlyValue");
     }
 }
