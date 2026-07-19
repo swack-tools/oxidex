@@ -12,6 +12,7 @@ use crate::parsers::jpeg::app_segments::{
     parse_app6, parse_app10_hdr, parse_app11_jpeg_hdr, parse_app12_agfa, parse_app12_olympus,
     parse_app14_adobe,
 };
+use crate::parsers::jpeg::quality_estimate::estimate_quality_from_dqt_tables;
 use crate::parsers::jpeg::segment_parser::Segment;
 use crate::parsers::jpeg::xmp_parser::extract_xmp_from_segments;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
@@ -743,5 +744,32 @@ pub fn process_com_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     const COM_MARKER: u16 = 0xFFFE;
     for segment in segments.iter().filter(|s| s.marker == COM_MARKER) {
         let _ = crate::parsers::jpeg::app_parsers::parse_comment_segment(segment.data, metadata);
+    }
+}
+
+/// Processes DQT (Define Quantization Table) segments into a quality estimate.
+///
+/// Collects DQT payloads indexed by table id (first byte & 0x0F, ids 0-3,
+/// later segments overwrite earlier ones — ExifTool.pm DQT handler) and emits
+/// File:JPEGQualityEstimate. ExifTool computes this tag only when explicitly
+/// requested; oxidex has no tag-request mechanism and always emits it (see
+/// tests/integration/KNOWN_DISCREPANCIES.md).
+pub fn process_dqt_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const DQT_MARKER: u16 = 0xFFDB;
+    let mut dqt_list: [Option<&[u8]>; 4] = [None, None, None, None];
+    for segment in segments.iter().filter(|s| s.marker == DQT_MARKER) {
+        if segment.data.is_empty() {
+            continue;
+        }
+        let table_id = (segment.data[0] & 0x0F) as usize;
+        if table_id < 4 {
+            dqt_list[table_id] = Some(segment.data);
+        }
+    }
+    if let Some(quality) = estimate_quality_from_dqt_tables(&dqt_list) {
+        metadata.insert(
+            "File:JPEGQualityEstimate".to_string(),
+            TagValue::Integer(quality),
+        );
     }
 }

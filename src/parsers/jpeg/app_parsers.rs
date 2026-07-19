@@ -1,11 +1,10 @@
-//! JPEG APP segment parsers (APP2, APP12, APP14, COM, DQT, SOF)
+//! JPEG APP segment parsers (APP2, APP12, APP14, COM, SOF)
 //!
 //! This module provides parsers for various JPEG application-specific segments:
 //! - APP2: ICC Profile
 //! - APP12: Picture Info (Ducky)
 //! - APP14: Adobe segment
 //! - COM: JPEG Comment
-//! - DQT: Quantization tables (for quality estimation)
 //! - SOF: Start of Frame (component information)
 
 use crate::core::{MetadataMap, TagValue};
@@ -236,49 +235,6 @@ pub fn parse_comment_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<
             );
         }
     }
-    Ok(())
-}
-
-/// Estimate JPEG quality from DQT (Define Quantization Table) segment
-///
-/// This uses a heuristic based on the quantization table values
-pub fn estimate_quality_from_dqt(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    if data.is_empty() {
-        return Err("DQT segment is empty".to_string());
-    }
-
-    // Parse DQT header
-    let precision_and_id = data[0];
-    let _precision = (precision_and_id >> 4) & 0x0F; // 0 = 8-bit, 1 = 16-bit
-    let _table_id = precision_and_id & 0x0F;
-
-    // For 8-bit precision, we have 64 quantization values
-    if data.len() < 65 {
-        return Err("DQT segment too short".to_string());
-    }
-
-    // Calculate average quantization value (excluding first byte)
-    let qvals = &data[1..65];
-    let sum: u32 = qvals.iter().map(|&v| v as u32).sum();
-    let avg = sum / 64;
-
-    // Estimate quality using a simple heuristic
-    // Lower quantization values = higher quality
-    let quality = if avg <= 10 {
-        95 + (10 - avg) as i64
-    } else if avg <= 50 {
-        85 - ((avg - 10) / 4) as i64
-    } else {
-        50 - ((avg - 50) / 2) as i64
-    };
-
-    let quality = quality.clamp(1, 100);
-
-    metadata.insert(
-        "JPEG:EstimatedQuality".to_string(),
-        TagValue::Integer(quality),
-    );
-
     Ok(())
 }
 
@@ -774,20 +730,6 @@ mod tests {
             metadata.get("File:Comment"),
             Some(&TagValue::Binary(vec![0xFF, 0xFE, 0x00, 0x41]))
         );
-    }
-
-    #[test]
-    fn test_estimate_quality_high() {
-        // Create a DQT with low values (high quality)
-        let mut data = vec![0x00]; // Precision 0, table 0
-        data.extend(vec![5u8; 64]); // Low quantization values
-
-        let mut metadata = MetadataMap::new();
-        let result = estimate_quality_from_dqt(&data, &mut metadata);
-
-        assert!(result.is_ok());
-        let quality = metadata.get_integer("JPEG:EstimatedQuality").unwrap();
-        assert!(quality > 90);
     }
 
     #[test]

@@ -1794,3 +1794,25 @@ fn jpeg_com_segment_yields_file_comment() {
     let metadata = read_temp_file(&jpeg, ".jpg");
     assert_eq!(metadata.get_string("File:Comment"), Some("Test comment"));
 }
+
+// ---------------------------------------------------------------------------
+// JPEG DQT quality estimation wiring
+// ---------------------------------------------------------------------------
+
+fn dqt_payload() -> Vec<u8> {
+    // 8-bit precision, table id 0, all values 16
+    let mut p = vec![0x00];
+    p.extend_from_slice(&[16u8; 64]);
+    p
+}
+
+#[test]
+fn jpeg_dqt_yields_exiftool_quality_estimate() {
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xDB, &dqt_payload()),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    // ExifTool 13.55 reports 87 for this quantization table
+    assert_eq!(metadata.get_integer("File:JPEGQualityEstimate"), Some(87));
+}
