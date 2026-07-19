@@ -6,9 +6,11 @@
 """Close oxidex/ExifTool tag-coverage gaps via any OpenAI-compatible model API.
 
 Config (env vars, or matching --flags):
-    MODEL_FIX_BASE_URL   e.g. https://api.z.ai/api/paas/v4  (GLM-5.2)
+    MODEL_FIX_BASE_URL             e.g. https://api.z.ai/api/paas/v4  (GLM-5.2)
     MODEL_FIX_API_KEY
-    MODEL_FIX_MODEL       e.g. "glm-5.2"
+    MODEL_FIX_MODEL                e.g. "glm-5.2"
+    MODEL_FIX_MAX_TOKENS           default 4096
+    MODEL_FIX_REASONING_EFFORT     default "max"
 
 Usage:
     uv run scripts/model_fix_loop.py
@@ -48,10 +50,16 @@ def extract_diff(response_text):
     return None
 
 
-def call_model(messages, base_url, api_key, model):
+def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort):
     """POST a chat-completions request, return the assistant's reply text."""
     url = base_url.rstrip("/") + "/chat/completions"
-    body = json.dumps({"model": model, "messages": messages, "temperature": 0}).encode()
+    body = json.dumps({
+        "model": model,
+        "messages": messages,
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "reasoning_effort": reasoning_effort,
+    }).encode()
     req = urllib.request.Request(
         url, data=body, method="POST",
         headers={
@@ -148,7 +156,10 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
 
     built = False
     for _attempt in range(2):  # one initial attempt + one repair round-trip
-        reply = call_model_fn(messages, config["base_url"], config["api_key"], config["model"])
+        reply = call_model_fn(
+            messages, config["base_url"], config["api_key"], config["model"],
+            config["max_tokens"], config["reasoning_effort"],
+        )
         diff = extract_diff(reply)
         if diff is None:
             return {"format": gap["format"], "status": "failed", "reason": "no diff in model response"}
@@ -239,6 +250,14 @@ def main(argv=None):
     parser.add_argument("--base-url", default=os.environ.get("MODEL_FIX_BASE_URL"))
     parser.add_argument("--api-key", default=os.environ.get("MODEL_FIX_API_KEY"))
     parser.add_argument("--model", default=os.environ.get("MODEL_FIX_MODEL"))
+    parser.add_argument(
+        "--max-tokens", type=int,
+        default=int(os.environ.get("MODEL_FIX_MAX_TOKENS", "4096")),
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        default=os.environ.get("MODEL_FIX_REASONING_EFFORT", "max"),
+    )
     parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
     args = parser.parse_args(argv)
 
@@ -250,7 +269,13 @@ def main(argv=None):
         )
         return 1
 
-    config = {"base_url": args.base_url, "api_key": args.api_key, "model": args.model}
+    config = {
+        "base_url": args.base_url,
+        "api_key": args.api_key,
+        "model": args.model,
+        "max_tokens": args.max_tokens,
+        "reasoning_effort": args.reasoning_effort,
+    }
 
     def find_gaps_fn():
         report_path = run_full_comparison(args.cache_dir)

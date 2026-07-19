@@ -53,6 +53,8 @@ class CallModelTests(unittest.TestCase):
             base_url="https://api.z.ai/api/paas/v4",
             api_key="secret",
             model="glm-5.2",
+            max_tokens=4096,
+            reasoning_effort="max",
         )
 
         self.assertEqual(result, "the diff")
@@ -62,6 +64,8 @@ class CallModelTests(unittest.TestCase):
         body = json.loads(request.data)
         self.assertEqual(body["model"], "glm-5.2")
         self.assertEqual(body["messages"], [{"role": "user", "content": "fix it"}])
+        self.assertEqual(body["max_tokens"], 4096)
+        self.assertEqual(body["reasoning_effort"], "max")
 
 
 class GitApplyTests(unittest.TestCase):
@@ -150,7 +154,7 @@ class FixGapHappyPathTests(unittest.TestCase):
 
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2"},
+            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
             call_model_fn=lambda messages, *a: (model_calls.append(1), "```diff\n--- a/x\n+++ b/x\n```\n")[1],
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
@@ -181,7 +185,7 @@ class FixGapRepairRoundTripTests(unittest.TestCase):
 
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2"},
+            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
@@ -207,7 +211,7 @@ class FixGapRepairRoundTripTests(unittest.TestCase):
 
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2"},
+            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=fake_git_apply,
             git_checkout_clean_fn=lambda root: None,
@@ -227,7 +231,7 @@ class FixGapFailureTests(unittest.TestCase):
         gap = make_gap()
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2"},
+            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
@@ -242,7 +246,7 @@ class FixGapFailureTests(unittest.TestCase):
         gap = make_gap(gap_count=2)
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2"},
+            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
@@ -259,7 +263,7 @@ class FixGapFailureTests(unittest.TestCase):
         gap = make_gap(gap_count=2)
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2"},
+            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
@@ -276,7 +280,7 @@ class FixGapFailureTests(unittest.TestCase):
         gap = make_gap()
         result = fix_gap(
             gap,
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2"},
+            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
             call_model_fn=lambda messages, *a: "I could not find a fix.",
             git_apply_fn=lambda diff, root: self.fail("should not apply"),
             cargo_build_fn=lambda root: self.fail("should not build"),
