@@ -14,7 +14,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Check ExifTool version
         id: check
@@ -59,7 +59,7 @@ jobs:
 
       - name: Setup Rust toolchain
         if: steps.check.outputs.version_changed == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Install dependencies
         if: steps.check.outputs.version_changed == 'true'
@@ -106,7 +106,7 @@ jobs:
 
       - name: Create Pull Request
         if: steps.check.outputs.version_changed == 'true'
-        uses: peter-evans/create-pull-request@v5
+        uses: peter-evans/create-pull-request@4e1beaa7521e8b457b572c090b25bd3db56bf1c5 # v5.0.3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: |

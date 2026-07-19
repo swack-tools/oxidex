@@ -1694,3 +1694,259 @@ trailer<</Size 5/Root 1 0 R/Info 4 0 R/Prev {base_xref_off}>>\nstartxref\n{upd_x
         "rejected PDF write must leave the file untouched"
     );
 }
+
+// ---------------------------------------------------------------------------
+// JPEG APP6 (GoPro GPMF) wiring
+// ---------------------------------------------------------------------------
+
+fn jpeg_segment(marker: u8, payload: &[u8]) -> Vec<u8> {
+    let mut seg = vec![0xFF, marker];
+    seg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+    seg.extend_from_slice(payload);
+    seg
+}
+
+fn jpeg_with_segments(segments: &[Vec<u8>]) -> Vec<u8> {
+    let mut data = vec![0xFF, 0xD8];
+    for seg in segments {
+        data.extend_from_slice(seg);
+    }
+    data.extend_from_slice(&[0xFF, 0xD9]);
+    data
+}
+
+fn sof0_payload() -> Vec<u8> {
+    // 8-bit precision, 480x640, 3 components: Y 2x2 q0, Cb 1x1 q1, Cr 1x1 q1
+    let mut p = vec![8];
+    p.extend_from_slice(&480u16.to_be_bytes());
+    p.extend_from_slice(&640u16.to_be_bytes());
+    p.push(3);
+    p.extend_from_slice(&[1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+    p
+}
+
+fn gpmf_record(fourcc: &[u8; 4], fmt: u8, size: u8, count: u16, data: &[u8]) -> Vec<u8> {
+    let mut rec = fourcc.to_vec();
+    rec.push(fmt);
+    rec.push(size);
+    rec.extend_from_slice(&count.to_be_bytes());
+    rec.extend_from_slice(data);
+    while !rec.len().is_multiple_of(4) {
+        rec.push(0);
+    }
+    rec
+}
+
+fn gopro_app6_payload() -> Vec<u8> {
+    let mut p = b"GoPro\0".to_vec();
+    p.extend_from_slice(&gpmf_record(b"MINF", b'c', 1, 11, b"HERO8 Black"));
+    p.extend_from_slice(&gpmf_record(b"CASN", b'c', 1, 14, b"C3221324545448"));
+    p.extend_from_slice(&gpmf_record(b"FMWR", b'c', 1, 15, b"HD8.01.01.60.00"));
+    p.extend_from_slice(&gpmf_record(b"RATE", b'c', 1, 6, b"4_1SEC"));
+    p
+}
+
+#[test]
+fn jpeg_app6_gopro_segment_yields_gopro_tags() {
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xE6, &gopro_app6_payload()),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    // Parity target captured from ExifTool 13.55 (-G1: group GoPro)
+    assert_eq!(metadata.get_string("GoPro:Model"), Some("HERO8 Black"));
+    assert_eq!(
+        metadata.get_string("GoPro:CameraSerialNumber"),
+        Some("C3221324545448")
+    );
+    assert_eq!(
+        metadata.get_string("GoPro:FirmwareVersion"),
+        Some("HD8.01.01.60.00")
+    );
+    assert_eq!(metadata.get_string("GoPro:Rate"), Some("4_1SEC"));
+}
+
+#[test]
+fn jpeg_app6_unknown_format_extracts_nothing() {
+    let mut payload = b"MMIMETA\0".to_vec();
+    payload.extend_from_slice(&[0x01; 16]);
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xE6, &payload),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    assert!(
+        !metadata
+            .iter()
+            .any(|(k, _)| k.starts_with("GoPro:") || k.starts_with("APP6:")),
+        "unknown APP6 payloads must not produce GoPro/APP6 tags"
+    );
+    // The rest of the file still parses normally.
+    assert_eq!(metadata.get_integer("File:ImageWidth"), Some(640));
+}
+
+#[test]
+fn jpeg_com_segment_yields_file_comment() {
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xFE, b"Test comment\0\0"),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    assert_eq!(metadata.get_string("File:Comment"), Some("Test comment"));
+}
+
+// ---------------------------------------------------------------------------
+// JPEG DQT quality estimation wiring
+// ---------------------------------------------------------------------------
+
+fn dqt_payload() -> Vec<u8> {
+    // 8-bit precision, table id 0, all values 16
+    let mut p = vec![0x00];
+    p.extend_from_slice(&[16u8; 64]);
+    p
+}
+
+#[test]
+fn jpeg_dqt_yields_exiftool_quality_estimate() {
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xDB, &dqt_payload()),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    // ExifTool 13.55 reports 87 for this quantization table
+    assert_eq!(metadata.get_integer("File:JPEGQualityEstimate"), Some(87));
+}
+
+// ---------------------------------------------------------------------------
+// JPEG APP8 SPIFF wiring
+// ---------------------------------------------------------------------------
+
+fn spiff_payload() -> Vec<u8> {
+    let mut p = b"SPIFF\0".to_vec();
+    p.extend_from_slice(&[1, 0]);
+    p.push(1);
+    p.push(3);
+    p.extend_from_slice(&[0, 0]);
+    p.extend_from_slice(&480u32.to_be_bytes());
+    p.extend_from_slice(&640u32.to_be_bytes());
+    p.extend_from_slice(&[3, 8, 5, 1]);
+    p.extend_from_slice(&72u32.to_be_bytes());
+    p.extend_from_slice(&72u32.to_be_bytes());
+    assert_eq!(p.len(), 32);
+    p
+}
+
+#[test]
+fn jpeg_spiff_segment_yields_spiff_tags() {
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xE8, &spiff_payload()),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    assert_eq!(metadata.get_string("SPIFF:SPIFFVersion"), Some("1.0"));
+    assert_eq!(metadata.get_integer("SPIFF:ImageWidth"), Some(640));
+    assert_eq!(metadata.get_string("SPIFF:Compression"), Some("JPEG"));
+}
+
+#[test]
+fn jpeg_spiff_segment_wrong_length_is_ignored() {
+    let mut short = spiff_payload();
+    short.truncate(30);
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xE8, &short),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    assert!(metadata.get("SPIFF:SPIFFVersion").is_none());
+}
+
+// ---------------------------------------------------------------------------
+// JPEG multi-chunk ICC profile reassembly wiring
+// ---------------------------------------------------------------------------
+
+fn icc_header_128() -> Vec<u8> {
+    let mut h = vec![0u8; 128];
+    h[0..4].copy_from_slice(&128u32.to_be_bytes()); // profile size
+    h[4..8].copy_from_slice(b"ADBE"); // CMM type
+    h[8] = 4; // version 4.0
+    h[12..16].copy_from_slice(b"mntr"); // display device profile
+    h[16..20].copy_from_slice(b"RGB "); // color space
+    h[20..24].copy_from_slice(b"XYZ "); // PCS
+    h[36..40].copy_from_slice(b"acsp"); // profile file signature
+    h
+}
+
+fn icc_chunk(chunk_num: u8, total: u8, data: &[u8]) -> Vec<u8> {
+    let mut p = b"ICC_PROFILE\0".to_vec();
+    p.push(chunk_num);
+    p.push(total);
+    p.extend_from_slice(data);
+    p
+}
+
+#[test]
+fn jpeg_multichunk_icc_profile_reassembles() {
+    let profile = icc_header_128();
+    let (part1, part2) = profile.split_at(64);
+    // Chunks arrive out of order to exercise reassembly rather than luck.
+    let jpeg_multi = jpeg_with_segments(&[
+        jpeg_segment(0xE2, &icc_chunk(2, 2, part2)),
+        jpeg_segment(0xE2, &icc_chunk(1, 2, part1)),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let jpeg_single = jpeg_with_segments(&[
+        jpeg_segment(0xE2, &icc_chunk(1, 1, &profile)),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let multi = read_temp_file(&jpeg_multi, ".jpg");
+    let single = read_temp_file(&jpeg_single, ".jpg");
+    let key = "ICC_Profile:ColorSpaceData";
+    assert!(
+        multi.get(key).is_some(),
+        "multi-chunk ICC profile produced no {key}"
+    );
+    assert_eq!(multi.get(key), single.get(key));
+}
+
+#[test]
+fn jpeg_duplicate_single_chunk_icc_profiles_keeps_first() {
+    // Two APP2 segments each marked "chunk 1 of 1" collide in the chunk
+    // assembler (duplicate chunk 1). ExifTool warns and keeps the first
+    // profile; approximate that instead of dropping every ICC tag.
+    let profile1 = icc_header_128();
+    let mut profile2 = icc_header_128();
+    profile2[16..20].copy_from_slice(b"GRAY"); // differ from profile1's "RGB "
+
+    let jpeg_dup = jpeg_with_segments(&[
+        jpeg_segment(0xE2, &icc_chunk(1, 1, &profile1)),
+        jpeg_segment(0xE2, &icc_chunk(1, 1, &profile2)),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let jpeg_control = jpeg_with_segments(&[
+        jpeg_segment(0xE2, &icc_chunk(1, 1, &profile1)),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+
+    let dup = read_temp_file(&jpeg_dup, ".jpg");
+    let control = read_temp_file(&jpeg_control, ".jpg");
+    let key = "ICC_Profile:ColorSpaceData";
+    assert!(
+        dup.get(key).is_some(),
+        "duplicate single-chunk ICC profiles produced no {key}"
+    );
+    assert_eq!(dup.get(key), control.get(key));
+}
+
+#[test]
+fn jpeg_incomplete_multichunk_icc_profile_degrades_gracefully() {
+    let profile = icc_header_128();
+    let (part1, _part2) = profile.split_at(64);
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xE2, &icc_chunk(1, 2, part1)), // chunk 2 of 2 missing
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let metadata = read_temp_file(&jpeg, ".jpg");
+    assert!(metadata.get("ICC_Profile:ColorSpaceData").is_none());
+    // File-level tags still parse; the read never hard-fails.
+    assert_eq!(metadata.get_integer("File:ImageWidth"), Some(640));
+}

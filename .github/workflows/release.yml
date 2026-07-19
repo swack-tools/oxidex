@@ -25,10 +25,10 @@ jobs:
             os: warp-ubuntu-latest-arm64-2x
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: ${{ matrix.target }}
 
@@ -51,7 +51,7 @@ jobs:
           cp target/${{ matrix.target }}/release/oxidex artifacts/oxidex-${{ matrix.target }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oxidex-${{ matrix.target }}
           path: artifacts/oxidex-${{ matrix.target }}
@@ -62,10 +62,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: x86_64-pc-windows-gnu
 
@@ -87,7 +87,7 @@ jobs:
           cp target/x86_64-pc-windows-gnu/release/oxidex.exe artifacts/oxidex-x86_64-pc-windows-gnu.exe
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oxidex-x86_64-pc-windows-gnu
           path: artifacts/oxidex-x86_64-pc-windows-gnu.exe
@@ -100,7 +100,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Extract version from tag
         id: version
@@ -230,14 +230,14 @@ jobs:
           cp dist/oxidex-v${{ steps.version.outputs.version }}.dmg artifacts/
 
       - name: Upload signed binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oxidex-aarch64-apple-darwin
           path: artifacts/oxidex-aarch64-apple-darwin
           retention-days: 1
 
       - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oxidex-dmg
           path: artifacts/oxidex-v${{ steps.version.outputs.version }}.dmg
@@ -256,10 +256,10 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
 
@@ -327,7 +327,7 @@ jobs:
           sed -i "s/\$VERSION/$VERSION/g" release-notes.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           name: Release v${{ steps.version.outputs.version }}
           body_path: release-notes.md
@@ -346,7 +346,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout gh-pages branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: gh-pages
           fetch-depth: 0

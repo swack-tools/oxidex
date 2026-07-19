@@ -22,13 +22,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-features -- -D warnings
-      - uses: rustsec/audit-check@v1
+      - uses: rustsec/audit-check@e9159ac5f7d7d873ce074ca134da2f445c0a4a61 # v1.3.2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # Accept the informational "bincode is unmaintained" advisory: it is a
@@ -43,9 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
         with:
           # Pin cbindgen: the committed api/oxidex.h is generated with 0.29.2,
           # and newer cbindgen emits extra #define macros that would fail the
@@ -84,8 +84,8 @@ jobs:
           - target: aarch64-unknown-linux-musl
             os: warp-ubuntu-latest-arm64-2x
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: ${{ matrix.target }}
       - run: |
@@ -101,21 +101,21 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [test]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
       - name: Run benchmarks
         run: cargo bench --bench integration_benchmarks --bench parse_benchmarks
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: benchmark-results
           path: target/criterion/
           retention-days: 90
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
         with:
           tool: cargo-tarpaulin
       - name: Generate coverage
         run: cargo tarpaulin --verbose --all-features --workspace --timeout 300 --out xml --output-dir ./coverage
-      - uses: codacy/codacy-coverage-reporter-action@v1
+      - uses: codacy/codacy-coverage-reporter-action@89d6c85cfafaec52c72b6c5e8b2878d33104c699 # v1.3.0
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           coverage-reports: coverage/cobertura.xml

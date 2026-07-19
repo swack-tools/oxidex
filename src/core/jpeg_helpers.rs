@@ -9,8 +9,11 @@ use crate::core::tag_conversion::{parse_string_to_tag_value, raw_bytes_to_tag_va
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
 use crate::io::EndianReader;
 use crate::parsers::jpeg::app_segments::{
-    parse_app10_hdr, parse_app11_jpeg_hdr, parse_app12_agfa, parse_app12_olympus, parse_app14_adobe,
+    parse_app6, parse_app10_hdr, parse_app11_jpeg_hdr, parse_app12_agfa, parse_app12_olympus,
+    parse_app14_adobe,
 };
+use crate::parsers::jpeg::icc_chunk_assembler::IccChunkAssembler;
+use crate::parsers::jpeg::quality_estimate::estimate_quality_from_dqt_tables;
 use crate::parsers::jpeg::segment_parser::Segment;
 use crate::parsers::jpeg::xmp_parser::extract_xmp_from_segments;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
@@ -312,50 +315,71 @@ pub fn process_mpf_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 /// Processes ICC profile APP2 segments and extracts color profile metadata.
 ///
 /// ICC (International Color Consortium) profiles describe the color
-/// characteristics of an image and are stored in APP2 segments.
+/// characteristics of an image. Profiles larger than one APP2 segment
+/// (~64KB) are split into chunks carrying a 1-based sequence number and a
+/// total count; chunks are reassembled with IccChunkAssembler before parsing.
 ///
 /// # Arguments
 ///
 /// * `segments` - Parsed JPEG segments
 /// * `metadata` - MetadataMap to populate with ICC profile tags
 pub fn process_icc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
-    for segment in segments.iter().filter(|s| s.marker == 0xFFE2) {
-        // Check if this is an ICC profile segment (starts with "ICC_PROFILE\0")
-        if segment.data.len() >= 14 && &segment.data[0..12] == b"ICC_PROFILE\0" {
-            // ICC profile structure in JPEG APP2:
-            // Bytes 0-11: "ICC_PROFILE\0" identifier
-            // Byte 12: Chunk number (1-based)
-            // Byte 13: Total chunks
-            // Bytes 14+: ICC profile data
+    let icc_segments: Vec<&Segment> = segments
+        .iter()
+        .filter(|s| s.marker == 0xFFE2 && s.data.len() >= 14 && &s.data[0..12] == b"ICC_PROFILE\0")
+        .collect();
+    if icc_segments.is_empty() {
+        return;
+    }
 
-            // For now, only handle single-chunk ICC profiles (most common)
-            let chunk_num = segment.data[12];
-            let total_chunks = segment.data[13];
+    // Fast path: single-chunk profile parses in place, no reassembly copy.
+    if icc_segments.len() == 1 && icc_segments[0].data[12] == 1 && icc_segments[0].data[13] == 1 {
+        insert_icc_tags(&icc_segments[0].data[14..], metadata);
+        return;
+    }
 
-            if chunk_num == 1 && total_chunks == 1 {
-                // Single chunk - parse ICC profile directly
-                let icc_data = &segment.data[14..];
-                match crate::parsers::icc::parse_icc_profile_data(icc_data) {
-                    Ok(icc_tags) => {
-                        // Add all ICC tags to metadata with "ICC_Profile:" prefix
-                        // to match ExifTool's family naming
-                        for (tag_name, value) in icc_tags {
-                            metadata.insert(format!("ICC_Profile:{}", tag_name), value);
-                        }
-                    }
-                    Err(e) => {
-                        // Log error but continue processing
-                        eprintln!("Warning: Failed to parse ICC profile: {}", e);
-                    }
-                }
-            } else {
-                // Multi-chunk ICC profile - would need to reassemble chunks
-                // This is less common, so we'll skip for now
-                eprintln!(
-                    "Warning: Multi-chunk ICC profile detected ({}/{}), not yet supported",
-                    chunk_num, total_chunks
-                );
+    let mut assembler = IccChunkAssembler::new();
+    for segment in &icc_segments {
+        if let Err(e) = assembler.add_chunk(segment.data) {
+            eprintln!("Warning: Invalid ICC profile chunk: {}", e);
+            // ExifTool warns and keeps the FIRST profile when duplicate
+            // "chunk 1 of 1" segments collide (the previous oxidex release
+            // kept the last). Approximate that by falling back to the
+            // first segment whose header marks it chunk 1 of 1, instead of
+            // dropping every ICC tag.
+            if let Some(seg) = icc_segments
+                .iter()
+                .find(|s| s.data[12] == 1 && s.data[13] == 1)
+            {
+                insert_icc_tags(&seg.data[14..], metadata);
             }
+            return;
+        }
+    }
+    if !assembler.is_complete() {
+        eprintln!(
+            "Warning: Incomplete multi-chunk ICC profile ({} of {:?} chunks), skipping",
+            assembler.chunk_count(),
+            assembler.expected_total()
+        );
+        return;
+    }
+    match assembler.assemble() {
+        Ok(profile) => insert_icc_tags(&profile, metadata),
+        Err(e) => eprintln!("Warning: Failed to assemble ICC profile: {}", e),
+    }
+}
+
+/// Parses raw ICC profile bytes and inserts ICC_Profile-prefixed tags.
+fn insert_icc_tags(icc_data: &[u8], metadata: &mut MetadataMap) {
+    match crate::parsers::icc::parse_icc_profile_data(icc_data) {
+        Ok(icc_tags) => {
+            for (tag_name, value) in icc_tags {
+                metadata.insert(format!("ICC_Profile:{}", tag_name), value);
+            }
+        }
+        Err(e) => {
+            eprintln!("Warning: Failed to parse ICC profile: {}", e);
         }
     }
 }
@@ -390,36 +414,33 @@ pub fn process_sof_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     }
 }
 
-/// Processes APP10 segments and extracts HDR gain curve metadata.
+/// Processes APP6 segments and extracts GoPro GPMF, TDHD, or NITF metadata.
 ///
-/// APP10 segments (marker 0xFFEA) may contain HDR (High Dynamic Range) gain curve
-/// data used for tone mapping and HDR image reconstruction.
+/// APP6 segments (marker 0xFFE6) are dispatched on the same identifier
+/// conditions ExifTool uses: GoPro GPMF ("GoPro\0"), HP/Toshiba TDHD
+/// ("TDHD\x01\0\0\0"), and NITF ("NITF\0"). GoPro tags are emitted under the
+/// GoPro: family with ExifTool tag names (e.g. GoPro:Model,
+/// GoPro:CameraSerialNumber). Unrecognized APP6 payloads extract nothing.
 ///
 /// # Arguments
 ///
 /// * `segments` - Parsed JPEG segments
-/// * `metadata` - MetadataMap to populate with HDR tags
-///
-/// # HDR Formats Supported
-///
-/// - Standard HDR with "HDR\0" prefix
-/// - Android AROT gain map format
-/// - Generic/unknown HDR formats (stored as raw data)
-pub fn process_app6_segments(_segments: &[Segment], _metadata: &mut MetadataMap) {
-    // TODO: implement parse_app6
-    // const APP6_MARKER: u16 = 0xFFE6;
-    // for segment in segments.iter().filter(|s| s.marker == APP6_MARKER) {
-    //     match parse_app6(segment.data) {
-    //         Ok(app6_metadata) => {
-    //             for (key, value) in app6_metadata.iter() {
-    //                 metadata.insert(key.clone(), value.clone());
-    //             }
-    //         }
-    //         Err(e) => {
-    //             eprintln!("Warning: Failed to parse APP6 segment: {}", e);
-    //         }
-    //     }
-    // }
+/// * `metadata` - MetadataMap to populate with APP6 tags
+pub fn process_app6_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const APP6_MARKER: u16 = 0xFFE6;
+    for segment in segments.iter().filter(|s| s.marker == APP6_MARKER) {
+        match parse_app6(segment.data) {
+            Ok(app6_metadata) => {
+                for (key, value) in app6_metadata.iter() {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+            Err(e) => {
+                // APP6 data is optional; parse failures are not fatal
+                eprintln!("Warning: Failed to parse APP6 segment: {}", e);
+            }
+        }
+    }
 }
 
 /// Process APP10 segments to extract HDR gain curve data
@@ -733,5 +754,62 @@ pub fn process_app14_segments(segments: &[Segment], metadata: &mut MetadataMap) 
         }
         // Non-Adobe APP14 segments are silently ignored - they may contain
         // other proprietary data that we don't support yet.
+    }
+}
+
+/// Processes JPEG COM (comment) segments.
+///
+/// COM segments (marker 0xFFFE) carry free-form comment text. ExifTool exposes
+/// them as File:Comment with trailing NULs stripped; when several COM segments
+/// are present the last one wins (MetadataMap holds one value per key).
+pub fn process_com_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const COM_MARKER: u16 = 0xFFFE;
+    for segment in segments.iter().filter(|s| s.marker == COM_MARKER) {
+        let _ = crate::parsers::jpeg::app_parsers::parse_comment_segment(segment.data, metadata);
+    }
+}
+
+/// Processes DQT (Define Quantization Table) segments into a quality estimate.
+///
+/// Collects DQT payloads indexed by table id (first byte & 0x0F, ids 0-3,
+/// later segments overwrite earlier ones — ExifTool.pm DQT handler) and emits
+/// File:JPEGQualityEstimate. ExifTool computes this tag only when explicitly
+/// requested; oxidex has no tag-request mechanism and always emits it (see
+/// tests/integration/KNOWN_DISCREPANCIES.md).
+pub fn process_dqt_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const DQT_MARKER: u16 = 0xFFDB;
+    let mut dqt_list: [Option<&[u8]>; 4] = [None, None, None, None];
+    for segment in segments.iter().filter(|s| s.marker == DQT_MARKER) {
+        if segment.data.is_empty() {
+            continue;
+        }
+        let table_id = (segment.data[0] & 0x0F) as usize;
+        if table_id < 4 {
+            dqt_list[table_id] = Some(segment.data);
+        }
+    }
+    if let Some(quality) = estimate_quality_from_dqt_tables(&dqt_list) {
+        metadata.insert(
+            "File:JPEGQualityEstimate".to_string(),
+            TagValue::Integer(quality),
+        );
+    }
+}
+
+/// Processes APP8 SPIFF segments.
+///
+/// Matching ExifTool, only 32-byte payloads starting with "SPIFF\0" are
+/// treated as SPIFF headers; other APP8 payloads (InfiRay, SEAL, ...) are
+/// left alone.
+pub fn process_spiff_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const APP8_MARKER: u16 = 0xFFE8;
+    for segment in segments.iter().filter(|s| s.marker == APP8_MARKER) {
+        // The 32-byte/"SPIFF\0" gate is intentionally duplicated in
+        // parse_spiff_segment as defense-in-depth; its own length/identifier
+        // error paths are therefore unreachable from production callers by
+        // design, not dead code.
+        if segment.data.len() == 32 && segment.data.starts_with(b"SPIFF\0") {
+            let _ = crate::parsers::jpeg::app_parsers::parse_spiff_segment(segment.data, metadata);
+        }
     }
 }
