@@ -1299,6 +1299,56 @@ mod tests {
         );
     }
 
+    /// The other half of the collision shape that motivated the generalized
+    /// guard in `plan_exif_write` (see the comment above the
+    /// `carried_reader_keys` check): MakerNote is an "unsurfaced class" that
+    /// is always raw-carried, but the reader still surfaces it under a
+    /// hex-fallback key ("ExifIFD:0x927C") because tag 0x927C has no name in
+    /// the registry. Before the generalization, this key's presence in
+    /// `original_map` made the "Added" loop treat a real edit as an
+    /// already-known tag and silently `continue`, dropping it. Confirmed by
+    /// reading the pre-fix code at `2e16b24` (`original_map.contains_key(&key)
+    /// { continue; }` with no error path).
+    #[test]
+    fn plan_changed_makernote_key_errors_instead_of_silently_dropping() {
+        let (scan, original, _tiff) = canon_scan_and_maps();
+        assert!(
+            original.get("ExifIFD:0x927C").is_some(),
+            "fixture must surface the MakerNote hex-fallback key"
+        );
+
+        let mut desired = original.clone();
+        let original_value = original.get("ExifIFD:0x927C").unwrap().clone();
+        let new_value = TagValue::new_string("tampered");
+        assert_ne!(
+            original_value, new_value,
+            "test setup must actually change the value"
+        );
+        desired.insert("ExifIFD:0x927C", new_value);
+
+        let err = plan_exif_write(&scan, &original, &desired).unwrap_err();
+        // Must be a clear rejection, not Ok() with the edit silently dropped
+        let msg = err.to_string();
+        assert!(
+            msg.to_lowercase().contains("not")
+                && (msg.contains("0x927C")
+                    || msg.to_lowercase().contains("makernote")
+                    || msg.to_lowercase().contains("supported")),
+            "expected a clear rejection error, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn plan_unchanged_makernote_key_is_noop() {
+        let (scan, original, _tiff) = canon_scan_and_maps();
+        let desired = original.clone();
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        // The MakerNote entry must still be carried unchanged
+        assert!(plan.exif_ifd.iter().any(|e| e.tag_id == MAKERNOTE));
+    }
+
     #[test]
     fn plan_clear_semantics() {
         let tiff = build_full_tiff(ByteOrder::LittleEndian);
