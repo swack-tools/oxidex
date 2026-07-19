@@ -439,6 +439,10 @@ tables:
         name: "Switch Subject"
         writable: false
         description: "Switch Subject tag"
+      - id: "0xFFFF"
+        name: "n/a"
+        writable: false
+        description: "n/a tag"
       - id: "0x0018"
         name: "EyeDetection"
         writable: false
@@ -740,6 +744,10 @@ tables:
   - name: Canon::CameraInfo1000D
     tags:
       - id: "0x0003"
+        name: "FlashModel"
+        writable: false
+        description: "FlashModel tag"
+      - id: "0x0015"
         name: "FlashMeteringMode"
         writable: false
         description: "FlashMeteringMode tag"
@@ -1969,6 +1977,10 @@ tables:
         name: "HighlightTonePriority"
         writable: false
         description: "HighlightTonePriority tag"
+      - id: "0x0013"
+        name: "FlashModel"
+        writable: false
+        description: "FlashModel tag"
       - id: "0x001B"
         name: "FlashMeteringMode"
         writable: false
@@ -2061,6 +2073,10 @@ tables:
         name: "FirmwareVersion"
         writable: false
         description: "FirmwareVersion tag"
+      - id: "0x018E"
+        name: "OwnerName"
+        writable: false
+        description: "OwnerName tag"
       - id: "0x01BB"
         name: "FileIndex"
         writable: false
@@ -2751,6 +2767,10 @@ tables:
         description: "CameraTemperature tag"
   - name: Canon::CameraInfoR6
     tags:
+      - id: "0x09DA"
+        name: "CameraTemperature"
+        writable: false
+        description: "CameraTemperature tag"
       - id: "0x0AF1"
         name: "ShutterCount"
         writable: false
@@ -2761,6 +2781,12 @@ tables:
         name: "ShutterCount"
         writable: false
         description: "ShutterCount tag"
+  - name: Canon::CameraInfoR6m3
+    tags:
+      - id: "0x086D"
+        name: "ImageCount"
+        writable: false
+        description: "ImageCount tag"
   - name: Canon::CameraInfoUnknown
     tags:
       - id: "0x016B"
@@ -3052,9 +3078,9 @@ tables:
         writable: false
         description: "MinAperture tag"
       - id: "0x001C"
-        name: "FlashActivity"
+        name: "FlashModel"
         writable: false
-        description: "FlashActivity tag"
+        description: "FlashModel tag"
       - id: "0x001D"
         name: "FlashBits"
         writable: false
@@ -4157,6 +4183,14 @@ tables:
         name: "PerChannelBlackLevel"
         writable: false
         description: "PerChannelBlackLevel tag"
+      - id: "0x0299"
+        name: "FlashOutput"
+        writable: false
+        description: "FlashOutput tag"
+      - id: "0x029A"
+        name: "FlashBatteryLevel"
+        writable: false
+        description: "FlashBatteryLevel tag"
       - id: "0x032A"
         name: "NormalWhiteLevel"
         writable: false
@@ -4288,53 +4322,53 @@ tables:
         writable: false
         description: "ColorTempUnknown11 tag"
       - id: "0x00AF"
-        name: "WB_RGGBLevelsUnknown11"
-        writable: false
-        description: "WB_RGGBLevelsUnknown11 tag"
-      - id: "0x00B3"
-        name: "ColorTempUnknown11"
-        writable: false
-        description: "ColorTempUnknown11 tag"
-      - id: "0x00B4"
         name: "WB_RGGBLevelsUnknown12"
         writable: false
         description: "WB_RGGBLevelsUnknown12 tag"
-      - id: "0x00B8"
+      - id: "0x00B3"
         name: "ColorTempUnknown12"
         writable: false
         description: "ColorTempUnknown12 tag"
-      - id: "0x00B9"
+      - id: "0x00B4"
         name: "WB_RGGBLevelsUnknown13"
         writable: false
         description: "WB_RGGBLevelsUnknown13 tag"
-      - id: "0x00BD"
+      - id: "0x00B8"
         name: "ColorTempUnknown13"
         writable: false
         description: "ColorTempUnknown13 tag"
-      - id: "0x00BE"
+      - id: "0x00B9"
         name: "WB_RGGBLevelsUnknown14"
         writable: false
         description: "WB_RGGBLevelsUnknown14 tag"
-      - id: "0x00C2"
+      - id: "0x00BD"
         name: "ColorTempUnknown14"
         writable: false
         description: "ColorTempUnknown14 tag"
-      - id: "0x00C3"
+      - id: "0x00BE"
         name: "WB_RGGBLevelsUnknown15"
         writable: false
         description: "WB_RGGBLevelsUnknown15 tag"
-      - id: "0x00C7"
+      - id: "0x00C2"
         name: "ColorTempUnknown15"
         writable: false
         description: "ColorTempUnknown15 tag"
-      - id: "0x00C8"
+      - id: "0x00C3"
         name: "WB_RGGBLevelsUnknown16"
         writable: false
         description: "WB_RGGBLevelsUnknown16 tag"
-      - id: "0x00CC"
+      - id: "0x00C7"
         name: "ColorTempUnknown16"
         writable: false
         description: "ColorTempUnknown16 tag"
+      - id: "0x00C8"
+        name: "WB_RGGBLevelsUnknown17"
+        writable: false
+        description: "WB_RGGBLevelsUnknown17 tag"
+      - id: "0x00CC"
+        name: "ColorTempUnknown17"
+        writable: false
+        description: "ColorTempUnknown17 tag"
       - id: "0x00CD"
         name: "WB_RGGBLevelsDaylight"
         writable: false
@@ -4392,93 +4426,93 @@ tables:
         writable: false
         description: "ColorTempFlash tag"
       - id: "0x00F0"
-        name: "WB_RGGBLevelsUnknown17"
-        writable: false
-        description: "WB_RGGBLevelsUnknown17 tag"
-      - id: "0x00F4"
-        name: "ColorTempUnknown17"
-        writable: false
-        description: "ColorTempUnknown17 tag"
-      - id: "0x00F5"
         name: "WB_RGGBLevelsUnknown18"
         writable: false
         description: "WB_RGGBLevelsUnknown18 tag"
-      - id: "0x00F9"
+      - id: "0x00F4"
         name: "ColorTempUnknown18"
         writable: false
         description: "ColorTempUnknown18 tag"
-      - id: "0x00FA"
+      - id: "0x00F5"
         name: "WB_RGGBLevelsUnknown19"
         writable: false
         description: "WB_RGGBLevelsUnknown19 tag"
-      - id: "0x00FE"
+      - id: "0x00F9"
         name: "ColorTempUnknown19"
         writable: false
         description: "ColorTempUnknown19 tag"
-      - id: "0x00FF"
+      - id: "0x00FA"
         name: "WB_RGGBLevelsUnknown20"
         writable: false
         description: "WB_RGGBLevelsUnknown20 tag"
-      - id: "0x0103"
+      - id: "0x00FE"
         name: "ColorTempUnknown20"
         writable: false
         description: "ColorTempUnknown20 tag"
-      - id: "0x0104"
+      - id: "0x00FF"
         name: "WB_RGGBLevelsUnknown21"
         writable: false
         description: "WB_RGGBLevelsUnknown21 tag"
-      - id: "0x0108"
+      - id: "0x0103"
         name: "ColorTempUnknown21"
         writable: false
         description: "ColorTempUnknown21 tag"
-      - id: "0x0109"
+      - id: "0x0104"
         name: "WB_RGGBLevelsUnknown22"
         writable: false
         description: "WB_RGGBLevelsUnknown22 tag"
-      - id: "0x010D"
+      - id: "0x0108"
         name: "ColorTempUnknown22"
         writable: false
         description: "ColorTempUnknown22 tag"
-      - id: "0x010E"
+      - id: "0x0109"
         name: "WB_RGGBLevelsUnknown23"
         writable: false
         description: "WB_RGGBLevelsUnknown23 tag"
-      - id: "0x0112"
+      - id: "0x010D"
         name: "ColorTempUnknown23"
         writable: false
         description: "ColorTempUnknown23 tag"
-      - id: "0x0113"
+      - id: "0x010E"
         name: "WB_RGGBLevelsUnknown24"
         writable: false
         description: "WB_RGGBLevelsUnknown24 tag"
-      - id: "0x0117"
+      - id: "0x0112"
         name: "ColorTempUnknown24"
         writable: false
         description: "ColorTempUnknown24 tag"
-      - id: "0x0118"
+      - id: "0x0113"
         name: "WB_RGGBLevelsUnknown25"
         writable: false
         description: "WB_RGGBLevelsUnknown25 tag"
-      - id: "0x011C"
+      - id: "0x0117"
         name: "ColorTempUnknown25"
         writable: false
         description: "ColorTempUnknown25 tag"
-      - id: "0x011D"
+      - id: "0x0118"
         name: "WB_RGGBLevelsUnknown26"
         writable: false
         description: "WB_RGGBLevelsUnknown26 tag"
-      - id: "0x0121"
+      - id: "0x011C"
         name: "ColorTempUnknown26"
         writable: false
         description: "ColorTempUnknown26 tag"
-      - id: "0x0122"
+      - id: "0x011D"
         name: "WB_RGGBLevelsUnknown27"
         writable: false
         description: "WB_RGGBLevelsUnknown27 tag"
-      - id: "0x0126"
+      - id: "0x0121"
         name: "ColorTempUnknown27"
         writable: false
         description: "ColorTempUnknown27 tag"
+      - id: "0x0122"
+        name: "WB_RGGBLevelsUnknown28"
+        writable: false
+        description: "WB_RGGBLevelsUnknown28 tag"
+      - id: "0x0126"
+        name: "ColorTempUnknown28"
+        writable: false
+        description: "ColorTempUnknown28 tag"
       - id: "0x012C"
         name: "ColorCalib"
         writable: false
@@ -4821,6 +4855,14 @@ tables:
         name: "PerChannelBlackLevel"
         writable: false
         description: "PerChannelBlackLevel tag"
+      - id: "0x0203"
+        name: "FlashOutput"
+        writable: false
+        description: "FlashOutput tag"
+      - id: "0x0204"
+        name: "FlashBatteryLevel"
+        writable: false
+        description: "FlashBatteryLevel tag"
       - id: "0x0294"
         name: "NormalWhiteLevel"
         writable: false
@@ -5243,6 +5285,14 @@ tables:
         name: "AverageBlackLevel"
         writable: false
         description: "AverageBlackLevel tag"
+      - id: "0x026B"
+        name: "FlashOutput"
+        writable: false
+        description: "FlashOutput tag"
+      - id: "0x026C"
+        name: "FlashBatteryLevel"
+        writable: false
+        description: "FlashBatteryLevel tag"
       - id: "0x0280"
         name: "RawMeasuredRGGB"
         writable: false
@@ -5813,6 +5863,14 @@ tables:
         name: "AverageBlackLevel"
         writable: false
         description: "AverageBlackLevel tag"
+      - id: "0x0198"
+        name: "FlashOutput"
+        writable: false
+        description: "FlashOutput tag"
+      - id: "0x0199"
+        name: "FlashBatteryLevel"
+        writable: false
+        description: "FlashBatteryLevel tag"
       - id: "0x01AD"
         name: "RawMeasuredRGGB"
         writable: false
@@ -7049,6 +7107,20 @@ tables:
         name: "FocalLength"
         writable: false
         description: "FocalLength tag"
+  - name: Canon::FocusBracketingInfo
+    tags:
+      - id: "0x0001"
+        name: "FocusBracketing"
+        writable: false
+        description: "FocusBracketing tag"
+      - id: "0x0005"
+        name: "FocusBracketingDepthComposite"
+        writable: false
+        description: "FocusBracketingDepthComposite tag"
+      - id: "0x0006"
+        name: "FocusBracketingCropDepthComposite"
+        writable: false
+        description: "FocusBracketingCropDepthComposite tag"
   - name: Canon::HDRInfo
     tags:
       - id: "0x0001"
@@ -7601,6 +7673,10 @@ tables:
         name: "RawBurstModeRoll"
         writable: false
         description: "RawBurstModeRoll tag"
+      - id: "0x4053"
+        name: "FocusBracketingInfo"
+        writable: false
+        description: "FocusBracketingInfo tag"
       - id: "0x4059"
         name: "LevelInfo"
         writable: false
@@ -8663,6 +8739,10 @@ tables:
         description: "SensorHeight tag"
   - name: Canon::SerialInfo
     tags:
+      - id: "0x0000"
+        name: "InternalSerialNumber2"
+        writable: false
+        description: "InternalSerialNumber2 tag"
       - id: "0x0009"
         name: "InternalSerialNumber"
         writable: false
@@ -11117,6 +11197,10 @@ tables:
         name: "WhiteSampleBits"
         writable: false
         description: "WhiteSampleBits tag"
+      - id: "0x0037"
+        name: "BlackLevels"
+        writable: false
+        description: "BlackLevels tag"
   - name: Casio::AVI
     tags:
       - id: "0x0000"
@@ -14981,7 +15065,11 @@ tables:
         name: "FrameInfo"
         writable: false
         description: "FrameInfo tag"
-      - id: "0x3E81"
+      - id: "0xC85B"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
+      - id: "0x4242"
         name: "ISO"
         writable: false
         description: "ISO tag"
@@ -15025,6 +15113,14 @@ tables:
         name: "FrameInfo"
         writable: false
         description: "FrameInfo tag"
+      - id: "0x039C"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
+      - id: "0xB143"
+        name: "ISO"
+        writable: false
+        description: "ISO tag"
       - id: "0xB504"
         name: "ShutterSpeed"
         writable: false
@@ -15057,10 +15153,62 @@ tables:
         name: "GPSDateTime"
         writable: false
         description: "GPSDateTime tag"
+      - id: "0x4B20"
+        name: "SerialNumber"
+        writable: false
+        description: "SerialNumber tag"
+      - id: "0x473B"
+        name: "FrameInfo"
+        writable: false
+        description: "FrameInfo tag"
+      - id: "0x7A1E"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
+      - id: "0x8F45"
+        name: "ISO"
+        writable: false
+        description: "ISO tag"
+      - id: "0x9306"
+        name: "ShutterSpeed"
+        writable: false
+        description: "ShutterSpeed tag"
+      - id: "0x9A88"
+        name: "ColorTemperature"
+        writable: false
+        description: "ColorTemperature tag"
+      - id: "0x7B96"
+        name: "AccelerometerX"
+        writable: false
+        description: "AccelerometerX tag"
+      - id: "0x7B97"
+        name: "AccelerometerY"
+        writable: false
+        description: "AccelerometerY tag"
+      - id: "0x7B98"
+        name: "AccelerometerZ"
+        writable: false
+        description: "AccelerometerZ tag"
+      - id: "0xBA86"
+        name: "GPSInfo"
+        writable: false
+        description: "GPSInfo tag"
+      - id: "0xBA87"
+        name: "GPSAltitude"
+        writable: false
+        description: "GPSAltitude tag"
+      - id: "0x496F"
+        name: "GPSDateTime"
+        writable: false
+        description: "GPSDateTime tag"
       - id: "0xA0AB"
         name: "SerialNumber"
         writable: false
         description: "SerialNumber tag"
+      - id: "0xCFA9"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
       - id: "0xCFAA"
         name: "TimeStamp"
         writable: false
@@ -15105,6 +15253,10 @@ tables:
         name: "FrameInfo"
         writable: false
         description: "FrameInfo tag"
+      - id: "0xD19A"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
       - id: "0xF400"
         name: "ISO"
         writable: false
@@ -15145,6 +15297,10 @@ tables:
         name: "FrameInfo"
         writable: false
         description: "FrameInfo tag"
+      - id: "0xC3DC"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
       - id: "0x5DC2"
         name: "ISO"
         writable: false
@@ -15189,6 +15345,10 @@ tables:
         name: "FrameInfo"
         writable: false
         description: "FrameInfo tag"
+      - id: "0x4FF3"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
       - id: "0x52DE"
         name: "ISO"
         writable: false
@@ -15205,6 +15365,10 @@ tables:
         name: "ColorTemperature"
         writable: false
         description: "ColorTemperature tag"
+      - id: "0x5CA5"
+        name: "Temperature"
+        writable: false
+        description: "Temperature tag"
       - id: "0x5F1C"
         name: "GPSInfo"
         writable: false
@@ -15229,6 +15393,10 @@ tables:
         name: "SerialNumber"
         writable: false
         description: "SerialNumber tag"
+      - id: "0xEC44"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
       - id: "0xEC45"
         name: "TimeStamp"
         writable: false
@@ -15269,6 +15437,10 @@ tables:
         name: "FrameInfo"
         writable: false
         description: "FrameInfo tag"
+      - id: "0x6FB9"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
       - id: "0x6FBA"
         name: "TimeStamp"
         writable: false
@@ -15317,6 +15489,10 @@ tables:
         name: "FrameInfo"
         writable: false
         description: "FrameInfo tag"
+      - id: "0x2E12"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
       - id: "0x2E13"
         name: "TimeStamp"
         writable: false
@@ -15361,6 +15537,10 @@ tables:
         name: "SerialNumber"
         writable: false
         description: "SerialNumber tag"
+      - id: "0xD918"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
       - id: "0xD919"
         name: "TimeStamp"
         writable: false
@@ -15413,6 +15593,10 @@ tables:
         name: "FrameInfo"
         writable: false
         description: "FrameInfo tag"
+      - id: "0x1615"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
       - id: "0x1616"
         name: "TimeStamp"
         writable: false
@@ -15437,6 +15621,10 @@ tables:
         name: "FrameInfo"
         writable: false
         description: "FrameInfo tag"
+      - id: "0x03AB"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
       - id: "0x03AC"
         name: "TimeStamp"
         writable: false
@@ -15473,6 +15661,10 @@ tables:
         name: "FrameInfo"
         writable: false
         description: "FrameInfo tag"
+      - id: "0x26DF"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
       - id: "0x26E0"
         name: "TimeStamp"
         writable: false
@@ -15513,6 +15705,62 @@ tables:
         name: "GPSDateTime"
         writable: false
         description: "GPSDateTime tag"
+      - id: "0x020A"
+        name: "SerialNumber"
+        writable: false
+        description: "SerialNumber tag"
+      - id: "0xB0A5"
+        name: "FrameInfo"
+        writable: false
+        description: "FrameInfo tag"
+      - id: "0x3108"
+        name: "FrameNumber"
+        writable: false
+        description: "FrameNumber tag"
+      - id: "0x3109"
+        name: "TimeStamp"
+        writable: false
+        description: "TimeStamp tag"
+      - id: "0x4A35"
+        name: "ISO"
+        writable: false
+        description: "ISO tag"
+      - id: "0x646B"
+        name: "ShutterSpeed"
+        writable: false
+        description: "ShutterSpeed tag"
+      - id: "0xE7CE"
+        name: "ColorTemperature"
+        writable: false
+        description: "ColorTemperature tag"
+      - id: "0x6770"
+        name: "Temperature"
+        writable: false
+        description: "Temperature tag"
+      - id: "0x388C"
+        name: "DroneInfo"
+        writable: false
+        description: "DroneInfo tag"
+      - id: "0x4EF1"
+        name: "GPSInfo"
+        writable: false
+        description: "GPSInfo tag"
+      - id: "0x4EF2"
+        name: "AbsoluteAltitude"
+        writable: false
+        description: "AbsoluteAltitude tag"
+      - id: "0x52B2"
+        name: "RelativeAltitude"
+        writable: false
+        description: "RelativeAltitude tag"
+      - id: "0x7521"
+        name: "SerialNumber"
+        writable: false
+        description: "SerialNumber tag"
+      - id: "0x5849"
+        name: "AbsoluteAltitude"
+        writable: false
+        description: "AbsoluteAltitude tag"
   - name: DJI::ThermalParams
     tags:
       - id: "0x0024"
@@ -17663,6 +17911,10 @@ tables:
         name: "WB_GRGBLevelsTungsten"
         writable: false
         description: "WB_GRGBLevelsTungsten tag"
+      - id: "0x2410"
+        name: "WB_GRGBLevelsFlash"
+        writable: false
+        description: "WB_GRGBLevelsFlash tag"
       - id: "0x2FF0"
         name: "WB_GRGBLevels"
         writable: false
@@ -17692,9 +17944,9 @@ tables:
   - name: FujiFilm::RAFHeader
     tags:
       - id: "0x003C"
-        name: "RAFVersion"
+        name: "FirmwareVersion"
         writable: false
-        description: "RAFVersion tag"
+        description: "FirmwareVersion tag"
       - id: "0x006C"
         name: "RAFCompression"
         writable: false
@@ -23554,18 +23806,6 @@ tables:
         name: "AutoCaptureCriteriaSubjectType"
         writable: false
         description: "AutoCaptureCriteriaSubjectType tag"
-      - id: "0x0001"
-        name: "People"
-        writable: false
-        description: "People tag"
-      - id: "0x0002"
-        name: "Animals"
-        writable: false
-        description: "Animals tag"
-      - id: "0x0003"
-        name: "Vehicle"
-        writable: false
-        description: "Vehicle tag"
   - name: Nikon::BarometerInfo
     tags:
       - id: "0x0000"
@@ -26490,13 +26730,41 @@ tables:
         writable: false
         description: "FirmwareVersion56 tag"
       - id: "0x0004"
-        name: "BurstGroupID"
+        name: "BurstFlag"
         writable: false
-        description: "BurstGroupID tag"
+        description: "BurstFlag tag"
+      - id: "0x0002"
+        name: "NEF"
+        writable: false
+        description: "NEF tag"
+      - id: "0x0003"
+        name: "TIF"
+        writable: false
+        description: "TIF tag"
+      - id: "0x0004"
+        name: "NDF"
+        writable: false
+        description: "NDF tag"
+      - id: "0x0005"
+        name: "MOV"
+        writable: false
+        description: "MOV tag"
+      - id: "0x0006"
+        name: "NEV"
+        writable: false
+        description: "NEV tag"
+      - id: "0x0007"
+        name: "MP4"
+        writable: false
+        description: "MP4 tag"
+      - id: "0x0008"
+        name: "BurstShotNumber"
+        writable: false
+        description: "BurstShotNumber tag"
       - id: "0x000C"
-        name: "PixelShiftID"
+        name: "PixelShiftActive"
         writable: false
-        description: "PixelShiftID tag"
+        description: "PixelShiftActive tag"
   - name: Nikon::MenuInfoZ7II
     tags:
       - id: "0x0010"
@@ -55809,6 +56077,10 @@ tables:
         name: "High"
         writable: false
         description: "High tag"
+      - id: "0x00D4"
+        name: "HybridLogGamma"
+        writable: false
+        description: "HybridLogGamma tag"
       - id: "0x00D6"
         name: "NoiseReductionStrength"
         writable: false
@@ -55877,6 +56149,22 @@ tables:
         name: "DynamicRangeBoost"
         writable: false
         description: "DynamicRangeBoost tag"
+      - id: "0x00F1"
+        name: "LUT1Name"
+        writable: false
+        description: "LUT1Name tag"
+      - id: "0x00F3"
+        name: "LUT1Opacity"
+        writable: false
+        description: "LUT1Opacity tag"
+      - id: "0x00F4"
+        name: "LUT2Name"
+        writable: false
+        description: "LUT2Name tag"
+      - id: "0x00F5"
+        name: "LUT2Opacity"
+        writable: false
+        description: "LUT2Opacity tag"
       - id: "0x0E00"
         name: "PrintIM"
         writable: false
@@ -57820,9 +58108,9 @@ tables:
   - name: Pentax::AFInfoK3III
     tags:
       - id: "0x0000"
-        name: "AFInfo"
+        name: "AFInfoK3III"
         writable: false
-        description: "AFInfo tag"
+        description: "AFInfoK3III tag"
       - id: "0x0002"
         name: "Contrast Detect"
         writable: false
@@ -60972,6 +61260,46 @@ tables:
         name: "PhaseOne_0x025a"
         writable: false
         description: "PhaseOne_0x025a tag"
+      - id: "0x0262"
+        name: "SequenceID"
+        writable: false
+        description: "SequenceID tag"
+      - id: "0x0263"
+        name: "SequenceKind"
+        writable: false
+        description: "SequenceKind tag"
+      - id: "0x0001"
+        name: "Bracketing: Aperture"
+        writable: false
+        description: "Bracketing: Aperture tag"
+      - id: "0x0002"
+        name: "Bracketing: ISO"
+        writable: false
+        description: "Bracketing: ISO tag"
+      - id: "0x0003"
+        name: "Hyperfocal"
+        writable: false
+        description: "Hyperfocal tag"
+      - id: "0x0004"
+        name: "Time Lapse"
+        writable: false
+        description: "Time Lapse tag"
+      - id: "0x0005"
+        name: "HDR"
+        writable: false
+        description: "HDR tag"
+      - id: "0x0006"
+        name: "Focus Stacking"
+        writable: false
+        description: "Focus Stacking tag"
+      - id: "0x0264"
+        name: "SequenceFrameNumber"
+        writable: false
+        description: "SequenceFrameNumber tag"
+      - id: "0x0265"
+        name: "SequenceFrameCount"
+        writable: false
+        description: "SequenceFrameCount tag"
       - id: "0x0301"
         name: "FirmwareVersions"
         writable: false
@@ -67724,6 +68052,10 @@ tables:
         name: "Lv5"
         writable: false
         description: "Lv5 tag"
+      - id: "0x0017"
+        name: "Lv8"
+        writable: false
+        description: "Lv8 tag"
       - id: "0xB026"
         name: "ImageStabilization"
         writable: false
@@ -69946,6 +70278,10 @@ tables:
         name: "ISOInfo"
         writable: false
         description: "ISOInfo tag"
+      - id: "0x0453"
+        name: "ISOInfo"
+        writable: false
+        description: "ISOInfo tag"
       - id: "0x0498"
         name: "ISOInfo"
         writable: false
@@ -70640,6 +70976,38 @@ tables:
         name: "MaxFocalLength"
         writable: false
         description: "MaxFocalLength tag"
+      - id: "0x0702"
+        name: "VignettingCorrParams"
+        writable: false
+        description: "VignettingCorrParams tag"
+      - id: "0x0708"
+        name: "VignettingCorrParams"
+        writable: false
+        description: "VignettingCorrParams tag"
+      - id: "0x074A"
+        name: "APS-CSizeCapture"
+        writable: false
+        description: "APS-CSizeCapture tag"
+      - id: "0x0001"
+        name: "On"
+        writable: false
+        description: "On tag"
+      - id: "0x074F"
+        name: "APS-CSizeCapture"
+        writable: false
+        description: "APS-CSizeCapture tag"
+      - id: "0x0001"
+        name: "On"
+        writable: false
+        description: "On tag"
+      - id: "0x083B"
+        name: "ChromaticAberrationCorrParams"
+        writable: false
+        description: "ChromaticAberrationCorrParams tag"
+      - id: "0x0843"
+        name: "ChromaticAberrationCorrParams"
+        writable: false
+        description: "ChromaticAberrationCorrParams tag"
       - id: "0x088F"
         name: "VignettingCorrParams"
         writable: false
@@ -70747,9 +71115,9 @@ tables:
         writable: false
         description: "Sony_rtmd_0x8105 tag"
       - id: "0x8106"
-        name: "Sony_rtmd_0x8106"
+        name: "FrameRate"
         writable: false
-        description: "Sony_rtmd_0x8106 tag"
+        description: "FrameRate tag"
       - id: "0x8109"
         name: "ExposureTime"
         writable: false
@@ -70770,6 +71138,10 @@ tables:
         name: "Sony_rtmd_0x810d"
         writable: false
         description: "Sony_rtmd_0x810d tag"
+      - id: "0x8114"
+        name: "SerialNumber"
+        writable: false
+        description: "SerialNumber tag"
       - id: "0x8115"
         name: "Sony_rtmd_0x8115"
         writable: false
