@@ -135,6 +135,17 @@ When tests fail due to known discrepancies:
 - [Integration Test Plan](../../docs/testing/integration_test_plan.md)
 - [ExifTool JSON Format](https://exiftool.org/faq.html#Q10)
 
+## JPEG COM / DQT wiring (2026-07-19)
+
+- **File:JPEGQualityEstimate is always emitted.** ExifTool computes this tag
+  only when explicitly requested (`-JPEGQualityEstimate` or `RequestAll > 2`)
+  because of Perl-side overhead; oxidex has no tag-request mechanism and the
+  computation is trivial, so it is always present. Values match ExifTool's
+  algorithm exactly (JPEGDigest.pm EstimateQuality).
+- **Multiple COM segments collapse to one File:Comment (last wins).** ExifTool
+  reports each COM segment as a duplicate Comment tag under `-a`; MetadataMap
+  stores one value per key.
+
 ## Changelog
 
 ### 2025-10-30
