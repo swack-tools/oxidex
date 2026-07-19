@@ -4,6 +4,7 @@
 use anyhow::{Context, Result};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
+use std::collections::HashMap;
 
 /// A single ExifTool tag as reported by `exiftool -f -listx`.
 #[derive(Debug, Clone, PartialEq)]
@@ -152,6 +153,72 @@ pub fn get_domain_for_table(table_name: &str) -> &'static str {
 /// written.
 pub const DOMAINS: [&str; 6] = ["core", "camera", "media", "image", "document", "specialty"];
 
+fn escape_yaml_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Renders the YAML tag database for one `oxidex-tags-*` domain crate from
+/// the full set of parsed tags, filtering to tags whose table routes to
+/// `domain`. Table and tag ordering is sorted for deterministic,
+/// diffable output.
+pub fn generate_domain_yaml(domain: &str, tags: &[TagRecord]) -> String {
+    let mut by_table: HashMap<&str, Vec<&TagRecord>> = HashMap::new();
+    for tag in tags {
+        if get_domain_for_table(&tag.table) == domain {
+            by_table.entry(tag.table.as_str()).or_default().push(tag);
+        }
+    }
+
+    let mut yaml = String::from("tables:\n");
+    if by_table.is_empty() {
+        return yaml;
+    }
+
+    let mut table_names: Vec<&str> = by_table.keys().copied().collect();
+    table_names.sort_unstable();
+
+    for table_name in table_names {
+        let mut table_tags = by_table[table_name].clone();
+        table_tags.sort_by(|a, b| a.name.cmp(&b.name));
+
+        yaml.push_str(&format!("  - name: {}\n", table_name));
+        yaml.push_str("    tags:\n");
+
+        for tag in table_tags {
+            yaml.push_str(&format!("      - id: \"{}\"\n", escape_yaml_string(&tag.id)));
+            yaml.push_str(&format!(
+                "        name: \"{}\"\n",
+                escape_yaml_string(&tag.name)
+            ));
+            yaml.push_str(&format!("        writable: {}\n", tag.writable));
+
+            if let Some(ref type_name) = tag.type_name {
+                // Must be quoted: ExifTool's own "unknown/composite" type
+                // string is a bare `?`, which YAML treats as the explicit
+                // complex-mapping-key indicator when unquoted, breaking the
+                // parser (verified against a real exiftool 13.55 -f -listx
+                // dump during planning — AFCP::Main's PreviewImage tag has
+                // exactly this type value).
+                yaml.push_str(&format!(
+                    "        type: \"{}\"\n",
+                    escape_yaml_string(type_name)
+                ));
+            }
+
+            if let Some(ref description) = tag.description {
+                if !description.is_empty() {
+                    yaml.push_str(&format!(
+                        "        description: \"{}\"\n",
+                        escape_yaml_string(description)
+                    ));
+                }
+            }
+        }
+    }
+
+    yaml
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +309,88 @@ mod tests {
     #[test]
     fn routes_unknown_tables_to_core_by_default() {
         assert_eq!(get_domain_for_table("SomeBrandNewVendor::Main"), "core");
+    }
+
+    #[test]
+    fn generates_expected_yaml_shape_for_a_domain() {
+        let tags = vec![
+            TagRecord {
+                table: "Exif::Main".to_string(),
+                id: "271".to_string(),
+                name: "Make".to_string(),
+                writable: true,
+                type_name: Some("string".to_string()),
+                description: Some("Manufacturer".to_string()),
+            },
+            TagRecord {
+                table: "Exif::Main".to_string(),
+                id: "37500".to_string(),
+                name: "MakerNotes".to_string(),
+                writable: false,
+                type_name: Some("undef".to_string()),
+                description: None,
+            },
+            TagRecord {
+                table: "Canon::Main".to_string(),
+                id: "1".to_string(),
+                name: "CanonImageType".to_string(),
+                writable: true,
+                type_name: None,
+                description: Some("with \"quotes\" and \\backslash".to_string()),
+            },
+        ];
+
+        let core_yaml = generate_domain_yaml("core", &tags);
+        assert!(core_yaml.contains("  - name: Exif::Main\n"));
+        assert!(core_yaml.contains("      - id: \"271\"\n"));
+        assert!(core_yaml.contains("        name: \"Make\"\n"));
+        assert!(core_yaml.contains("        writable: true\n"));
+        assert!(core_yaml.contains("        type: \"string\"\n"));
+        assert!(core_yaml.contains("        description: \"Manufacturer\"\n"));
+        // MakerNotes has no description: field must be omitted, not empty-stringed.
+        assert!(!core_yaml.contains("37500\"\n        name: \"MakerNotes\"\n        writable: false\n        type: \"undef\"\n        description"));
+        // Canon tag must not appear in the "core" domain output.
+        assert!(!core_yaml.contains("CanonImageType"));
+
+        let camera_yaml = generate_domain_yaml("camera", &tags);
+        assert!(camera_yaml.contains("CanonImageType"));
+        // Escaping: embedded quotes and backslashes must not break the YAML string.
+        assert!(camera_yaml.contains("description: \"with \\\"quotes\\\" and \\\\backslash\"\n"));
+        // No `type:` field written for tags without a type.
+        assert!(!camera_yaml.contains("CanonImageType\"\n        writable: true\n        type:"));
+    }
+
+    #[test]
+    fn empty_domain_produces_minimal_valid_yaml() {
+        let yaml = generate_domain_yaml("specialty", &[]);
+        assert_eq!(yaml, "tables:\n");
+    }
+
+    #[test]
+    fn question_mark_type_is_quoted_to_stay_valid_yaml() {
+        // ExifTool reports type '?' for composite/calculated tags (e.g. real
+        // exiftool 13.55: AFCP::Main's PreviewImage). An unquoted `?` is
+        // YAML's explicit complex-mapping-key indicator — left unquoted,
+        // `serde_yaml`/any YAML parser fails with "mapping keys are not
+        // allowed in this context". Verified against a real exiftool dump
+        // during planning; this test guards against regressing the fix.
+        let tags = vec![TagRecord {
+            table: "Composite".to_string(),
+            id: "Exif-PreviewImage".to_string(),
+            name: "PreviewImage".to_string(),
+            writable: true,
+            type_name: Some("?".to_string()),
+            description: None,
+        }];
+
+        let yaml = generate_domain_yaml("core", &tags);
+        assert!(yaml.contains("        type: \"?\"\n"));
+
+        let parsed: Result<serde_yaml::Value, _> = serde_yaml::from_str(&yaml);
+        assert!(
+            parsed.is_ok(),
+            "generated YAML with a '?' type must remain parseable: {:?}",
+            parsed.err()
+        );
     }
 }
