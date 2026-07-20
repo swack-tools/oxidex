@@ -328,7 +328,7 @@ class GitApplyTests(unittest.TestCase):
         ok, msg = git_apply("diff text", Path("/fake/repo"))
         self.assertTrue(ok)
         args, kwargs = mock_run.call_args
-        self.assertEqual(args[0], ["git", "apply", "--reject", "-"])
+        self.assertEqual(args[0], ["git", "apply", "--reject", "--recount", "-"])
         self.assertEqual(kwargs["input"], "diff text")
         self.assertEqual(kwargs["cwd"], Path("/fake/repo"))
 
@@ -838,7 +838,7 @@ class FixGapReviewTests(unittest.TestCase):
         stream_values_seen = []
 
         def tracking_call_model_fn(messages, base_url, api_key, model, max_tokens, reasoning_effort,
-                                    stream=False, thinking=True, temperature=0):
+                                    stream=False, thinking=True, temperature=0, timeout=120):
             stream_values_seen.append(stream)
             if len(stream_values_seen) == 1:
                 return "```diff\n--- a/x\n+++ b/x\n```\n"
@@ -868,7 +868,7 @@ class FixGapReviewTests(unittest.TestCase):
         thinking_values_seen = []
 
         def tracking_call_model_fn(messages, base_url, api_key, model, max_tokens, reasoning_effort,
-                                    stream=False, thinking=True, temperature=0):
+                                    stream=False, thinking=True, temperature=0, timeout=120):
             thinking_values_seen.append(thinking)
             if len(thinking_values_seen) == 1:
                 return "```diff\n--- a/x\n+++ b/x\n```\n"
@@ -895,7 +895,7 @@ class FixGapReviewTests(unittest.TestCase):
         temperature_values_seen = []
 
         def tracking_call_model_fn(messages, base_url, api_key, model, max_tokens, reasoning_effort,
-                                    stream=False, thinking=True, temperature=0):
+                                    stream=False, thinking=True, temperature=0, timeout=120):
             temperature_values_seen.append(temperature)
             if len(temperature_values_seen) == 1:
                 return "```diff\n--- a/x\n+++ b/x\n```\n"
