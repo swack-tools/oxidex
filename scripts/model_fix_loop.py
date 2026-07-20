@@ -155,9 +155,16 @@ def git_apply(diff_text, repo_root):
     List-argv only, no shell=True anywhere in this file -- repo_root is a
     local path this process already trusts (the repo it's running in), and
     diff_text is passed via stdin, never interpolated into the argv list.
+
+    --recount tells git to ignore each hunk's stated @@ -a,b +c,d @@ line
+    counts and recompute them from the actual +/-/context lines instead --
+    models routinely emit diffs with an off-by-one in that header despite
+    otherwise-correct content, which git rejects outright as "corrupt
+    patch" without this flag. Harmless for a diff whose counts were
+    already right.
     """
     result = subprocess.run(  # nosec B603
-        ["git", "apply", "--reject", "-"],
+        ["git", "apply", "--reject", "--recount", "-"],
         input=diff_text, capture_output=True, text=True, cwd=repo_root,
     )
     if result.returncode == 0:
