@@ -39,6 +39,7 @@ Config (env vars, or matching --flags):
 
 Usage:
     uv run scripts/model_fix_loop.py
+    uv run scripts/model_fix_loop.py --only-format JPEG
 """
 import argparse
 import json
@@ -550,6 +551,14 @@ def main(argv=None):
         default=float(os.environ.get("REVIEW_TEMPERATURE", os.environ.get("MODEL_FIX_TEMPERATURE", "0"))),
     )
     parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
+    parser.add_argument(
+        "--only-format",
+        default=os.environ.get("MODEL_FIX_ONLY_FORMAT"),
+        help="Scope the loop to a single format (e.g. JPEG, NEF). Uses the "
+             "fast single-format comparison instead of the full corpus scan; "
+             "requires the combined-samples cache to already exist from a "
+             "prior full run (see find_tag_gaps.py's own --only-format).",
+    )
     args = parser.parse_args(argv)
 
     if not (args.base_url and args.api_key and args.model):
@@ -585,8 +594,14 @@ def main(argv=None):
     }
 
     def find_gaps_fn():
-        report_path = run_full_comparison(args.cache_dir)
-        return group_gaps_by_format(load_comparison_report(report_path))
+        if args.only_format:
+            report_path = run_format_comparison(args.only_format, args.cache_dir)
+        else:
+            report_path = run_full_comparison(args.cache_dir)
+        gaps = group_gaps_by_format(load_comparison_report(report_path))
+        if args.only_format:
+            gaps = [g for g in gaps if g["format"] == args.only_format]
+        return gaps
 
     def real_fix_gap(gap, cfg):
         def recheck(fmt):
