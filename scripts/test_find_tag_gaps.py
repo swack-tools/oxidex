@@ -40,7 +40,7 @@ class LocateParserFilesTests(unittest.TestCase):
     def test_jpeg_maps_to_a_real_directory(self):
         files = locate_parser_files("JPEG")
         self.assertTrue(any("src/parsers/jpeg" in f or "src/core" in f for f in files))
-        self.assertTrue(len(files) > 0)
+        self.assertGreater(len(files), 0)
 
     def test_unknown_format_with_no_matching_directory_returns_empty(self):
         files = locate_parser_files("TotallyMadeUpFormat")
