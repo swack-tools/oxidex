@@ -114,6 +114,13 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
+            # Some providers (e.g. theclawbay.com) sit behind a Cloudflare
+            # WAF that blocks the default "Python-urllib/x.y" User-Agent
+            # outright (error code 1010), independent of API key validity.
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+            ),
         },
     )
     # base_url is developer-supplied local config (MODEL_FIX_BASE_URL /
