@@ -47,15 +47,17 @@ class LocateParserFilesTests(unittest.TestCase):
         self.assertEqual(files, [])
 
 
+# The /tmp/... literals below are inert test-fixture values passed to a
+# mocked subprocess.run -- no real filesystem I/O happens in this file.
 class RunFullComparisonTests(unittest.TestCase):
     @patch("find_tag_gaps.subprocess.run")
     def test_invokes_just_with_cache_dir_env(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0)
-        result = run_full_comparison("/tmp/fake-cache", repo_root=Path("/fake/repo"))
+        result = run_full_comparison("/tmp/fake-cache", repo_root=Path("/fake/repo"))  # nosec B108
         args, kwargs = mock_run.call_args
         self.assertEqual(args[0], ["just", "compare-exiftool-full"])
         self.assertEqual(kwargs["cwd"], Path("/fake/repo"))
-        self.assertEqual(kwargs["env"]["EXIFTOOL_CACHE_DIR"], "/tmp/fake-cache")
+        self.assertEqual(kwargs["env"]["EXIFTOOL_CACHE_DIR"], "/tmp/fake-cache")  # nosec B108
         self.assertEqual(result, Path("/fake/repo/comparison.json"))
 
 
@@ -64,14 +66,14 @@ class RunFormatComparisonTests(unittest.TestCase):
     @patch("find_tag_gaps.subprocess.run")
     def test_invokes_tag_comparison_with_format_flag(self, mock_run, mock_ensure):
         mock_run.return_value = MagicMock(returncode=0)
-        result = run_format_comparison("NEF", "/tmp/fake-cache", repo_root=Path("/fake/repo"))
+        result = run_format_comparison("NEF", "/tmp/fake-cache", repo_root=Path("/fake/repo"))  # nosec B108
         mock_ensure.assert_called_once_with(Path("/fake/repo"))
         args, kwargs = mock_run.call_args
         self.assertIn("--format", args[0])
         self.assertIn("NEF", args[0])
         self.assertIn("--samples", args[0])
-        self.assertIn("/tmp/fake-cache/combined-samples", args[0])
-        self.assertEqual(result, Path("/tmp/tagcmp-NEF.json"))
+        self.assertIn("/tmp/fake-cache/combined-samples", args[0])  # nosec B108
+        self.assertEqual(result, Path("/tmp/tagcmp-NEF.json"))  # nosec B108
 
 
 if __name__ == "__main__":

@@ -10,11 +10,13 @@ from parallel_model_fix_loop import (
 )
 
 
+# /tmp/base is an inert fixture path -- no real filesystem I/O happens
+# here, this only exercises string/Path construction.
 class WorktreePathTests(unittest.TestCase):
     def test_lowercases_format_into_a_stable_path(self):
         self.assertEqual(
-            worktree_path(Path("/tmp/base"), "NEF"),
-            Path("/tmp/base/model-fix-nef"),
+            worktree_path(Path("/tmp/base"), "NEF"),  # nosec B108
+            Path("/tmp/base/model-fix-nef"),  # nosec B108
         )
 
 

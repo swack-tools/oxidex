@@ -20,7 +20,7 @@ Usage:
 import argparse
 import concurrent.futures
 import os
-import subprocess
+import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
 from pathlib import Path
 
@@ -44,25 +44,31 @@ def branch_name(fmt):
     return f"model-fix-parallel-{fmt.lower()}"
 
 
+# List-argv only throughout this file, no shell=True -- repo_root/path are
+# local filesystem locations this process already trusts, branch/base_ref
+# are derived from format names (a closed set from tag-comparison's own
+# output) or the caller's own current git ref, never network input.
+
+
 def create_worktree(repo_root, path, branch, base_ref):
-    subprocess.run(
+    subprocess.run(  # nosec B603
         ["git", "worktree", "add", "-b", branch, str(path), base_ref],
         cwd=repo_root, check=True, capture_output=True, text=True,
     )
 
 
 def remove_worktree(repo_root, path):
-    subprocess.run(["git", "worktree", "remove", "--force", str(path)], cwd=repo_root, check=True)
+    subprocess.run(["git", "worktree", "remove", "--force", str(path)], cwd=repo_root, check=True)  # nosec B603
 
 
 def delete_branch(repo_root, branch):
-    subprocess.run(["git", "branch", "-D", branch], cwd=repo_root, check=True)
+    subprocess.run(["git", "branch", "-D", branch], cwd=repo_root, check=True)  # nosec B603
 
 
 def commits_on_branch(repo_root, base_ref, branch):
     """Commit subjects unique to branch vs base_ref, oldest first (empty
     if the worker made no commits)."""
-    result = subprocess.run(
+    result = subprocess.run(  # nosec B603
         ["git", "log", f"{base_ref}..{branch}", "--format=%s", "--reverse"],
         cwd=repo_root, capture_output=True, text=True, check=True,
     )
@@ -77,24 +83,26 @@ def merge_branch(repo_root, branch, cargo_test_fn=None):
     cargo_test_fn, if provided, overrides the real `cargo test --workspace`
     call for testing -- must return True/False like the real check would.
     """
-    merge = subprocess.run(
+    merge = subprocess.run(  # nosec B603
         ["git", "merge", "--no-ff", branch, "-m", f"merge: {branch}"],
         cwd=repo_root, capture_output=True, text=True,
     )
     if merge.returncode != 0:
-        subprocess.run(["git", "merge", "--abort"], cwd=repo_root, capture_output=True, text=True)
+        subprocess.run(["git", "merge", "--abort"], cwd=repo_root, capture_output=True, text=True)  # nosec B603
         return False, f"merge conflict: {merge.stderr.strip()}"
 
     tests_pass = cargo_test_fn() if cargo_test_fn else _real_cargo_test(repo_root)
     if not tests_pass:
-        subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=repo_root, check=True)
+        subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=repo_root, check=True)  # nosec B603
         return False, "cargo test --workspace regressed after merge, rolled back"
 
     return True, "merged"
 
 
 def _real_cargo_test(repo_root):
-    result = subprocess.run(["cargo", "test", "--workspace"], cwd=repo_root, capture_output=True, text=True)
+    result = subprocess.run(  # nosec B603
+        ["cargo", "test", "--workspace"], cwd=repo_root, capture_output=True, text=True,
+    )
     return result.returncode == 0
 
 
@@ -105,7 +113,7 @@ def run_worker(fmt, worktree, cache_dir, log_path, timeout=None):
     env.pop("CARGO_TARGET_DIR", None)  # each worktree gets its own default target/, never shared
     env["EXIFTOOL_CACHE_DIR"] = str(cache_dir)
     with open(log_path, "w") as log_file:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603
             ["uv", "run", "scripts/model_fix_loop.py", "--only-format", fmt],
             cwd=worktree, env=env, stdout=log_file, stderr=subprocess.STDOUT,
             timeout=timeout,
@@ -147,10 +155,22 @@ def main(argv=None):
         "--formats",
         help="Comma-separated format list; default: auto-discover every format with gaps",
     )
-    parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
+    # Fixed /tmp defaults are a race-condition concern on shared multi-user
+    # systems; this is a single-developer local CLI tool, and every one of
+    # these is overridable via its env var or flag.
+    parser.add_argument(
+        "--cache-dir",
+        default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"),  # nosec B108
+    )
     parser.add_argument("--timeout", type=int, default=None, help="Per-worker timeout in seconds (default: none)")
-    parser.add_argument("--worktree-dir", default=os.environ.get("MODEL_FIX_WORKTREE_DIR", "/tmp/oxidex-parallel-fix"))
-    parser.add_argument("--log-dir", default=os.environ.get("MODEL_FIX_LOG_DIR", "/tmp/oxidex-parallel-fix-logs"))
+    parser.add_argument(
+        "--worktree-dir",
+        default=os.environ.get("MODEL_FIX_WORKTREE_DIR", "/tmp/oxidex-parallel-fix"),  # nosec B108
+    )
+    parser.add_argument(
+        "--log-dir",
+        default=os.environ.get("MODEL_FIX_LOG_DIR", "/tmp/oxidex-parallel-fix-logs"),  # nosec B108
+    )
     args = parser.parse_args(argv)
 
     if args.formats:
@@ -163,7 +183,7 @@ def main(argv=None):
         print("No formats with gaps found.")
         return 0
 
-    base_ref = subprocess.run(
+    base_ref = subprocess.run(  # nosec B603
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
         cwd=REPO_ROOT, capture_output=True, text=True, check=True,
     ).stdout.strip()

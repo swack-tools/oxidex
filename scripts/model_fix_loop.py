@@ -45,7 +45,7 @@ import argparse
 import json
 import os
 import re
-import subprocess
+import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
 import urllib.request
 
@@ -113,7 +113,9 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
             "Authorization": f"Bearer {api_key}",
         },
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    # base_url is developer-supplied local config (MODEL_FIX_BASE_URL /
+    # REVIEW_BASE_URL), never network- or attacker-controlled input.
+    with urllib.request.urlopen(req, timeout=120) as resp:  # nosec B310
         if not stream:
             payload = json.loads(resp.read())
             return payload["choices"][0]["message"]["content"]
@@ -137,8 +139,13 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
 
 
 def git_apply(diff_text, repo_root):
-    """Apply a unified diff to the working tree. Returns (success, message)."""
-    result = subprocess.run(
+    """Apply a unified diff to the working tree. Returns (success, message).
+
+    List-argv only, no shell=True anywhere in this file -- repo_root is a
+    local path this process already trusts (the repo it's running in), and
+    diff_text is passed via stdin, never interpolated into the argv list.
+    """
+    result = subprocess.run(  # nosec B603
         ["git", "apply", "--reject", "-"],
         input=diff_text, capture_output=True, text=True, cwd=repo_root,
     )
@@ -149,18 +156,18 @@ def git_apply(diff_text, repo_root):
 
 def git_checkout_clean(repo_root):
     """Discard all uncommitted changes, including untracked files."""
-    subprocess.run(["git", "checkout", "--", "."], cwd=repo_root, check=True)
-    subprocess.run(["git", "clean", "-fd"], cwd=repo_root, check=True)
+    subprocess.run(["git", "checkout", "--", "."], cwd=repo_root, check=True)  # nosec B603
+    subprocess.run(["git", "clean", "-fd"], cwd=repo_root, check=True)  # nosec B603
 
 
 def git_commit(message, repo_root):
-    subprocess.run(["git", "add", "-A"], cwd=repo_root, check=True)
-    subprocess.run(["git", "commit", "-m", message], cwd=repo_root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo_root, check=True)  # nosec B603
+    subprocess.run(["git", "commit", "-m", message], cwd=repo_root, check=True)  # nosec B603
 
 
 def cargo_build(repo_root):
     """Build the oxidex binary. Returns (success, stderr)."""
-    result = subprocess.run(
+    result = subprocess.run(  # nosec B603
         ["cargo", "build", "--release", "--bin", "oxidex"],
         capture_output=True, text=True, cwd=repo_root,
     )
@@ -169,7 +176,7 @@ def cargo_build(repo_root):
 
 def cargo_test_workspace(repo_root):
     """Run the full workspace test suite. Returns True if all tests pass."""
-    result = subprocess.run(
+    result = subprocess.run(  # nosec B603
         ["cargo", "test", "--workspace"],
         capture_output=True, text=True, cwd=repo_root,
     )
@@ -550,7 +557,13 @@ def main(argv=None):
         "--review-temperature", type=float,
         default=float(os.environ.get("REVIEW_TEMPERATURE", os.environ.get("MODEL_FIX_TEMPERATURE", "0"))),
     )
-    parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
+    # A fixed /tmp default is a race-condition concern on shared multi-user
+    # systems; this is a single-developer local CLI tool, and the value is
+    # always overridable via EXIFTOOL_CACHE_DIR/--cache-dir.
+    parser.add_argument(
+        "--cache-dir",
+        default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"),  # nosec B108
+    )
     parser.add_argument(
         "--only-format",
         default=os.environ.get("MODEL_FIX_ONLY_FORMAT"),

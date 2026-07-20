@@ -17,7 +17,7 @@ Usage:
 import argparse
 import json
 import os
-import subprocess
+import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
 from pathlib import Path
 
@@ -123,7 +123,9 @@ def group_gaps_by_format(report, repo_root=REPO_ROOT):
 
 
 def ensure_tag_comparison_built(repo_root=REPO_ROOT):
-    subprocess.run(
+    # List-argv only, no shell=True anywhere in this file -- repo_root is a
+    # local path this process already trusts.
+    subprocess.run(  # nosec B603
         ["cargo", "build", "--release", "--bin", "tag-comparison", "--features", "tag-comparison-binary"],
         cwd=repo_root, check=True,
     )
@@ -131,7 +133,7 @@ def ensure_tag_comparison_built(repo_root=REPO_ROOT):
 
 def run_full_comparison(cache_dir, repo_root=REPO_ROOT):
     """Run `just compare-exiftool-full` and return the path to comparison.json."""
-    subprocess.run(
+    subprocess.run(  # nosec B603
         ["just", "compare-exiftool-full"],
         cwd=repo_root,
         env={**os.environ, "EXIFTOOL_CACHE_DIR": str(cache_dir)},
@@ -147,15 +149,17 @@ def run_format_comparison(format_name, cache_dir, repo_root=REPO_ROOT):
     (this does not download or build the combined samples itself).
     """
     ensure_tag_comparison_built(repo_root)
-    output = Path(f"/tmp/tagcmp-{format_name}.json")
-    subprocess.run(
+    # Fixed /tmp paths are a race-condition concern on shared multi-user
+    # systems; this is a single-developer local CLI tool.
+    output = Path(f"/tmp/tagcmp-{format_name}.json")  # nosec B108
+    subprocess.run(  # nosec B603 # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
         [
             str(repo_root / "target/release/tag-comparison"),
             "--exiftool", f"{cache_dir}/exiftool/exiftool",
             "--samples", f"{cache_dir}/combined-samples",
             "--format", format_name,
             "-o", str(output),
-            "--markdown-dir", f"/tmp/tagcmp-{format_name}-md",
+            "--markdown-dir", f"/tmp/tagcmp-{format_name}-md",  # nosec B108
         ],
         cwd=repo_root, check=True,
     )
@@ -166,7 +170,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default="gaps.json")
     parser.add_argument("--only-format")
-    parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
+    # A fixed /tmp default is a race-condition concern on shared multi-user
+    # systems; this is a single-developer local CLI tool, and the value is
+    # always overridable via EXIFTOOL_CACHE_DIR/--cache-dir.
+    parser.add_argument(
+        "--cache-dir",
+        default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"),  # nosec B108
+    )
     args = parser.parse_args(argv)
 
     if args.only_format:
