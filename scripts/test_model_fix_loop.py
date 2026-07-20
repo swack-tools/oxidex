@@ -12,6 +12,7 @@ from model_fix_loop import (
     cargo_build,
     cargo_test_workspace,
     call_model,
+    expand_gaps_to_tags,
     extract_diff,
     extract_review_verdict,
     fix_gap,
@@ -19,8 +20,11 @@ from model_fix_loop import (
     git_checkout_clean,
     git_commit,
     load_toml_config,
+    make_single_tag_gap,
     review_verdict,
     run_loop,
+    run_tag_loop,
+    tag_key_for,
 )
 
 
@@ -1099,6 +1103,226 @@ class RunLoopTests(unittest.TestCase):
             {"models": ["x"]}, fake_find_gaps,
             fix_gap_fn=lambda g, c: {"format": g["format"], "status": "failed", "reason": "still broken"},
         )
+
+
+class TagKeyForTests(unittest.TestCase):
+    def test_missing_tag_uses_family_and_name(self):
+        entry = {"family": "EXIF", "name": "LensModel"}
+        self.assertEqual(tag_key_for("NEF", entry, "missing"), "NEF:EXIF:LensModel")
+
+    def test_diff_tag_uses_existing_tag_key(self):
+        entry = {"tag_key": "EXIF:ISO"}
+        self.assertEqual(tag_key_for("NEF", entry, "diff"), "NEF:EXIF:ISO")
+
+
+class ExpandGapsToTagsTests(unittest.TestCase):
+    def test_flattens_missing_and_diff_entries_across_formats(self):
+        gaps = [
+            make_gap(),  # format NEF: 1 missing_tags entry, 1 value_differences entry
+            {
+                "format": "PNG",
+                "missing_tags": [{"family": "PNG", "name": "Gamma", "value": "1", "tag_id": None, "source_file": None}],
+                "value_differences": [],
+                "gap_count": 1,
+                "parser_files": ["src/parsers/png/mod.rs"],
+            },
+        ]
+        tag_gaps = expand_gaps_to_tags(gaps)
+        self.assertEqual(len(tag_gaps), 3)
+        keys = {tg["tag_key"] for tg in tag_gaps}
+        self.assertEqual(keys, {"NEF:EXIF:LensModel", "NEF:EXIF:ISO", "PNG:PNG:Gamma"})
+        kinds = {tg["tag_key"]: tg["kind"] for tg in tag_gaps}
+        self.assertEqual(kinds["NEF:EXIF:LensModel"], "missing")
+        self.assertEqual(kinds["NEF:EXIF:ISO"], "diff")
+
+    def test_empty_gaps_list_yields_no_tags(self):
+        self.assertEqual(expand_gaps_to_tags([]), [])
+
+
+class MakeSingleTagGapTests(unittest.TestCase):
+    def test_missing_kind_populates_missing_tags_only(self):
+        tag_gap = {
+            "format": "NEF", "tag_key": "NEF:EXIF:LensModel", "kind": "missing",
+            "entry": {"family": "EXIF", "name": "LensModel"}, "parser_files": ["a.rs"],
+        }
+        gap = make_single_tag_gap(tag_gap)
+        self.assertEqual(gap["missing_tags"], [tag_gap["entry"]])
+        self.assertEqual(gap["value_differences"], [])
+        self.assertEqual(gap["gap_count"], 1)
+        self.assertEqual(gap["format"], "NEF")
+        self.assertEqual(gap["parser_files"], ["a.rs"])
+
+    def test_diff_kind_populates_value_differences_only(self):
+        tag_gap = {
+            "format": "NEF", "tag_key": "NEF:EXIF:ISO", "kind": "diff",
+            "entry": {"tag_key": "EXIF:ISO"}, "parser_files": [],
+        }
+        gap = make_single_tag_gap(tag_gap)
+        self.assertEqual(gap["missing_tags"], [])
+        self.assertEqual(gap["value_differences"], [tag_gap["entry"]])
+        self.assertEqual(gap["gap_count"], 1)
+
+
+class RunTagLoopTests(unittest.TestCase):
+    def _state_io(self):
+        store = {}
+
+        def load(_path):
+            return dict(store)
+
+        def save(_path, state):
+            store.clear()
+            store.update(state)
+
+        return store, load, save
+
+    def test_stops_when_no_tags_remain(self):
+        result = run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: [], fix_gap_fn=lambda tg, c: self.fail("should not fix"),
+            state_path="/fake/state.json",
+            load_state_fn=lambda p: {}, save_state_fn=lambda p, s: None,
+        )
+        self.assertEqual(result["rounds"], 1)
+        self.assertEqual(result["fixed"], [])
+
+    def test_attempts_exactly_one_tag_per_round(self):
+        gaps = [make_gap()]  # 2 tags: NEF:EXIF:LensModel (missing), NEF:EXIF:ISO (diff)
+        attempts = []
+
+        def fake_fix(tag_gap, config):
+            attempts.append(tag_gap["tag_key"])
+            return {"status": "failed", "reason": "nope"}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1,
+        )
+        # Exactly one tag attempted this round, not both -- one tag per
+        # loop process/round, per the "limit it down to 1 tag" design.
+        self.assertEqual(len(attempts), 1)
+
+    def test_blacklists_a_tag_after_two_failures_not_the_whole_format(self):
+        gaps = [make_gap()]  # NEF:EXIF:LensModel (missing) picked first each round
+        attempts = []
+
+        def fake_fix(tag_gap, config):
+            attempts.append(tag_gap["tag_key"])
+            if tag_gap["tag_key"] == "NEF:EXIF:LensModel":
+                return {"status": "failed", "reason": "nope"}
+            return {"status": "fixed", "gaps_closed": 1}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=2,
+        )
+        self.assertEqual(attempts, ["NEF:EXIF:LensModel", "NEF:EXIF:LensModel"])
+        self.assertTrue(store["NEF:EXIF:LensModel"]["blacklisted"])
+        self.assertEqual(store["NEF:EXIF:LensModel"]["fails"], 2)
+
+    def test_blacklisted_tag_is_skipped_in_favor_of_another(self):
+        gaps = [make_gap()]  # LensModel (missing) + ISO (diff)
+        attempts = []
+
+        def fake_fix(tag_gap, config):
+            attempts.append(tag_gap["tag_key"])
+            return {"status": "failed", "reason": "nope"}
+
+        store, load, save = self._state_io()
+        store["NEF:EXIF:LensModel"] = {"fails": 2, "blacklisted": True}
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1,
+        )
+        # LensModel is blacklisted -- must never be attempted; ISO (the
+        # other tag in this format) gets picked instead.
+        self.assertEqual(attempts, ["NEF:EXIF:ISO"])
+
+    def test_resets_blacklist_once_every_remaining_tag_is_blacklisted(self):
+        gaps = [make_gap()]  # both LensModel and ISO already blacklisted
+        attempts = []
+
+        def fake_fix(tag_gap, config):
+            attempts.append(tag_gap["tag_key"])
+            return {"status": "fixed", "gaps_closed": 1}
+
+        store, load, save = self._state_io()
+        store["NEF:EXIF:LensModel"] = {"fails": 2, "blacklisted": True}
+        store["NEF:EXIF:ISO"] = {"fails": 2, "blacklisted": True}
+        result = run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=2,
+        )
+        # Round 1: everything blacklisted -> reset (no attempt made).
+        # Round 2: blacklist is empty again -> one of the two tags gets a
+        # fresh attempt.
+        self.assertEqual(result["cycles_reset"], 1)
+        self.assertEqual(len(attempts), 1)
+
+    def test_fixed_tag_clears_its_state_entry(self):
+        gaps = [make_gap()]
+
+        def fake_fix(tag_gap, config):
+            return {"status": "fixed", "gaps_closed": 1}
+
+        store, load, save = self._state_io()
+        store["NEF:EXIF:LensModel"] = {"fails": 1, "blacklisted": False}
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1,
+        )
+        self.assertNotIn("NEF:EXIF:LensModel", store)
+
+    def test_persists_state_via_save_state_fn(self):
+        gaps = [make_gap()]
+        written = []
+
+        def fake_fix(tag_gap, config):
+            return {"status": "failed", "reason": "nope"}
+
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json",
+            load_state_fn=lambda p: {},
+            save_state_fn=lambda p, s: written.append((p, dict(s))),
+            max_rounds=1,
+        )
+        self.assertEqual(written[-1][0], "/fake/state.json")
+        self.assertIn("NEF:EXIF:LensModel", written[-1][1])
+
+    def test_calls_git_checkout_clean_only_when_a_tag_gets_blacklisted(self):
+        gaps = [make_gap()]
+        clean_calls = []
+
+        def fake_fix(tag_gap, config):
+            return {"status": "failed", "reason": "nope"}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            git_checkout_clean_fn=lambda root: clean_calls.append(root),
+            repo_root=Path("/fake/repo"),
+            max_rounds=1,
+        )
+        # First failure only -- not blacklisted yet, so no cleanup call.
+        self.assertEqual(clean_calls, [])
+
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            git_checkout_clean_fn=lambda root: clean_calls.append(root),
+            repo_root=Path("/fake/repo"),
+            max_rounds=1,
+        )
+        # Second failure -- now blacklisted, cleanup must fire.
+        self.assertEqual(clean_calls, [Path("/fake/repo")])
 
 
 if __name__ == "__main__":

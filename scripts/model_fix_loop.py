@@ -668,6 +668,148 @@ def run_loop(config, find_gaps_fn, fix_gap_fn, max_dry_rounds=2,
     }
 
 
+def tag_key_for(format_name, entry, kind):
+    """Stable identity string for one tag within one format -- the
+    persistent blacklist's dict key. kind is "missing" or "diff";
+    value_differences entries already carry a combined "tag_key" like
+    "EXIF:ISO", while missing_tags entries need family+name joined."""
+    if kind == "diff":
+        return f"{format_name}:{entry['tag_key']}"
+    return f"{format_name}:{entry['family']}:{entry['name']}"
+
+
+def expand_gaps_to_tags(gaps):
+    """Flatten format-level gaps (as returned by find_gaps_fn) into one
+    entry per individual tag, across every format -- the actual unit of
+    work run_tag_loop attempts and blacklists, per-tag rather than
+    per-format."""
+    tag_gaps = []
+    for g in gaps:
+        fmt = g["format"]
+        for t in g["missing_tags"]:
+            tag_gaps.append({
+                "format": fmt, "tag_key": tag_key_for(fmt, t, "missing"),
+                "kind": "missing", "entry": t, "parser_files": g["parser_files"],
+            })
+        for d in g["value_differences"]:
+            tag_gaps.append({
+                "format": fmt, "tag_key": tag_key_for(fmt, d, "diff"),
+                "kind": "diff", "entry": d, "parser_files": g["parser_files"],
+            })
+    return tag_gaps
+
+
+def make_single_tag_gap(tag_gap):
+    """Build a synthetic single-tag "gap" dict with the same shape fix_gap/
+    build_prompt already expect (format/missing_tags/value_differences/
+    gap_count/parser_files), scoped to exactly the one tag in tag_gap.
+    Reuses the existing single-shot-patch machinery unchanged -- gap_count
+    is 1, so fix_gap's "did remaining decrease" check means "is this one
+    tag still missing/differing", not a whole format's tally."""
+    entry = tag_gap["entry"]
+    return {
+        "format": tag_gap["format"],
+        "missing_tags": [entry] if tag_gap["kind"] == "missing" else [],
+        "value_differences": [entry] if tag_gap["kind"] == "diff" else [],
+        "gap_count": 1,
+        "parser_files": tag_gap["parser_files"],
+    }
+
+
+def load_tag_state(path):
+    """Load the persistent per-tag blacklist/fail-count state. A missing or
+    corrupt file just means "nothing blacklisted yet" -- this is advisory,
+    resumable state, not something worth failing a run over."""
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_tag_state(path, state):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2))
+
+
+def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
+                  git_checkout_clean_fn=None, repo_root=None, log_fn=print,
+                  load_state_fn=load_tag_state, save_state_fn=save_tag_state,
+                  max_rounds=None):
+    """Loop-until-everything-found driver, blacklisting individual TAGS
+    (never a whole format) after 2 failed attempts each. State persists to
+    disk at state_path, so the blacklist survives across separate process
+    runs -- not just within this one call.
+
+    Once every currently-known tag is either fixed or blacklisted, the
+    blacklist is cleared entirely and a fresh cycle starts -- a tag that
+    failed twice under one random model pick gets a clean second chance in
+    the next cycle rather than being given up on forever. fix_gap_fn
+    receives the whole tag_gap dict (format/tag_key/kind/entry/
+    parser_files), not a pre-built single-tag gap, so the caller can wire
+    up a recheck_fn scoped to that specific tag.
+
+    max_rounds caps the number of attempts (None = run forever, until
+    find_gaps_fn() reports zero gaps left anywhere -- every tag genuinely
+    fixed); tests pass a small cap instead of relying on that natural
+    termination.
+    """
+    state = load_state_fn(state_path)
+    fixed, failed = [], []
+    cycles_reset = 0
+    round_num = 0
+
+    while max_rounds is None or round_num < max_rounds:
+        round_num += 1
+        gaps = find_gaps_fn()
+        tag_gaps = expand_gaps_to_tags(gaps)
+
+        if not tag_gaps:
+            log_fn("All tags found -- nothing left to fix.")
+            break
+
+        active = [tg for tg in tag_gaps if not state.get(tg["tag_key"], {}).get("blacklisted")]
+
+        if not active:
+            log_fn(
+                f"All {len(tag_gaps)} remaining tag(s) are blacklisted -- "
+                "resetting the blacklist and starting a new cycle"
+            )
+            state = {}
+            save_state_fn(state_path, state)
+            cycles_reset += 1
+            continue
+
+        tag_gap = active[0]
+        result = fix_gap_fn(tag_gap, config)
+
+        if result["status"] == "fixed":
+            fixed.append({"tag_key": tag_gap["tag_key"], **result})
+            state.pop(tag_gap["tag_key"], None)
+            log_fn(f"[{tag_gap['tag_key']}] FIXED")
+        else:
+            failed.append({"tag_key": tag_gap["tag_key"], **result})
+            entry = state.setdefault(tag_gap["tag_key"], {"fails": 0, "blacklisted": False})
+            entry["fails"] += 1
+            if entry["fails"] >= 2:
+                entry["blacklisted"] = True
+                log_fn(f"[{tag_gap['tag_key']}] blacklisted after {entry['fails']} failed attempts")
+                if git_checkout_clean_fn and repo_root:
+                    git_checkout_clean_fn(repo_root)
+            else:
+                log_fn(f"[{tag_gap['tag_key']}] failed attempt {entry['fails']}/2")
+
+        save_state_fn(state_path, state)
+
+    return {
+        "rounds": round_num,
+        "fixed": fixed,
+        "failed": failed,
+        "cycles_reset": cycles_reset,
+    }
+
+
+DEFAULT_TAG_STATE_PATH = REPO_ROOT / "logs" / "model-fix-tag-state.json"
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config.toml"
 
 
@@ -891,28 +1033,45 @@ def main(argv=None):
             )
         return reply
 
-    def real_fix_gap(gap, cfg):
-        def recheck(fmt):
+    def real_fix_tag(tag_gap, cfg):
+        def recheck(_fmt):
+            # _fmt is ignored -- tag_gap already knows its own format;
+            # fix_gap's recheck_fn(format_name) contract is reused as-is,
+            # scoped here to whether this ONE tag is still present rather
+            # than the whole format's gap count.
+            fmt = tag_gap["format"]
             path = run_format_comparison(fmt, args.cache_dir)
             regrouped = group_gaps_by_format(load_comparison_report(path))
             match = next((g for g in regrouped if g["format"] == fmt), None)
-            return match["gap_count"] if match else 0
+            if not match:
+                return 0
+            if tag_gap["kind"] == "missing":
+                fam, name = tag_gap["entry"]["family"], tag_gap["entry"]["name"]
+                present = any(
+                    t["family"] == fam and t["name"] == name for t in match["missing_tags"]
+                )
+            else:
+                tk = tag_gap["entry"]["tag_key"]
+                present = any(d["tag_key"] == tk for d in match["value_differences"])
+            return 1 if present else 0
 
+        single_gap = make_single_tag_gap(tag_gap)
         return fix_gap(
-            gap, cfg, recheck_fn=recheck, review_config=review_config,
+            single_gap, cfg, recheck_fn=recheck, review_config=review_config,
             git_apply_fn=logging_git_apply, log_fn=timestamped_log,
             call_model_fn=logging_call_model,
             samples_dir=Path(args.cache_dir) / "combined-samples",
         )
 
-    summary = run_loop(
-        config, find_gaps_fn, real_fix_gap,
+    summary = run_tag_loop(
+        config, find_gaps_fn, real_fix_tag, state_path=DEFAULT_TAG_STATE_PATH,
         git_checkout_clean_fn=git_checkout_clean, repo_root=REPO_ROOT,
+        log_fn=timestamped_log,
     )
     print(f"stopped after {summary['rounds']} rounds")
-    print(f"  fixed:   {len(summary['fixed'])} formats")
+    print(f"  fixed:   {len(summary['fixed'])} tags")
     print(f"  failed:  {len(summary['failed'])} attempts")
-    print(f"  skipped: {', '.join(summary['skipped']) or '(none)'}")
+    print(f"  cycles reset (blacklist exhausted): {summary['cycles_reset']}")
     return 0
 
 
