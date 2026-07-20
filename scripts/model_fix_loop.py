@@ -20,14 +20,20 @@ Config (env vars, or matching --flags):
                                     enable; requests the response as
                                     OpenAI-compatible SSE and reassembles it
                                     into the same full-string reply either way)
+    MODEL_FIX_THINKING              default true; "false"/"0"/"no"/"off" sends
+                                    "thinking": {"type": "disabled"} in the
+                                    request body. True omits the field entirely
+                                    (the API's own default), rather than
+                                    guessing at an "enabled" shape the docs
+                                    don't show.
 
     REVIEW_BASE_URL, REVIEW_API_KEY, REVIEW_MODEL, REVIEW_MAX_TOKENS,
-    REVIEW_REASONING_EFFORT, REVIEW_STREAM -- same meaning as the MODEL_FIX_*
-    equivalents above, but for the outer loop's reviewer call instead of the
-    fixer. Each falls back to its MODEL_FIX_* counterpart when unset, so the
-    reviewer reuses the fixer's model/config by default -- set only the ones
-    you want to differ (e.g. REVIEW_MODEL alone, to review with a different
-    model while still fixing with the original one).
+    REVIEW_REASONING_EFFORT, REVIEW_STREAM, REVIEW_THINKING -- same meaning as
+    the MODEL_FIX_* equivalents above, but for the outer loop's reviewer call
+    instead of the fixer. Each falls back to its MODEL_FIX_* counterpart when
+    unset, so the reviewer reuses the fixer's model/config by default -- set
+    only the ones you want to differ (e.g. REVIEW_MODEL alone, to review with
+    a different model while still fixing with the original one).
 
 Usage:
     uv run scripts/model_fix_loop.py
@@ -67,7 +73,7 @@ def extract_diff(response_text):
     return None
 
 
-def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream=False):
+def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream=False, thinking=True):
     """POST a chat-completions request, return the assistant's reply text.
 
     When stream is True, the response arrives as OpenAI-compatible SSE
@@ -76,16 +82,23 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
     reassembles those fragments into the same complete string a
     non-streaming call would return, so every caller's contract stays
     identical regardless of which mode is used.
+
+    thinking defaults to True (the API's own default -- omit the field
+    entirely rather than guess at an "enabled" shape the docs don't show).
+    Set False to send "thinking": {"type": "disabled"}.
     """
     url = base_url.rstrip("/") + "/chat/completions"
-    body = json.dumps({
+    payload = {
         "model": model,
         "messages": messages,
         "temperature": 0,
         "max_tokens": max_tokens,
         "reasoning_effort": reasoning_effort,
         "stream": stream,
-    }).encode()
+    }
+    if not thinking:
+        payload["thinking"] = {"type": "disabled"}
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(
         url, data=body, method="POST",
         headers={
@@ -262,7 +275,7 @@ def review_verdict(gap, diff, config, call_model_fn=call_model):
             [{"role": "user", "content": prompt}],
             config["base_url"], config["api_key"], config["model"],
             config["max_tokens"], config["reasoning_effort"],
-            config.get("stream", False),
+            config.get("stream", False), config.get("thinking", True),
         )
     except Exception as e:
         return False, f"review call failed: {e}"
@@ -282,7 +295,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
             reply = call_model_fn(
                 messages, config["base_url"], config["api_key"], config["model"],
                 config["max_tokens"], config["reasoning_effort"],
-                config.get("stream", False),
+                config.get("stream", False), config.get("thinking", True),
             )
         except Exception as e:
             # Network/timeout/HTTP/malformed-response failures are a normal
@@ -458,6 +471,11 @@ def main(argv=None):
         type=lambda v: str(v).strip().lower() in ("1", "true", "yes", "on"),
         default=os.environ.get("MODEL_FIX_STREAM", "false").strip().lower() in ("1", "true", "yes", "on"),
     )
+    parser.add_argument(
+        "--thinking",
+        type=lambda v: str(v).strip().lower() in ("1", "true", "yes", "on"),
+        default=os.environ.get("MODEL_FIX_THINKING", "true").strip().lower() in ("1", "true", "yes", "on"),
+    )
     # REVIEW_* config for the outer loop's reviewer model -- each falls
     # back to the corresponding MODEL_FIX_* value when unset, so setting
     # nothing here keeps today's behavior (reviewer reuses the fixer's
@@ -489,6 +507,13 @@ def main(argv=None):
             "REVIEW_STREAM", os.environ.get("MODEL_FIX_STREAM", "false"),
         ).strip().lower() in ("1", "true", "yes", "on"),
     )
+    parser.add_argument(
+        "--review-thinking",
+        type=lambda v: str(v).strip().lower() in ("1", "true", "yes", "on"),
+        default=os.environ.get(
+            "REVIEW_THINKING", os.environ.get("MODEL_FIX_THINKING", "true"),
+        ).strip().lower() in ("1", "true", "yes", "on"),
+    )
     parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
     args = parser.parse_args(argv)
 
@@ -509,6 +534,7 @@ def main(argv=None):
         "max_prompt_tags": args.max_prompt_tags,
         "max_prompt_file_bytes": args.max_prompt_file_bytes,
         "stream": args.stream,
+        "thinking": args.thinking,
     }
 
     review_config = {
@@ -518,6 +544,7 @@ def main(argv=None):
         "max_tokens": args.review_max_tokens,
         "reasoning_effort": args.review_reasoning_effort,
         "stream": args.review_stream,
+        "thinking": args.review_thinking,
     }
 
     def find_gaps_fn():

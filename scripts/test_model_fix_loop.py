@@ -163,6 +163,49 @@ class CallModelStreamingTests(unittest.TestCase):
         self.assertEqual(result, "ok")
 
 
+class CallModelThinkingTests(unittest.TestCase):
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_thinking_true_by_default_omits_thinking_field(self, mock_urlopen):
+        response_json = json.dumps({"choices": [{"message": {"content": "the diff"}}]}).encode()
+        mock_cm = MagicMock()
+        mock_cm.read.return_value = response_json
+        mock_urlopen.return_value.__enter__.return_value = mock_cm
+
+        call_model(
+            [{"role": "user", "content": "fix it"}],
+            base_url="https://api.z.ai/api/paas/v4",
+            api_key="secret",
+            model="glm-5.2",
+            max_tokens=4096,
+            reasoning_effort="max",
+        )
+
+        request = mock_urlopen.call_args[0][0]
+        body = json.loads(request.data)
+        self.assertNotIn("thinking", body)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_thinking_false_sends_disabled_thinking_field(self, mock_urlopen):
+        response_json = json.dumps({"choices": [{"message": {"content": "the diff"}}]}).encode()
+        mock_cm = MagicMock()
+        mock_cm.read.return_value = response_json
+        mock_urlopen.return_value.__enter__.return_value = mock_cm
+
+        call_model(
+            [{"role": "user", "content": "fix it"}],
+            base_url="https://api.z.ai/api/paas/v4",
+            api_key="secret",
+            model="glm-5.2",
+            max_tokens=4096,
+            reasoning_effort="max",
+            thinking=False,
+        )
+
+        request = mock_urlopen.call_args[0][0]
+        body = json.loads(request.data)
+        self.assertEqual(body["thinking"], {"type": "disabled"})
+
+
 class GitApplyTests(unittest.TestCase):
     @patch("model_fix_loop.subprocess.run")
     def test_success_returns_true(self, mock_run):
@@ -618,7 +661,8 @@ class FixGapReviewTests(unittest.TestCase):
         gap = make_gap(gap_count=2)
         stream_values_seen = []
 
-        def tracking_call_model_fn(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream=False):
+        def tracking_call_model_fn(messages, base_url, api_key, model, max_tokens, reasoning_effort,
+                                    stream=False, thinking=True):
             stream_values_seen.append(stream)
             if len(stream_values_seen) == 1:
                 return "```diff\n--- a/x\n+++ b/x\n```\n"
@@ -642,6 +686,33 @@ class FixGapReviewTests(unittest.TestCase):
         # see the config's stream flag -- proving it's threaded through
         # both real call sites, not just one of them.
         self.assertEqual(stream_values_seen, [True, True])
+
+    def test_config_thinking_flag_reaches_call_model_fn(self):
+        gap = make_gap(gap_count=2)
+        thinking_values_seen = []
+
+        def tracking_call_model_fn(messages, base_url, api_key, model, max_tokens, reasoning_effort,
+                                    stream=False, thinking=True):
+            thinking_values_seen.append(thinking)
+            if len(thinking_values_seen) == 1:
+                return "```diff\n--- a/x\n+++ b/x\n```\n"
+            return "APPROVE"
+
+        config = dict(CONFIG, thinking=False)
+        result = fix_gap(
+            gap, config,
+            call_model_fn=tracking_call_model_fn,
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            cargo_test_workspace_fn=lambda root: True,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(thinking_values_seen, [False, False])
 
     def test_uses_separate_review_config_when_provided(self):
         gap = make_gap(gap_count=2)
