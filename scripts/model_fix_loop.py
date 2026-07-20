@@ -69,6 +69,21 @@ from find_tag_gaps import (
 DIFF_BLOCK_RE = re.compile(r"```diff[ \t]*\r?\n(.*?)```", re.DOTALL)
 
 
+PATCH_SENTINEL_RE = re.compile(r"^\*{3}\s*(Begin|End)\s+Patch\s*$", re.MULTILINE)
+
+
+def strip_patch_sentinels(diff_text):
+    """Drop stray "*** Begin Patch"/"*** End Patch" lines from a unified
+    diff. Some models are also trained on OpenAI's "apply_patch" format
+    (which wraps a diff-like body in those sentinels) and bleed that
+    convention into an otherwise well-formed unified diff -- git apply
+    rejects the whole patch outright on the leftover line ("unexpected
+    line" / "patch with only garbage"), even though the diff content
+    itself is fine.
+    """
+    return PATCH_SENTINEL_RE.sub("", diff_text).strip() + "\n"
+
+
 def extract_diff(response_text):
     """Pull a unified diff out of a chat response.
 
@@ -78,10 +93,10 @@ def extract_diff(response_text):
     """
     match = DIFF_BLOCK_RE.search(response_text)
     if match:
-        return match.group(1).strip() + "\n"
+        return strip_patch_sentinels(match.group(1))
     stripped = response_text.strip()
     if stripped.startswith("diff --git") or stripped.startswith("--- "):
-        return stripped + "\n"
+        return strip_patch_sentinels(stripped)
     return None
 
 
