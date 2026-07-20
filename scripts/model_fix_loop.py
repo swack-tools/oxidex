@@ -31,6 +31,11 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           default), rather than guessing at an "enabled"
                           shape the docs don't show.
     temperature            default 0 (deterministic)
+    timeout                default 120 (socket read timeout in seconds --
+                          some providers hold a streaming connection open
+                          with keepalives well past this before ever
+                          sending real content, so raise it if a provider
+                          is otherwise reliable but just slow)
 
 [reviewer] defaults to [worker] entirely when omitted, so a single table
 covers both the fixer and the reviewer by default -- add [reviewer] only to
@@ -81,7 +86,7 @@ def extract_diff(response_text):
 
 
 def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream=False, thinking=True,
-                temperature=0):
+                temperature=0, timeout=120):
     """POST a chat-completions request, return the assistant's reply text.
 
     When stream is True, the response arrives as OpenAI-compatible SSE
@@ -97,6 +102,11 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
 
     temperature defaults to 0 (deterministic, matching this loop's
     original hardcoded behavior).
+
+    timeout is the socket read timeout in seconds, passed straight to
+    urlopen -- some providers hold a streaming connection open with
+    keepalives well past 120s before ever sending real content, so this is
+    configurable per [worker]/[reviewer] rather than a fixed value.
     """
     url = base_url.rstrip("/") + "/chat/completions"
     payload = {
@@ -126,7 +136,7 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
     )
     # base_url is developer-supplied local config (MODEL_FIX_BASE_URL /
     # REVIEW_BASE_URL), never network- or attacker-controlled input.
-    with urllib.request.urlopen(req, timeout=120) as resp:  # nosec B310
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
         if not stream:
             payload = json.loads(resp.read())
             return payload["choices"][0]["message"]["content"]
@@ -359,7 +369,7 @@ def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=ra
             model_spec["base_url"], model_spec["api_key"], model_spec["name"],
             config["max_tokens"], config["reasoning_effort"],
             config.get("stream", False), config.get("thinking", True),
-            config.get("temperature", 0),
+            config.get("temperature", 0), config.get("timeout", 120),
         )
     except Exception as e:
         return False, f"review call failed: {e}"
@@ -444,7 +454,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 messages, model_spec["base_url"], model_spec["api_key"], model_spec["name"],
                 config["max_tokens"], config["reasoning_effort"],
                 config.get("stream", False), config.get("thinking", True),
-                config.get("temperature", 0),
+                config.get("temperature", 0), config.get("timeout", 120),
             )
         except Exception as e:
             # Network/timeout/HTTP/malformed-response failures are a normal
@@ -705,6 +715,7 @@ def _normalize_model_config(table):
         "stream": table.get("stream", False),
         "thinking": table.get("thinking", True),
         "temperature": table.get("temperature", 0),
+        "timeout": table.get("timeout", 120),
     }
 
 
@@ -823,21 +834,21 @@ def main(argv=None):
     req_manifest_path = req_log_dir / "manifest.log"
 
     def logging_call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
-                            stream=False, thinking=True, temperature=0):
+                            stream=False, thinking=True, temperature=0, timeout=120):
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         prompt_chars = sum(len(m.get("content", "")) for m in messages)
         req_path = req_log_dir / f"{ts}-request.json"
         req_path.write_text(json.dumps({
             "model": model, "base_url": base_url, "max_tokens": max_tokens,
             "reasoning_effort": reasoning_effort, "stream": stream,
-            "thinking": thinking, "temperature": temperature,
+            "thinking": thinking, "temperature": temperature, "timeout": timeout,
             "prompt_chars": prompt_chars, "messages": messages,
         }, indent=2))
         t0 = time.time()
         try:
             reply = call_model(
                 messages, base_url, api_key, model, max_tokens, reasoning_effort,
-                stream, thinking, temperature,
+                stream, thinking, temperature, timeout,
             )
         except Exception as e:
             elapsed = time.time() - t0
