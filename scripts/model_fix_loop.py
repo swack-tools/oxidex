@@ -26,14 +26,16 @@ Config (env vars, or matching --flags):
                                     (the API's own default), rather than
                                     guessing at an "enabled" shape the docs
                                     don't show.
+    MODEL_FIX_TEMPERATURE           default 0 (deterministic)
 
     REVIEW_BASE_URL, REVIEW_API_KEY, REVIEW_MODEL, REVIEW_MAX_TOKENS,
-    REVIEW_REASONING_EFFORT, REVIEW_STREAM, REVIEW_THINKING -- same meaning as
-    the MODEL_FIX_* equivalents above, but for the outer loop's reviewer call
-    instead of the fixer. Each falls back to its MODEL_FIX_* counterpart when
-    unset, so the reviewer reuses the fixer's model/config by default -- set
-    only the ones you want to differ (e.g. REVIEW_MODEL alone, to review with
-    a different model while still fixing with the original one).
+    REVIEW_REASONING_EFFORT, REVIEW_STREAM, REVIEW_THINKING, REVIEW_TEMPERATURE
+    -- same meaning as the MODEL_FIX_* equivalents above, but for the outer
+    loop's reviewer call instead of the fixer. Each falls back to its
+    MODEL_FIX_* counterpart when unset, so the reviewer reuses the fixer's
+    model/config by default -- set only the ones you want to differ (e.g.
+    REVIEW_MODEL alone, to review with a different model while still fixing
+    with the original one).
 
 Usage:
     uv run scripts/model_fix_loop.py
@@ -73,7 +75,8 @@ def extract_diff(response_text):
     return None
 
 
-def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream=False, thinking=True):
+def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream=False, thinking=True,
+                temperature=0):
     """POST a chat-completions request, return the assistant's reply text.
 
     When stream is True, the response arrives as OpenAI-compatible SSE
@@ -86,12 +89,15 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
     thinking defaults to True (the API's own default -- omit the field
     entirely rather than guess at an "enabled" shape the docs don't show).
     Set False to send "thinking": {"type": "disabled"}.
+
+    temperature defaults to 0 (deterministic, matching this loop's
+    original hardcoded behavior).
     """
     url = base_url.rstrip("/") + "/chat/completions"
     payload = {
         "model": model,
         "messages": messages,
-        "temperature": 0,
+        "temperature": temperature,
         "max_tokens": max_tokens,
         "reasoning_effort": reasoning_effort,
         "stream": stream,
@@ -276,6 +282,7 @@ def review_verdict(gap, diff, config, call_model_fn=call_model):
             config["base_url"], config["api_key"], config["model"],
             config["max_tokens"], config["reasoning_effort"],
             config.get("stream", False), config.get("thinking", True),
+            config.get("temperature", 0),
         )
     except Exception as e:
         return False, f"review call failed: {e}"
@@ -296,6 +303,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 messages, config["base_url"], config["api_key"], config["model"],
                 config["max_tokens"], config["reasoning_effort"],
                 config.get("stream", False), config.get("thinking", True),
+                config.get("temperature", 0),
             )
         except Exception as e:
             # Network/timeout/HTTP/malformed-response failures are a normal
@@ -495,6 +503,10 @@ def main(argv=None):
         type=lambda v: str(v).strip().lower() in ("1", "true", "yes", "on"),
         default=os.environ.get("MODEL_FIX_THINKING", "true").strip().lower() in ("1", "true", "yes", "on"),
     )
+    parser.add_argument(
+        "--temperature", type=float,
+        default=float(os.environ.get("MODEL_FIX_TEMPERATURE", "0")),
+    )
     # REVIEW_* config for the outer loop's reviewer model -- each falls
     # back to the corresponding MODEL_FIX_* value when unset, so setting
     # nothing here keeps today's behavior (reviewer reuses the fixer's
@@ -533,6 +545,10 @@ def main(argv=None):
             "REVIEW_THINKING", os.environ.get("MODEL_FIX_THINKING", "true"),
         ).strip().lower() in ("1", "true", "yes", "on"),
     )
+    parser.add_argument(
+        "--review-temperature", type=float,
+        default=float(os.environ.get("REVIEW_TEMPERATURE", os.environ.get("MODEL_FIX_TEMPERATURE", "0"))),
+    )
     parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
     args = parser.parse_args(argv)
 
@@ -554,6 +570,7 @@ def main(argv=None):
         "max_prompt_file_bytes": args.max_prompt_file_bytes,
         "stream": args.stream,
         "thinking": args.thinking,
+        "temperature": args.temperature,
     }
 
     review_config = {
@@ -564,6 +581,7 @@ def main(argv=None):
         "reasoning_effort": args.review_reasoning_effort,
         "stream": args.review_stream,
         "thinking": args.review_thinking,
+        "temperature": args.review_temperature,
     }
 
     def find_gaps_fn():
