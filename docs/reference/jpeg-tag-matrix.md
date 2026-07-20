@@ -16,9 +16,9 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | Classification | Tags |
 |---|---|
 | ❌ Unsupported | 2516 |
-| 📖 Read only | 1678 |
-| 🐛 Read OK, write broken | 252 |
+| 📖 Read only | 1731 |
 | ❔ Untestable | 219 |
+| 🐛 Read OK, write broken | 199 |
 | ✅ Full (read + write) | 57 |
 | 🐛 Read broken | 48 |
 | ⚠️ Full (write non-standard encoding) | 42 |
@@ -29,15 +29,15 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | Group | Full | Read-only | Write-broken | Read-broken | Write-only | Unsupported | Untestable | Total |
 |---|---|---|---|---|---|---|---|---|
 | All | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
-| ExifIFD | 26 | 1 | 52 | 11 | 0 | 0 | 98 | 196 |
+| ExifIFD | 26 | 0 | 53 | 11 | 0 | 0 | 98 | 196 |
 | File | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | GPS | 0 | 0 | 24 | 1 | 0 | 0 | 0 | 32 |
 | GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
-| IFD0 | 31 | 6 | 67 | 21 | 0 | 0 | 17 | 169 |
+| IFD0 | 31 | 0 | 73 | 21 | 0 | 0 | 17 | 169 |
 | IFD1 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | IFD2 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
-| IPTC | 0 | 84 | 4 | 5 | 0 | 5 | 7 | 105 |
-| InteropIFD | 0 | 2 | 2 | 0 | 0 | 1 | 0 | 5 |
+| IPTC | 0 | 88 | 0 | 5 | 0 | 5 | 7 | 105 |
+| InteropIFD | 0 | 4 | 0 | 0 | 0 | 1 | 0 | 5 |
 | JFIF | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
 | MakerNotes | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | Photoshop | 0 | 0 | 0 | 0 | 0 | 6 | 6 | 12 |
@@ -58,8 +58,8 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | XMP-LImage | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
 | XMP-MP | 0 | 0 | 0 | 0 | 0 | 8 | 0 | 8 |
 | XMP-MP1 | 0 | 15 | 0 | 0 | 0 | 0 | 0 | 15 |
-| XMP-aas | 0 | 26 | 1 | 0 | 0 | 0 | 0 | 27 |
-| XMP-acdsee | 0 | 14 | 2 | 0 | 0 | 3 | 0 | 19 |
+| XMP-aas | 0 | 27 | 0 | 0 | 0 | 0 | 0 | 27 |
+| XMP-acdsee | 0 | 15 | 1 | 0 | 0 | 3 | 0 | 19 |
 | XMP-acdsee-rs | 0 | 0 | 0 | 0 | 0 | 19 | 0 | 19 |
 | XMP-album | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | XMP-apdi | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
@@ -67,16 +67,16 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | XMP-aux | 0 | 25 | 0 | 0 | 0 | 0 | 1 | 26 |
 | XMP-cc | 0 | 2 | 0 | 0 | 0 | 9 | 0 | 11 |
 | XMP-cell | 0 | 0 | 0 | 0 | 0 | 6 | 0 | 6 |
-| XMP-crd | 0 | 227 | 22 | 3 | 0 | 841 | 0 | 1093 |
+| XMP-crd | 0 | 249 | 0 | 3 | 0 | 841 | 0 | 1093 |
 | XMP-creatorAtom | 0 | 0 | 0 | 0 | 0 | 14 | 0 | 14 |
-| XMP-crs | 0 | 227 | 22 | 3 | 0 | 841 | 0 | 1093 |
+| XMP-crs | 0 | 249 | 0 | 3 | 0 | 841 | 0 | 1093 |
 | XMP-dc | 0 | 14 | 1 | 0 | 0 | 0 | 0 | 15 |
-| XMP-dex | 0 | 2 | 1 | 0 | 0 | 5 | 0 | 8 |
+| XMP-dex | 0 | 3 | 0 | 0 | 0 | 5 | 0 | 8 |
 | XMP-digiKam | 0 | 8 | 1 | 0 | 0 | 0 | 0 | 9 |
 | XMP-drone-dji | 0 | 25 | 0 | 0 | 0 | 3 | 0 | 28 |
 | XMP-dwc | 0 | 0 | 0 | 0 | 0 | 260 | 3 | 263 |
 | XMP-et | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
-| XMP-exif | 0 | 84 | 5 | 4 | 0 | 7 | 0 | 100 |
+| XMP-exif | 0 | 86 | 3 | 4 | 0 | 7 | 0 | 100 |
 | XMP-exifEX | 0 | 26 | 0 | 0 | 0 | 16 | 0 | 42 |
 | XMP-expressionmedia | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 4 |
 | XMP-extensis | 0 | 8 | 0 | 0 | 0 | 0 | 0 | 8 |
@@ -97,10 +97,10 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | XMP-pdf | 0 | 10 | 2 | 0 | 0 | 0 | 0 | 12 |
 | XMP-pdfx | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
 | XMP-photomech | 0 | 6 | 0 | 0 | 0 | 0 | 2 | 8 |
-| XMP-photoshop | 0 | 45 | 4 | 0 | 0 | 4 | 0 | 53 |
+| XMP-photoshop | 0 | 48 | 1 | 0 | 0 | 4 | 0 | 53 |
 | XMP-plus | 0 | 74 | 4 | 0 | 0 | 8 | 0 | 86 |
 | XMP-pmi | 0 | 34 | 0 | 0 | 0 | 0 | 0 | 34 |
-| XMP-prism | 0 | 67 | 6 | 0 | 0 | 39 | 0 | 112 |
+| XMP-prism | 0 | 68 | 5 | 0 | 0 | 39 | 0 | 112 |
 | XMP-prl | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
 | XMP-prm | 0 | 19 | 0 | 0 | 0 | 0 | 0 | 19 |
 | XMP-pur | 0 | 10 | 4 | 0 | 0 | 0 | 0 | 14 |
@@ -108,7 +108,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | XMP-swf | 0 | 1 | 0 | 0 | 0 | 3 | 0 | 4 |
 | XMP-tiff | 0 | 25 | 1 | 0 | 0 | 0 | 0 | 26 |
 | XMP-x | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
-| XMP-xmp | 0 | 12 | 4 | 0 | 0 | 11 | 0 | 27 |
+| XMP-xmp | 0 | 13 | 3 | 0 | 0 | 11 | 0 | 27 |
 | XMP-xmpBJ | 0 | 0 | 0 | 0 | 0 | 4 | 0 | 4 |
 | XMP-xmpDM | 0 | 57 | 5 | 0 | 0 | 99 | 0 | 161 |
 | XMP-xmpDSA | 0 | 10 | 0 | 0 | 0 | 0 | 0 | 10 |
@@ -226,100 +226,100 @@ references are into this repo.
 | `LensModel` | ✅ ok | ✅ ok | `OxTest` |
 | `LensSerialNumber` | ✅ ok | ✅ ok | `OxTest` |
 | `LightSource` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Daylight` |
-| `MakerNoteApple` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteCanon` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteCasio` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteCasio2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteDJI` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteDJIInfo` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteFLIR` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteFujiFilm` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteGE` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteGE2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteGoogle` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteHP` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteHP2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteHP4` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteHP6` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteHasselblad` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteISL` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteJVC` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteJVCText` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak10` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak11` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak12` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak1a` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak1b` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak4` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak5` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak6a` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak6b` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak7` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak8a` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak8b` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak8c` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodak9` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKodakUnknown` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteKyocera` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteLeica` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteLeica10` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteLeica2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteLeica3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteLeica4` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteLeica5` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteLeica6` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteLeica7` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteLeica8` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteLeica9` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteMinolta` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteMinolta2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteMinolta3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteMotorola` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteNikon` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteNikon2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteNikon3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteNintendo` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteOlympus` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteOlympus2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteOlympus3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNotePanasonic` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNotePanasonic2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNotePanasonic3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNotePentax` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNotePentax2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNotePentax3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNotePentax4` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNotePentax5` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNotePentax6` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNotePhaseOne` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteReconyxHyperFire` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteReconyxHyperFire2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteReconyxHyperFire4K` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteReconyxMicroFire` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteReconyxUltraFire` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteRicoh` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteRicoh2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteRicohPentax` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteRicohText` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSamsung1a` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSamsung1b` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSamsung2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSanyo` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSanyoC4` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSanyoPatch` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSigma` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSony` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSony2` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSony3` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSony4` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSony5` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSonyEricsson` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteSonySRF` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteUnknown` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteUnknownBinary` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
-| `MakerNoteUnknownText` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `MakerNoteApple` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteCanon` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteCasio` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteCasio2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteDJI` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteDJIInfo` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteFLIR` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteFujiFilm` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteGE` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteGE2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteGoogle` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteHP` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteHP2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteHP4` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteHP6` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteHasselblad` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteISL` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteJVC` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteJVCText` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak10` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak11` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak12` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak1a` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak1b` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak3` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak4` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak5` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak6a` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak6b` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak7` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak8a` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak8b` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak8c` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodak9` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKodakUnknown` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteKyocera` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteLeica` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteLeica10` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteLeica2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteLeica3` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteLeica4` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteLeica5` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteLeica6` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteLeica7` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteLeica8` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteLeica9` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteMinolta` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteMinolta2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteMinolta3` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteMotorola` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteNikon` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteNikon2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteNikon3` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteNintendo` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteOlympus` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteOlympus2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteOlympus3` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNotePanasonic` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNotePanasonic2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNotePanasonic3` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNotePentax` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNotePentax2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNotePentax3` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNotePentax4` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNotePentax5` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNotePentax6` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNotePhaseOne` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteReconyxHyperFire` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteReconyxHyperFire2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteReconyxHyperFire4K` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteReconyxMicroFire` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteReconyxUltraFire` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteRicoh` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteRicoh2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteRicohPentax` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteRicohText` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSamsung1a` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSamsung1b` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSamsung2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSanyo` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSanyoC4` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSanyoPatch` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSigma` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSony` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSony2` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSony3` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSony4` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSony5` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSonyEricsson` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteSonySRF` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteUnknown` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteUnknownBinary` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `MakerNoteUnknownText` | ✅ ok | 🐛 broken: error | `OxTest` |
 | `MaxApertureValue` | 🐛 broken: APEX ValueConv (2^x) not applied | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `MetadataEditingSoftware` | ✅ ok | ✅ ok | `OxTest` |
 | `MeteringMode` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Average` |
@@ -464,10 +464,10 @@ references are into this repo.
 | `Copyright` | ✅ ok | ✅ ok | `OxTest` |
 | `CurrentICCProfile` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
 | `CurrentPreProfileMatrix` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
-| `DNGAdobeData` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `DNGAdobeData` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
 | `DNGBackwardVersion` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3` |
 | `DNGLensInfo` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `1.5 1.5 1.5 1.5` |
-| `DNGPrivateData` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `DNGPrivateData` | ✅ ok | 🐛 broken: error | `3` |
 | `DNGVersion` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3` |
 | `DefaultBlackRender` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Auto` |
 | `DepthFar` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
@@ -485,7 +485,7 @@ references are into this repo.
 | `GDALMetadata` | ✅ ok | ✅ ok | `OxTest` |
 | `GDALNoData` | ✅ ok | ✅ ok | `OxTest` |
 | `GeoTiffAsciiParams` | ✅ ok | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
-| `GeoTiffDirectory` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `GeoTiffDirectory` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `3` |
 | `GeoTiffDoubleParams` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: written as ASCII where numeric/rational expected | `1.5` |
 | `GrayResponseUnit` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `0.1` |
 | `HalftoneHints` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3 3` |
@@ -501,7 +501,7 @@ references are into this repo.
 | `ImageStats` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
 | `ImageWidth` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `InkSet` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `CMYK` |
-| `IntergraphMatrix` | ✅ ok | — unsupported (silent no-op) | `1.5` |
+| `IntergraphMatrix` | ✅ ok | 🐛 broken: error | `1.5` |
 | `JXLDecodeSpeed` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
 | `JXLDistance` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `JXLEffort` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
@@ -512,8 +512,8 @@ references are into this repo.
 | `MaxSampleValue` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `MinSampleValue` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `Model` | ✅ ok | ✅ ok | `OxTest` |
-| `ModelTiePoint` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `ModelTransform` | ✅ ok | — unsupported (silent no-op) | `1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 ` |
+| `ModelTiePoint` | ✅ ok | 🐛 broken: error | `1.5` |
+| `ModelTransform` | ✅ ok | 🐛 broken: error | `1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 ` |
 | `ModifyDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `NewRawImageDigest` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
 | `OldSubfileType` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Full-resolution image` |
@@ -529,7 +529,7 @@ references are into this repo.
 | `PanasonicTitle` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ✅ ok | `OxTest` |
 | `PanasonicTitle2` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ✅ ok | `OxTest` |
 | `PhotometricInterpretation` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `WhiteIsZero` |
-| `PixelScale` | ✅ ok | — unsupported (silent no-op) | `1.5 1.5 1.5` |
+| `PixelScale` | ✅ ok | 🐛 broken: error | `1.5 1.5 1.5` |
 | `PlanarConfiguration` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Chunky` |
 | `Predictor` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `Horizontal differencing` |
 | `PreviewApplicationName` | ✅ ok | ✅ ok | `OxTest` |
@@ -537,11 +537,11 @@ references are into this repo.
 | `PreviewColorSpace` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Gray Gamma 2.2` |
 | `PreviewDateTime` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `PreviewImageLength` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
-| `PreviewImageStart` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `PreviewImageStart` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `3` |
 | `PreviewSettingsDigest` | ✅ ok (formatting differs from exiftool) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
 | `PreviewSettingsName` | ✅ ok | ✅ ok | `OxTest` |
 | `PrimaryChromaticities` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `1.5 1.5 1.5 1.5 1.5 1.5` |
-| `PrintIM` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
+| `PrintIM` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
 | `ProcessingSoftware` | ✅ ok | ✅ ok | `OxTest` |
 | `ProfileCalibrationSig` | ✅ ok | ✅ ok | `OxTest` |
 | `ProfileCopyright` | ✅ ok | ✅ ok | `OxTest` |
@@ -573,7 +573,7 @@ references are into this repo.
 | `ResolutionUnit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `inches` |
 | `RowsPerStrip` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `SEAL` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
-| `SEMInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `SEMInfo` | ✅ ok | 🐛 broken: error | `OxTest` |
 | `SamplesPerPixel` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `ShadowScale` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `Software` | ✅ ok | ✅ ok | `OxTest` |
@@ -606,8 +606,8 @@ references are into this repo.
 
 | ExifTool tag | Read | Write | Example |
 |---|---|---|---|
-| `ThumbnailLength` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ThumbnailOffset` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ThumbnailLength` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
+| `ThumbnailOffset` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
 
 ### IFD2
 
@@ -623,7 +623,7 @@ references are into this repo.
 | `ARMIdentifier` | 🐛 broken: IPTC binary int16u decoded as NUL-garbage string | — unsupported (silent no-op) | `3` |
 | `ARMVersion` | 🐛 broken: IPTC binary int16u decoded as NUL-garbage string | — unsupported (silent no-op) | `3` |
 | `ActionAdvised` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Object Kill` |
-| `ApplicationRecordVersion` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ApplicationRecordVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `AudioDuration` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3 3 3` |
 | `AudioOutcue` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `AudioSamplingRate` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3 3 3` |
@@ -659,7 +659,7 @@ references are into this repo.
 | `EditorialUpdate` | ✅ ok | — unsupported (silent no-op) | `Additional language` |
 | `EnvelopeNumber` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3 3 3 3 3 3 3 3` |
 | `EnvelopePriority` | ✅ ok | — unsupported (silent no-op) | `0 (reserved)` |
-| `EnvelopeRecordVersion` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `EnvelopeRecordVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ExcursionTolerance` | — unsupported | — unsupported (silent no-op) | `Not Allowed` |
 | `ExifCameraInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ExpirationDate` | ✅ ok | — unsupported (silent no-op) | `2024:01:15` |
@@ -690,9 +690,9 @@ references are into this repo.
 | `ObjectAttributeReference` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ObjectCycle` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Morning` |
 | `ObjectName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `ObjectPreviewData` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
-| `ObjectPreviewFileFormat` | 🐛 broken: IPTC binary int16u decoded as NUL-garbage string | 🐛 broken: type-validation rejects CLI string values | `No ObjectData` |
-| `ObjectPreviewFileVersion` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ObjectPreviewData` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ObjectPreviewFileFormat` | 🐛 broken: IPTC binary int16u decoded as NUL-garbage string | — unsupported (silent no-op) | `No ObjectData` |
+| `ObjectPreviewFileVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ObjectTypeReference` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `OriginalTransmissionReference` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `OriginatingProgram` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -733,8 +733,8 @@ references are into this repo.
 | `InteropIndex` | ✅ ok | — unsupported (silent no-op) | `R03 - DCF option file (Adobe RGB)` |
 | `InteropVersion` | ✅ ok | — unsupported (silent no-op) | `0100` |
 | `RelatedImageFileFormat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `RelatedImageHeight` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `RelatedImageWidth` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `RelatedImageHeight` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `RelatedImageWidth` | ✅ ok | — unsupported (silent no-op) | `3` |
 
 ### JFIF
 
@@ -761,9 +761,9 @@ references are into this repo.
 | `GlobalAltitude` | — unsupported | — unsupported (silent no-op) | `3` |
 | `GlobalAngle` | — unsupported | — unsupported (silent no-op) | `3` |
 | `IPTCDigest` | ❔ untestable (exiftool could not synthesize a sample) | value_mismatch | `new` |
-| `PhotoshopBGRThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/Users/allen/git/oxidex/.claude/worktrees/oxidex-pr-15-revie` |
+| `PhotoshopBGRThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/home/runner/work/oxidex/oxidex/tests/fixtures/jpeg/tag_matr` |
 | `PhotoshopQuality` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
-| `PhotoshopThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/Users/allen/git/oxidex/.claude/worktrees/oxidex-pr-15-revie` |
+| `PhotoshopThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/home/runner/work/oxidex/oxidex/tests/fixtures/jpeg/tag_matr` |
 | `URL` | — unsupported | — unsupported (silent no-op) | `OxTest` |
 | `XResolution` | — unsupported | — unsupported (silent no-op) | `3` |
 | `YResolution` | — unsupported | — unsupported (silent no-op) | `3` |
@@ -1154,7 +1154,7 @@ references are into this repo.
 | `FaceBalanceWarmth` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `Highlights` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `Shadows` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `Vibrance` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `Vibrance` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 
 ### XMP-acdsee
 
@@ -1173,7 +1173,7 @@ references are into this repo.
 | `ObjectCycle` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `OriginatingProgram` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `RPP` | — unsupported | — unsupported (silent no-op) | `OxTest` |
-| `Rating` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `Rating` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `Rawrppused` | ✅ ok | — unsupported (silent no-op) | `True` |
 | `ReleaseDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `ReleaseTime` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -1300,7 +1300,7 @@ references are into this repo.
 | `AutoToneDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `AutoToneDigestNoSat` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `AutoWhiteVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `Blacks2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Blacks2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `BlueHue` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `BlueSaturation` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Brightness` | ✅ ok | — unsupported (silent no-op) | `3` |
@@ -1453,7 +1453,7 @@ references are into this repo.
 | `CircGradBasedCorrWhites2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
 | `CircularGradientBasedCorrections` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `Clarity` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `Clarity2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Clarity2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ClipboardAspectRatio` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ClipboardOrientation` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Cluster` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -1466,7 +1466,7 @@ references are into this repo.
 | `ColorGradeMidtoneLum` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ColorGradeMidtoneSat` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ColorGradeShadowLum` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `ColorNoiseReduction` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ColorNoiseReduction` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ColorNoiseReductionDetail` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ColorNoiseReductionSmoothness` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ColorTemperature` | — unsupported | — unsupported (silent no-op) | `3` |
@@ -1474,7 +1474,7 @@ references are into this repo.
 | `CompatibleVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ContactInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Contrast` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `3` |
-| `Contrast2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Contrast2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ConvertToGrayscale` | ✅ ok | — unsupported (silent no-op) | `True` |
 | `Converter` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Copyright` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -1619,7 +1619,7 @@ references are into this repo.
 | `DepthMapInfoDepthSource` | — unsupported | — unsupported (silent no-op) | `OxTest` |
 | `Description` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Exposure` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `Exposure2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `Exposure2012` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `FillLight` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `GradientBasedCorrActive` | — unsupported | — unsupported (silent no-op) | `True` |
 | `GradientBasedCorrAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
@@ -1785,15 +1785,15 @@ references are into this repo.
 | `HasSettings` | ✅ ok | — unsupported (silent no-op) | `True` |
 | `Highlight2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `HighlightRecovery` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `Highlights2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Highlights2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `HueAdjustmentAqua` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `HueAdjustmentBlue` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `HueAdjustmentGreen` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `HueAdjustmentMagenta` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `HueAdjustmentOrange` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `HueAdjustmentOrange` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `HueAdjustmentPurple` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `HueAdjustmentRed` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `HueAdjustmentYellow` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `HueAdjustmentRed` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HueAdjustmentYellow` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `IncrementalTemperature` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `IncrementalTint` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `JPEGHandling` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -1866,7 +1866,7 @@ references are into this repo.
 | `LuminanceAdjustmentYellow` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `LuminanceNoiseReductionContrast` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `LuminanceNoiseReductionDetail` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `LuminanceSmoothing` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `LuminanceSmoothing` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `MaskGroupBasedCorrActive` | — unsupported | — unsupported (silent no-op) | `True` |
 | `MaskGroupBasedCorrAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
 | `MaskGroupBasedCorrBlacks2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
@@ -2159,13 +2159,13 @@ references are into this repo.
 | `PaintCorrectionToningSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
 | `PaintCorrectionWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
 | `PaintCorrectionWhites2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `ParametricDarks` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ParametricHighlightSplit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ParametricHighlights` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ParametricLights` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ParametricMidtoneSplit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ParametricShadowSplit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ParametricShadows` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricDarks` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ParametricHighlightSplit` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ParametricHighlights` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ParametricLights` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ParametricMidtoneSplit` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ParametricShadowSplit` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ParametricShadows` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `PerspectiveAspect` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `PerspectiveHorizontal` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `PerspectiveRotate` | ✅ ok | — unsupported (silent no-op) | `1.5` |
@@ -2307,22 +2307,22 @@ references are into this repo.
 | `SDRHighlights` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `SDRShadows` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `SDRWhites` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `Saturation` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Saturation` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentAqua` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentBlue` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentGreen` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentMagenta` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentOrange` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentPurple` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `SaturationAdjustmentRed` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `SaturationAdjustmentRed` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentYellow` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ShadowTint` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Shadows` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `Shadows2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Shadows2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SharpenDetail` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SharpenEdgeMasking` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SharpenRadius` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `Sharpness` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Sharpness` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `3` |
 | `ShortName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Smoothness` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SortName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -2340,7 +2340,7 @@ references are into this repo.
 | `SupportsSceneReferred` | ✅ ok | — unsupported (silent no-op) | `True` |
 | `TIFFHandling` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Texture` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `Tint` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Tint` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ToggleStyleAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ToggleStyleDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ToneCurve` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -2377,12 +2377,12 @@ references are into this repo.
 | `UprightTransform_5` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `UprightVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Version` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `Vibrance` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Vibrance` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `VignetteAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `VignetteMidpoint` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `What` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `WhiteBalance` | ✅ ok | — unsupported (silent no-op) | `As Shot` |
-| `Whites2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Whites2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 
 ### XMP-creatorAtom
 
@@ -2417,7 +2417,7 @@ references are into this repo.
 | `AutoToneDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `AutoToneDigestNoSat` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `AutoWhiteVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `Blacks2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Blacks2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `BlueHue` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `BlueSaturation` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Brightness` | ✅ ok | — unsupported (silent no-op) | `3` |
@@ -2570,7 +2570,7 @@ references are into this repo.
 | `CircGradBasedCorrWhites2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
 | `CircularGradientBasedCorrections` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `Clarity` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `Clarity2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Clarity2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ClipboardAspectRatio` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ClipboardOrientation` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Cluster` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -2583,7 +2583,7 @@ references are into this repo.
 | `ColorGradeMidtoneLum` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ColorGradeMidtoneSat` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ColorGradeShadowLum` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `ColorNoiseReduction` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ColorNoiseReduction` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ColorNoiseReductionDetail` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ColorNoiseReductionSmoothness` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ColorTemperature` | — unsupported | — unsupported (silent no-op) | `3` |
@@ -2591,7 +2591,7 @@ references are into this repo.
 | `CompatibleVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ContactInfo` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Contrast` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `3` |
-| `Contrast2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Contrast2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ConvertToGrayscale` | ✅ ok | — unsupported (silent no-op) | `True` |
 | `Converter` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Copyright` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -2736,7 +2736,7 @@ references are into this repo.
 | `DepthMapInfoDepthSource` | — unsupported | — unsupported (silent no-op) | `OxTest` |
 | `Description` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Exposure` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `Exposure2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `Exposure2012` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `FillLight` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `GradientBasedCorrActive` | — unsupported | — unsupported (silent no-op) | `True` |
 | `GradientBasedCorrAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
@@ -2902,15 +2902,15 @@ references are into this repo.
 | `HasSettings` | ✅ ok | — unsupported (silent no-op) | `True` |
 | `Highlight2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `HighlightRecovery` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `Highlights2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Highlights2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `HueAdjustmentAqua` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `HueAdjustmentBlue` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `HueAdjustmentGreen` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `HueAdjustmentMagenta` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `HueAdjustmentOrange` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `HueAdjustmentOrange` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `HueAdjustmentPurple` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `HueAdjustmentRed` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `HueAdjustmentYellow` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `HueAdjustmentRed` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `HueAdjustmentYellow` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `IncrementalTemperature` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `IncrementalTint` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `JPEGHandling` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -2983,7 +2983,7 @@ references are into this repo.
 | `LuminanceAdjustmentYellow` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `LuminanceNoiseReductionContrast` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `LuminanceNoiseReductionDetail` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `LuminanceSmoothing` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `LuminanceSmoothing` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `MaskGroupBasedCorrActive` | — unsupported | — unsupported (silent no-op) | `True` |
 | `MaskGroupBasedCorrAmount` | — unsupported | — unsupported (silent no-op) | `1.5` |
 | `MaskGroupBasedCorrBlacks2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
@@ -3276,13 +3276,13 @@ references are into this repo.
 | `PaintCorrectionToningSaturation` | — unsupported | — unsupported (silent no-op) | `1.5` |
 | `PaintCorrectionWhat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
 | `PaintCorrectionWhites2012` | — unsupported | — unsupported (silent no-op) | `1.5` |
-| `ParametricDarks` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ParametricHighlightSplit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ParametricHighlights` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ParametricLights` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ParametricMidtoneSplit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ParametricShadowSplit` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `ParametricShadows` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `ParametricDarks` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ParametricHighlightSplit` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ParametricHighlights` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ParametricLights` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ParametricMidtoneSplit` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ParametricShadowSplit` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ParametricShadows` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `PerspectiveAspect` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `PerspectiveHorizontal` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `PerspectiveRotate` | ✅ ok | — unsupported (silent no-op) | `1.5` |
@@ -3424,22 +3424,22 @@ references are into this repo.
 | `SDRHighlights` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `SDRShadows` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `SDRWhites` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `Saturation` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Saturation` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentAqua` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentBlue` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentGreen` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentMagenta` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentOrange` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentPurple` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `SaturationAdjustmentRed` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `SaturationAdjustmentRed` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SaturationAdjustmentYellow` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ShadowTint` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Shadows` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `Shadows2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Shadows2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SharpenDetail` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SharpenEdgeMasking` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SharpenRadius` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `Sharpness` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Sharpness` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `3` |
 | `ShortName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Smoothness` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SortName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -3457,7 +3457,7 @@ references are into this repo.
 | `SupportsSceneReferred` | ✅ ok | — unsupported (silent no-op) | `True` |
 | `TIFFHandling` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Texture` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `Tint` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Tint` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ToggleStyleAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ToggleStyleDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ToneCurve` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -3494,12 +3494,12 @@ references are into this repo.
 | `UprightTransform_5` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `UprightVersion` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Version` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `Vibrance` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Vibrance` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `VignetteAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `VignetteMidpoint` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `What` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `WhiteBalance` | ✅ ok | — unsupported (silent no-op) | `As Shot` |
-| `Whites2012` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
+| `Whites2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 
 ### XMP-dc
 
@@ -3529,7 +3529,7 @@ references are into this repo.
 | `FFID` | — unsupported | — unsupported (silent no-op) | `OxTest` |
 | `LicenseType` | — unsupported | — unsupported (silent no-op) | `Adware` |
 | `OS` | — unsupported | — unsupported (silent no-op) | `3` |
-| `Rating` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
+| `Rating` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Revision` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ShortDescription` | — unsupported | — unsupported (silent no-op) | `OxTest` |
 | `Source` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -3943,11 +3943,11 @@ references are into this repo.
 | `OECFValues` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `Opto-ElectricConvFactor` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `RelatedSoundFile` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `Saturation` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Normal` |
+| `Saturation` | ✅ ok | — unsupported (silent no-op) | `Normal` |
 | `SceneCaptureType` | ✅ ok | — unsupported (silent no-op) | `Standard` |
 | `SceneType` | ✅ ok | — unsupported (silent no-op) | `Directly photographed` |
 | `SensingMethod` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `Monochrome area` |
-| `Sharpness` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Normal` |
+| `Sharpness` | ✅ ok | — unsupported (silent no-op) | `Normal` |
 | `ShutterSpeedValue` | 🐛 broken: APEX ValueConv (2^x) not applied | — unsupported (silent no-op) | `1.5` |
 | `SpatialFrequencyResponse` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `SpatialFrequencyResponseColumns` | ✅ ok | — unsupported (silent no-op) | `3` |
@@ -4130,7 +4130,7 @@ references are into this repo.
 | `CountryCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CreatorAddress` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CreatorCity` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `CreatorContactInfo` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `{}` |
+| `CreatorContactInfo` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `CreatorCountry` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CreatorPostalCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CreatorRegion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -4319,7 +4319,7 @@ references are into this repo.
 | `PublicationEventDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `PublicationEventIdentifier` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `PublicationEventName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `Rating` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `{}` |
+| `Rating` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `RatingRegion` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `RatingRegionCity` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `RatingRegionCountryCode` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -4574,14 +4574,14 @@ references are into this repo.
 | `CaptionWriter` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Category` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `City` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `ColorMode` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Bitmap` |
+| `ColorMode` | ✅ ok | — unsupported (silent no-op) | `Bitmap` |
 | `Country` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Credit` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `DateCreated` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `DocumentAncestors` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `EmbeddedXMPDigest` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Headline` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `History` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
+| `History` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ICCProfileName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Instructions` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `LabelColor` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -4594,7 +4594,7 @@ references are into this repo.
 | `TextLayerText` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `TextLayers` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `TransmissionReference` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `Urgency` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `0 (reserved)` |
+| `Urgency` | ✅ ok | — unsupported (silent no-op) | `0 (reserved)` |
 
 ### XMP-plus
 
@@ -4816,7 +4816,7 @@ references are into this repo.
 | `PublicationDisplayDateDate` | — unsupported | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `PublicationName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `PublishingFrequency` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `Rating` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
+| `Rating` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `SamplePageRange` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Section` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `SellingAgency` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -4969,13 +4969,13 @@ references are into this repo.
 | `PageImagePageNumber` | — unsupported | — unsupported (silent no-op) | `3` |
 | `PageImageWidth` | — unsupported | — unsupported (silent no-op) | `3` |
 | `PageInfo` | — unsupported | — unsupported (silent no-op) | `{}` |
-| `Rating` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
+| `Rating` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `RatingPercent` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `ThumbnailFormat` | — unsupported | — unsupported (silent no-op) | `OxTest` |
 | `ThumbnailHeight` | — unsupported | — unsupported (silent no-op) | `3` |
 | `ThumbnailImage` | — unsupported | — unsupported (silent no-op) | `OxTest` |
 | `ThumbnailWidth` | — unsupported | — unsupported (silent no-op) | `3` |
-| `Thumbnails` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `{}` |
+| `Thumbnails` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `Title` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 
 ### XMP-xmpBJ
@@ -5172,7 +5172,7 @@ references are into this repo.
 
 | ExifTool tag | Read | Write | Example |
 |---|---|---|---|
-| `DerivedFrom` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `{}` |
+| `DerivedFrom` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `DerivedFromAlternatePaths` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `DerivedFromDocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `DerivedFromFilePath` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -5197,7 +5197,7 @@ references are into this repo.
 | `DerivedFromToPart` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `DerivedFromVersionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `DocumentID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `History` | — unsupported | 🐛 broken: type-validation rejects CLI string values | `{}` |
+| `History` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `HistoryAction` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `HistoryChanged` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `HistoryInstanceID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
