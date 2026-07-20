@@ -241,9 +241,39 @@ DEFAULT_MAX_PROMPT_FILE_BYTES = 60_000
 DEFAULT_MAX_SAMPLE_FILES_LISTED = 15
 
 
+DEFAULT_MAX_ATTEMPT_DIFF_CHARS = 2000
+
+
+def format_previous_attempts(previous_attempts, max_diff_chars=DEFAULT_MAX_ATTEMPT_DIFF_CHARS):
+    """Render a tag's attempt history (see run_tag_loop's persisted
+    per-tag "attempts" list) into a prompt section, so a later round gets
+    to see what earlier rounds already tried and why it failed instead of
+    repeating the same broken approach from scratch. Each diff is
+    truncated -- the point is "what direction was tried", not a byte-exact
+    replay -- so this stays bounded even after many rounds' worth of
+    history accumulates for one stubborn tag."""
+    if not previous_attempts:
+        return ""
+    blocks = []
+    for i, attempt in enumerate(previous_attempts, 1):
+        diff = attempt.get("diff")
+        if diff:
+            shown = diff[:max_diff_chars]
+            if len(diff) > max_diff_chars:
+                shown += "\n... (truncated)"
+            diff_block = f"```diff\n{shown}\n```"
+        else:
+            diff_block = "(no diff was produced)"
+        blocks.append(f"Attempt {i}:\n{diff_block}\nFailed because: {attempt.get('reason', 'unknown')}")
+    return (
+        "\n\nPrevious attempts on this exact tag, in order (learn from these -- do not "
+        "repeat the same broken approach):\n\n" + "\n\n".join(blocks)
+    )
+
+
 def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                   max_file_bytes=DEFAULT_MAX_PROMPT_FILE_BYTES, samples_dir=None,
-                  max_samples_listed=DEFAULT_MAX_SAMPLE_FILES_LISTED):
+                  max_samples_listed=DEFAULT_MAX_SAMPLE_FILES_LISTED, previous_attempts=None):
     """Format one gap into a model prompt, capped so a huge format (e.g.
     JPEG with thousands of gaps and dozens of parser files) becomes an
     iterative, tractable request instead of one impossibly large prompt.
@@ -256,6 +286,9 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     the model can ask to see one's actual raw bytes via the REQUEST:
     protocol (see attempt_build) instead of guessing at binary layout from
     tag names/values alone.
+
+    previous_attempts, if given, is this tag's persisted attempt history
+    (run_tag_loop's per-tag "attempts" list) -- see format_previous_attempts.
     """
     missing_shown = gap["missing_tags"][:max_tags]
     missing_omitted = len(gap["missing_tags"]) - len(missing_shown)
@@ -309,12 +342,15 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                 "in the next turn to work from."
             )
 
+    attempts_block = format_previous_attempts(previous_attempts)
+
     return (
         f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
         f"Missing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
         f"Value differences (both extract it, values disagree):\n{diffs}\n\n"
         f"Likely relevant source files:\n{files}"
-        f"{samples_block}\n\n"
+        f"{samples_block}"
+        f"{attempts_block}\n\n"
         "Respond with a single unified diff (in a ```diff fenced block) that fixes as many of these gaps "
         "as you can correctly verify. For value differences, only fix genuine bugs, not benign formatting "
         "differences. Do not include any explanation outside the diff. If more gaps exist than are shown "
@@ -529,7 +565,8 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
             cargo_build_fn=cargo_build, cargo_test_workspace_fn=cargo_test_workspace,
             attempt_build_fn=attempt_build, review_fn=review_verdict,
             pick_model_fn=random.choice, log_fn=print,
-            review_config=None, recheck_fn=None, repo_root=None, samples_dir=None):
+            review_config=None, recheck_fn=None, repo_root=None, samples_dir=None,
+            previous_attempts=None):
     """Attempt to close one format's gaps via a single-shot patch. Up to
     two candidates: the initial fix, and one repair round-trip if a
     reviewer rejects the first. Returns a result dict.
@@ -553,6 +590,11 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
     format after the attempted fix (used to confirm real progress). If not
     provided, progress can never be confirmed and the attempt always fails
     the "gap count did not decrease" check.
+
+    previous_attempts, if given, is passed straight through to build_prompt
+    (see format_previous_attempts) -- prior rounds' diffs/failure reasons
+    for this exact gap, so a repair round-trip driven by run_tag_loop's
+    persisted per-tag history doesn't repeat the same broken approach.
     """
     repo_root = repo_root or REPO_ROOT
     review_config = review_config or config
@@ -562,6 +604,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
         max_tags=config["max_prompt_tags"],
         max_file_bytes=config["max_prompt_file_bytes"],
         samples_dir=samples_dir,
+        previous_attempts=previous_attempts,
     )}]
 
     review_reason = None
@@ -575,19 +618,19 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
         )
         if not built:
             log_fn(f"[{fmt}] build failed: {reason}")
-            return {"format": fmt, "status": "failed", "reason": reason}
+            return {"format": fmt, "status": "failed", "reason": reason, "diff": diff}
 
         remaining = recheck_fn(fmt) if recheck_fn else gap["gap_count"]
         log_fn(f"[{fmt}] gaps {gap['gap_count']} -> {remaining}")
         if remaining >= gap["gap_count"]:
             git_checkout_clean_fn(repo_root)
             log_fn(f"[{fmt}] gap count did not decrease, reverting")
-            return {"format": fmt, "status": "failed", "reason": "gap count did not decrease"}
+            return {"format": fmt, "status": "failed", "reason": "gap count did not decrease", "diff": diff}
 
         if not cargo_test_workspace_fn(repo_root):
             git_checkout_clean_fn(repo_root)
             log_fn(f"[{fmt}] cargo test --workspace regressed, reverting")
-            return {"format": fmt, "status": "failed", "reason": "cargo test --workspace regressed"}
+            return {"format": fmt, "status": "failed", "reason": "cargo test --workspace regressed", "diff": diff}
 
         approved, review_reason = review_fn(
             gap, diff, review_config, call_model_fn=call_model_fn, pick_model_fn=pick_model_fn,
@@ -612,6 +655,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
     return {
         "format": gap["format"], "status": "failed",
         "reason": f"rejected by review after repair attempt: {review_reason}",
+        "diff": diff,
     }
 
 
@@ -732,32 +776,61 @@ def save_tag_state(path, state):
     path.write_text(json.dumps(state, indent=2))
 
 
+DEFAULT_MAX_TAG_FAILS = 10
+
+
 def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
                   git_checkout_clean_fn=None, repo_root=None, log_fn=print,
                   load_state_fn=load_tag_state, save_state_fn=save_tag_state,
-                  max_rounds=None):
+                  max_rounds=None, max_fails=DEFAULT_MAX_TAG_FAILS, blacklist_full=False,
+                  worker_id=None, claim_stale_seconds=1800):
     """Loop-until-everything-found driver, blacklisting individual TAGS
-    (never a whole format) after 2 failed attempts each. State persists to
-    disk at state_path, so the blacklist survives across separate process
-    runs -- not just within this one call.
+    (never a whole format) after max_fails failed attempts each. State
+    persists to disk at state_path, so the blacklist -- and each tag's
+    attempt history -- survives across separate process runs, not just
+    within this one call.
 
-    Once every currently-known tag is either fixed or blacklisted, the
-    blacklist is cleared entirely and a fresh cycle starts -- a tag that
-    failed twice under one random model pick gets a clean second chance in
-    the next cycle rather than being given up on forever. fix_gap_fn
-    receives the whole tag_gap dict (format/tag_key/kind/entry/
-    parser_files), not a pre-built single-tag gap, so the caller can wire
-    up a recheck_fn scoped to that specific tag.
+    Each failed attempt's diff/reason is appended to that tag's persisted
+    "attempts" list (see fix_gap_fn's contract below) and handed back as
+    previous_attempts on the next round targeting the same tag, so round N
+    carries forward N-1 rounds of "here's what was already tried and why
+    it failed" instead of starting from zero each time.
+
+    Once every currently-known tag is either fixed or blacklisted:
+      - by default (blacklist_full=False), the blacklist is cleared
+        entirely and a fresh cycle starts, so a tag given up on under one
+        random model pick gets a clean second chance later rather than
+        being abandoned forever
+      - with blacklist_full=True, the loop stops instead -- for a parallel
+        run where the point IS to exhaust every tag once and report,
+        rather than cycle forever
+
+    worker_id, if given, tags this run's claim on a tag with an identity
+    (see state's "claimed_by") and a timestamp, so multiple concurrent
+    processes sharing the same state_path (a parallel run) don't both pick
+    the same currently-unclaimed tag -- see claim_stale_seconds: a claim
+    older than this is treated as abandoned (its owning process likely
+    crashed) and can be re-claimed by anyone.
+
+    fix_gap_fn(tag_gap, config, previous_attempts) -> result dict; result
+    must have "status" ("fixed" or anything else) and, when not fixed,
+    "reason" and "diff" (the diff attempted, or None) for history tracking.
 
     max_rounds caps the number of attempts (None = run forever, until
-    find_gaps_fn() reports zero gaps left anywhere -- every tag genuinely
-    fixed); tests pass a small cap instead of relying on that natural
-    termination.
+    find_gaps_fn() reports zero gaps left anywhere, or blacklist_full's
+    natural stop); tests pass a small cap instead of relying on that.
     """
     state = load_state_fn(state_path)
     fixed, failed = [], []
     cycles_reset = 0
     round_num = 0
+
+    def is_claimed_by_someone_else(entry):
+        claimed_by = entry.get("claimed_by")
+        if not claimed_by or claimed_by == worker_id:
+            return False
+        claimed_at = entry.get("claimed_at", 0)
+        return (time.time() - claimed_at) < claim_stale_seconds
 
     while max_rounds is None or round_num < max_rounds:
         round_num += 1
@@ -768,20 +841,48 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             log_fn("All tags found -- nothing left to fix.")
             break
 
-        active = [tg for tg in tag_gaps if not state.get(tg["tag_key"], {}).get("blacklisted")]
+        state = load_state_fn(state_path)  # fresh read -- other workers may have updated it
+        active = [
+            tg for tg in tag_gaps
+            if not state.get(tg["tag_key"], {}).get("blacklisted")
+            and not is_claimed_by_someone_else(state.get(tg["tag_key"], {}))
+        ]
 
         if not active:
-            log_fn(
-                f"All {len(tag_gaps)} remaining tag(s) are blacklisted -- "
-                "resetting the blacklist and starting a new cycle"
-            )
-            state = {}
-            save_state_fn(state_path, state)
-            cycles_reset += 1
+            all_blacklisted = all(state.get(tg["tag_key"], {}).get("blacklisted") for tg in tag_gaps)
+            if blacklist_full and all_blacklisted:
+                log_fn(f"All {len(tag_gaps)} tag(s) are blacklisted -- stopping (--blacklist-full).")
+                break
+            if all_blacklisted:
+                log_fn(
+                    f"All {len(tag_gaps)} remaining tag(s) are blacklisted -- "
+                    "resetting the blacklist and starting a new cycle"
+                )
+                state = {}
+                save_state_fn(state_path, state)
+                cycles_reset += 1
+                continue
+            # Nothing blacklisted, but everything currently claimed by
+            # other (non-stale) workers -- wait rather than busy-loop.
+            log_fn("All remaining tags are claimed by other workers -- waiting")
+            time.sleep(5)
             continue
 
         tag_gap = active[0]
-        result = fix_gap_fn(tag_gap, config)
+        entry = state.setdefault(tag_gap["tag_key"], {"fails": 0, "blacklisted": False, "attempts": []})
+        entry["claimed_by"] = worker_id
+        entry["claimed_at"] = time.time()
+        save_state_fn(state_path, state)
+
+        previous_attempts = entry.get("attempts", [])
+        result = fix_gap_fn(tag_gap, config, previous_attempts)
+
+        # Re-read in case another worker touched other tags meanwhile --
+        # then re-fetch this tag's own entry to mutate it in place.
+        state = load_state_fn(state_path)
+        entry = state.setdefault(tag_gap["tag_key"], {"fails": 0, "blacklisted": False, "attempts": []})
+        entry.pop("claimed_by", None)
+        entry.pop("claimed_at", None)
 
         if result["status"] == "fixed":
             fixed.append({"tag_key": tag_gap["tag_key"], **result})
@@ -789,15 +890,18 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             log_fn(f"[{tag_gap['tag_key']}] FIXED")
         else:
             failed.append({"tag_key": tag_gap["tag_key"], **result})
-            entry = state.setdefault(tag_gap["tag_key"], {"fails": 0, "blacklisted": False})
-            entry["fails"] += 1
-            if entry["fails"] >= 2:
+            entry["fails"] = entry.get("fails", 0) + 1
+            entry.setdefault("attempts", []).append({
+                "round": entry["fails"], "diff": result.get("diff"), "reason": result.get("reason", "unknown"),
+            })
+            if entry["fails"] >= max_fails:
                 entry["blacklisted"] = True
                 log_fn(f"[{tag_gap['tag_key']}] blacklisted after {entry['fails']} failed attempts")
                 if git_checkout_clean_fn and repo_root:
                     git_checkout_clean_fn(repo_root)
             else:
-                log_fn(f"[{tag_gap['tag_key']}] failed attempt {entry['fails']}/2")
+                log_fn(f"[{tag_gap['tag_key']}] failed attempt {entry['fails']}/{max_fails}")
+            state[tag_gap["tag_key"]] = entry
 
         save_state_fn(state_path, state)
 
@@ -914,6 +1018,34 @@ def main(argv=None):
              "fast single-format comparison instead of the full corpus scan; "
              "requires the combined-samples cache to already exist from a "
              "prior full run (see find_tag_gaps.py's own --only-format).",
+    )
+    parser.add_argument(
+        "--max-tag-fails", type=int, default=DEFAULT_MAX_TAG_FAILS,
+        help=f"Failed attempts on one tag before it's blacklisted (default: {DEFAULT_MAX_TAG_FAILS}). "
+             "Each failed attempt's diff/reason is carried forward as guidance to the next.",
+    )
+    parser.add_argument(
+        "--blacklist-full", action="store_true",
+        help="Stop once every known tag is blacklisted or fixed, instead of the default "
+             "behavior of clearing the blacklist and starting a fresh cycle forever. "
+             "Intended for a parallel run where the point is to exhaust the tag pool once.",
+    )
+    parser.add_argument(
+        "--worker-id", default=os.environ.get("MODEL_FIX_WORKER_ID"),
+        help="Identity used to claim a tag in --tag-state-path so concurrent processes sharing "
+             "the same state file don't both attempt the same tag; also used to name this "
+             "process's prompt log (process-<id>-prompt.log).",
+    )
+    parser.add_argument(
+        "--tag-state-path", default=str(DEFAULT_TAG_STATE_PATH),
+        help=f"Where the per-tag blacklist/fail-count/attempt-history state persists "
+             f"(default: {DEFAULT_TAG_STATE_PATH}). Point multiple concurrent processes at "
+             "the same path to coordinate them via --worker-id claims.",
+    )
+    parser.add_argument(
+        "--prompt-log-dir", default=str(REPO_ROOT / "logs" / "tag-fix-prompts"),
+        help="Directory for process-<worker-id>-prompt.log, which every round's full prompt "
+             "is appended to (also printed to stdout).",
     )
     args = parser.parse_args(argv)
 
@@ -1033,7 +1165,12 @@ def main(argv=None):
             )
         return reply
 
-    def real_fix_tag(tag_gap, cfg):
+    prompt_log_dir = Path(args.prompt_log_dir)
+    prompt_log_dir.mkdir(parents=True, exist_ok=True)
+    worker_label = args.worker_id or "1"
+    prompt_log_path = prompt_log_dir / f"process-{worker_label}-prompt.log"
+
+    def real_fix_tag(tag_gap, cfg, previous_attempts=None):
         def recheck(_fmt):
             # _fmt is ignored -- tag_gap already knows its own format;
             # fix_gap's recheck_fn(format_name) contract is reused as-is,
@@ -1056,17 +1193,36 @@ def main(argv=None):
             return 1 if present else 0
 
         single_gap = make_single_tag_gap(tag_gap)
+        # Log the exact prompt this round is about to send -- to the
+        # screen and to a per-worker file -- before the call goes out, so
+        # "what is it sending" is visible immediately rather than only
+        # reconstructable after the fact from logging_call_model's request
+        # dump.
+        prompt_preview = build_prompt(
+            single_gap, repo_root=REPO_ROOT,
+            max_tags=cfg["max_prompt_tags"], max_file_bytes=cfg["max_prompt_file_bytes"],
+            samples_dir=Path(args.cache_dir) / "combined-samples",
+            previous_attempts=previous_attempts,
+        )
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        banner = f"\n{'=' * 20} [{ts}] worker={worker_label} tag={tag_gap['tag_key']} {'=' * 20}\n"
+        print(banner + prompt_preview)
+        with prompt_log_path.open("a") as f:
+            f.write(banner + prompt_preview + "\n")
+
         return fix_gap(
             single_gap, cfg, recheck_fn=recheck, review_config=review_config,
             git_apply_fn=logging_git_apply, log_fn=timestamped_log,
             call_model_fn=logging_call_model,
             samples_dir=Path(args.cache_dir) / "combined-samples",
+            previous_attempts=previous_attempts,
         )
 
     summary = run_tag_loop(
-        config, find_gaps_fn, real_fix_tag, state_path=DEFAULT_TAG_STATE_PATH,
+        config, find_gaps_fn, real_fix_tag, state_path=args.tag_state_path,
         git_checkout_clean_fn=git_checkout_clean, repo_root=REPO_ROOT,
-        log_fn=timestamped_log,
+        log_fn=timestamped_log, max_fails=args.max_tag_fails,
+        blacklist_full=args.blacklist_full, worker_id=args.worker_id,
     )
     print(f"stopped after {summary['rounds']} rounds")
     print(f"  fixed:   {len(summary['fixed'])} tags")

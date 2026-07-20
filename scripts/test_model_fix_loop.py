@@ -1,5 +1,6 @@
 import json
 import tempfile
+import time
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
@@ -1168,11 +1169,17 @@ class RunTagLoopTests(unittest.TestCase):
         store = {}
 
         def load(_path):
-            return dict(store)
+            # A real on-disk load (json.loads) always produces fresh
+            # objects with no shared references back to what was last
+            # saved -- a shallow dict(store) here would let two "loads"
+            # share the same nested list/dict objects, which a save
+            # in between then mutates retroactively under both callers'
+            # feet. json round-trip is a simple, correct deep copy.
+            return json.loads(json.dumps(store))
 
         def save(_path, state):
             store.clear()
-            store.update(state)
+            store.update(json.loads(json.dumps(state)))
 
         return store, load, save
 
@@ -1189,7 +1196,7 @@ class RunTagLoopTests(unittest.TestCase):
         gaps = [make_gap()]  # 2 tags: NEF:EXIF:LensModel (missing), NEF:EXIF:ISO (diff)
         attempts = []
 
-        def fake_fix(tag_gap, config):
+        def fake_fix(tag_gap, config, previous_attempts=None):
             attempts.append(tag_gap["tag_key"])
             return {"status": "failed", "reason": "nope"}
 
@@ -1207,7 +1214,7 @@ class RunTagLoopTests(unittest.TestCase):
         gaps = [make_gap()]  # NEF:EXIF:LensModel (missing) picked first each round
         attempts = []
 
-        def fake_fix(tag_gap, config):
+        def fake_fix(tag_gap, config, previous_attempts=None):
             attempts.append(tag_gap["tag_key"])
             if tag_gap["tag_key"] == "NEF:EXIF:LensModel":
                 return {"status": "failed", "reason": "nope"}
@@ -1217,17 +1224,125 @@ class RunTagLoopTests(unittest.TestCase):
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
             state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
-            max_rounds=2,
+            max_rounds=2, max_fails=2,
         )
         self.assertEqual(attempts, ["NEF:EXIF:LensModel", "NEF:EXIF:LensModel"])
         self.assertTrue(store["NEF:EXIF:LensModel"]["blacklisted"])
         self.assertEqual(store["NEF:EXIF:LensModel"]["fails"], 2)
 
+    def test_default_max_fails_is_ten(self):
+        gaps = [make_gap()]
+        attempts = []
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            attempts.append(1)
+            return {"status": "failed", "reason": "nope"}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=9,
+        )
+        # 9 failures on the same tag (LensModel picked every round, since
+        # the diff-kind ISO tag is never blacklisted or exhausted) must
+        # NOT blacklist it yet under the new default of 10.
+        self.assertFalse(store["NEF:EXIF:LensModel"]["blacklisted"])
+        self.assertEqual(store["NEF:EXIF:LensModel"]["fails"], 9)
+
+    def test_previous_attempts_carried_forward_and_history_recorded(self):
+        gaps = [make_gap()]
+        seen_history = []
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            if tag_gap["tag_key"] == "NEF:EXIF:LensModel":
+                seen_history.append(previous_attempts)
+                return {"status": "failed", "reason": f"attempt {len(seen_history)} failed", "diff": f"diff-{len(seen_history)}"}
+            return {"status": "fixed", "gaps_closed": 1}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=3, max_fails=10,
+        )
+        # Round 1 sees no history yet; round 2 sees round 1's; round 3
+        # sees both -- context accumulates round over round for this tag.
+        self.assertEqual(seen_history[0], [])
+        self.assertEqual(len(seen_history[1]), 1)
+        self.assertEqual(seen_history[1][0]["diff"], "diff-1")
+        self.assertEqual(seen_history[1][0]["reason"], "attempt 1 failed")
+        self.assertEqual(len(seen_history[2]), 2)
+        self.assertEqual(seen_history[2][1]["diff"], "diff-2")
+
+    def test_blacklist_full_stops_instead_of_resetting(self):
+        gaps = [make_gap()]
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            return {"status": "failed", "reason": "nope"}
+
+        store, load, save = self._state_io()
+        store["NEF:EXIF:LensModel"] = {"fails": 10, "blacklisted": True}
+        store["NEF:EXIF:ISO"] = {"fails": 10, "blacklisted": True}
+        result = run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=5, blacklist_full=True,
+        )
+        # Must stop immediately (round 1) rather than reset-and-continue.
+        self.assertEqual(result["rounds"], 1)
+        self.assertEqual(result["cycles_reset"], 0)
+
+    def test_worker_claim_prevents_another_worker_from_picking_same_tag(self):
+        gaps = [make_gap()]
+        attempts_by_worker = {"a": [], "b": []}
+
+        store, load, save = self._state_io()
+        # Simulate worker "a" having already claimed LensModel recently.
+        store["NEF:EXIF:LensModel"] = {
+            "fails": 0, "blacklisted": False, "attempts": [],
+            "claimed_by": "a", "claimed_at": time.time(),
+        }
+
+        def fake_fix_b(tag_gap, config, previous_attempts=None):
+            attempts_by_worker["b"].append(tag_gap["tag_key"])
+            return {"status": "failed", "reason": "nope"}
+
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix_b,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1, worker_id="b",
+        )
+        # Worker "b" must pick the OTHER tag (ISO), not the one "a" holds.
+        self.assertEqual(attempts_by_worker["b"], ["NEF:EXIF:ISO"])
+
+    def test_stale_claim_can_be_reclaimed(self):
+        gaps = [make_gap()]
+        attempts = []
+
+        store, load, save = self._state_io()
+        # Claimed a long time ago -- treated as an abandoned/crashed worker.
+        store["NEF:EXIF:LensModel"] = {
+            "fails": 0, "blacklisted": False, "attempts": [],
+            "claimed_by": "a", "claimed_at": time.time() - 999999,
+        }
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            attempts.append(tag_gap["tag_key"])
+            return {"status": "failed", "reason": "nope"}
+
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1, worker_id="b", claim_stale_seconds=1800,
+        )
+        self.assertIn("NEF:EXIF:LensModel", attempts)
+
     def test_blacklisted_tag_is_skipped_in_favor_of_another(self):
         gaps = [make_gap()]  # LensModel (missing) + ISO (diff)
         attempts = []
 
-        def fake_fix(tag_gap, config):
+        def fake_fix(tag_gap, config, previous_attempts=None):
             attempts.append(tag_gap["tag_key"])
             return {"status": "failed", "reason": "nope"}
 
@@ -1246,7 +1361,7 @@ class RunTagLoopTests(unittest.TestCase):
         gaps = [make_gap()]  # both LensModel and ISO already blacklisted
         attempts = []
 
-        def fake_fix(tag_gap, config):
+        def fake_fix(tag_gap, config, previous_attempts=None):
             attempts.append(tag_gap["tag_key"])
             return {"status": "fixed", "gaps_closed": 1}
 
@@ -1267,7 +1382,7 @@ class RunTagLoopTests(unittest.TestCase):
     def test_fixed_tag_clears_its_state_entry(self):
         gaps = [make_gap()]
 
-        def fake_fix(tag_gap, config):
+        def fake_fix(tag_gap, config, previous_attempts=None):
             return {"status": "fixed", "gaps_closed": 1}
 
         store, load, save = self._state_io()
@@ -1283,7 +1398,7 @@ class RunTagLoopTests(unittest.TestCase):
         gaps = [make_gap()]
         written = []
 
-        def fake_fix(tag_gap, config):
+        def fake_fix(tag_gap, config, previous_attempts=None):
             return {"status": "failed", "reason": "nope"}
 
         run_tag_loop(
@@ -1300,7 +1415,7 @@ class RunTagLoopTests(unittest.TestCase):
         gaps = [make_gap()]
         clean_calls = []
 
-        def fake_fix(tag_gap, config):
+        def fake_fix(tag_gap, config, previous_attempts=None):
             return {"status": "failed", "reason": "nope"}
 
         store, load, save = self._state_io()
@@ -1309,7 +1424,7 @@ class RunTagLoopTests(unittest.TestCase):
             state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
             git_checkout_clean_fn=lambda root: clean_calls.append(root),
             repo_root=Path("/fake/repo"),
-            max_rounds=1,
+            max_rounds=1, max_fails=2,
         )
         # First failure only -- not blacklisted yet, so no cleanup call.
         self.assertEqual(clean_calls, [])
@@ -1319,7 +1434,7 @@ class RunTagLoopTests(unittest.TestCase):
             state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
             git_checkout_clean_fn=lambda root: clean_calls.append(root),
             repo_root=Path("/fake/repo"),
-            max_rounds=1,
+            max_rounds=1, max_fails=2,
         )
         # Second failure -- now blacklisted, cleanup must fire.
         self.assertEqual(clean_calls, [Path("/fake/repo")])
