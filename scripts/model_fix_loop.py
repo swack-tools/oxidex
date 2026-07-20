@@ -48,6 +48,7 @@ import random
 import re
 import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
+import time
 import tomllib
 import urllib.request
 from pathlib import Path
@@ -672,6 +673,28 @@ def main(argv=None):
             gaps = [g for g in gaps if g["format"] == args.only_format]
         return gaps
 
+    # Audit trail of every diff the model produces, applied or not -- so
+    # "did it actually change code, and when" never has to be inferred from
+    # a one-line summary again. attempt_build's own git_checkout_clean_fn
+    # calls still revert a rejected/failed diff from the working tree right
+    # after this logs it, so this directory is the only durable record of
+    # what was tried each round.
+    diff_log_dir = REPO_ROOT / "logs" / "model-fix-diffs"
+    diff_log_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = diff_log_dir / "manifest.log"
+
+    def logging_git_apply(diff_text, repo_root):
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        applied, msg = git_apply(diff_text, repo_root)
+        diff_path = diff_log_dir / f"{ts}-{'applied' if applied else 'rejected'}.diff"
+        diff_path.write_text(diff_text)
+        with manifest_path.open("a") as f:
+            f.write(f"{ts} applied={applied} file={diff_path.name} apply_msg={msg[:200]!r}\n")
+        return applied, msg
+
+    def timestamped_log(msg):
+        print(f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}] {msg}")
+
     def real_fix_gap(gap, cfg):
         def recheck(fmt):
             path = run_format_comparison(fmt, args.cache_dir)
@@ -679,7 +702,10 @@ def main(argv=None):
             match = next((g for g in regrouped if g["format"] == fmt), None)
             return match["gap_count"] if match else 0
 
-        return fix_gap(gap, cfg, recheck_fn=recheck, review_config=review_config)
+        return fix_gap(
+            gap, cfg, recheck_fn=recheck, review_config=review_config,
+            git_apply_fn=logging_git_apply, log_fn=timestamped_log,
+        )
 
     summary = run_loop(
         config, find_gaps_fn, real_fix_gap,
