@@ -21,6 +21,14 @@ Config (env vars, or matching --flags):
                                     OpenAI-compatible SSE and reassembles it
                                     into the same full-string reply either way)
 
+    REVIEW_BASE_URL, REVIEW_API_KEY, REVIEW_MODEL, REVIEW_MAX_TOKENS,
+    REVIEW_REASONING_EFFORT, REVIEW_STREAM -- same meaning as the MODEL_FIX_*
+    equivalents above, but for the outer loop's reviewer call instead of the
+    fixer. Each falls back to its MODEL_FIX_* counterpart when unset, so the
+    reviewer reuses the fixer's model/config by default -- set only the ones
+    you want to differ (e.g. REVIEW_MODEL alone, to review with a different
+    model while still fixing with the original one).
+
 Usage:
     uv run scripts/model_fix_loop.py
 """
@@ -317,10 +325,15 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
             git_checkout_clean_fn=git_checkout_clean, git_commit_fn=git_commit,
             cargo_build_fn=cargo_build, cargo_test_workspace_fn=cargo_test_workspace,
             attempt_build_fn=attempt_build, review_fn=review_verdict,
-            recheck_fn=None, repo_root=None):
+            review_config=None, recheck_fn=None, repo_root=None):
     """Attempt to close one format's gaps via a single-shot patch. Up to
     two candidates: the initial fix, and one repair round-trip if a
     reviewer rejects the first. Returns a result dict.
+
+    review_config, if provided, is the config dict used for the review
+    call instead of the fixer's own config -- lets the outer loop's
+    reviewer run on a different model/provider than the fixer. Defaults
+    to reusing config, matching the original single-config behavior.
 
     recheck_fn(format_name) -> int must return the gap count for that
     format after the attempted fix (used to confirm real progress). If not
@@ -328,6 +341,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
     the "gap count did not decrease" check.
     """
     repo_root = repo_root or REPO_ROOT
+    review_config = review_config or config
     messages = [{"role": "user", "content": build_prompt(
         gap, repo_root=repo_root,
         max_tags=config["max_prompt_tags"],
@@ -354,7 +368,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
             git_checkout_clean_fn(repo_root)
             return {"format": gap["format"], "status": "failed", "reason": "cargo test --workspace regressed"}
 
-        approved, review_reason = review_fn(gap, diff, config, call_model_fn=call_model_fn)
+        approved, review_reason = review_fn(gap, diff, review_config, call_model_fn=call_model_fn)
         if approved:
             closed = gap["gap_count"] - remaining
             git_commit_fn(
@@ -444,6 +458,37 @@ def main(argv=None):
         type=lambda v: str(v).strip().lower() in ("1", "true", "yes", "on"),
         default=os.environ.get("MODEL_FIX_STREAM", "false").strip().lower() in ("1", "true", "yes", "on"),
     )
+    # REVIEW_* config for the outer loop's reviewer model -- each falls
+    # back to the corresponding MODEL_FIX_* value when unset, so setting
+    # nothing here keeps today's behavior (reviewer reuses the fixer's
+    # own model/config) exactly as before.
+    parser.add_argument(
+        "--review-base-url",
+        default=os.environ.get("REVIEW_BASE_URL", os.environ.get("MODEL_FIX_BASE_URL")),
+    )
+    parser.add_argument(
+        "--review-api-key",
+        default=os.environ.get("REVIEW_API_KEY", os.environ.get("MODEL_FIX_API_KEY")),
+    )
+    parser.add_argument(
+        "--review-model",
+        default=os.environ.get("REVIEW_MODEL", os.environ.get("MODEL_FIX_MODEL")),
+    )
+    parser.add_argument(
+        "--review-max-tokens", type=int,
+        default=int(os.environ.get("REVIEW_MAX_TOKENS", os.environ.get("MODEL_FIX_MAX_TOKENS", "4096"))),
+    )
+    parser.add_argument(
+        "--review-reasoning-effort",
+        default=os.environ.get("REVIEW_REASONING_EFFORT", os.environ.get("MODEL_FIX_REASONING_EFFORT", "max")),
+    )
+    parser.add_argument(
+        "--review-stream",
+        type=lambda v: str(v).strip().lower() in ("1", "true", "yes", "on"),
+        default=os.environ.get(
+            "REVIEW_STREAM", os.environ.get("MODEL_FIX_STREAM", "false"),
+        ).strip().lower() in ("1", "true", "yes", "on"),
+    )
     parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
     args = parser.parse_args(argv)
 
@@ -466,6 +511,15 @@ def main(argv=None):
         "stream": args.stream,
     }
 
+    review_config = {
+        "base_url": args.review_base_url,
+        "api_key": args.review_api_key,
+        "model": args.review_model,
+        "max_tokens": args.review_max_tokens,
+        "reasoning_effort": args.review_reasoning_effort,
+        "stream": args.review_stream,
+    }
+
     def find_gaps_fn():
         report_path = run_full_comparison(args.cache_dir)
         return group_gaps_by_format(load_comparison_report(report_path))
@@ -477,7 +531,7 @@ def main(argv=None):
             match = next((g for g in regrouped if g["format"] == fmt), None)
             return match["gap_count"] if match else 0
 
-        return fix_gap(gap, cfg, recheck_fn=recheck)
+        return fix_gap(gap, cfg, recheck_fn=recheck, review_config=review_config)
 
     summary = run_loop(config, find_gaps_fn, real_fix_gap)
     print(f"stopped after {summary['rounds']} rounds")

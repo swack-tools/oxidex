@@ -643,6 +643,66 @@ class FixGapReviewTests(unittest.TestCase):
         # both real call sites, not just one of them.
         self.assertEqual(stream_values_seen, [True, True])
 
+    def test_uses_separate_review_config_when_provided(self):
+        gap = make_gap(gap_count=2)
+        configs_seen = []
+
+        def fake_attempt_build(messages, **kwargs):
+            configs_seen.append(("fixer", kwargs["config"]))
+            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        def fake_review(g, diff, config, **kwargs):
+            configs_seen.append(("review", config))
+            return True, ""
+
+        review_config = dict(CONFIG, model="review-model", base_url="https://review.example/v1")
+
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=fake_attempt_build,
+            review_fn=fake_review,
+            review_config=review_config,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: None,
+            cargo_test_workspace_fn=lambda root: True,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "fixed")
+        fixer_config = next(c for label, c in configs_seen if label == "fixer")
+        review_seen_config = next(c for label, c in configs_seen if label == "review")
+        self.assertEqual(fixer_config["model"], "glm-5.2")
+        self.assertEqual(review_seen_config["model"], "review-model")
+        self.assertEqual(review_seen_config["base_url"], "https://review.example/v1")
+
+    def test_review_config_defaults_to_fixer_config_when_not_provided(self):
+        gap = make_gap(gap_count=2)
+        seen_review_config = []
+
+        def fake_attempt_build(messages, **kwargs):
+            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        def fake_review(g, diff, config, **kwargs):
+            seen_review_config.append(config)
+            return True, ""
+
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=fake_attempt_build,
+            review_fn=fake_review,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: None,
+            cargo_test_workspace_fn=lambda root: True,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(seen_review_config[0], CONFIG)
+
 
 class RunLoopTests(unittest.TestCase):
     def test_stops_after_two_consecutive_dry_rounds(self):
