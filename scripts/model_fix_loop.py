@@ -321,7 +321,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
             git_checkout_clean_fn(repo_root)
             return {"format": gap["format"], "status": "failed", "reason": "cargo test --workspace regressed"}
 
-        approved, review_reason = review_fn(gap, diff, config)
+        approved, review_reason = review_fn(gap, diff, config, call_model_fn=call_model_fn)
         if approved:
             closed = gap["gap_count"] - remaining
             git_commit_fn(

@@ -277,7 +277,7 @@ class FixGapHappyPathTests(unittest.TestCase):
             git_commit_fn=lambda msg, root: commit_calls.append(msg),
             cargo_build_fn=lambda root: (True, ""),
             cargo_test_workspace_fn=lambda root: True,
-            review_fn=lambda g, diff, config: (True, ""),
+            review_fn=lambda g, diff, config, **kwargs: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -454,7 +454,7 @@ class FixGapReviewTests(unittest.TestCase):
             messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
             return True, None, "--- a/x\n+++ b/x\n", messages
 
-        def fake_review(g, diff, config):
+        def fake_review(g, diff, config, **kwargs):
             review_calls.append(1)
             if len(review_calls) == 1:
                 return False, "hardcodes the sample value"
@@ -487,7 +487,7 @@ class FixGapReviewTests(unittest.TestCase):
         result = fix_gap(
             gap, CONFIG,
             attempt_build_fn=fake_attempt_build,
-            review_fn=lambda g, diff, config: (False, "hardcodes the sample value"),
+            review_fn=lambda g, diff, config, **kwargs: (False, "hardcodes the sample value"),
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: self.fail("should not commit"),
             cargo_test_workspace_fn=lambda root: True,
@@ -498,6 +498,32 @@ class FixGapReviewTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertIn("rejected by review after repair attempt", result["reason"])
         self.assertIn("hardcodes the sample value", result["reason"])
+
+    def test_review_uses_fix_gaps_injected_call_model_fn(self):
+        gap = make_gap(gap_count=2)
+        review_call_model_calls = []
+
+        def fake_attempt_build(messages, **kwargs):
+            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        def tracking_call_model_fn(messages, *a):
+            review_call_model_calls.append(messages)
+            return "APPROVE"
+
+        result = fix_gap(
+            gap, CONFIG,
+            call_model_fn=tracking_call_model_fn,
+            attempt_build_fn=fake_attempt_build,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: None,
+            cargo_test_workspace_fn=lambda root: True,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(len(review_call_model_calls), 1)
 
 
 class RunLoopTests(unittest.TestCase):
