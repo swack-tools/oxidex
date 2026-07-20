@@ -34,9 +34,18 @@ fn real_exiftool_listx_parses_and_beats_the_current_type_coverage_baseline() {
     // (1.1%) with a populated `type` field. The new pipeline must clear
     // both bars by a wide margin, since ExifTool resolves every tag's
     // writable/type attributes before emitting -listx.
+    //
+    // The exact tag count varies by installed exiftool version -- this
+    // repo's CI installs whatever Ubuntu's apt repos currently carry
+    // (libimage-exiftool-perl), which lags well behind a pinned recent
+    // release (confirmed: 27,864 tags on CI vs 32,684+ on a current
+    // 13.55 install) and will drift further as apt's package updates.
+    // 20,000 is a floor comfortably below any realistic exiftool version
+    // this test might run against, while still far too high for anything
+    // but a genuinely healthy parse of a real -listx dump.
     assert!(
-        tags.len() > 30_000,
-        "expected >30,000 tags from a real exiftool -listx dump, got {}",
+        tags.len() > 20_000,
+        "expected >20,000 tags from a real exiftool -listx dump, got {}",
         tags.len()
     );
 

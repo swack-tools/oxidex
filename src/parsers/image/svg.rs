@@ -3,11 +3,10 @@
 #![allow(dead_code)]
 
 use base64::{Engine as _, engine::general_purpose};
+
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::xmp::parse_xmp;
-use quick_xml::Reader;
-use quick_xml::events::Event;
 
 /// Maximum bytes to read from SVG file for parsing (SVG headers are at the start)
 const MAX_READ_SIZE: usize = 65536; // 64KB
@@ -32,59 +31,43 @@ impl SVGParser {
 
     /// Extracts an attribute value from an XML tag
     /// Handles both single and double quotes: width="100" or width='100'
-    /// Also tolerates whitespace around the `=`, e.g. `width = "100"`, which
-    /// is valid XML and appears in real-world SVG files.
+    /// Also tolerates whitespace around the `=`, e.g. `xmlns = 'http://...'`
     fn extract_attribute(text: &str, attr_name: &str) -> Option<String> {
         let bytes = text.as_bytes();
-        let name_bytes = attr_name.as_bytes();
         let mut search_start = 0usize;
 
         while let Some(rel_pos) = text[search_start..].find(attr_name) {
-            let name_start = search_start + rel_pos;
-            let name_end = name_start + name_bytes.len();
+            let pos = search_start + rel_pos;
 
-            // Ensure the match is a whole attribute name: preceded by whitespace
-            // (or start of tag/text) and not immediately followed by an
-            // identifier character (so "width" doesn't match "strokewidth").
-            let preceded_ok = name_start == 0
-                || !(bytes[name_start - 1].is_ascii_alphanumeric() || bytes[name_start - 1] == b'-' || bytes[name_start - 1] == b':');
+            // Basic word-boundary check so e.g. "width" doesn't match inside
+            // "strokewidth" or "xmlns" doesn't match the start of "xmlns:foo"
+            let before_ok = pos == 0 || {
+                let c = bytes[pos - 1];
+                !(c.is_ascii_alphanumeric() || c == b'-' || c == b':' || c == b'_')
+            };
 
-            if !preceded_ok {
-                search_start = name_end;
-                continue;
+            if before_ok {
+                let mut idx = pos + attr_name.len();
+                while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+                    idx += 1;
+                }
+                if idx < bytes.len() && bytes[idx] == b'=' {
+                    idx += 1;
+                    while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+                        idx += 1;
+                    }
+                    if idx < bytes.len() && (bytes[idx] == b'"' || bytes[idx] == b'\'') {
+                        let quote = bytes[idx];
+                        let value_start = idx + 1;
+                        if let Some(end_rel) = text[value_start..].find(quote as char) {
+                            return Some(text[value_start..value_start + end_rel].to_string());
+                        }
+                    }
+                }
             }
 
-            // Skip whitespace before '='
-            let mut pos = name_end;
-            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-                pos += 1;
-            }
-
-            if pos >= bytes.len() || bytes[pos] != b'=' {
-                search_start = name_end;
-                continue;
-            }
-            pos += 1;
-
-            // Skip whitespace after '='
-            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-                pos += 1;
-            }
-
-            if pos >= bytes.len() || (bytes[pos] != b'"' && bytes[pos] != b'\'') {
-                search_start = name_end;
-                continue;
-            }
-            let quote = bytes[pos];
-            let value_start = pos + 1;
-
-            if let Some(end) = text[value_start..].find(quote as char) {
-                return Some(text[value_start..value_start + end].to_string());
-            }
-
-            search_start = name_end;
+            search_start = pos + attr_name.len();
         }
-
         None
     }
 
@@ -284,18 +267,14 @@ impl SVGParser {
             metadata.insert("XMP:Publisher".to_string(), TagValue::new_string(dc_pub));
         }
 
-        // rdf:about -> XMP:About
-        // The "about" attribute lives on the <rdf:Description> element and, per
-        // RDF/XML, may be written with or without the "rdf:" prefix (some real
-        // world SVG producers omit it), so scope the search to that element's
-        // opening tag and accept either spelling.
+        // rdf:about (or bare "about" within an rdf:Description tag) -> XMP:About
         if let Some(desc_start) = text.find("<rdf:Description")
-            && let Some(tag_end) = text[desc_start..].find('>')
+            && let Some(tag_end_rel) = text[desc_start..].find('>')
         {
-            let tag_content = &text[desc_start..desc_start + tag_end + 1];
-            let about = Self::extract_attribute(tag_content, "rdf:about")
-                .or_else(|| Self::extract_attribute(tag_content, "about"));
-            if let Some(about) = about {
+            let desc_tag = &text[desc_start..desc_start + tag_end_rel + 1];
+            if let Some(about) = Self::extract_attribute(desc_tag, "rdf:about")
+                .or_else(|| Self::extract_attribute(desc_tag, "about"))
+            {
                 metadata.insert("XMP:About".to_string(), TagValue::new_string(about));
             }
         }
@@ -311,20 +290,28 @@ impl SVGParser {
 
             // Find end of opening tag
             if let Some(tag_end) = text[desc_abs_start..].find('>') {
-                let tag_content = &text[desc_abs_start..desc_abs_start + tag_end + 1];
+                let tag_end_abs = desc_abs_start + tag_end;
+                let tag_content = &text[desc_abs_start..tag_end_abs + 1];
 
                 // Look for closing tag
-                if let Some(close) = text[desc_abs_start + tag_end..].find("</desc>") {
-                    let content =
-                        &text[desc_abs_start + tag_end + 1..desc_abs_start + tag_end + close];
+                if let Some(close) = text[tag_end_abs..].find("</desc>") {
+                    let inner_start = tag_end_abs + 1;
+                    let inner_end = tag_end_abs + close;
+                    let content = &text[inner_start..inner_end];
 
-                    // Extract role attribute
+                    // Extract role attribute (e.g. <desc role="xxxTitle">content</desc>)
                     if let Some(role) = Self::extract_attribute(tag_content, "role") {
                         let tag_name = format!("SVG:Desc{}", capitalize_first(&role));
                         metadata.insert(tag_name, TagValue::new_string(content.trim().to_string()));
+                    } else {
+                        // Otherwise, recursively walk any namespaced child elements
+                        // (e.g. <myfoo:title>...</myfoo:title>) and build tag names by
+                        // concatenating the capitalized path of leaf element names,
+                        // matching ExifTool's generic SVG "desc" processing.
+                        Self::extract_desc_children(content, "", metadata, 0);
                     }
 
-                    pos = desc_abs_start + tag_end + close + 7;
+                    pos = inner_end + "</desc>".len();
                 } else {
                     pos = desc_abs_start + 1;
                 }
@@ -334,36 +321,223 @@ impl SVGParser {
         }
     }
 
-    /// Extracts nested, arbitrarily-namespaced elements inside `<desc>` blocks.
-    ///
-    /// SVG producers sometimes embed custom, namespaced markup inside `<desc>`
-    /// (e.g. `<myfoo:title>...</myfoo:title>`, or several levels deep such as
-    /// `<myfoo:scene><myfoo:what>...</myfoo:what></myfoo:scene>`). ExifTool
-    /// surfaces each leaf element (an element with text but no child elements)
-    /// as a tag named by concatenating the capitalized, namespace-stripped
-    /// local names from `desc` down to the leaf, e.g. `DescSceneWhat`.
-    fn extract_desc_nested_tags(text: &str, metadata: &mut MetadataMap) {
-        let mut pos = 0;
-        while let Some(desc_start) = text[pos..].find("<desc") {
-            let desc_abs_start = pos + desc_start;
+    /// Recursively walks child elements of a `<desc>` element. Leaf elements (those with
+    /// no nested child elements) produce a tag named `SVG:Desc<Path>` where `<Path>` is the
+    /// capitalized, concatenated names of all ancestor elements (excluding `<desc>` itself)
+    /// down to and including the leaf. Non-leaf elements only contribute to the path and do
+    /// not themselves produce a tag.
+    fn extract_desc_children(content: &str, path: &str, metadata: &mut MetadataMap, depth: usize) {
+        if depth > 20 {
+            return;
+        }
 
-            let Some(tag_end) = text[desc_abs_start..].find('>') else {
+        let mut pos = 0usize;
+        while let Some(lt_rel) = content[pos..].find('<') {
+            let lt_abs = pos + lt_rel;
+
+            // Skip XML comments
+            if content[lt_abs..].starts_with("<!--") {
+                if let Some(end_rel) = content[lt_abs..].find("-->") {
+                    pos = lt_abs + end_rel + 3;
+                    continue;
+                } else {
+                    break;
+                }
+            }
+
+            // A stray closing tag means our bounds are off; stop to avoid misparsing
+            if content[lt_abs..].starts_with("</") {
+                break;
+            }
+
+            let Some(gt_rel) = content[lt_abs..].find('>') else {
                 break;
             };
-            let content_start = desc_abs_start + tag_end + 1;
+            let gt_abs = lt_abs + gt_rel;
+            let open_tag = content[lt_abs + 1..gt_abs].trim_end();
 
-            let Some(close) = text[content_start..].find("</desc>") else {
-                pos = desc_abs_start + 1;
+            let self_closing = open_tag.ends_with('/');
+            let tag_token = open_tag.trim_end_matches('/').trim_end();
+            let tag_name_full = tag_token.split_whitespace().next().unwrap_or("");
+
+            if tag_name_full.is_empty() {
+                break;
+            }
+
+            if self_closing {
+                pos = gt_abs + 1;
                 continue;
-            };
-            let content_end = content_start + close;
+            }
 
-            // Re-parse the whole block (including the opening tag) so quick-xml
-            // sees a single well-formed root element.
-            let block = &text[desc_abs_start..content_end + "</desc>".len()];
-            walk_desc_xml(block, metadata);
+            let local_name = tag_name_full.rsplit(':').next().unwrap_or(tag_name_full);
+            let close_tag = format!("</{}>", tag_name_full);
 
-            pos = content_end + "</desc>".len();
+            if let Some(close_rel) = content[gt_abs + 1..].find(&close_tag) {
+                let inner_start = gt_abs + 1;
+                let inner_end = gt_abs + 1 + close_rel;
+                let inner = &content[inner_start..inner_end];
+                let new_path = format!("{}{}", path, capitalize_first(local_name));
+
+                if inner.contains('<') {
+                    // Non-leaf: recurse into children, don't emit a tag for this element
+                    Self::extract_desc_children(inner, &new_path, metadata, depth + 1);
+                } else {
+                    let trimmed = inner.trim();
+                    if !trimmed.is_empty() {
+                        let tag_key = format!("SVG:Desc{}", new_path);
+                        metadata.insert(tag_key, TagValue::new_string(trimmed.to_string()));
+                    }
+                }
+
+                pos = inner_end + close_tag.len();
+            } else {
+                // No matching close tag found; bail out rather than looping forever
+                break;
+            }
+        }
+    }
+
+    /// Extract JUMBF (JPEG Universal Metadata Box Format) metadata embedded as base64 inside
+    /// a `<c2pa:manifest>` element within SVG `<metadata>`. This is used to carry C2PA content
+    /// provenance data (ISO/IEC 19566-5).
+    fn extract_c2pa_manifest(text: &str, metadata: &mut MetadataMap) {
+        let Some(start) = text.find("<c2pa:manifest") else {
+            return;
+        };
+        let Some(tag_end_rel) = text[start..].find('>') else {
+            return;
+        };
+        let content_start = start + tag_end_rel + 1;
+        let Some(close_rel) = text[content_start..].find("</c2pa:manifest>") else {
+            return;
+        };
+
+        let raw = &text[content_start..content_start + close_rel];
+        let cleaned: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+        let Ok(decoded) = general_purpose::STANDARD.decode(cleaned.as_bytes()) else {
+            return;
+        };
+
+        metadata.insert(
+            "JUMBF:JUMBF".to_string(),
+            TagValue::new_string(format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                decoded.len()
+            )),
+        );
+
+        let mut first_jumd_seen = false;
+        Self::parse_jumbf_boxes(&decoded, metadata, &mut first_jumd_seen, 0);
+    }
+
+    /// Recursively walks JUMBF boxes (ISO/IEC 19566-5), extracting the JUMDType/JUMDLabel
+    /// of the outermost description box (matching ExifTool, which keeps only the first
+    /// value for duplicate tag names), plus any string values found in "json" content boxes.
+    fn parse_jumbf_boxes(
+        data: &[u8],
+        metadata: &mut MetadataMap,
+        first_jumd_seen: &mut bool,
+        depth: usize,
+    ) {
+        if depth > 20 {
+            return;
+        }
+
+        let mut offset = 0usize;
+        while offset + 8 <= data.len() {
+            let length = u32::from_be_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ]) as usize;
+            if length < 8 || offset + length > data.len() {
+                break;
+            }
+            let box_type = &data[offset + 4..offset + 8];
+            let content = &data[offset + 8..offset + length];
+
+            if box_type == b"jumb" {
+                Self::parse_jumbf_boxes(content, metadata, first_jumd_seen, depth + 1);
+            } else if box_type == b"jumd" {
+                if !*first_jumd_seen {
+                    *first_jumd_seen = true;
+                    if content.len() >= 17 {
+                        let uuid = &content[0..16];
+                        metadata.insert(
+                            "JUMBF:JUMDType".to_string(),
+                            TagValue::new_string(Self::format_jumd_type(uuid)),
+                        );
+
+                        let rest = &content[17..];
+                        if let Some(nul_rel) = rest.iter().position(|&b| b == 0)
+                            && let Ok(label) = std::str::from_utf8(&rest[..nul_rel])
+                            && !label.is_empty()
+                        {
+                            metadata.insert(
+                                "JUMBF:JUMDLabel".to_string(),
+                                TagValue::new_string(label.to_string()),
+                            );
+                        }
+                    }
+                }
+            } else if box_type == b"json" {
+                Self::extract_jumbf_json_strings(content, metadata);
+            }
+
+            offset += length;
+        }
+    }
+
+    /// Formats a 16-byte JUMBF content-type UUID the way ExifTool does: the first 4 bytes
+    /// are shown as ASCII (in parens) when printable, and the remaining 12 bytes as
+    /// hyphen-separated hex groups of 2/2/8 bytes.
+    fn format_jumd_type(uuid: &[u8]) -> String {
+        let first4 = &uuid[0..4];
+        let first_part = if first4.iter().all(|&b| b.is_ascii_graphic()) {
+            format!("({})", std::str::from_utf8(first4).unwrap_or_default())
+        } else {
+            format!(
+                "{:02x}{:02x}{:02x}{:02x}",
+                first4[0], first4[1], first4[2], first4[3]
+            )
+        };
+
+        format!(
+            "{}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            first_part,
+            uuid[4],
+            uuid[5],
+            uuid[6],
+            uuid[7],
+            uuid[8],
+            uuid[9],
+            uuid[10],
+            uuid[11],
+            uuid[12],
+            uuid[13],
+            uuid[14],
+            uuid[15]
+        )
+    }
+
+    /// Extracts string values from a JUMBF "json" content box, inserting tags as
+    /// `JUMBF:<CapitalizedKey>`. Only the first value seen for a given key is kept
+    /// (matching ExifTool's JSON-based output, which cannot represent duplicate keys).
+    fn extract_jumbf_json_strings(content: &[u8], metadata: &mut MetadataMap) {
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(content) else {
+            return;
+        };
+        let Some(obj) = value.as_object() else {
+            return;
+        };
+        for (key, val) in obj {
+            if let Some(s) = val.as_str() {
+                let tag_key = format!("JUMBF:{}", capitalize_first(key));
+                if !metadata.contains_key(&tag_key) {
+                    metadata.insert(tag_key, TagValue::new_string(s.to_string()));
+                }
+            }
         }
     }
 }
@@ -374,225 +548,6 @@ fn capitalize_first(s: &str) -> String {
     match c.next() {
         None => String::new(),
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-    }
-}
-
-/// Strips a namespace prefix (e.g. "myfoo:title" -> "title") from a qualified name.
-fn local_name(qname: &str) -> &str {
-    qname.rsplit(':').next().unwrap_or(qname)
-}
-
-/// Recursively walks a `<desc>...</desc>` XML fragment, emitting `SVG:Desc...`
-/// tags for leaf elements (elements with text content but no child elements),
-/// named by joining the capitalized, namespace-stripped local names of every
-/// ancestor starting from `desc` itself.
-fn walk_desc_xml(xml: &str, metadata: &mut MetadataMap) {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
-
-    let mut path: Vec<String> = Vec::new();
-    let mut has_child_stack: Vec<bool> = Vec::new();
-    let mut text_stack: Vec<String> = Vec::new();
-
-    loop {
-        match reader.read_event() {
-            Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) => {
-                let raw_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if let Some(parent_has_child) = has_child_stack.last_mut() {
-                    *parent_has_child = true;
-                }
-                path.push(capitalize_first(local_name(&raw_name)));
-                has_child_stack.push(false);
-                text_stack.push(String::new());
-            }
-            Ok(Event::Text(t)) => {
-                if let Some(buf_text) = text_stack.last_mut() {
-                    buf_text.push_str(&String::from_utf8_lossy(&t));
-                }
-            }
-            Ok(Event::CData(t)) => {
-                if let Some(buf_text) = text_stack.last_mut() {
-                    buf_text.push_str(&String::from_utf8_lossy(t.as_ref()));
-                }
-            }
-            Ok(Event::End(_)) => {
-                let has_child = has_child_stack.pop().unwrap_or(false);
-                let text = text_stack.pop().unwrap_or_default();
-                if !has_child {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() {
-                        let tag_name = format!("SVG:{}", path.join(""));
-                        if !metadata.contains_key(&tag_name) {
-                            metadata.insert(tag_name, TagValue::new_string(trimmed.to_string()));
-                        }
-                    }
-                }
-                path.pop();
-            }
-            Ok(Event::Empty(e)) => {
-                if let Some(parent_has_child) = has_child_stack.last_mut() {
-                    *parent_has_child = true;
-                }
-                let _ = e; // self-closing leaf carries no text; nothing to emit
-            }
-            Err(_) => break,
-            _ => {}
-        }
-    }
-}
-
-/// Extracts embedded C2PA content authenticity data from a `<c2pa:manifest>`
-/// element and decodes its base64 payload as a JUMBF (ISO/IEC 19566-5) box
-/// structure, surfacing tags the same way ExifTool's JUMBF module does.
-fn extract_c2pa_manifest(text: &str, metadata: &mut MetadataMap) {
-    let Some(start) = text.find("<c2pa:manifest") else {
-        return;
-    };
-    let Some(tag_end) = text[start..].find('>') else {
-        return;
-    };
-    let content_start = start + tag_end + 1;
-
-    let Some(close) = text[content_start..].find("</c2pa:manifest>") else {
-        return;
-    };
-    let content_end = content_start + close;
-
-    let cleaned: String = text[content_start..content_end]
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
-
-    let Ok(decoded) = general_purpose::STANDARD.decode(cleaned.as_bytes()) else {
-        return;
-    };
-
-    walk_jumbf_boxes(&decoded, metadata, true);
-}
-
-/// Recursively walks a JUMBF box stream (ISO/IEC 19566-5), populating
-/// `JUMBF:*` tags. Only the first value seen for a given tag is kept,
-/// matching ExifTool's default (non `-a`) behavior for duplicate tags.
-fn walk_jumbf_boxes(data: &[u8], metadata: &mut MetadataMap, is_top: bool) {
-    const BOX_HEADER_SIZE: usize = 8;
-    let mut offset = 0usize;
-
-    while offset + BOX_HEADER_SIZE <= data.len() {
-        let length = u32::from_be_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]) as usize;
-        let box_type = &data[offset + 4..offset + BOX_HEADER_SIZE];
-
-        let box_end = if length == 0 {
-            data.len()
-        } else {
-            (offset + length).min(data.len())
-        };
-        if box_end <= offset + BOX_HEADER_SIZE {
-            break;
-        }
-        let payload = &data[offset + BOX_HEADER_SIZE..box_end];
-
-        match box_type {
-            b"jumb" => {
-                if is_top && !metadata.contains_key("JUMBF:JUMBF") {
-                    metadata.insert(
-                        "JUMBF:JUMBF".to_string(),
-                        TagValue::new_string(format!(
-                            "(Binary data {} bytes, use -b option to extract)",
-                            box_end - offset
-                        )),
-                    );
-                }
-                walk_jumbf_boxes(payload, metadata, false);
-            }
-            b"jumd" => parse_jumd_box(payload, metadata),
-            b"json" => parse_json_box(payload, metadata),
-            _ => {}
-        }
-
-        if length == 0 {
-            break;
-        }
-        offset += length;
-    }
-}
-
-/// Parses a JUMBF description ("jumd") box: a 16-byte content-type UUID
-/// (whose first 4 bytes are conventionally an ASCII mnemonic), a 1-byte
-/// toggles field, and an optional null-terminated UTF-8 label.
-fn parse_jumd_box(payload: &[u8], metadata: &mut MetadataMap) {
-    if payload.len() < 17 {
-        return;
-    }
-
-    let type_bytes = &payload[0..4];
-    let rest = &payload[4..16];
-
-    let type_str = if type_bytes.iter().all(|b| b.is_ascii_graphic()) {
-        String::from_utf8_lossy(type_bytes).to_string()
-    } else {
-        type_bytes.iter().map(|b| format!("{:02x}", b)).collect()
-    };
-
-    let jumd_type = format!(
-        "({})-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        type_str,
-        rest[0],
-        rest[1],
-        rest[2],
-        rest[3],
-        rest[4],
-        rest[5],
-        rest[6],
-        rest[7],
-        rest[8],
-        rest[9],
-        rest[10],
-        rest[11]
-    );
-
-    if !metadata.contains_key("JUMBF:JUMDType") {
-        metadata.insert("JUMBF:JUMDType".to_string(), TagValue::new_string(jumd_type));
-    }
-
-    // Label follows the 1-byte toggles field at offset 16.
-    if payload.len() > 17
-        && let Some(null_pos) = payload[17..].iter().position(|&b| b == 0)
-        && let Ok(label) = std::str::from_utf8(&payload[17..17 + null_pos])
-        && !label.is_empty()
-        && !metadata.contains_key("JUMBF:JUMDLabel")
-    {
-        metadata.insert(
-            "JUMBF:JUMDLabel".to_string(),
-            TagValue::new_string(label.to_string()),
-        );
-    }
-}
-
-/// Parses a JSON content box, surfacing each top-level string field as a
-/// `JUMBF:<CapitalizedKey>` tag (e.g. `{"location": "Salem, Oregon"}` becomes
-/// `JUMBF:Location`), matching ExifTool's handling of C2PA JSON assertions.
-fn parse_json_box(payload: &[u8], metadata: &mut MetadataMap) {
-    let Ok(text) = std::str::from_utf8(payload) else {
-        return;
-    };
-    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(text)
-    else {
-        return;
-    };
-
-    for (key, val) in map {
-        if let serde_json::Value::String(s) = val {
-            let tag_name = format!("JUMBF:{}", capitalize_first(&key));
-            if !metadata.contains_key(&tag_name) {
-                metadata.insert(tag_name, TagValue::new_string(s));
-            }
-        }
     }
 }
 
@@ -711,12 +666,8 @@ impl FormatParser for SVGParser {
         // Extract SVG-specific desc metadata with roles
         Self::extract_svg_desc_metadata(text, &mut metadata);
 
-        // Extract arbitrarily-namespaced nested elements inside <desc> (e.g.
-        // <myfoo:title>, <myfoo:scene><myfoo:what>...)
-        Self::extract_desc_nested_tags(text, &mut metadata);
-
-        // Extract embedded C2PA/JUMBF metadata from a <c2pa:manifest> element
-        extract_c2pa_manifest(text, &mut metadata);
+        // Extract embedded C2PA/JUMBF manifest data, if present
+        Self::extract_c2pa_manifest(text, &mut metadata);
 
         // Check if animated
         if Self::is_animated(text) {

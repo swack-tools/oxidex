@@ -41,6 +41,11 @@ name = "tag-comparison"
 path = "src/bin/tag-comparison/main.rs"
 required-features = ["tag-comparison-binary"]
 
+[[bin]]
+name = "jpeg-tag-matrix"
+path = "src/bin/jpeg-tag-matrix/main.rs"
+required-features = ["jpeg-tag-matrix-binary"]
+
 [[bench]]
 name = "parse_benchmarks"
 harness = false
@@ -64,7 +69,7 @@ lexopt = "0.3"
 nom = "8.0"
 
 # XML Parsing (for XMP metadata)
-quick-xml = "0.41"
+quick-xml = { version = "0.41", features = ["serialize"] }
 
 # JSON Output
 serde = { version = "1.0", features = ["derive"] }
@@ -122,6 +127,9 @@ tokio = { version = "1.53", features = ["full"] }
 
 # CLI Argument Parsing (for tag-comparison binary)
 clap = { version = "4.6", features = ["derive"] }
+
+# Regular expressions (for jpeg-tag-matrix binary and build scripts)
+regex = "1.13"
 
 # Error handling
 anyhow = "1.0"
@@ -202,6 +210,8 @@ exiftool-comparison = []
 # Feature to enable the tag-comparison binary (used by deploy-docs workflow)
 # This binary has special linking requirements and is excluded from default builds
 tag-comparison-binary = []
+# Feature to enable the jpeg-tag-matrix binary (JPEG tag comparison pipeline)
+jpeg-tag-matrix-binary = []
 
 # Debian Package Configuration (cargo-deb)
 # Install cargo-deb: cargo install cargo-deb
