@@ -115,6 +115,38 @@ pub fn parse_app0_extended(data: &[u8], metadata: &mut MetadataMap) -> Result<()
         return Err("APP0 segment too short".to_string());
     }
 
+    // AVI1 (Motion JPEG) APP0 segment
+    //
+    // ExifTool exposes the byte after the "AVI1\0" signature as
+    // APP0:InterleavedField.
+    if data.len() >= 6 && &data[0..5] == b"AVI1\0" {
+        let interleaved = data[5];
+        let interleaved_str = match interleaved {
+            0 => "Not Interleaved",
+            1 => "Odd",
+            2 => "Even",
+            _ => "Unknown",
+        };
+        metadata.insert(
+            "APP0:InterleavedField".to_string(),
+            TagValue::String(interleaved_str.to_string()),
+        );
+        return Ok(());
+    }
+
+    // OCAD APP0 segment
+    //
+    // ExifTool extracts OcadRevision from APP0. This revision is stored as a
+    // 16-bit little-endian value immediately following the "Ocad\0" signature.
+    if data.len() >= 7 && &data[0..5] == b"Ocad\0" {
+        let revision = u16::from_le_bytes([data[5], data[6]]);
+        metadata.insert(
+            "APP0:OcadRevision".to_string(),
+            TagValue::Integer(revision as i64),
+        );
+        return Ok(());
+    }
+
     // Check JFIF identifier
     if &data[0..5] == b"JFIF\x00" {
         // Already parsed by jfif_parser, but we can add JFXX extension support
@@ -466,7 +498,11 @@ pub fn parse_jpeg_hdr_segment(data: &[u8], metadata: &mut MetadataMap) -> Result
     }
 
     // Delegate to specialized HDR parser if available and data looks valid
-    let _ = crate::parsers::jpeg::app_segments::parse_app11_jpeg_hdr(data);
+    if let Ok(hdr_metadata) = crate::parsers::jpeg::app_segments::parse_app11_jpeg_hdr(data) {
+        for (key, value) in hdr_metadata {
+            metadata.insert(key, value);
+        }
+    }
 
     Ok(())
 }

@@ -126,10 +126,18 @@ fn parse_standard_hdr(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
 
     // Store the gain curve size
     metadata.insert("HDR:GainCurveSize", TagValue::Integer(curve_size as i64));
+    metadata.insert(
+        "APP10:HDRGainCurveSize".to_string(),
+        TagValue::Integer(curve_size as i64),
+    );
 
     // Store the gain curve binary data if present
     if !data.is_empty() {
         metadata.insert("HDR:GainCurve", TagValue::Binary(data.to_vec()));
+        metadata.insert(
+            "APP10:HDRGainCurve".to_string(),
+            TagValue::Binary(data.to_vec()),
+        );
     }
 
     Ok(())
@@ -155,9 +163,17 @@ fn parse_arot_hdr(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
     let curve_size = data.len();
 
     metadata.insert("HDR:GainCurveSize", TagValue::Integer(curve_size as i64));
+    metadata.insert(
+        "APP10:HDRGainCurveSize".to_string(),
+        TagValue::Integer(curve_size as i64),
+    );
 
     if !data.is_empty() {
         metadata.insert("HDR:GainCurve", TagValue::Binary(data.to_vec()));
+        metadata.insert(
+            "APP10:HDRGainCurve".to_string(),
+            TagValue::Binary(data.to_vec()),
+        );
     }
 
     Ok(())
@@ -182,9 +198,17 @@ fn parse_generic_hdr(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
     let curve_size = data.len();
 
     metadata.insert("HDR:GainCurveSize", TagValue::Integer(curve_size as i64));
+    metadata.insert(
+        "APP10:HDRGainCurveSize".to_string(),
+        TagValue::Integer(curve_size as i64),
+    );
 
     if !data.is_empty() {
         metadata.insert("HDR:GainCurve", TagValue::Binary(data.to_vec()));
+        metadata.insert(
+            "APP10:HDRGainCurve".to_string(),
+            TagValue::Binary(data.to_vec()),
+        );
     }
 
     Ok(())
