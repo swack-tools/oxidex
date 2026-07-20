@@ -1390,9 +1390,11 @@ fn decode_internal_serial_number(raw: &str) -> String {
     let dd = &suffix[4..6];
     let rest12 = &suffix[6..18];
 
-    let (Some(_yy_num), Some(mm_num), Some(dd_num)) =
-        (yy.parse::<u32>().ok(), mm.parse::<u32>().ok(), dd.parse::<u32>().ok())
-    else {
+    let (Some(_yy_num), Some(mm_num), Some(dd_num)) = (
+        yy.parse::<u32>().ok(),
+        mm.parse::<u32>().ok(),
+        dd.parse::<u32>().ok(),
+    ) else {
         return trimmed.to_string();
     };
     if !(1..=12).contains(&mm_num) || !(1..=31).contains(&dd_num) {
@@ -1436,7 +1438,11 @@ fn decode_internal_serial_number(raw: &str) -> String {
         })
         .collect();
 
-    let year = if yy_num < 70 { yy_num + 2000 } else { yy_num + 1900 };
+    let year = if yy_num < 70 {
+        yy_num + 2000
+    } else {
+        yy_num + 1900
+    };
 
     format!("{}{} {}:{}:{} {}", group1, sn, year, mm, dd, rest12)
 }

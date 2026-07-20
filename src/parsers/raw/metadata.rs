@@ -1478,11 +1478,10 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 // IFD0's entries. Parse it to recover Compression and the
                                 // Thumbnail offset/length tags that ExifTool reports under
                                 // the "EXIF" family.
-                                let next_ifd_pos =
-                                    first_ifd_offset + 2 + (tags.len() as u64 * 12);
+                                let next_ifd_pos = first_ifd_offset + 2 + (tags.len() as u64 * 12);
                                 if (next_ifd_pos + 4) as usize <= exif_data.len()
-                                    && let Some(next_ifd_bytes) =
-                                        exif_data.get(next_ifd_pos as usize..(next_ifd_pos + 4) as usize)
+                                    && let Some(next_ifd_bytes) = exif_data
+                                        .get(next_ifd_pos as usize..(next_ifd_pos + 4) as usize)
                                 {
                                     let next_ifd_offset =
                                         read_u32(next_ifd_bytes, byte_order) as u64;
@@ -1528,8 +1527,7 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                                     );
                                                 }
                                                 _ => {
-                                                    let tag_name =
-                                                        lookup_tag_name(*tag_id, "IFD1");
+                                                    let tag_name = lookup_tag_name(*tag_id, "IFD1");
                                                     let tag_value = raw_bytes_to_simple_tag_value(
                                                         bytes,
                                                         *field_type,
@@ -1617,15 +1615,12 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                                 // InteropIndex (0x0001): short ASCII code with
                                                 // a PrintConv to a descriptive string.
                                                 0x0001 => {
-                                                    let raw =
-                                                        String::from_utf8_lossy(bytes)
-                                                            .trim_end_matches('\0')
-                                                            .to_string();
+                                                    let raw = String::from_utf8_lossy(bytes)
+                                                        .trim_end_matches('\0')
+                                                        .to_string();
                                                     let printed = match raw.as_str() {
-                                                        "R98" => {
-                                                            "R98 - DCF basic file (sRGB)"
-                                                                .to_string()
-                                                        }
+                                                        "R98" => "R98 - DCF basic file (sRGB)"
+                                                            .to_string(),
                                                         "R03" => {
                                                             "R03 - DCF option file (Adobe RGB)"
                                                                 .to_string()

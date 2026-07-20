@@ -296,7 +296,8 @@ impl EPSParser {
                         // inside xmpBJ:JobRef. Extract them directly here.
                         if !metadata.contains_key("XMP:About") {
                             if let Some(about) = extract_xml_attribute(xml_str, "about") {
-                                metadata.insert("XMP:About".to_string(), TagValue::new_string(about));
+                                metadata
+                                    .insert("XMP:About".to_string(), TagValue::new_string(about));
                             }
                         }
                         if !metadata.contains_key("XMP:XMPToolkit") {
@@ -654,7 +655,7 @@ fn format_iptc_record_value(record_number: u8, dataset_number: u8, data: &[u8]) 
             0 => format_iptc_record_version(data), // EnvelopeRecordVersion
             70 => format_iptc_date(&decode_iptc_string(data)), // DateSent
             80 => format_iptc_time(&decode_iptc_string(data)), // TimeSent
-            90 => format_iptc_coded_charset(data),  // CodedCharacterSet
+            90 => format_iptc_coded_charset(data), // CodedCharacterSet
             _ => decode_iptc_string(data),
         };
     }

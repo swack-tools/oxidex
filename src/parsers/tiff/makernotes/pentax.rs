@@ -873,9 +873,8 @@ impl MakerNoteParser for PentaxParser {
                     if raw.len() >= 2 {
                         let series = raw[0];
                         let sub_id = raw[1] as u16;
-                        let name = lookup_lens_type_pair(series, sub_id).unwrap_or_else(|| {
-                            format!("Unknown ({} {})", series, sub_id)
-                        });
+                        let name = lookup_lens_type_pair(series, sub_id)
+                            .unwrap_or_else(|| format!("Unknown ({} {})", series, sub_id));
                         tags.insert("Pentax:LensType".to_string(), name);
                     }
                     if raw.len() >= 4 {
@@ -1171,16 +1170,14 @@ impl MakerNoteParser for PentaxParser {
                     let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
                     if raw.len() >= 4 {
                         let (b0, b1) = match byte_order {
-                            ByteOrder::BigEndian => {
-                                (i16::from_be_bytes([raw[0], raw[1]]), i16::from_be_bytes([
-                                    raw[2], raw[3],
-                                ]))
-                            }
-                            ByteOrder::LittleEndian => {
-                                (i16::from_le_bytes([raw[0], raw[1]]), i16::from_le_bytes([
-                                    raw[2], raw[3],
-                                ]))
-                            }
+                            ByteOrder::BigEndian => (
+                                i16::from_be_bytes([raw[0], raw[1]]),
+                                i16::from_be_bytes([raw[2], raw[3]]),
+                            ),
+                            ByteOrder::LittleEndian => (
+                                i16::from_le_bytes([raw[0], raw[1]]),
+                                i16::from_le_bytes([raw[2], raw[3]]),
+                            ),
                         };
                         let value = if b1 == 0 && (-4..=4).contains(&b0) {
                             b0.to_string()
@@ -1272,7 +1269,10 @@ impl MakerNoteParser for PentaxParser {
                 }
                 PENTAX_CROSS_PROCESS => {
                     let value = extract_value_as_i32(&entry, byte_order);
-                    tags.insert("Pentax:CrossProcess".to_string(), CROSS_PROCESS.decode(value));
+                    tags.insert(
+                        "Pentax:CrossProcess".to_string(),
+                        CROSS_PROCESS.decode(value),
+                    );
                 }
                 PENTAX_LENS_CORR => {
                     tags.insert(
@@ -1371,12 +1371,21 @@ impl MakerNoteParser for PentaxParser {
                         );
                         tags.insert(
                             "Pentax:E-DialInProgram".to_string(),
-                            if raw[1] & 0x40 != 0 { "P Shift" } else { "Tv or Av" }.to_string(),
+                            if raw[1] & 0x40 != 0 {
+                                "P Shift"
+                            } else {
+                                "Tv or Av"
+                            }
+                            .to_string(),
                         );
                         tags.insert(
                             "Pentax:ApertureRingUse".to_string(),
-                            if raw[1] & 0x80 != 0 { "Permitted" } else { "Prohibited" }
-                                .to_string(),
+                            if raw[1] & 0x80 != 0 {
+                                "Permitted"
+                            } else {
+                                "Prohibited"
+                            }
+                            .to_string(),
                         );
                         tags.insert(
                             "Pentax:FlashOptions".to_string(),
@@ -1406,8 +1415,8 @@ impl MakerNoteParser for PentaxParser {
                         }
                         if raw.len() >= 7 {
                             let ev = pentax_ev(raw[6] as i32 - 32);
-                            let iso_floor = (100.0 * (ev * std::f64::consts::LN_2).exp() + 0.5)
-                                as i64;
+                            let iso_floor =
+                                (100.0 * (ev * std::f64::consts::LN_2).exp() + 0.5) as i64;
                             tags.insert("Pentax:ISOFloor".to_string(), iso_floor.to_string());
                         }
                         if raw.len() >= 8 {
@@ -1448,19 +1457,21 @@ impl MakerNoteParser for PentaxParser {
                     if raw.len() <= 25 && raw.len() != 21 && raw.len() >= 7 {
                         let shift: usize = if raw.len() > 20 { 1 } else { 0 };
                         let exposure_time = |b: u8| {
-                            print_exposure_time(24.0 * (-((b as f64) - 32.0) * std::f64::consts::LN_2 / 8.0).exp())
+                            print_exposure_time(
+                                24.0 * (-((b as f64) - 32.0) * std::f64::consts::LN_2 / 8.0).exp(),
+                            )
                         };
-                        tags.insert(
-                            "Pentax:AEExposureTime".to_string(),
-                            exposure_time(raw[0]),
-                        );
+                        tags.insert("Pentax:AEExposureTime".to_string(), exposure_time(raw[0]));
                         tags.insert(
                             "Pentax:AEAperture".to_string(),
                             format!("{:.1}", ae_aperture_from_raw(raw[1] as i32)),
                         );
-                        let iso = 100.0
-                            * ((raw[2] as f64 - 32.0) * std::f64::consts::LN_2 / 8.0).exp();
-                        tags.insert("Pentax:AE_ISO".to_string(), format!("{}", (iso + 0.5) as i64));
+                        let iso =
+                            100.0 * ((raw[2] as f64 - 32.0) * std::f64::consts::LN_2 / 8.0).exp();
+                        tags.insert(
+                            "Pentax:AE_ISO".to_string(),
+                            format!("{}", (iso + 0.5) as i64),
+                        );
                         tags.insert(
                             "Pentax:AEXv".to_string(),
                             format_pentax_float((raw[3] as f64 - 64.0) / 8.0),
@@ -1469,7 +1480,10 @@ impl MakerNoteParser for PentaxParser {
                             "Pentax:AEBXv".to_string(),
                             format_pentax_float((raw[4] as i8) as f64 / 8.0),
                         );
-                        tags.insert("Pentax:AEMinExposureTime".to_string(), exposure_time(raw[5]));
+                        tags.insert(
+                            "Pentax:AEMinExposureTime".to_string(),
+                            exposure_time(raw[5]),
+                        );
                         tags.insert(
                             "Pentax:AEProgramMode".to_string(),
                             decode_ae_program_mode(raw[6]),
@@ -1480,7 +1494,11 @@ impl MakerNoteParser for PentaxParser {
                             let v = raw[idx(8)];
                             tags.insert(
                                 "Pentax:AEApertureSteps".to_string(),
-                                if v == 255 { "n/a".to_string() } else { v.to_string() },
+                                if v == 255 {
+                                    "n/a".to_string()
+                                } else {
+                                    v.to_string()
+                                },
                             );
                         }
                         if raw.len() > idx(9) {
@@ -1531,7 +1549,11 @@ impl MakerNoteParser for PentaxParser {
                             let v = raw[idx(21)];
                             tags.insert(
                                 "Pentax:LevelIndicator".to_string(),
-                                if v == 90 { "n/a".to_string() } else { v.to_string() },
+                                if v == 90 {
+                                    "n/a".to_string()
+                                } else {
+                                    v.to_string()
+                                },
                             );
                         }
                     }
@@ -1582,8 +1604,7 @@ impl MakerNoteParser for PentaxParser {
                             "Pentax:NominalMaxAperture".to_string(),
                             format!("{:.1}", nominal_max),
                         );
-                        let nominal_min =
-                            2f64.powf(((ld[10] & 0x0f) as f64 + 10.0) / 4.0);
+                        let nominal_min = 2f64.powf(((ld[10] & 0x0f) as f64 + 10.0) / 4.0);
                         tags.insert(
                             "Pentax:NominalMinAperture".to_string(),
                             format!("{:.0}", nominal_min),
@@ -1591,10 +1612,7 @@ impl MakerNoteParser for PentaxParser {
                         let max_ap_raw = ld[14] & 0x7f;
                         if max_ap_raw > 1 {
                             let max_ap = 2f64.powf((max_ap_raw as f64 - 1.0) / 32.0);
-                            tags.insert(
-                                "Pentax:MaxAperture".to_string(),
-                                format!("{:.1}", max_ap),
-                            );
+                            tags.insert("Pentax:MaxAperture".to_string(), format!("{:.1}", max_ap));
                         }
                     }
                 }
@@ -1648,14 +1666,8 @@ impl MakerNoteParser for PentaxParser {
                 PENTAX_COLOR_INFO => {
                     let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
                     if raw.len() >= 18 {
-                        tags.insert(
-                            "Pentax:WBShiftAB".to_string(),
-                            (raw[16] as i8).to_string(),
-                        );
-                        tags.insert(
-                            "Pentax:WBShiftGM".to_string(),
-                            (raw[17] as i8).to_string(),
-                        );
+                        tags.insert("Pentax:WBShiftAB".to_string(), (raw[16] as i8).to_string());
+                        tags.insert("Pentax:WBShiftGM".to_string(), (raw[17] as i8).to_string());
                     }
                 }
 
@@ -1831,10 +1843,10 @@ fn extract_string_value(entry: &IfdEntry, full_data: &[u8], ifd_offset: usize) -
 /// types are assumed to be 1 byte/element (BYTE/ASCII/UNDEF/SBYTE).
 fn tiff_field_type_size(field_type: u16) -> usize {
     match field_type {
-        3 | 8 => 2,          // SHORT / SSHORT
-        4 | 9 | 11 => 4,     // LONG / SLONG / FLOAT
-        5 | 10 | 12 => 8,    // RATIONAL / SRATIONAL / DOUBLE
-        _ => 1,              // BYTE / ASCII / UNDEF / SBYTE
+        3 | 8 => 2,       // SHORT / SSHORT
+        4 | 9 | 11 => 4,  // LONG / SLONG / FLOAT
+        5 | 10 | 12 => 8, // RATIONAL / SRATIONAL / DOUBLE
+        _ => 1,           // BYTE / ASCII / UNDEF / SBYTE
     }
 }
 
@@ -1917,7 +1929,11 @@ fn format_bitmask(raw: u32, zero_label: Option<&str>, named: &[(u8, &str)]) -> S
 }
 
 fn decode_sr_result_bitmask(raw: u8) -> String {
-    format_bitmask(raw as u32, Some("Not stabilized"), &[(0, "Stabilized"), (6, "Not ready")])
+    format_bitmask(
+        raw as u32,
+        Some("Not stabilized"),
+        &[(0, "Stabilized"), (6, "Not ready")],
+    )
 }
 
 /// Trims a float the way Perl's default number stringification would (no
@@ -2178,7 +2194,11 @@ fn decode_metering_mode2_bitmask(b: u8) -> String {
 }
 
 fn decode_af_point_mode_bitmask(b: u8) -> String {
-    format_bitmask(b as u32, Some("Auto"), &[(0, "Select"), (1, "Fixed Center")])
+    format_bitmask(
+        b as u32,
+        Some("Auto"),
+        &[(0, "Select"), (1, "Fixed Center")],
+    )
 }
 
 fn decode_focus_mode2(b: u8) -> String {

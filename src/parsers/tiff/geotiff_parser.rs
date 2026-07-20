@@ -220,11 +220,7 @@ fn format_exiftool_double(value: f64) -> String {
         s
     };
 
-    if neg {
-        format!("-{}", result)
-    } else {
-        result
-    }
+    if neg { format!("-{}", result) } else { result }
 }
 
 /// Reads a u16 from bytes with the specified byte order
@@ -468,11 +464,26 @@ mod tests {
         // ExifTool (Perl) stringifies doubles with ~15 significant digits,
         // while Rust's default `{}` uses the shortest round-trip
         // representation (often 16-17 digits). Verify we match ExifTool.
-        assert_eq!(format_exiftool_double(33.417919642966924), "33.4179196429669");
-        assert_eq!(format_exiftool_double(35.836331379428414), "35.8363313794284");
-        assert_eq!(format_exiftool_double(691955.1656840311), "691955.165684031");
-        assert_eq!(format_exiftool_double(2791710.9901260315), "2791710.99012603");
-        assert_eq!(format_exiftool_double(-33.417919642966924), "-33.4179196429669");
+        assert_eq!(
+            format_exiftool_double(33.417919642966924),
+            "33.4179196429669"
+        );
+        assert_eq!(
+            format_exiftool_double(35.836331379428414),
+            "35.8363313794284"
+        );
+        assert_eq!(
+            format_exiftool_double(691955.1656840311),
+            "691955.165684031"
+        );
+        assert_eq!(
+            format_exiftool_double(2791710.9901260315),
+            "2791710.99012603"
+        );
+        assert_eq!(
+            format_exiftool_double(-33.417919642966924),
+            "-33.4179196429669"
+        );
         assert_eq!(format_exiftool_double(0.0), "0");
         assert_eq!(format_exiftool_double(1.0), "1");
     }

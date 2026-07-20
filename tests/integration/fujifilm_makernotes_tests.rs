@@ -267,10 +267,7 @@ fn test_fujifilm_parse_film_simulation() {
         Some(&"Classic Chrome".to_string())
     );
     assert_eq!(tags.get("Fujifilm:DynamicRange"), Some(&"Wide".to_string()));
-    assert_eq!(
-        tags.get("Fujifilm:AutoBracketing"),
-        Some(&"On".to_string())
-    );
+    assert_eq!(tags.get("Fujifilm:AutoBracketing"), Some(&"On".to_string()));
 }
 
 #[test]
@@ -448,8 +445,5 @@ fn test_fujifilm_parse_advanced_settings() {
     assert!(tags.contains_key("Fujifilm:ShadowTone"));
     assert!(tags.contains_key("Fujifilm:HighlightTone"));
     assert_eq!(tags.get("Fujifilm:FacesDetected"), Some(&"3".to_string()));
-    assert_eq!(
-        tags.get("Fujifilm:SequenceNumber"),
-        Some(&"2".to_string())
-    );
+    assert_eq!(tags.get("Fujifilm:SequenceNumber"), Some(&"2".to_string()));
 }
