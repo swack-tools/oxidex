@@ -1,10 +1,12 @@
 import json
+import os
 import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from model_fix_loop import (
+    _load_dotenv,
     attempt_build,
     build_prompt,
     build_review_prompt,
@@ -20,6 +22,37 @@ from model_fix_loop import (
     review_verdict,
     run_loop,
 )
+
+
+class LoadDotenvTests(unittest.TestCase):
+    def test_sets_env_vars_from_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / ".env"
+            env_path.write_text("MODEL_FIX_TEST_KEY=hello\n")
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("MODEL_FIX_TEST_KEY", None)
+                _load_dotenv(env_path)
+                self.assertEqual(os.environ["MODEL_FIX_TEST_KEY"], "hello")
+
+    def test_skips_comments_and_blank_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / ".env"
+            env_path.write_text("# a comment\n\nMODEL_FIX_TEST_KEY2=world\n")
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("MODEL_FIX_TEST_KEY2", None)
+                _load_dotenv(env_path)
+                self.assertEqual(os.environ["MODEL_FIX_TEST_KEY2"], "world")
+
+    def test_does_not_override_existing_env_var(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / ".env"
+            env_path.write_text("MODEL_FIX_TEST_KEY3=from_file\n")
+            with patch.dict(os.environ, {"MODEL_FIX_TEST_KEY3": "from_shell"}, clear=False):
+                _load_dotenv(env_path)
+                self.assertEqual(os.environ["MODEL_FIX_TEST_KEY3"], "from_shell")
+
+    def test_missing_file_is_a_silent_no_op(self):
+        _load_dotenv(Path("/nonexistent/path/.env"))  # must not raise
 
 
 class ExtractDiffTests(unittest.TestCase):

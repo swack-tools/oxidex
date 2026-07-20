@@ -445,7 +445,26 @@ def run_loop(config, find_gaps_fn, fix_gap_fn, max_dry_rounds=2):
     }
 
 
+def _load_dotenv(path):
+    """Minimal .env loader (KEY=VALUE per line, # comments and blank lines
+    skipped) -- stdlib only, no python-dotenv dependency. A real
+    environment variable always wins over the file, matching standard
+    dotenv semantics. Missing file is a silent no-op.
+    """
+    if not path.is_file():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value.strip()
+
+
 def main(argv=None):
+    _load_dotenv(REPO_ROOT / ".env")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=os.environ.get("MODEL_FIX_BASE_URL"))
     parser.add_argument("--api-key", default=os.environ.get("MODEL_FIX_API_KEY"))
