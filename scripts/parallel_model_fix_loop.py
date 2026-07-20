@@ -82,6 +82,14 @@ def clean_worktree(path):
     subprocess.run(["git", "clean", "-fd"], cwd=path, check=True)  # nosec B603
 
 
+def _branch_exists(repo_root, branch):
+    result = subprocess.run(  # nosec B603
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    return result.returncode == 0
+
+
 def create_worktree(repo_root, path, branch, base_ref, config_path=DEFAULT_CONFIG_PATH):
     """Create fmt's worktree, or -- if one from a prior failed attempt is
     still sitting at `path` (left in place for inspection, or surviving
@@ -90,6 +98,14 @@ def create_worktree(repo_root, path, branch, base_ref, config_path=DEFAULT_CONFI
     target/ build cache; tearing down and recreating it would force a
     from-scratch cargo build every single round, which is exactly the
     "pollution" this is meant to avoid paying for repeatedly.
+
+    A worktree's directory and its branch don't always disappear together
+    -- e.g. /tmp getting wiped on reboot removes the directory but the
+    branch ref lives in the repo's own object database and survives. Left
+    alone, that orphaned branch makes `git worktree add -b` fail outright
+    ("a branch named ... already exists") even though nothing is actually
+    using it, so it's discarded here rather than treated as real state
+    worth keeping.
     """
     if path.is_dir():
         clean_worktree(path)
@@ -98,6 +114,8 @@ def create_worktree(repo_root, path, branch, base_ref, config_path=DEFAULT_CONFI
             cwd=path, check=True, capture_output=True, text=True,
         )
     else:
+        if _branch_exists(repo_root, branch):
+            subprocess.run(["git", "branch", "-D", branch], cwd=repo_root, check=True)  # nosec B603
         subprocess.run(  # nosec B603
             ["git", "worktree", "add", "-b", branch, str(path), base_ref],
             cwd=repo_root, check=True, capture_output=True, text=True,

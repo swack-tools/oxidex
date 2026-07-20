@@ -178,6 +178,51 @@ class CreateWorktreeTests(unittest.TestCase):
             checkout_dash_b_call = next(c for c in mock_run.call_args_list if c.args[0][:3] == ["git", "checkout", "-B"])
             self.assertEqual(checkout_dash_b_call.kwargs["cwd"], worktree)
 
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_discards_an_orphaned_branch_whose_worktree_directory_is_already_gone(self, mock_run):
+        # Simulates /tmp being wiped on reboot: the worktree directory is
+        # gone, but the branch ref survives in the repo's own object
+        # database -- `git worktree add -b` would otherwise fail outright
+        # with "a branch named ... already exists" even though nothing is
+        # using it.
+        def fake_run(argv, **kwargs):
+            if argv[:4] == ["git", "rev-parse", "--verify", "--quiet"]:
+                return MagicMock(returncode=0)  # branch exists
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = fake_run
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            worktree = tmp / "worktree"  # deliberately not created -- directory is gone
+
+            create_worktree(tmp, worktree, "model-fix-parallel-nef", "main", config_path=tmp / "no-config.toml")
+
+            argvs = [c.args[0] for c in mock_run.call_args_list]
+            self.assertIn(["git", "branch", "-D", "model-fix-parallel-nef"], argvs)
+            self.assertIn(["git", "worktree", "add", "-b", "model-fix-parallel-nef", str(worktree), "main"], argvs)
+            # the branch delete must happen before the worktree add, not after
+            delete_index = argvs.index(["git", "branch", "-D", "model-fix-parallel-nef"])
+            add_index = argvs.index(["git", "worktree", "add", "-b", "model-fix-parallel-nef", str(worktree), "main"])
+            self.assertLess(delete_index, add_index)
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_does_not_delete_a_branch_that_does_not_exist(self, mock_run):
+        def fake_run(argv, **kwargs):
+            if argv[:4] == ["git", "rev-parse", "--verify", "--quiet"]:
+                return MagicMock(returncode=1)  # no such branch
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = fake_run
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            worktree = tmp / "worktree"
+
+            create_worktree(tmp, worktree, "model-fix-parallel-nef", "main", config_path=tmp / "no-config.toml")
+
+            argvs = [c.args[0] for c in mock_run.call_args_list]
+            self.assertNotIn(["git", "branch", "-D", "model-fix-parallel-nef"], argvs)
+            self.assertIn(["git", "worktree", "add", "-b", "model-fix-parallel-nef", str(worktree), "main"], argvs)
+
 
 # /tmp/base is an inert fixture path -- no real filesystem I/O happens
 # here, this only exercises string/Path construction.
