@@ -40,14 +40,21 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| repo.join("tests/fixtures/jpeg/tag_matrix_base.jpg"));
     let results_path = work.join("results.json");
-    let tools = Tools { exiftool: &exiftool, oxidex: &oxidex };
+    let tools = Tools {
+        exiftool: &exiftool,
+        oxidex: &oxidex,
+    };
 
     // Bounds the previously-unbounded rayon parallelism used by both the
     // read phase (Task 7's run_read_phase) and the write phase below.
-    rayon::ThreadPoolBuilder::new().num_threads(args.workers).build_global().ok();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.workers)
+        .build_global()
+        .ok();
 
-    let manifest: ManifestFile =
-        serde_json::from_str(&std::fs::read_to_string(work.join("exiftool_jpeg_tags.json"))?)?;
+    let manifest: ManifestFile = serde_json::from_str(&std::fs::read_to_string(
+        work.join("exiftool_jpeg_tags.json"),
+    )?)?;
     let mut tags: Vec<ManifestTag> = manifest.tags.into_iter().filter(|t| t.writable).collect();
     if let Some(g) = &args.only_group {
         tags.retain(|t| &t.group == g);
@@ -67,7 +74,9 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
     merge_read_phase_results(&mut results, &tags, &read_res);
 
     if !skip_write {
-        let base_ox = oxidex_json(&tools, &base).0.unwrap_or_else(|| Value::Object(Default::default()));
+        let base_ox = oxidex_json(&tools, &base)
+            .0
+            .unwrap_or_else(|| Value::Object(Default::default()));
         let base_et = exiftool_json(&tools, &base);
         let base_validate_warnings = exiftool_validate_warnings(&tools, &base);
         let ctx = WriteContext {
@@ -101,7 +110,11 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
     let mut sorted: Vec<_> = counts.into_iter().collect();
     sorted.sort_by(|a, b| b.1.cmp(&a.1));
     for ((rd, wr), n) in sorted {
-        println!("  read={:<18} write={:<18} {n}", rd.unwrap_or_default(), wr.unwrap_or_default());
+        println!(
+            "  read={:<18} write={:<18} {n}",
+            rd.unwrap_or_default(),
+            wr.unwrap_or_default()
+        );
     }
     println!("Results: {}", results_path.display());
     Ok(())
@@ -249,7 +262,11 @@ mod merge_phase_tests {
 
         let write_results = vec![(
             key.clone(),
-            ResultEntry { write: Some("NOT_WRITTEN".into()), bug_cluster: None, ..Default::default() },
+            ResultEntry {
+                write: Some("NOT_WRITTEN".into()),
+                bug_cluster: None,
+                ..Default::default()
+            },
         )];
         merge_write_phase_results(&mut results, write_results);
 
@@ -282,7 +299,10 @@ mod merge_phase_tests {
         )];
         merge_write_phase_results(&mut results, write_results);
 
-        assert_eq!(results[&key].bug_cluster.as_deref(), Some("R4-registry-asymmetry"));
+        assert_eq!(
+            results[&key].bug_cluster.as_deref(),
+            Some("R4-registry-asymmetry")
+        );
     }
 
     /// On a --reread pass (skip_write forced true, write-phase merge never
@@ -299,13 +319,20 @@ mod merge_phase_tests {
         let mut results: HashMap<String, ResultEntry> = HashMap::new();
         results.insert(
             key.clone(),
-            ResultEntry { bug_cluster: Some("R4-registry-asymmetry".into()), ..Default::default() },
+            ResultEntry {
+                bug_cluster: Some("R4-registry-asymmetry".into()),
+                ..Default::default()
+            },
         );
 
         let mut read_res = HashMap::new();
         read_res.insert(
             key.clone(),
-            ResultEntry { read: Some("OK".into()), bug_cluster: None, ..Default::default() },
+            ResultEntry {
+                read: Some("OK".into()),
+                bug_cluster: None,
+                ..Default::default()
+            },
         );
         merge_read_phase_results(&mut results, std::slice::from_ref(&t), &read_res);
 
@@ -441,9 +468,14 @@ pub fn values_match_opt(expected: Option<&str>, actual: Option<&str>) -> bool {
 // supported for coverage purposes).
 
 static APEX_TAG_NAMES: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    ["ApertureValue", "MaxApertureValue", "ShutterSpeedValue", "FlashEnergy"]
-        .into_iter()
-        .collect()
+    [
+        "ApertureValue",
+        "MaxApertureValue",
+        "ShutterSpeedValue",
+        "FlashEnergy",
+    ]
+    .into_iter()
+    .collect()
 });
 static IPTC_BINARY_TAG_NAMES: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     [
@@ -457,9 +489,15 @@ static IPTC_BINARY_TAG_NAMES: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     .collect()
 });
 static NAMESPACE_BLIND_ENUM_NAMES: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    ["Contrast", "Saturation", "Sharpness", "SensingMethod", "CustomRendered"]
-        .into_iter()
-        .collect()
+    [
+        "Contrast",
+        "Saturation",
+        "Sharpness",
+        "SensingMethod",
+        "CustomRendered",
+    ]
+    .into_iter()
+    .collect()
 });
 static XP_INT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d{6,}$").unwrap());
 static FLOAT_RAW_BITS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^-?\d{7,}$").unwrap());
@@ -1170,7 +1208,11 @@ pub fn run_read_phase(
     for t in tags {
         by_group.entry(t.group.clone()).or_default().push(t.clone());
     }
-    println!("Testing {} tags across {} groups", tags.len(), by_group.len());
+    println!(
+        "Testing {} tags across {} groups",
+        tags.len(),
+        by_group.len()
+    );
 
     // READ phase 1: one batch per group, groups in parallel
     let group_results: Vec<HashMap<String, ResultEntry>> = by_group
@@ -1224,8 +1266,11 @@ pub fn run_read_phase(
 // the writer, so the file comes back byte-identical to the base fixture).
 // Port of `scripts/jpeg_tag_matrix.py:440-545`.
 
-static NONSTANDARD_WARNING_MARKERS: &[&str] =
-    &["Non-standard format", "Non-standard count", "Missing required"];
+static NONSTANDARD_WARNING_MARKERS: &[&str] = &[
+    "Non-standard format",
+    "Non-standard count",
+    "Missing required",
+];
 
 /// Return the set of exiftool `-validate` warning lines for a file.
 fn exiftool_validate_warnings(tools: &Tools, path: &Path) -> HashSet<String> {
@@ -1270,12 +1315,23 @@ pub struct WriteContext<'a> {
 /// kept as a single function rather than decomposed further, matching why
 /// the Python keeps it as one function (its internal state doesn't factor
 /// cleanly into smaller pieces).
-pub fn write_test_tag(tools: &Tools, base: &Path, tag: &ManifestTag, ctx: &WriteContext) -> ResultEntry {
-    let base_ox_val = find_in_json(ctx.base_ox, &oxidex_read_keys(tag)).1.map(value_to_str);
+pub fn write_test_tag(
+    tools: &Tools,
+    base: &Path,
+    tag: &ManifestTag,
+    ctx: &WriteContext,
+) -> ResultEntry {
+    let base_ox_val = find_in_json(ctx.base_ox, &oxidex_read_keys(tag))
+        .1
+        .map(value_to_str);
     let base_et_val = find_in_exiftool_json(ctx.base_et, tag, true).map(value_to_str);
     let sample = tag.sample.clone().unwrap_or_default();
 
-    let mut res = ResultEntry { write: Some("ERROR".into()), detail: Some(String::new()), ..Default::default() };
+    let mut res = ResultEntry {
+        write: Some("ERROR".into()),
+        detail: Some(String::new()),
+        ..Default::default()
+    };
 
     for wkey in oxidex_write_keys(tag) {
         let td = tempfile::tempdir().unwrap();
@@ -1305,11 +1361,20 @@ pub fn write_test_tag(tools: &Tools, base: &Path, tag: &ManifestTag, ctx: &Write
             continue;
         }
         let et_val = find_in_exiftool_json(&et, tag, true).map(value_to_str);
-        let ox_val = ox.as_ref().and_then(|ox| find_in_json(ox, &oxidex_read_keys(tag)).1).map(value_to_str);
+        let ox_val = ox
+            .as_ref()
+            .and_then(|ox| find_in_json(ox, &oxidex_read_keys(tag)).1)
+            .map(value_to_str);
         let mut ox_key_used: Option<String> = None;
 
-        let sample_eq_base_ox = base_ox_val.as_deref().map(|b| b.trim() == sample.trim()).unwrap_or(false);
-        let sample_eq_base_et = base_et_val.as_deref().map(|b| b.trim() == sample.trim()).unwrap_or(false);
+        let sample_eq_base_ox = base_ox_val
+            .as_deref()
+            .map(|b| b.trim() == sample.trim())
+            .unwrap_or(false);
+        let sample_eq_base_et = base_et_val
+            .as_deref()
+            .map(|b| b.trim() == sample.trim())
+            .unwrap_or(false);
         let ox_unchanged = ox_val.is_some()
             && base_ox_val.is_some()
             && ox_val.as_deref().unwrap().trim() == base_ox_val.as_deref().unwrap().trim()
@@ -1319,8 +1384,12 @@ pub fn write_test_tag(tools: &Tools, base: &Path, tag: &ManifestTag, ctx: &Write
             && et_val.as_deref().unwrap().trim() == base_et_val.as_deref().unwrap().trim()
             && !sample_eq_base_et;
 
-        let mut ox_ok = ox_val.is_some() && !ox_unchanged && values_match(&sample, ox_val.as_deref().unwrap_or(""));
-        let et_ok = et_val.is_some() && !et_unchanged && values_match(&sample, et_val.as_deref().unwrap_or(""));
+        let mut ox_ok = ox_val.is_some()
+            && !ox_unchanged
+            && values_match(&sample, ox_val.as_deref().unwrap_or(""));
+        let et_ok = et_val.is_some()
+            && !et_unchanged
+            && values_match(&sample, et_val.as_deref().unwrap_or(""));
 
         // Registry asymmetry: oxidex has no display name for this tag, but the
         // value landed correctly under a raw/hex key in the same group.
@@ -1386,14 +1455,18 @@ pub fn write_test_tag(tools: &Tools, base: &Path, tag: &ManifestTag, ctx: &Write
             res = ResultEntry {
                 write: Some("INTEROP_BROKEN".into()),
                 wkey: Some(wkey),
-                detail: Some(format!("oxidex reads back {ox_val:?} but exiftool sees {et_val:?}")),
+                detail: Some(format!(
+                    "oxidex reads back {ox_val:?} but exiftool sees {et_val:?}"
+                )),
                 ..Default::default()
             };
         } else if ox_val.is_some() || et_val.is_some() {
             res = ResultEntry {
                 write: Some("VALUE_MISMATCH".into()),
                 wkey: Some(wkey),
-                detail: Some(format!("wrote {sample:?}; oxidex={ox_val:?} exiftool={et_val:?}")),
+                detail: Some(format!(
+                    "wrote {sample:?}; oxidex={ox_val:?} exiftool={et_val:?}"
+                )),
                 ..Default::default()
             };
         } else {
@@ -1418,17 +1491,31 @@ mod key_mapping_tests {
 
     fn tag(group: &str, name: &str) -> ManifestTag {
         ManifestTag {
-            group: group.into(), name: name.into(), family0: "EXIF".into(),
-            writable: true, vtype: "string".into(), protected: false,
-            flags: None, count: None, sample: Some("x".into()),
-            sample_is_file: None, noop: None,
+            group: group.into(),
+            name: name.into(),
+            family0: "EXIF".into(),
+            writable: true,
+            vtype: "string".into(),
+            protected: false,
+            flags: None,
+            count: None,
+            sample: Some("x".into()),
+            sample_is_file: None,
+            noop: None,
         }
     }
 
     #[test]
     fn interop_ifd_gets_exif_prefixed_first() {
         let keys = oxidex_read_keys(&tag("InteropIFD", "InteropIndex"));
-        assert_eq!(keys, vec!["EXIF:InteropIndex", "InteropIFD:InteropIndex", "InteropIndex"]);
+        assert_eq!(
+            keys,
+            vec![
+                "EXIF:InteropIndex",
+                "InteropIFD:InteropIndex",
+                "InteropIndex"
+            ]
+        );
     }
 
     #[test]
@@ -1440,7 +1527,10 @@ mod key_mapping_tests {
     #[test]
     fn photoshop_falls_back_to_iptc() {
         let keys = oxidex_read_keys(&tag("Photoshop", "IPTCDigest"));
-        assert_eq!(keys, vec!["Photoshop:IPTCDigest", "IPTC:IPTCDigest", "IPTCDigest"]);
+        assert_eq!(
+            keys,
+            vec!["Photoshop:IPTCDigest", "IPTC:IPTCDigest", "IPTCDigest"]
+        );
     }
 
     #[test]
@@ -1452,7 +1542,10 @@ mod key_mapping_tests {
     #[test]
     fn find_in_json_returns_first_present_key() {
         let data = json!({"InteropIFD:InteropIndex": "R98"});
-        let (k, v) = find_in_json(&data, &["EXIF:InteropIndex".into(), "InteropIFD:InteropIndex".into()]);
+        let (k, v) = find_in_json(
+            &data,
+            &["EXIF:InteropIndex".into(), "InteropIFD:InteropIndex".into()],
+        );
         assert_eq!(k.as_deref(), Some("InteropIFD:InteropIndex"));
         assert_eq!(v, Some(&json!("R98")));
     }
@@ -1535,14 +1628,18 @@ mod run_cmd_tests {
     #[test]
     fn large_stdout_does_not_deadlock_or_timeout() {
         let n: usize = 200_000;
-        let (code, out, err) = run_cmd(
-            "sh",
-            &["-c".into(), format!("yes | head -c {n}")],
-            10,
-        );
+        let (code, out, err) = run_cmd("sh", &["-c".into(), format!("yes | head -c {n}")], 10);
         assert_eq!(code, 0, "expected clean exit, got stderr={err:?}");
-        assert_eq!(out.len(), n, "expected full {n}-byte output to be captured, got {} bytes", out.len());
-        assert_ne!(err, "TIMEOUT", "run_cmd incorrectly reported a timeout on large stdout output");
+        assert_eq!(
+            out.len(),
+            n,
+            "expected full {n}-byte output to be captured, got {} bytes",
+            out.len()
+        );
+        assert_ne!(
+            err, "TIMEOUT",
+            "run_cmd incorrectly reported a timeout on large stdout output"
+        );
     }
 }
 
@@ -1590,7 +1687,11 @@ mod write_phase_tests {
         let base_ox = json!({"ExifIFD:ISO": "100"});
         let base_et = json!({"ExifIFD:ISO": "100"});
         let base_warnings = HashSet::new();
-        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let ctx = WriteContext {
+            base_ox: &base_ox,
+            base_et: &base_et,
+            base_validate_warnings: &base_warnings,
+        };
         let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
         assert_eq!(r.write.as_deref(), Some("OK"));
         assert_eq!(r.write_ox_val.as_deref(), Some("400"));
@@ -1609,11 +1710,20 @@ mod write_phase_tests {
         let base_ox = json!({"ExifIFD:ISO": "100"});
         let base_et = json!({"ExifIFD:ISO": "100"});
         let base_warnings = HashSet::new();
-        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let ctx = WriteContext {
+            base_ox: &base_ox,
+            base_et: &base_et,
+            base_validate_warnings: &base_warnings,
+        };
         let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
         assert_eq!(r.write.as_deref(), Some("OK"));
         assert_eq!(r.write_quality.as_deref(), Some("nonstandard"));
-        assert!(r.write_warnings.as_deref().unwrap().contains("Non-standard count"));
+        assert!(
+            r.write_warnings
+                .as_deref()
+                .unwrap()
+                .contains("Non-standard count")
+        );
     }
 
     #[test]
@@ -1626,7 +1736,11 @@ mod write_phase_tests {
         let base_ox = json!({"ExifIFD:ISO": "100"});
         let base_et = json!({"ExifIFD:ISO": "100"});
         let base_warnings = HashSet::new();
-        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let ctx = WriteContext {
+            base_ox: &base_ox,
+            base_et: &base_et,
+            base_validate_warnings: &base_warnings,
+        };
         let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
         assert_eq!(r.write.as_deref(), Some("NOT_WRITTEN"));
         assert!(r.detail.unwrap().contains("silent no-op"));
@@ -1642,7 +1756,11 @@ mod write_phase_tests {
         let base_ox = json!({"ExifIFD:ISO": "100"});
         let base_et = json!({"ExifIFD:ISO": "100"});
         let base_warnings = HashSet::new();
-        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let ctx = WriteContext {
+            base_ox: &base_ox,
+            base_et: &base_et,
+            base_validate_warnings: &base_warnings,
+        };
         let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
         assert_eq!(r.write.as_deref(), Some("ERROR"));
         assert!(r.detail.unwrap().contains("Error: cannot write tag"));
@@ -1658,7 +1776,11 @@ mod write_phase_tests {
         let base_ox = json!({"ExifIFD:ISO": "100"});
         let base_et = json!({"ExifIFD:ISO": "100"});
         let base_warnings = HashSet::new();
-        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let ctx = WriteContext {
+            base_ox: &base_ox,
+            base_et: &base_et,
+            base_validate_warnings: &base_warnings,
+        };
         let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
         assert_eq!(r.write.as_deref(), Some("CORRUPTS_FILE"));
     }
@@ -1673,7 +1795,11 @@ mod write_phase_tests {
         let base_ox = json!({"ExifIFD:ISO": "100"});
         let base_et = json!({"ExifIFD:ISO": "100"});
         let base_warnings = HashSet::new();
-        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let ctx = WriteContext {
+            base_ox: &base_ox,
+            base_et: &base_et,
+            base_validate_warnings: &base_warnings,
+        };
         let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
         assert_eq!(r.write.as_deref(), Some("OK"));
         assert_eq!(r.write_ox_key.as_deref(), Some("ExifIFD:0x8827"));
@@ -1690,7 +1816,11 @@ mod write_phase_tests {
         let base_ox = json!({"ExifIFD:ISO": "100"});
         let base_et = json!({"ExifIFD:ISO": "100"});
         let base_warnings = HashSet::new();
-        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let ctx = WriteContext {
+            base_ox: &base_ox,
+            base_et: &base_et,
+            base_validate_warnings: &base_warnings,
+        };
         let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
         assert_eq!(r.write.as_deref(), Some("READBACK_BROKEN"));
     }
@@ -1705,7 +1835,11 @@ mod write_phase_tests {
         let base_ox = json!({"ExifIFD:ISO": "100"});
         let base_et = json!({"ExifIFD:ISO": "100"});
         let base_warnings = HashSet::new();
-        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let ctx = WriteContext {
+            base_ox: &base_ox,
+            base_et: &base_et,
+            base_validate_warnings: &base_warnings,
+        };
         let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
         assert_eq!(r.write.as_deref(), Some("INTEROP_BROKEN"));
     }
@@ -1720,7 +1854,11 @@ mod write_phase_tests {
         let base_ox = json!({"ExifIFD:ISO": "100"});
         let base_et = json!({"ExifIFD:ISO": "100"});
         let base_warnings = HashSet::new();
-        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let ctx = WriteContext {
+            base_ox: &base_ox,
+            base_et: &base_et,
+            base_validate_warnings: &base_warnings,
+        };
         let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
         assert_eq!(r.write.as_deref(), Some("VALUE_MISMATCH"));
     }
@@ -1744,11 +1882,18 @@ mod write_phase_tests {
         let base_ox = json!({});
         let base_et = json!({});
         let base_warnings = HashSet::new();
-        let ctx = WriteContext { base_ox: &base_ox, base_et: &base_et, base_validate_warnings: &base_warnings };
+        let ctx = WriteContext {
+            base_ox: &base_ox,
+            base_et: &base_et,
+            base_validate_warnings: &base_warnings,
+        };
         let r = write_test_tag(&tools, &base, &iso_tag(), &ctx);
         assert_eq!(r.write.as_deref(), Some("NOT_WRITTEN"));
         let detail = r.detail.unwrap();
-        assert!(detail.contains("exit 0 but tag absent on read-back"), "detail was: {detail:?}");
+        assert!(
+            detail.contains("exit 0 but tag absent on read-back"),
+            "detail was: {detail:?}"
+        );
         assert!(!detail.contains("silent no-op"), "detail was: {detail:?}");
     }
 }
@@ -1759,7 +1904,12 @@ mod bug_classification_post_process_tests {
     use crate::types::ResultEntry;
 
     fn entry() -> ResultEntry {
-        ResultEntry { group: "EXIF".into(), name: "SomeTag".into(), sample: "x".into(), ..Default::default() }
+        ResultEntry {
+            group: "EXIF".into(),
+            name: "SomeTag".into(),
+            sample: "x".into(),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1801,7 +1951,10 @@ mod bug_classification_post_process_tests {
         let mut results = HashMap::new();
         results.insert("k".to_string(), e);
         apply_bug_classification(&mut results);
-        assert_eq!(results["k"].bug_cluster.as_deref(), Some("I1-no-printconvinv"));
+        assert_eq!(
+            results["k"].bug_cluster.as_deref(),
+            Some("I1-no-printconvinv")
+        );
     }
 
     #[test]
@@ -1813,7 +1966,10 @@ mod bug_classification_post_process_tests {
         let mut results = HashMap::new();
         results.insert("k".to_string(), e);
         apply_bug_classification(&mut results);
-        assert_eq!(results["k"].bug_cluster.as_deref(), Some("R4-registry-asymmetry"));
+        assert_eq!(
+            results["k"].bug_cluster.as_deref(),
+            Some("R4-registry-asymmetry")
+        );
     }
 
     #[test]

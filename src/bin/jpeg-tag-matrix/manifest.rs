@@ -131,9 +131,17 @@ static RAT_TYPES: Lazy<HashSet<&'static str>> = Lazy::new(|| {
 });
 
 static STRINGISH: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    ["string", "undef", "?", "var_ustr32", "var_string", "lang-alt", "binary"]
-        .into_iter()
-        .collect()
+    [
+        "string",
+        "undef",
+        "?",
+        "var_ustr32",
+        "var_string",
+        "lang-alt",
+        "binary",
+    ]
+    .into_iter()
+    .collect()
 });
 
 fn override_sample(group1: &str, name: &str) -> Option<&'static str> {
@@ -201,7 +209,11 @@ pub fn make_sample(family0: &str, name: &str, vtype: &str, tag: &ListxTag, group
         }
     }
     if INT_TYPES.contains(vtype) || RAT_TYPES.contains(vtype) {
-        let scalar = if INT_TYPES.contains(vtype) { "3" } else { "1.5" };
+        let scalar = if INT_TYPES.contains(vtype) {
+            "3"
+        } else {
+            "1.5"
+        };
         let n: usize = tag.count.parse().unwrap_or(1);
         if n > 1 {
             return vec![scalar; n].join(" ");
@@ -340,7 +352,10 @@ fn flag_noops(
          behaviorally verified to be silent no-ops when written to a bare JPEG \
          (exiftool {exiftool_ver})."
     ));
-    println!("flag-noops: {} suspects tested, {noop_count} no-ops", suspects.len());
+    println!(
+        "flag-noops: {} suspects tested, {noop_count} no-ops",
+        suspects.len()
+    );
     Ok(())
 }
 
