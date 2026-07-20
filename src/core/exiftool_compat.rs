@@ -587,7 +587,13 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     // Note: MeasurementFlare is also handled in the ICC matrix rule above,
     // but Quality (from Ducky segment) is handled here for integer values.
     // ---------------------------------------------------------------------
-    if is_percentage_tag(base_name) {
+    // Note: only Ducky's "Quality" tag (or a bare, family-less "Quality")
+    // gets a "%" suffix -- other formats that happen to share the tag name
+    // (e.g. RIFF/AVI's numeric stream Quality, unrelated to percentages)
+    // must NOT be reformatted here.
+    let quality_percentage_applies =
+        base_name == "MeasurementFlare" || tag_name == "Ducky:Quality" || tag_name == "Quality";
+    if quality_percentage_applies && is_percentage_tag(base_name) {
         if let Some(i) = value.as_integer() {
             return TagValue::String(format!("{}%", i));
         }
