@@ -20,9 +20,26 @@ use oxidex::core::value_formatter::{
     needs_unit_suffix,
 };
 use oxidex::parsers::tiff::tiff_enums::tiff_enum_to_string;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+
+/// On-disk cache entry for one format's OxiDex extraction. Unlike ExifTool's
+/// output (which is stable across a whole fix-loop run), OxiDex's output can
+/// legitimately change every time a fix gets applied and rebuilt -- so this
+/// is keyed on the currently-running binary's own content hash rather than a
+/// version string: a rebuild changes that hash automatically, forcing a
+/// fresh extraction exactly when (and only when) the code actually changed.
+/// A round where the last diff was rejected/reverted leaves the binary
+/// byte-for-byte identical, so this hits and skips re-extracting from
+/// scratch every round even though nothing was actually fixed.
+#[derive(Debug, Serialize, Deserialize)]
+struct DiskCacheEntry {
+    binary_hash: String,
+    signature: String,
+    result: ExtractionResult,
+}
 
 /// Extract tags from OxiDex by processing test fixtures
 pub struct OxiDexExtractor {
@@ -44,7 +61,7 @@ impl OxiDexExtractor {
         &mut self,
         format: &str,
     ) -> Result<ExtractionResult, Box<dyn std::error::Error>> {
-        // Check cache first
+        // Check in-memory cache first
         if let Some(cached) = self.cache.get(format) {
             return Ok(cached.clone());
         }
@@ -59,6 +76,19 @@ impl OxiDexExtractor {
                 tags: Vec::new(),
                 files_processed: 0,
             });
+        }
+
+        // Check the on-disk cache next -- see DiskCacheEntry's docs. Only
+        // meaningful once this binary was actually built once and run from
+        // disk (current_exe/hashing an in-memory-only test binary isn't
+        // useful), so a hashing failure just means "treat as a miss".
+        let signature = Self::compute_signature(&files);
+        let binary_hash = Self::current_binary_hash();
+        if let Some(hash) = &binary_hash
+            && let Some(cached) = self.load_disk_cache(format, hash, &signature)
+        {
+            self.cache.insert(format.to_string(), cached.clone());
+            return Ok(cached);
         }
 
         // Extract tags from each file
@@ -97,8 +127,93 @@ impl OxiDexExtractor {
         };
 
         self.cache.insert(format.to_string(), result.clone());
+        if let Some(hash) = &binary_hash {
+            self.save_disk_cache(format, hash, &signature, &result);
+        }
 
         Ok(result)
+    }
+
+    /// Directory the on-disk cache lives in: a sibling of the samples dir
+    /// itself, keeping it alongside ExifTool's own disk cache dir rather
+    /// than inside the samples tree.
+    fn disk_cache_dir(&self) -> PathBuf {
+        self.fixture_path
+            .parent()
+            .map(|p| p.join("oxidex-tag-cache"))
+            .unwrap_or_else(|| self.fixture_path.join(".oxidex-tag-cache"))
+    }
+
+    fn disk_cache_path(&self, format: &str) -> PathBuf {
+        self.disk_cache_dir()
+            .join(format!("{}.json", format.to_lowercase()))
+    }
+
+    /// Cheap signature of the exact sample set this format's cache entry
+    /// covers -- path, size, and mtime per file, hashed together. Any
+    /// change to the corpus changes this, invalidating the cache.
+    fn compute_signature(files: &[PathBuf]) -> String {
+        let mut sorted: Vec<&PathBuf> = files.iter().collect();
+        sorted.sort();
+        let mut hasher_input = String::new();
+        for path in sorted {
+            if let Ok(meta) = std::fs::metadata(path) {
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                hasher_input.push_str(&format!("{}|{}|{}\n", path.display(), meta.len(), mtime));
+            } else {
+                hasher_input.push_str(&format!("{}|?|?\n", path.display()));
+            }
+        }
+        format!("{:x}", md5::compute(hasher_input.as_bytes()))
+    }
+
+    /// MD5 of the currently-running executable's own bytes -- a rebuild
+    /// (new fix applied and compiled) changes this automatically, so the
+    /// cache invalidates exactly when OxiDex's actual behavior could have
+    /// changed. Returns None if the exe path or its bytes can't be read
+    /// (e.g. sandboxed environments); callers treat that as "skip caching"
+    /// rather than erroring.
+    fn current_binary_hash() -> Option<String> {
+        let exe_path = std::env::current_exe().ok()?;
+        let bytes = std::fs::read(exe_path).ok()?;
+        Some(format!("{:x}", md5::compute(&bytes)))
+    }
+
+    fn load_disk_cache(
+        &self,
+        format: &str,
+        binary_hash: &str,
+        signature: &str,
+    ) -> Option<ExtractionResult> {
+        let content = std::fs::read_to_string(self.disk_cache_path(format)).ok()?;
+        let entry: DiskCacheEntry = serde_json::from_str(&content).ok()?;
+        if entry.binary_hash == binary_hash && entry.signature == signature {
+            Some(entry.result)
+        } else {
+            None
+        }
+    }
+
+    /// Best-effort -- a failure to persist the cache must never fail the
+    /// extraction itself, since the result was already computed correctly.
+    fn save_disk_cache(&self, format: &str, binary_hash: &str, signature: &str, result: &ExtractionResult) {
+        let dir = self.disk_cache_dir();
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let entry = DiskCacheEntry {
+            binary_hash: binary_hash.to_string(),
+            signature: signature.to_string(),
+            result: result.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&entry) {
+            let _ = std::fs::write(self.disk_cache_path(format), json);
+        }
     }
 
     /// Extract tags from a single file using OxiDex

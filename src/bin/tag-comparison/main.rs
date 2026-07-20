@@ -117,16 +117,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Processing format: {}", format);
 
         // Extract OxiDex tags
+        let t_oxidex = std::time::Instant::now();
         let mut oxidex_extractor = OxiDexExtractor::new(args.samples.clone());
         match oxidex_extractor.extract_format_tags(&format).await {
             Ok(oxidex_result) => {
                 println!(
-                    "  OxiDex found {} tags from {} files",
+                    "  OxiDex found {} tags from {} files [{:.2}s]",
                     oxidex_result.tags.len(),
-                    oxidex_result.files_processed
+                    oxidex_result.files_processed,
+                    t_oxidex.elapsed().as_secs_f64()
                 );
 
                 // Extract ExifTool tags
+                let t_exiftool = std::time::Instant::now();
                 let mut exiftool_extractor = ExifToolExtractor::new(args.exiftool.clone());
                 match exiftool_extractor
                     .extract_format_tags(&format, &args.samples)
@@ -134,9 +137,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     Ok(exiftool_result) => {
                         println!(
-                            "  ExifTool found {} tags from {} files",
+                            "  ExifTool found {} tags from {} files [{:.2}s]",
                             exiftool_result.tags.len(),
-                            exiftool_result.files_processed
+                            exiftool_result.files_processed,
+                            t_exiftool.elapsed().as_secs_f64()
                         );
 
                         // Use the max files processed from both extractors
@@ -145,6 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .max(exiftool_result.files_processed);
 
                         // Compare with baseline for regression detection
+                        let t_compare = std::time::Instant::now();
                         let previous = baseline.as_ref().and_then(|b| b.by_format.get(&format));
                         let comparison = ComparisonEngine::compare(
                             oxidex_result.tags,
@@ -153,7 +158,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             files_tested,
                             previous,
                         );
-                        println!("  Result: {}", comparison.summary());
+                        println!(
+                            "  Result: {} [compare {:.2}s]",
+                            comparison.summary(),
+                            t_compare.elapsed().as_secs_f64()
+                        );
 
                         report.add_format(format, comparison);
                     }
@@ -172,16 +181,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", report.summary);
 
     // Output results
+    let t_json = std::time::Instant::now();
     let json = serde_json::to_string_pretty(&report)?;
     std::fs::write(&args.output, json)?;
-    println!("\n✅ Results saved to: {}", args.output.display());
+    println!(
+        "\n✅ Results saved to: {} [{:.2}s]",
+        args.output.display(),
+        t_json.elapsed().as_secs_f64()
+    );
 
     // Generate markdown reports
+    let t_md = std::time::Instant::now();
     println!("\n📝 Generating markdown reports...");
     generate_markdown_reports(&report, &args.markdown_dir)?;
     println!(
-        "✅ Markdown reports saved to: {}",
-        args.markdown_dir.display()
+        "✅ Markdown reports saved to: {} [{:.2}s]",
+        args.markdown_dir.display(),
+        t_md.elapsed().as_secs_f64()
     );
 
     // Save updated baseline
