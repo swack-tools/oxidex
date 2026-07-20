@@ -209,9 +209,17 @@ def git_commit(message, repo_root):
 
 
 def cargo_build(repo_root):
-    """Build the oxidex binary. Returns (success, stderr)."""
+    """Build the oxidex binary to verify a candidate diff compiles.
+
+    Uses the "fixloop" profile (see Cargo.toml) rather than --release --
+    this is a correctness check, not a binary anyone ships, so it isn't
+    worth paying release's fat-LTO/single-codegen-unit compile cost on
+    every single verification build.
+
+    Returns (success, stderr).
+    """
     result = subprocess.run(  # nosec B603
-        ["cargo", "build", "--release", "--bin", "oxidex"],
+        ["cargo", "build", "--profile", "fixloop", "--bin", "oxidex"],
         capture_output=True, text=True, cwd=repo_root,
     )
     return result.returncode == 0, result.stderr

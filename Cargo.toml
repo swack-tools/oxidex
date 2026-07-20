@@ -156,6 +156,19 @@ codegen-units = 1
 strip = true
 panic = 'abort'
 
+# Used by scripts/model_fix_loop.py and scripts/find_tag_gaps.py for their
+# build-then-verify cycle (does this diff build? what tags does it produce?)
+# -- correctness matters there, peak runtime speed doesn't, but [profile.release]'s
+# fat LTO + single codegen unit makes every single one of those verification
+# builds pay the same multi-minute compile cost as a real optimized release
+# build. This trades that runtime performance away for compile speed instead.
+[profile.fixloop]
+inherits = "release"
+lto = false
+codegen-units = 16
+opt-level = 1
+strip = false
+
 [profile.dev]
 opt-level = 0
 # Increase codegen-units to reduce per-unit memory usage

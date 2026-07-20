@@ -123,10 +123,17 @@ def group_gaps_by_format(report, repo_root=REPO_ROOT):
 
 
 def ensure_tag_comparison_built(repo_root=REPO_ROOT):
-    # List-argv only, no shell=True anywhere in this file -- repo_root is a
-    # local path this process already trusts.
+    """Build tag-comparison under the "fixloop" profile (see Cargo.toml) --
+    this runs on every single round of a fix-loop to re-check gaps, so it's
+    a correctness check, not a binary anyone ships; --release's fat LTO and
+    single codegen unit make every one of those rebuilds pay a compile cost
+    tuned for runtime speed nobody needs here.
+
+    List-argv only, no shell=True anywhere in this file -- repo_root is a
+    local path this process already trusts.
+    """
     subprocess.run(  # nosec B603
-        ["cargo", "build", "--release", "--bin", "tag-comparison", "--features", "tag-comparison-binary"],
+        ["cargo", "build", "--profile", "fixloop", "--bin", "tag-comparison", "--features", "tag-comparison-binary"],
         cwd=repo_root, check=True,
     )
 
@@ -154,7 +161,7 @@ def run_format_comparison(format_name, cache_dir, repo_root=REPO_ROOT):
     output = Path(f"/tmp/tagcmp-{format_name}.json")  # nosec B108
     subprocess.run(  # nosec B603 # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
         [
-            str(repo_root / "target/release/tag-comparison"),
+            str(repo_root / "target/fixloop/tag-comparison"),
             "--exiftool", f"{cache_dir}/exiftool/exiftool",
             "--samples", f"{cache_dir}/combined-samples",
             "--format", format_name,
