@@ -130,6 +130,12 @@ const COMPARISON_REPORT_SCHEMA = {
     overall_coverage: { type: 'number' },
     total_regressions: { type: 'number' },
     summary: { type: 'string' },
+    // Ground truth for later stages to verify they're operating in the same
+    // location as this (known-good, non-isolated) agent -- see mergePrompt,
+    // which had a real incident where a merge agent wandered into the wrong
+    // worktree/branch entirely and silently merged there instead.
+    repo_path: { type: 'string' },
+    repo_branch: { type: 'string' },
     by_format: {
       type: 'object',
       additionalProperties: {
@@ -167,12 +173,23 @@ const COMPARISON_REPORT_SCHEMA = {
             },
           },
           regressions: { type: 'array', items: { type: 'string' } },
+          // For large formats the relaying agent truncates these arrays
+          // rather than writing thousands of entries into its own
+          // structured-output call, and adds these markers when it does.
+          // Consumers needing the complete list must re-derive it directly
+          // (e.g. by re-running tag-comparison --format X themselves)
+          // rather than trusting missing_in_oxidex/value_differences here
+          // to be exhaustive.
+          missing_in_oxidex_truncated: { type: 'boolean' },
+          missing_in_oxidex_total_count: { type: 'number' },
+          value_differences_truncated: { type: 'boolean' },
+          value_differences_total_count: { type: 'number' },
         },
         required: ['format', 'missing_in_oxidex', 'value_differences', 'regressions'],
       },
     },
   },
-  required: ['by_format'],
+  required: ['by_format', 'repo_path', 'repo_branch'],
 }
 
 function findGapsPrompt() {
@@ -180,8 +197,15 @@ function findGapsPrompt() {
     `This builds the tag-comparison binary, downloads or reuses a cached ExifTool release plus its t/images ` +
     `test corpus and camera sample set, and writes comparison.json in the repo root. Read comparison.json and ` +
     `return its contents as your structured output verbatim: the by_format map keyed by format name, each ` +
-    `with missing_in_oxidex, value_differences, and regressions. Do not modify or commit anything -- this is ` +
-    `a read-only discovery step.`
+    `with missing_in_oxidex, value_differences, and regressions. If a format's missing_in_oxidex or ` +
+    `value_differences array is large (roughly 50+ entries), truncate it to a representative sample and set ` +
+    `the corresponding missing_in_oxidex_truncated / value_differences_truncated to true and ` +
+    `missing_in_oxidex_total_count / value_differences_total_count to the real total count -- don't silently ` +
+    `truncate without those markers, since downstream consumers rely on them to know the list isn't ` +
+    `exhaustive. Also run \`pwd\` and \`git branch --show-current\` and report them as repo_path and ` +
+    `repo_branch -- later stages use these to verify they're operating in the same location as you, since a ` +
+    `past incident had a merge agent wander into an unrelated worktree/branch and silently merge there ` +
+    `instead of here. Do not modify or commit anything -- this is a read-only discovery step.`
 }
 
 phase('Find')
@@ -385,16 +409,30 @@ const MERGE_RESULT_SCHEMA = {
   required: ['format', 'success', 'summary'],
 }
 
-function mergePrompt(result) {
-  return `You are in the oxidex repository's main (non-worktree) working tree. A subagent working in git ` +
-    `branch "${result.branch}" verified a coverage fix for format "${result.format}": ${result.summary}\n\n` +
+function mergePrompt(result, repoPath, repoBranch) {
+  // A past incident: a merge agent wandered into a fix-agent's worktree directory
+  // (e.g. to inspect the branch) and ran the merge from there instead of returning to
+  // the shared main tree -- it silently merged into whatever branch that OTHER
+  // directory happened to have checked out, reported success:true, and the real
+  // target branch never received the commit at all. Verify location explicitly
+  // before touching git, and never cd elsewhere to inspect the branch.
+  return `Before doing anything else, run \`pwd\` and \`git branch --show-current\` and confirm the output ` +
+    `is EXACTLY "${repoPath}" and "${repoBranch}". If either does not match -- including if you are inside ` +
+    `any other directory such as a worktree for the branch being merged -- \`cd "${repoPath}"\` first and ` +
+    `re-verify before proceeding. Do not run any git command in this task from any other directory. To ` +
+    `inspect the branch being merged, use "git log ${result.branch} --oneline" or ` +
+    `"git diff ${repoBranch}..${result.branch}" -- both work without cd-ing anywhere.\n\n` +
+    `Once confirmed, you are in the oxidex repository's main working tree on "${repoBranch}". A subagent ` +
+    `working in git branch "${result.branch}" verified a coverage fix for format "${result.format}": ` +
+    `${result.summary}\n\n` +
     `1. Run: git merge --no-ff "${result.branch}" -m "merge: ${result.format} coverage fix"\n` +
     `   If it conflicts, run "git merge --abort", report success: false, and explain the conflict in summary.\n` +
     `2. If the merge succeeded, run: cargo test --workspace\n` +
     `3. If tests fail, run "git reset --hard HEAD~1" to undo only the merge commit you just made, report ` +
     `success: false, and explain the regression in summary.\n` +
     `4. If tests pass, the merge stands. Report success: true.\n\n` +
-    `Report: format ("${result.format}"), success (bool), summary.`
+    `Report: format ("${result.format}"), success (bool), summary (include the pwd/branch you verified in ` +
+    `step 1 as part of the summary, for auditability).`
 }
 ```
 
@@ -459,7 +497,7 @@ while (dryRounds < MAX_DRY_ROUNDS) {
   phase('Merge')
   let closedCount = 0
   for (const r of verified) {
-    const merged = await agent(mergePrompt(r), {
+    const merged = await agent(mergePrompt(r, report.repo_path, report.repo_branch), {
       label: `merge-${r.format}`,
       phase: 'Merge',
       schema: MERGE_RESULT_SCHEMA,
