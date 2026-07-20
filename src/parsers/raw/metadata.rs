@@ -1398,6 +1398,13 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         TagValue::new_string(format!("{:?}", format)),
     );
 
+    // Parse the RAF file's own proprietary header/directory structures
+    // (FirmwareVersion, RAFCompression, RawImage* dimensions,
+    // WB_GRGBLevels*, etc.), separate from the embedded JPEG's EXIF data.
+    for (tag_name, tag_value) in raf_parser::parse_raf_container_metadata(data) {
+        metadata.insert(tag_name, TagValue::new_string(tag_value));
+    }
+
     // Parse embedded JPEG to extract EXIF data
     // Create a SliceReader for the JPEG data
     let jpeg_reader = SliceReader::new(jpeg_data);
@@ -1438,6 +1445,23 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                         continue;
                                     }
 
+                                    // PrintIM directory (tag 0xC4A5): a small proprietary
+                                    // sub-block starting with "PrintIM\0" followed by a
+                                    // 4-byte ASCII version string at offset 8. ExifTool
+                                    // reports this under its own "PrintIM" family.
+                                    if *tag_id == 0xC4A5
+                                        && bytes.len() >= 12
+                                        && &bytes[0..7] == b"PrintIM"
+                                    {
+                                        let version =
+                                            String::from_utf8_lossy(&bytes[8..12]).to_string();
+                                        metadata.insert(
+                                            "PrintIM:PrintIMVersion".to_string(),
+                                            TagValue::new_string(version),
+                                        );
+                                        continue;
+                                    }
+
                                     // Convert tag to metadata
                                     let tag_name = lookup_tag_name(*tag_id, "IFD0");
                                     let tag_value = raw_bytes_to_simple_tag_value(
@@ -1447,6 +1471,89 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                         byte_order,
                                     );
                                     metadata.insert(tag_name, tag_value);
+                                }
+
+                                // The thumbnail (IFD1) immediately follows IFD0 and is
+                                // referenced by the 4-byte "next IFD offset" that trails
+                                // IFD0's entries. Parse it to recover Compression and the
+                                // Thumbnail offset/length tags that ExifTool reports under
+                                // the "EXIF" family.
+                                let next_ifd_pos =
+                                    first_ifd_offset + 2 + (tags.len() as u64 * 12);
+                                if (next_ifd_pos + 4) as usize <= exif_data.len()
+                                    && let Some(next_ifd_bytes) =
+                                        exif_data.get(next_ifd_pos as usize..(next_ifd_pos + 4) as usize)
+                                {
+                                    let next_ifd_offset =
+                                        read_u32(next_ifd_bytes, byte_order) as u64;
+                                    if next_ifd_offset != 0
+                                        && let Ok(ifd1_tags) =
+                                            parse_ifd(&exif_reader, next_ifd_offset, byte_order)
+                                    {
+                                        // ThumbnailOffset (0x0201) is stored relative to this
+                                        // TIFF header (same base as every other offset we read
+                                        // from `exif_data`), but ExifTool reports it as an
+                                        // absolute offset into the physical file. Recover that
+                                        // base: JPEG data start + APP1 marker/length (4 bytes)
+                                        // + "Exif\0\0" (6 bytes).
+                                        let thumbnail_base =
+                                            jpeg_offset as u64 + segment.offset + 4 + 6;
+
+                                        let mut thumbnail_length: Option<u32> = None;
+                                        for (tag_id, field_type, value_count, raw_bytes) in
+                                            &ifd1_tags
+                                        {
+                                            let bytes = raw_bytes.as_ref();
+                                            match *tag_id {
+                                                // ThumbnailOffset/ThumbnailLength are absent
+                                                // from the generated tag name database under
+                                                // those names (they're indexed under the
+                                                // EXIF-spec name "JPEGInterchangeFormat*"
+                                                // instead), so name them explicitly here to
+                                                // match ExifTool's default output.
+                                                0x0201 if bytes.len() >= 4 => {
+                                                    let value = read_u32(bytes, byte_order) as u64
+                                                        + thumbnail_base;
+                                                    metadata.insert(
+                                                        "IFD1:ThumbnailOffset".to_string(),
+                                                        TagValue::new_integer(value as i64),
+                                                    );
+                                                }
+                                                0x0202 if bytes.len() >= 4 => {
+                                                    let value = read_u32(bytes, byte_order);
+                                                    thumbnail_length = Some(value);
+                                                    metadata.insert(
+                                                        "IFD1:ThumbnailLength".to_string(),
+                                                        TagValue::new_integer(value as i64),
+                                                    );
+                                                }
+                                                _ => {
+                                                    let tag_name =
+                                                        lookup_tag_name(*tag_id, "IFD1");
+                                                    let tag_value = raw_bytes_to_simple_tag_value(
+                                                        bytes,
+                                                        *field_type,
+                                                        *value_count,
+                                                        byte_order,
+                                                    );
+                                                    metadata.insert(tag_name, tag_value);
+                                                }
+                                            }
+                                        }
+
+                                        // ExifTool represents the actual thumbnail image
+                                        // data with a placeholder unless -b is used to
+                                        // extract binary data.
+                                        if let Some(len) = thumbnail_length {
+                                            metadata.insert(
+                                                "IFD1:ThumbnailImage".to_string(),
+                                                TagValue::new_string(format!(
+                                                    "(Binary data {} bytes, use -b option to extract)",
+                                                    len
+                                                )),
+                                            );
+                                        }
+                                    }
                                 }
 
                                 // Also look for GPS IFD pointer in IFD0
@@ -1465,8 +1572,9 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     && let Ok(exif_tags) =
                                         parse_ifd(&exif_reader, offset, byte_order)
                                 {
-                                    // Track MakerNote data
+                                    // Track MakerNote data and Interoperability Sub-IFD pointer
                                     let mut makernote_data: Option<Vec<u8>> = None;
+                                    let mut interop_ifd_offset: Option<u64> = None;
 
                                     for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
                                         let bytes = raw_bytes.as_ref();
@@ -1477,6 +1585,13 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                             continue; // Don't add raw MakerNote to metadata
                                         }
 
+                                        // Interoperability Sub-IFD pointer (tag 0xA005)
+                                        if *tag_id == 0xA005 && bytes.len() >= 4 {
+                                            let offset = read_u32(bytes, byte_order);
+                                            interop_ifd_offset = Some(offset as u64);
+                                            continue; // Don't add raw offset to metadata
+                                        }
+
                                         let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
                                         let tag_value = raw_bytes_to_simple_tag_value(
                                             bytes,
@@ -1485,6 +1600,59 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                             byte_order,
                                         );
                                         metadata.insert(tag_name, tag_value);
+                                    }
+
+                                    // Parse Interoperability Sub-IFD if present (InteropIndex,
+                                    // InteropVersion). ExifTool reports these under the "EXIF"
+                                    // family even though they live in their own InteropIFD.
+                                    if let Some(offset) = interop_ifd_offset
+                                        && let Ok(interop_tags) =
+                                            parse_ifd(&exif_reader, offset, byte_order)
+                                    {
+                                        for (tag_id, field_type, value_count, raw_bytes) in
+                                            &interop_tags
+                                        {
+                                            let bytes = raw_bytes.as_ref();
+                                            match *tag_id {
+                                                // InteropIndex (0x0001): short ASCII code with
+                                                // a PrintConv to a descriptive string.
+                                                0x0001 => {
+                                                    let raw =
+                                                        String::from_utf8_lossy(bytes)
+                                                            .trim_end_matches('\0')
+                                                            .to_string();
+                                                    let printed = match raw.as_str() {
+                                                        "R98" => {
+                                                            "R98 - DCF basic file (sRGB)"
+                                                                .to_string()
+                                                        }
+                                                        "R03" => {
+                                                            "R03 - DCF option file (Adobe RGB)"
+                                                                .to_string()
+                                                        }
+                                                        "THM" => {
+                                                            "THM - DCF thumbnail file".to_string()
+                                                        }
+                                                        _ => raw,
+                                                    };
+                                                    metadata.insert(
+                                                        "InteropIFD:InteropIndex".to_string(),
+                                                        TagValue::new_string(printed),
+                                                    );
+                                                }
+                                                _ => {
+                                                    let tag_name =
+                                                        lookup_tag_name(*tag_id, "InteropIFD");
+                                                    let tag_value = raw_bytes_to_simple_tag_value(
+                                                        bytes,
+                                                        *field_type,
+                                                        *value_count,
+                                                        byte_order,
+                                                    );
+                                                    metadata.insert(tag_name, tag_value);
+                                                }
+                                            }
+                                        }
                                     }
 
                                     // Parse MakerNote if present (Fujifilm camera)
