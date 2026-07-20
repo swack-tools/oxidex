@@ -164,6 +164,62 @@ fn convert_fourcc_to_codec_name(fourcc: &str, is_video: bool) -> String {
     }
 }
 
+/// Formats a float the way Perl's default number stringification would: no
+/// trailing zeros or unnecessary decimal point.
+fn format_trimmed_decimal(v: f64) -> String {
+    if (v - v.round()).abs() < 1e-9 {
+        format!("{}", v.round() as i64)
+    } else {
+        let s = format!("{:.3}", v);
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+/// Converts a raw RIFF `IDIT` date string into ExifTool's `YYYY:MM:DD HH:MM:SS`
+/// format.
+///
+/// Mirrors ExifTool's `Image::ExifTool::RIFF::ConvertRIFFDate()`, handling the
+/// standard ctime-style AVI date format (e.g. "Mon Mar 10 15:04:43 2003") as
+/// well as a couple of camera-specific variants. Unrecognized formats are
+/// returned unchanged.
+fn convert_riff_idit_date(raw: &str) -> String {
+    let parts: Vec<&str> = raw.split_whitespace().collect();
+
+    // Standard AVI date format: "Day Mon DD HH:MM:SS YYYY"
+    if parts.len() >= 5 {
+        if let (Some(month), Ok(day), Ok(year)) = (
+            month_name_to_number(parts[1]),
+            parts[2].parse::<u32>(),
+            parts[4].parse::<u32>(),
+        ) {
+            return format!("{:04}:{:02}:{:02} {}", year, month, day, parts[3]);
+        }
+    }
+
+    raw.to_string()
+}
+
+/// Maps a 3-letter (or full) English month name to its 1-based number.
+fn month_name_to_number(name: &str) -> Option<u32> {
+    let lower = name.to_lowercase();
+    let short = &lower[..lower.len().min(3)];
+    match short {
+        "jan" => Some(1),
+        "feb" => Some(2),
+        "mar" => Some(3),
+        "apr" => Some(4),
+        "may" => Some(5),
+        "jun" => Some(6),
+        "jul" => Some(7),
+        "aug" => Some(8),
+        "sep" => Some(9),
+        "oct" => Some(10),
+        "nov" => Some(11),
+        "dec" => Some(12),
+        _ => None,
+    }
+}
+
 /// Parse AVI RIFF chunks
 fn parse_avi_chunks(
     reader: &dyn FileReader,
@@ -200,10 +256,13 @@ fn parse_avi_chunks(
                             parse_hdrl_list(reader, offset + 4, offset + chunk_size, metadata)?;
                         }
                         b"INFO" => {
-                            // Metadata list - reuse WAV INFO parser
-                            crate::parsers::audio::wav::parse_riff_chunks(
+                            // Metadata list - reuse WAV's INFO sub-chunk parser
+                            // directly (skip the 4-byte "INFO" list-type marker;
+                            // this is the tag stream itself, not another
+                            // top-level RIFF chunk sequence).
+                            crate::parsers::audio::wav::parse_info_chunk(
                                 reader,
-                                offset,
+                                offset + 4,
                                 offset + chunk_size,
                                 metadata,
                             )?;
@@ -211,6 +270,17 @@ fn parse_avi_chunks(
                         b"odml" => {
                             // OpenDML extended header - contains real frame count
                             parse_odml_list(reader, offset + 4, offset + chunk_size, metadata)?;
+                        }
+                        b"hydt" | b"pntx" => {
+                            // Pentax-specific metadata (LIST_hydt/LIST_pntx in
+                            // ExifTool's RIFF.pm), containing a "hymn"/"mknt"
+                            // chunk with embedded Pentax MakerNotes.
+                            parse_pentax_data_list(
+                                reader,
+                                offset + 4,
+                                offset + chunk_size,
+                                metadata,
+                            )?;
                         }
                         _ => {
                             // Skip other LIST types (movi, etc.)
@@ -236,13 +306,11 @@ fn parse_avi_chunks(
                 // Date/time original chunk
                 if chunk_size > 0 {
                     if let Ok(date_data) = reader.read(offset, chunk_size as usize) {
-                        // IDIT format is typically "Day Mon DD HH:MM:SS YYYY\n"
-                        // or "YYYY:MM:DD HH:MM:SS" or similar
                         let date_str = String::from_utf8_lossy(&date_data).trim().replace('\0', "");
                         if !date_str.is_empty() {
                             metadata.insert(
                                 "RIFF:DateTimeOriginal".to_string(),
-                                TagValue::String(date_str),
+                                TagValue::String(convert_riff_idit_date(&date_str)),
                             );
                         }
                     }
@@ -290,6 +358,19 @@ fn parse_hdrl_list(
         // Parse avih (main AVI header)
         if chunk_id == b"avih" && chunk_size >= 56 {
             parse_avih_chunk(reader, offset, metadata)?;
+        }
+        // IDIT (date/time original) is part of the Hdrl table in ExifTool's
+        // RIFF.pm, not a top-level RIFF chunk.
+        else if chunk_id == b"IDIT" && chunk_size > 0 {
+            if let Ok(date_data) = reader.read(offset, chunk_size as usize) {
+                let date_str = String::from_utf8_lossy(&date_data).trim().replace('\0', "");
+                if !date_str.is_empty() {
+                    metadata.insert(
+                        "RIFF:DateTimeOriginal".to_string(),
+                        TagValue::String(convert_riff_idit_date(&date_str)),
+                    );
+                }
+            }
         }
         // Parse strl LIST (stream list) or odml LIST (OpenDML extended header)
         else if chunk_id == b"LIST" && chunk_size >= 4 {
@@ -349,7 +430,14 @@ fn parse_avih_chunk(
     // Calculate frame rate from microseconds per frame
     if microsec_per_frame > 0 {
         let frame_rate = 1_000_000.0 / microsec_per_frame as f64;
-        // ExifTool outputs this as "VideoFrameRate"
+        // ExifTool's RIFF:FrameRate tag (from avih), rounded to 3 decimal
+        // places and printed without trailing zeros (matching Perl's default
+        // number stringification).
+        let rounded = ((frame_rate * 1000.0 + 0.5).floor()) / 1000.0;
+        metadata.insert(
+            "RIFF:FrameRate".to_string(),
+            TagValue::new_string(format_trimmed_decimal(rounded)),
+        );
         metadata.insert(
             "RIFF:VideoFrameRate".to_string(),
             TagValue::new_integer(frame_rate.round() as i64),
@@ -468,6 +556,60 @@ fn parse_odml_list(
     Ok(())
 }
 
+/// Parse a Pentax metadata LIST (`LIST_hydt` / `LIST_pntx`), which contains a
+/// `hymn` (or `mknt`) chunk holding an embedded Pentax MakerNotes IFD.
+///
+/// See ExifTool's `Image::ExifTool::Pentax::AVI` table: the maker note data
+/// starts with a "PENTAX \0" header followed by a 2-byte byte-order marker
+/// and the IFD itself (handled by the shared Pentax MakerNotes parser).
+fn parse_pentax_data_list(
+    reader: &dyn FileReader,
+    start_offset: u64,
+    end_offset: u64,
+    metadata: &mut MetadataMap,
+) -> Result<()> {
+    let mut offset = start_offset;
+
+    while offset + 8 < end_offset {
+        let chunk_header = reader.read(offset, 8)?;
+        let r = EndianReader::little_endian(chunk_header);
+        let chunk_id = &chunk_header[0..4];
+        let chunk_size = r.u32_at(4).unwrap_or(0) as u64;
+
+        offset += 8;
+
+        if offset + chunk_size > end_offset {
+            break;
+        }
+
+        if (chunk_id == b"hymn" || chunk_id == b"mknt") && chunk_size > 0 {
+            if let Ok(makernote_data) = reader.read(offset, chunk_size as usize) {
+                let mut makernote_tags = std::collections::HashMap::new();
+                // Byte order is auto-detected from the "PENTAX \0" header's
+                // marker inside the Pentax parser; the default passed here is
+                // only used as a fallback.
+                let _ = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
+                    "Pentax",
+                    &makernote_data,
+                    crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian,
+                    &mut makernote_tags,
+                );
+                for (tag_name, tag_value_str) in makernote_tags {
+                    metadata.insert(tag_name, TagValue::String(tag_value_str));
+                }
+            }
+        }
+
+        // Move to next chunk (word-aligned)
+        offset += chunk_size;
+        if chunk_size % 2 == 1 {
+            offset += 1;
+        }
+    }
+
+    Ok(())
+}
+
 /// Parse strl LIST (stream list with strh and strf chunks)
 fn parse_stream_list(
     reader: &dyn FileReader,
@@ -554,7 +696,10 @@ fn parse_stream_header(
     let scale = r.u32_at(20).unwrap_or(0);
     let rate = r.u32_at(24).unwrap_or(0);
     let length = r.u32_at(32).unwrap_or(0);
-    let quality = r.u32_at(44).unwrap_or(0);
+    // AVISTREAMHEADER: dwQuality is at offset 40, dwSampleSize at offset 44
+    // (dwStart=28, dwLength=32, dwSuggestedBufferSize=36, dwQuality=40,
+    // dwSampleSize=44).
+    let quality = r.u32_at(40).unwrap_or(0);
 
     // Stream type (for first video stream)
     if stream_type == *b"vids" && is_first_video {
@@ -566,32 +711,34 @@ fn parse_stream_header(
 
     // Codec FourCC
     let fourcc_str = String::from_utf8_lossy(&codec_fourcc).to_string();
-    if !fourcc_str.trim().is_empty() && fourcc_str != "\0\0\0\0" {
-        if stream_type == *b"vids" && is_first_video {
+    let fourcc_is_present = !fourcc_str.trim().is_empty() && fourcc_str != "\0\0\0\0";
+    if fourcc_is_present && stream_type == *b"vids" && is_first_video {
+        metadata.insert(
+            "RIFF:VideoCodec".to_string(),
+            TagValue::new_string(fourcc_str.clone()),
+        );
+        // Add AVI:VideoCodec with human-readable codec name
+        let codec_name = convert_fourcc_to_codec_name(&fourcc_str, true);
+        metadata.insert(
+            "AVI:VideoCodec".to_string(),
+            TagValue::new_string(codec_name),
+        );
+    } else if stream_type == *b"auds" && is_first_audio {
+        // Audio codec from strh is usually empty, strf has more info; ExifTool
+        // still emits an (empty) RIFF:AudioCodec tag in that case.
+        let value = if fourcc_is_present {
+            fourcc_str.clone()
+        } else {
+            String::new()
+        };
+        metadata.insert("RIFF:AudioCodec".to_string(), TagValue::new_string(value));
+        // Add AVI:AudioCodec with human-readable codec name if not empty
+        if fourcc_is_present {
+            let codec_name = convert_fourcc_to_codec_name(&fourcc_str, false);
             metadata.insert(
-                "RIFF:VideoCodec".to_string(),
-                TagValue::new_string(fourcc_str.clone()),
-            );
-            // Add AVI:VideoCodec with human-readable codec name
-            let codec_name = convert_fourcc_to_codec_name(&fourcc_str, true);
-            metadata.insert(
-                "AVI:VideoCodec".to_string(),
+                "AVI:AudioCodec".to_string(),
                 TagValue::new_string(codec_name),
             );
-        } else if stream_type == *b"auds" && is_first_audio {
-            // Audio codec from strh is usually empty, strf has more info
-            metadata.insert(
-                "RIFF:AudioCodec".to_string(),
-                TagValue::new_string(fourcc_str.clone()),
-            );
-            // Add AVI:AudioCodec with human-readable codec name if not empty
-            if !fourcc_str.trim().is_empty() {
-                let codec_name = convert_fourcc_to_codec_name(&fourcc_str, false);
-                metadata.insert(
-                    "AVI:AudioCodec".to_string(),
-                    TagValue::new_string(codec_name),
-                );
-            }
         }
     }
 
@@ -637,7 +784,7 @@ fn parse_stream_header(
     }
 
     // SampleSize (variable vs fixed)
-    let sample_size = r.u32_at(48).unwrap_or(0);
+    let sample_size = r.u32_at(44).unwrap_or(0);
     if stream_type == *b"vids" && is_first_video {
         let size_str = if sample_size == 0 {
             "Variable"
