@@ -67,7 +67,12 @@ jobs:
           diff -q api/oxidex.h api/oxidex.h.tmp || (echo "C header out of date" && exit 1)
           rm api/oxidex.h.tmp
       - name: Install ExifTool
-        run: sudo apt-get update -qq && sudo apt-get install -y libimage-exiftool-perl
+        run: |
+          curl -sSL https://sourceforge.net/projects/exiftool/files/latest/download -o /tmp/exiftool.tar.gz
+          mkdir -p /tmp/exiftool-src
+          tar xzf /tmp/exiftool.tar.gz -C /tmp/exiftool-src --strip-components=1
+          echo "/tmp/exiftool-src" >> "$GITHUB_PATH"
+          /tmp/exiftool-src/exiftool -ver
       - name: Integration tests (ExifTool comparison)
         run: cargo test --features exiftool-comparison
 
