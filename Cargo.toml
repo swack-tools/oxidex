@@ -131,7 +131,7 @@ clap = { version = "4.6", features = ["derive"] }
 # Regular expressions (for jpeg-tag-matrix binary and build scripts)
 regex = "1.13"
 
-# Error handling (for jpeg-tag-matrix binary and build scripts)
+# Error handling
 anyhow = "1.0"
 
 [build-dependencies]
@@ -147,6 +147,7 @@ anyhow = "1.0"
 proptest = "1.11"
 criterion = "0.8"
 cc = "1.3"
+serde_yaml = "0.9"
 
 [profile.release]
 opt-level = 3
