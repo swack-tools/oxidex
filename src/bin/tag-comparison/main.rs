@@ -4,6 +4,7 @@
 
 use clap::Parser;
 use std::path::PathBuf;
+use std::process::Command;
 
 mod comparison;
 mod extraction;
@@ -41,23 +42,48 @@ struct Args {
     #[arg(long, default_value = "docs/reference/comparison")]
     markdown_dir: PathBuf,
 
-    /// ExifTool version string (for report metadata)
-    #[arg(long, default_value = "unknown")]
-    exiftool_version: String,
+    /// ExifTool version string (for report metadata); auto-detected via
+    /// `exiftool -ver` when omitted
+    #[arg(long)]
+    exiftool_version: Option<String>,
 
-    /// OxiDex version string (for report metadata)
-    #[arg(long, default_value = "unknown")]
-    oxidex_version: String,
+    /// OxiDex version string (for report metadata); defaults to this
+    /// binary's own Cargo package version when omitted
+    #[arg(long)]
+    oxidex_version: Option<String>,
+}
+
+/// Runs `<exiftool> -ver` and returns its trimmed stdout, or "unknown" if
+/// the binary can't be found or fails.
+fn detect_exiftool_version(exiftool: &str) -> String {
+    Command::new(exiftool)
+        .arg("-ver")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
+    let exiftool_version = args
+        .exiftool_version
+        .clone()
+        .unwrap_or_else(|| detect_exiftool_version(&args.exiftool));
+    let oxidex_version = args
+        .oxidex_version
+        .clone()
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+
     println!("🏷️  Tag Comparison Tool");
     println!("=======================\n");
-    println!("ExifTool: v{}", args.exiftool_version);
-    println!("OxiDex: v{}", args.oxidex_version);
+    println!("ExifTool: v{}", exiftool_version);
+    println!("OxiDex: v{}", oxidex_version);
     println!("Samples: {}", args.samples.display());
     println!();
 
@@ -74,8 +100,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create report
     let mut report = ComparisonReport::new();
-    report.exiftool_version = args.exiftool_version.clone();
-    report.oxidex_version = args.oxidex_version.clone();
+    report.exiftool_version = exiftool_version.clone();
+    report.oxidex_version = oxidex_version.clone();
 
     // Auto-detect formats from samples directory
     let formats = if let Some(format) = args.format {
