@@ -205,14 +205,24 @@ DEFAULT_MAX_PROMPT_TAGS = 40
 DEFAULT_MAX_PROMPT_FILE_BYTES = 60_000
 
 
+DEFAULT_MAX_SAMPLE_FILES_LISTED = 15
+
+
 def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
-                  max_file_bytes=DEFAULT_MAX_PROMPT_FILE_BYTES):
+                  max_file_bytes=DEFAULT_MAX_PROMPT_FILE_BYTES, samples_dir=None,
+                  max_samples_listed=DEFAULT_MAX_SAMPLE_FILES_LISTED):
     """Format one gap into a model prompt, capped so a huge format (e.g.
     JPEG with thousands of gaps and dozens of parser files) becomes an
     iterative, tractable request instead of one impossibly large prompt.
     Whatever's omitted here resurfaces in a later round automatically,
     since gap["gap_count"] (used by fix_gap's verification) always
     reflects the format's real total, not just what's shown below.
+
+    samples_dir, if given, is scanned for real sample files matching this
+    format (case-insensitive filename suffix) and a handful are listed so
+    the model can ask to see one's actual raw bytes via the REQUEST:
+    protocol (see attempt_build) instead of guessing at binary layout from
+    tag names/values alone.
     """
     missing_shown = gap["missing_tags"][:max_tags]
     missing_omitted = len(gap["missing_tags"]) - len(missing_shown)
@@ -249,16 +259,49 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     if files_omitted > 0:
         files += f"\n\n({files_omitted} additional file(s) omitted to keep this prompt a reasonable size)"
 
+    samples_block = ""
+    if samples_dir is not None:
+        exts = FORMAT_SAMPLE_EXTENSIONS.get(gap["format"], [gap["format"].lower()])
+        sample_paths = sorted(
+            p for ext in exts for p in Path(samples_dir).rglob(f"*.{ext}")
+        )[:max_samples_listed]
+        if sample_paths:
+            listed = "\n".join(f"  - {p.relative_to(samples_dir)}" for p in sample_paths)
+            samples_block = (
+                f"\n\nReal sample files available for this format (relative to the samples dir):\n{listed}\n\n"
+                "If you need to see actual raw bytes to understand the binary layout instead of "
+                "guessing from the tag values above, respond with EXACTLY one line "
+                "\"REQUEST: <path>\" (a path from the list above, or a source file under src/) "
+                "instead of a diff, and you'll get a hex dump (for samples) or the file's text back "
+                "in the next turn to work from."
+            )
+
     return (
         f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
         f"Missing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
         f"Value differences (both extract it, values disagree):\n{diffs}\n\n"
-        f"Likely relevant source files:\n{files}\n\n"
+        f"Likely relevant source files:\n{files}"
+        f"{samples_block}\n\n"
         "Respond with a single unified diff (in a ```diff fenced block) that fixes as many of these gaps "
         "as you can correctly verify. For value differences, only fix genuine bugs, not benign formatting "
         "differences. Do not include any explanation outside the diff. If more gaps exist than are shown "
         "above, that's expected -- just fix what's shown here, and future rounds will address the rest."
     )
+
+
+FORMAT_SAMPLE_EXTENSIONS = {
+    "JPEG": ["jpg", "jpeg"],
+    "TIFF": ["tif", "tiff"],
+    "HEIC": ["heic", "heif"],
+    "PNG": ["png"],
+    "GIF": ["gif"],
+    "PDF": ["pdf"],
+    "MP4": ["mp4", "mov", "m4v"],
+    "WEBP": ["webp"],
+    "BMP": ["bmp"],
+    "PSD": ["psd"],
+    "AVIF": ["avif"],
+}
 
 
 def build_review_prompt(gap, diff):
@@ -323,13 +366,68 @@ def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=ra
     return extract_review_verdict(reply)
 
 
+REQUEST_RE = re.compile(r"^REQUEST:\s*(.+)$", re.IGNORECASE)
+MAX_REQUEST_TURNS = 4  # investigation turns before a diff is still required
+DEFAULT_HEXDUMP_BYTES = 2048
+
+
+def hex_dump(data, max_bytes=DEFAULT_HEXDUMP_BYTES):
+    """Render up to max_bytes of data as classic 16-bytes-per-line hex+ASCII,
+    the way a human would inspect an unfamiliar binary segment."""
+    data = data[:max_bytes]
+    lines = []
+    for i in range(0, len(data), 16):
+        chunk = data[i:i + 16]
+        hex_part = " ".join(f"{b:02x}" for b in chunk)
+        ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        lines.append(f"{i:08x}  {hex_part:<47}  {ascii_part}")
+    return "\n".join(lines)
+
+
+def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
+    """Answer a model's "REQUEST: <path>" turn -- a hex dump if the path
+    resolves under samples_dir (real binary sample data), the raw text if
+    it resolves under repo_root (more source to read), or a rejection
+    message otherwise. Path traversal outside both roots is refused.
+    """
+    candidates = []
+    if samples_dir is not None:
+        candidates.append((Path(samples_dir) / path_str.strip(), "sample"))
+    candidates.append((repo_root / path_str.strip(), "source"))
+
+    for candidate, kind in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        root = (Path(samples_dir).resolve() if kind == "sample" else repo_root.resolve())
+        if root not in resolved.parents and resolved != root:
+            continue
+        if not resolved.is_file():
+            continue
+        if kind == "sample":
+            data = resolved.read_bytes()
+            return (
+                f"Hex dump of {path_str} ({len(data)} bytes total, "
+                f"showing first {min(len(data), DEFAULT_HEXDUMP_BYTES)}):\n"
+                f"{hex_dump(data)}"
+            )
+        content = resolved.read_text(errors="replace")[:max_text_bytes]
+        return f"Contents of {path_str}:\n{content}"
+
+    return f"Could not resolve {path_str!r} under the samples dir or repo root -- try a path from the list shown."
+
+
 def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_fn,
-                   cargo_build_fn, config, repo_root, pick_model_fn=random.choice):
-    """Try to get a working build via up to 2 model calls (initial + one
-    apply/build repair round-trip), extending the given messages
-    conversation in place. Returns (built, reason, diff, messages) --
-    reason is None when built is True; diff is the successfully-applied
-    diff (None if not built).
+                   cargo_build_fn, config, repo_root, pick_model_fn=random.choice,
+                   samples_dir=None):
+    """Try to get a working build via a bounded conversation: up to
+    MAX_REQUEST_TURNS turns where the model can ask to see more context
+    (REQUEST: <path> -- see resolve_request) before it must submit a diff,
+    then up to 2 diff attempts (initial + one apply/build repair
+    round-trip). Extends the given messages conversation in place. Returns
+    (built, reason, diff, messages) -- reason is None when built is True;
+    diff is the successfully-applied diff (None if not built).
 
     pick_model_fn(models) -> model_spec is called fresh before every
     individual model call (not once per attempt_build invocation), so a
@@ -337,7 +435,9 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     different provider entirely -- from config["models"] than the initial
     attempt. Each spec is a {"name", "base_url", "api_key"} dict.
     """
-    for _attempt in range(2):  # one initial attempt + one repair round-trip
+    request_turns_used = 0
+    diff_attempts_used = 0
+    while diff_attempts_used < 2:  # one initial attempt + one repair round-trip
         model_spec = pick_model_fn(config["models"])
         try:
             reply = call_model_fn(
@@ -355,12 +455,20 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
             # long-term if it keeps failing.
             return False, f"model call failed: {e}", None, messages
 
+        messages.append({"role": "assistant", "content": reply})
+
+        request_match = REQUEST_RE.match(reply.strip())
+        if request_match and request_turns_used < MAX_REQUEST_TURNS:
+            request_turns_used += 1
+            answer = resolve_request(request_match.group(1), repo_root, samples_dir)
+            messages.append({"role": "user", "content": answer})
+            continue
+
         diff = extract_diff(reply)
         if diff is None:
             return False, "no diff in model response", None, messages
 
-        messages.append({"role": "assistant", "content": reply})
-
+        diff_attempts_used += 1
         applied, apply_msg = git_apply_fn(diff, repo_root)
         if not applied:
             git_checkout_clean_fn(repo_root)
@@ -388,7 +496,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
             cargo_build_fn=cargo_build, cargo_test_workspace_fn=cargo_test_workspace,
             attempt_build_fn=attempt_build, review_fn=review_verdict,
             pick_model_fn=random.choice, log_fn=print,
-            review_config=None, recheck_fn=None, repo_root=None):
+            review_config=None, recheck_fn=None, repo_root=None, samples_dir=None):
     """Attempt to close one format's gaps via a single-shot patch. Up to
     two candidates: the initial fix, and one repair round-trip if a
     reviewer rejects the first. Returns a result dict.
@@ -420,6 +528,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
         gap, repo_root=repo_root,
         max_tags=config["max_prompt_tags"],
         max_file_bytes=config["max_prompt_file_bytes"],
+        samples_dir=samples_dir,
     )}]
 
     review_reason = None
@@ -429,6 +538,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
             call_model_fn=call_model_fn, git_apply_fn=git_apply_fn,
             git_checkout_clean_fn=git_checkout_clean_fn, cargo_build_fn=cargo_build_fn,
             config=config, repo_root=repo_root, pick_model_fn=pick_model_fn,
+            samples_dir=samples_dir,
         )
         if not built:
             log_fn(f"[{fmt}] build failed: {reason}")
@@ -758,6 +868,7 @@ def main(argv=None):
             gap, cfg, recheck_fn=recheck, review_config=review_config,
             git_apply_fn=logging_git_apply, log_fn=timestamped_log,
             call_model_fn=logging_call_model,
+            samples_dir=Path(args.cache_dir) / "combined-samples",
         )
 
     summary = run_loop(
