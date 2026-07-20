@@ -457,12 +457,20 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
     }
 
 
-def run_loop(config, find_gaps_fn, fix_gap_fn, max_dry_rounds=2):
+def run_loop(config, find_gaps_fn, fix_gap_fn, max_dry_rounds=2,
+             git_checkout_clean_fn=None, repo_root=None):
     """Loop-until-dry driver. Returns a summary dict.
 
     A round is dry iff it closes zero gaps (not "discovers nothing new").
     A format that fails twice across rounds is skipped for the rest of
     the run.
+
+    git_checkout_clean_fn/repo_root, if both given, are called right when a
+    format hits its second failure and gets skip-listed -- belt-and-suspenders
+    insurance on top of fix_gap's own per-attempt cleanup, so a format that's
+    given up on can never leave dirty/untracked files (beyond gitignored
+    build caches like target/, which checkout+clean never touches) behind
+    for whatever gap gets attempted next.
     """
     skip_list = set()
     fail_counts = {}
@@ -489,6 +497,8 @@ def run_loop(config, find_gaps_fn, fix_gap_fn, max_dry_rounds=2):
                 if fail_counts[gap["format"]] >= 2:
                     skip_list.add(gap["format"])
                     skipped.append(gap["format"])
+                    if git_checkout_clean_fn and repo_root:
+                        git_checkout_clean_fn(repo_root)
 
         dry_rounds = 0 if closed_this_round else dry_rounds + 1
 
@@ -514,6 +524,9 @@ def load_toml_config(path):
         return tomllib.load(f)
 
 
+_KNOWN_MODEL_SPEC_KEYS = {"name", "base_url", "api_key"}
+
+
 def _normalize_model_spec(entry, default_base_url, default_api_key):
     """Turn one models[] entry into a {"name", "base_url", "api_key"} dict.
 
@@ -522,9 +535,25 @@ def _normalize_model_spec(entry, default_base_url, default_api_key):
     array-of-tables) may override base_url/api_key individually, so a
     single pool can mix providers -- e.g. one wafer.ai model alongside a
     Fireworks-hosted one with its own key.
+
+    Only name/base_url/api_key are recognized on an entry -- max_tokens,
+    reasoning_effort, stream, thinking, and temperature belong on the
+    parent [worker]/[reviewer] table, shared across every model in the
+    pool. A misplaced key there raises immediately instead of being
+    silently dropped, which is exactly what happened when max_tokens got
+    written under [[worker.models]] instead of [worker]: the value never
+    took effect, and nothing in the run reported that.
     """
     if isinstance(entry, str):
         return {"name": entry, "base_url": default_base_url, "api_key": default_api_key}
+    unknown = set(entry) - _KNOWN_MODEL_SPEC_KEYS
+    if unknown:
+        raise ValueError(
+            f"unrecognized key(s) {sorted(unknown)} on a models[] entry ({entry.get('name', '?')!r}) -- "
+            "only name/base_url/api_key belong on an individual model entry; max_tokens, "
+            "reasoning_effort, stream, thinking, and temperature belong on the parent "
+            "[worker]/[reviewer] table instead, shared across every model in the pool"
+        )
     return {
         "name": entry["name"],
         "base_url": entry.get("base_url", default_base_url),
@@ -598,19 +627,23 @@ def main(argv=None):
         print(f"{config_path} is missing a [worker] table", file=sys.stderr)
         return 1
 
-    config = _normalize_model_config(worker_table)
-    if args.models:
-        config["models"] = [
-            _normalize_model_spec(m.strip(), config["base_url"], config["api_key"])
-            for m in args.models.split(",") if m.strip()
-        ]
+    try:
+        config = _normalize_model_config(worker_table)
+        if args.models:
+            config["models"] = [
+                _normalize_model_spec(m.strip(), config["base_url"], config["api_key"])
+                for m in args.models.split(",") if m.strip()
+            ]
 
-    review_config = _normalize_model_config(toml_data.get("reviewer") or worker_table)
-    if args.review_models:
-        review_config["models"] = [
-            _normalize_model_spec(m.strip(), review_config["base_url"], review_config["api_key"])
-            for m in args.review_models.split(",") if m.strip()
-        ]
+        review_config = _normalize_model_config(toml_data.get("reviewer") or worker_table)
+        if args.review_models:
+            review_config["models"] = [
+                _normalize_model_spec(m.strip(), review_config["base_url"], review_config["api_key"])
+                for m in args.review_models.split(",") if m.strip()
+            ]
+    except ValueError as e:
+        print(f"{config_path}: {e}", file=sys.stderr)
+        return 1
 
     for label, cfg in (("worker", config), ("reviewer", review_config)):
         if not cfg["models"] or not all(m["base_url"] and m["api_key"] for m in cfg["models"]):
@@ -641,7 +674,10 @@ def main(argv=None):
 
         return fix_gap(gap, cfg, recheck_fn=recheck, review_config=review_config)
 
-    summary = run_loop(config, find_gaps_fn, real_fix_gap)
+    summary = run_loop(
+        config, find_gaps_fn, real_fix_gap,
+        git_checkout_clean_fn=git_checkout_clean, repo_root=REPO_ROOT,
+    )
     print(f"stopped after {summary['rounds']} rounds")
     print(f"  fixed:   {len(summary['fixed'])} formats")
     print(f"  failed:  {len(summary['failed'])} attempts")

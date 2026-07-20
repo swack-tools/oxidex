@@ -13,6 +13,9 @@ node_modules
 # Driver B model config (holds API keys) -- see config.example.toml
 config.toml
 
+# Driver B parallel-run worker logs (default --log-dir)
+/logs/
+
 # OS files
 .DS_Store
 Thumbs.db

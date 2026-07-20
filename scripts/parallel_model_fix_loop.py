@@ -32,6 +32,18 @@ from pathlib import Path
 from find_tag_gaps import REPO_ROOT, group_gaps_by_format, load_comparison_report, run_full_comparison
 from model_fix_loop import DEFAULT_CONFIG_PATH
 
+# Each worker runs a full `cargo test --workspace` before committing --
+# running more of those concurrently than there are cores just makes them
+# contend for CPU, which can produce spurious regressions unrelated to the
+# fix under test. Capping at the core count keeps every worker's test run
+# meaningful.
+DEFAULT_MAX_PARALLEL = min(20, os.cpu_count() or 4)
+
+# Per-worker log files default here instead of /tmp: /tmp is wiped on
+# reboot (and never included in Time Machine backups), which otherwise
+# destroys the only record of why a run's fixes did or didn't land.
+DEFAULT_LOG_DIR = REPO_ROOT / "logs" / "parallel-model-fix"
+
 # Every in-flight worker's process group, so an interrupted wrapper
 # (Ctrl-C, SIGTERM) can force-terminate all of them rather than leaving
 # cargo/rustc grandchildren running unsupervised.
@@ -61,11 +73,35 @@ def branch_name(fmt):
 # output) or the caller's own current git ref, never network input.
 
 
+def clean_worktree(path):
+    """Discard uncommitted changes and untracked files in a worker's
+    worktree -- git clean -fd never touches gitignored paths (target/, in
+    particular), so this can't evict the worktree's own cargo build cache.
+    """
+    subprocess.run(["git", "checkout", "--", "."], cwd=path, check=True)  # nosec B603
+    subprocess.run(["git", "clean", "-fd"], cwd=path, check=True)  # nosec B603
+
+
 def create_worktree(repo_root, path, branch, base_ref, config_path=DEFAULT_CONFIG_PATH):
-    subprocess.run(  # nosec B603
-        ["git", "worktree", "add", "-b", branch, str(path), base_ref],
-        cwd=repo_root, check=True, capture_output=True, text=True,
-    )
+    """Create fmt's worktree, or -- if one from a prior failed attempt is
+    still sitting at `path` (left in place for inspection, or surviving
+    into the next --infinite round) -- reuse it in place after resetting it
+    to a clean base_ref checkout. Reusing preserves the worktree's own
+    target/ build cache; tearing down and recreating it would force a
+    from-scratch cargo build every single round, which is exactly the
+    "pollution" this is meant to avoid paying for repeatedly.
+    """
+    if path.is_dir():
+        clean_worktree(path)
+        subprocess.run(  # nosec B603
+            ["git", "checkout", "-B", branch, base_ref],
+            cwd=path, check=True, capture_output=True, text=True,
+        )
+    else:
+        subprocess.run(  # nosec B603
+            ["git", "worktree", "add", "-b", branch, str(path), base_ref],
+            cwd=repo_root, check=True, capture_output=True, text=True,
+        )
     # config.toml is gitignored (holds API keys), so a fresh worktree
     # checkout never has one -- copy it explicitly so the worker's own
     # model_fix_loop.py finds it at its default path.
@@ -336,7 +372,11 @@ def main(argv=None, run_round_fn=run_round, sleep_fn=time.sleep):
     )
     parser.add_argument(
         "--max-parallel", type=int,
-        default=int(os.environ.get("MODEL_FIX_MAX_PARALLEL", "20")),
+        default=int(os.environ.get("MODEL_FIX_MAX_PARALLEL", str(DEFAULT_MAX_PARALLEL))),
+        help=f"Default: min(20, CPU count) = {DEFAULT_MAX_PARALLEL} on this machine. Each worker "
+             "runs a full `cargo test --workspace` before committing -- oversubscribing past the "
+             "core count makes those test runs contend for CPU and risks spurious regressions "
+             "that aren't actually caused by the fix being tested.",
     )
     parser.add_argument(
         "--formats",
@@ -369,7 +409,10 @@ def main(argv=None, run_round_fn=run_round, sleep_fn=time.sleep):
     )
     parser.add_argument(
         "--log-dir",
-        default=os.environ.get("MODEL_FIX_LOG_DIR", "/tmp/oxidex-parallel-fix-logs"),  # nosec B108
+        default=os.environ.get("MODEL_FIX_LOG_DIR", str(DEFAULT_LOG_DIR)),
+        help=f"Default: {DEFAULT_LOG_DIR} -- deliberately NOT under /tmp, which is wiped on "
+             "reboot and excluded from Time Machine, so a run's worker logs are the one thing "
+             "that survives to explain what happened after the fact.",
     )
     args = parser.parse_args(argv)
 

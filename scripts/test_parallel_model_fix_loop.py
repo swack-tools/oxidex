@@ -142,6 +142,42 @@ class CreateWorktreeTests(unittest.TestCase):
             )
             self.assertFalse((worktree / "config.toml").exists())
 
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_uses_git_worktree_add_when_path_does_not_exist(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            worktree = tmp / "worktree"  # deliberately not created
+
+            create_worktree(tmp, worktree, "model-fix-parallel-nef", "main", config_path=tmp / "no-config.toml")
+
+            argvs = [c.args[0] for c in mock_run.call_args_list]
+            self.assertIn(["git", "worktree", "add", "-b", "model-fix-parallel-nef", str(worktree), "main"], argvs)
+            self.assertFalse(any(argv[:2] == ["git", "checkout"] for argv in argvs))
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_reuses_an_existing_worktree_in_place_instead_of_recreating_it(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            worktree = tmp / "worktree"
+            worktree.mkdir()  # simulates a worktree left behind by a prior failed attempt
+
+            create_worktree(tmp, worktree, "model-fix-parallel-nef", "main", config_path=tmp / "no-config.toml")
+
+            argvs = [c.args[0] for c in mock_run.call_args_list]
+            # never torn down and recreated -- that would blow away the
+            # worktree's own target/ build cache
+            self.assertNotIn(
+                ["git", "worktree", "add", "-b", "model-fix-parallel-nef", str(worktree), "main"], argvs,
+            )
+            self.assertIn(["git", "checkout", "--", "."], argvs)
+            self.assertIn(["git", "clean", "-fd"], argvs)
+            self.assertIn(["git", "checkout", "-B", "model-fix-parallel-nef", "main"], argvs)
+            # the clean+reset happened inside the worktree itself, not repo_root
+            checkout_dash_b_call = next(c for c in mock_run.call_args_list if c.args[0][:3] == ["git", "checkout", "-B"])
+            self.assertEqual(checkout_dash_b_call.kwargs["cwd"], worktree)
+
 
 # /tmp/base is an inert fixture path -- no real filesystem I/O happens
 # here, this only exercises string/Path construction.

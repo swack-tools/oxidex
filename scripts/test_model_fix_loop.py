@@ -80,6 +80,19 @@ class NormalizeModelConfigTests(unittest.TestCase):
             {"name": "other-provider-model", "base_url": "https://other.example/v1", "api_key": "other-key"},
         ])
 
+    def test_rejects_unrecognized_keys_on_a_models_entry_instead_of_silently_dropping_them(self):
+        # This exact shape -- max_tokens misplaced under a models[] entry
+        # instead of the parent table -- silently no-op'd instead of
+        # erroring, so a real run's configured max_tokens/temperature/etc.
+        # never took effect and nothing reported it.
+        with self.assertRaises(ValueError) as ctx:
+            _normalize_model_config({
+                "base_url": "u", "api_key": "k",
+                "models": [{"name": "glm5.2-fast", "max_tokens": 1024, "temperature": 0.8}],
+            })
+        self.assertIn("max_tokens", str(ctx.exception))
+        self.assertIn("glm5.2-fast", str(ctx.exception))
+
 
 class ExtractDiffTests(unittest.TestCase):
     def test_extracts_fenced_diff_block(self):
@@ -1036,6 +1049,56 @@ class RunLoopTests(unittest.TestCase):
         # skip-list filter in run_loop actually removes it before dispatch.
         self.assertEqual(attempts.count("NEF"), 2)
         self.assertEqual(result["skipped"], ["NEF"])
+
+    def test_cleans_the_workspace_when_a_format_gets_skip_listed(self):
+        nef_gap = make_gap()  # format "NEF"
+        clean_calls = []
+        rounds = [[nef_gap], [nef_gap], []]
+
+        def fake_find_gaps():
+            return rounds.pop(0) if rounds else []
+
+        def fake_fix_gap(g, config):
+            return {"format": g["format"], "status": "failed", "reason": "still broken"}
+
+        run_loop(
+            {"models": ["x"]}, fake_find_gaps, fake_fix_gap,
+            git_checkout_clean_fn=lambda root: clean_calls.append(root),
+            repo_root=Path("/fake/repo"),
+        )
+
+        # Cleaned exactly once, right when the 2nd failure skip-lists NEF --
+        # not after the 1st failure, and not once per round thereafter.
+        self.assertEqual(clean_calls, [Path("/fake/repo")])
+
+    def test_does_not_clean_when_no_format_ever_gets_skip_listed(self):
+        clean_calls = []
+        rounds = [[make_gap()], []]
+
+        def fake_find_gaps():
+            return rounds.pop(0) if rounds else []
+
+        run_loop(
+            {"models": ["x"]}, fake_find_gaps,
+            fix_gap_fn=lambda g, c: {"format": g["format"], "status": "fixed", "gaps_closed": g["gap_count"]},
+            git_checkout_clean_fn=lambda root: clean_calls.append(root),
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(clean_calls, [])
+
+    def test_does_not_clean_when_git_checkout_clean_fn_or_repo_root_is_omitted(self):
+        rounds = [[make_gap()], [make_gap()], []]
+
+        def fake_find_gaps():
+            return rounds.pop(0) if rounds else []
+
+        # Must not raise even though a format gets skip-listed here --
+        # cleanup is opt-in, not required.
+        run_loop(
+            {"models": ["x"]}, fake_find_gaps,
+            fix_gap_fn=lambda g, c: {"format": g["format"], "status": "failed", "reason": "still broken"},
+        )
 
 
 if __name__ == "__main__":
