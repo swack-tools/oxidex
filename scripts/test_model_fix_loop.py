@@ -74,6 +74,95 @@ class CallModelTests(unittest.TestCase):
         self.assertEqual(body["reasoning_effort"], "max")
 
 
+class CallModelStreamingTests(unittest.TestCase):
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_stream_true_sets_stream_field_in_request_body(self, mock_urlopen):
+        mock_cm = MagicMock()
+        mock_cm.__iter__.return_value = iter([b"data: [DONE]\n"])
+        mock_urlopen.return_value.__enter__.return_value = mock_cm
+
+        call_model(
+            [{"role": "user", "content": "fix it"}],
+            base_url="https://api.z.ai/api/paas/v4",
+            api_key="secret",
+            model="glm-5.2",
+            max_tokens=4096,
+            reasoning_effort="max",
+            stream=True,
+        )
+
+        request = mock_urlopen.call_args[0][0]
+        body = json.loads(request.data)
+        self.assertTrue(body["stream"])
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_stream_false_by_default(self, mock_urlopen):
+        response_json = json.dumps({"choices": [{"message": {"content": "the diff"}}]}).encode()
+        mock_cm = MagicMock()
+        mock_cm.read.return_value = response_json
+        mock_urlopen.return_value.__enter__.return_value = mock_cm
+
+        call_model(
+            [{"role": "user", "content": "fix it"}],
+            base_url="https://api.z.ai/api/paas/v4",
+            api_key="secret",
+            model="glm-5.2",
+            max_tokens=4096,
+            reasoning_effort="max",
+        )
+
+        request = mock_urlopen.call_args[0][0]
+        body = json.loads(request.data)
+        self.assertFalse(body["stream"])
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_reassembles_sse_chunks_into_full_reply(self, mock_urlopen):
+        lines = [
+            b'data: {"choices":[{"delta":{"content":"Hello"}}]}\n',
+            b'data: {"choices":[{"delta":{"content":", world"}}]}\n',
+            b'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}\n',
+            b"data: [DONE]\n",
+        ]
+        mock_cm = MagicMock()
+        mock_cm.__iter__.return_value = iter(lines)
+        mock_urlopen.return_value.__enter__.return_value = mock_cm
+
+        result = call_model(
+            [{"role": "user", "content": "fix it"}],
+            base_url="https://api.z.ai/api/paas/v4",
+            api_key="secret",
+            model="glm-5.2",
+            max_tokens=4096,
+            reasoning_effort="max",
+            stream=True,
+        )
+
+        self.assertEqual(result, "Hello, world")
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_skips_chunks_with_no_content_delta(self, mock_urlopen):
+        lines = [
+            b'data: {"choices":[{"delta":{}}]}\n',
+            b'data: {"choices":[{"delta":{"content":"ok"}}]}\n',
+            b"data: [DONE]\n",
+        ]
+        mock_cm = MagicMock()
+        mock_cm.__iter__.return_value = iter(lines)
+        mock_urlopen.return_value.__enter__.return_value = mock_cm
+
+        result = call_model(
+            [{"role": "user", "content": "fix it"}],
+            base_url="https://api.z.ai/api/paas/v4",
+            api_key="secret",
+            model="glm-5.2",
+            max_tokens=4096,
+            reasoning_effort="max",
+            stream=True,
+        )
+
+        self.assertEqual(result, "ok")
+
+
 class GitApplyTests(unittest.TestCase):
     @patch("model_fix_loop.subprocess.run")
     def test_success_returns_true(self, mock_run):
@@ -524,6 +613,35 @@ class FixGapReviewTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "fixed")
         self.assertEqual(len(review_call_model_calls), 1)
+
+    def test_config_stream_flag_reaches_call_model_fn(self):
+        gap = make_gap(gap_count=2)
+        stream_values_seen = []
+
+        def tracking_call_model_fn(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream=False):
+            stream_values_seen.append(stream)
+            if len(stream_values_seen) == 1:
+                return "```diff\n--- a/x\n+++ b/x\n```\n"
+            return "APPROVE"
+
+        config = dict(CONFIG, stream=True)
+        result = fix_gap(
+            gap, config,
+            call_model_fn=tracking_call_model_fn,
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            cargo_test_workspace_fn=lambda root: True,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "fixed")
+        # Both attempt_build's fixer call and review_verdict's call must
+        # see the config's stream flag -- proving it's threaded through
+        # both real call sites, not just one of them.
+        self.assertEqual(stream_values_seen, [True, True])
 
 
 class RunLoopTests(unittest.TestCase):

@@ -16,6 +16,10 @@ Config (env vars, or matching --flags):
                                     in later rounds automatically)
     MODEL_FIX_MAX_PROMPT_FILE_BYTES default 60000 (per-attempt cap on total
                                     parser-file source bytes included)
+    MODEL_FIX_STREAM                default false ("true"/"1"/"yes"/"on" to
+                                    enable; requests the response as
+                                    OpenAI-compatible SSE and reassembles it
+                                    into the same full-string reply either way)
 
 Usage:
     uv run scripts/model_fix_loop.py
@@ -55,8 +59,16 @@ def extract_diff(response_text):
     return None
 
 
-def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort):
-    """POST a chat-completions request, return the assistant's reply text."""
+def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream=False):
+    """POST a chat-completions request, return the assistant's reply text.
+
+    When stream is True, the response arrives as OpenAI-compatible SSE
+    ("data: {...}" lines terminated by "data: [DONE]") -- each chunk's
+    choices[0].delta.content is a fragment of the reply. This function
+    reassembles those fragments into the same complete string a
+    non-streaming call would return, so every caller's contract stays
+    identical regardless of which mode is used.
+    """
     url = base_url.rstrip("/") + "/chat/completions"
     body = json.dumps({
         "model": model,
@@ -64,6 +76,7 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort)
         "temperature": 0,
         "max_tokens": max_tokens,
         "reasoning_effort": reasoning_effort,
+        "stream": stream,
     }).encode()
     req = urllib.request.Request(
         url, data=body, method="POST",
@@ -73,8 +86,26 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort)
         },
     )
     with urllib.request.urlopen(req, timeout=120) as resp:
-        payload = json.loads(resp.read())
-    return payload["choices"][0]["message"]["content"]
+        if not stream:
+            payload = json.loads(resp.read())
+            return payload["choices"][0]["message"]["content"]
+
+        chunks = []
+        for raw_line in resp:
+            line = raw_line.decode("utf-8").strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if data == "[DONE]":
+                break
+            event = json.loads(data)
+            choices = event.get("choices") or []
+            if not choices:
+                continue  # e.g. the final usage-only chunk
+            content = (choices[0].get("delta") or {}).get("content")
+            if content:
+                chunks.append(content)
+        return "".join(chunks)
 
 
 def git_apply(diff_text, repo_root):
@@ -223,6 +254,7 @@ def review_verdict(gap, diff, config, call_model_fn=call_model):
             [{"role": "user", "content": prompt}],
             config["base_url"], config["api_key"], config["model"],
             config["max_tokens"], config["reasoning_effort"],
+            config.get("stream", False),
         )
     except Exception as e:
         return False, f"review call failed: {e}"
@@ -242,6 +274,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
             reply = call_model_fn(
                 messages, config["base_url"], config["api_key"], config["model"],
                 config["max_tokens"], config["reasoning_effort"],
+                config.get("stream", False),
             )
         except Exception as e:
             # Network/timeout/HTTP/malformed-response failures are a normal
@@ -406,6 +439,11 @@ def main(argv=None):
         "--max-prompt-file-bytes", type=int,
         default=int(os.environ.get("MODEL_FIX_MAX_PROMPT_FILE_BYTES", str(DEFAULT_MAX_PROMPT_FILE_BYTES))),
     )
+    parser.add_argument(
+        "--stream",
+        type=lambda v: str(v).strip().lower() in ("1", "true", "yes", "on"),
+        default=os.environ.get("MODEL_FIX_STREAM", "false").strip().lower() in ("1", "true", "yes", "on"),
+    )
     parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
     args = parser.parse_args(argv)
 
@@ -425,6 +463,7 @@ def main(argv=None):
         "reasoning_effort": args.reasoning_effort,
         "max_prompt_tags": args.max_prompt_tags,
         "max_prompt_file_bytes": args.max_prompt_file_bytes,
+        "stream": args.stream,
     }
 
     def find_gaps_fn():
