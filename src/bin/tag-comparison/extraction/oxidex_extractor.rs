@@ -641,9 +641,11 @@ impl OxiDexExtractor {
 
         if let Some((family, name)) = tag_key.split_once(':') {
             let normalized_family = match family {
-                // ExifIFD, IFD0, and GPS tags are output as EXIF in comparison reports
-                // Perl ExifTool outputs GPS tags as EXIF:GPSxxx
-                "ExifIFD" | "IFD0" | "GPS" => "EXIF",
+                // ExifIFD, IFD0, IFD1, GPS, and InteropIFD tags are output as EXIF in
+                // comparison reports. Perl ExifTool outputs GPS tags as EXIF:GPSxxx,
+                // and groups the thumbnail (IFD1) and Interoperability (InteropIFD)
+                // sub-IFDs under the same top-level "EXIF" family by default.
+                "ExifIFD" | "IFD0" | "IFD1" | "GPS" | "InteropIFD" => "EXIF",
                 // Manufacturer maker notes are output as MakerNotes in comparison reports
                 "Canon" | "Nikon" | "Sony" | "Fujifilm" | "Panasonic" | "Olympus" | "Pentax"
                 | "Samsung" => "MakerNotes",
