@@ -235,7 +235,10 @@ impl ExifToolExtractor {
     /// Best-effort -- a failure to persist the cache (e.g. read-only
     /// filesystem) must never fail the extraction itself, since the result
     /// was already computed correctly; it just means next round pays the
-    /// same ExifTool cost again.
+    /// same ExifTool cost again. Also refuses to write when exiftool_version
+    /// is "unknown" (get_exiftool_version's failure sentinel) -- writing
+    /// under that key would clobber a previously good cache entry with one
+    /// that can never validate against a future successful run.
     fn save_disk_cache(
         &self,
         fixture_path: &Path,
@@ -244,6 +247,9 @@ impl ExifToolExtractor {
         signature: &str,
         result: &ExtractionResult,
     ) {
+        if exiftool_version == "unknown" {
+            return;
+        }
         let dir = Self::disk_cache_dir(fixture_path);
         if std::fs::create_dir_all(&dir).is_err() {
             return;
