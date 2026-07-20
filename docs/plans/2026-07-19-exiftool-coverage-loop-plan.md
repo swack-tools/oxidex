@@ -31,7 +31,7 @@ Today, `just compare-exiftool-full` builds its combined ExifTool-test-corpus-plu
 **Interfaces:**
 - Produces: a stable path `${EXIFTOOL_CACHE_DIR:-/tmp/oxidex-exiftool-cache}/combined-samples` that persists across separate `just compare-exiftool-full` invocations and separate shell processes, and a stable exiftool binary path `${EXIFTOOL_CACHE_DIR:-/tmp/oxidex-exiftool-cache}/exiftool/exiftool` (already the existing behavior — unchanged). Task 2 (Find stage) and Task 3 (Fix stage) both reference these two paths directly.
 
-- [ ] **Step 1: Change `COMBINED_DIR` to a stable path under the cache dir**
+- [x] **Step 1: Change `COMBINED_DIR` to a stable path under the cache dir**
 
 In `justfile`, inside the `compare-exiftool-full` recipe, change:
 
@@ -68,7 +68,7 @@ to:
 
 (This removes the `cleanup()`/`trap` block entirely — nothing else in this recipe needs cleanup on exit.)
 
-- [ ] **Step 2: Verify the recipe still runs and the directory survives**
+- [x] **Step 2: Verify the recipe still runs and the directory survives**
 
 Run:
 ```bash
@@ -77,7 +77,7 @@ ls -d /tmp/oxidex-coverage-loop-test/combined-samples
 ```
 Expected: the recipe completes with `✅ Comprehensive comparison complete!`, and the `ls` command finds the directory (proving it wasn't deleted on exit).
 
-- [ ] **Step 3: Verify re-running reuses the cache (no re-download) and doesn't wipe the directory**
+- [x] **Step 3: Verify re-running reuses the cache (no re-download) and doesn't wipe the directory**
 
 Run:
 ```bash
@@ -85,7 +85,7 @@ time EXIFTOOL_CACHE_DIR=/tmp/oxidex-coverage-loop-test just compare-exiftool-ful
 ```
 Expected: output includes `✓ Using cached ExifTool <version>` and `(cached)` next to each manufacturer, and the whole run completes noticeably faster than Step 2's first run (no fresh downloads). The directory from Step 2 is still present throughout (nothing deletes it mid-run).
 
-- [ ] **Step 4: Clean up the test cache dir and commit**
+- [x] **Step 4: Clean up the test cache dir and commit**
 
 ```bash
 rm -rf /tmp/oxidex-coverage-loop-test
@@ -109,7 +109,7 @@ stable path under the existing cache dir."
 **Interfaces:**
 - Produces: `COMPARISON_REPORT_SCHEMA` (JSON Schema mirroring `ComparisonReport`/`FormatComparison` from `src/bin/tag-comparison/models/mod.rs`), `CACHE_DIR` (string constant), `findGapsPrompt()` (returns a prompt string, no args). Task 3 consumes `COMPARISON_REPORT_SCHEMA` and `CACHE_DIR`.
 
-- [ ] **Step 1: Write the script with just the meta block and Find stage**
+- [x] **Step 1: Write the script with just the meta block and Find stage**
 
 ```js
 export const meta = {
@@ -218,7 +218,7 @@ log(`find stage: ${Object.keys(report.by_format || {}).length} formats in report
 return report
 ```
 
-- [ ] **Step 2: Run it and confirm the Find stage produces a well-formed report**
+- [x] **Step 2: Run it and confirm the Find stage produces a well-formed report**
 
 Invoke:
 ```
@@ -228,7 +228,7 @@ Workflow({ scriptPath: "<the path this was saved under>" })
 
 Expected: the workflow completes, `log()` reports some number of formats greater than zero (JPEG/PNG/TIFF/PDF/MP4 at minimum, since those have local fixtures ExifTool's own `t/images` corpus will also cover many more), and the returned report validates against `COMPARISON_REPORT_SCHEMA` (the harness retries automatically on schema mismatch — if it fails after retries, read `<transcriptDir>/journal.jsonl` to see the agent's actual raw output and adjust the schema or prompt).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .claude/workflows/exiftool-coverage-loop.js
@@ -249,7 +249,7 @@ comparison.json as a schema-validated structured object."
 - Consumes: `COMPARISON_REPORT_SCHEMA`, `CACHE_DIR`, `findGapsPrompt()`, `report` (Task 2).
 - Produces: `FIX_RESULT_SCHEMA` (`{format, verified, gapsClosed, branch, summary}`), `fixPrompt(group)` (takes one `by_format` entry, returns a prompt string), `gapGroups` (array of `by_format` entries with at least one gap). Task 4 consumes `FIX_RESULT_SCHEMA` and the `verified` filtering pattern shown here.
 
-- [ ] **Step 1: Add gap grouping, the Fix schema/prompt, and an optional test-scoping filter**
+- [x] **Step 1: Add gap grouping, the Fix schema/prompt, and an optional test-scoping filter**
 
 Insert after the `COMPARISON_REPORT_SCHEMA` constant and before `findGapsPrompt()`:
 
@@ -362,7 +362,7 @@ log(`${fixResults.filter(Boolean).filter(r => r.verified).length}/${fixResults.f
 return { report, fixResults }
 ```
 
-- [ ] **Step 2: Validate against a single, small, real format**
+- [x] **Step 2: Validate against a single, small, real format**
 
 Pick a format from Task 2's report with a modest gap count (check the report's `by_format` entries for one with, say, under 20 combined `missing_in_oxidex`/`value_differences` -- avoid picking a huge one like QuickTime for this validation run). Invoke:
 ```
@@ -372,7 +372,7 @@ Expected: exactly one `fix-<FORMAT>` agent runs (visible in `/workflows`), and i
 - `verified: true` with a `branch` name -- confirm that branch exists (`git branch --list "<branch>"`) and has a real commit (`git log <branch> -1`).
 - `verified: false` -- confirm the worktree was left clean (`git worktree list` shows no dirty state) rather than lingering with uncommitted changes.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .claude/workflows/exiftool-coverage-loop.js
@@ -394,7 +394,7 @@ self-verify a fix, gated on cargo test --workspace passing."
 - Consumes: `FIX_RESULT_SCHEMA`, `fixResults`, `gapGroupsFrom()`, `findGapsPrompt()` (Tasks 2-3).
 - Produces: `MERGE_RESULT_SCHEMA`, `mergePrompt(result)`, the outer `while` round loop with `dryRounds` tracking. This is the last task -- nothing downstream depends on this file further.
 
-- [ ] **Step 1: Replace the script body with the full round loop**
+- [x] **Step 1: Replace the script body with the full round loop**
 
 Keep everything above `phase('Find')` from Tasks 2-3 (the `meta` block, `CACHE_DIR`, both schemas, `findGapsPrompt`, `fixPrompt`, `gapGroupsFrom`) unchanged. Add, right after `gapGroupsFrom`:
 
@@ -428,8 +428,12 @@ function mergePrompt(result, repoPath, repoBranch) {
     `1. Run: git merge --no-ff "${result.branch}" -m "merge: ${result.format} coverage fix"\n` +
     `   If it conflicts, run "git merge --abort", report success: false, and explain the conflict in summary.\n` +
     `2. If the merge succeeded, run: cargo test --workspace\n` +
-    `3. If tests fail, run "git reset --hard HEAD~1" to undo only the merge commit you just made, report ` +
-    `success: false, and explain the regression in summary.\n` +
+    `3. If tests fail: before running any reset command, re-verify \`pwd\` and \`git branch --show-current\` ` +
+    `STILL match "${repoPath}" and "${repoBranch}" exactly -- a long test run is exactly the kind of gap ` +
+    `where you might have changed directories in between. If they no longer match, STOP -- do not run ` +
+    `"git reset --hard" from anywhere -- report success: false and explain the location mismatch instead of ` +
+    `guessing. If they still match, run "git reset --hard HEAD~1" to undo only the merge commit you just ` +
+    `made, report success: false, and explain the regression in summary.\n` +
     `4. If tests pass, the merge stands. Report success: true.\n\n` +
     `Report: format ("${result.format}"), success (bool), summary (include the pwd/branch you verified in ` +
     `step 1 as part of the summary, for auditability).`
@@ -517,7 +521,7 @@ log(`stopped after ${round} rounds (${dryRounds} consecutive dry rounds)`)
 return { rounds: round }
 ```
 
-- [ ] **Step 2: Validate the loop mechanics on a small scope**
+- [x] **Step 2: Validate the loop mechanics on a small scope**
 
 Invoke with a format already known (from Task 3's validation) to have few enough gaps that a fix-agent could plausibly close all of them in one round, forcing an observable dry transition:
 ```
@@ -525,7 +529,7 @@ Workflow({ scriptPath: "<path>", args: { onlyFormats: ["<SAME_FORMAT_AS_TASK_3>"
 ```
 Expected: at least one round runs Find → Fix → Merge; if that format's gaps get fully closed, the *next* round's Find should report zero gaps for it, `dryRounds` increments, and after two such rounds the workflow logs `stopped after N rounds (2 consecutive dry rounds)` and returns. If gaps only partially close, run it again (or just let it keep going) to observe multiple non-dry rounds before dryness. Either way, confirm via `git log --oneline -10` that each closed gap produced exactly one merge commit on the working branch, and that `cargo test --workspace` passes on `HEAD` afterward.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .claude/workflows/exiftool-coverage-loop.js
@@ -537,13 +541,27 @@ round loop, and stops after two consecutive rounds close zero
 gaps."
 ```
 
-- [ ] **Step 4: Full, unscoped integration run**
+- [x] **Step 4: Full, unscoped integration run**
 
 Invoke without `onlyFormats`:
 ```
 Workflow({ name: "exiftool-coverage-loop" })
 ```
 (If name-based resolution fails, check whether `.claude/workflows/` expects a different filename/structure than a flat `<name>.js` and adjust Task 2's file location accordingly, then retry.) Let at least one full round run across every format with gaps. Confirm: the round completes, the log summary reports a real `closedCount`, `git log` shows one merge commit per successfully-closed format, and `cargo test --workspace` passes on `HEAD`. This is the acceptance test for the whole plan -- everything upstream was validated in isolation, this is the first time all three stages run together at full scale.
+
+**Actual execution note:** the user chose a narrower, resource-bounded scope instead of the
+literal unscoped run above -- confirmed via `just compare-exiftool-full`, ~15-20 formats had gaps
+at the time and JPEG alone had 3,080, so an unscoped run means 15+ simultaneous full Rust release
+builds contending for one machine. Ran `Workflow({ scriptPath, args: { onlyFormats: ["SVG", "MXF",
+"EPS", "AVI", "RAF"] } })` instead: 4 rounds, 16 agents, 204 gaps closed across 5 real, verified
+parser fixes (`wf_99ad35e0-60b`). This run also surfaced and led to fixing a real incident (a merge
+agent operating in the wrong directory -- see the commit history for
+`fix: harden merge stage against operating in the wrong directory`), re-validated afterward on GIF
+and HEIC (`wf_ae5b35ae-7a2`, `wf_5ed959c5-420`). `name`-based resolution (`Workflow({ name:
+"exiftool-coverage-loop" })`) was separately confirmed working -- it surfaced in the
+session's available-skills list once the file was committed. Given ~15 formats (led by JPEG's
+2,700+ remaining gaps) are still open, future invocations of the named workflow will continue
+closing them incrementally, per the plan's own iterative design.
 
 ---
 

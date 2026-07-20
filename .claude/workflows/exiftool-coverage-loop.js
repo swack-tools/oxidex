@@ -176,8 +176,12 @@ function mergePrompt(result, repoPath, repoBranch) {
     `1. Run: git merge --no-ff "${result.branch}" -m "merge: ${result.format} coverage fix"\n` +
     `   If it conflicts, run "git merge --abort", report success: false, and explain the conflict in summary.\n` +
     `2. If the merge succeeded, run: cargo test --workspace\n` +
-    `3. If tests fail, run "git reset --hard HEAD~1" to undo only the merge commit you just made, report ` +
-    `success: false, and explain the regression in summary.\n` +
+    `3. If tests fail: before running any reset command, re-verify \`pwd\` and \`git branch --show-current\` ` +
+    `STILL match "${repoPath}" and "${repoBranch}" exactly -- a long test run is exactly the kind of gap ` +
+    `where you might have changed directories in between. If they no longer match, STOP -- do not run ` +
+    `"git reset --hard" from anywhere -- report success: false and explain the location mismatch instead of ` +
+    `guessing. If they still match, run "git reset --hard HEAD~1" to undo only the merge commit you just ` +
+    `made, report success: false, and explain the regression in summary.\n` +
     `4. If tests pass, the merge stands. Report success: true.\n\n` +
     `Report: format ("${result.format}"), success (bool), summary (include the pwd/branch you verified in ` +
     `step 1 as part of the summary, for auditability).`
