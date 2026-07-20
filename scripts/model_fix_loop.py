@@ -702,6 +702,51 @@ def main(argv=None):
     def timestamped_log(msg):
         print(f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}] {msg}")
 
+    # Audit trail of every actual API call (fixer and reviewer both funnel
+    # through this, since fix_gap threads the same call_model_fn into both
+    # attempt_build and review_fn) -- request params + prompt saved before
+    # the call, response (or the exact error) saved right after, so "is it
+    # even talking to the model, and what did it get back" never has to be
+    # guessed at from a timeout/exception message alone.
+    req_log_dir = REPO_ROOT / "logs" / "model-fix-requests"
+    req_log_dir.mkdir(parents=True, exist_ok=True)
+    req_manifest_path = req_log_dir / "manifest.log"
+
+    def logging_call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
+                            stream=False, thinking=True, temperature=0):
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        prompt_chars = sum(len(m.get("content", "")) for m in messages)
+        req_path = req_log_dir / f"{ts}-request.json"
+        req_path.write_text(json.dumps({
+            "model": model, "base_url": base_url, "max_tokens": max_tokens,
+            "reasoning_effort": reasoning_effort, "stream": stream,
+            "thinking": thinking, "temperature": temperature,
+            "prompt_chars": prompt_chars, "messages": messages,
+        }, indent=2))
+        t0 = time.time()
+        try:
+            reply = call_model(
+                messages, base_url, api_key, model, max_tokens, reasoning_effort,
+                stream, thinking, temperature,
+            )
+        except Exception as e:
+            elapsed = time.time() - t0
+            with req_manifest_path.open("a") as f:
+                f.write(
+                    f"{ts} model={model} prompt_chars={prompt_chars} "
+                    f"elapsed={elapsed:.1f}s ERROR={e}\n"
+                )
+            raise
+        elapsed = time.time() - t0
+        reply_path = req_log_dir / f"{ts}-response.txt"
+        reply_path.write_text(reply)
+        with req_manifest_path.open("a") as f:
+            f.write(
+                f"{ts} model={model} prompt_chars={prompt_chars} "
+                f"elapsed={elapsed:.1f}s reply_chars={len(reply)} OK\n"
+            )
+        return reply
+
     def real_fix_gap(gap, cfg):
         def recheck(fmt):
             path = run_format_comparison(fmt, args.cache_dir)
@@ -712,6 +757,7 @@ def main(argv=None):
         return fix_gap(
             gap, cfg, recheck_fn=recheck, review_config=review_config,
             git_apply_fn=logging_git_apply, log_fn=timestamped_log,
+            call_model_fn=logging_call_model,
         )
 
     summary = run_loop(
