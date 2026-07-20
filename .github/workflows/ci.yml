@@ -68,7 +68,18 @@ jobs:
           rm api/oxidex.h.tmp
       - name: Install ExifTool
         run: |
-          curl -sSL https://sourceforge.net/projects/exiftool/files/latest/download -o /tmp/exiftool.tar.gz
+          # "files/latest/download" now resolves to the Windows/default zip
+          # package rather than the Unix tarball, so find the newest
+          # Image-ExifTool-*.tar.gz entry from the project's RSS feed instead.
+          tarball_url=$(curl -sSL "https://sourceforge.net/projects/exiftool/rss?path=/" \
+            | grep -oE '<link>[^<]*Image-ExifTool-[0-9.]+\.tar\.gz/download</link>' \
+            | head -1 \
+            | sed -E 's#<link>(.*)</link>#\1#')
+          if [ -z "$tarball_url" ]; then
+            echo "Could not find an Image-ExifTool tarball URL" >&2
+            exit 1
+          fi
+          curl -sSL "$tarball_url" -o /tmp/exiftool.tar.gz
           mkdir -p /tmp/exiftool-src
           tar xzf /tmp/exiftool.tar.gz -C /tmp/exiftool-src --strip-components=1
           echo "/tmp/exiftool-src" >> "$GITHUB_PATH"
