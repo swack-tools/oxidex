@@ -1,12 +1,11 @@
 import json
-import os
 import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from model_fix_loop import (
-    _load_dotenv,
+    _normalize_model_config,
     attempt_build,
     build_prompt,
     build_review_prompt,
@@ -19,40 +18,67 @@ from model_fix_loop import (
     git_apply,
     git_checkout_clean,
     git_commit,
+    load_toml_config,
     review_verdict,
     run_loop,
 )
 
 
-class LoadDotenvTests(unittest.TestCase):
-    def test_sets_env_vars_from_file(self):
+class LoadTomlConfigTests(unittest.TestCase):
+    def test_parses_worker_and_reviewer_tables(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            env_path = Path(tmpdir) / ".env"
-            env_path.write_text("MODEL_FIX_TEST_KEY=hello\n")
-            with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("MODEL_FIX_TEST_KEY", None)
-                _load_dotenv(env_path)
-                self.assertEqual(os.environ["MODEL_FIX_TEST_KEY"], "hello")
+            config_path = Path(tmpdir) / "config.toml"
+            config_path.write_text(
+                '[worker]\nbase_url = "https://api.example/v1"\napi_key = "k"\n'
+                'models = ["a", "b"]\n\n'
+                '[reviewer]\nmodels = ["c"]\n'
+            )
+            data = load_toml_config(config_path)
+            self.assertEqual(data["worker"]["models"], ["a", "b"])
+            self.assertEqual(data["reviewer"]["models"], ["c"])
 
-    def test_skips_comments_and_blank_lines(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            env_path = Path(tmpdir) / ".env"
-            env_path.write_text("# a comment\n\nMODEL_FIX_TEST_KEY2=world\n")
-            with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("MODEL_FIX_TEST_KEY2", None)
-                _load_dotenv(env_path)
-                self.assertEqual(os.environ["MODEL_FIX_TEST_KEY2"], "world")
+    def test_missing_file_returns_none(self):
+        self.assertIsNone(load_toml_config(Path("/nonexistent/path/config.toml")))
 
-    def test_does_not_override_existing_env_var(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            env_path = Path(tmpdir) / ".env"
-            env_path.write_text("MODEL_FIX_TEST_KEY3=from_file\n")
-            with patch.dict(os.environ, {"MODEL_FIX_TEST_KEY3": "from_shell"}, clear=False):
-                _load_dotenv(env_path)
-                self.assertEqual(os.environ["MODEL_FIX_TEST_KEY3"], "from_shell")
 
-    def test_missing_file_is_a_silent_no_op(self):
-        _load_dotenv(Path("/nonexistent/path/.env"))  # must not raise
+class NormalizeModelConfigTests(unittest.TestCase):
+    def test_fills_in_defaults_for_missing_keys(self):
+        config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
+        self.assertEqual(config["max_tokens"], 4096)
+        self.assertEqual(config["reasoning_effort"], "max")
+        self.assertEqual(config["stream"], False)
+        self.assertEqual(config["thinking"], True)
+        self.assertEqual(config["temperature"], 0)
+
+    def test_preserves_explicit_values(self):
+        config = _normalize_model_config({
+            "base_url": "u", "api_key": "k", "models": ["m1", "m2"],
+            "max_tokens": 16, "reasoning_effort": "low", "stream": True,
+            "thinking": False, "temperature": 0.7,
+        })
+        self.assertEqual(config["models"], [
+            {"name": "m1", "base_url": "u", "api_key": "k"},
+            {"name": "m2", "base_url": "u", "api_key": "k"},
+        ])
+        self.assertEqual(config["max_tokens"], 16)
+        self.assertEqual(config["stream"], True)
+
+    def test_string_model_entries_inherit_table_base_url_and_api_key(self):
+        config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
+        self.assertEqual(config["models"], [{"name": "m", "base_url": "u", "api_key": "k"}])
+
+    def test_table_model_entries_can_override_base_url_and_api_key(self):
+        config = _normalize_model_config({
+            "base_url": "u", "api_key": "k",
+            "models": [
+                "shared-provider-model",
+                {"name": "other-provider-model", "base_url": "https://other.example/v1", "api_key": "other-key"},
+            ],
+        })
+        self.assertEqual(config["models"], [
+            {"name": "shared-provider-model", "base_url": "u", "api_key": "k"},
+            {"name": "other-provider-model", "base_url": "https://other.example/v1", "api_key": "other-key"},
+        ])
 
 
 class ExtractDiffTests(unittest.TestCase):
@@ -436,7 +462,7 @@ class ReviewVerdictTests(unittest.TestCase):
         gap = make_gap()
         approved, reason = review_verdict(
             gap, "--- a/x\n+++ b/x\n",
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            {"base_url": "u", "api_key": "k", "models": [{"name": "glm-5.2", "base_url": "u", "api_key": "k"}], "max_tokens": 4096, "reasoning_effort": "max"},
             call_model_fn=lambda messages, *a: "APPROVE",
         )
         self.assertTrue(approved)
@@ -445,7 +471,7 @@ class ReviewVerdictTests(unittest.TestCase):
         gap = make_gap()
         approved, reason = review_verdict(
             gap, "--- a/x\n+++ b/x\n",
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            {"base_url": "u", "api_key": "k", "models": [{"name": "glm-5.2", "base_url": "u", "api_key": "k"}], "max_tokens": 4096, "reasoning_effort": "max"},
             call_model_fn=lambda messages, *a: "REJECT: hardcoded value",
         )
         self.assertFalse(approved)
@@ -459,11 +485,39 @@ class ReviewVerdictTests(unittest.TestCase):
 
         approved, reason = review_verdict(
             gap, "--- a/x\n+++ b/x\n",
-            {"base_url": "u", "api_key": "k", "model": "glm-5.2", "max_tokens": 4096, "reasoning_effort": "max"},
+            {"base_url": "u", "api_key": "k", "models": [{"name": "glm-5.2", "base_url": "u", "api_key": "k"}], "max_tokens": 4096, "reasoning_effort": "max"},
             call_model_fn=raising,
         )
         self.assertFalse(approved)
         self.assertIn("review call failed", reason)
+
+    def test_picks_a_model_from_the_pool_via_pick_model_fn(self):
+        gap = make_gap()
+        models_seen = []
+        picks = []
+
+        def tracking_call_model_fn(messages, base_url, api_key, model, *rest):
+            models_seen.append(model)
+            return "APPROVE"
+
+        def tracking_pick_model_fn(models):
+            picks.append(list(models))
+            return models[-1]
+
+        model_specs = [
+            {"name": "model-a", "base_url": "u", "api_key": "k"},
+            {"name": "model-b", "base_url": "u", "api_key": "k"},
+        ]
+        approved, reason = review_verdict(
+            gap, "--- a/x\n+++ b/x\n",
+            {"base_url": "u", "api_key": "k", "models": model_specs,
+             "max_tokens": 4096, "reasoning_effort": "max"},
+            call_model_fn=tracking_call_model_fn,
+            pick_model_fn=tracking_pick_model_fn,
+        )
+        self.assertTrue(approved)
+        self.assertEqual(models_seen, ["model-b"])
+        self.assertEqual(picks, [model_specs])
 
 
 class FixGapHappyPathTests(unittest.TestCase):
@@ -475,7 +529,7 @@ class FixGapHappyPathTests(unittest.TestCase):
         result = fix_gap(
             gap,
             {
-                "base_url": "u", "api_key": "k", "model": "glm-5.2",
+                "base_url": "u", "api_key": "k", "models": [{"name": "glm-5.2", "base_url": "u", "api_key": "k"}],
                 "max_tokens": 4096, "reasoning_effort": "max",
                 "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
             },
@@ -498,7 +552,7 @@ class FixGapHappyPathTests(unittest.TestCase):
 
 
 CONFIG = {
-    "base_url": "u", "api_key": "k", "model": "glm-5.2",
+    "base_url": "u", "api_key": "k", "models": [{"name": "glm-5.2", "base_url": "u", "api_key": "k"}],
     "max_tokens": 4096, "reasoning_effort": "max",
     "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
 }
@@ -518,6 +572,39 @@ class AttemptBuildTests(unittest.TestCase):
         self.assertTrue(built)
         self.assertIsNone(reason)
         self.assertTrue(diff.startswith("--- a/x"))
+
+    def test_picks_a_model_from_the_pool_for_each_call_via_pick_model_fn(self):
+        models_seen = []
+        picks = []
+
+        def tracking_call_model_fn(messages, base_url, api_key, model, *rest):
+            models_seen.append(model)
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        def tracking_pick_model_fn(models):
+            picks.append(list(models))
+            return models[0]
+
+        model_specs = [
+            {"name": "model-a", "base_url": "u", "api_key": "k"},
+            {"name": "model-b", "base_url": "u", "api_key": "k"},
+            {"name": "model-c", "base_url": "u", "api_key": "k"},
+        ]
+        multi_model_config = dict(CONFIG, models=model_specs)
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=tracking_call_model_fn,
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=multi_model_config,
+            repo_root=Path("/fake/repo"),
+            pick_model_fn=tracking_pick_model_fn,
+        )
+
+        self.assertTrue(built)
+        self.assertEqual(models_seen, ["model-a"])
+        self.assertEqual(picks, [model_specs])
 
     def test_retries_once_on_build_failure_then_succeeds(self):
         build_attempts = []
@@ -612,7 +699,7 @@ class FixGapFailureTests(unittest.TestCase):
         result = fix_gap(
             gap,
             {
-                "base_url": "u", "api_key": "k", "model": "glm-5.2",
+                "base_url": "u", "api_key": "k", "models": [{"name": "glm-5.2", "base_url": "u", "api_key": "k"}],
                 "max_tokens": 4096, "reasoning_effort": "max",
                 "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
             },
@@ -633,7 +720,7 @@ class FixGapFailureTests(unittest.TestCase):
         result = fix_gap(
             gap,
             {
-                "base_url": "u", "api_key": "k", "model": "glm-5.2",
+                "base_url": "u", "api_key": "k", "models": [{"name": "glm-5.2", "base_url": "u", "api_key": "k"}],
                 "max_tokens": 4096, "reasoning_effort": "max",
                 "max_prompt_tags": 40, "max_prompt_file_bytes": 60_000,
             },
@@ -830,7 +917,11 @@ class FixGapReviewTests(unittest.TestCase):
             configs_seen.append(("review", config))
             return True, ""
 
-        review_config = dict(CONFIG, model="review-model", base_url="https://review.example/v1")
+        review_config = dict(
+            CONFIG,
+            models=[{"name": "review-model", "base_url": "https://review.example/v1", "api_key": "k"}],
+            base_url="https://review.example/v1",
+        )
 
         result = fix_gap(
             gap, CONFIG,
@@ -847,8 +938,11 @@ class FixGapReviewTests(unittest.TestCase):
         self.assertEqual(result["status"], "fixed")
         fixer_config = next(c for label, c in configs_seen if label == "fixer")
         review_seen_config = next(c for label, c in configs_seen if label == "review")
-        self.assertEqual(fixer_config["model"], "glm-5.2")
-        self.assertEqual(review_seen_config["model"], "review-model")
+        self.assertEqual(fixer_config["models"], [{"name": "glm-5.2", "base_url": "u", "api_key": "k"}])
+        self.assertEqual(
+            review_seen_config["models"],
+            [{"name": "review-model", "base_url": "https://review.example/v1", "api_key": "k"}],
+        )
         self.assertEqual(review_seen_config["base_url"], "https://review.example/v1")
 
     def test_review_config_defaults_to_fixer_config_when_not_provided(self):
@@ -886,7 +980,7 @@ class RunLoopTests(unittest.TestCase):
             find_calls.append(1)
             return []
 
-        result = run_loop({"model": "x"}, fake_find_gaps, fix_gap_fn=lambda g, c: self.fail("should not fix"))
+        result = run_loop({"models": ["x"]}, fake_find_gaps, fix_gap_fn=lambda g, c: self.fail("should not fix"))
         self.assertEqual(result["rounds"], 2)
         self.assertEqual(len(find_calls), 2)
 
@@ -899,7 +993,7 @@ class RunLoopTests(unittest.TestCase):
         def fake_fix_gap(gap, config):
             return {"format": gap["format"], "status": "fixed", "gaps_closed": gap["gap_count"]}
 
-        result = run_loop({"model": "x"}, fake_find_gaps, fake_fix_gap)
+        result = run_loop({"models": ["x"]}, fake_find_gaps, fake_fix_gap)
         self.assertEqual(result["rounds"], 3)
         self.assertEqual(len(result["fixed"]), 1)
 
@@ -935,7 +1029,7 @@ class RunLoopTests(unittest.TestCase):
                 return {"format": "PNG", "status": "fixed", "gaps_closed": g["gap_count"]}
             return {"format": g["format"], "status": "failed", "reason": "still broken"}
 
-        result = run_loop({"model": "x"}, fake_find_gaps, fake_fix_gap)
+        result = run_loop({"models": ["x"]}, fake_find_gaps, fake_fix_gap)
 
         # NEF attempted exactly twice (rounds 1 and 2), never a third time,
         # even though round 3's fake data includes it -- proving the

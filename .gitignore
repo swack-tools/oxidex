@@ -10,6 +10,9 @@ node_modules
 .env.local
 .env.*.local
 
+# Driver B model config (holds API keys) -- see config.example.toml
+config.toml
+
 # OS files
 .DS_Store
 Thumbs.db

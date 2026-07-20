@@ -1,6 +1,6 @@
 #!/usr/bin/env -S uv run
 # /// script
-# requires-python = ">=3.9"
+# requires-python = ">=3.11"
 # dependencies = []
 # ///
 """Run scripts/model_fix_loop.py in parallel across formats, each in its
@@ -8,9 +8,10 @@ own git worktree with its own target/ dir (never shared -- CARGO_TARGET_DIR
 is explicitly stripped from each worker's environment), then merge
 completed work back sequentially once each worker finishes.
 
-Config: same MODEL_FIX_*/REVIEW_* env vars as model_fix_loop.py, loaded
-from .env automatically (same loader) and passed through to every worker
-unchanged.
+Config: config.toml (see config.example.toml), same file model_fix_loop.py
+reads directly. Since config.toml is gitignored, `git worktree add` won't
+bring it into a freshly created worktree on its own, so each worker's
+worktree gets its own copy at creation time (see create_worktree).
 
 Usage:
     uv run scripts/parallel_model_fix_loop.py
@@ -20,6 +21,7 @@ Usage:
 import argparse
 import concurrent.futures
 import os
+import shutil
 import signal
 import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
@@ -28,7 +30,7 @@ import time
 from pathlib import Path
 
 from find_tag_gaps import REPO_ROOT, group_gaps_by_format, load_comparison_report, run_full_comparison
-from model_fix_loop import _load_dotenv
+from model_fix_loop import DEFAULT_CONFIG_PATH
 
 # Every in-flight worker's process group, so an interrupted wrapper
 # (Ctrl-C, SIGTERM) can force-terminate all of them rather than leaving
@@ -59,11 +61,16 @@ def branch_name(fmt):
 # output) or the caller's own current git ref, never network input.
 
 
-def create_worktree(repo_root, path, branch, base_ref):
+def create_worktree(repo_root, path, branch, base_ref, config_path=DEFAULT_CONFIG_PATH):
     subprocess.run(  # nosec B603
         ["git", "worktree", "add", "-b", branch, str(path), base_ref],
         cwd=repo_root, check=True, capture_output=True, text=True,
     )
+    # config.toml is gitignored (holds API keys), so a fresh worktree
+    # checkout never has one -- copy it explicitly so the worker's own
+    # model_fix_loop.py finds it at its default path.
+    if config_path.is_file():
+        shutil.copy(config_path, path / config_path.name)
 
 
 def remove_worktree(repo_root, path):
@@ -214,7 +221,8 @@ def run_worker(fmt, worktree, cache_dir, log_path, timeout=None):
     return returncode
 
 
-def process_format(fmt, repo_root, base_ref, worktree_base, log_base, cache_dir, timeout):
+def process_format(fmt, repo_root, base_ref, worktree_base, log_base, cache_dir, timeout,
+                    config_path=DEFAULT_CONFIG_PATH):
     """Create fmt's worktree, run its worker, report what happened. Never
     raises -- failures are reported in the returned dict's status."""
     path = worktree_path(worktree_base, fmt)
@@ -222,7 +230,7 @@ def process_format(fmt, repo_root, base_ref, worktree_base, log_base, cache_dir,
     log_path = log_base / f"{fmt}.log"
 
     try:
-        create_worktree(repo_root, path, branch, base_ref)
+        create_worktree(repo_root, path, branch, base_ref, config_path=config_path)
     except subprocess.CalledProcessError as e:
         return fmt, {"status": "worktree_failed", "error": e.stderr}
 
@@ -237,39 +245,13 @@ def process_format(fmt, repo_root, base_ref, worktree_base, log_base, cache_dir,
     }
 
 
-def main(argv=None):
-    # An interrupted wrapper (Ctrl-C, SIGTERM) must not leave worker
-    # process trees (cargo build/test, rustc) running unsupervised.
-    signal.signal(signal.SIGINT, _handle_shutdown_signal)
-    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
-    _load_dotenv(REPO_ROOT / ".env")
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--max-parallel", type=int,
-        default=int(os.environ.get("MODEL_FIX_MAX_PARALLEL", "20")),
-    )
-    parser.add_argument(
-        "--formats",
-        help="Comma-separated format list; default: auto-discover every format with gaps",
-    )
-    # Fixed /tmp defaults are a race-condition concern on shared multi-user
-    # systems; this is a single-developer local CLI tool, and every one of
-    # these is overridable via its env var or flag.
-    parser.add_argument(
-        "--cache-dir",
-        default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"),  # nosec B108
-    )
-    parser.add_argument("--timeout", type=int, default=None, help="Per-worker timeout in seconds (default: none)")
-    parser.add_argument(
-        "--worktree-dir",
-        default=os.environ.get("MODEL_FIX_WORKTREE_DIR", "/tmp/oxidex-parallel-fix"),  # nosec B108
-    )
-    parser.add_argument(
-        "--log-dir",
-        default=os.environ.get("MODEL_FIX_LOG_DIR", "/tmp/oxidex-parallel-fix-logs"),  # nosec B108
-    )
-    args = parser.parse_args(argv)
-
+def run_round(args, config_path):
+    """One discover -> dispatch -> merge cycle across every requested
+    format. Returns True iff the round had no unresolved failures
+    (worktree_failed/timeout/merge-conflict/test-regression) -- callers in
+    --infinite mode use this only for logging, never to stop the loop,
+    since a format that can't currently be fixed is expected, not fatal.
+    """
     if args.formats:
         formats = [f.strip() for f in args.formats.split(",") if f.strip()]
     else:
@@ -278,7 +260,7 @@ def main(argv=None):
 
     if not formats:
         print("No formats with gaps found.")
-        return 0
+        return True
 
     base_ref = subprocess.run(  # nosec B603
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
@@ -297,6 +279,7 @@ def main(argv=None):
         futures = {
             pool.submit(
                 process_format, fmt, REPO_ROOT, base_ref, worktree_base, log_base, args.cache_dir, args.timeout,
+                config_path=config_path,
             ): fmt
             for fmt in formats
         }
@@ -338,7 +321,74 @@ def main(argv=None):
     for fmt, reason in failed:
         print(f"  {fmt}: {reason}")
 
-    return 1 if failed else 0
+    return not failed
+
+
+def main(argv=None, run_round_fn=run_round, sleep_fn=time.sleep):
+    # An interrupted wrapper (Ctrl-C, SIGTERM) must not leave worker
+    # process trees (cargo build/test, rustc) running unsupervised.
+    signal.signal(signal.SIGINT, _handle_shutdown_signal)
+    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--config", default=str(DEFAULT_CONFIG_PATH),
+        help="Path to config.toml, copied into every worker's worktree (see config.example.toml)",
+    )
+    parser.add_argument(
+        "--max-parallel", type=int,
+        default=int(os.environ.get("MODEL_FIX_MAX_PARALLEL", "20")),
+    )
+    parser.add_argument(
+        "--formats",
+        help="Comma-separated format list; default: auto-discover every format with gaps, "
+             "re-discovered fresh every round when combined with --infinite",
+    )
+    parser.add_argument(
+        "--infinite", action="store_true",
+        help="Keep running discover -> dispatch -> merge rounds back to back, forever, until "
+             "interrupted (Ctrl-C/SIGTERM). Each round re-discovers formats with gaps from "
+             "scratch (unless --formats pins a fixed list), so newly-exposed or still-unfixed "
+             "gaps keep getting retried across rounds. A round with zero formats or zero "
+             "successful fixes is not a stop condition -- only an interrupt stops this mode.",
+    )
+    parser.add_argument(
+        "--round-delay", type=float, default=0,
+        help="Seconds to sleep between rounds in --infinite mode (default: 0, back to back)",
+    )
+    # Fixed /tmp defaults are a race-condition concern on shared multi-user
+    # systems; this is a single-developer local CLI tool, and every one of
+    # these is overridable via its env var or flag.
+    parser.add_argument(
+        "--cache-dir",
+        default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"),  # nosec B108
+    )
+    parser.add_argument("--timeout", type=int, default=None, help="Per-worker timeout in seconds (default: none)")
+    parser.add_argument(
+        "--worktree-dir",
+        default=os.environ.get("MODEL_FIX_WORKTREE_DIR", "/tmp/oxidex-parallel-fix"),  # nosec B108
+    )
+    parser.add_argument(
+        "--log-dir",
+        default=os.environ.get("MODEL_FIX_LOG_DIR", "/tmp/oxidex-parallel-fix-logs"),  # nosec B108
+    )
+    args = parser.parse_args(argv)
+
+    config_path = Path(args.config)
+    if not config_path.is_file():
+        print(f"{config_path} not found -- see config.example.toml", file=sys.stderr)
+        return 1
+
+    round_num = 0
+    last_round_ok = True
+    while True:
+        round_num += 1
+        if args.infinite:
+            print(f"\n{'=' * 20} round {round_num} {'=' * 20}")
+        last_round_ok = run_round_fn(args, config_path)
+        if not args.infinite:
+            return 0 if last_round_ok else 1
+        if args.round_delay:
+            sleep_fn(args.round_delay)
 
 
 if __name__ == "__main__":

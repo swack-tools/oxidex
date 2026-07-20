@@ -1,0 +1,65 @@
+# Copy this file to config.toml (gitignored) and fill in real values.
+# scripts/model_fix_loop.py and scripts/parallel_model_fix_loop.py both read
+# config.toml by default (override the path with --config).
+#
+# Each [[worker.models]]/[[reviewer.models]] entry is one pool member. One
+# is picked at random for every individual model call (each fixer attempt,
+# each reviewer verdict), so a run rotates across the whole pool instead of
+# pinning to one model. A single-entry pool behaves exactly like the old
+# fixed-model setup.
+#
+# An entry needs only "name" -- it inherits base_url/api_key from its
+# [worker]/[reviewer] table. Add base_url/api_key directly on an entry to
+# pull that one model from a different provider (see the Fireworks example
+# below), so a single pool can mix providers.
+
+[worker]
+base_url = "https://pass.wafer.ai/v1"
+api_key = "your-api-key-here"
+max_tokens = 4096
+reasoning_effort = "low"
+stream = true
+thinking = false
+temperature = 0.7
+max_prompt_tags = 40
+max_prompt_file_bytes = 60000
+
+[[worker.models]]
+name = "glm5.2-fast"
+
+[[worker.models]]
+name = "MiniMax-M3"
+
+[[worker.models]]
+name = "Kimi-K2.6"
+
+[[worker.models]]
+name = "accounts/fireworks/routers/kimi-k2p7-code-fast"
+base_url = "https://api.fireworks.ai/inference/v1"
+api_key = "your-fireworks-api-key-here"
+
+# Optional: omit this table entirely to have the reviewer reuse [worker]'s
+# pool/config exactly. Add it to review with a different model pool and/or
+# provider than the fixer.
+[reviewer]
+base_url = "https://pass.wafer.ai/v1"
+api_key = "your-api-key-here"
+max_tokens = 256
+reasoning_effort = "max"
+stream = true
+thinking = true
+temperature = 0
+
+[[reviewer.models]]
+name = "glm5.2-fast"
+
+[[reviewer.models]]
+name = "MiniMax-M3"
+
+[[reviewer.models]]
+name = "Kimi-K2.6"
+
+[[reviewer.models]]
+name = "accounts/fireworks/routers/kimi-k2p7-code-fast"
+base_url = "https://api.fireworks.ai/inference/v1"
+api_key = "your-fireworks-api-key-here"

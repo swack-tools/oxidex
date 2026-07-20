@@ -1,4 +1,5 @@
 import signal
+import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
@@ -13,9 +14,133 @@ from parallel_model_fix_loop import (
     _wait_for_process_group_exit,
     branch_name,
     commits_on_branch,
+    create_worktree,
+    main,
     merge_branch,
     worktree_path,
 )
+
+
+class MainInfiniteLoopTests(unittest.TestCase):
+    def _config_path(self, tmpdir):
+        config_path = Path(tmpdir) / "config.toml"
+        config_path.write_text('[worker]\nmodels = ["m"]\n')
+        return config_path
+
+    def test_runs_a_single_round_by_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._config_path(tmpdir)
+            calls = []
+            exit_code = main(
+                ["--config", str(config_path)],
+                run_round_fn=lambda args, cfg: calls.append(1) or True,
+            )
+            self.assertEqual(calls, [1])
+            self.assertEqual(exit_code, 0)
+
+    def test_single_round_returns_1_when_round_reports_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._config_path(tmpdir)
+            exit_code = main(
+                ["--config", str(config_path)],
+                run_round_fn=lambda args, cfg: False,
+            )
+            self.assertEqual(exit_code, 1)
+
+    def test_infinite_keeps_calling_run_round_fn_until_it_raises(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._config_path(tmpdir)
+            calls = []
+
+            def fake_run_round(args, cfg):
+                calls.append(1)
+                if len(calls) == 3:
+                    raise RuntimeError("stop the test loop")
+                return True
+
+            with self.assertRaises(RuntimeError):
+                main(
+                    ["--config", str(config_path), "--infinite"],
+                    run_round_fn=fake_run_round,
+                )
+            self.assertEqual(len(calls), 3)
+
+    def test_infinite_sleeps_between_rounds_using_injected_sleep_fn(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._config_path(tmpdir)
+            round_calls = []
+            sleep_calls = []
+
+            def fake_run_round(args, cfg):
+                round_calls.append(1)
+                if len(round_calls) == 2:
+                    raise RuntimeError("stop the test loop")
+                return True
+
+            with self.assertRaises(RuntimeError):
+                main(
+                    ["--config", str(config_path), "--infinite", "--round-delay", "5"],
+                    run_round_fn=fake_run_round,
+                    sleep_fn=sleep_calls.append,
+                )
+            # Round 1 succeeds and sleeps; round 2 raises before reaching
+            # its own sleep call.
+            self.assertEqual(sleep_calls, [5.0])
+
+    def test_infinite_does_not_sleep_when_round_delay_is_zero(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._config_path(tmpdir)
+            round_calls = []
+
+            def fake_run_round(args, cfg):
+                round_calls.append(1)
+                if len(round_calls) == 2:
+                    raise RuntimeError("stop the test loop")
+                return True
+
+            with self.assertRaises(RuntimeError):
+                main(
+                    ["--config", str(config_path), "--infinite"],
+                    run_round_fn=fake_run_round,
+                    sleep_fn=lambda s: self.fail("should not sleep when round-delay is 0"),
+                )
+
+    def test_missing_config_returns_1_without_running_a_round(self):
+        exit_code = main(
+            ["--config", "/nonexistent/path/config.toml"],
+            run_round_fn=lambda args, cfg: self.fail("should not run a round"),
+        )
+        self.assertEqual(exit_code, 1)
+
+
+class CreateWorktreeTests(unittest.TestCase):
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_copies_config_toml_into_the_new_worktree(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config_path = tmp / "config.toml"
+            config_path.write_text('[worker]\nmodels = ["m"]\n')
+            worktree = tmp / "worktree"
+            worktree.mkdir()
+
+            create_worktree(tmp, worktree, "model-fix-parallel-nef", "main", config_path=config_path)
+
+            self.assertEqual((worktree / "config.toml").read_text(), config_path.read_text())
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_missing_config_is_not_an_error(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            worktree = tmp / "worktree"
+            worktree.mkdir()
+
+            create_worktree(  # must not raise
+                tmp, worktree, "model-fix-parallel-nef", "main",
+                config_path=tmp / "nonexistent-config.toml",
+            )
+            self.assertFalse((worktree / "config.toml").exists())
 
 
 # /tmp/base is an inert fixture path -- no real filesystem I/O happens
