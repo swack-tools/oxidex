@@ -33,9 +33,4 @@ fn main() {
     let dest_path = Path::new(&out_dir).join("image_tags.bin");
 
     fs::write(&dest_path, binary_data).expect("Failed to write binary tag database file");
-
-    println!(
-        "cargo:warning=Pre-compiled image_tags.yaml to binary format ({} bytes)",
-        fs::metadata(&dest_path).unwrap().len()
-    );
 }
