@@ -3,7 +3,7 @@
 This document details OxiDex's coverage of ExifTool's tag database and analyzes parser implementation status.
 
 ::: info Auto-Generated
-This document is automatically updated on each push to `main`. Last updated: **2026-07-19**
+This document is automatically updated on each push to `main`. Last updated: **2026-07-20**
 :::
 
 ## Summary
