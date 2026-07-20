@@ -185,10 +185,7 @@ pub fn generate_domain_yaml(domain: &str, tags: &[TagRecord]) -> String {
         yaml.push_str("    tags:\n");
 
         for tag in table_tags {
-            yaml.push_str(&format!(
-                "      - id: \"{}\"\n",
-                escape_yaml_string(&tag.id)
-            ));
+            yaml.push_str(&format!("      - id: \"{}\"\n", escape_yaml_string(&tag.id)));
             yaml.push_str(&format!(
                 "        name: \"{}\"\n",
                 escape_yaml_string(&tag.name)
@@ -294,10 +291,7 @@ mod tests {
     #[test]
     fn rejects_malformed_xml() {
         let result = parse_listx("<taginfo><table name='X'><tag id='1'");
-        assert!(
-            result.is_err(),
-            "truncated XML must return an error, not panic"
-        );
+        assert!(result.is_err(), "truncated XML must return an error, not panic");
     }
 
     #[test]
