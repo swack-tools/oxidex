@@ -710,6 +710,51 @@ class AttemptBuildTests(unittest.TestCase):
         self.assertIn("model call failed", reason)
         self.assertIn("timed out", reason)
 
+    def test_nudges_model_to_submit_a_diff_once_request_budget_is_exhausted(self):
+        # Previously: once request_turns_used hit MAX_REQUEST_TURNS, the
+        # next REQUEST-shaped reply fell straight through to extract_diff
+        # and failed immediately -- the model was never actually told to
+        # stop investigating and submit something, so a whole attempt
+        # could be burned on file requests with zero code ever touched.
+        calls = []
+
+        def fake_call_model(messages, *a):
+            calls.append(1)
+            if len(calls) <= 5:
+                # Calls 1-4 consume the 4 allowed REQUEST turns; call 5 is
+                # a 5th REQUEST made after the budget is already spent --
+                # that's what must trigger the nudge instead of an
+                # immediate silent failure.
+                return "REQUEST: src/parsers/jpeg/mod.rs"
+            # 6th call: this is the post-nudge turn -- submit a real diff.
+            self.assertIn("No more file requests", messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
+        self.assertEqual(len(calls), 6)
+
+    def test_fails_with_specific_reason_if_model_keeps_requesting_after_the_nudge(self):
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=lambda messages, *a: "REQUEST: src/parsers/jpeg/mod.rs",
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertEqual(reason, "no diff in model response (exhausted request budget)")
+
 
 class FixGapFailureTests(unittest.TestCase):
     def test_fails_when_gap_count_does_not_decrease(self):

@@ -506,6 +506,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     """
     request_turns_used = 0
     diff_attempts_used = 0
+    nudged_to_stop_investigating = False
     while diff_attempts_used < 2:  # one initial attempt + one repair round-trip
         model_spec = pick_model_fn(config["models"])
         try:
@@ -527,11 +528,30 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
         messages.append({"role": "assistant", "content": reply})
 
         request_match = REQUEST_RE.match(reply.strip())
-        if request_match and request_turns_used < MAX_REQUEST_TURNS:
-            request_turns_used += 1
-            answer = resolve_request(request_match.group(1), repo_root, samples_dir)
-            messages.append({"role": "user", "content": answer})
-            continue
+        if request_match:
+            if request_turns_used < MAX_REQUEST_TURNS:
+                request_turns_used += 1
+                answer = resolve_request(request_match.group(1), repo_root, samples_dir)
+                messages.append({"role": "user", "content": answer})
+                continue
+            if not nudged_to_stop_investigating:
+                # Previously fell straight through to extract_diff on this
+                # same REQUEST-shaped reply and failed immediately with "no
+                # diff in model response" -- silently wasting the whole
+                # attempt on investigation without ever telling the model
+                # to actually submit something. One explicit nudge first.
+                nudged_to_stop_investigating = True
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "You've used all your allowed investigation turns for this attempt. "
+                        "No more file requests -- submit your best diff now (in a ```diff "
+                        "fenced block) based on what you've already seen, even if you're not "
+                        "fully certain."
+                    ),
+                })
+                continue
+            return False, "no diff in model response (exhausted request budget)", None, messages
 
         diff = extract_diff(reply)
         if diff is None:
