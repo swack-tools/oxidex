@@ -79,8 +79,16 @@ impl MxfParser {
     }
 
     /// Parse a 16-byte Universal Label to identify the element
+    ///
+    /// Note: for the `IDENTIFICATION_SET_UL` family (register
+    /// `06.0E.2B.34.02.53.01.01.0D.01.01.01.01.xx.yy.00`), the class/local-set
+    /// discriminator byte is at index 14, not index 13 (index 13 is always
+    /// 0x01, part of the fixed 13-byte prefix's trailing byte). This differs
+    /// from the partition-pack family (`06.0E.2B.34.02.05.01.01.0D.01.02.01.01.xx.yy.00`)
+    /// where the discriminator *is* at index 13. Mixing these up causes every
+    /// local-set key to be misclassified as `Unknown`.
     fn identify_ul(key: &[u8; 16]) -> ULType {
-        // Check for partition pack
+        // Check for partition pack (discriminator at index 13 for this family)
         if key[..13] == MXF_PARTITION_PACK_PREFIX {
             return match key[13] {
                 0x02 => ULType::HeaderPartitionPack,
@@ -90,69 +98,31 @@ impl MxfParser {
             };
         }
 
-        // Check for identification set (local set)
-        if key[..13] == IDENTIFICATION_SET_UL && key[13] == 0x30 {
-            return ULType::IdentificationSet;
-        }
-
-        // Check for preface set
-        if key[..13] == IDENTIFICATION_SET_UL && key[13] == 0x2F {
-            return ULType::PrefaceSet;
-        }
-
-        // Check for content storage
-        if key[..13] == IDENTIFICATION_SET_UL && key[13] == 0x18 {
-            return ULType::ContentStorageSet;
-        }
-
-        // Check for material package
-        if key[..13] == IDENTIFICATION_SET_UL && key[13] == 0x36 {
-            return ULType::MaterialPackageSet;
-        }
-
-        // Check for source package
-        if key[..13] == IDENTIFICATION_SET_UL && key[13] == 0x37 {
-            return ULType::SourcePackageSet;
-        }
-
-        // Check for track sets
+        // Metadata sets, essence descriptors, and structural components all
+        // share the IDENTIFICATION_SET_UL 13-byte prefix; discriminate on
+        // index 14.
         if key[..13] == IDENTIFICATION_SET_UL {
-            return match key[13] {
+            return match key[14] {
+                0x30 => ULType::IdentificationSet,
+                0x2F => ULType::PrefaceSet,
+                0x18 => ULType::ContentStorageSet,
+                0x36 => ULType::MaterialPackageSet,
+                0x37 => ULType::SourcePackageSet,
                 0x3A => ULType::EventTrackSet,
                 0x3B => ULType::StaticTrackSet,
                 0x3D => ULType::TimelineTrackSet,
+                0x25 => ULType::FileDescriptor,
+                0x27 => ULType::GenericPictureDescriptor,
+                0x28 => ULType::CDCIDescriptor,
+                0x29 => ULType::RGBADescriptor,
+                0x42 => ULType::GenericSoundDescriptor,
+                0x47 => ULType::AES3Descriptor,
+                0x48 => ULType::WaveAudioDescriptor,
+                0x14 => ULType::TimecodeComponent,
+                0x0F => ULType::SequenceSet,
+                0x23 => ULType::SubDescriptor,
                 _ => ULType::Unknown,
             };
-        }
-
-        // Check for essence descriptors
-        if key[0..4] == [0x06, 0x0E, 0x2B, 0x34] && key[4..8] == [0x02, 0x53, 0x01, 0x01] {
-            if key[8..12] == [0x0D, 0x01, 0x01, 0x01] && key[12] == 0x01 {
-                return match key[13] {
-                    0x25 => ULType::FileDescriptor,
-                    0x27 => ULType::GenericPictureDescriptor,
-                    0x28 => ULType::CDCIDescriptor,
-                    0x29 => ULType::RGBADescriptor,
-                    0x42 => ULType::GenericSoundDescriptor,
-                    0x47 => ULType::AES3Descriptor,
-                    0x48 => ULType::WaveAudioDescriptor,
-                    _ => ULType::Unknown,
-                };
-            }
-        }
-
-        // Check for timecode component
-        if key[0..4] == [0x06, 0x0E, 0x2B, 0x34] && key[4..8] == [0x02, 0x53, 0x01, 0x01] {
-            if key[8..12] == [0x0D, 0x01, 0x01, 0x01] && key[12] == 0x01 && key[13] == 0x14 {
-                return ULType::TimecodeComponent;
-            }
-        }
-
-        // Check for sequence
-        if key[0..4] == [0x06, 0x0E, 0x2B, 0x34] && key[4..8] == [0x02, 0x53, 0x01, 0x01] {
-            if key[8..12] == [0x0D, 0x01, 0x01, 0x01] && key[12] == 0x01 && key[13] == 0x0F {
-                return ULType::SequenceSet;
-            }
         }
 
         ULType::Unknown
@@ -220,8 +190,11 @@ impl MxfParser {
                         metadata.insert("MXF:ApplicationName".to_string(), TagValue::new_string(s));
                     }
                 }
-                // Product Version - 0x3C03
-                0x3C03 => {
+                // Toolkit Version - 0x3C07 (ProductVersion struct: major,
+                // minor, patch, build as int16u, then a release-type byte).
+                // Verified against ExifTool's MXF.pm: local tag 0x3C07
+                // resolves to UL ...05200701.0a000000 = ToolkitVersion.
+                0x3C07 => {
                     if value_data.len() >= 10 {
                         let maj = u16::from_be_bytes([value_data[0], value_data[1]]);
                         let min = u16::from_be_bytes([value_data[2], value_data[3]]);
@@ -239,10 +212,6 @@ impl MxfParser {
                             _ => "unknown",
                         };
 
-                        metadata.insert(
-                            "MXF:SDKVersion".to_string(),
-                            TagValue::new_string(format!("{}.{}", maj, min)),
-                        );
                         metadata.insert(
                             "MXF:ToolkitVersion".to_string(),
                             TagValue::new_string(format!(
@@ -271,16 +240,12 @@ impl MxfParser {
                     }
                 }
                 // Modification Date - 0x3C06
+                // (PackageLastModifyDate comes from SourcePackage tag 0x4404,
+                // not from this Identification Set field -- they are
+                // distinct timestamps in the source file.)
                 0x3C06 => {
                     if let Some(ts) = parse_mxf_timestamp(value_data) {
-                        metadata.insert(
-                            "MXF:ModifyDate".to_string(),
-                            TagValue::new_string(ts.clone()),
-                        );
-                        metadata.insert(
-                            "MXF:PackageLastModifyDate".to_string(),
-                            TagValue::new_string(ts),
-                        );
+                        metadata.insert("MXF:ModifyDate".to_string(), TagValue::new_string(ts));
                     }
                 }
                 _ => {}
@@ -314,14 +279,15 @@ impl MxfParser {
                         );
                     }
                 }
-                // Version - 0x3B05
+                // SDK Version - 0x3B05 (verified against ExifTool's MXF.pm:
+                // local tag 0x3B05 resolves to UL ...03010201.05000000 =
+                // SDKVersion, not a generic "file format version".)
                 0x3B05 => {
                     if value_data.len() >= 2 {
-                        let version = u16::from_be_bytes([value_data[0], value_data[1]]);
-                        let major = version >> 8;
-                        let minor = version & 0xFF;
+                        let major = value_data[0];
+                        let minor = value_data[1];
                         metadata.insert(
-                            "MXF:FileFormatVersion".to_string(),
+                            "MXF:SDKVersion".to_string(),
                             TagValue::new_string(format!("{}.{}", major, minor)),
                         );
                     }
@@ -364,13 +330,14 @@ impl MxfParser {
                             value_data[7],
                         ]);
                         if den != 0 {
-                            // Only set if not already set
-                            if !metadata.contains_key("MXF:EditRate") {
-                                metadata.insert(
-                                    "MXF:EditRate".to_string(),
-                                    TagValue::new_integer(num as i64),
-                                );
-                            }
+                            // Multiple Track sets (material/source package,
+                            // timeline/static/event) can appear per file;
+                            // match ExifTool's default last-value-wins tag
+                            // storage instead of keeping only the first.
+                            metadata.insert(
+                                "MXF:EditRate".to_string(),
+                                TagValue::new_integer(num as i64),
+                            );
                         }
                     }
                 }
@@ -402,13 +369,12 @@ impl MxfParser {
                             value_data[2],
                             value_data[3],
                         ]);
-                        // Only set first track ID found
-                        if !metadata.contains_key("MXF:TrackID") {
-                            metadata.insert(
-                                "MXF:TrackID".to_string(),
-                                TagValue::new_integer(track_id as i64),
-                            );
-                        }
+                        // Last-value-wins, matching ExifTool's default tag
+                        // storage semantics across multiple Track sets.
+                        metadata.insert(
+                            "MXF:TrackID".to_string(),
+                            TagValue::new_integer(track_id as i64),
+                        );
                     }
                 }
                 // Track Number - 0x4804
@@ -420,20 +386,16 @@ impl MxfParser {
                             value_data[2],
                             value_data[3],
                         ]);
-                        if !metadata.contains_key("MXF:TrackNumber") {
-                            metadata.insert(
-                                "MXF:TrackNumber".to_string(),
-                                TagValue::new_integer(track_num as i64),
-                            );
-                        }
+                        metadata.insert(
+                            "MXF:TrackNumber".to_string(),
+                            TagValue::new_integer(track_num as i64),
+                        );
                     }
                 }
                 // Track Name - 0x4802
                 0x4802 => {
                     if let Some(s) = parse_utf16_string(value_data) {
-                        if !metadata.contains_key("MXF:TrackName") {
-                            metadata.insert("MXF:TrackName".to_string(), TagValue::new_string(s));
-                        }
+                        metadata.insert("MXF:TrackName".to_string(), TagValue::new_string(s));
                     }
                 }
                 _ => {}
@@ -530,32 +492,36 @@ impl MxfParser {
                     value_data[6],
                     value_data[7],
                 ]);
-                // Only set first duration found
-                if !metadata.contains_key("MXF:Duration") {
-                    metadata.insert(
-                        "MXF:Duration".to_string(),
-                        TagValue::new_string(format!("{} s", duration)),
-                    );
-                }
+                // Multiple Sequence sets can appear (one per track); match
+                // ExifTool's last-value-wins tag storage.
+                metadata.insert(
+                    "MXF:Duration".to_string(),
+                    TagValue::new_string(format!("{} s", duration)),
+                );
             }
 
-            // Data definition for component type
-            if tag == 0x0201 && value_data.len() >= 16 {
-                // Check if this is sound essence
-                if value_data[12] == 0x01 && value_data[13] == 0x02 {
-                    if !metadata.contains_key("MXF:ComponentDataDefinition") {
-                        metadata.insert(
-                            "MXF:ComponentDataDefinition".to_string(),
-                            TagValue::new_string("Sound Essence Track"),
-                        );
-                    }
-                } else if value_data[12] == 0x01 && value_data[13] == 0x01 {
-                    if !metadata.contains_key("MXF:ComponentDataDefinition") {
-                        metadata.insert(
-                            "MXF:ComponentDataDefinition".to_string(),
-                            TagValue::new_string("Picture Essence Track"),
-                        );
-                    }
+            // Data definition for component type (weak reference to a
+            // registered Data Definition UL). The canonical ULs are:
+            //   Picture: 06.0E.2B.34.04.01.01.01.01.03.02.02.01.00.00.00
+            //   Sound:   06.0E.2B.34.04.01.01.01.01.03.02.02.02.00.00.00
+            //   Data:    06.0E.2B.34.04.01.01.01.01.03.02.02.03.00.00.00
+            // i.e. bytes 8..12 == 01.03.02.02, with byte 12 as the
+            // Picture/Sound/Data discriminator.
+            if tag == 0x0201
+                && value_data.len() >= 16
+                && value_data[8..12] == [0x01, 0x03, 0x02, 0x02]
+            {
+                let label = match value_data[12] {
+                    0x01 => Some("Picture Essence Track"),
+                    0x02 => Some("Sound Essence Track"),
+                    0x03 => Some("Data Essence Track"),
+                    _ => None,
+                };
+                if let Some(label) = label {
+                    metadata.insert(
+                        "MXF:ComponentDataDefinition".to_string(),
+                        TagValue::new_string(label),
+                    );
                 }
             }
         }
@@ -729,8 +695,11 @@ impl MxfParser {
                         );
                     }
                 }
-                // Essence Stream ID - 0x3004
-                0x3004 => {
+                // Essence Stream ID - 0x3F07
+                // (0x3004 is EssenceContainerFormat, a weak reference to a
+                // container-format object, not the stream ID -- verified
+                // against ExifTool's MXF.pm UL registry.)
+                0x3F07 => {
                     if value_data.len() >= 4 {
                         let stream_id = u32::from_be_bytes([
                             value_data[0],
@@ -765,11 +734,27 @@ impl MxfParser {
             let value_data = &data[offset..offset + len];
             offset += len;
 
-            // Package Creation Date - 0x4404
-            if tag == 0x4404 {
-                if let Some(ts) = parse_mxf_timestamp(value_data) {
-                    metadata.insert("MXF:CreateDate".to_string(), TagValue::new_string(ts));
+            match tag {
+                // Package Last Modified Date - 0x4404
+                // (verified against ExifTool's MXF.pm UL registry: local tag
+                // 0x4404 resolves to UL ...07020110.02050000 = PackageLastModifyDate,
+                // not CreateDate as previously assumed.)
+                0x4404 => {
+                    if let Some(ts) = parse_mxf_timestamp(value_data) {
+                        metadata.insert(
+                            "MXF:PackageLastModifyDate".to_string(),
+                            TagValue::new_string(ts),
+                        );
+                    }
                 }
+                // Package Creation Date - 0x4405
+                // (resolves to UL ...07020110.01030000 = CreateDate.)
+                0x4405 => {
+                    if let Some(ts) = parse_mxf_timestamp(value_data) {
+                        metadata.insert("MXF:CreateDate".to_string(), TagValue::new_string(ts));
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -798,6 +783,7 @@ enum ULType {
     WaveAudioDescriptor,
     TimecodeComponent,
     SequenceSet,
+    SubDescriptor,
     Unknown,
 }
 
@@ -909,7 +895,11 @@ impl FormatParser for MxfParser {
                 ULType::PrefaceSet => {
                     Self::parse_preface_set(value_data, &mut metadata);
                 }
-                ULType::TimelineTrackSet => {
+                ULType::TimelineTrackSet | ULType::StaticTrackSet | ULType::EventTrackSet => {
+                    // These all derive from the common "Track" class, which
+                    // carries TrackID/TrackName/TrackNumber/EditRate/Origin
+                    // regardless of whether the track is a timeline, static,
+                    // or event track.
                     Self::parse_timeline_track_set(value_data, &mut metadata);
                 }
                 ULType::TimecodeComponent => {
@@ -919,11 +909,16 @@ impl FormatParser for MxfParser {
                     Self::parse_sequence_set(value_data, &mut metadata);
                 }
                 ULType::WaveAudioDescriptor | ULType::AES3Descriptor => {
+                    // These subclass GenericSoundDescriptor -> FileDescriptor,
+                    // so they also carry FileDescriptor-level properties
+                    // (e.g. LinkedTrackID) in addition to their own.
                     Self::parse_wave_audio_descriptor(value_data, &mut metadata);
+                    Self::parse_file_descriptor(value_data, &mut metadata);
                 }
                 ULType::FileDescriptor
                 | ULType::GenericPictureDescriptor
-                | ULType::GenericSoundDescriptor => {
+                | ULType::GenericSoundDescriptor
+                | ULType::SubDescriptor => {
                     Self::parse_file_descriptor(value_data, &mut metadata);
                 }
                 ULType::SourcePackageSet => {
