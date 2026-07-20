@@ -283,9 +283,11 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
 def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
             git_checkout_clean_fn=git_checkout_clean, git_commit_fn=git_commit,
             cargo_build_fn=cargo_build, cargo_test_workspace_fn=cargo_test_workspace,
-            attempt_build_fn=attempt_build, recheck_fn=None, repo_root=None):
-    """Attempt to close one format's gaps via a single-shot patch, with one
-    repair round-trip on build failure. Returns a result dict.
+            attempt_build_fn=attempt_build, review_fn=review_verdict,
+            recheck_fn=None, repo_root=None):
+    """Attempt to close one format's gaps via a single-shot patch. Up to
+    two candidates: the initial fix, and one repair round-trip if a
+    reviewer rejects the first. Returns a result dict.
 
     recheck_fn(format_name) -> int must return the gap count for that
     format after the attempted fix (used to confirm real progress). If not
@@ -299,27 +301,45 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
         max_file_bytes=config["max_prompt_file_bytes"],
     )}]
 
-    built, reason, diff, messages = attempt_build_fn(
-        messages,
-        call_model_fn=call_model_fn, git_apply_fn=git_apply_fn,
-        git_checkout_clean_fn=git_checkout_clean_fn, cargo_build_fn=cargo_build_fn,
-        config=config, repo_root=repo_root,
-    )
-    if not built:
-        return {"format": gap["format"], "status": "failed", "reason": reason}
+    review_reason = None
+    for _review_attempt in range(2):  # initial candidate + one review-driven repair
+        built, reason, diff, messages = attempt_build_fn(
+            messages,
+            call_model_fn=call_model_fn, git_apply_fn=git_apply_fn,
+            git_checkout_clean_fn=git_checkout_clean_fn, cargo_build_fn=cargo_build_fn,
+            config=config, repo_root=repo_root,
+        )
+        if not built:
+            return {"format": gap["format"], "status": "failed", "reason": reason}
 
-    remaining = recheck_fn(gap["format"]) if recheck_fn else gap["gap_count"]
-    if remaining >= gap["gap_count"]:
+        remaining = recheck_fn(gap["format"]) if recheck_fn else gap["gap_count"]
+        if remaining >= gap["gap_count"]:
+            git_checkout_clean_fn(repo_root)
+            return {"format": gap["format"], "status": "failed", "reason": "gap count did not decrease"}
+
+        if not cargo_test_workspace_fn(repo_root):
+            git_checkout_clean_fn(repo_root)
+            return {"format": gap["format"], "status": "failed", "reason": "cargo test --workspace regressed"}
+
+        approved, review_reason = review_fn(gap, diff, config)
+        if approved:
+            closed = gap["gap_count"] - remaining
+            git_commit_fn(
+                f"fix({gap['format'].lower()}): wire {closed} missing tags (via {config['model']})",
+                repo_root,
+            )
+            return {"format": gap["format"], "status": "fixed", "gaps_closed": closed}
+
         git_checkout_clean_fn(repo_root)
-        return {"format": gap["format"], "status": "failed", "reason": "gap count did not decrease"}
+        messages.append({
+            "role": "user",
+            "content": f"A reviewer rejected this fix: {review_reason}\nPlease resend a corrected diff.",
+        })
 
-    if not cargo_test_workspace_fn(repo_root):
-        git_checkout_clean_fn(repo_root)
-        return {"format": gap["format"], "status": "failed", "reason": "cargo test --workspace regressed"}
-
-    closed = gap["gap_count"] - remaining
-    git_commit_fn(f"fix({gap['format'].lower()}): wire {closed} missing tags (via {config['model']})", repo_root)
-    return {"format": gap["format"], "status": "fixed", "gaps_closed": closed}
+    return {
+        "format": gap["format"], "status": "failed",
+        "reason": f"rejected by review after repair attempt: {review_reason}",
+    }
 
 
 def run_loop(config, find_gaps_fn, fix_gap_fn, max_dry_rounds=2):

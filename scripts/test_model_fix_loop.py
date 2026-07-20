@@ -277,6 +277,7 @@ class FixGapHappyPathTests(unittest.TestCase):
             git_commit_fn=lambda msg, root: commit_calls.append(msg),
             cargo_build_fn=lambda root: (True, ""),
             cargo_test_workspace_fn=lambda root: True,
+            review_fn=lambda g, diff, config: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -439,6 +440,64 @@ class FixGapFailureTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["reason"], "cargo test --workspace regressed")
+
+
+class FixGapReviewTests(unittest.TestCase):
+    def test_retries_once_when_review_rejects_then_approves(self):
+        gap = make_gap(gap_count=2)
+        review_calls = []
+        attempt_calls = []
+        commit_calls = []
+
+        def fake_attempt_build(messages, **kwargs):
+            attempt_calls.append(len(messages))
+            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        def fake_review(g, diff, config):
+            review_calls.append(1)
+            if len(review_calls) == 1:
+                return False, "hardcodes the sample value"
+            return True, ""
+
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=fake_attempt_build,
+            review_fn=fake_review,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: commit_calls.append(msg),
+            cargo_test_workspace_fn=lambda root: True,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(len(review_calls), 2)
+        self.assertEqual(len(attempt_calls), 2)
+        self.assertGreater(attempt_calls[1], attempt_calls[0])
+        self.assertEqual(len(commit_calls), 1)
+
+    def test_fails_after_review_rejects_twice(self):
+        gap = make_gap(gap_count=2)
+
+        def fake_attempt_build(messages, **kwargs):
+            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=fake_attempt_build,
+            review_fn=lambda g, diff, config: (False, "hardcodes the sample value"),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: self.fail("should not commit"),
+            cargo_test_workspace_fn=lambda root: True,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("rejected by review after repair attempt", result["reason"])
+        self.assertIn("hardcodes the sample value", result["reason"])
 
 
 class RunLoopTests(unittest.TestCase):
