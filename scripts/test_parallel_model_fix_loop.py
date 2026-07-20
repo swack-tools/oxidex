@@ -1,8 +1,16 @@
+import signal
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
+import parallel_model_fix_loop
 from parallel_model_fix_loop import (
+    _kill_all_active_workers,
+    _kill_process_group,
+    _process_group_alive,
+    _register_pgid,
+    _unregister_pgid,
+    _wait_for_process_group_exit,
     branch_name,
     commits_on_branch,
     merge_branch,
@@ -97,6 +105,84 @@ class MergeBranchTests(unittest.TestCase):
         # the merge itself was NOT aborted (it happened; only the resulting
         # commit is rolled back afterward) -- no "git merge --abort" call
         self.assertNotIn(["git", "merge", "--abort"], all_argvs)
+
+
+class ProcessGroupAliveTests(unittest.TestCase):
+    @patch("parallel_model_fix_loop.os.killpg")
+    def test_true_when_signal_succeeds(self, mock_killpg):
+        mock_killpg.return_value = None
+        self.assertTrue(_process_group_alive(123))
+
+    @patch("parallel_model_fix_loop.os.killpg")
+    def test_false_when_process_lookup_error(self, mock_killpg):
+        mock_killpg.side_effect = ProcessLookupError()
+        self.assertFalse(_process_group_alive(123))
+
+
+class KillProcessGroupTests(unittest.TestCase):
+    @patch("parallel_model_fix_loop.os.killpg")
+    def test_sends_sigkill_by_default(self, mock_killpg):
+        _kill_process_group(123)
+        mock_killpg.assert_called_once_with(123, signal.SIGKILL)
+
+    @patch("parallel_model_fix_loop.os.killpg")
+    def test_ignores_already_dead_group(self, mock_killpg):
+        mock_killpg.side_effect = ProcessLookupError()
+        _kill_process_group(123)  # must not raise
+
+
+class WaitForProcessGroupExitTests(unittest.TestCase):
+    @patch("parallel_model_fix_loop.os.killpg")
+    def test_returns_immediately_if_already_dead(self, mock_killpg):
+        mock_killpg.side_effect = ProcessLookupError()
+        sleeps = []
+        _wait_for_process_group_exit(123, sleep_fn=sleeps.append)
+        self.assertEqual(sleeps, [])
+
+    @patch("parallel_model_fix_loop.os.killpg")
+    def test_polls_until_group_exits(self, mock_killpg):
+        calls = []
+
+        def fake_killpg(pgid, sig):
+            calls.append(sig)
+            if len(calls) < 3:
+                return None  # still alive
+            raise ProcessLookupError()
+
+        mock_killpg.side_effect = fake_killpg
+        sleeps = []
+        _wait_for_process_group_exit(123, poll_interval=1, sleep_fn=sleeps.append)
+        self.assertEqual(len(sleeps), 2)  # two "still alive" polls before exit confirmed
+
+    @patch("parallel_model_fix_loop.os.killpg")
+    def test_force_kills_after_timeout(self, mock_killpg):
+        # Always reports alive via signal-0 checks; a plain SIGKILL call
+        # should eventually fire once force_after is reached.
+        mock_killpg.return_value = None
+        sleeps = []
+        _wait_for_process_group_exit(123, poll_interval=1, force_after=2, sleep_fn=sleeps.append)
+        kill_calls = [c for c in mock_killpg.call_args_list if c.args[1] == signal.SIGKILL]
+        self.assertEqual(len(kill_calls), 1)
+
+
+class ActiveWorkerRegistryTests(unittest.TestCase):
+    def tearDown(self):
+        with parallel_model_fix_loop._active_pgids_lock:
+            parallel_model_fix_loop._active_pgids.clear()
+
+    @patch("parallel_model_fix_loop.os.killpg")
+    def test_kill_all_active_workers_kills_every_registered_pgid(self, mock_killpg):
+        _register_pgid(111)
+        _register_pgid(222)
+        _kill_all_active_workers()
+        killed = {c.args[0] for c in mock_killpg.call_args_list}
+        self.assertEqual(killed, {111, 222})
+
+    def test_unregister_removes_pgid(self):
+        _register_pgid(333)
+        _unregister_pgid(333)
+        with parallel_model_fix_loop._active_pgids_lock:
+            self.assertNotIn(333, parallel_model_fix_loop._active_pgids)
 
 
 if __name__ == "__main__":

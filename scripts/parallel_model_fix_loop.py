@@ -20,12 +20,21 @@ Usage:
 import argparse
 import concurrent.futures
 import os
+import signal
 import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
+import threading
+import time
 from pathlib import Path
 
 from find_tag_gaps import REPO_ROOT, group_gaps_by_format, load_comparison_report, run_full_comparison
 from model_fix_loop import _load_dotenv
+
+# Every in-flight worker's process group, so an interrupted wrapper
+# (Ctrl-C, SIGTERM) can force-terminate all of them rather than leaving
+# cargo/rustc grandchildren running unsupervised.
+_active_pgids = set()
+_active_pgids_lock = threading.Lock()
 
 
 def discover_formats(cache_dir):
@@ -106,19 +115,103 @@ def _real_cargo_test(repo_root):
     return result.returncode == 0
 
 
+def _process_group_alive(pgid):
+    """True if any process in the group is still alive."""
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def _kill_process_group(pgid, sig=signal.SIGKILL):
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def _wait_for_process_group_exit(pgid, poll_interval=0.5, force_after=30, sleep_fn=time.sleep):
+    """Block until every process in pgid has exited.
+
+    Popen.wait()/subprocess.run() only wait for the direct child --
+    cargo build/test spawn grandchildren (rustc etc.) that can outlive it,
+    especially if the wait was ever interrupted. This is the single point
+    that must return true before a worker is reported "done", so the
+    wrapper's merge phase never starts while a worker's real work (rustc
+    compilation, in particular) is still in flight. Force-kills the group
+    if it's still alive well past when the direct child exited.
+    """
+    waited = 0.0
+    while _process_group_alive(pgid):
+        sleep_fn(poll_interval)
+        waited += poll_interval
+        if waited >= force_after:
+            _kill_process_group(pgid)
+            break
+
+
+def _register_pgid(pgid):
+    with _active_pgids_lock:
+        _active_pgids.add(pgid)
+
+
+def _unregister_pgid(pgid):
+    with _active_pgids_lock:
+        _active_pgids.discard(pgid)
+
+
+def _kill_all_active_workers():
+    """Force-terminate every worker process group still registered. Called
+    on SIGINT/SIGTERM so an interrupted wrapper never leaves orphaned
+    cargo/rustc processes running unsupervised."""
+    with _active_pgids_lock:
+        pgids = list(_active_pgids)
+    for pgid in pgids:
+        _kill_process_group(pgid)
+
+
+def _handle_shutdown_signal(signum, frame):
+    _kill_all_active_workers()
+    sys.exit(1)
+
+
 def run_worker(fmt, worktree, cache_dir, log_path, timeout=None):
     """Run model_fix_loop.py --only-format <fmt> inside worktree, logging
-    combined stdout/stderr to log_path. Returns the process's exit code."""
+    combined stdout/stderr to log_path. Returns the process's exit code.
+
+    Launched in its own process group (POSIX) so this function can
+    positively confirm -- and if needed, force-terminate -- the worker's
+    entire process tree before returning, not just the immediate `uv run`
+    child. See _wait_for_process_group_exit for why that distinction
+    matters.
+    """
     env = dict(os.environ)
     env.pop("CARGO_TARGET_DIR", None)  # each worktree gets its own default target/, never shared
     env["EXIFTOOL_CACHE_DIR"] = str(cache_dir)
     with open(log_path, "w") as log_file:
-        result = subprocess.run(  # nosec B603
+        proc = subprocess.Popen(  # nosec B603
             ["uv", "run", "scripts/model_fix_loop.py", "--only-format", fmt],
             cwd=worktree, env=env, stdout=log_file, stderr=subprocess.STDOUT,
-            timeout=timeout,
+            start_new_session=True,
         )
-    return result.returncode
+        pgid = os.getpgid(proc.pid)
+        _register_pgid(pgid)
+        try:
+            returncode = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_process_group(pgid)
+            raise
+        except BaseException:
+            # Any interruption mid-wait (KeyboardInterrupt, etc.): never
+            # leave the process group running unsupervised.
+            _kill_process_group(pgid)
+            raise
+        finally:
+            _wait_for_process_group_exit(pgid)
+            _unregister_pgid(pgid)
+
+    return returncode
 
 
 def process_format(fmt, repo_root, base_ref, worktree_base, log_base, cache_dir, timeout):
@@ -145,6 +238,10 @@ def process_format(fmt, repo_root, base_ref, worktree_base, log_base, cache_dir,
 
 
 def main(argv=None):
+    # An interrupted wrapper (Ctrl-C, SIGTERM) must not leave worker
+    # process trees (cargo build/test, rustc) running unsupervised.
+    signal.signal(signal.SIGINT, _handle_shutdown_signal)
+    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
     _load_dotenv(REPO_ROOT / ".env")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
