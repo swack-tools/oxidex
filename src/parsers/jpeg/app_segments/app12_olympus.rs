@@ -45,6 +45,8 @@ const KNOWN_TAGS: &[&str] = &[
     "InternalSerialNumber",
     "DateTimeOriginal",
     "ExposureTime",
+    "ExposureCompensation",
+    "ExposureBias",
     "FNumber",
     "Flash",
     "Macro",
@@ -231,6 +233,17 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             if tag_name == "CameraType" {
                 metadata.insert(
                     "APP12:CameraType".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
+            // Olympus Picture Info calls this field ExposureBias. ExifTool
+            // exposes it as APP12:ExposureCompensation. Preserve the textual
+            // representation because these records include the explicit sign
+            // and precision (for example, "+2.0").
+            if tag_name == "ExposureCompensation" {
+                metadata.insert(
+                    "APP12:ExposureCompensation".to_string(),
                     TagValue::String(value.clone()),
                 );
             }
@@ -501,6 +514,19 @@ mod camera_type_tests {
             Some(0)
         );
     }
+
+    #[test]
+    fn test_olympus_exposure_compensation() {
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS DIGITAL CAMERA\0[picture info]\r\nExposureBias=+2.0\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:ExposureCompensation"),
+            Some("+2.0")
+        );
+    }
 }
 
 /// Parse a single key=value pair from a line of text.
@@ -550,6 +576,9 @@ fn normalize_tag_name(key: &str) -> String {
         "resolution" => "ImageResolution",
         "imagesize" => "ImageSize",
         "exposuretime" | "exposure" | "shutter" => "ExposureTime",
+        "exposurecompensation" | "exposurebias" | "exposurebiasvalue" | "expbias" => {
+            "ExposureCompensation"
+        }
         "fnumber" | "aperture" | "f-number" => "FNumber",
         "isosetting" | "iso" => "ISO",
         "focallength" | "focal" => "FocalLength",
