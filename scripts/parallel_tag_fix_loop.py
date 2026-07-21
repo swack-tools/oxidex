@@ -197,6 +197,13 @@ def parse_worker_summary(log_path):
 
 
 def main(argv=None):
+    # Same buffering issue fixed for workers (PYTHONUNBUFFERED in
+    # start_worker's env) also applies to this wrapper process itself when
+    # its own stdout is redirected to a file (e.g. `nohup ... > out.log &`)
+    # rather than a TTY -- confirmed live: its print() status lines sat
+    # completely unflushed, making it impossible to tell what it was doing
+    # (mid-merge? stuck? just sleeping?) without attaching a debugger.
+    sys.stdout.reconfigure(line_buffering=True)
     signal.signal(signal.SIGINT, _handle_shutdown_signal)
     signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 
@@ -319,6 +326,19 @@ def main(argv=None):
     try:
         while workers:
             time.sleep(args.merge_interval)
+
+            # Pass 1: merge every worker's new commits into base_ref, and
+            # collect (don't yet act on) which workers have exited. This
+            # must fully finish -- every pending merge applied -- before
+            # any exited worker gets cleaned up/respawned in pass 2 below.
+            # Doing merge-and-respawn together per worker in one pass (the
+            # original design) let an earlier worker in iteration order
+            # respawn against a base_ref that hadn't yet picked up a later
+            # worker's merge from the very same tick -- confirmed live: two
+            # respawned workers both re-picked tags (CAM3, CAM5) that two
+            # other workers had just fixed, because their fresh worktrees
+            # were checked out before those fixes were merged in.
+            just_exited = []
             for worker_id in list(workers):
                 w = workers[worker_id]
                 count, ok, message = merge_worker_progress(REPO_ROOT, base_ref, w["branch"], w["merged_up_to"])
@@ -328,45 +348,51 @@ def main(argv=None):
                     if ok:
                         w["merged_up_to"] = count
 
-                exited = w["proc"].poll() is not None
-                if exited:
-                    wait_for_process_group_exit(w["pgid"])
-                    _unregister_pgid(w["pgid"])
-                    w["log_file"].close()
-                    # Final sweep in case commits landed between the last
-                    # merge check and process exit.
-                    count, ok, message = merge_worker_progress(REPO_ROOT, base_ref, w["branch"], w["merged_up_to"])
-                    if count > w["merged_up_to"] and ok:
-                        w["merged_up_to"] = count
-                        print(f"[worker {worker_id}] final merge: {count - w['merged_up_to']} commit(s)")
-                    print(f"[worker {worker_id}] exited (code {w['proc'].returncode}) -- {w['log_path']}")
+                if w["proc"].poll() is not None:
+                    just_exited.append(worker_id)
 
-                    fixed, failed = parse_worker_summary(w["log_path"])
-                    if not ok:
-                        print(f"[worker {worker_id}] worktree/branch left in place (merge issue): {w['path']}")
-                        del workers[worker_id]
-                    elif fixed == 0 and failed == 0:
-                        # Exited having attempted nothing at all -- the
-                        # shared tag pool was already exhausted (or every
-                        # remaining tag already claimed) the moment this
-                        # worker looked. Respawning would just repeat that
-                        # immediately, forever; let this slot end.
-                        print(f"[worker {worker_id}] found no work available -- not respawning this slot")
-                        remove_worktree(REPO_ROOT, w["path"])
-                        delete_branch(REPO_ROOT, w["branch"])
-                        del workers[worker_id]
+            # Pass 2: now that base_ref reflects every merge from this
+            # tick, clean up and (maybe) respawn each worker that exited.
+            for worker_id in just_exited:
+                w = workers[worker_id]
+                wait_for_process_group_exit(w["pgid"])
+                _unregister_pgid(w["pgid"])
+                w["log_file"].close()
+                # Final sweep in case commits landed between pass 1's
+                # merge check and the process actually exiting.
+                count, ok, message = merge_worker_progress(REPO_ROOT, base_ref, w["branch"], w["merged_up_to"])
+                if count > w["merged_up_to"] and ok:
+                    w["merged_up_to"] = count
+                    print(f"[worker {worker_id}] final merge: {count - w['merged_up_to']} commit(s)")
+                print(f"[worker {worker_id}] exited (code {w['proc'].returncode}) -- {w['log_path']}")
+
+                fixed, failed = parse_worker_summary(w["log_path"])
+                if not ok:
+                    print(f"[worker {worker_id}] worktree/branch left in place (merge issue): {w['path']}")
+                    del workers[worker_id]
+                elif fixed == 0 and failed == 0:
+                    # Exited having attempted nothing at all -- the shared
+                    # tag pool was already exhausted (or every remaining
+                    # tag already claimed) the moment this worker looked.
+                    # Respawning would just repeat that immediately,
+                    # forever; let this slot end.
+                    print(f"[worker {worker_id}] found no work available -- not respawning this slot")
+                    remove_worktree(REPO_ROOT, w["path"])
+                    delete_branch(REPO_ROOT, w["branch"])
+                    del workers[worker_id]
+                else:
+                    # Did real work and hit --max-tags-per-process, not
+                    # "nothing left" -- refill the slot now that base_ref
+                    # reflects every merge from this tick (including any
+                    # other worker that also just exited), so this fresh
+                    # worktree can't redo work another slot just landed.
+                    remove_worktree(REPO_ROOT, w["path"])
+                    delete_branch(REPO_ROOT, w["branch"])
+                    entry = spawn_worker(worker_id)
+                    if entry:
+                        workers[worker_id] = entry
                     else:
-                        # Did real work and hit --max-tags-per-process, not
-                        # "nothing left" -- refill the slot immediately so
-                        # num_workers stays actually busy for the rest of
-                        # the run.
-                        remove_worktree(REPO_ROOT, w["path"])
-                        delete_branch(REPO_ROOT, w["branch"])
-                        entry = spawn_worker(worker_id)
-                        if entry:
-                            workers[worker_id] = entry
-                        else:
-                            del workers[worker_id]
+                        del workers[worker_id]
     except BaseException:
         for w in workers.values():
             _kill_process_group(w["pgid"])
