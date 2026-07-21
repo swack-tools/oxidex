@@ -69,6 +69,7 @@ const KNOWN_TAGS: &[&str] = &[
     "Manufacturer",
     "Model",
     "Software",
+    "CAM1",
     "COLOR2",
     "COLOR3",
     "COLOR4",
@@ -356,6 +357,16 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
 
+            // ExifTool exposes the Olympus diagnostic CAM1 field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("CAM1") {
+                let app12_value = match value.parse::<i64>() {
+                    Ok(number) => TagValue::Integer(number),
+                    Err(_) => TagValue::String(value.clone()),
+                };
+                metadata.insert("APP12:CAM1".to_string(), app12_value);
+            }
+
             // ExifTool's Olympus Picture Info table exposes CAM2 using its
             // original name in the APP12 group. Keep the Olympus-prefixed
             // value above for compatibility while also emitting the canonical
@@ -528,6 +539,19 @@ mod camera_type_tests {
         assert_eq!(
             metadata.get_integer("APP12:EXP3"),
             Some(227)
+        );
+    }
+
+    #[test]
+    fn test_olympus_cam1_diagnostic_value() {
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nCAM1=59\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:CAM1"),
+            Some(59)
         );
     }
 
