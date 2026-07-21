@@ -25,6 +25,7 @@ Usage:
 """
 import argparse
 import os
+import re
 import signal
 import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
@@ -166,6 +167,35 @@ def merge_worker_progress(repo_root, base_ref, branch, merged_up_to):
     return len(commits), ok, message
 
 
+FIXED_COUNT_RE = re.compile(r"^\s*fixed:\s+(\d+) tags", re.MULTILINE)
+FAILED_COUNT_RE = re.compile(r"^\s*failed:\s+(\d+) attempts", re.MULTILINE)
+
+
+def parse_worker_summary(log_path):
+    """(fixed_count, failed_count) from a worker's final
+    "  fixed:   N tags" / "  failed:  N attempts" summary lines (see
+    model_fix_loop.py main()'s prints), or (0, 0) if the log doesn't have
+    them yet (e.g. it crashed before printing a summary at all).
+
+    Used to decide whether a slot is worth respawning: a worker that did
+    real work (fixed and/or failed attempts > 0) likely stopped only
+    because it hit --max-tags-per-process, not because the shared tag
+    pool is actually empty -- respawn it. A worker that exited having
+    done nothing at all found the pool already exhausted (or fully
+    claimed/blacklisted) on its very first look; respawning it would
+    just repeat that immediately, forever.
+    """
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError:
+        return 0, 0
+    fixed_match = FIXED_COUNT_RE.search(text)
+    failed_match = FAILED_COUNT_RE.search(text)
+    fixed = int(fixed_match.group(1)) if fixed_match else 0
+    failed = int(failed_match.group(1)) if failed_match else 0
+    return fixed, failed
+
+
 def main(argv=None):
     signal.signal(signal.SIGINT, _handle_shutdown_signal)
     signal.signal(signal.SIGTERM, _handle_shutdown_signal)
@@ -247,8 +277,16 @@ def main(argv=None):
         f"merging into {base_ref!r} every {args.merge_interval}s"
     )
 
-    workers = {}  # worker_id -> {"path", "branch", "log_path", "proc", "log_file", "pgid", "merged_up_to"}
-    for worker_id in range(1, num_workers + 1):
+    def spawn_worker(worker_id):
+        """(Re)create worker_id's worktree/branch and start a fresh
+        model_fix_loop.py in it. Returns the workers[worker_id] dict entry,
+        or None if worktree setup failed. Called both for the initial
+        batch and to refill a slot once its previous occupant exits --
+        with --max-tags-per-process bounding each individual worker's
+        lifetime, this is what keeps num_workers actually busy for the
+        life of the whole run instead of each one doing exactly one tag
+        and then sitting idle forever.
+        """
         path = worktree_path(worktree_base, worker_id)
         branch = branch_name(worker_id)
         log_path = log_base / f"worker-{worker_id}.log"
@@ -256,17 +294,23 @@ def main(argv=None):
             create_worktree(REPO_ROOT, path, branch, base_ref, config_path=config_path)
         except subprocess.CalledProcessError as e:
             print(f"[worker {worker_id}] worktree setup failed: {e.stderr}", file=sys.stderr)
-            continue
+            return None
         proc, log_file, pgid = start_worker(
             worker_id, path, args.cache_dir, log_path, tag_state_path, prompt_log_dir,
             args.max_tag_fails, only_format=args.only_format, max_tags_per_process=max_tags_per_process,
             tags_found_log=Path(args.tags_found_log),
         )
-        workers[worker_id] = {
+        print(f"[worker {worker_id}] started (pid {proc.pid}), worktree {path}")
+        return {
             "path": path, "branch": branch, "log_path": log_path,
             "proc": proc, "log_file": log_file, "pgid": pgid, "merged_up_to": 0,
         }
-        print(f"[worker {worker_id}] started (pid {proc.pid}), worktree {path}")
+
+    workers = {}  # worker_id -> {"path", "branch", "log_path", "proc", "log_file", "pgid", "merged_up_to"}
+    for worker_id in range(1, num_workers + 1):
+        entry = spawn_worker(worker_id)
+        if entry:
+            workers[worker_id] = entry
 
     if not workers:
         print("No workers started.", file=sys.stderr)
@@ -296,12 +340,33 @@ def main(argv=None):
                         w["merged_up_to"] = count
                         print(f"[worker {worker_id}] final merge: {count - w['merged_up_to']} commit(s)")
                     print(f"[worker {worker_id}] exited (code {w['proc'].returncode}) -- {w['log_path']}")
-                    if ok:
+
+                    fixed, failed = parse_worker_summary(w["log_path"])
+                    if not ok:
+                        print(f"[worker {worker_id}] worktree/branch left in place (merge issue): {w['path']}")
+                        del workers[worker_id]
+                    elif fixed == 0 and failed == 0:
+                        # Exited having attempted nothing at all -- the
+                        # shared tag pool was already exhausted (or every
+                        # remaining tag already claimed) the moment this
+                        # worker looked. Respawning would just repeat that
+                        # immediately, forever; let this slot end.
+                        print(f"[worker {worker_id}] found no work available -- not respawning this slot")
                         remove_worktree(REPO_ROOT, w["path"])
                         delete_branch(REPO_ROOT, w["branch"])
+                        del workers[worker_id]
                     else:
-                        print(f"[worker {worker_id}] worktree/branch left in place (merge issue): {w['path']}")
-                    del workers[worker_id]
+                        # Did real work and hit --max-tags-per-process, not
+                        # "nothing left" -- refill the slot immediately so
+                        # num_workers stays actually busy for the rest of
+                        # the run.
+                        remove_worktree(REPO_ROOT, w["path"])
+                        delete_branch(REPO_ROOT, w["branch"])
+                        entry = spawn_worker(worker_id)
+                        if entry:
+                            workers[worker_id] = entry
+                        else:
+                            del workers[worker_id]
     except BaseException:
         for w in workers.values():
             _kill_process_group(w["pgid"])
