@@ -76,6 +76,7 @@ const KNOWN_TAGS: &[&str] = &[
     "EXP1",
     "EXP2",
     "EXP3",
+    "FCS1",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -339,6 +340,17 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     "APP12:EXP3".to_string(),
                     app12_value,
                 );
+            }
+
+            // ExifTool exposes the Olympus FCS1 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("FCS1") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:FCS1".to_string(), app12_value);
             }
 
             // ExifTool exposes the continuous-take diagnostic field in the
