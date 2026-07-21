@@ -219,6 +219,18 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             let tag_name = normalize_tag_name(&key);
             let tag_value = parse_tag_value(&tag_name, &value);
 
+            // The legacy Picture Info field "Type" is the camera model.
+            // ExifTool exposes it in the APP12 group as CameraType. This
+            // parser handles identifier-less Picture Info records (including
+            // Agfa SR84 data), so the canonical tag must be emitted here
+            // rather than only by the AGFA-identified parser.
+            if tag_name == "CameraType" {
+                metadata.insert(
+                    "APP12:CameraType".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
             // ExifTool exposes these Olympus diagnostic fields in the APP12
             // group rather than as an Olympus maker-note tag.
             if key.eq_ignore_ascii_case("CAM4") || key.eq_ignore_ascii_case("CAM6") {
@@ -352,6 +364,26 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:COLOR4".to_string(), app12_value);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod camera_type_tests {
+    use super::*;
+
+    #[test]
+    fn test_legacy_picture_info_camera_type() {
+        // Agfa SR84 files use the generic, identifier-less APP12 Picture Info
+        // layout and are accepted by this parser through the known Type field.
+        let metadata = parse_app12_olympus(
+            b"Type=SR84\rVersion=v84-71\rID=AGFA DIGITAL CAMERA\r",
+        )
+        .expect("legacy Picture Info should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:CameraType"),
+            Some("SR84")
+        );
     }
 }
 
