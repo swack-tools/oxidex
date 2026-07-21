@@ -249,6 +249,17 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 );
             }
 
+            // Identifier-less Picture Info records, including the legacy Agfa
+            // variant used by ExifTool.jpg, are routed through this parser
+            // rather than the Agfa-specific parser. ExifTool exposes ID as a
+            // textual tag in the APP12 group.
+            if key.eq_ignore_ascii_case("ID") {
+                metadata.insert(
+                    "APP12:ID".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
             // Olympus Picture Info calls this field ExposureBias. ExifTool
             // exposes it as APP12:ExposureCompensation. Preserve the textual
             // representation because these records include the explicit sign

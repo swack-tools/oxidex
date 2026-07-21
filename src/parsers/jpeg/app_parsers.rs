@@ -683,6 +683,23 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_legacy_agfa_app12_id() {
+        // Identifier-less Agfa Picture Info is recognized by the generic
+        // Olympus/Picture Info parser used by APP12 dispatch.
+        let data =
+            b"Type=SR84\r\nVersion=v84-71\r\nID=AGFA DIGITAL CAMERA\r\n";
+
+        let metadata =
+            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+                .expect("valid legacy Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:ID"),
+            Some("AGFA DIGITAL CAMERA")
+        );
+    }
+
+    #[test]
     fn test_parse_olympus_app12_fcs7() {
         let data =
             b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nFCS6=3\r\nFCS7=3\r\n";
