@@ -43,6 +43,7 @@ const KNOWN_TAGS: &[&str] = &[
     "Version",
     "SerialNumber",
     "InternalSerialNumber",
+    "TimeDate",
     "DateTimeOriginal",
     "ExposureTime",
     "ExposureCompensation",
@@ -244,6 +245,20 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             if tag_name == "ExposureCompensation" {
                 metadata.insert(
                     "APP12:ExposureCompensation".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
+            // The source field in JPEG Picture Info records is normally named
+            // TimeDate. ExifTool renames this to DateTimeOriginal and exposes
+            // it in the APP12 group. Also accept DateTimeOriginal directly
+            // for variants which already use the normalized field name.
+            if tag_name == "DateTimeOriginal"
+                || key.eq_ignore_ascii_case("TimeDate")
+                || key.eq_ignore_ascii_case("DateTimeOriginal")
+            {
+                metadata.insert(
+                    "APP12:DateTimeOriginal".to_string(),
                     TagValue::String(value.clone()),
                 );
             }
@@ -552,6 +567,19 @@ mod camera_type_tests {
         assert_eq!(
             metadata.get_integer("APP12:ColorMode"),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn test_picture_info_datetime_original_app12_tag() {
+        let metadata = parse_app12_olympus(
+            b"[picture info]\r\nTimeDate=1998:12:31 15:17:20\r\n",
+        )
+        .expect("Picture Info should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:DateTimeOriginal"),
+            Some("1998:12:31 15:17:20")
         );
     }
 }
