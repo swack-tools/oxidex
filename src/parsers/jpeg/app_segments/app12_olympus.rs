@@ -66,6 +66,7 @@ const KNOWN_TAGS: &[&str] = &[
     "Model",
     "Software",
     "COLOR2",
+    "COLOR3",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -328,6 +329,16 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     Err(_) => TagValue::String(value.clone()),
                 };
                 metadata.insert("APP12:COLOR2".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus diagnostic COLOR3 field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("COLOR3") {
+                let app12_value = match value.parse::<i64>() {
+                    Ok(number) => TagValue::Integer(number),
+                    Err(_) => TagValue::String(value.clone()),
+                };
+                metadata.insert("APP12:COLOR3".to_string(), app12_value);
             }
         }
     }
