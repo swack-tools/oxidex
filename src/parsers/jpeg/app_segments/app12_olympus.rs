@@ -85,6 +85,7 @@ const KNOWN_TAGS: &[&str] = &[
     "FCS7",
     "IMbb",
     "IMbg",
+    "IMgb",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -399,6 +400,20 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:IMbg".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus IMgb diagnostic field in the
+            // APP12 group using its original mixed-case name.
+            if key.eq_ignore_ascii_case("IMgb") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert(
+                    "APP12:IMgb".to_string(),
+                    app12_value,
+                );
             }
 
             // ExifTool exposes the Olympus FCS diagnostic fields in the APP12
