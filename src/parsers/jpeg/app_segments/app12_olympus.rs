@@ -248,6 +248,20 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 );
             }
 
+            // ColorMode is part of ExifTool's JPEG Picture Info table, whose
+            // tags belong to the APP12 group. Keep the Olympus-prefixed tag
+            // emitted below for compatibility and also emit the canonical
+            // ExifTool tag. Picture Info normally stores this as an integer;
+            // retain unexpected non-numeric values rather than dropping them.
+            if key.eq_ignore_ascii_case("ColorMode") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:ColorMode".to_string(), app12_value);
+            }
+
             // ExifTool exposes these Olympus diagnostic fields in the APP12
             // group rather than as an Olympus maker-note tag.
             if key.eq_ignore_ascii_case("CAM4") || key.eq_ignore_ascii_case("CAM6") {
@@ -525,6 +539,19 @@ mod camera_type_tests {
         assert_eq!(
             metadata.get_string("APP12:ExposureCompensation"),
             Some("+2.0")
+        );
+    }
+
+    #[test]
+    fn test_olympus_color_mode_app12_tag() {
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS OPTICAL CO.,LTD.\0[picture info]\r\nColorMode=1\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:ColorMode"),
+            Some(1)
         );
     }
 }
