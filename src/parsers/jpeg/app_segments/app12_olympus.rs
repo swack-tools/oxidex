@@ -293,6 +293,20 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:Fnumber".to_string(), tag_value.clone());
             }
 
+            // Picture Info stores the pixel dimensions in the Resolution
+            // field, but ExifTool exposes this field as APP12:ImageSize.
+            // Accept ImageSize directly as well for format variants which
+            // already use the normalized field name.
+            if key.eq_ignore_ascii_case("Resolution")
+                || key.eq_ignore_ascii_case("ImageSize")
+                || tag_name == "ImageSize"
+            {
+                metadata.insert(
+                    "APP12:ImageSize".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
             // Flash is part of ExifTool's JPEG Picture Info table and belongs
             // to the APP12 group. Preserve its display-ready textual value,
             // such as "Off", while retaining the Olympus compatibility tag.
