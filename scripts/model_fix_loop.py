@@ -36,10 +36,24 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           with keepalives well past this before ever
                           sending real content, so raise it if a provider
                           is otherwise reliable but just slow)
+    max_request_turns      default 20 (worker only; how many REQUEST:
+                          <path> investigation turns -- see
+                          attempt_build/resolve_request -- the fixer gets
+                          before it's nudged, then required, to submit a
+                          diff instead of continuing to investigate)
 
 [reviewer] defaults to [worker] entirely when omitted, so a single table
 covers both the fixer and the reviewer by default -- add [reviewer] only to
 run review on a different model pool/provider.
+
+An optional [parallel] table configures scripts/parallel_tag_fix_loop.py:
+
+    workers                default 4 -- number of concurrent worker
+                          processes, each in its own persistent worktree
+    max_tags_per_process   default none (unbounded) -- stop a worker after
+                          it has attempted this many distinct tags, rather
+                          than running until the whole shared tag pool is
+                          blacklisted/fixed
 
 Usage:
     uv run scripts/model_fix_loop.py
@@ -436,7 +450,7 @@ def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=ra
 
 
 REQUEST_RE = re.compile(r"^REQUEST:\s*(.+)$", re.IGNORECASE)
-MAX_REQUEST_TURNS = 4  # investigation turns before a diff is still required
+DEFAULT_MAX_REQUEST_TURNS = 20  # investigation turns before a diff is still required
 DEFAULT_HEXDUMP_BYTES = 2048
 
 
@@ -491,9 +505,9 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                    cargo_build_fn, config, repo_root, pick_model_fn=random.choice,
                    samples_dir=None):
     """Try to get a working build via a bounded conversation: up to
-    MAX_REQUEST_TURNS turns where the model can ask to see more context
-    (REQUEST: <path> -- see resolve_request) before it must submit a diff,
-    then up to 2 diff attempts (initial + one apply/build repair
+    config["max_request_turns"] turns where the model can ask to see more
+    context (REQUEST: <path> -- see resolve_request) before it must submit
+    a diff, then up to 2 diff attempts (initial + one apply/build repair
     round-trip). Extends the given messages conversation in place. Returns
     (built, reason, diff, messages) -- reason is None when built is True;
     diff is the successfully-applied diff (None if not built).
@@ -504,6 +518,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     different provider entirely -- from config["models"] than the initial
     attempt. Each spec is a {"name", "base_url", "api_key"} dict.
     """
+    max_request_turns = config.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS)
     request_turns_used = 0
     diff_attempts_used = 0
     nudged_to_stop_investigating = False
@@ -529,7 +544,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
 
         request_match = REQUEST_RE.match(reply.strip())
         if request_match:
-            if request_turns_used < MAX_REQUEST_TURNS:
+            if request_turns_used < max_request_turns:
                 request_turns_used += 1
                 answer = resolve_request(request_match.group(1), repo_root, samples_dir)
                 messages.append({"role": "user", "content": answer})
@@ -803,7 +818,7 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
                   git_checkout_clean_fn=None, repo_root=None, log_fn=print,
                   load_state_fn=load_tag_state, save_state_fn=save_tag_state,
                   max_rounds=None, max_fails=DEFAULT_MAX_TAG_FAILS, blacklist_full=False,
-                  worker_id=None, claim_stale_seconds=1800):
+                  worker_id=None, claim_stale_seconds=1800, max_distinct_tags=None):
     """Loop-until-everything-found driver, blacklisting individual TAGS
     (never a whole format) after max_fails failed attempts each. State
     persists to disk at state_path, so the blacklist -- and each tag's
@@ -839,11 +854,20 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
     max_rounds caps the number of attempts (None = run forever, until
     find_gaps_fn() reports zero gaps left anywhere, or blacklist_full's
     natural stop); tests pass a small cap instead of relying on that.
+
+    max_distinct_tags, if given, caps how many different tags this one
+    process will ever start work on (not total attempts -- a tag already
+    started keeps getting retried across rounds same as always). Once
+    that many distinct tags have been touched, the loop stops rather than
+    picking up a brand-new one -- useful to bound one worker's share of a
+    shared tag pool in a parallel run (see [parallel].max_tags_per_process
+    in config.toml).
     """
     state = load_state_fn(state_path)
     fixed, failed = [], []
     cycles_reset = 0
     round_num = 0
+    seen_tag_keys = set()
 
     def is_claimed_by_someone_else(entry):
         claimed_by = entry.get("claimed_by")
@@ -866,7 +890,13 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             tg for tg in tag_gaps
             if not state.get(tg["tag_key"], {}).get("blacklisted")
             and not is_claimed_by_someone_else(state.get(tg["tag_key"], {}))
+            and (max_distinct_tags is None or len(seen_tag_keys) < max_distinct_tags
+                 or tg["tag_key"] in seen_tag_keys)
         ]
+
+        if not active and max_distinct_tags is not None and len(seen_tag_keys) >= max_distinct_tags:
+            log_fn(f"Reached max_distinct_tags={max_distinct_tags} for this process -- stopping.")
+            break
 
         if not active:
             all_blacklisted = all(state.get(tg["tag_key"], {}).get("blacklisted") for tg in tag_gaps)
@@ -889,6 +919,7 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             continue
 
         tag_gap = active[0]
+        seen_tag_keys.add(tag_gap["tag_key"])
         entry = state.setdefault(tag_gap["tag_key"], {"fails": 0, "blacklisted": False, "attempts": []})
         entry["claimed_by"] = worker_id
         entry["claimed_at"] = time.time()
@@ -930,6 +961,7 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
         "fixed": fixed,
         "failed": failed,
         "cycles_reset": cycles_reset,
+        "distinct_tags_seen": len(seen_tag_keys),
     }
 
 
@@ -1005,6 +1037,7 @@ def _normalize_model_config(table):
         "thinking": table.get("thinking", True),
         "temperature": table.get("temperature", 0),
         "timeout": table.get("timeout", 120),
+        "max_request_turns": table.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS),
     }
 
 
@@ -1066,6 +1099,12 @@ def main(argv=None):
         "--prompt-log-dir", default=str(REPO_ROOT / "logs" / "tag-fix-prompts"),
         help="Directory for process-<worker-id>-prompt.log, which every round's full prompt "
              "is appended to (also printed to stdout).",
+    )
+    parser.add_argument(
+        "--max-tags-per-process", type=int, default=None,
+        help="Cap how many distinct tags this one process will start work on before stopping "
+             "(a tag already started keeps getting retried as normal). Default: unbounded. "
+             "See [parallel].max_tags_per_process in config.toml for the parallel-runner default.",
     )
     args = parser.parse_args(argv)
 
@@ -1243,6 +1282,7 @@ def main(argv=None):
         git_checkout_clean_fn=git_checkout_clean, repo_root=REPO_ROOT,
         log_fn=timestamped_log, max_fails=args.max_tag_fails,
         blacklist_full=args.blacklist_full, worker_id=args.worker_id,
+        max_distinct_tags=args.max_tags_per_process,
     )
     print(f"stopped after {summary['rounds']} rounds")
     print(f"  fixed:   {len(summary['fixed'])} tags")

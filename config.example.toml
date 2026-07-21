@@ -24,6 +24,7 @@ temperature = 0.7
 max_prompt_tags = 40
 max_prompt_file_bytes = 60000
 timeout = 600
+max_request_turns = 20
 
 [[worker.models]]
 name = "glm5.2-fast"
@@ -65,3 +66,9 @@ name = "Kimi-K2.6"
 name = "accounts/fireworks/routers/kimi-k2p7-code-fast"
 base_url = "https://api.fireworks.ai/inference/v1"
 api_key = "your-fireworks-api-key-here"
+
+# Optional: configures scripts/parallel_tag_fix_loop.py. Omit entirely to
+# use its own defaults (workers = 4, max_tags_per_process unbounded).
+[parallel]
+workers = 4
+# max_tags_per_process = 10

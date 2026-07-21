@@ -736,7 +736,7 @@ class AttemptBuildTests(unittest.TestCase):
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
             cargo_build_fn=lambda root: (True, ""),
-            config=CONFIG,
+            config=dict(CONFIG, max_request_turns=4),
             repo_root=Path("/fake/repo"),
         )
         self.assertTrue(built)
@@ -749,11 +749,52 @@ class AttemptBuildTests(unittest.TestCase):
             git_apply_fn=lambda diff, root: self.fail("should not apply"),
             cargo_build_fn=lambda root: self.fail("should not build"),
             git_checkout_clean_fn=lambda root: None,
-            config=CONFIG,
+            config=dict(CONFIG, max_request_turns=4),
             repo_root=Path("/fake/repo"),
         )
         self.assertFalse(built)
         self.assertEqual(reason, "no diff in model response (exhausted request budget)")
+
+    def test_max_request_turns_is_configurable(self):
+        calls = []
+
+        def fake_call_model(messages, *a):
+            calls.append(1)
+            return "REQUEST: src/parsers/jpeg/mod.rs"
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=dict(CONFIG, max_request_turns=2),
+            repo_root=Path("/fake/repo"),
+        )
+        # 2 REQUEST turns allowed (calls 1-2), then the 3rd REQUEST triggers
+        # the nudge, then the 4th (still just requesting) fails -- 4 calls
+        # total, not the default cap's 22.
+        self.assertEqual(len(calls), 4)
+        self.assertFalse(built)
+
+    def test_default_max_request_turns_is_twenty(self):
+        calls = []
+
+        def fake_call_model(messages, *a):
+            calls.append(1)
+            return "REQUEST: src/parsers/jpeg/mod.rs"
+
+        attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=CONFIG,  # no max_request_turns override -- uses the default
+            repo_root=Path("/fake/repo"),
+        )
+        # 20 REQUEST turns + 1 nudge turn + 1 final failing call = 22.
+        self.assertEqual(len(calls), 22)
 
 
 class FixGapFailureTests(unittest.TestCase):
@@ -1337,6 +1378,35 @@ class RunTagLoopTests(unittest.TestCase):
         # Must stop immediately (round 1) rather than reset-and-continue.
         self.assertEqual(result["rounds"], 1)
         self.assertEqual(result["cycles_reset"], 0)
+
+    def test_max_distinct_tags_stops_onboarding_new_tags(self):
+        # 3 distinct tags across two formats; cap this process at 1.
+        gaps = [
+            make_gap(),  # NEF: LensModel (missing), ISO (diff)
+            {
+                "format": "PNG",
+                "missing_tags": [{"family": "PNG", "name": "Gamma", "value": "1", "tag_id": None, "source_file": None}],
+                "value_differences": [], "gap_count": 1, "parser_files": [],
+            },
+        ]
+        attempts = []
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            attempts.append(tag_gap["tag_key"])
+            return {"status": "failed", "reason": "nope"}
+
+        store, load, save = self._state_io()
+        result = run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=5, max_fails=10, max_distinct_tags=1,
+        )
+        # Only the first tag ever picked (NEF:EXIF:LensModel) gets
+        # attempted, repeatedly -- the loop must stop rather than start
+        # PNG:PNG:Gamma or NEF:EXIF:ISO once the cap of 1 distinct tag is
+        # reached.
+        self.assertEqual(set(attempts), {"NEF:EXIF:LensModel"})
+        self.assertEqual(result["distinct_tags_seen"], 1)
 
     def test_worker_claim_prevents_another_worker_from_picking_same_tag(self):
         gaps = [make_gap()]
