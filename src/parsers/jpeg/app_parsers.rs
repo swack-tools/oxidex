@@ -136,13 +136,28 @@ pub fn parse_app0_extended(data: &[u8], metadata: &mut MetadataMap) -> Result<()
 
     // OCAD APP0 segment
     //
-    // ExifTool extracts OcadRevision from APP0. This revision is stored as a
-    // 16-bit little-endian value immediately following the "Ocad\0" signature.
-    if data.len() >= 7 && &data[0..5] == b"Ocad\0" {
-        let revision = u16::from_le_bytes([data[5], data[6]]);
+    // OCAD writes an ASCII revision header of the form
+    // "Ocad$Rev: <decimal revision> $", followed by padding and other data.
+    const OCAD_REVISION_PREFIX: &[u8] = b"Ocad$Rev: ";
+    if data.starts_with(OCAD_REVISION_PREFIX) {
+        let revision_data = &data[OCAD_REVISION_PREFIX.len()..];
+        let digit_count = revision_data
+            .iter()
+            .position(|byte| !byte.is_ascii_digit())
+            .unwrap_or(revision_data.len());
+
+        if digit_count == 0 {
+            return Err("OCAD APP0 segment has no revision number".to_string());
+        }
+
+        let revision = std::str::from_utf8(&revision_data[..digit_count])
+            .map_err(|_| "OCAD revision is not valid ASCII".to_string())?
+            .parse::<i64>()
+            .map_err(|_| "OCAD revision is outside the supported integer range".to_string())?;
+
         metadata.insert(
             "APP0:OcadRevision".to_string(),
-            TagValue::Integer(revision as i64),
+            TagValue::Integer(revision),
         );
         return Ok(());
     }
@@ -528,6 +543,21 @@ mod tests {
         assert_eq!(
             metadata.get("File:Comment"),
             Some(&TagValue::Binary(vec![0xFF, 0xFE, 0x00, 0x41]))
+        );
+    }
+
+    #[test]
+    fn test_parse_app0_ocad_revision() {
+        // Exact APP0 payload layout used by SonyDCR-DVD710.jpg.
+        let data = b"Ocad$Rev: 14797 $\0\0\0\0\0\0\0\x01\x10";
+        let mut metadata = MetadataMap::new();
+
+        let result = parse_app0_extended(data, &mut metadata);
+
+        assert!(result.is_ok());
+        assert_eq!(
+            metadata.get_integer("APP0:OcadRevision"),
+            Some(14797)
         );
     }
 
