@@ -182,6 +182,31 @@ class CallModelRetryTests(unittest.TestCase):
         self.assertEqual(sleeps, [2, 4])
 
     @patch("model_fix_loop.urllib.request.urlopen")
+    def test_logs_each_retry_so_a_long_ride_out_is_not_silent(self, mock_urlopen):
+        # A worker riding out many transient failures (the whole point of
+        # a high max_retries) must not go completely silent for however
+        # long that takes -- previously nothing was logged per retry,
+        # making a busy worker indistinguishable from a stuck one on any
+        # dashboard/log tailing it.
+        response_json = json.dumps({"choices": [{"message": {"content": "the diff"}}]}).encode()
+        ok_cm = MagicMock()
+        ok_cm.read.return_value = response_json
+        ok_ctx = MagicMock()
+        ok_ctx.__enter__.return_value = ok_cm
+        mock_urlopen.side_effect = [self._http_error(502), self._http_error(500), ok_ctx]
+
+        logged = []
+        call_model(
+            [{"role": "user", "content": "fix it"}],
+            base_url="https://api.example/v1", api_key="k", model="m",
+            max_tokens=100, reasoning_effort="max",
+            sleep_fn=lambda s: None, log_fn=logged.append,
+        )
+        self.assertEqual(len(logged), 2)
+        self.assertIn("retry 1/", logged[0])
+        self.assertIn("retry 2/", logged[1])
+
+    @patch("model_fix_loop.urllib.request.urlopen")
     def test_does_not_retry_on_4xx(self, mock_urlopen):
         mock_urlopen.side_effect = self._http_error(400)
         with self.assertRaises(urllib.error.HTTPError):

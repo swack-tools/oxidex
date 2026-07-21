@@ -136,7 +136,8 @@ DEFAULT_MAX_RETRY_BACKOFF_SECONDS = 120  # cap growth -- 2**1000 would otherwise
 def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream=False, thinking=True,
                 temperature=0, timeout=120, max_retries=DEFAULT_MAX_RETRIES,
                 retry_backoff_seconds=DEFAULT_RETRY_BACKOFF_SECONDS,
-                max_retry_backoff_seconds=DEFAULT_MAX_RETRY_BACKOFF_SECONDS, sleep_fn=time.sleep):
+                max_retry_backoff_seconds=DEFAULT_MAX_RETRY_BACKOFF_SECONDS, sleep_fn=time.sleep,
+                log_fn=None):
     """POST a chat-completions request, retrying on transient upstream
     failures, and return the assistant's reply text.
 
@@ -173,11 +174,23 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
     urlopen -- some providers hold a streaming connection open with
     keepalives well past 120s before ever sending real content, so this is
     configurable per [worker]/[reviewer] rather than a fixed value.
+
+    log_fn(str), if given, is called once per retry -- otherwise a worker
+    riding out a long stretch of transient failures (a real, intended
+    outcome of max_retries being high) produces zero log output for
+    however long that takes, which looks indistinguishable from "stuck"
+    to anything tailing the log or a dashboard reading it.
     """
     last_error = None
     for attempt in range(max_retries + 1):
         if attempt > 0:
-            sleep_fn(min(retry_backoff_seconds * (2 ** (attempt - 1)), max_retry_backoff_seconds))
+            delay = min(retry_backoff_seconds * (2 ** (attempt - 1)), max_retry_backoff_seconds)
+            if log_fn:
+                log_fn(
+                    f"model call retry {attempt}/{max_retries} after {last_error!r}, "
+                    f"waiting {delay}s"
+                )
+            sleep_fn(delay)
         try:
             reply = _call_model_once(
                 messages, base_url, api_key, model, max_tokens, reasoning_effort,
@@ -1357,6 +1370,7 @@ def main(argv=None):
                 messages, base_url, api_key, model, max_tokens, reasoning_effort,
                 stream, thinking, temperature, timeout,
                 max_retries, retry_backoff_seconds, max_retry_backoff_seconds,
+                log_fn=timestamped_log,
             )
         except Exception as e:
             elapsed = time.time() - t0
