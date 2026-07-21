@@ -239,6 +239,17 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 );
             }
 
+            // ExposureTime is defined by ExifTool's JPEG Picture Info table
+            // and therefore belongs to the APP12 group. Reuse the parsed
+            // value so fractional exposure times retain their rational type
+            // instead of being coerced back to text.
+            if tag_name == "ExposureTime" {
+                metadata.insert(
+                    "APP12:ExposureTime".to_string(),
+                    tag_value.clone(),
+                );
+            }
+
             // Olympus Picture Info calls this field ExposureBias. ExifTool
             // exposes it as APP12:ExposureCompensation. Preserve the textual
             // representation because these records include the explicit sign
@@ -500,6 +511,24 @@ mod camera_type_tests {
         assert_eq!(
             metadata.get_string("APP12:CameraType"),
             Some("SR84")
+        );
+    }
+
+    #[test]
+    fn test_olympus_exposure_time_in_app12_group() {
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS DIGITAL CAMERA\0[picture info]\r\nExposureTime=1/155\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        let app12_value = metadata
+            .get("APP12:ExposureTime")
+            .expect("APP12 ExposureTime should be emitted");
+
+        assert_eq!(
+            Some(app12_value),
+            metadata.get("Olympus:ExposureTime"),
+            "canonical APP12 value should retain the parsed Olympus value and type"
         );
     }
 
