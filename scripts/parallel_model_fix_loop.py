@@ -250,6 +250,12 @@ def run_worker(fmt, worktree, cache_dir, log_path, timeout=None):
     env = dict(os.environ)
     env.pop("CARGO_TARGET_DIR", None)  # each worktree gets its own default target/, never shared
     env["EXIFTOOL_CACHE_DIR"] = str(cache_dir)
+    # stdout redirected to a regular file (not a TTY) makes Python default
+    # to full block buffering instead of line buffering -- print() output
+    # (what watch_parallel_fix.py tails) can sit unflushed behind the
+    # worker's true progress. Force unbuffered so the log file actually
+    # reflects real-time state.
+    env["PYTHONUNBUFFERED"] = "1"
     with open(log_path, "w") as log_file:
         proc = subprocess.Popen(  # nosec B603
             ["uv", "run", "scripts/model_fix_loop.py", "--only-format", fmt],

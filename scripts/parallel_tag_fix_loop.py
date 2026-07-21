@@ -111,6 +111,13 @@ def start_worker(worker_id, worktree, cache_dir, log_path, tag_state_path, promp
     env = dict(os.environ)
     env.pop("CARGO_TARGET_DIR", None)  # each worktree gets its own default target/, never shared
     env["EXIFTOOL_CACHE_DIR"] = str(cache_dir)
+    # stdout redirected to a regular file (not a TTY) makes Python default
+    # to full block buffering instead of line buffering -- print() output
+    # (including the "round N: attempting TAG" line watch_parallel_fix.py
+    # tails) can sit unflushed for many lines/rounds behind the worker's
+    # true progress. Force unbuffered so the log file -- and the live
+    # dashboard reading it -- actually reflect real-time state.
+    env["PYTHONUNBUFFERED"] = "1"
     argv = [
         "uv", "run", "scripts/model_fix_loop.py",
         "--blacklist-full",
