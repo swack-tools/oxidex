@@ -783,6 +783,23 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_olympus_app12_imrg() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data =
+            b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMrg=33975\r\n";
+
+        let metadata =
+            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+                .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:IMrg"),
+            Some(33975),
+            "IMrg should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
     fn test_parse_olympus_app12_imbr() {
         // Diagnostic data from OlympusD620L.jpg.
         let data =

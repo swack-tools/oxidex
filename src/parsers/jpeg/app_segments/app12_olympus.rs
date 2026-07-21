@@ -87,6 +87,7 @@ const KNOWN_TAGS: &[&str] = &[
     "IMbg",
     "IMgb",
     "IMgr",
+    "IMrg",
     "IMbr",
     "IMgg",
     "IMrb",
@@ -440,6 +441,17 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:IMgr".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus IMrg diagnostic field in the
+            // APP12 group using its original mixed-case name.
+            if key.eq_ignore_ascii_case("IMrg") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:IMrg".to_string(), app12_value);
             }
 
             // ExifTool exposes the Olympus IMbr diagnostic field in the
