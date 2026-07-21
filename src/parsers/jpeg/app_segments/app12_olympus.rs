@@ -216,18 +216,20 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             let tag_name = normalize_tag_name(&key);
             let tag_value = parse_tag_value(&tag_name, &value);
 
-            // ExifTool exposes this Olympus diagnostic field in the APP12
+            // ExifTool exposes these Olympus diagnostic fields in the APP12
             // group rather than as an Olympus maker-note tag.
-            if key.eq_ignore_ascii_case("CAM4") {
-                let cam4_value = value
+            if key.eq_ignore_ascii_case("CAM4") || key.eq_ignore_ascii_case("CAM6") {
+                let app12_value = value
                     .parse::<i64>()
                     .map(TagValue::Integer)
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
+                let app12_tag = if key.eq_ignore_ascii_case("CAM4") {
+                    "APP12:CAM4"
+                } else {
+                    "APP12:CAM6"
+                };
 
-                metadata.insert(
-                    "APP12:CAM4".to_string(),
-                    cam4_value,
-                );
+                metadata.insert(app12_tag.to_string(), app12_value);
             }
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
@@ -556,6 +558,24 @@ mod tests {
         let metadata = parse_app12_olympus(data).unwrap();
 
         assert_eq!(metadata.get_integer("APP12:CAM4"), Some(32));
+    }
+
+    /// Test the diagnostic CAM6 field exposed by ExifTool as APP12:CAM6.
+    #[test]
+    fn test_parse_app12_cam6() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\
+                     [picture info]\r\n\
+                     Type=DCHT\r\n\
+                     [diag info]\r\n\
+                     CAM4=32\r\n\
+                     CAM5=224\r\n\
+                     CAM6=80\r\n\
+                     CAM7=86\r\n\
+                     [end]\r\n\0";
+
+        let metadata = parse_app12_olympus(data).unwrap();
+
+        assert_eq!(metadata.get_integer("APP12:CAM6"), Some(80));
     }
 
     /// Test parsing data with ID tag
