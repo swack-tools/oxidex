@@ -74,7 +74,7 @@ base_url = "https://api.fireworks.ai/inference/v1"
 api_key = "your-fireworks-api-key-here"
 
 # Optional: configures scripts/parallel_tag_fix_loop.py. Omit entirely to
-# use its own defaults (workers = 4, max_tags_per_process unbounded).
+# use its own defaults (workers = 4, max_tags_per_process = 1).
 [parallel]
 workers = 4
-# max_tags_per_process = 10
+max_tags_per_process = 1

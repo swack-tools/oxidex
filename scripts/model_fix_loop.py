@@ -61,10 +61,13 @@ An optional [parallel] table configures scripts/parallel_tag_fix_loop.py:
 
     workers                default 4 -- number of concurrent worker
                           processes, each in its own persistent worktree
-    max_tags_per_process   default none (unbounded) -- stop a worker after
-                          it has attempted this many distinct tags, rather
-                          than running until the whole shared tag pool is
-                          blacklisted/fixed
+    max_tags_per_process   default 1 -- stop a worker after it has
+                          attempted this many distinct tags, rather than
+                          running until the whole shared tag pool is
+                          blacklisted/fixed. Respawning frequently (rather
+                          than one worker grinding through many tags on a
+                          long-lived private branch) is what makes real
+                          progress land on the shared branch often.
 
 Usage:
     uv run scripts/model_fix_loop.py
@@ -957,6 +960,12 @@ def save_tag_state(path, state):
 
 DEFAULT_MAX_TAG_FAILS = 10
 
+# Keep in sync with parallel_tag_fix_loop.py's own copy of this default --
+# each worker (whether launched directly or via the parallel wrapper)
+# should only ever hold one tag at a time unless config.toml says
+# otherwise. See that module for the full rationale.
+DEFAULT_MAX_TAGS_PER_PROCESS = 1
+
 
 def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
                   git_checkout_clean_fn=None, repo_root=None, log_fn=print,
@@ -1257,8 +1266,8 @@ def main(argv=None):
     parser.add_argument(
         "--max-tags-per-process", type=int, default=None,
         help="Cap how many distinct tags this one process will start work on before stopping "
-             "(a tag already started keeps getting retried as normal). Default: unbounded. "
-             "See [parallel].max_tags_per_process in config.toml for the parallel-runner default.",
+             "(a tag already started keeps getting retried as normal). Default: "
+             f"[parallel].max_tags_per_process in config.toml, or {DEFAULT_MAX_TAGS_PER_PROCESS} if absent.",
     )
     parser.add_argument(
         "--tags-found-log", default=str(REPO_ROOT / "logs" / "tags-found.log"),
@@ -1477,12 +1486,16 @@ def main(argv=None):
             log_tag_found(tag_gap, result)
         return result
 
+    max_tags_per_process = (
+        args.max_tags_per_process if args.max_tags_per_process is not None
+        else (toml_data.get("parallel") or {}).get("max_tags_per_process", DEFAULT_MAX_TAGS_PER_PROCESS)
+    )
     summary = run_tag_loop(
         config, find_gaps_fn, real_fix_tag, state_path=args.tag_state_path,
         git_checkout_clean_fn=git_checkout_clean, repo_root=REPO_ROOT,
         log_fn=timestamped_log, max_fails=args.max_tag_fails,
         blacklist_full=args.blacklist_full, worker_id=args.worker_id,
-        max_distinct_tags=args.max_tags_per_process,
+        max_distinct_tags=max_tags_per_process,
     )
     print(f"stopped after {summary['rounds']} rounds")
     print(f"  fixed:   {len(summary['fixed'])} tags")

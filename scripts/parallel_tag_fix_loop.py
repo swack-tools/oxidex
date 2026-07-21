@@ -49,6 +49,21 @@ DEFAULT_LOG_DIR = REPO_ROOT / "logs" / "parallel-tag-fix"
 DEFAULT_PROMPT_LOG_DIR = REPO_ROOT / "logs" / "tag-fix-prompts"
 DEFAULT_TAGS_FOUND_LOG = REPO_ROOT / "logs" / "tags-found.log"
 
+# Each worker should only ever hold one tag at a time -- respawning
+# frequently is what makes the merge-then-respawn design (see the two-pass
+# loop below) actually exercise itself often, instead of one worker sitting
+# on a long private branch for hours before its work ever reaches base_ref.
+DEFAULT_MAX_TAGS_PER_PROCESS = 1
+
+# A worker that crashes (uncaught exception, e.g. a transient network
+# failure building cargo) before ever printing its "stopped after N
+# rounds" summary must never be mistaken for "the shared tag pool is
+# empty" -- see classify_worker_exit. It's still worth retrying (the
+# failure may be transient), but a slot that crashes over and over with no
+# real work happening between crashes is a broken environment, not
+# progress; cap consecutive crashes before giving up on that slot for good.
+DEFAULT_MAX_CONSECUTIVE_CRASHES = 5
+
 # Every in-flight worker's process group, so an interrupted wrapper
 # (Ctrl-C, SIGTERM) can force-terminate all of them rather than leaving
 # cargo/rustc grandchildren running unsupervised.
@@ -172,28 +187,56 @@ FAILED_COUNT_RE = re.compile(r"^\s*failed:\s+(\d+) attempts", re.MULTILINE)
 
 
 def parse_worker_summary(log_path):
-    """(fixed_count, failed_count) from a worker's final
+    """(fixed_count, failed_count, has_summary) from a worker's final
     "  fixed:   N tags" / "  failed:  N attempts" summary lines (see
-    model_fix_loop.py main()'s prints), or (0, 0) if the log doesn't have
-    them yet (e.g. it crashed before printing a summary at all).
-
-    Used to decide whether a slot is worth respawning: a worker that did
-    real work (fixed and/or failed attempts > 0) likely stopped only
-    because it hit --max-tags-per-process, not because the shared tag
-    pool is actually empty -- respawn it. A worker that exited having
-    done nothing at all found the pool already exhausted (or fully
-    claimed/blacklisted) on its very first look; respawning it would
-    just repeat that immediately, forever.
+    model_fix_loop.py main()'s prints). has_summary is False if the log
+    doesn't have them at all (e.g. it crashed before printing a summary),
+    in which case fixed/failed are just 0 placeholders, not a real "did
+    nothing" report -- see classify_worker_exit, which is what actually
+    tells those two situations apart.
     """
     try:
         text = log_path.read_text(errors="replace")
     except OSError:
-        return 0, 0
+        return 0, 0, False
     fixed_match = FIXED_COUNT_RE.search(text)
     failed_match = FAILED_COUNT_RE.search(text)
+    has_summary = fixed_match is not None or failed_match is not None
     fixed = int(fixed_match.group(1)) if fixed_match else 0
     failed = int(failed_match.group(1)) if failed_match else 0
-    return fixed, failed
+    return fixed, failed, has_summary
+
+
+def classify_worker_exit(returncode, has_summary, fixed, failed):
+    """What a just-exited worker's outcome actually means, given its
+    process return code and parse_worker_summary's result -- the three
+    possibilities the caller must tell apart:
+
+      "crashed"  -- returncode != 0, or no summary was ever printed (an
+                    uncaught exception, e.g. a transient network failure
+                    mid-build). This must NEVER be treated as "the shared
+                    tag pool is empty": a real crash produces exactly the
+                    same (fixed=0, failed=0) as a clean no-work exit once
+                    parse_worker_summary's fallback kicks in, and
+                    conflating the two silently retires a slot that could
+                    have kept making progress -- confirmed live: a worker
+                    hit a crates.io DNS timeout building cargo, the
+                    wrapper logged "found no work available", and retired
+                    the slot while thousands of tags were still unfixed.
+      "no_work"  -- exited cleanly (returncode 0, real summary present)
+                    having fixed and failed nothing at all: the shared
+                    pool was already exhausted, or every remaining tag was
+                    claimed by other workers, the moment this one looked.
+                    Respawning would just repeat that immediately, forever.
+      "respawn"  -- exited cleanly having done real work (fixed and/or
+                    failed attempts > 0) and hit --max-tags-per-process,
+                    not "nothing left" -- refill the slot.
+    """
+    if returncode != 0 or not has_summary:
+        return "crashed"
+    if fixed == 0 and failed == 0:
+        return "no_work"
+    return "respawn"
 
 
 def main(argv=None):
@@ -226,7 +269,7 @@ def main(argv=None):
     parser.add_argument(
         "--max-tags-per-process", type=int, default=None,
         help="Cap how many distinct tags each worker will start work on. Default: "
-             "[parallel].max_tags_per_process in config.toml, or unbounded if absent.",
+             f"[parallel].max_tags_per_process in config.toml, or {DEFAULT_MAX_TAGS_PER_PROCESS} if absent.",
     )
     parser.add_argument(
         "--tag-state-path", default=str(DEFAULT_TAG_STATE_PATH),
@@ -259,7 +302,7 @@ def main(argv=None):
     num_workers = args.workers if args.workers is not None else parallel_table.get("workers", 4)
     max_tags_per_process = (
         args.max_tags_per_process if args.max_tags_per_process is not None
-        else parallel_table.get("max_tags_per_process")
+        else parallel_table.get("max_tags_per_process", DEFAULT_MAX_TAGS_PER_PROCESS)
     )
 
     tag_state_path = Path(args.tag_state_path)
@@ -311,9 +354,20 @@ def main(argv=None):
         return {
             "path": path, "branch": branch, "log_path": log_path,
             "proc": proc, "log_file": log_file, "pgid": pgid, "merged_up_to": 0,
+            "merge_broken": False,
         }
 
-    workers = {}  # worker_id -> {"path", "branch", "log_path", "proc", "log_file", "pgid", "merged_up_to"}
+    # worker_id -> {"path", "branch", "log_path", "proc", "log_file", "pgid",
+    # "merged_up_to", "merge_broken"}
+    workers = {}
+    # worker_id -> count of consecutive crashes on this slot (reset to 0 by
+    # any exit that isn't itself a crash) -- see classify_worker_exit and
+    # DEFAULT_MAX_CONSECUTIVE_CRASHES.
+    crash_counts = {}
+    # Human-readable lines describing any slot that ended for a reason
+    # other than "genuinely found no work" -- drives the final summary
+    # message so it never claims completeness it can't back up.
+    retired_for_review = []
     for worker_id in range(1, num_workers + 1):
         entry = spawn_worker(worker_id)
         if entry:
@@ -341,12 +395,26 @@ def main(argv=None):
             just_exited = []
             for worker_id in list(workers):
                 w = workers[worker_id]
-                count, ok, message = merge_worker_progress(REPO_ROOT, base_ref, w["branch"], w["merged_up_to"])
-                if count > w["merged_up_to"]:
-                    status = "merged" if ok else f"MERGE FAILED: {message}"
-                    print(f"[worker {worker_id}] {count - w['merged_up_to']} new commit(s) -> {status}")
-                    if ok:
-                        w["merged_up_to"] = count
+                if not w["merge_broken"]:
+                    count, ok, message = merge_worker_progress(REPO_ROOT, base_ref, w["branch"], w["merged_up_to"])
+                    if count > w["merged_up_to"]:
+                        if ok:
+                            print(f"[worker {worker_id}] {count - w['merged_up_to']} new commit(s) -> merged")
+                            w["merged_up_to"] = count
+                        else:
+                            print(f"[worker {worker_id}] {count - w['merged_up_to']} new commit(s) -> MERGE FAILED: {message}")
+                            # A conflict here won't resolve itself on a later
+                            # tick -- nothing about this worker's commits or
+                            # the target branch changes between retries, so
+                            # retrying just re-runs `git merge`/`--abort`
+                            # forever. Confirmed live: one conflicted worker
+                            # got retried 150+ times over more than an hour,
+                            # burying every other worker's real status in
+                            # the log. One failure is enough to know this
+                            # needs a human, not another attempt.
+                            w["merge_broken"] = True
+                            print(f"[worker {worker_id}] will not retry this merge automatically -- "
+                                  "needs manual resolution once the worker itself exits")
 
                 if w["proc"].poll() is not None:
                     just_exited.append(worker_id)
@@ -358,34 +426,79 @@ def main(argv=None):
                 wait_for_process_group_exit(w["pgid"])
                 _unregister_pgid(w["pgid"])
                 w["log_file"].close()
-                # Final sweep in case commits landed between pass 1's
-                # merge check and the process actually exiting.
-                count, ok, message = merge_worker_progress(REPO_ROOT, base_ref, w["branch"], w["merged_up_to"])
-                if count > w["merged_up_to"] and ok:
-                    w["merged_up_to"] = count
-                    print(f"[worker {worker_id}] final merge: {count - w['merged_up_to']} commit(s)")
+                # Final sweep in case commits landed between pass 1's merge
+                # check and the process actually exiting (skipped once a
+                # merge has already failed once -- see pass 1 above).
+                if not w["merge_broken"]:
+                    count, ok, message = merge_worker_progress(REPO_ROOT, base_ref, w["branch"], w["merged_up_to"])
+                    if count > w["merged_up_to"]:
+                        if ok:
+                            new_commits = count - w["merged_up_to"]
+                            w["merged_up_to"] = count
+                            print(f"[worker {worker_id}] final merge: {new_commits} commit(s)")
+                        else:
+                            w["merge_broken"] = True
                 print(f"[worker {worker_id}] exited (code {w['proc'].returncode}) -- {w['log_path']}")
 
-                fixed, failed = parse_worker_summary(w["log_path"])
-                if not ok:
+                if w["merge_broken"]:
                     print(f"[worker {worker_id}] worktree/branch left in place (merge issue): {w['path']}")
+                    retired_for_review.append(f"worker {worker_id}: merge conflict at {w['path']}")
                     del workers[worker_id]
-                elif fixed == 0 and failed == 0:
+                    crash_counts.pop(worker_id, None)
+                    continue
+
+                fixed, failed, has_summary = parse_worker_summary(w["log_path"])
+                outcome = classify_worker_exit(w["proc"].returncode, has_summary, fixed, failed)
+
+                if outcome == "crashed":
+                    # Never treat this as "the shared tag pool is empty" --
+                    # see classify_worker_exit's docstring for why the two
+                    # look identical from parse_worker_summary alone. Retry
+                    # a bounded number of times (a transient failure, e.g. a
+                    # DNS blip building cargo, deserves another chance) but
+                    # don't let a genuinely broken environment masquerade as
+                    # slow progress forever.
+                    crash_counts[worker_id] = crash_counts.get(worker_id, 0) + 1
+                    remove_worktree(REPO_ROOT, w["path"])
+                    delete_branch(REPO_ROOT, w["branch"])
+                    if crash_counts[worker_id] >= DEFAULT_MAX_CONSECUTIVE_CRASHES:
+                        print(
+                            f"[worker {worker_id}] CRASHED {crash_counts[worker_id]} times in a row "
+                            f"(exit code {w['proc'].returncode}) -- giving up on this slot, see {w['log_path']}"
+                        )
+                        retired_for_review.append(f"worker {worker_id}: repeated crashes, see {w['log_path']}")
+                        del workers[worker_id]
+                        crash_counts.pop(worker_id, None)
+                    else:
+                        print(
+                            f"[worker {worker_id}] CRASHED (exit code {w['proc'].returncode}), attempt "
+                            f"{crash_counts[worker_id]}/{DEFAULT_MAX_CONSECUTIVE_CRASHES} -- see "
+                            f"{w['log_path']} -- respawning"
+                        )
+                        entry = spawn_worker(worker_id)
+                        if entry:
+                            workers[worker_id] = entry
+                        else:
+                            del workers[worker_id]
+                            crash_counts.pop(worker_id, None)
+                elif outcome == "no_work":
                     # Exited having attempted nothing at all -- the shared
                     # tag pool was already exhausted (or every remaining
                     # tag already claimed) the moment this worker looked.
                     # Respawning would just repeat that immediately,
                     # forever; let this slot end.
+                    crash_counts.pop(worker_id, None)
                     print(f"[worker {worker_id}] found no work available -- not respawning this slot")
                     remove_worktree(REPO_ROOT, w["path"])
                     delete_branch(REPO_ROOT, w["branch"])
                     del workers[worker_id]
-                else:
+                else:  # "respawn"
                     # Did real work and hit --max-tags-per-process, not
                     # "nothing left" -- refill the slot now that base_ref
                     # reflects every merge from this tick (including any
                     # other worker that also just exited), so this fresh
                     # worktree can't redo work another slot just landed.
+                    crash_counts.pop(worker_id, None)
                     remove_worktree(REPO_ROOT, w["path"])
                     delete_branch(REPO_ROOT, w["branch"])
                     entry = spawn_worker(worker_id)
@@ -398,7 +511,16 @@ def main(argv=None):
             _kill_process_group(w["pgid"])
         raise
 
-    print("\nAll workers exited -- every tag is now either fixed or blacklisted.")
+    if retired_for_review:
+        print(
+            f"\nAll worker slots ended, but {len(retired_for_review)} need manual attention "
+            "(merge conflicts or repeated crashes) -- NOT every tag is necessarily fixed or "
+            "blacklisted:"
+        )
+        for line in retired_for_review:
+            print(f"  - {line}")
+    else:
+        print("\nAll workers exited -- every tag is now either fixed or blacklisted.")
     return 0
 
 
