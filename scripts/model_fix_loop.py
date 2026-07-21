@@ -1006,6 +1006,13 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
         entry["claimed_at"] = time.time()
         save_state_fn(state_path, state)
 
+        # One line per round naming both the round number and the tag --
+        # the single source watch_parallel_fix.py's dashboard reads to
+        # show "what iteration is this worker on, and on what tag" without
+        # having to infer it from whatever bracketed status line happens
+        # to be logged deeper inside fix_gap.
+        log_fn(f"round {round_num}: attempting {tag_gap['tag_key']}")
+
         previous_attempts = entry.get("attempts", [])
         result = fix_gap_fn(tag_gap, config, previous_attempts)
 
