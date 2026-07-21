@@ -245,6 +245,15 @@ fn parse_key_value_pairs(content: &[u8], metadata: &mut MetadataMap) {
                 );
             }
 
+            // Flash is a standard Picture Info field. ExifTool exposes the
+            // display-ready value (for example, "Off") in the APP12 group.
+            if key.eq_ignore_ascii_case("Flash") {
+                metadata.insert(
+                    "APP12:Flash".to_string(),
+                    TagValue::String(value.to_string()),
+                );
+            }
+
             metadata.insert(tag_name, tag_value);
         }
     }
@@ -416,6 +425,7 @@ mod tests {
 
         let metadata = result.unwrap();
         assert_eq!(metadata.get_string("Agfa:Flash"), Some("Fired"));
+        assert_eq!(metadata.get_string("APP12:Flash"), Some("Fired"));
         assert_eq!(metadata.get_string("Agfa:FlashMode"), Some("Auto"));
     }
 

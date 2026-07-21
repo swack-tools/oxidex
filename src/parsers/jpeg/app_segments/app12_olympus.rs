@@ -275,6 +275,16 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:FNumber".to_string(), tag_value.clone());
             }
 
+            // Flash is part of ExifTool's JPEG Picture Info table and belongs
+            // to the APP12 group. Preserve its display-ready textual value,
+            // such as "Off", while retaining the Olympus compatibility tag.
+            if key.eq_ignore_ascii_case("Flash") {
+                metadata.insert(
+                    "APP12:Flash".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
             // The source field in JPEG Picture Info records is normally named
             // TimeDate. ExifTool renames this to DateTimeOriginal and exposes
             // it in the APP12 group. Also accept DateTimeOriginal directly
