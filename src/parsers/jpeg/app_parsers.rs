@@ -649,6 +649,25 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_olympus_app12_f_number() {
+        let data = b"[picture info]\r\nFNumber=11.0\r\n";
+
+        let metadata =
+            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+                .expect("valid Picture Info APP12 data should parse");
+
+        assert!(
+            metadata.get("APP12:FNumber").is_some(),
+            "FNumber should be exposed in ExifTool's APP12 group"
+        );
+        assert_eq!(
+            metadata.get("APP12:FNumber"),
+            metadata.get("Olympus:FNumber"),
+            "APP12 FNumber should retain the parsed decimal value"
+        );
+    }
+
+    #[test]
     fn test_parse_olympus_app12_fcs7() {
         let data =
             b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nFCS6=3\r\nFCS7=3\r\n";

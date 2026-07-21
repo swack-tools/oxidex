@@ -267,6 +267,14 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 );
             }
 
+            // FNumber is a standard Picture Info field exposed by ExifTool in
+            // the APP12 group. Reuse the parsed value so decimal apertures
+            // retain the same numeric representation as the compatibility
+            // Olympus tag emitted below.
+            if key.eq_ignore_ascii_case("FNumber") {
+                metadata.insert("APP12:FNumber".to_string(), tag_value.clone());
+            }
+
             // The source field in JPEG Picture Info records is normally named
             // TimeDate. ExifTool renames this to DateTimeOriginal and exposes
             // it in the APP12 group. Also accept DateTimeOriginal directly
