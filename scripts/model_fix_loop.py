@@ -318,6 +318,107 @@ def git_commit(message, repo_root):
     subprocess.run(["git", "commit", "-m", message], cwd=repo_root, check=True)  # nosec B603
 
 
+def refresh_worktree(repo_root, base_ref):
+    """Fast-forward this worktree's current branch onto base_ref's latest
+    commits. Returns (refreshed: bool, message: str).
+
+    Called at the top of every run_tag_loop round (see its
+    refresh_worktree_fn) so a worker retrying the same tag across many
+    rounds -- --max-tags-per-process=1 means it never picks a different
+    tag, only keeps retrying this one until it's fixed or blacklisted --
+    doesn't keep comparing against an increasingly stale snapshot of the
+    shared branch for however long that takes. Without this, another
+    worker can fix and merge the exact same tag while this one is still
+    working on it, entirely invisibly: fix_gap's own duplicate-insertion
+    check (see detect_duplicate_tag_insertion) is the last line of
+    defense for whatever staleness window this doesn't close.
+
+    --ff-only deliberately never attempts a real 3-way merge: this
+    worktree should have zero local commits ahead of base_ref at the
+    point this runs (a fresh round only starts after the previous
+    round's failed attempt was fully reverted, and a successful attempt
+    exits the process immediately per --max-tags-per-process=1), so
+    the fast-forward should always succeed in practice. If it can't (the
+    rare case where that assumption doesn't hold), skip the refresh for
+    this round rather than risk a real merge conflict deep inside a
+    retry loop -- the next round tries again.
+    """
+    result = subprocess.run(  # nosec B603
+        ["git", "merge", "--ff-only", base_ref],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    return result.returncode == 0, (result.stdout + result.stderr).strip()
+
+
+def file_content_at_head(path, repo_root):
+    """path's content as of the current branch's HEAD -- i.e. before
+    whatever diff is currently applied (uncommitted) to the working
+    tree. "" if path doesn't exist there (a brand-new file has nothing
+    to have already duplicated)."""
+    result = subprocess.run(  # nosec B603
+        ["git", "show", f"HEAD:{path}"], cwd=repo_root, capture_output=True, text=True,
+    )
+    return result.stdout if result.returncode == 0 else ""
+
+
+DIFF_FILE_HEADER_RE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
+
+
+def detect_duplicate_tag_insertion(diff_text, tag_literal, repo_root):
+    """True if diff_text appears to add a REDUNDANT second handler for
+    tag_literal (the exact Rust string literal a correct fix inserts,
+    e.g. '"APP12:CAM1"') in some file it touches, rather than genuinely
+    introducing it for the first time or editing an existing occurrence
+    in place.
+
+    Compares tag_literal's occurrence count in each touched file before
+    (file_content_at_head) vs after (the file as it sits on disk right
+    now, with the diff already applied) the diff: a genuinely new tag
+    starts at 0 and ends at 1; an in-place edit of an existing handler
+    stays the same (e.g. 1 -> 1); only a redundant duplicate ADDS a new
+    occurrence alongside an untouched existing one (1 -> 2). This is
+    exactly the shape of every merge conflict this pipeline has hit so
+    far: two workers, each unaware of the other, independently wiring up
+    a tag that was already fixed and merged while this one was still
+    working on it -- a gap refresh_worktree closes for most rounds, but
+    not the window between "this round's refresh" and "this diff being
+    reviewed", which can still be many minutes on a slow/retried model
+    call.
+    """
+    for path in DIFF_FILE_HEADER_RE.findall(diff_text):
+        full_path = Path(repo_root) / path
+        try:
+            post_text = full_path.read_text()
+        except OSError:
+            continue
+        pre_text = file_content_at_head(path, repo_root)
+        pre_count = pre_text.count(tag_literal)
+        post_count = post_text.count(tag_literal)
+        if pre_count >= 1 and post_count > pre_count:
+            return True
+    return False
+
+
+def tag_literal_for_gap(gap):
+    """The exact Rust string literal (e.g. '"APP12:CAM1"') a correct fix
+    for this single-tag gap should insert -- used by
+    detect_duplicate_tag_insertion. None if gap doesn't look like a
+    single-tag gap (zero or more than one entry across missing_tags/
+    value_differences) -- the duplicate check is skipped rather than
+    guessing which of several tags a diff was actually supposed to add.
+    """
+    entries = gap["missing_tags"] + gap["value_differences"]
+    if len(entries) != 1:
+        return None
+    entry = entries[0]
+    if entry.get("tag_key"):
+        return f'"{entry["tag_key"]}"'
+    family, name = entry.get("family"), entry.get("name")
+    if not family or not name:
+        return None
+    return f'"{family}:{name}"'
+
+
 def cargo_env():
     """Base env for cargo subprocesses -- opportunistically routes rustc
     through sccache when it's installed, so parallel workers (each its own
@@ -769,7 +870,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             attempt_build_fn=attempt_build, review_fn=review_verdict,
             pick_model_fn=random.choice, log_fn=print,
             review_config=None, recheck_fn=None, repo_root=None, samples_dir=None,
-            previous_attempts=None):
+            previous_attempts=None, detect_duplicate_fn=detect_duplicate_tag_insertion):
     """Attempt to close one format's gaps via a single-shot patch. Up to
     two candidates: the initial fix, and one repair round-trip if a
     reviewer rejects the first. Returns a result dict.
@@ -805,6 +906,18 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     (see format_previous_attempts) -- prior rounds' diffs/failure reasons
     for this exact gap, so a repair round-trip driven by run_tag_loop's
     persisted per-tag history doesn't repeat the same broken approach.
+
+    detect_duplicate_fn(diff_text, tag_literal, repo_root) -> bool is
+    checked right after a candidate diff builds and passes cargo test,
+    but BEFORE spending a reviewer call on it: this is the review step's
+    own defense against a worker whose worktree was stale when it
+    started this attempt (see run_tag_loop's per-round
+    refresh_worktree_fn, which shrinks but can't fully close that
+    window) and has just independently reproduced a fix another worker
+    already landed. A detected duplicate short-circuits straight to
+    status "duplicate" -- distinct from "failed" so run_tag_loop knows
+    not to count it against this tag's fail budget; it isn't this tag's
+    fault that another worker got there first.
     """
     repo_root = repo_root or REPO_ROOT
     review_config = review_config or config
@@ -842,6 +955,13 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             git_checkout_clean_fn(repo_root)
             log_fn(f"[{fmt}] cargo test --workspace regressed, reverting")
             return {"format": fmt, "status": "failed", "reason": "cargo test --workspace regressed", "diff": diff}
+
+        tag_literal = tag_literal_for_gap(gap)
+        if tag_literal and detect_duplicate_fn(diff, tag_literal, repo_root):
+            git_checkout_clean_fn(repo_root)
+            reason = f"duplicate: a handler for {tag_literal} already exists elsewhere"
+            log_fn(f"[{fmt}] {reason}, reverting (not a failure -- another worker got there first)")
+            return {"format": fmt, "status": "duplicate", "reason": reason, "diff": diff}
 
         approved, review_reason = review_fn(
             gap, diff, review_config, call_model_fn=review_call_model_fn, pick_model_fn=pick_model_fn,
@@ -1000,7 +1120,8 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
                   git_checkout_clean_fn=None, repo_root=None, log_fn=print,
                   load_state_fn=load_tag_state, save_state_fn=save_tag_state,
                   max_rounds=None, max_fails=DEFAULT_MAX_TAG_FAILS, blacklist_full=False,
-                  worker_id=None, claim_stale_seconds=1800, max_distinct_tags=None):
+                  worker_id=None, claim_stale_seconds=1800, max_distinct_tags=None,
+                  refresh_worktree_fn=None):
     """Loop-until-everything-found driver, blacklisting individual TAGS
     (never a whole format) after max_fails failed attempts each. State
     persists to disk at state_path, so the blacklist -- and each tag's
@@ -1044,9 +1165,21 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
     picking up a brand-new one -- useful to bound one worker's share of a
     shared tag pool in a parallel run (see [parallel].max_tags_per_process
     in config.toml).
+
+    refresh_worktree_fn(), if given, is called at the start of every
+    round before find_gaps_fn() -- see main()'s wiring to the real
+    refresh_worktree(repo_root, base_ref), which fast-forwards this
+    worktree onto the shared branch's latest commits. Since a tag can be
+    retried across many rounds before it's fixed or blacklisted, this is
+    what keeps that comparison from operating on an increasingly stale
+    snapshot for however long that takes -- without it, another worker
+    can fix and merge the exact same tag while this one is still
+    grinding on it, and this one would never find out. None (the
+    default) skips this entirely -- standalone/non-parallel runs have no
+    shared branch to refresh against.
     """
     state = load_state_fn(state_path)
-    fixed, failed = [], []
+    fixed, failed, skipped = [], [], []
     cycles_reset = 0
     round_num = 0
     seen_tag_keys = set()
@@ -1060,6 +1193,10 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
 
     while max_rounds is None or round_num < max_rounds:
         round_num += 1
+        if refresh_worktree_fn:
+            refreshed, message = refresh_worktree_fn()
+            if not refreshed:
+                log_fn(f"worktree refresh skipped this round: {message}")
         gaps = find_gaps_fn()
         tag_gaps = expand_gaps_to_tags(gaps)
 
@@ -1128,6 +1265,16 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             fixed.append({"tag_key": tag_gap["tag_key"], **result})
             state.pop(tag_gap["tag_key"], None)
             log_fn(f"[{tag_gap['tag_key']}] FIXED")
+        elif result["status"] == "duplicate":
+            # Already fixed elsewhere (see fix_gap's detect_duplicate_fn)
+            # -- this worker's own worktree was stale when it started,
+            # not a real failure of this tag, so don't count it against
+            # the fail budget or let it march toward blacklisting; just
+            # drop any stale attempt history the same way a genuine fix
+            # would, and move on to a different tag next round.
+            skipped.append({"tag_key": tag_gap["tag_key"], **result})
+            state.pop(tag_gap["tag_key"], None)
+            log_fn(f"[{tag_gap['tag_key']}] SKIPPED (already fixed elsewhere)")
         else:
             failed.append({"tag_key": tag_gap["tag_key"], **result})
             entry["fails"] = entry.get("fails", 0) + 1
@@ -1156,6 +1303,7 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
         "rounds": round_num,
         "fixed": fixed,
         "failed": failed,
+        "skipped": skipped,
         "cycles_reset": cycles_reset,
         "distinct_tags_seen": len(seen_tag_keys),
     }
@@ -1287,6 +1435,15 @@ def main(argv=None):
         help="Identity used to claim a tag in --tag-state-path so concurrent processes sharing "
              "the same state file don't both attempt the same tag; also used to name this "
              "process's prompt log (process-<id>-prompt.log).",
+    )
+    parser.add_argument(
+        "--base-ref", default=None,
+        help="Shared branch this worktree was forked from (parallel_tag_fix_loop.py's own "
+             "current branch at startup) -- if given, run_tag_loop fast-forwards this worktree "
+             "onto its latest commits at the start of every round, so a tag retried across many "
+             "rounds doesn't keep comparing against an increasingly stale snapshot while other "
+             "workers merge in fixes elsewhere. Omit for a standalone run with no shared branch "
+             "to refresh against.",
     )
     parser.add_argument(
         "--tag-state-path", default=str(DEFAULT_TAG_STATE_PATH),
@@ -1541,16 +1698,20 @@ def main(argv=None):
         args.max_tags_per_process if args.max_tags_per_process is not None
         else (toml_data.get("parallel") or {}).get("max_tags_per_process", DEFAULT_MAX_TAGS_PER_PROCESS)
     )
+    refresh_worktree_fn = (
+        (lambda: refresh_worktree(REPO_ROOT, args.base_ref)) if args.base_ref else None
+    )
     summary = run_tag_loop(
         config, find_gaps_fn, real_fix_tag, state_path=args.tag_state_path,
         git_checkout_clean_fn=git_checkout_clean, repo_root=REPO_ROOT,
         log_fn=timestamped_log, max_fails=args.max_tag_fails,
         blacklist_full=args.blacklist_full, worker_id=args.worker_id,
-        max_distinct_tags=max_tags_per_process,
+        max_distinct_tags=max_tags_per_process, refresh_worktree_fn=refresh_worktree_fn,
     )
     print(f"stopped after {summary['rounds']} rounds")
     print(f"  fixed:   {len(summary['fixed'])} tags")
     print(f"  failed:  {len(summary['failed'])} attempts")
+    print(f"  skipped: {len(summary['skipped'])} tags (already fixed elsewhere)")
     print(f"  cycles reset (blacklist exhausted): {summary['cycles_reset']}")
     return 0
 

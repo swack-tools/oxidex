@@ -15,19 +15,23 @@ from model_fix_loop import (
     cargo_build,
     cargo_test_workspace,
     call_model,
+    detect_duplicate_tag_insertion,
     expand_gaps_to_tags,
     extract_diff,
     extract_review_verdict,
+    file_content_at_head,
     fix_gap,
     git_apply,
     git_checkout_clean,
     git_commit,
     load_toml_config,
     make_single_tag_gap,
+    refresh_worktree,
     review_verdict,
     run_loop,
     run_tag_loop,
     tag_key_for,
+    tag_literal_for_gap,
 )
 
 
@@ -538,6 +542,157 @@ class GitCommitTests(unittest.TestCase):
         calls = [c.args[0] for c in mock_run.call_args_list]
         self.assertIn(["git", "add", "-A"], calls)
         self.assertIn(["git", "commit", "-m", "fix(nef): wire tags"], calls)
+
+
+class RefreshWorktreeTests(unittest.TestCase):
+    @patch("model_fix_loop.subprocess.run")
+    def test_clean_fast_forward_returns_true(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="Updating abc..def\n", stderr="")
+        ok, message = refresh_worktree(Path("/fake/repo"), "shared-branch")
+        self.assertTrue(ok)
+        args, kwargs = mock_run.call_args
+        self.assertEqual(args[0], ["git", "merge", "--ff-only", "shared-branch"])
+        self.assertEqual(kwargs["cwd"], Path("/fake/repo"))
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_already_up_to_date_returns_true(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="Already up to date.\n", stderr="")
+        ok, message = refresh_worktree(Path("/fake/repo"), "shared-branch")
+        self.assertTrue(ok)
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_non_fast_forward_returns_false_with_message(self, mock_run):
+        # The rare case this is designed to bail out of rather than risk
+        # a real merge conflict deep inside a retry loop -- see
+        # refresh_worktree's own docstring for why this "shouldn't"
+        # happen under --max-tags-per-process=1, but must still degrade
+        # safely (skip this round's refresh) if it ever does.
+        mock_run.return_value = MagicMock(
+            returncode=128, stdout="", stderr="fatal: Not possible to fast-forward, aborting.\n",
+        )
+        ok, message = refresh_worktree(Path("/fake/repo"), "shared-branch")
+        self.assertFalse(ok)
+        self.assertIn("Not possible to fast-forward", message)
+
+
+class FileContentAtHeadTests(unittest.TestCase):
+    @patch("model_fix_loop.subprocess.run")
+    def test_existing_path_returns_its_head_content(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="fn foo() {}\n")
+        content = file_content_at_head("src/foo.rs", Path("/fake/repo"))
+        self.assertEqual(content, "fn foo() {}\n")
+        args, kwargs = mock_run.call_args
+        self.assertEqual(args[0], ["git", "show", "HEAD:src/foo.rs"])
+        self.assertEqual(kwargs["cwd"], Path("/fake/repo"))
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_path_not_at_head_returns_empty_string(self, mock_run):
+        # A brand-new file the diff itself creates -- nothing to have
+        # already duplicated at HEAD.
+        mock_run.return_value = MagicMock(returncode=128, stdout="", stderr="fatal: path does not exist")
+        content = file_content_at_head("src/new.rs", Path("/fake/repo"))
+        self.assertEqual(content, "")
+
+
+class TagLiteralForGapTests(unittest.TestCase):
+    def test_missing_tag_combines_family_and_name(self):
+        gap = {"missing_tags": [{"family": "APP12", "name": "CAM1"}], "value_differences": []}
+        self.assertEqual(tag_literal_for_gap(gap), '"APP12:CAM1"')
+
+    def test_value_difference_uses_its_own_tag_key(self):
+        gap = {"missing_tags": [], "value_differences": [{"tag_key": "EXIF:ISO"}]}
+        self.assertEqual(tag_literal_for_gap(gap), '"EXIF:ISO"')
+
+    def test_zero_entries_returns_none(self):
+        self.assertIsNone(tag_literal_for_gap({"missing_tags": [], "value_differences": []}))
+
+    def test_multiple_entries_returns_none(self):
+        # Skip the check rather than guess which of several tags in a
+        # (non-single-tag) gap a diff was meant to address.
+        gap = {
+            "missing_tags": [
+                {"family": "APP12", "name": "CAM1"}, {"family": "APP12", "name": "CAM2"},
+            ],
+            "value_differences": [],
+        }
+        self.assertIsNone(tag_literal_for_gap(gap))
+
+
+class DetectDuplicateTagInsertionTests(unittest.TestCase):
+    DIFF_HEADER = (
+        "diff --git a/src/foo.rs b/src/foo.rs\n"
+        "index 1111111..2222222 100644\n"
+        "--- a/src/foo.rs\n"
+        "+++ b/src/foo.rs\n"
+    )
+
+    def _write_current(self, tmpdir, text):
+        path = Path(tmpdir) / "src" / "foo.rs"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_brand_new_tag_is_not_a_duplicate(self, mock_run):
+        # Occurrence count 0 -> 1: genuinely new, the common successful case.
+        mock_run.return_value = MagicMock(returncode=0, stdout="fn parse() {}\n")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_current(tmpdir, 'fn parse() {\n    metadata.insert("APP12:CAM1", v);\n}\n')
+            result = detect_duplicate_tag_insertion(
+                self.DIFF_HEADER + '+    metadata.insert("APP12:CAM1", v);\n', '"APP12:CAM1"', tmpdir,
+            )
+            self.assertFalse(result)
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_in_place_edit_is_not_a_duplicate(self, mock_run):
+        # Occurrence count 1 -> 1: the existing occurrence was edited
+        # (old value removed, new value added), not duplicated.
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout='fn parse() {\n    metadata.insert("APP12:CAM1", old_v);\n}\n',
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_current(tmpdir, 'fn parse() {\n    metadata.insert("APP12:CAM1", new_v);\n}\n')
+            result = detect_duplicate_tag_insertion(
+                self.DIFF_HEADER
+                + '-    metadata.insert("APP12:CAM1", old_v);\n'
+                + '+    metadata.insert("APP12:CAM1", new_v);\n',
+                '"APP12:CAM1"', tmpdir,
+            )
+            self.assertFalse(result)
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_redundant_second_occurrence_is_a_duplicate(self, mock_run):
+        # Occurrence count 1 -> 2: a new occurrence added ALONGSIDE an
+        # untouched existing one -- exactly the shape of every merge
+        # conflict this pipeline has hit so far.
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout='fn parse() {\n    metadata.insert("APP12:CAM1", v);\n}\n',
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_current(
+                tmpdir,
+                'fn parse() {\n    metadata.insert("APP12:CAM1", v);\n'
+                '    metadata.insert("APP12:CAM1", v2);\n}\n',
+            )
+            result = detect_duplicate_tag_insertion(
+                self.DIFF_HEADER + '+    metadata.insert("APP12:CAM1", v2);\n', '"APP12:CAM1"', tmpdir,
+            )
+            self.assertTrue(result)
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_different_tags_sharing_a_file_do_not_interfere(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout='metadata.insert("APP12:CAM2", v);\n')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_current(
+                tmpdir, 'metadata.insert("APP12:CAM2", v);\nmetadata.insert("APP12:CAM1", v);\n',
+            )
+            result = detect_duplicate_tag_insertion(
+                self.DIFF_HEADER + '+metadata.insert("APP12:CAM1", v);\n', '"APP12:CAM1"', tmpdir,
+            )
+            self.assertFalse(result)
+
+    def test_diff_with_no_file_headers_returns_false(self):
+        self.assertFalse(detect_duplicate_tag_insertion("not a real diff", '"APP12:CAM1"', "/fake/repo"))
 
 
 class CargoBuildTests(unittest.TestCase):
@@ -1383,6 +1538,76 @@ class FixGapReviewTests(unittest.TestCase):
         self.assertEqual(seen_review_config[0], CONFIG)
 
 
+class FixGapDuplicateDetectionTests(unittest.TestCase):
+    def _fake_attempt_build(self, messages, **kwargs):
+        messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+        return True, None, "--- a/x\n+++ b/x\n", messages
+
+    def test_detected_duplicate_short_circuits_before_calling_review(self):
+        # The whole point: a detected duplicate must never reach the
+        # (API-call-costing) reviewer at all -- it's rejected
+        # deterministically and immediately.
+        gap = make_single_tag_gap_dict(source_file=None)
+        review_calls = []
+
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=self._fake_attempt_build,
+            review_fn=lambda *a, **kw: review_calls.append(1) or (True, ""),
+            detect_duplicate_fn=lambda diff, tag_literal, repo_root: True,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: self.fail("must not commit a detected duplicate"),
+            cargo_test_workspace_fn=lambda root: True,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "duplicate")
+        self.assertIn("APP0:OcadRevision", result["reason"])
+        self.assertEqual(review_calls, [])
+
+    def test_no_duplicate_detected_proceeds_to_normal_review(self):
+        gap = make_single_tag_gap_dict(source_file=None)
+        commit_calls = []
+
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=self._fake_attempt_build,
+            review_fn=lambda *a, **kw: (True, ""),
+            detect_duplicate_fn=lambda diff, tag_literal, repo_root: False,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: commit_calls.append(msg),
+            cargo_test_workspace_fn=lambda root: True,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(len(commit_calls), 1)
+
+    def test_multi_tag_gap_skips_the_duplicate_check_entirely(self):
+        # tag_literal_for_gap returns None for a gap with more than one
+        # entry (see its own tests) -- detect_duplicate_fn must not even
+        # be called in that case, not called with a meaningless literal.
+        gap = make_gap(gap_count=2)
+        detect_calls = []
+
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=self._fake_attempt_build,
+            review_fn=lambda *a, **kw: (True, ""),
+            detect_duplicate_fn=lambda diff, tag_literal, repo_root: detect_calls.append(tag_literal) or False,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: None,
+            cargo_test_workspace_fn=lambda root: True,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(detect_calls, [])
+
+
 class RunLoopTests(unittest.TestCase):
     def test_stops_after_two_consecutive_dry_rounds(self):
         find_calls = []
@@ -1887,6 +2112,77 @@ class RunTagLoopTests(unittest.TestCase):
         )
         # Second failure -- now blacklisted, cleanup must fire.
         self.assertEqual(clean_calls, [Path("/fake/repo")])
+
+    def test_duplicate_status_is_skipped_not_failed_and_not_blacklisted(self):
+        # A tag another worker already fixed elsewhere (see fix_gap's
+        # detect_duplicate_fn) must never count against this tag's fail
+        # budget -- it isn't this tag's fault someone else got there
+        # first. Confirmed with max_fails=1: if "duplicate" were treated
+        # as a failure, a single one would immediately blacklist it.
+        gaps = [make_gap()]
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            if tag_gap["tag_key"] == "NEF:EXIF:LensModel":
+                return {"status": "duplicate", "reason": "already fixed elsewhere"}
+            return {"status": "fixed", "gaps_closed": 1}
+
+        store, load, save = self._state_io()
+        result = run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1, max_fails=1,
+        )
+        self.assertEqual(len(result["skipped"]), 1)
+        self.assertEqual(result["skipped"][0]["tag_key"], "NEF:EXIF:LensModel")
+        self.assertEqual(result["failed"], [])
+        # Popped from state entirely, same cleanup as a genuine fix --
+        # not left sitting around with a fail count or blacklist flag.
+        self.assertNotIn("NEF:EXIF:LensModel", store)
+
+    def test_refresh_worktree_fn_is_called_once_per_round(self):
+        gaps = [make_gap()]
+        refresh_calls = []
+
+        def fake_refresh():
+            refresh_calls.append(1)
+            return True, "ok"
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps,
+            fix_gap_fn=lambda tg, c, previous_attempts=None: {"status": "failed", "reason": "nope"},
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=3, refresh_worktree_fn=fake_refresh,
+        )
+        self.assertEqual(len(refresh_calls), 3)
+
+    def test_no_refresh_worktree_fn_given_does_not_crash(self):
+        # Default (refresh_worktree_fn=None) -- standalone runs with no
+        # shared branch to refresh against must work exactly as before.
+        gaps = [make_gap()]
+        store, load, save = self._state_io()
+        result = run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps,
+            fix_gap_fn=lambda tg, c, previous_attempts=None: {"status": "failed", "reason": "nope"},
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1,
+        )
+        self.assertEqual(result["rounds"], 1)
+
+    def test_failed_refresh_is_logged_but_does_not_stop_the_round(self):
+        gaps = [make_gap()]
+        logged = []
+
+        store, load, save = self._state_io()
+        result = run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps,
+            fix_gap_fn=lambda tg, c, previous_attempts=None: {"status": "failed", "reason": "nope"},
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1, refresh_worktree_fn=lambda: (False, "not possible to fast-forward"),
+            log_fn=logged.append,
+        )
+        self.assertEqual(result["rounds"], 1)
+        self.assertTrue(any("refresh skipped" in line for line in logged))
 
 
 if __name__ == "__main__":

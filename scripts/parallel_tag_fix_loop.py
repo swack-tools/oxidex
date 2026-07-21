@@ -118,11 +118,20 @@ def _handle_shutdown_signal(signum, frame):
 
 def start_worker(worker_id, worktree, cache_dir, log_path, tag_state_path, prompt_log_dir,
                   max_tag_fails, only_format=None, max_tags_per_process=None,
-                  tags_found_log=DEFAULT_TAGS_FOUND_LOG):
+                  tags_found_log=DEFAULT_TAGS_FOUND_LOG, base_ref=None):
     """Launch model_fix_loop.py --blacklist-full in worktree as a
     background process (own process group, POSIX), logging combined
     stdout/stderr to log_path. Returns the Popen handle -- callers poll it
     rather than blocking, since these workers can run for a long time.
+
+    base_ref, if given, is passed through as --base-ref so the worker
+    fast-forwards this worktree onto the shared branch's latest commits
+    at the start of every round -- see model_fix_loop.py's
+    refresh_worktree/run_tag_loop for why this matters: a tag retried
+    across many rounds would otherwise keep comparing against an
+    increasingly stale snapshot while other workers merge in fixes
+    elsewhere, which is exactly what's produced every duplicate-fix
+    merge conflict seen in this pipeline so far.
     """
     env = dict(os.environ)
     env.pop("CARGO_TARGET_DIR", None)  # each worktree gets its own default target/, never shared
@@ -148,6 +157,8 @@ def start_worker(worker_id, worktree, cache_dir, log_path, tag_state_path, promp
         argv += ["--only-format", only_format]
     if max_tags_per_process is not None:
         argv += ["--max-tags-per-process", str(max_tags_per_process)]
+    if base_ref:
+        argv += ["--base-ref", base_ref]
     log_file = open(log_path, "w")  # noqa: SIM115 -- kept open for the worker's lifetime, closed by caller
     proc = subprocess.Popen(  # nosec B603
         argv, cwd=worktree, env=env, stdout=log_file, stderr=subprocess.STDOUT,
@@ -184,30 +195,34 @@ def merge_worker_progress(repo_root, base_ref, branch, merged_up_to):
 
 FIXED_COUNT_RE = re.compile(r"^\s*fixed:\s+(\d+) tags", re.MULTILINE)
 FAILED_COUNT_RE = re.compile(r"^\s*failed:\s+(\d+) attempts", re.MULTILINE)
+SKIPPED_COUNT_RE = re.compile(r"^\s*skipped:\s+(\d+) tags", re.MULTILINE)
 
 
 def parse_worker_summary(log_path):
-    """(fixed_count, failed_count, has_summary) from a worker's final
-    "  fixed:   N tags" / "  failed:  N attempts" summary lines (see
-    model_fix_loop.py main()'s prints). has_summary is False if the log
-    doesn't have them at all (e.g. it crashed before printing a summary),
-    in which case fixed/failed are just 0 placeholders, not a real "did
+    """(fixed_count, failed_count, skipped_count, has_summary) from a
+    worker's final "  fixed:   N tags" / "  failed:  N attempts" /
+    "  skipped: N tags" summary lines (see model_fix_loop.py main()'s
+    prints). has_summary is False if the log doesn't have them at all
+    (e.g. it crashed before printing a summary), in which case
+    fixed/failed/skipped are just 0 placeholders, not a real "did
     nothing" report -- see classify_worker_exit, which is what actually
     tells those two situations apart.
     """
     try:
         text = log_path.read_text(errors="replace")
     except OSError:
-        return 0, 0, False
+        return 0, 0, 0, False
     fixed_match = FIXED_COUNT_RE.search(text)
     failed_match = FAILED_COUNT_RE.search(text)
+    skipped_match = SKIPPED_COUNT_RE.search(text)
     has_summary = fixed_match is not None or failed_match is not None
     fixed = int(fixed_match.group(1)) if fixed_match else 0
     failed = int(failed_match.group(1)) if failed_match else 0
-    return fixed, failed, has_summary
+    skipped = int(skipped_match.group(1)) if skipped_match else 0
+    return fixed, failed, skipped, has_summary
 
 
-def classify_worker_exit(returncode, has_summary, fixed, failed):
+def classify_worker_exit(returncode, has_summary, fixed, failed, skipped=0):
     """What a just-exited worker's outcome actually means, given its
     process return code and parse_worker_summary's result -- the three
     possibilities the caller must tell apart:
@@ -224,17 +239,23 @@ def classify_worker_exit(returncode, has_summary, fixed, failed):
                     wrapper logged "found no work available", and retired
                     the slot while thousands of tags were still unfixed.
       "no_work"  -- exited cleanly (returncode 0, real summary present)
-                    having fixed and failed nothing at all: the shared
-                    pool was already exhausted, or every remaining tag was
-                    claimed by other workers, the moment this one looked.
-                    Respawning would just repeat that immediately, forever.
-      "respawn"  -- exited cleanly having done real work (fixed and/or
-                    failed attempts > 0) and hit --max-tags-per-process,
-                    not "nothing left" -- refill the slot.
+                    having fixed, failed, AND skipped nothing at all: the
+                    shared pool was already exhausted, or every remaining
+                    tag was claimed by other workers, the moment this one
+                    looked. Respawning would just repeat that immediately,
+                    forever.
+      "respawn"  -- exited cleanly having done real work -- fixed and/or
+                    failed attempts > 0, OR skipped a tag it found
+                    already fixed elsewhere (see fix_gap's
+                    detect_duplicate_fn) -- and hit
+                    --max-tags-per-process, not "nothing left". A
+                    duplicate-skip specifically must respawn, not retire:
+                    the shared pool very much isn't empty, this worker's
+                    own worktree was just stale about one specific tag.
     """
     if returncode != 0 or not has_summary:
         return "crashed"
-    if fixed == 0 and failed == 0:
+    if fixed == 0 and failed == 0 and skipped == 0:
         return "no_work"
     return "respawn"
 
@@ -348,7 +369,7 @@ def main(argv=None):
         proc, log_file, pgid = start_worker(
             worker_id, path, args.cache_dir, log_path, tag_state_path, prompt_log_dir,
             args.max_tag_fails, only_format=args.only_format, max_tags_per_process=max_tags_per_process,
-            tags_found_log=Path(args.tags_found_log),
+            tags_found_log=Path(args.tags_found_log), base_ref=base_ref,
         )
         print(f"[worker {worker_id}] started (pid {proc.pid}), worktree {path}")
         return {
@@ -447,8 +468,8 @@ def main(argv=None):
                     crash_counts.pop(worker_id, None)
                     continue
 
-                fixed, failed, has_summary = parse_worker_summary(w["log_path"])
-                outcome = classify_worker_exit(w["proc"].returncode, has_summary, fixed, failed)
+                fixed, failed, skipped, has_summary = parse_worker_summary(w["log_path"])
+                outcome = classify_worker_exit(w["proc"].returncode, has_summary, fixed, failed, skipped)
 
                 if outcome == "crashed":
                     # Never treat this as "the shared tag pool is empty" --
