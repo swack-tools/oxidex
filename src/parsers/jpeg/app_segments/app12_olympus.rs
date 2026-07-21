@@ -79,6 +79,7 @@ const KNOWN_TAGS: &[&str] = &[
     "FCS1",
     "FCS2",
     "FCS3",
+    "FCS4",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -359,6 +360,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             if key.eq_ignore_ascii_case("FCS1")
                 || key.eq_ignore_ascii_case("FCS2")
                 || key.eq_ignore_ascii_case("FCS3")
+                || key.eq_ignore_ascii_case("FCS4")
             {
                 let app12_value = value
                     .parse::<i64>()
@@ -368,8 +370,10 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     "APP12:FCS1"
                 } else if key.eq_ignore_ascii_case("FCS2") {
                     "APP12:FCS2"
-                } else {
+                } else if key.eq_ignore_ascii_case("FCS3") {
                     "APP12:FCS3"
+                } else {
+                    "APP12:FCS4"
                 };
 
                 metadata.insert(app12_tag.to_string(), app12_value);
@@ -515,6 +519,24 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:CAM9".to_string(), app12_value);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod fcs_tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_fcs4() {
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nFCS4=221\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:FCS4"),
+            Some(221)
+        );
     }
 }
 
