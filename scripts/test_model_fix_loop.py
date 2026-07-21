@@ -182,6 +182,48 @@ class CallModelRetryTests(unittest.TestCase):
         self.assertEqual(sleeps, [2, 4])
 
     @patch("model_fix_loop.urllib.request.urlopen")
+    def test_retries_on_connection_level_url_error_then_succeeds(self, mock_urlopen):
+        # A DNS failure (or refused connection/TLS handshake/stalled read)
+        # raises urllib.error.URLError, not HTTPError -- no HTTP response
+        # was ever received at all. Previously only HTTPError was caught
+        # here, so this propagated straight past call_model's retry loop
+        # on the very first attempt: confirmed live, a DNS outage burned
+        # all 10 of one tag's fail-count attempts and got it blacklisted
+        # without the model ever actually being reachable.
+        dns_failure = urllib.error.URLError(
+            OSError(8, "nodename nor servname provided, or not known")
+        )
+        response_json = json.dumps({"choices": [{"message": {"content": "the diff"}}]}).encode()
+        ok_cm = MagicMock()
+        ok_cm.read.return_value = response_json
+        ok_ctx = MagicMock()
+        ok_ctx.__enter__.return_value = ok_cm
+        mock_urlopen.side_effect = [dns_failure, dns_failure, ok_ctx]
+
+        sleeps = []
+        result = call_model(
+            [{"role": "user", "content": "fix it"}],
+            base_url="https://api.example/v1", api_key="k", model="m",
+            max_tokens=100, reasoning_effort="max",
+            sleep_fn=sleeps.append,
+        )
+        self.assertEqual(result, "the diff")
+        self.assertEqual(mock_urlopen.call_count, 3)
+        self.assertEqual(sleeps, [2, 4])
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_gives_up_after_max_retries_on_persistent_url_error(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError(OSError(8, "Could not resolve host"))
+        with self.assertRaises(urllib.error.URLError):
+            call_model(
+                [{"role": "user", "content": "fix it"}],
+                base_url="https://api.example/v1", api_key="k", model="m",
+                max_tokens=100, reasoning_effort="max",
+                max_retries=2, sleep_fn=lambda s: None,
+            )
+        self.assertEqual(mock_urlopen.call_count, 3)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
     def test_logs_each_retry_so_a_long_ride_out_is_not_silent(self, mock_urlopen):
         # A worker riding out many transient failures (the whole point of
         # a high max_retries) must not go completely silent for however
@@ -1514,6 +1556,33 @@ class RunTagLoopTests(unittest.TestCase):
         self.assertEqual(attempts, ["NEF:EXIF:LensModel", "NEF:EXIF:LensModel"])
         self.assertTrue(store["NEF:EXIF:LensModel"]["blacklisted"])
         self.assertEqual(store["NEF:EXIF:LensModel"]["fails"], 2)
+
+    def test_blacklisting_records_when_and_by_which_worker(self):
+        # A dashboard reading tag-state.json needs to answer "when was
+        # this blacklisted" and "which worker gave up on it" without
+        # relying on that worker's own log -- which gets truncated on
+        # every respawn, so it can't be trusted to still hold this
+        # history by the time anyone looks.
+        gaps = [make_gap()]
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            if tag_gap["tag_key"] == "NEF:EXIF:LensModel":
+                return {"status": "failed", "reason": "nope"}
+            return {"status": "fixed", "gaps_closed": 1}
+
+        store, load, save = self._state_io()
+        before = time.time()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=2, max_fails=2, worker_id="3",
+        )
+        after = time.time()
+        entry = store["NEF:EXIF:LensModel"]
+        self.assertTrue(entry["blacklisted"])
+        self.assertEqual(entry["blacklisted_by"], "3")
+        self.assertGreaterEqual(entry["blacklisted_at"], before)
+        self.assertLessEqual(entry["blacklisted_at"], after)
 
     def test_default_max_fails_is_ten(self):
         gaps = [make_gap()]

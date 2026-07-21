@@ -1,20 +1,38 @@
 import io
+import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from watch_parallel_fix import (
+    BRIGHT_GREEN,
     GREEN,
     RED,
     YELLOW,
+    bar_color,
+    blacklist_stats,
     count_tags_found,
+    discover_format_progress,
     discover_formats,
     discover_workers,
+    format_relative,
+    found_stats,
+    load_tag_state,
     main,
+    parse_current_tag_progress,
     parse_round_and_tag,
     parse_status,
+    parse_tags_found_log,
+    parse_timestamp,
+    parse_worker_log_status,
+    parse_wrapper_log,
     render,
+    render_dashboard,
+    render_format_progress,
+    render_progress_bar,
     render_workers,
+    tag_iteration,
 )
 
 
@@ -104,6 +122,396 @@ class ParseStatusTests(unittest.TestCase):
             label, color, detail = parse_status(path)
             self.assertEqual(label, "done")
             self.assertIn("stopped after 3 rounds", detail)
+
+
+class ParseWorkerLogStatusTests(unittest.TestCase):
+    def _write(self, tmpdir, text):
+        path = Path(tmpdir) / "worker-1.log"
+        path.write_text(text)
+        return path
+
+    def test_missing_file_is_waiting(self):
+        label, color, detail = parse_worker_log_status(Path("/nonexistent/worker-1.log"))
+        self.assertEqual(label, "waiting")
+
+    def test_traceback_anywhere_in_log_is_crashed(self):
+        # The exact bug that prompted this: a crashed worker's raw
+        # exception text used to show up under a generic "busy" label,
+        # indistinguishable from ordinary progress -- confirmed to read
+        # as an unexplained error on the previous dashboard.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(
+                tmpdir,
+                "Updating crates.io index\n"
+                "Traceback (most recent call last):\n"
+                '  File "model_fix_loop.py", line 1, in <module>\n'
+                "    sys.exit(main())\n"
+                "subprocess.CalledProcessError: Command '['cargo', 'build']' returned non-zero exit status 101.\n",
+            )
+            label, color, detail = parse_worker_log_status(path)
+            self.assertEqual(label, "crashed")
+            self.assertIn("CalledProcessError", detail)
+
+    def test_blacklisted_line_is_its_own_state(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(
+                tmpdir,
+                "round 1: attempting JPEG:APP0:OcadRevision\n"
+                "[JPEG:APP0:OcadRevision] blacklisted after 10 failed attempts\n",
+            )
+            label, color, detail = parse_worker_log_status(path)
+            self.assertEqual(label, "blacklisted")
+            self.assertEqual(color, RED)
+
+    def test_tag_fixed_line_is_fixed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(
+                tmpdir,
+                "round 1: attempting JPEG:APP12:CAM4\n"
+                "[JPEG:APP12:CAM4] FIXED\n",
+            )
+            label, color, detail = parse_worker_log_status(path)
+            self.assertEqual(label, "fixed")
+            self.assertEqual(color, BRIGHT_GREEN)
+
+    def test_failed_attempt_not_yet_blacklisted_is_retrying(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(
+                tmpdir,
+                "round 1: attempting JPEG:APP12:ExposureTime\n"
+                "[JPEG:APP12:ExposureTime] failed attempt 3/10\n",
+            )
+            label, color, detail = parse_worker_log_status(path)
+            self.assertEqual(label, "retrying")
+            self.assertEqual(color, YELLOW)
+
+    def test_model_call_retry_is_retrying(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(
+                tmpdir,
+                "round 1: attempting JPEG:APP12:ExposureTime\n"
+                "model call retry 2/1000 after RuntimeError('empty reply'), waiting 4s\n",
+            )
+            label, color, detail = parse_worker_log_status(path)
+            self.assertEqual(label, "retrying")
+
+    def test_stopped_summary_wins_over_everything_earlier(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(
+                tmpdir,
+                "round 1: attempting JPEG:APP12:CAM4\n"
+                "[JPEG:APP12:CAM4] FIXED\n"
+                "stopped after 1 rounds\n  fixed:   1 tags\n",
+            )
+            label, color, detail = parse_worker_log_status(path)
+            self.assertEqual(label, "done")
+
+    def test_empty_file_is_waiting(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(tmpdir, "")
+            label, color, detail = parse_worker_log_status(path)
+            self.assertEqual(label, "waiting")
+
+
+class ParseCurrentTagProgressTests(unittest.TestCase):
+    def test_missing_file_returns_all_none(self):
+        round_num, tag, launched_at = parse_current_tag_progress(Path("/nonexistent/worker-1.log"))
+        self.assertIsNone(round_num)
+        self.assertIsNone(tag)
+        self.assertIsNone(launched_at)
+
+    def test_single_attempt_launched_at_is_that_lines_timestamp(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "worker-1.log"
+            path.write_text("[2026-07-20T19:00:00] round 1: attempting JPEG:APP12:CAM1\n")
+            round_num, tag, launched_at = parse_current_tag_progress(path)
+            self.assertEqual(round_num, 1)
+            self.assertEqual(tag, "JPEG:APP12:CAM1")
+            self.assertEqual(launched_at, parse_timestamp("2026-07-20T19:00:00"))
+
+    def test_launched_at_is_earliest_line_for_the_same_tag_not_the_latest(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "worker-1.log"
+            path.write_text(
+                "[2026-07-20T19:00:00] round 1: attempting JPEG:APP12:CAM1\n"
+                "[2026-07-20T19:00:05] [JPEG:APP12:CAM1] failed attempt 1/10\n"
+                "[2026-07-20T19:05:00] round 2: attempting JPEG:APP12:CAM1\n"
+            )
+            round_num, tag, launched_at = parse_current_tag_progress(path)
+            self.assertEqual(round_num, 2)  # most recent round number
+            self.assertEqual(tag, "JPEG:APP12:CAM1")
+            # launched_at anchors to the FIRST attempt on this tag, not the latest.
+            self.assertEqual(launched_at, parse_timestamp("2026-07-20T19:00:00"))
+
+    def test_stops_at_a_different_earlier_tag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "worker-1.log"
+            path.write_text(
+                "[2026-07-20T18:00:00] round 1: attempting JPEG:APP12:CAM9\n"
+                "[2026-07-20T19:00:00] round 2: attempting JPEG:APP12:CAM1\n"
+            )
+            round_num, tag, launched_at = parse_current_tag_progress(path)
+            self.assertEqual(tag, "JPEG:APP12:CAM1")
+            self.assertEqual(launched_at, parse_timestamp("2026-07-20T19:00:00"))
+
+
+class ParseTimestampTests(unittest.TestCase):
+    def test_naive_local_timestamp(self):
+        self.assertIsNotNone(parse_timestamp("2026-07-20T19:00:00"))
+
+    def test_aware_utc_timestamp_with_fractional_seconds(self):
+        self.assertIsNotNone(parse_timestamp("2026-07-21T15:44:19.068866+00:00"))
+
+    def test_garbage_returns_none(self):
+        self.assertIsNone(parse_timestamp("not a timestamp"))
+
+
+class FormatRelativeTests(unittest.TestCase):
+    def test_none_is_never(self):
+        self.assertEqual(format_relative(None), "never")
+
+    def test_just_now(self):
+        self.assertEqual(format_relative(2), "just now")
+
+    def test_seconds(self):
+        self.assertEqual(format_relative(45), "45s ago")
+
+    def test_minutes(self):
+        self.assertEqual(format_relative(150), "2m ago")
+
+    def test_hours(self):
+        self.assertEqual(format_relative(3 * 3600 + 1800), "3.5h ago")
+
+    def test_days(self):
+        self.assertEqual(format_relative(2 * 86400 + 43200), "2.5d ago")
+
+
+class BlacklistStatsTests(unittest.TestCase):
+    def test_empty_state(self):
+        stats = blacklist_stats({}, now=1000.0)
+        self.assertEqual(stats, {"total": 0, "last_hour": 0, "last_24h": 0, "per_worker": {}})
+
+    def test_counts_by_age_window_and_worker(self):
+        now = 1_000_000.0
+        state = {
+            "JPEG:A": {"blacklisted": True, "blacklisted_at": now - 100, "blacklisted_by": "1"},
+            "JPEG:B": {"blacklisted": True, "blacklisted_at": now - 7200, "blacklisted_by": "1"},
+            "JPEG:C": {"blacklisted": True, "blacklisted_at": now - 90000, "blacklisted_by": "2"},
+            "JPEG:D": {"blacklisted": False, "fails": 3},
+        }
+        stats = blacklist_stats(state, now)
+        self.assertEqual(stats["total"], 3)
+        self.assertEqual(stats["last_hour"], 1)
+        self.assertEqual(stats["last_24h"], 2)
+        self.assertEqual(stats["per_worker"], {"1": 2, "2": 1})
+
+    def test_missing_blacklisted_at_still_counts_toward_total_only(self):
+        state = {"JPEG:A": {"blacklisted": True}}
+        stats = blacklist_stats(state, now=1000.0)
+        self.assertEqual(stats["total"], 1)
+        self.assertEqual(stats["last_hour"], 0)
+        self.assertEqual(stats["last_24h"], 0)
+
+
+class TagIterationTests(unittest.TestCase):
+    def test_no_tag_is_none(self):
+        self.assertIsNone(tag_iteration({}, None))
+
+    def test_never_attempted_tag_is_iteration_one(self):
+        self.assertEqual(tag_iteration({}, "JPEG:A"), 1)
+
+    def test_uses_persisted_fails_count_not_a_process_local_counter(self):
+        # The exact scenario that motivated this: worker A fails once on a
+        # tag and releases its claim; worker B picks the SAME tag up fresh
+        # (its own round_num starts at 1 again) -- iteration must reflect
+        # the tag's true cumulative history (2), not worker B's own fresh
+        # round_num (which would wrongly read back as 1).
+        state = {"JPEG:A": {"blacklisted": False, "fails": 1}}
+        self.assertEqual(tag_iteration(state, "JPEG:A"), 2)
+
+
+class ParseTagsFoundLogTests(unittest.TestCase):
+    def test_missing_file_is_empty(self):
+        self.assertEqual(parse_tags_found_log(Path("/nonexistent/tags-found.log")), [])
+
+    def test_parses_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tags-found.log"
+            path.write_text(
+                "2026-07-20T19:00:00 worker=1 tag=JPEG:EXIF:LensModel gaps_closed=1\n"
+                "\n"
+                "2026-07-20T19:05:00 worker=3 tag=JPEG:APP12:CAM1 gaps_closed=2\n"
+            )
+            entries = parse_tags_found_log(path)
+            self.assertEqual(len(entries), 2)
+            self.assertEqual(entries[0], ("2026-07-20T19:00:00", "1", "JPEG:EXIF:LensModel", 1))
+            self.assertEqual(entries[1], ("2026-07-20T19:05:00", "3", "JPEG:APP12:CAM1", 2))
+
+
+class FoundStatsTests(unittest.TestCase):
+    def test_no_entries(self):
+        stats = found_stats([], now=1000.0)
+        self.assertEqual(stats["total"], 0)
+        self.assertIsNone(stats["last_at"])
+        self.assertIsNone(stats["last_tag"])
+
+    def test_last_is_the_max_timestamp_not_the_last_list_entry(self):
+        now = parse_timestamp("2026-07-20T20:00:00")
+        entries = [
+            ("2026-07-20T19:50:00", "2", "JPEG:LATER", 1),  # appended out of order
+            ("2026-07-20T19:55:00", "1", "JPEG:ACTUAL_LAST", 1),
+        ]
+        stats = found_stats(entries, now)
+        self.assertEqual(stats["last_tag"], "JPEG:ACTUAL_LAST")
+        self.assertEqual(stats["last_worker"], "1")
+
+    def test_window_counts(self):
+        now = parse_timestamp("2026-07-20T20:00:00")
+        entries = [
+            ("2026-07-20T19:59:00", "1", "JPEG:A", 1),   # 1 min ago
+            ("2026-07-20T18:30:00", "1", "JPEG:B", 1),   # 1.5 hours ago
+            ("2026-07-19T10:00:00", "1", "JPEG:C", 1),   # >24h ago
+        ]
+        stats = found_stats(entries, now)
+        self.assertEqual(stats["total"], 3)
+        self.assertEqual(stats["last_hour"], 1)
+        self.assertEqual(stats["last_24h"], 2)
+
+
+class ParseWrapperLogTests(unittest.TestCase):
+    def test_missing_file_is_empty(self):
+        self.assertEqual(parse_wrapper_log(Path("/nonexistent/parallel-wrapper.log")), {})
+
+    def test_first_start_is_zero_restarts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "parallel-wrapper.log"
+            path.write_text("[worker 1] started (pid 100), worktree /tmp/x\n")
+            stats = parse_wrapper_log(path)
+            self.assertEqual(stats["1"]["restarts"], 0)
+            self.assertEqual(stats["1"]["crashes"], 0)
+
+    def test_counts_restarts_beyond_the_first_and_crashes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "parallel-wrapper.log"
+            path.write_text(
+                "[worker 1] started (pid 100), worktree /tmp/x\n"
+                "[worker 1] exited (code 1) -- /tmp/worker-1.log\n"
+                "[worker 1] CRASHED (exit code 1), attempt 1/5 -- see /tmp/worker-1.log -- respawning\n"
+                "[worker 1] started (pid 101), worktree /tmp/x\n"
+                "[worker 1] CRASHED 2 times in a row (exit code 1) -- giving up on this slot\n"
+            )
+            stats = parse_wrapper_log(path)
+            self.assertEqual(stats["1"]["restarts"], 1)  # 2 starts total, minus the first
+            self.assertEqual(stats["1"]["crashes"], 2)
+
+    def test_tracks_multiple_workers_independently(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "parallel-wrapper.log"
+            path.write_text(
+                "[worker 1] started (pid 100), worktree /tmp/x\n"
+                "[worker 2] started (pid 200), worktree /tmp/y\n"
+                "[worker 2] started (pid 201), worktree /tmp/y\n"
+            )
+            stats = parse_wrapper_log(path)
+            self.assertEqual(stats["1"]["restarts"], 0)
+            self.assertEqual(stats["2"]["restarts"], 1)
+
+
+class DiscoverFormatProgressTests(unittest.TestCase):
+    def _write_report(self, path, by_format):
+        path.write_text(json.dumps({"by_format": by_format}))
+
+    def test_no_files_is_empty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.assertEqual(discover_format_progress(Path(tmpdir)), {})
+
+    def test_reads_matched_and_total_from_a_single_format_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            self._write_report(
+                tmp / "tagcmp-JPEG.json",
+                {"JPEG": {"matched_tags": ["a", "b", "c"], "total_exiftool_tags": 10}},
+            )
+            progress = discover_format_progress(tmp)
+            self.assertEqual(progress["JPEG"]["matched"], 3)
+            self.assertEqual(progress["JPEG"]["total"], 10)
+
+    def test_zero_total_format_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            self._write_report(tmp / "tagcmp-EMPTY.json", {"EMPTY": {"matched_tags": [], "total_exiftool_tags": 0}})
+            self.assertEqual(discover_format_progress(tmp), {})
+
+    def test_newer_file_wins_over_an_older_one_for_the_same_format(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            old_path = tmp / "tagcmp-old-test.json"
+            new_path = tmp / "tagcmp-JPEG.json"
+            self._write_report(old_path, {"JPEG": {"matched_tags": [1], "total_exiftool_tags": 100}})
+            self._write_report(new_path, {"JPEG": {"matched_tags": [1, 2], "total_exiftool_tags": 100}})
+            # Force a real, unambiguous mtime ordering.
+            old_time = time.time() - 1000
+            import os
+            os.utime(old_path, (old_time, old_time))
+            progress = discover_format_progress(tmp)
+            self.assertEqual(progress["JPEG"]["matched"], 2)
+            self.assertEqual(progress["JPEG"]["source"], new_path)
+
+    def test_reads_full_corpus_comparison_json_from_repo_root(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            self._write_report(tmp / "comparison.json", {"NEF": {"matched_tags": [1, 2], "total_exiftool_tags": 4}})
+            progress = discover_format_progress(tmp / "nonexistent-tagcmp-dir", repo_root=tmp)
+            self.assertEqual(progress["NEF"]["matched"], 2)
+            self.assertEqual(progress["NEF"]["total"], 4)
+
+    def test_matched_tags_as_a_plain_int_is_also_accepted(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            self._write_report(tmp / "tagcmp-JPEG.json", {"JPEG": {"matched_tags": 5, "total_exiftool_tags": 10}})
+            progress = discover_format_progress(tmp)
+            self.assertEqual(progress["JPEG"]["matched"], 5)
+
+
+class BarColorTests(unittest.TestCase):
+    def test_full_is_bright_green(self):
+        self.assertEqual(bar_color(100), BRIGHT_GREEN)
+
+    def test_zero_is_red(self):
+        self.assertEqual(bar_color(0), RED)
+
+
+class RenderProgressBarTests(unittest.TestCase):
+    def test_includes_counts_and_percentage(self):
+        rendered = render_progress_bar(629, 3690, width=40)
+        self.assertIn("629", rendered)
+        self.assertIn("3690", rendered)
+        self.assertIn("17.0%", rendered)
+
+    def test_zero_total_does_not_crash(self):
+        rendered = render_progress_bar(0, 0, width=10)
+        self.assertIn("0", rendered)
+
+    def test_full_bar_gets_a_checkmark(self):
+        rendered = render_progress_bar(10, 10, width=10)
+        self.assertIn("✓", rendered)
+
+
+class RenderFormatProgressTests(unittest.TestCase):
+    def test_empty_progress_shows_explanatory_line(self):
+        lines = render_format_progress({})
+        self.assertEqual(len(lines), 1)
+        self.assertIn("no tag-comparison data", lines[0])
+
+    def test_least_complete_format_sorts_first(self):
+        progress = {
+            "DONE": {"matched": 10, "total": 10, "mtime": 0, "source": Path("x")},
+            "JPEG": {"matched": 1, "total": 100, "mtime": 0, "source": Path("y")},
+        }
+        lines = render_format_progress(progress)
+        jpeg_index = next(i for i, l in enumerate(lines) if "JPEG" in l)
+        done_index = next(i for i, l in enumerate(lines) if "DONE" in l)
+        self.assertLess(jpeg_index, done_index)
 
 
 class DiscoverFormatsTests(unittest.TestCase):
@@ -235,8 +643,56 @@ class RenderWorkersTests(unittest.TestCase):
             self.assertIn("(none yet)", output)
 
 
+class RenderDashboardTests(unittest.TestCase):
+    def test_includes_header_stats_and_worker_row(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            (tmp / "worker-1.log").write_text(
+                "[2026-07-20T19:00:00] round 1: attempting JPEG:APP12:CAM1\n"
+                "[JPEG:APP12:CAM1] FIXED\n"
+            )
+            tags_found_log = tmp / "tags-found.log"
+            tags_found_log.write_text("2026-07-20T19:00:00 worker=1 tag=JPEG:APP12:CAM1 gaps_closed=1\n")
+            tag_state_path = tmp / "state.json"
+            tag_state_path.write_text(json.dumps({}))
+            wrapper_log_path = tmp / "wrapper.log"
+            wrapper_log_path.write_text("[worker 1] started (pid 1), worktree /tmp/x\n")
+
+            now = parse_timestamp("2026-07-20T19:05:00")
+            output = render_dashboard(
+                tmp, [1], tags_found_log, tag_state_path, wrapper_log_path,
+                format_progress={}, max_tag_fails=10, now=now,
+            )
+            self.assertIn("OXIDEX TAG-FIX DASHBOARD", output)
+            self.assertIn("Tags found:", output)
+            self.assertIn("Blacklisted:", output)
+            self.assertIn("worker-1", output)
+            self.assertIn("JPEG:APP12:CAM1", output)
+            self.assertIn("restarts:", output)
+
+    def test_no_workers_shows_explanatory_line(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            output = render_dashboard(
+                tmp, [], tmp / "tags-found.log", tmp / "state.json", tmp / "wrapper.log",
+                format_progress={}, max_tag_fails=10, now=time.time(),
+            )
+            self.assertIn("no workers found", output)
+
+
+class LoadTagStateTests(unittest.TestCase):
+    def test_missing_file_is_empty_dict(self):
+        self.assertEqual(load_tag_state(Path("/nonexistent/state.json")), {})
+
+    def test_loads_real_json(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "state.json"
+            path.write_text(json.dumps({"JPEG:A": {"blacklisted": True}}))
+            self.assertEqual(load_tag_state(path), {"JPEG:A": {"blacklisted": True}})
+
+
 class MainLoopWorkerModeTests(unittest.TestCase):
-    def test_auto_detects_worker_mode_and_shows_aggregate_count(self):
+    def test_auto_detects_worker_mode_and_renders_the_dashboard(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             sleeps = []
@@ -244,8 +700,10 @@ class MainLoopWorkerModeTests(unittest.TestCase):
             def fake_sleep(interval):
                 sleeps.append(interval)
                 if len(sleeps) == 1:
-                    (tmp / "worker-1.log").write_text("round 1: attempting JPEG:EXIF:LensModel\n")
-                    (tmp / "tags-found.log").write_text("x worker=1 tag=Y gaps_closed=1\n")
+                    (tmp / "worker-1.log").write_text(
+                        "[2026-07-20T19:00:00] round 1: attempting JPEG:EXIF:LensModel\n"
+                    )
+                    (tmp / "tags-found.log").write_text("2026-07-20T19:00:00 worker=1 tag=Y gaps_closed=1\n")
                 elif len(sleeps) == 2:
                     raise KeyboardInterrupt
 
@@ -257,7 +715,8 @@ class MainLoopWorkerModeTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn("worker-1", out.getvalue())
-            self.assertIn("tags found so far", out.getvalue())
+            self.assertIn("OXIDEX TAG-FIX DASHBOARD", out.getvalue())
+            self.assertIn("Tags found:", out.getvalue())
 
 
 if __name__ == "__main__":

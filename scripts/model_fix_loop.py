@@ -42,11 +42,12 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           before it's nudged, then required, to submit a
                           diff instead of continuing to investigate)
     max_retries            default 1000 (retries on a transient upstream
-                          failure -- 5xx HTTPError or a completely empty
-                          reply -- before giving up on one model call;
-                          high, not unlimited, to ride out a long outage
-                          rather than blacklist a tag over infrastructure
-                          being down)
+                          failure -- 5xx HTTPError, a connection-level
+                          URLError (DNS/refused/TLS/stalled read), or a
+                          completely empty reply -- before giving up on
+                          one model call; high, not unlimited, to ride
+                          out a long outage rather than blacklist a tag
+                          over infrastructure being down)
     retry_backoff_seconds  default 2 (first retry's delay; doubles each
                           subsequent retry)
     max_retry_backoff_seconds default 120 (caps the exponential backoff's
@@ -148,16 +149,21 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
     capped at max_retry_backoff_seconds so a large max_retries doesn't
     imply an absurd wait -- up to max_retries times) on: a 5xx HTTPError
     (500/502/503/504 -- server-side, not this request's fault, confirmed
-    to occur in bursts across otherwise-unrelated concurrent workers) or a
-    reply that comes back completely empty (a provider occasionally
-    returns "200 OK" with zero content -- not a legitimate model answer,
-    indistinguishable from a dropped/truncated response, and retrying is
-    cheap compared to burning a whole fix attempt on it). A non-5xx
-    HTTPError (4xx: bad request, auth, etc.) fails immediately -- retrying
-    an actual client-side problem just wastes time and can mask a real
-    config issue. max_retries is high (not unlimited) specifically to ride
-    out a long transient outage rather than give up and blacklist a tag
-    over infrastructure, not the tag itself, being the problem.
+    to occur in bursts across otherwise-unrelated concurrent workers), a
+    connection-level URLError (DNS resolution failure, refused connection,
+    TLS handshake failure, or a stalled read -- no HTTP response was ever
+    received at all, confirmed live: a DNS outage on the caller's machine
+    burned all 10 of one tag's fail-count attempts and got it blacklisted
+    without the model ever actually being reachable), or a reply that
+    comes back completely empty (a provider occasionally returns "200 OK"
+    with zero content -- not a legitimate model answer, indistinguishable
+    from a dropped/truncated response, and retrying is cheap compared to
+    burning a whole fix attempt on it). A non-5xx HTTPError (4xx: bad
+    request, auth, etc.) fails immediately -- retrying an actual
+    client-side problem just wastes time and can mask a real config
+    issue. max_retries is high (not unlimited) specifically to ride out a
+    long transient outage rather than give up and blacklist a tag over
+    infrastructure, not the tag itself, being the problem.
 
     When stream is True, the response arrives as OpenAI-compatible SSE
     ("data: {...}" lines terminated by "data: [DONE]") -- each chunk's
@@ -202,6 +208,20 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
         except urllib.error.HTTPError as e:
             if e.code not in DEFAULT_RETRYABLE_HTTP_STATUSES:
                 raise
+            last_error = e
+            continue
+        except urllib.error.URLError as e:
+            # A connection-level failure (DNS resolution, refused
+            # connection, TLS handshake, or a stalled read past timeout)
+            # rather than a completed HTTP response -- HTTPError (caught
+            # above) is a URLError subclass, so this only matches when no
+            # response was ever received at all. Always worth retrying,
+            # same as a 5xx: infrastructure being briefly unreachable is
+            # not a reason to burn one of this tag's fail-count attempts.
+            # Confirmed live: a DNS outage burned all 10 of one tag's
+            # attempts and got it blacklisted without the model ever
+            # actually being asked -- see urlopen error "nodename nor
+            # servname provided" in a real run's attempt history.
             last_error = e
             continue
         if not reply:
@@ -1107,6 +1127,13 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             })
             if entry["fails"] >= max_fails:
                 entry["blacklisted"] = True
+                # Both persisted alongside "blacklisted" (not just logged)
+                # so a dashboard reading tag-state.json later -- possibly
+                # long after this worker's own log has been truncated by a
+                # respawn -- can still answer "when" and "by which worker"
+                # for every blacklist event, not just the current count.
+                entry["blacklisted_at"] = time.time()
+                entry["blacklisted_by"] = worker_id
                 log_fn(f"[{tag_gap['tag_key']}] blacklisted after {entry['fails']} failed attempts")
                 if git_checkout_clean_fn and repo_root:
                     git_checkout_clean_fn(repo_root)
