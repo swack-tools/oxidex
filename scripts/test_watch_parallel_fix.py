@@ -10,6 +10,7 @@ from watch_parallel_fix import (
     GREEN,
     RED,
     YELLOW,
+    aggregate_manifest_entries,
     bar_color,
     blacklist_stats,
     count_tags_found,
@@ -21,7 +22,9 @@ from watch_parallel_fix import (
     load_tag_state,
     load_worker_model_config,
     main,
+    parse_current_round_start,
     parse_current_tag_progress,
+    parse_manifest_log,
     parse_round_and_tag,
     parse_status,
     parse_tags_found_log,
@@ -33,7 +36,9 @@ from watch_parallel_fix import (
     render_format_progress,
     render_progress_bar,
     render_workers,
+    request_stats,
     tag_iteration,
+    worker_manifest_path,
 )
 
 
@@ -774,6 +779,163 @@ class LoadWorkerModelConfigTests(unittest.TestCase):
             )
             fixer_models, _, _, _ = load_worker_model_config(tmpdir, 3)
             self.assertEqual(fixer_models, ["accounts/fireworks/routers/kimi-k2p7-code-fast"])
+
+
+class ParseManifestLogTests(unittest.TestCase):
+    def test_missing_file_is_empty(self):
+        self.assertEqual(parse_manifest_log(Path("/nonexistent/manifest.log")), [])
+
+    def test_parses_ok_and_error_lines_skips_retry_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "manifest.log"
+            path.write_text(
+                "2026-07-21T10:00:00 phase=fixer model=gpt-5.6-sol prompt_chars=1200 "
+                "elapsed=12.3s reply_chars=500 OK\n"
+                "2026-07-21T10:05:00 phase=fixer model=gpt-5.6-sol RETRY model call retry "
+                "1/1000 after RuntimeError('empty reply'), waiting 2s\n"
+                "2026-07-21T10:06:00 phase=reviewer model=gpt-5.6-sol prompt_chars=200 "
+                "elapsed=1.5s reply_chars=10 OK\n"
+                "2026-07-21T10:10:00 phase=fixer model=gpt-5.6-sol prompt_chars=900 "
+                "elapsed=45.0s ERROR=<urlopen error DNS failure>\n"
+            )
+            entries = parse_manifest_log(path)
+            # 3 completed calls (OK/ERROR); the RETRY line is excluded --
+            # it has no elapsed time of its own to report a latency for.
+            self.assertEqual(len(entries), 3)
+            self.assertEqual(entries[0], ("2026-07-21T10:00:00", "fixer", 12.3, True))
+            self.assertEqual(entries[1], ("2026-07-21T10:06:00", "reviewer", 1.5, True))
+            self.assertEqual(entries[2], ("2026-07-21T10:10:00", "fixer", 45.0, False))
+
+
+class RequestStatsTests(unittest.TestCase):
+    def test_empty_entries(self):
+        stats = request_stats([])
+        self.assertEqual(stats["fixer"], {"count": 0, "mean": None, "median": None})
+        self.assertEqual(stats["reviewer"], {"count": 0, "mean": None, "median": None})
+        self.assertIsNone(stats["last"])
+
+    def test_computes_mean_and_median_per_phase(self):
+        entries = [
+            ("2026-07-21T10:00:00", "fixer", 10.0, True),
+            ("2026-07-21T10:01:00", "fixer", 20.0, True),
+            ("2026-07-21T10:02:00", "fixer", 30.0, False),
+            ("2026-07-21T10:03:00", "reviewer", 5.0, True),
+        ]
+        stats = request_stats(entries)
+        self.assertEqual(stats["fixer"]["count"], 3)
+        self.assertEqual(stats["fixer"]["mean"], 20.0)
+        self.assertEqual(stats["fixer"]["median"], 20.0)
+        self.assertEqual(stats["reviewer"]["count"], 1)
+        self.assertEqual(stats["reviewer"]["mean"], 5.0)
+
+    def test_last_is_the_most_recent_entry_of_either_phase(self):
+        entries = [
+            ("2026-07-21T10:00:00", "fixer", 10.0, True),
+            ("2026-07-21T10:05:00", "reviewer", 3.0, True),
+        ]
+        stats = request_stats(entries)
+        self.assertEqual(stats["last"]["phase"], "reviewer")
+        self.assertEqual(stats["last"]["elapsed"], 3.0)
+
+    def test_since_filters_out_earlier_entries(self):
+        entries = [
+            ("2026-07-21T10:00:00", "fixer", 10.0, True),
+            ("2026-07-21T10:10:00", "fixer", 20.0, True),
+        ]
+        since = parse_timestamp("2026-07-21T10:05:00")
+        stats = request_stats(entries, since=since)
+        self.assertEqual(stats["fixer"]["count"], 1)
+        self.assertEqual(stats["fixer"]["mean"], 20.0)
+
+    def test_since_none_includes_everything(self):
+        entries = [
+            ("2026-07-21T10:00:00", "fixer", 10.0, True),
+            ("2026-07-21T10:10:00", "fixer", 20.0, True),
+        ]
+        stats = request_stats(entries, since=None)
+        self.assertEqual(stats["fixer"]["count"], 2)
+
+
+class ParseCurrentRoundStartTests(unittest.TestCase):
+    def test_missing_file_is_none(self):
+        self.assertIsNone(parse_current_round_start(Path("/nonexistent/worker-1.log")))
+
+    def test_no_round_line_yet_is_none(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "worker-1.log"
+            path.write_text("   Compiling oxidex v1.2.1\n")
+            self.assertIsNone(parse_current_round_start(path))
+
+    def test_returns_the_most_recent_rounds_own_timestamp(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "worker-1.log"
+            path.write_text(
+                "[2026-07-21T10:00:00] round 1: attempting JPEG:APP12:CAM1\n"
+                "[2026-07-21T10:00:05] [JPEG:APP12:CAM1] failed attempt 1/10\n"
+                "[2026-07-21T10:05:00] round 2: attempting JPEG:APP12:CAM1\n"
+            )
+            # Unlike parse_current_tag_progress's launched_at (anchored to
+            # the earliest same-tag line), this is the LATEST round's own
+            # start time.
+            self.assertEqual(parse_current_round_start(path), parse_timestamp("2026-07-21T10:05:00"))
+
+
+class AggregateManifestEntriesTests(unittest.TestCase):
+    def test_combines_entries_across_workers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for worker_id, elapsed in ((1, "10.0"), (2, "20.0")):
+                path = worker_manifest_path(tmpdir, worker_id)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    f"2026-07-21T10:00:00 phase=fixer model=gpt-5.6-sol prompt_chars=100 "
+                    f"elapsed={elapsed}s reply_chars=10 OK\n"
+                )
+            entries = aggregate_manifest_entries(tmpdir, [1, 2])
+            self.assertEqual(len(entries), 2)
+
+    def test_missing_worker_worktree_contributes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            entries = aggregate_manifest_entries(tmpdir, [1, 2, 3])
+            self.assertEqual(entries, [])
+
+
+class RenderDashboardRequestStatsTests(unittest.TestCase):
+    def test_includes_aggregate_and_per_worker_request_stats(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            worktree_dir = tmp / "worktrees"
+            (tmp / "worker-1.log").write_text(
+                "[2026-07-21T10:00:00] round 1: attempting JPEG:APP12:CAM1\n"
+            )
+            manifest_path = worker_manifest_path(worktree_dir, 1)
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                "2026-07-21T10:00:01 phase=fixer model=gpt-5.6-sol prompt_chars=100 "
+                "elapsed=12.0s reply_chars=10 OK\n"
+                "2026-07-21T10:00:30 phase=reviewer model=gpt-5.6-sol prompt_chars=50 "
+                "elapsed=3.0s reply_chars=5 OK\n"
+            )
+            now = parse_timestamp("2026-07-21T10:01:00")
+            output = render_dashboard(
+                tmp, [1], tmp / "tags-found.log", tmp / "state.json", tmp / "wrapper.log",
+                format_progress={}, max_tag_fails=10, now=now, worktree_dir=worktree_dir,
+            )
+            self.assertIn("API requests:", output)
+            self.assertIn("Requests:", output)
+            self.assertIn("this round:", output)
+            self.assertIn("2", output)  # aggregate: 1 fixer + 1 reviewer request seen somewhere
+
+    def test_no_manifest_log_yet_skips_the_requests_line(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            worktree_dir = tmp / "worktrees"
+            (worktree_dir / "model-fix-tag-worker-1").mkdir(parents=True)
+            (tmp / "worker-1.log").write_text("round 1: attempting JPEG:APP12:CAM1\n")
+            output = render_dashboard(
+                tmp, [1], tmp / "tags-found.log", tmp / "state.json", tmp / "wrapper.log",
+                format_progress={}, max_tag_fails=10, now=time.time(), worktree_dir=worktree_dir,
+            )
+            self.assertNotIn("Requests:", output)
 
 
 class MainLoopWorkerModeTests(unittest.TestCase):

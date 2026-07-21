@@ -1162,6 +1162,72 @@ class FixGapReviewTests(unittest.TestCase):
         self.assertEqual(result["status"], "fixed")
         self.assertEqual(len(review_call_model_calls), 1)
 
+    def test_review_call_model_fn_is_used_for_review_when_given_separately(self):
+        # Lets a caller distinguish fixer vs reviewer calls in its own
+        # logging/metrics (see model_fix_loop.py main()'s two
+        # phase-tagged logging_call_model closures) -- the fixer call and
+        # the review call must go to two different functions, not the
+        # same shared one, when review_call_model_fn is provided.
+        gap = make_gap(gap_count=2)
+        fixer_calls = []
+        reviewer_calls = []
+
+        def fake_attempt_build(messages, **kwargs):
+            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        def fixer_call_model_fn(messages, *a):
+            fixer_calls.append(messages)
+            return "should not be called -- review_call_model_fn takes over review calls"
+
+        def reviewer_call_model_fn(messages, *a):
+            reviewer_calls.append(messages)
+            return "APPROVE"
+
+        result = fix_gap(
+            gap, CONFIG,
+            call_model_fn=fixer_call_model_fn, review_call_model_fn=reviewer_call_model_fn,
+            attempt_build_fn=fake_attempt_build,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: None,
+            cargo_test_workspace_fn=lambda root: True,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(len(fixer_calls), 0)
+        self.assertEqual(len(reviewer_calls), 1)
+
+    def test_review_call_model_fn_defaults_to_call_model_fn_when_absent(self):
+        # Backward compatibility: existing callers that only pass
+        # call_model_fn (not review_call_model_fn) must keep getting the
+        # original shared-closure behavior.
+        gap = make_gap(gap_count=2)
+        review_call_model_calls = []
+
+        def fake_attempt_build(messages, **kwargs):
+            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        def tracking_call_model_fn(messages, *a):
+            review_call_model_calls.append(messages)
+            return "APPROVE"
+
+        result = fix_gap(
+            gap, CONFIG,
+            call_model_fn=tracking_call_model_fn,
+            attempt_build_fn=fake_attempt_build,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: None,
+            cargo_test_workspace_fn=lambda root: True,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(len(review_call_model_calls), 1)
+
     def test_config_stream_flag_reaches_call_model_fn(self):
         gap = make_gap(gap_count=2)
         stream_values_seen = []

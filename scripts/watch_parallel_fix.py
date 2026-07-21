@@ -109,6 +109,16 @@ WORKER_CRASHED_RE = re.compile(r"^\[worker (\d+)\] CRASHED")
 # share this ComparisonReport shape.
 TAGCMP_FILENAME_RE = re.compile(r"^tagcmp-.+\.json$")
 
+# A worker's own logs/model-fix-requests/manifest.log -- one completed
+# (OK or ERROR) API call per line, phase-tagged (see model_fix_loop.py's
+# make_logging_call_model). RETRY lines use a different shape entirely
+# and are intentionally not matched by this -- see parse_manifest_log.
+MANIFEST_ENTRY_RE = re.compile(
+    r"^(?P<ts>\S+) phase=(?P<phase>fixer|reviewer) model=(?P<model>\S+) "
+    r"prompt_chars=(?P<prompt_chars>\d+) elapsed=(?P<elapsed>[\d.]+)s "
+    r"(?:reply_chars=\d+ )?(?P<rest>OK|ERROR=.*)$"
+)
+
 
 def parse_status(log_path):
     """Return (label, color, detail) describing a worker's most recent
@@ -486,6 +496,121 @@ def load_worker_model_config(worktree_dir, worker_id):
     )
 
 
+def worker_manifest_path(worktree_dir, worker_id):
+    """Path to a worker's own request audit trail -- see
+    model_fix_loop.py main()'s make_logging_call_model, which writes
+    req_log_dir relative to REPO_ROOT as resolved *inside that worker's
+    own worktree* (each is a full checkout with its own copy of
+    scripts/model_fix_loop.py), not a path shared across workers."""
+    return Path(worktree_dir) / f"model-fix-tag-worker-{worker_id}" / "logs" / "model-fix-requests" / "manifest.log"
+
+
+def parse_manifest_log(path):
+    """[(timestamp_str, phase, elapsed_seconds, ok), ...] in file order,
+    from a worker's own manifest.log (see model_fix_loop.py's
+    make_logging_call_model) -- one entry per COMPLETED API call, fixer
+    or reviewer, success or failure, each with its own elapsed time.
+
+    RETRY lines (call_model's own internal retry, logged before the
+    retried attempt actually happens) are deliberately excluded: they
+    don't represent a finished call and have no elapsed time of their
+    own to report a latency for -- the eventual OK/ERROR line that ends
+    that whole (possibly-retried) logical call already has the real,
+    total elapsed time, including every retry's wait.
+    """
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return []
+    entries = []
+    for line in text.splitlines():
+        m = MANIFEST_ENTRY_RE.match(line)
+        if m:
+            entries.append((m.group("ts"), m.group("phase"), float(m.group("elapsed")), m.group("rest") == "OK"))
+    return entries
+
+
+def _mean(values):
+    return sum(values) / len(values) if values else None
+
+
+def _median(values):
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def request_stats(entries, since=None):
+    """{"fixer": {"count", "mean", "median"}, "reviewer": {...}, "last":
+    {"phase", "elapsed", "at"} or None} from parse_manifest_log's
+    entries. since, if given, restricts to entries at or after that
+    epoch timestamp (used for "requests this round" -- see
+    parse_current_round_start) -- None (the default) covers every entry
+    in the log, i.e. this worker's whole current lifetime/"iteration" on
+    its current tag (a fresh manifest.log per worktree means this is
+    naturally scoped to one worker incarnation, same caveat as every
+    other per-worktree file this dashboard reads).
+    """
+    by_phase = {"fixer": [], "reviewer": []}
+    last = None
+    for ts, phase, elapsed, _ok in entries:
+        t = parse_timestamp(ts)
+        if since is not None and (t is None or t < since):
+            continue
+        by_phase.setdefault(phase, []).append(elapsed)
+        if t is not None and (last is None or t > last["at"]):
+            last = {"phase": phase, "elapsed": elapsed, "at": t}
+    return {
+        phase: {"count": len(latencies), "mean": _mean(latencies), "median": _median(latencies)}
+        for phase, latencies in by_phase.items()
+    } | {"last": last}
+
+
+def parse_current_round_start(log_path):
+    """Epoch timestamp of the most recent "round N: attempting TAG" line
+    -- when the round in progress right now actually started, as opposed
+    to parse_current_tag_progress's launched_at (which anchors to the
+    EARLIEST same-tag line, i.e. this whole multi-round attempt's start).
+    None if no such line has been logged yet.
+    """
+    try:
+        lines = log_path.read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        if ROUND_TAG_RE.search(line):
+            ts_match = LOG_TIMESTAMP_RE.match(line)
+            return parse_timestamp(ts_match.group(1)) if ts_match else None
+    return None
+
+
+def aggregate_manifest_entries(worktree_dir, worker_ids):
+    """All manifest.log entries across every given worker id, combined --
+    for a dashboard-wide aggregate (see request_stats). A worker whose
+    worktree/manifest.log no longer exists (e.g. a slot retired after
+    exhausting its crash-retry cap) simply contributes nothing, rather
+    than breaking the aggregate."""
+    entries = []
+    for worker_id in worker_ids:
+        entries.extend(parse_manifest_log(worker_manifest_path(worktree_dir, worker_id)))
+    return entries
+
+
+def _format_latency_stats(stats, color):
+    """"12 reqs (mean 34.2s, median 11.0s)" -- or just "0 reqs" when
+    count is zero, since mean/median are None with nothing to average."""
+    if stats["count"] == 0:
+        return f"{DIM}0 reqs{RESET}"
+    return (
+        f"{color}{stats['count']}{RESET} reqs "
+        f"{DIM}(mean{RESET} {stats['mean']:.1f}s {DIM}median{RESET} {stats['median']:.1f}s{DIM}){RESET}"
+    )
+
+
 def discover_format_progress(tagcmp_dir, repo_root=None):
     """{format_name: {"matched", "total", "mtime", "source"}} for every
     format with cached tag-comparison data -- not just whatever the
@@ -643,6 +768,20 @@ def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrappe
         f"{DIM}|{RESET}  {YELLOW}{bl_stats['last_hour']}{RESET} last hour  "
         f"{DIM}|{RESET}  {YELLOW}{bl_stats['last_24h']}{RESET} last 24h"
     )
+    if worktree_dir is not None:
+        all_entries = aggregate_manifest_entries(worktree_dir, worker_ids)
+        agg_stats = request_stats(all_entries)
+        last_str = "never"
+        if agg_stats["last"] is not None:
+            last_str = (
+                f"{format_relative(now - agg_stats['last']['at'])} "
+                f"({agg_stats['last']['phase']}, took {agg_stats['last']['elapsed']:.1f}s)"
+            )
+        lines.append(
+            f"  {BOLD}API requests:{RESET} fixer {_format_latency_stats(agg_stats['fixer'], MAGENTA)}  "
+            f"{DIM}|{RESET}  reviewer {_format_latency_stats(agg_stats['reviewer'], BLUE)}  "
+            f"{DIM}|{RESET}  last: {CYAN}{last_str}{RESET}"
+        )
     lines.append("")
 
     lines.append(f"  {BOLD}{BRIGHT_CYAN}FORMAT PROGRESS{RESET}")
@@ -688,6 +827,25 @@ def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrappe
                     f"{DIM}@{fixer_reasoning}{RESET}   "
                     f"{DIM}Reviewer:{RESET} {BLUE}{'/'.join(reviewer_models)}{RESET} "
                     f"{DIM}@{reviewer_reasoning}{RESET}"
+                )
+
+            manifest_entries = parse_manifest_log(worker_manifest_path(worktree_dir, worker_id))
+            if manifest_entries:
+                lifetime_stats = request_stats(manifest_entries)
+                round_start = parse_current_round_start(log_path)
+                round_stats = request_stats(manifest_entries, since=round_start)
+                round_count = round_stats["fixer"]["count"] + round_stats["reviewer"]["count"]
+                last_str = "never"
+                if lifetime_stats["last"] is not None:
+                    last_str = (
+                        f"{format_relative(now - lifetime_stats['last']['at'])} "
+                        f"({lifetime_stats['last']['phase']}, took {lifetime_stats['last']['elapsed']:.1f}s)"
+                    )
+                lines.append(
+                    f"      {DIM}Requests:{RESET} fixer {_format_latency_stats(lifetime_stats['fixer'], MAGENTA)}  "
+                    f"{DIM}|{RESET} reviewer {_format_latency_stats(lifetime_stats['reviewer'], BLUE)}  "
+                    f"{DIM}|{RESET} this round: {BOLD}{round_count}{RESET}  "
+                    f"{DIM}|{RESET} last: {CYAN}{last_str}{RESET}"
                 )
         if detail and label in ("crashed", "build-fail", "reverted", "blacklisted"):
             lines.append(f"      {DIM}{detail[:width - 8]}{RESET}")

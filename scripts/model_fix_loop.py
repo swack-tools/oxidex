@@ -762,7 +762,8 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     return False, "no working fix after repair attempt", None, messages
 
 
-def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
+def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
+            git_apply_fn=git_apply,
             git_checkout_clean_fn=git_checkout_clean, git_commit_fn=git_commit,
             cargo_build_fn=cargo_build, cargo_test_workspace_fn=cargo_test_workspace,
             attempt_build_fn=attempt_build, review_fn=review_verdict,
@@ -777,6 +778,13 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
     call instead of the fixer's own config -- lets the outer loop's
     reviewer run on a different model/provider than the fixer. Defaults
     to reusing config, matching the original single-config behavior.
+
+    review_call_model_fn, if provided, is used for review_fn's call
+    instead of call_model_fn -- lets a caller distinguish fixer vs
+    reviewer calls in its own logging/metrics (see main()'s two
+    phase-tagged logging_call_model closures) despite both ultimately
+    calling the same underlying call_model. Defaults to call_model_fn,
+    matching the original shared-closure behavior.
 
     pick_model_fn is threaded into both attempt_build_fn and review_fn, so
     a single injected fake can make an entire fix_gap call deterministic
@@ -800,6 +808,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
     """
     repo_root = repo_root or REPO_ROOT
     review_config = review_config or config
+    review_call_model_fn = review_call_model_fn or call_model_fn
     fmt = gap["format"]
     messages = [{"role": "user", "content": build_prompt(
         gap, repo_root=repo_root,
@@ -835,7 +844,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, git_apply_fn=git_apply,
             return {"format": fmt, "status": "failed", "reason": "cargo test --workspace regressed", "diff": diff}
 
         approved, review_reason = review_fn(
-            gap, diff, review_config, call_model_fn=call_model_fn, pick_model_fn=pick_model_fn,
+            gap, diff, review_config, call_model_fn=review_call_model_fn, pick_model_fn=pick_model_fn,
         )
         if approved:
             closed = gap["gap_count"] - remaining
@@ -1377,66 +1386,81 @@ def main(argv=None):
         print(f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}] {msg}")
 
     # Audit trail of every actual API call (fixer and reviewer both funnel
-    # through this, since fix_gap threads the same call_model_fn into both
-    # attempt_build and review_fn) -- request params + prompt saved before
-    # the call, response (or the exact error) saved right after, so "is it
-    # even talking to the model, and what did it get back" never has to be
+    # through this -- see make_logging_call_model's two phase-tagged
+    # instances below) -- request params + prompt saved before the call,
+    # response (or the exact error) saved right after, so "is it even
+    # talking to the model, and what did it get back" never has to be
     # guessed at from a timeout/exception message alone.
     req_log_dir = REPO_ROOT / "logs" / "model-fix-requests"
     req_log_dir.mkdir(parents=True, exist_ok=True)
     req_manifest_path = req_log_dir / "manifest.log"
 
-    def logging_call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
-                            stream=False, thinking=True, temperature=0, timeout=120,
-                            max_retries=DEFAULT_MAX_RETRIES,
-                            retry_backoff_seconds=DEFAULT_RETRY_BACKOFF_SECONDS,
-                            max_retry_backoff_seconds=DEFAULT_MAX_RETRY_BACKOFF_SECONDS):
-        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
-        prompt_chars = sum(len(m.get("content", "")) for m in messages)
-        req_path = req_log_dir / f"{ts}-request.json"
-        req_path.write_text(json.dumps({
-            "model": model, "base_url": base_url, "max_tokens": max_tokens,
-            "reasoning_effort": reasoning_effort, "stream": stream,
-            "thinking": thinking, "temperature": temperature, "timeout": timeout,
-            "prompt_chars": prompt_chars, "messages": messages,
-        }, indent=2))
-        t0 = time.time()
+    def make_logging_call_model(phase):
+        """Build a call_model_fn wrapper tagged with phase ("fixer" or
+        "reviewer") in every manifest.log line it writes. fix_gap used to
+        thread one shared closure into both attempt_build and review_fn,
+        which made every manifest.log entry ambiguous about which side
+        made the call -- fine for a human skimming the log, but useless
+        for a dashboard trying to report separate fixer/reviewer request
+        counts and latencies without guessing. Two instances of this
+        (one per phase) replace that single shared closure.
+        """
+        def logging_call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
+                                stream=False, thinking=True, temperature=0, timeout=120,
+                                max_retries=DEFAULT_MAX_RETRIES,
+                                retry_backoff_seconds=DEFAULT_RETRY_BACKOFF_SECONDS,
+                                max_retry_backoff_seconds=DEFAULT_MAX_RETRY_BACKOFF_SECONDS):
+            ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+            prompt_chars = sum(len(m.get("content", "")) for m in messages)
+            req_path = req_log_dir / f"{ts}-{phase}-request.json"
+            req_path.write_text(json.dumps({
+                "phase": phase, "model": model, "base_url": base_url, "max_tokens": max_tokens,
+                "reasoning_effort": reasoning_effort, "stream": stream,
+                "thinking": thinking, "temperature": temperature, "timeout": timeout,
+                "prompt_chars": prompt_chars, "messages": messages,
+            }, indent=2))
+            t0 = time.time()
 
-        def log_retry(msg):
-            # timestamped_log(msg) already shows this in the worker's plain
-            # log (and hence watch_parallel_fix.py's dashboard); this also
-            # appends a matching line to the structured manifest.log, which
-            # previously only ever recorded this whole call's single final
-            # outcome -- every individual 5xx/empty-reply retry riding out
-            # inside call_model's own loop was invisible there.
-            timestamped_log(msg)
-            with req_manifest_path.open("a") as f:
-                f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} model={model} RETRY {msg}\n")
+            def log_retry(msg):
+                # timestamped_log(msg) already shows this in the worker's plain
+                # log (and hence watch_parallel_fix.py's dashboard); this also
+                # appends a matching line to the structured manifest.log, which
+                # previously only ever recorded this whole call's single final
+                # outcome -- every individual 5xx/empty-reply retry riding out
+                # inside call_model's own loop was invisible there.
+                timestamped_log(msg)
+                with req_manifest_path.open("a") as f:
+                    f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} phase={phase} model={model} RETRY {msg}\n")
 
-        try:
-            reply = call_model(
-                messages, base_url, api_key, model, max_tokens, reasoning_effort,
-                stream, thinking, temperature, timeout,
-                max_retries, retry_backoff_seconds, max_retry_backoff_seconds,
-                log_fn=log_retry,
-            )
-        except Exception as e:
+            try:
+                reply = call_model(
+                    messages, base_url, api_key, model, max_tokens, reasoning_effort,
+                    stream, thinking, temperature, timeout,
+                    max_retries, retry_backoff_seconds, max_retry_backoff_seconds,
+                    log_fn=log_retry,
+                )
+            except Exception as e:
+                elapsed = time.time() - t0
+                with req_manifest_path.open("a") as f:
+                    f.write(
+                        f"{ts} phase={phase} model={model} prompt_chars={prompt_chars} "
+                        f"elapsed={elapsed:.1f}s ERROR={e}\n"
+                    )
+                raise
             elapsed = time.time() - t0
+            reply_path = req_log_dir / f"{ts}-{phase}-response.txt"
+            reply_path.write_text(reply)
             with req_manifest_path.open("a") as f:
                 f.write(
-                    f"{ts} model={model} prompt_chars={prompt_chars} "
-                    f"elapsed={elapsed:.1f}s ERROR={e}\n"
+                    f"{ts} phase={phase} model={model} prompt_chars={prompt_chars} "
+                    f"elapsed={elapsed:.1f}s reply_chars={len(reply)} OK\n"
                 )
-            raise
-        elapsed = time.time() - t0
-        reply_path = req_log_dir / f"{ts}-response.txt"
-        reply_path.write_text(reply)
-        with req_manifest_path.open("a") as f:
-            f.write(
-                f"{ts} model={model} prompt_chars={prompt_chars} "
-                f"elapsed={elapsed:.1f}s reply_chars={len(reply)} OK\n"
-            )
-        return reply
+            return reply
+
+        return logging_call_model
+
+    logging_call_model_fixer = make_logging_call_model("fixer")
+    logging_call_model_reviewer = make_logging_call_model("reviewer")
 
     prompt_log_dir = Path(args.prompt_log_dir)
     prompt_log_dir.mkdir(parents=True, exist_ok=True)
@@ -1505,7 +1529,7 @@ def main(argv=None):
         result = fix_gap(
             single_gap, cfg, recheck_fn=recheck, review_config=review_config,
             git_apply_fn=logging_git_apply, log_fn=timestamped_log,
-            call_model_fn=logging_call_model,
+            call_model_fn=logging_call_model_fixer, review_call_model_fn=logging_call_model_reviewer,
             samples_dir=Path(args.cache_dir) / "combined-samples",
             previous_attempts=previous_attempts,
         )
