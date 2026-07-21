@@ -1365,12 +1365,24 @@ def main(argv=None):
             "prompt_chars": prompt_chars, "messages": messages,
         }, indent=2))
         t0 = time.time()
+
+        def log_retry(msg):
+            # timestamped_log(msg) already shows this in the worker's plain
+            # log (and hence watch_parallel_fix.py's dashboard); this also
+            # appends a matching line to the structured manifest.log, which
+            # previously only ever recorded this whole call's single final
+            # outcome -- every individual 5xx/empty-reply retry riding out
+            # inside call_model's own loop was invisible there.
+            timestamped_log(msg)
+            with req_manifest_path.open("a") as f:
+                f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} model={model} RETRY {msg}\n")
+
         try:
             reply = call_model(
                 messages, base_url, api_key, model, max_tokens, reasoning_effort,
                 stream, thinking, temperature, timeout,
                 max_retries, retry_backoff_seconds, max_retry_backoff_seconds,
-                log_fn=timestamped_log,
+                log_fn=log_retry,
             )
         except Exception as e:
             elapsed = time.time() - t0
