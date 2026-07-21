@@ -77,6 +77,7 @@ const KNOWN_TAGS: &[&str] = &[
     "EXP2",
     "EXP3",
     "FCS1",
+    "FCS2",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -352,15 +353,20 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 );
             }
 
-            // ExifTool exposes the Olympus FCS1 diagnostic field in the
-            // APP12 group using its original name.
-            if key.eq_ignore_ascii_case("FCS1") {
+            // ExifTool exposes the Olympus FCS diagnostic fields in the APP12
+            // group using their original names.
+            if key.eq_ignore_ascii_case("FCS1") || key.eq_ignore_ascii_case("FCS2") {
                 let app12_value = value
                     .parse::<i64>()
                     .map(TagValue::Integer)
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
+                let app12_tag = if key.eq_ignore_ascii_case("FCS1") {
+                    "APP12:FCS1"
+                } else {
+                    "APP12:FCS2"
+                };
 
-                metadata.insert("APP12:FCS1".to_string(), app12_value);
+                metadata.insert(app12_tag.to_string(), app12_value);
             }
 
             // ExifTool exposes the continuous-take diagnostic field in the
@@ -522,6 +528,19 @@ mod camera_type_tests {
         assert_eq!(
             metadata.get_string("APP12:CameraType"),
             Some("SR84")
+        );
+    }
+
+    #[test]
+    fn test_picture_info_fcs2_app12_tag() {
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS OPTICAL CO.,LTD.\0[picture info]\r\nFCS1=0\r\nFCS2=1\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:FCS2"),
+            Some(1)
         );
     }
 
