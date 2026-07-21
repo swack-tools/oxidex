@@ -369,10 +369,7 @@ mod tests {
 
         let metadata = result.unwrap();
 
-        assert_eq!(
-            metadata.get_string("APP12:ExposureTime"),
-            Some("1/125")
-        );
+        assert_eq!(metadata.get_string("APP12:ExposureTime"), Some("1/125"));
 
         // ExposureTime should be parsed as a rational
         match metadata.get("Agfa:ExposureTime") {

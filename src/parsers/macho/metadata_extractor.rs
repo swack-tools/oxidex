@@ -347,10 +347,7 @@ fn extract_dylib_metadata(dylibs: &[DylibCommand], metadata: &mut MetadataMap) {
 
 /// Extract UUID metadata
 fn extract_uuid_metadata(uuid: &UuidCommand, metadata: &mut MetadataMap) {
-    metadata.insert(
-        "EXE:UUID".to_string(),
-        TagValue::String(uuid.uuid_string()),
-    );
+    metadata.insert("EXE:UUID".to_string(), TagValue::String(uuid.uuid_string()));
 }
 
 /// Extract version-related metadata
@@ -729,10 +726,7 @@ mod tests {
         assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
         assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
         assert_eq!(metadata.get_integer("EXE:IsPIE").unwrap(), 1);
-        assert_eq!(
-            metadata.get_integer("EXE:HasTwoLevelNamespace").unwrap(),
-            1
-        );
+        assert_eq!(metadata.get_integer("EXE:HasTwoLevelNamespace").unwrap(), 1);
     }
 
     #[test]

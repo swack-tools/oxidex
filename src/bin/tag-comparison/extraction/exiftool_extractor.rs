@@ -85,7 +85,8 @@ impl ExifToolExtractor {
         // worth persisting across process invocations.
         let signature = Self::compute_signature(&files);
         let exiftool_version = self.get_exiftool_version();
-        if let Some(cached) = self.load_disk_cache(fixture_path, format, &exiftool_version, &signature)
+        if let Some(cached) =
+            self.load_disk_cache(fixture_path, format, &exiftool_version, &signature)
         {
             self.cache.insert(format.to_string(), cached.clone());
             return Ok(cached);

@@ -440,10 +440,7 @@ fn test_macho_file_size() {
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(
-        metadata.get_integer("EXE:FileSize").unwrap(),
-        expected_size
-    );
+    assert_eq!(metadata.get_integer("EXE:FileSize").unwrap(), expected_size);
 }
 
 #[test]

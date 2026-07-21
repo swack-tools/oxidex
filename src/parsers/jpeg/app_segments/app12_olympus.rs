@@ -260,10 +260,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             // rather than the Agfa-specific parser. ExifTool exposes ID as a
             // textual tag in the APP12 group.
             if key.eq_ignore_ascii_case("ID") {
-                metadata.insert(
-                    "APP12:ID".to_string(),
-                    TagValue::String(value.clone()),
-                );
+                metadata.insert("APP12:ID".to_string(), TagValue::String(value.clone()));
             }
 
             // Olympus Picture Info calls this field ExposureBias. ExifTool
@@ -300,10 +297,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             // to the APP12 group. Preserve its display-ready textual value,
             // such as "Off", while retaining the Olympus compatibility tag.
             if key.eq_ignore_ascii_case("Flash") {
-                metadata.insert(
-                    "APP12:Flash".to_string(),
-                    TagValue::String(value.clone()),
-                );
+                metadata.insert("APP12:Flash".to_string(), TagValue::String(value.clone()));
             }
 
             // The source field in JPEG Picture Info records is normally named
@@ -391,10 +385,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .map(TagValue::Integer)
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
-                metadata.insert(
-                    "APP12:EXP3".to_string(),
-                    app12_value,
-                );
+                metadata.insert("APP12:EXP3".to_string(), app12_value);
             }
 
             // ExifTool exposes the Olympus IMbb diagnostic field in the
@@ -427,10 +418,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .map(TagValue::Integer)
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
-                metadata.insert(
-                    "APP12:IMgb".to_string(),
-                    app12_value,
-                );
+                metadata.insert("APP12:IMgb".to_string(), app12_value);
             }
 
             // ExifTool exposes the Olympus IMgr diagnostic field in the
@@ -540,10 +528,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .map(TagValue::Integer)
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
-                metadata.insert(
-                    "APP12:ContTake".to_string(),
-                    app12_value,
-                );
+                metadata.insert("APP12:ContTake".to_string(), app12_value);
             }
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
@@ -577,10 +562,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     Ok(number) => TagValue::Integer(number),
                     Err(_) => TagValue::String(value.clone()),
                 };
-                metadata.insert(
-                    "APP12:CAM7".to_string(),
-                    app12_value,
-                );
+                metadata.insert("APP12:CAM7".to_string(), app12_value);
             }
 
             // ExifTool exposes the Olympus diagnostic CAM8 field in the
@@ -590,10 +572,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     Ok(number) => TagValue::Integer(number),
                     Err(_) => TagValue::String(value.clone()),
                 };
-                metadata.insert(
-                    "APP12:CAM8".to_string(),
-                    app12_value,
-                );
+                metadata.insert("APP12:CAM8".to_string(), app12_value);
             }
 
             // ExifTool exposes the Olympus diagnostic CAM9 field in the
@@ -603,10 +582,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     Ok(number) => TagValue::Integer(number),
                     Err(_) => TagValue::String(value.clone()),
                 };
-                metadata.insert(
-                    "APP12:CAM9".to_string(),
-                    app12_value,
-                );
+                metadata.insert("APP12:CAM9".to_string(), app12_value);
             }
 
             // ExifTool exposes the Olympus diagnostic CAM3 field in the
@@ -616,10 +592,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     Ok(number) => TagValue::Integer(number),
                     Err(_) => TagValue::String(value.clone()),
                 };
-                metadata.insert(
-                    "APP12:CAM3".to_string(),
-                    app12_value,
-                );
+                metadata.insert("APP12:CAM3".to_string(), app12_value);
             }
 
             // ExifTool exposes the Olympus diagnostic COLOR1 field in the
@@ -681,38 +654,28 @@ mod fcs_tests {
 
     #[test]
     fn test_parse_fcs6() {
-        let metadata = parse_app12_olympus(
-            b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nFCS6=3\r\n",
-        )
-        .unwrap();
+        let metadata =
+            parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nFCS6=3\r\n").unwrap();
 
         assert_eq!(metadata.get_integer("APP12:FCS6"), Some(3));
     }
 
     #[test]
     fn test_parse_fcs5() {
-        let metadata = parse_app12_olympus(
-            b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nFCS5=215\r\n",
-        )
-        .expect("Olympus Picture Info should parse");
+        let metadata =
+            parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nFCS5=215\r\n")
+                .expect("Olympus Picture Info should parse");
 
-        assert_eq!(
-            metadata.get_integer("APP12:FCS5"),
-            Some(215)
-        );
+        assert_eq!(metadata.get_integer("APP12:FCS5"), Some(215));
     }
 
     #[test]
     fn test_parse_fcs4() {
-        let metadata = parse_app12_olympus(
-            b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nFCS4=221\r\n",
-        )
-        .expect("Olympus Picture Info should parse");
+        let metadata =
+            parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nFCS4=221\r\n")
+                .expect("Olympus Picture Info should parse");
 
-        assert_eq!(
-            metadata.get_integer("APP12:FCS4"),
-            Some(221)
-        );
+        assert_eq!(metadata.get_integer("APP12:FCS4"), Some(221));
     }
 }
 
@@ -724,28 +687,19 @@ mod camera_type_tests {
     fn test_legacy_picture_info_camera_type() {
         // Agfa SR84 files use the generic, identifier-less APP12 Picture Info
         // layout and are accepted by this parser through the known Type field.
-        let metadata = parse_app12_olympus(
-            b"Type=SR84\rVersion=v84-71\rID=AGFA DIGITAL CAMERA\r",
-        )
-        .expect("legacy Picture Info should parse");
+        let metadata = parse_app12_olympus(b"Type=SR84\rVersion=v84-71\rID=AGFA DIGITAL CAMERA\r")
+            .expect("legacy Picture Info should parse");
 
-        assert_eq!(
-            metadata.get_string("APP12:CameraType"),
-            Some("SR84")
-        );
+        assert_eq!(metadata.get_string("APP12:CameraType"), Some("SR84"));
     }
 
     #[test]
     fn test_picture_info_fcs3_app12_tag() {
-        let metadata = parse_app12_olympus(
-            b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nFCS3=2200\r\n",
-        )
-        .expect("Olympus Picture Info should parse");
+        let metadata =
+            parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nFCS3=2200\r\n")
+                .expect("Olympus Picture Info should parse");
 
-        assert_eq!(
-            metadata.get_integer("APP12:FCS3"),
-            Some(2200)
-        );
+        assert_eq!(metadata.get_integer("APP12:FCS3"), Some(2200));
     }
 
     #[test]
@@ -755,10 +709,7 @@ mod camera_type_tests {
         )
         .expect("Olympus Picture Info should parse");
 
-        assert_eq!(
-            metadata.get_integer("APP12:FCS2"),
-            Some(1)
-        );
+        assert_eq!(metadata.get_integer("APP12:FCS2"), Some(1));
     }
 
     #[test]
@@ -768,83 +719,58 @@ mod camera_type_tests {
         )
         .expect("Olympus Picture Info should parse");
 
-        assert_eq!(
-            metadata.get_string("APP12:ExposureTime"),
-            Some("1/155")
-        );
+        assert_eq!(metadata.get_string("APP12:ExposureTime"), Some("1/155"));
     }
 
     #[test]
     fn test_olympus_exp1_diagnostic_value() {
-        let metadata = parse_app12_olympus(
-            b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nEXP1=7727\r\n",
-        )
-        .expect("Olympus Picture Info should parse");
+        let metadata =
+            parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nEXP1=7727\r\n")
+                .expect("Olympus Picture Info should parse");
 
-        assert_eq!(
-            metadata.get_integer("APP12:EXP1"),
-            Some(7727)
-        );
+        assert_eq!(metadata.get_integer("APP12:EXP1"), Some(7727));
     }
 
     #[test]
     fn test_olympus_exp2_diagnostic_value() {
-        let metadata = parse_app12_olympus(
-            b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nEXP2=59\r\n",
-        )
-        .expect("Olympus Picture Info should parse");
+        let metadata = parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nEXP2=59\r\n")
+            .expect("Olympus Picture Info should parse");
 
-        assert_eq!(
-            metadata.get_integer("APP12:EXP2"),
-            Some(59)
-        );
+        assert_eq!(metadata.get_integer("APP12:EXP2"), Some(59));
     }
 
     #[test]
     fn test_olympus_exp3_diagnostic_value() {
-        let metadata = parse_app12_olympus(
-            b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nEXP3=227\r\n",
-        )
-        .expect("Olympus Picture Info should parse");
+        let metadata =
+            parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nEXP3=227\r\n")
+                .expect("Olympus Picture Info should parse");
 
-        assert_eq!(
-            metadata.get_integer("APP12:EXP3"),
-            Some(227)
-        );
+        assert_eq!(metadata.get_integer("APP12:EXP3"), Some(227));
     }
 
     #[test]
     fn test_olympus_cam1_diagnostic_value() {
-        let metadata = parse_app12_olympus(
-            b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nCAM1=59\r\n",
-        )
-        .expect("Olympus Picture Info should parse");
+        let metadata = parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nCAM1=59\r\n")
+            .expect("Olympus Picture Info should parse");
 
-        assert_eq!(
-            metadata.get_integer("APP12:CAM1"),
-            Some(59)
-        );
+        assert_eq!(metadata.get_integer("APP12:CAM1"), Some(59));
     }
 
     #[test]
     fn test_olympus_cont_take_diagnostic_value() {
         // ContTake is itself a known Picture Info field, so identifier-less
         // records containing it are accepted.
-        let metadata = parse_app12_olympus(b"ContTake=0\r\n")
-            .expect("Olympus Picture Info should parse");
+        let metadata =
+            parse_app12_olympus(b"ContTake=0\r\n").expect("Olympus Picture Info should parse");
 
-        assert_eq!(
-            metadata.get_integer("APP12:ContTake"),
-            Some(0)
-        );
+        assert_eq!(metadata.get_integer("APP12:ContTake"), Some(0));
     }
 
     #[test]
     fn test_olympus_exposure_compensation() {
-        let metadata = parse_app12_olympus(
-            b"OLYMPUS DIGITAL CAMERA\0[picture info]\r\nExposureBias=+2.0\r\n",
-        )
-        .expect("Olympus Picture Info should parse");
+        let metadata =
+            parse_app12_olympus(b"OLYMPUS DIGITAL CAMERA\0[picture info]\r\nExposureBias=+2.0\r\n")
+                .expect("Olympus Picture Info should parse");
 
         assert_eq!(
             metadata.get_string("APP12:ExposureCompensation"),
@@ -854,23 +780,17 @@ mod camera_type_tests {
 
     #[test]
     fn test_olympus_color_mode_app12_tag() {
-        let metadata = parse_app12_olympus(
-            b"OLYMPUS OPTICAL CO.,LTD.\0[picture info]\r\nColorMode=1\r\n",
-        )
-        .expect("Olympus Picture Info should parse");
+        let metadata =
+            parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0[picture info]\r\nColorMode=1\r\n")
+                .expect("Olympus Picture Info should parse");
 
-        assert_eq!(
-            metadata.get_integer("APP12:ColorMode"),
-            Some(1)
-        );
+        assert_eq!(metadata.get_integer("APP12:ColorMode"), Some(1));
     }
 
     #[test]
     fn test_picture_info_datetime_original_app12_tag() {
-        let metadata = parse_app12_olympus(
-            b"[picture info]\r\nTimeDate=1998:12:31 15:17:20\r\n",
-        )
-        .expect("Picture Info should parse");
+        let metadata = parse_app12_olympus(b"[picture info]\r\nTimeDate=1998:12:31 15:17:20\r\n")
+            .expect("Picture Info should parse");
 
         assert_eq!(
             metadata.get_string("APP12:DateTimeOriginal"),
@@ -880,10 +800,8 @@ mod camera_type_tests {
 
     #[test]
     fn test_picture_info_timedate_ctime_format() {
-        let metadata = parse_app12_olympus(
-            b"[picture info]\rTimeDate=Thu Dec 31 15:17:20 1998\r",
-        )
-        .expect("Picture Info TimeDate should parse");
+        let metadata = parse_app12_olympus(b"[picture info]\rTimeDate=Thu Dec 31 15:17:20 1998\r")
+            .expect("Picture Info TimeDate should parse");
 
         assert_eq!(
             metadata.get_string("APP12:DateTimeOriginal"),
@@ -1228,11 +1146,9 @@ mod tests {
 
     #[test]
     fn test_parse_app12_color4() {
-        let data =
-            b"OLYMPUS OPTICAL CO.,LTD.\r\n[diag info]\r\nCOLOR4=5\r\n";
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\r\n[diag info]\r\nCOLOR4=5\r\n";
 
-        let metadata =
-            parse_app12_olympus(data).expect("Olympus APP12 data should parse");
+        let metadata = parse_app12_olympus(data).expect("Olympus APP12 data should parse");
 
         assert_eq!(metadata.get_integer("APP12:COLOR4"), Some(5));
     }

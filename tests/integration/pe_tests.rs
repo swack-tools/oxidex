@@ -416,7 +416,10 @@ fn test_pe_with_exports() {
     assert!(metadata.contains_key("EXE:HasExports"));
     assert_eq!(metadata.get_integer("EXE:HasExports").unwrap(), 1);
 
-    assert_eq!(metadata.get_string("EXE:ExportDLLName").unwrap(), "test.dll");
+    assert_eq!(
+        metadata.get_string("EXE:ExportDLLName").unwrap(),
+        "test.dll"
+    );
     assert_eq!(metadata.get_integer("EXE:ExportCount").unwrap(), 3);
     assert_eq!(metadata.get_integer("EXE:ExportNameCount").unwrap(), 2);
     assert_eq!(metadata.get_integer("EXE:ExportBase").unwrap(), 1);

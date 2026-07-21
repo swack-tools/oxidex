@@ -201,7 +201,13 @@ impl OxiDexExtractor {
 
     /// Best-effort -- a failure to persist the cache must never fail the
     /// extraction itself, since the result was already computed correctly.
-    fn save_disk_cache(&self, format: &str, binary_hash: &str, signature: &str, result: &ExtractionResult) {
+    fn save_disk_cache(
+        &self,
+        format: &str,
+        binary_hash: &str,
+        signature: &str,
+        result: &ExtractionResult,
+    ) {
         let dir = self.disk_cache_dir();
         if std::fs::create_dir_all(&dir).is_err() {
             return;

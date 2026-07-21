@@ -155,10 +155,7 @@ pub fn parse_app0_extended(data: &[u8], metadata: &mut MetadataMap) -> Result<()
             .parse::<i64>()
             .map_err(|_| "OCAD revision is outside the supported integer range".to_string())?;
 
-        metadata.insert(
-            "APP0:OcadRevision".to_string(),
-            TagValue::Integer(revision),
-        );
+        metadata.insert("APP0:OcadRevision".to_string(), TagValue::Integer(revision));
         return Ok(());
     }
 
@@ -555,10 +552,7 @@ mod tests {
         let result = parse_app0_extended(data, &mut metadata);
 
         assert!(result.is_ok());
-        assert_eq!(
-            metadata.get_integer("APP0:OcadRevision"),
-            Some(14797)
-        );
+        assert_eq!(metadata.get_integer("APP0:OcadRevision"), Some(14797));
     }
 
     #[test]
@@ -652,9 +646,8 @@ mod tests {
     fn test_parse_olympus_app12_f_number() {
         let data = b"[picture info]\r\nFNumber=11.0\r\n";
 
-        let metadata =
-            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
-                .expect("valid Picture Info APP12 data should parse");
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
 
         assert!(
             metadata.get("APP12:FNumber").is_some(),
@@ -671,9 +664,8 @@ mod tests {
     fn test_parse_olympus_app12_flash() {
         let data = b"[picture info]\r\nFlash=Off\r\n";
 
-        let metadata =
-            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
-                .expect("valid Picture Info APP12 data should parse");
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
 
         assert_eq!(
             metadata.get_string("APP12:Flash"),
@@ -686,27 +678,20 @@ mod tests {
     fn test_parse_legacy_agfa_app12_id() {
         // Identifier-less Agfa Picture Info is recognized by the generic
         // Olympus/Picture Info parser used by APP12 dispatch.
-        let data =
-            b"Type=SR84\r\nVersion=v84-71\r\nID=AGFA DIGITAL CAMERA\r\n";
+        let data = b"Type=SR84\r\nVersion=v84-71\r\nID=AGFA DIGITAL CAMERA\r\n";
 
-        let metadata =
-            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
-                .expect("valid legacy Picture Info APP12 data should parse");
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid legacy Picture Info APP12 data should parse");
 
-        assert_eq!(
-            metadata.get_string("APP12:ID"),
-            Some("AGFA DIGITAL CAMERA")
-        );
+        assert_eq!(metadata.get_string("APP12:ID"), Some("AGFA DIGITAL CAMERA"));
     }
 
     #[test]
     fn test_parse_olympus_app12_fcs7() {
-        let data =
-            b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nFCS6=3\r\nFCS7=3\r\n";
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nFCS6=3\r\nFCS7=3\r\n";
 
-        let metadata =
-            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
-                .expect("valid Olympus Picture Info APP12 data should parse");
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
 
         assert_eq!(metadata.get_integer("APP12:FCS6"), Some(3));
         assert_eq!(
@@ -718,12 +703,10 @@ mod tests {
 
     #[test]
     fn test_parse_olympus_app12_imbb() {
-        let data =
-            b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMbb=35761\r\n";
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMbb=35761\r\n";
 
-        let metadata =
-            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
-                .expect("valid Olympus Picture Info APP12 data should parse");
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
 
         assert_eq!(
             metadata.get_integer("APP12:IMbb"),
@@ -735,28 +718,21 @@ mod tests {
     #[test]
     fn test_parse_olympus_app12_imbg() {
         // Diagnostic data from OlympusD620L.jpg.
-        let data =
-            b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMbg=33709\r\n";
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMbg=33709\r\n";
 
-        let metadata =
-            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
-                .expect("valid Olympus Picture Info APP12 data should parse");
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
 
-        assert_eq!(
-            metadata.get_integer("APP12:IMbg"),
-            Some(33709)
-        );
+        assert_eq!(metadata.get_integer("APP12:IMbg"), Some(33709));
     }
 
     #[test]
     fn test_parse_olympus_app12_imgb() {
         // Diagnostic data from OlympusD620L.jpg.
-        let data =
-            b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMgb=33346\r\n";
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMgb=33346\r\n";
 
-        let metadata =
-            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
-                .expect("valid Olympus Picture Info APP12 data should parse");
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
 
         assert_eq!(
             metadata.get_integer("APP12:IMgb"),
@@ -768,12 +744,10 @@ mod tests {
     #[test]
     fn test_parse_olympus_app12_imgr() {
         // Diagnostic data from OlympusD620L.jpg.
-        let data =
-            b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMgr=33122\r\n";
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMgr=33122\r\n";
 
-        let metadata =
-            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
-                .expect("valid Olympus Picture Info APP12 data should parse");
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
 
         assert_eq!(
             metadata.get_integer("APP12:IMgr"),
@@ -785,12 +759,10 @@ mod tests {
     #[test]
     fn test_parse_olympus_app12_imrg() {
         // Diagnostic data from OlympusD620L.jpg.
-        let data =
-            b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMrg=33975\r\n";
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMrg=33975\r\n";
 
-        let metadata =
-            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
-                .expect("valid Olympus Picture Info APP12 data should parse");
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
 
         assert_eq!(
             metadata.get_integer("APP12:IMrg"),
@@ -802,12 +774,10 @@ mod tests {
     #[test]
     fn test_parse_olympus_app12_imbr() {
         // Diagnostic data from OlympusD620L.jpg.
-        let data =
-            b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMbr=32929\r\n";
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMbr=32929\r\n";
 
-        let metadata =
-            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
-                .expect("valid Olympus Picture Info APP12 data should parse");
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
 
         assert_eq!(
             metadata.get_integer("APP12:IMbr"),
@@ -819,12 +789,10 @@ mod tests {
     #[test]
     fn test_parse_olympus_app12_imrb() {
         // Diagnostic data from OlympusD620L.jpg.
-        let data =
-            b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMrb=32721\r\n";
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMrb=32721\r\n";
 
-        let metadata =
-            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
-                .expect("valid Olympus Picture Info APP12 data should parse");
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
 
         assert_eq!(
             metadata.get_integer("APP12:IMrb"),

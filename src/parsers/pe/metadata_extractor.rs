@@ -934,7 +934,10 @@ mod tests {
         extract_nb10_metadata(&nb10, &mut metadata);
 
         // Verify PDB file name
-        assert_eq!(metadata.get_string("EXE:PDBFileName").unwrap(), "legacy.pdb");
+        assert_eq!(
+            metadata.get_string("EXE:PDBFileName").unwrap(),
+            "legacy.pdb"
+        );
 
         // Verify age
         assert_eq!(metadata.get_integer("EXE:PDBAge").unwrap(), 1);
@@ -984,7 +987,10 @@ mod tests {
         assert_eq!(metadata.get_integer("EXE:HasExports").unwrap(), 1);
 
         // Verify DLL name
-        assert_eq!(metadata.get_string("EXE:ExportDLLName").unwrap(), "test.dll");
+        assert_eq!(
+            metadata.get_string("EXE:ExportDLLName").unwrap(),
+            "test.dll"
+        );
 
         // Verify counts
         assert_eq!(metadata.get_integer("EXE:ExportCount").unwrap(), 5);
@@ -1001,7 +1007,10 @@ mod tests {
         assert!(create_date.starts_with("2021:01:01"));
 
         // Verify characteristics
-        assert_eq!(metadata.get_integer("EXE:ExportCharacteristics").unwrap(), 0);
+        assert_eq!(
+            metadata.get_integer("EXE:ExportCharacteristics").unwrap(),
+            0
+        );
 
         // Verify forwarded count
         assert_eq!(metadata.get_integer("EXE:ForwardedExportCount").unwrap(), 1);
@@ -1147,7 +1156,9 @@ mod tests {
         );
 
         // Check decoded flags
-        let decoded = metadata.get_string("EXE:DllCharacteristicsDecoded").unwrap();
+        let decoded = metadata
+            .get_string("EXE:DllCharacteristicsDecoded")
+            .unwrap();
         assert!(decoded.contains("High entropy VA"));
         assert!(decoded.contains("Dynamic base"));
         assert!(decoded.contains("NX compatible"));
