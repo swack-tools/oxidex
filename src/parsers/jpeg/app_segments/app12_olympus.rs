@@ -283,6 +283,19 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 );
             }
 
+            // ExifTool exposes the Olympus diagnostic CAM9 field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("CAM9") {
+                let app12_value = match value.parse::<i64>() {
+                    Ok(number) => TagValue::Integer(number),
+                    Err(_) => TagValue::String(value.clone()),
+                };
+                metadata.insert(
+                    "APP12:CAM9".to_string(),
+                    app12_value,
+                );
+            }
+
             // ExifTool exposes the Olympus diagnostic CAM3 field in the
             // APP12 group using its original name.
             if key.eq_ignore_ascii_case("CAM3") {
