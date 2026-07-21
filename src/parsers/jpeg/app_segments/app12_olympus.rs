@@ -80,6 +80,7 @@ const KNOWN_TAGS: &[&str] = &[
     "FCS2",
     "FCS3",
     "FCS4",
+    "FCS5",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -361,6 +362,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 || key.eq_ignore_ascii_case("FCS2")
                 || key.eq_ignore_ascii_case("FCS3")
                 || key.eq_ignore_ascii_case("FCS4")
+                || key.eq_ignore_ascii_case("FCS5")
             {
                 let app12_value = value
                     .parse::<i64>()
@@ -372,8 +374,10 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     "APP12:FCS2"
                 } else if key.eq_ignore_ascii_case("FCS3") {
                     "APP12:FCS3"
-                } else {
+                } else if key.eq_ignore_ascii_case("FCS4") {
                     "APP12:FCS4"
+                } else {
+                    "APP12:FCS5"
                 };
 
                 metadata.insert(app12_tag.to_string(), app12_value);
@@ -525,6 +529,19 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
 #[cfg(test)]
 mod fcs_tests {
     use super::*;
+
+    #[test]
+    fn test_parse_fcs5() {
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nFCS5=215\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:FCS5"),
+            Some(215)
+        );
+    }
 
     #[test]
     fn test_parse_fcs4() {
