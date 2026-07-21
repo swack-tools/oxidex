@@ -60,6 +60,7 @@ const KNOWN_TAGS: &[&str] = &[
     "ISOSetting",
     "ColorMode",
     "DriveMode",
+    "ContTake",
     "FocalLength",
     "DigitalZoom",
     "Manufacturer",
@@ -270,6 +271,20 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:EXP1".to_string(), app12_value);
             }
 
+            // ExifTool exposes the continuous-take diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("ContTake") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert(
+                    "APP12:ContTake".to_string(),
+                    app12_value,
+                );
+            }
+
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
 
             // ExifTool's Olympus Picture Info table exposes CAM2 using its
@@ -418,6 +433,19 @@ mod camera_type_tests {
         assert_eq!(
             metadata.get_integer("APP12:EXP1"),
             Some(7727)
+        );
+    }
+
+    #[test]
+    fn test_olympus_cont_take_diagnostic_value() {
+        // ContTake is itself a known Picture Info field, so identifier-less
+        // records containing it are accepted.
+        let metadata = parse_app12_olympus(b"ContTake=0\r\n")
+            .expect("Olympus Picture Info should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:ContTake"),
+            Some(0)
         );
     }
 }
