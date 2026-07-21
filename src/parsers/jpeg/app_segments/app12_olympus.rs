@@ -217,6 +217,18 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             let tag_value = parse_tag_value(&tag_name, &value);
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
+
+            // ExifTool's Olympus Picture Info table exposes CAM2 using its
+            // original name in the APP12 group. Keep the Olympus-prefixed
+            // value above for compatibility while also emitting the canonical
+            // ExifTool tag.
+            if key.eq_ignore_ascii_case("CAM2") {
+                let app12_value = match value.parse::<i64>() {
+                    Ok(number) => TagValue::Integer(number),
+                    Err(_) => TagValue::String(value.clone()),
+                };
+                metadata.insert("APP12:CAM2".to_string(), app12_value);
+            }
         }
     }
 }
@@ -515,6 +527,22 @@ mod tests {
 
         // The second ID value should overwrite the first
         assert!(metadata.contains_key("Olympus:CameraID"));
+    }
+
+    /// Test ExifTool-compatible extraction of CAM2 from diagnostic information.
+    #[test]
+    fn test_parse_app12_cam2() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\
+                     [diag info]\r\n\
+                     CAM1=59\r\n\
+                     CAM2=56\r\n\
+                     CAM3=160\r\n";
+        let result = parse_app12_olympus(data);
+
+        assert!(result.is_ok());
+        let metadata = result.unwrap();
+
+        assert_eq!(metadata.get_integer("APP12:CAM2"), Some(56));
     }
 
     /// Test parsing exposure settings
