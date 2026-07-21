@@ -228,7 +228,10 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
             last_error = last_error or RuntimeError("model returned an empty reply")
             continue
         return reply
-    raise last_error
+    # last_error is only None if max_retries < 0 (range(max_retries + 1) never
+    # iterates) -- guard against `raise None`, which would raise a confusing
+    # TypeError instead of surfacing the actual misconfiguration.
+    raise last_error or RuntimeError("call_model: max_retries < 0, no attempt was made")
 
 
 def _call_model_once(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream, thinking,
@@ -530,7 +533,7 @@ def build_exact_sample_block(gap, samples_dir):
         try:
             shown_path = path.relative_to(samples_dir)
         except ValueError:
-            pass
+            pass  # not under samples_dir -- shown_path keeps the full absolute path set above
     if size <= DEFAULT_INLINE_SAMPLE_MAX_BYTES:
         data = path.read_bytes()
         return (

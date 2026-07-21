@@ -328,6 +328,20 @@ class CallModelRetryTests(unittest.TestCase):
         # Default max_retries=1000 -> 1001 calls total, not infinite.
         self.assertEqual(mock_urlopen.call_count, 1001)
 
+    def test_max_retries_below_zero_raises_clear_error_not_typeerror(self):
+        # range(max_retries + 1) never iterates when max_retries < 0, so
+        # last_error is still None at the final `raise` -- must not
+        # `raise None` (TypeError masking the real misconfiguration).
+        # No urlopen mock needed: a real attempt would fail differently
+        # (network error), which would also correctly fail this test.
+        with self.assertRaises(RuntimeError):
+            call_model(
+                [{"role": "user", "content": "fix it"}],
+                base_url="https://api.example/v1", api_key="k", model="m",
+                max_tokens=100, reasoning_effort="max",
+                max_retries=-1, sleep_fn=lambda s: None,
+            )
+
 
 class CallModelStreamingTests(unittest.TestCase):
     @patch("model_fix_loop.urllib.request.urlopen")
@@ -1803,7 +1817,7 @@ class RunTagLoopTests(unittest.TestCase):
 
     def test_stops_when_no_tags_remain(self):
         result = run_tag_loop(
-            {"models": ["x"]}, find_gaps_fn=lambda: [], fix_gap_fn=lambda tg, c: self.fail("should not fix"),
+            {"models": ["x"]}, find_gaps_fn=lambda: [], fix_gap_fn=lambda *a: self.fail("should not fix"),
             state_path="/fake/state.json",
             load_state_fn=lambda p: {}, save_state_fn=lambda p, s: None,
         )

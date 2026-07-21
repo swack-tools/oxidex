@@ -91,7 +91,7 @@ def _kill_process_group(pgid, sig=signal.SIGKILL):
     try:
         os.killpg(pgid, sig)
     except ProcessLookupError:
-        pass
+        pass  # already exited -- nothing to kill
 
 
 def _register_pgid(pgid):
@@ -160,8 +160,8 @@ def start_worker(worker_id, worktree, cache_dir, log_path, tag_state_path, promp
     if base_ref:
         argv += ["--base-ref", base_ref]
     log_file = open(log_path, "w")  # noqa: SIM115 -- kept open for the worker's lifetime, closed by caller
-    proc = subprocess.Popen(  # nosec B603
-        argv, cwd=worktree, env=env, stdout=log_file, stderr=subprocess.STDOUT,
+    proc = subprocess.Popen(  # nosec B603 # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit -- list-argv, no shell=True, argv built entirely from literals/internal paths above
+        argv, cwd=worktree, env=env, stdout=log_file, stderr=subprocess.STDOUT,  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- env is os.environ plus two internally-set keys, not external input
         start_new_session=True,
     )
     pgid = os.getpgid(proc.pid)

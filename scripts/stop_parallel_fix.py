@@ -89,7 +89,7 @@ def signal_pid(pid, sig):
     try:
         os.kill(pid, sig)
     except ProcessLookupError:
-        pass
+        pass  # already exited -- nothing to signal
 
 
 def signal_group(pid, sig):
@@ -106,7 +106,7 @@ def signal_group(pid, sig):
     try:
         os.killpg(pgid, sig)
     except ProcessLookupError:
-        pass
+        pass  # already exited -- nothing to signal
 
 
 def wait_until_dead(pids, timeout, is_alive_fn=is_alive, sleep_fn=time.sleep, now_fn=time.time):
