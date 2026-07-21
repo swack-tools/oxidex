@@ -41,6 +41,7 @@ import re
 import shutil
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 RESET = "\x1b[0m"
@@ -62,6 +63,7 @@ BULLET = "●"  # ●
 
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TAGCMP_DIR = "/tmp"  # nosec B108 -- find_tag_gaps.run_format_comparison's own hardcoded output location
+DEFAULT_WORKTREE_DIR = "/tmp/oxidex-parallel-tag-fix"  # nosec B108 -- parallel_tag_fix_loop.py's own default
 
 # Matched against a log file's lines, most recent first -- the first
 # pattern to hit wins, so more specific/terminal states (STOPPED, FIXED)
@@ -445,6 +447,45 @@ def parse_wrapper_log(path):
     }
 
 
+def _model_names(models_table):
+    return [m if isinstance(m, str) else m.get("name", "?") for m in (models_table or [])]
+
+
+def load_worker_model_config(worktree_dir, worker_id):
+    """(fixer_models, fixer_reasoning, reviewer_models, reviewer_reasoning)
+    read directly from this worker's own config.toml copy -- each
+    worktree gets one at creation time (see
+    parallel_tag_fix_loop.py's create_worktree/spawn_worker), since
+    config.toml is gitignored and never present in a fresh git checkout
+    on its own. This is the one reliable source for "what model pool and
+    reasoning level is this worker actually configured to use": both are
+    static per [worker]/[reviewer] table (reasoning_effort applies to
+    every model in a pool, and pick_model_fn picks randomly among
+    models[] on every individual call -- there's no cheap, unambiguous
+    way to tell a fixer call from a reviewer call apart after the fact
+    in a shared request log when both pools happen to name the same
+    model), so reading config.toml directly is both simpler and more
+    trustworthy than trying to reconstruct this from logs.
+
+    [reviewer] falls back to [worker] entirely when absent, matching
+    model_fix_loop.py's own _normalize_model_config default. All four
+    values are None if config.toml can't be read (worktree gone, or this
+    worker id never started).
+    """
+    path = Path(worktree_dir) / f"model-fix-tag-worker-{worker_id}" / "config.toml"
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None, None, None, None
+    worker_table = data.get("worker") or {}
+    reviewer_table = data.get("reviewer") or worker_table
+    return (
+        _model_names(worker_table.get("models")), worker_table.get("reasoning_effort", "max"),
+        _model_names(reviewer_table.get("models")), reviewer_table.get("reasoning_effort", "max"),
+    )
+
+
 def discover_format_progress(tagcmp_dir, repo_root=None):
     """{format_name: {"matched", "total", "mtime", "source"}} for every
     format with cached tag-comparison data -- not just whatever the
@@ -563,12 +604,15 @@ def _box_line(text, width, color=BRIGHT_WHITE):
 
 
 def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrapper_log_path,
-                      format_progress, max_tag_fails, now, term_width=100):
+                      format_progress, max_tag_fails, now, term_width=100, worktree_dir=None):
     """The full per-tag dashboard: header, aggregate found/blacklist
     stats, a colored progress bar per known format, then one detail row
     per worker (status, current round/tag, when it launched onto that
-    tag, and lifetime restart/crash/personal-blacklist counts)."""
-    width = max(60, min(term_width, 110))
+    tag, lifetime restart/crash/personal-blacklist counts, and its
+    configured fixer/reviewer model pool + reasoning level, read fresh
+    from that worker's own config.toml copy -- see
+    load_worker_model_config)."""
+    width = max(60, term_width)
     state = load_tag_state(tag_state_path)
     bl_stats = blacklist_stats(state, now)
     found_entries = parse_tags_found_log(tags_found_log)
@@ -603,7 +647,7 @@ def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrappe
 
     lines.append(f"  {BOLD}{BRIGHT_CYAN}FORMAT PROGRESS{RESET}")
     lines.append(f"  {DIM}{'─' * (width - 4)}{RESET}")
-    lines.extend(render_format_progress(format_progress, width=min(50, width - 35)))
+    lines.extend(render_format_progress(format_progress, width=min(80, width - 35)))
     lines.append("")
 
     lines.append(f"  {BOLD}{BRIGHT_CYAN}WORKERS{RESET}")
@@ -634,6 +678,17 @@ def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrappe
             f"{DIM}crashes:{RESET}{w_stats['crashes']:<3} "
             f"{DIM}blacklisted:{RESET}{personal_blacklisted}"
         )
+        if worktree_dir is not None:
+            fixer_models, fixer_reasoning, reviewer_models, reviewer_reasoning = load_worker_model_config(
+                worktree_dir, worker_id
+            )
+            if fixer_models is not None:
+                lines.append(
+                    f"      {DIM}Fixer:{RESET} {MAGENTA}{'/'.join(fixer_models)}{RESET} "
+                    f"{DIM}@{fixer_reasoning}{RESET}   "
+                    f"{DIM}Reviewer:{RESET} {BLUE}{'/'.join(reviewer_models)}{RESET} "
+                    f"{DIM}@{reviewer_reasoning}{RESET}"
+                )
         if detail and label in ("crashed", "build-fail", "reverted", "blacklisted"):
             lines.append(f"      {DIM}{detail[:width - 8]}{RESET}")
 
@@ -688,6 +743,13 @@ def main(argv=None, sleep_fn=time.sleep, stdout=sys.stdout, now_fn=time.time):
         help="Display-only denominator for each worker's 'iteration N/M' -- match whatever "
              "--max-tag-fails the fixer run itself was launched with (default: 10).",
     )
+    parser.add_argument(
+        "--worktree-dir",
+        default=DEFAULT_WORKTREE_DIR,
+        help="Base directory of each worker's own persistent worktree (parallel_tag_fix_loop.py's "
+             "own --worktree-dir), used to read each worker's config.toml copy for its fixer/"
+             f"reviewer model pool and reasoning level. Default: {DEFAULT_WORKTREE_DIR}",
+    )
     parser.add_argument("--interval", type=float, default=0.5, help="Redraw interval in seconds")
     args = parser.parse_args(argv)
 
@@ -716,7 +778,7 @@ def main(argv=None, sleep_fn=time.sleep, stdout=sys.stdout, now_fn=time.time):
                 format_progress = discover_format_progress(args.tagcmp_dir, args.repo_root)
                 stdout.write(render_dashboard(
                     log_dir, worker_ids, tags_found_log, tag_state_path, wrapper_log_path,
-                    format_progress, args.max_tag_fails, now_fn(), term_width,
+                    format_progress, args.max_tag_fails, now_fn(), term_width, args.worktree_dir,
                 ) + "\n")
             else:
                 formats = discover_formats(log_dir)

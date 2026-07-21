@@ -19,6 +19,7 @@ from watch_parallel_fix import (
     format_relative,
     found_stats,
     load_tag_state,
+    load_worker_model_config,
     main,
     parse_current_tag_progress,
     parse_round_and_tag,
@@ -679,6 +680,35 @@ class RenderDashboardTests(unittest.TestCase):
             )
             self.assertIn("no workers found", output)
 
+    def test_omitting_worktree_dir_skips_the_model_line(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            (tmp / "worker-1.log").write_text("round 1: attempting JPEG:APP12:CAM1\n")
+            output = render_dashboard(
+                tmp, [1], tmp / "tags-found.log", tmp / "state.json", tmp / "wrapper.log",
+                format_progress={}, max_tag_fails=10, now=time.time(),
+            )
+            self.assertNotIn("Fixer:", output)
+
+    def test_worktree_dir_adds_the_fixer_and_reviewer_model_line(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            (tmp / "worker-1.log").write_text("round 1: attempting JPEG:APP12:CAM1\n")
+            worktree_dir = Path(tmpdir) / "worktrees"
+            worker_dir = worktree_dir / "model-fix-tag-worker-1"
+            worker_dir.mkdir(parents=True)
+            (worker_dir / "config.toml").write_text(
+                '[worker]\nreasoning_effort = "max"\n[[worker.models]]\nname = "gpt-5.6-sol"\n'
+            )
+            output = render_dashboard(
+                tmp, [1], tmp / "tags-found.log", tmp / "state.json", tmp / "wrapper.log",
+                format_progress={}, max_tag_fails=10, now=time.time(), worktree_dir=worktree_dir,
+            )
+            self.assertIn("Fixer:", output)
+            self.assertIn("gpt-5.6-sol", output)
+            self.assertIn("@max", output)
+            self.assertIn("Reviewer:", output)
+
 
 class LoadTagStateTests(unittest.TestCase):
     def test_missing_file_is_empty_dict(self):
@@ -689,6 +719,61 @@ class LoadTagStateTests(unittest.TestCase):
             path = Path(tmpdir) / "state.json"
             path.write_text(json.dumps({"JPEG:A": {"blacklisted": True}}))
             self.assertEqual(load_tag_state(path), {"JPEG:A": {"blacklisted": True}})
+
+
+class LoadWorkerModelConfigTests(unittest.TestCase):
+    def _write_config(self, worktree_dir, worker_id, toml_text):
+        worker_dir = Path(worktree_dir) / f"model-fix-tag-worker-{worker_id}"
+        worker_dir.mkdir(parents=True, exist_ok=True)
+        (worker_dir / "config.toml").write_text(toml_text)
+
+    def test_missing_worktree_returns_all_none(self):
+        result = load_worker_model_config("/nonexistent", 1)
+        self.assertEqual(result, (None, None, None, None))
+
+    def test_reads_fixer_and_reviewer_pools_and_reasoning(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_config(
+                tmpdir, 1,
+                '[worker]\nreasoning_effort = "max"\n'
+                '[[worker.models]]\nname = "gpt-5.6-sol"\n'
+                '[reviewer]\nreasoning_effort = "high"\n'
+                '[[reviewer.models]]\nname = "gpt-5.6-sol"\n',
+            )
+            fixer_models, fixer_reasoning, reviewer_models, reviewer_reasoning = load_worker_model_config(
+                tmpdir, 1
+            )
+            self.assertEqual(fixer_models, ["gpt-5.6-sol"])
+            self.assertEqual(fixer_reasoning, "max")
+            self.assertEqual(reviewer_models, ["gpt-5.6-sol"])
+            self.assertEqual(reviewer_reasoning, "high")
+
+    def test_reviewer_falls_back_to_worker_when_absent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_config(
+                tmpdir, 2,
+                '[worker]\nreasoning_effort = "low"\n'
+                '[[worker.models]]\nname = "glm5.2-fast"\n'
+                '[[worker.models]]\nname = "Kimi-K2.6"\n',
+            )
+            fixer_models, fixer_reasoning, reviewer_models, reviewer_reasoning = load_worker_model_config(
+                tmpdir, 2
+            )
+            self.assertEqual(fixer_models, ["glm5.2-fast", "Kimi-K2.6"])
+            self.assertEqual(reviewer_models, fixer_models)
+            self.assertEqual(reviewer_reasoning, "low")
+
+    def test_table_entry_models_use_their_name_field(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_config(
+                tmpdir, 3,
+                '[worker]\n'
+                '[[worker.models]]\n'
+                'name = "accounts/fireworks/routers/kimi-k2p7-code-fast"\n'
+                'base_url = "https://api.fireworks.ai/inference/v1"\n',
+            )
+            fixer_models, _, _, _ = load_worker_model_config(tmpdir, 3)
+            self.assertEqual(fixer_models, ["accounts/fireworks/routers/kimi-k2p7-code-fast"])
 
 
 class MainLoopWorkerModeTests(unittest.TestCase):
