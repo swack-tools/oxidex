@@ -65,6 +65,7 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
 import time
@@ -222,6 +223,21 @@ def git_commit(message, repo_root):
     subprocess.run(["git", "commit", "-m", message], cwd=repo_root, check=True)  # nosec B603
 
 
+def cargo_env():
+    """Base env for cargo subprocesses -- opportunistically routes rustc
+    through sccache when it's installed, so parallel workers (each its own
+    worktree with its own target/ dir) share compiled dependency artifacts
+    across worktrees instead of every worker cold-compiling the same ~60
+    crates independently. A no-op (falls back to the plain environment,
+    i.e. cargo's normal incremental cache only) when sccache isn't on PATH,
+    so this never breaks an environment that doesn't have it.
+    """
+    env = dict(os.environ)
+    if shutil.which("sccache"):
+        env["RUSTC_WRAPPER"] = "sccache"
+    return env
+
+
 def cargo_build(repo_root):
     """Build the oxidex binary to verify a candidate diff compiles.
 
@@ -234,7 +250,7 @@ def cargo_build(repo_root):
     """
     result = subprocess.run(  # nosec B603
         ["cargo", "build", "--profile", "fixloop", "--bin", "oxidex"],
-        capture_output=True, text=True, cwd=repo_root,
+        capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
     )
     return result.returncode == 0, result.stderr
 
@@ -243,7 +259,7 @@ def cargo_test_workspace(repo_root):
     """Run the full workspace test suite. Returns True if all tests pass."""
     result = subprocess.run(  # nosec B603
         ["cargo", "test", "--workspace"],
-        capture_output=True, text=True, cwd=repo_root,
+        capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
     )
     return result.returncode == 0
 
