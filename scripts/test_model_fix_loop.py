@@ -9,6 +9,7 @@ from pathlib import Path
 from model_fix_loop import (
     _normalize_model_config,
     attempt_build,
+    build_exact_sample_block,
     build_prompt,
     build_review_prompt,
     cargo_build,
@@ -511,6 +512,67 @@ def make_gap(gap_count=2):
         "gap_count": gap_count,
         "parser_files": [],
     }
+
+
+def make_single_tag_gap_dict(source_file=None):
+    entry = {"family": "APP0", "name": "OcadRevision", "value": "1", "tag_id": None, "source_file": source_file}
+    return {
+        "format": "JPEG", "missing_tags": [entry], "value_differences": [], "gap_count": 1, "parser_files": [],
+    }
+
+
+class BuildExactSampleBlockTests(unittest.TestCase):
+    def test_returns_empty_when_gap_has_more_than_one_tag(self):
+        gap = make_gap(gap_count=2)  # 2 tags total (1 missing + 1 diff)
+        self.assertEqual(build_exact_sample_block(gap, None), "")
+
+    def test_returns_empty_when_source_file_is_none(self):
+        gap = make_single_tag_gap_dict(source_file=None)
+        self.assertEqual(build_exact_sample_block(gap, None), "")
+
+    def test_returns_empty_when_source_file_does_not_exist(self):
+        gap = make_single_tag_gap_dict(source_file="/nonexistent/file.jpg")
+        self.assertEqual(build_exact_sample_block(gap, None), "")
+
+    def test_inlines_full_hex_dump_for_a_small_sample(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "small.jpg"
+            path.write_bytes(b"\xff\xd8\xff\xe0hello")
+            gap = make_single_tag_gap_dict(source_file=str(path))
+            block = build_exact_sample_block(gap, tmpdir)
+            self.assertIn("small.jpg", block)
+            self.assertIn("full hex dump", block)
+            self.assertIn("ff d8 ff e0", block)
+            self.assertNotIn("REQUEST:", block)
+
+    def test_flags_path_and_size_instead_of_inlining_a_large_sample(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "big.jpg"
+            path.write_bytes(b"x" * 5000)
+            gap = make_single_tag_gap_dict(source_file=str(path))
+            block = build_exact_sample_block(gap, tmpdir)
+            self.assertIn("big.jpg", block)
+            self.assertIn("5000 bytes", block)
+            self.assertIn("too large to inline", block)
+            self.assertIn('REQUEST: big.jpg', block)
+
+    def test_shows_path_relative_to_samples_dir_when_possible(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sub = Path(tmpdir) / "Sony"
+            sub.mkdir()
+            path = sub / "camera.jpg"
+            path.write_bytes(b"x" * 10)
+            gap = make_single_tag_gap_dict(source_file=str(path))
+            block = build_exact_sample_block(gap, tmpdir)
+            self.assertIn("Sony/camera.jpg", block)
+
+    def test_falls_back_to_absolute_path_when_not_under_samples_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "elsewhere.jpg"
+            path.write_bytes(b"x" * 10)
+            gap = make_single_tag_gap_dict(source_file=str(path))
+            block = build_exact_sample_block(gap, "/some/other/samples/dir")
+            self.assertIn(str(path), block)
 
 
 class BuildPromptTests(unittest.TestCase):

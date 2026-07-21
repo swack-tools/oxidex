@@ -377,6 +377,16 @@ impl ExifToolExtractor {
         let mut tags = Vec::new();
 
         if let Some(obj) = file_data.as_object() {
+            // ExifTool's own JSON always includes this per entry regardless
+            // of -G grouping -- reading it directly here is far more
+            // robust than trying to zip batch results back up against the
+            // input file list positionally (which breaks the moment
+            // ExifTool skips or reorders an entry for a failed file).
+            let source_file = obj
+                .get("SourceFile")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+
             for (key, value) in obj.iter() {
                 let (family, name) = self.parse_tag_name(key);
                 // Skip pseudo-tags and computed values
@@ -389,7 +399,10 @@ impl ExifToolExtractor {
                         serde_json::Value::Object(_) => value.to_string(),
                         serde_json::Value::Null => "null".to_string(),
                     };
-                    let tag_info = TagInfo::new(name, family, value_str);
+                    let mut tag_info = TagInfo::new(name, family, value_str);
+                    if let Some(sf) = &source_file {
+                        tag_info = tag_info.with_source_file(sf.clone());
+                    }
                     tags.push(tag_info);
                 }
             }
@@ -574,5 +587,29 @@ mod tests {
             tags.iter()
                 .any(|t| t.name == "Creator" && t.family == "XMP")
         );
+    }
+
+    #[test]
+    fn test_parse_single_file_json_populates_source_file_from_exiftool_own_field() {
+        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let json = serde_json::json!({
+            "SourceFile": "/samples/JPEG/Sony/camera.jpg",
+            "EXIF:Make": "Sony",
+        });
+        let tags = extractor.parse_single_file_json(&json);
+        assert_eq!(tags.len(), 1);
+        assert_eq!(
+            tags[0].source_file,
+            Some("/samples/JPEG/Sony/camera.jpg".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_single_file_json_source_file_none_when_absent() {
+        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let json = serde_json::json!({"EXIF:Make": "Sony"});
+        let tags = extractor.parse_single_file_json(&json);
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].source_file, None);
     }
 }

@@ -360,6 +360,53 @@ def format_previous_attempts(previous_attempts, max_diff_chars=DEFAULT_MAX_ATTEM
     )
 
 
+DEFAULT_INLINE_SAMPLE_MAX_BYTES = 4096
+
+
+def build_exact_sample_block(gap, samples_dir):
+    """For a gap targeting exactly one tag (run_tag_loop's per-tag mode),
+    if that tag's real ExifTool source_file is known (see
+    ExifToolExtractor::parse_single_file_json in Rust, which now reads
+    ExifTool's own "SourceFile" JSON field), give the model the actual
+    sample data for THIS tag specifically -- not just a generic
+    per-format sample list it has to guess among.
+
+    Small enough to fit comfortably in the prompt: inline the full hex
+    dump directly, no round-trip needed. Too large: clearly name the
+    exact file and its size and point at the REQUEST: protocol, rather
+    than leaving it to be found (or missed) among samples_block's
+    generic per-format list.
+    """
+    all_entries = gap["missing_tags"] + gap["value_differences"]
+    if len(all_entries) != 1:
+        return ""
+    source_file = all_entries[0].get("source_file")
+    if not source_file:
+        return ""
+    path = Path(source_file)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return ""
+    shown_path = path
+    if samples_dir is not None:
+        try:
+            shown_path = path.relative_to(samples_dir)
+        except ValueError:
+            pass
+    if size <= DEFAULT_INLINE_SAMPLE_MAX_BYTES:
+        data = path.read_bytes()
+        return (
+            f"\n\nReal sample file containing this exact tag ({shown_path}, {size} bytes) "
+            f"-- full hex dump:\n{hex_dump(data, max_bytes=DEFAULT_INLINE_SAMPLE_MAX_BYTES)}"
+        )
+    return (
+        f"\n\nReal sample file containing this exact tag: {shown_path} ({size} bytes, too "
+        f"large to inline here). Respond with \"REQUEST: {shown_path}\" instead of a diff if "
+        "you need to see its raw bytes."
+    )
+
+
 def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                   max_file_bytes=DEFAULT_MAX_PROMPT_FILE_BYTES, samples_dir=None,
                   max_samples_listed=DEFAULT_MAX_SAMPLE_FILES_LISTED, previous_attempts=None):
@@ -431,6 +478,8 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                 "in the next turn to work from."
             )
 
+    exact_sample_block = build_exact_sample_block(gap, samples_dir)
+
     attempts_block = format_previous_attempts(previous_attempts)
 
     return (
@@ -439,6 +488,7 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
         f"Value differences (both extract it, values disagree):\n{diffs}\n\n"
         f"Likely relevant source files:\n{files}"
         f"{samples_block}"
+        f"{exact_sample_block}"
         f"{attempts_block}\n\n"
         "Respond with a single unified diff (in a ```diff fenced block) that fixes as many of these gaps "
         "as you can correctly verify. For value differences, only fix genuine bugs, not benign formatting "
