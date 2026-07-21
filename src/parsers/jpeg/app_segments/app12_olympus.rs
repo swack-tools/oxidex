@@ -68,6 +68,7 @@ const KNOWN_TAGS: &[&str] = &[
     "COLOR2",
     "COLOR3",
     "COLOR4",
+    "EXP1",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -258,6 +259,17 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:CAM5".to_string(), cam5_value);
             }
 
+            // ExifTool exposes the Olympus EXP1 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("EXP1") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:EXP1".to_string(), app12_value);
+            }
+
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
 
             // ExifTool's Olympus Picture Info table exposes CAM2 using its
@@ -393,6 +405,19 @@ mod camera_type_tests {
         assert_eq!(
             metadata.get_string("APP12:CameraType"),
             Some("SR84")
+        );
+    }
+
+    #[test]
+    fn test_olympus_exp1_diagnostic_value() {
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nEXP1=7727\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:EXP1"),
+            Some(7727)
         );
     }
 }
