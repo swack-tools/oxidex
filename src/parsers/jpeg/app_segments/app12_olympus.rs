@@ -270,6 +270,19 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 );
             }
 
+            // ExifTool exposes the Olympus diagnostic CAM8 field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("CAM8") {
+                let app12_value = match value.parse::<i64>() {
+                    Ok(number) => TagValue::Integer(number),
+                    Err(_) => TagValue::String(value.clone()),
+                };
+                metadata.insert(
+                    "APP12:CAM8".to_string(),
+                    app12_value,
+                );
+            }
+
             // ExifTool exposes the Olympus diagnostic CAM3 field in the
             // APP12 group using its original name.
             if key.eq_ignore_ascii_case("CAM3") {
@@ -617,6 +630,21 @@ mod tests {
         let metadata = parse_app12_olympus(data).unwrap();
 
         assert_eq!(metadata.get_integer("APP12:CAM5"), Some(224));
+    }
+
+    /// Test the diagnostic CAM8 field exposed by ExifTool as APP12:CAM8.
+    #[test]
+    fn test_parse_app12_cam8() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\
+                     [picture info]\r\n\
+                     Type=DCHT\r\n\
+                     [diag info]\r\n\
+                     CAM8=143\r\n\
+                     [end]\r\n\0";
+
+        let metadata = parse_app12_olympus(data).unwrap();
+
+        assert_eq!(metadata.get_integer("APP12:CAM8"), Some(143));
     }
 
     /// Test parsing data with ID tag
