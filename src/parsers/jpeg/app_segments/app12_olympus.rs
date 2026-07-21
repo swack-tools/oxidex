@@ -243,6 +243,19 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 };
                 metadata.insert("APP12:CAM2".to_string(), app12_value);
             }
+
+            // ExifTool exposes the Olympus CAM7 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("CAM7") {
+                let app12_value = match value.parse::<i64>() {
+                    Ok(number) => TagValue::Integer(number),
+                    Err(_) => TagValue::String(value.clone()),
+                };
+                metadata.insert(
+                    "APP12:CAM7".to_string(),
+                    app12_value,
+                );
+            }
         }
     }
 }
@@ -572,6 +585,25 @@ mod tests {
         let metadata = result.unwrap();
 
         assert_eq!(metadata.get_integer("APP12:CAM2"), Some(56));
+    }
+
+    /// Test ExifTool-compatible extraction of CAM7 from diagnostic information.
+    #[test]
+    fn test_parse_app12_cam7() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\
+                     [picture info]\r\n\
+                     Type=DCHT\r\n\
+                     [diag info]\r\n\
+                     CAM6=80\r\n\
+                     CAM7=86\r\n\
+                     CAM8=143\r\n\
+                     [end]\r\n\0";
+        let result = parse_app12_olympus(data);
+
+        assert!(result.is_ok());
+        let metadata = result.unwrap();
+
+        assert_eq!(metadata.get_integer("APP12:CAM7"), Some(86));
     }
 
     /// Test parsing exposure settings
