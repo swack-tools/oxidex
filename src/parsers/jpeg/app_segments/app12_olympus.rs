@@ -91,6 +91,7 @@ const KNOWN_TAGS: &[&str] = &[
     "IMbr",
     "IMgg",
     "IMrb",
+    "IMrr",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -474,6 +475,17 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:IMrb".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus IMrr diagnostic field in the APP12
+            // group using its original mixed-case name.
+            if key.eq_ignore_ascii_case("IMrr") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:IMrr".to_string(), app12_value);
             }
 
             // ExifTool exposes the Olympus IMgg diagnostic field in the APP12
