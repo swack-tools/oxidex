@@ -668,6 +668,21 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_olympus_app12_flash() {
+        let data = b"[picture info]\r\nFlash=Off\r\n";
+
+        let metadata =
+            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+                .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:Flash"),
+            Some("Off"),
+            "Flash should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
     fn test_parse_olympus_app12_fcs7() {
         let data =
             b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nFCS6=3\r\nFCS7=3\r\n";
