@@ -82,6 +82,7 @@ const KNOWN_TAGS: &[&str] = &[
     "FCS4",
     "FCS5",
     "FCS6",
+    "FCS7",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -365,6 +366,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 || key.eq_ignore_ascii_case("FCS4")
                 || key.eq_ignore_ascii_case("FCS5")
                 || key.eq_ignore_ascii_case("FCS6")
+                || key.eq_ignore_ascii_case("FCS7")
             {
                 let app12_value = value
                     .parse::<i64>()
@@ -380,8 +382,10 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     "APP12:FCS4"
                 } else if key.eq_ignore_ascii_case("FCS5") {
                     "APP12:FCS5"
-                } else {
+                } else if key.eq_ignore_ascii_case("FCS6") {
                     "APP12:FCS6"
+                } else {
+                    "APP12:FCS7"
                 };
 
                 metadata.insert(app12_tag.to_string(), app12_value);

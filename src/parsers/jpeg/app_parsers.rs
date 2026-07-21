@@ -649,6 +649,23 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_olympus_app12_fcs7() {
+        let data =
+            b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nFCS6=3\r\nFCS7=3\r\n";
+
+        let metadata =
+            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+                .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:FCS6"), Some(3));
+        assert_eq!(
+            metadata.get_integer("APP12:FCS7"),
+            Some(3),
+            "FCS7 should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
     fn test_parse_jpeg_hdr_segment() {
         let data = b"HDR_RI\x01";
 
