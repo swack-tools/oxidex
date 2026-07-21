@@ -179,10 +179,9 @@ impl OxiDexExtractor {
     /// (e.g. sandboxed environments); callers treat that as "skip caching"
     /// rather than erroring.
     fn current_binary_hash() -> Option<String> {
-        // nosemgrep: rust.lang.security.current-exe.current-exe -- used only
-        // as a cache-invalidation key (see docstring above), not a trust or
+        // Cache-invalidation key only (see docstring above), not a trust or
         // security decision, so current_exe's spoofability doesn't apply.
-        let exe_path = std::env::current_exe().ok()?;
+        let exe_path = std::env::current_exe().ok()?; // nosemgrep: rust.lang.security.current-exe.current-exe
         let bytes = std::fs::read(exe_path).ok()?;
         Some(format!("{:x}", md5::compute(&bytes)))
     }
