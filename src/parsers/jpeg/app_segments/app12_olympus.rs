@@ -216,6 +216,20 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             let tag_name = normalize_tag_name(&key);
             let tag_value = parse_tag_value(&tag_name, &value);
 
+            // ExifTool exposes this Olympus diagnostic field in the APP12
+            // group rather than as an Olympus maker-note tag.
+            if key.eq_ignore_ascii_case("CAM4") {
+                let cam4_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert(
+                    "APP12:CAM4".to_string(),
+                    cam4_value,
+                );
+            }
+
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
         }
     }
@@ -502,6 +516,21 @@ mod tests {
             Some("2048x1536")
         );
         assert_eq!(metadata.get_string("Olympus:Macro"), Some("Off"));
+    }
+
+    /// Test the diagnostic CAM4 field exposed by ExifTool as APP12:CAM4.
+    #[test]
+    fn test_parse_app12_cam4() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\
+                     [picture info]\r\n\
+                     Type=DCHT\r\n\
+                     [diag info]\r\n\
+                     CAM4=32\r\n\
+                     [end]\r\n\0";
+
+        let metadata = parse_app12_olympus(data).unwrap();
+
+        assert_eq!(metadata.get_integer("APP12:CAM4"), Some(32));
     }
 
     /// Test parsing data with ID tag
