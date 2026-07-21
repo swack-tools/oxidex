@@ -318,6 +318,16 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 };
                 metadata.insert("APP12:COLOR1".to_string(), app12_value);
             }
+
+            // ExifTool exposes the Olympus diagnostic COLOR3 field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("COLOR3") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:COLOR3".to_string(), app12_value);
+            }
         }
     }
 }
