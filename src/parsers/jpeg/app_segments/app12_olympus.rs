@@ -259,7 +259,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             {
                 metadata.insert(
                     "APP12:DateTimeOriginal".to_string(),
-                    TagValue::String(value.clone()),
+                    TagValue::String(normalize_picture_info_datetime(&value)),
                 );
             }
 
@@ -582,6 +582,19 @@ mod camera_type_tests {
             Some("1998:12:31 15:17:20")
         );
     }
+
+    #[test]
+    fn test_picture_info_timedate_ctime_format() {
+        let metadata = parse_app12_olympus(
+            b"[picture info]\rTimeDate=Thu Dec 31 15:17:20 1998\r",
+        )
+        .expect("Picture Info TimeDate should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:DateTimeOriginal"),
+            Some("1998:12:31 15:17:20")
+        );
+    }
 }
 
 /// Parse a single key=value pair from a line of text.
@@ -644,7 +657,9 @@ fn normalize_tag_name(key: &str) -> String {
         "colormode" | "color" => "ColorMode",
         "serialnumber" | "serial" => "SerialNumber",
         "internalserialnumber" | "internal_serial" => "InternalSerialNumber",
-        "datetimeoriginal" | "datetime" | "date" => "DateTimeOriginal",
+        "datetimeoriginal" | "datetime" | "date" | "timedate" | "time_date" | "time date" => {
+            "DateTimeOriginal"
+        }
         "manufacturer" | "make" => "Make",
         "model" => "Model",
         "software" | "firmware" => "Software",
@@ -695,6 +710,68 @@ fn to_pascal_case(s: &str) -> String {
     result
 }
 
+/// Convert the ctime-style timestamp used by APP12 Picture Info into EXIF
+/// date/time form. Values already in another form are preserved unchanged.
+fn normalize_picture_info_datetime(value: &str) -> String {
+    let fields: Vec<&str> = value.split_whitespace().collect();
+
+    // Common forms are:
+    //   Thu Dec 31 15:17:20 1998
+    //   Dec 31 15:17:20 1998
+    let (month_index, day_index, time_index, year_index) = match fields.len() {
+        5 => (1, 2, 3, 4),
+        4 => (0, 1, 2, 3),
+        _ => return value.to_string(),
+    };
+
+    let month = match fields[month_index].to_ascii_lowercase().as_str() {
+        "jan" => 1,
+        "feb" => 2,
+        "mar" => 3,
+        "apr" => 4,
+        "may" => 5,
+        "jun" => 6,
+        "jul" => 7,
+        "aug" => 8,
+        "sep" => 9,
+        "oct" => 10,
+        "nov" => 11,
+        "dec" => 12,
+        _ => return value.to_string(),
+    };
+
+    let Ok(day) = fields[day_index].parse::<u8>() else {
+        return value.to_string();
+    };
+    if !(1..=31).contains(&day) {
+        return value.to_string();
+    }
+
+    let time = fields[time_index];
+    let time_fields: Vec<&str> = time.split(':').collect();
+    if time_fields.len() != 3 {
+        return value.to_string();
+    }
+    let valid_time = match (
+        time_fields[0].parse::<u8>(),
+        time_fields[1].parse::<u8>(),
+        time_fields[2].parse::<u8>(),
+    ) {
+        (Ok(hour), Ok(minute), Ok(second)) => hour < 24 && minute < 60 && second < 60,
+        _ => false,
+    };
+    if !valid_time {
+        return value.to_string();
+    }
+
+    let year = fields[year_index];
+    if year.len() != 4 || !year.bytes().all(|byte| byte.is_ascii_digit()) {
+        return value.to_string();
+    }
+
+    format!("{year}:{month:02}:{day:02} {time}")
+}
+
 /// Parse a tag value and convert to appropriate TagValue type.
 ///
 /// This function attempts to interpret the string value as the most
@@ -712,6 +789,10 @@ fn parse_tag_value(tag_name: &str, value: &str) -> TagValue {
     // Handle empty values
     if value.is_empty() {
         return TagValue::String(String::new());
+    }
+
+    if tag_name == "DateTimeOriginal" {
+        return TagValue::String(normalize_picture_info_datetime(value));
     }
 
     // Tags that are known to be numeric
