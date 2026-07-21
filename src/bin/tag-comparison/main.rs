@@ -306,6 +306,32 @@ fn extension_to_format(ext: &str) -> Option<&'static str> {
         "sr2" | "srf" => Some("SR2"),
         "kdc" => Some("KDC"),
         "erf" => Some("ERF"),
+        // Executables/libraries/fonts/documents/archives -- detection for
+        // all of these is magic-byte-based in src/parsers/detection, not
+        // extension-based, so these mappings only serve this comparison
+        // tool's own file discovery; oxidex would recognize any of these
+        // formats regardless of what extension the file actually has.
+        "exe" | "dll" | "sys" => Some("PE"),
+        "elf" | "so" => Some("ELF"),
+        // Tag group prefix oxidex actually emits is "MachO" (no hyphen),
+        // unlike FileFormat::MachO.name()'s display string "Mach-O" --
+        // using the tag-prefix spelling here so this stays the identity
+        // tag-comparison groups its extracted tags under.
+        "dylib" | "bundle" | "macho" => Some("MachO"),
+        "otf" => Some("OTF"),
+        "ttf" => Some("TTF"),
+        "woff" => Some("WOFF"),
+        "woff2" => Some("WOFF2"),
+        "docx" => Some("DOCX"),
+        "xlsx" => Some("XLSX"),
+        "pptx" => Some("PPTX"),
+        "zip" => Some("ZIP"),
+        "rar" => Some("RAR"),
+        "7z" => Some("7z"),
+        "gz" => Some("GZIP"),
+        "tar" => Some("TAR"),
+        "iso" => Some("ISO"),
+        "doc" | "xls" | "ppt" | "msg" | "vsd" | "pub" => Some("OLE"),
         _ => None,
     }
 }

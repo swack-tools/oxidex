@@ -140,7 +140,7 @@ impl AnomalyDetector {
         let section_anomalies = Self::detect_section_anomalies(sections);
         if !section_anomalies.is_empty() {
             metadata.insert(
-                "PE:SectionAnomalies".to_string(),
+                "EXE:SectionAnomalies".to_string(),
                 TagValue::new_array(
                     section_anomalies
                         .iter()
@@ -149,7 +149,7 @@ impl AnomalyDetector {
                 ),
             );
             metadata.insert(
-                "PE:SuspiciousSections".to_string(),
+                "EXE:SuspiciousSections".to_string(),
                 TagValue::String("Yes".to_string()),
             );
         }
@@ -174,7 +174,7 @@ impl AnomalyDetector {
 
         if !high_entropy_sections.is_empty() {
             metadata.insert(
-                "PE:HighEntropySections".to_string(),
+                "EXE:HighEntropySections".to_string(),
                 TagValue::new_array(
                     high_entropy_sections
                         .iter()
@@ -183,7 +183,7 @@ impl AnomalyDetector {
                 ),
             );
             metadata.insert(
-                "PE:PossiblyPacked".to_string(),
+                "EXE:PossiblyPacked".to_string(),
                 TagValue::String("Yes".to_string()),
             );
         }
@@ -200,7 +200,7 @@ impl AnomalyDetector {
                 // Entry point in non-code section is suspicious
                 if !name.starts_with(".text") && !name.starts_with("CODE") {
                     metadata.insert(
-                        "PE:UnusualEntrySection".to_string(),
+                        "EXE:UnusualEntrySection".to_string(),
                         TagValue::String(format!("Entry point in '{}'", name)),
                     );
                 }
@@ -210,7 +210,7 @@ impl AnomalyDetector {
 
         if !entry_in_section {
             metadata.insert(
-                "PE:EntryPointAnomaly".to_string(),
+                "EXE:EntryPointAnomaly".to_string(),
                 TagValue::String("Entry point outside all sections".to_string()),
             );
         }

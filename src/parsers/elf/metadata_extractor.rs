@@ -275,123 +275,123 @@ pub fn extract_elf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 fn extract_header_metadata(header: &ElfHeader, metadata: &mut MetadataMap) {
     // ELF class (32-bit or 64-bit)
     metadata.insert(
-        "ELF:Class".to_string(),
+        "EXE:Class".to_string(),
         TagValue::String(header.class_str().to_string()),
     );
 
     // Endianness
     let endian_str = header.endian_str().to_string();
     metadata.insert(
-        "ELF:Endianness".to_string(),
+        "EXE:Endianness".to_string(),
         TagValue::String(endian_str.clone()),
     );
 
     // Add ELF:DataEncoding as alias for Endianness (for ExifTool compatibility)
-    metadata.insert("ELF:DataEncoding".to_string(), TagValue::String(endian_str));
+    metadata.insert("EXE:DataEncoding".to_string(), TagValue::String(endian_str));
 
     // OS/ABI
     metadata.insert(
-        "ELF:OSABI".to_string(),
+        "EXE:OSABI".to_string(),
         TagValue::String(header.osabi_str().to_string()),
     );
 
     // ABI version
     metadata.insert(
-        "ELF:ABIVersion".to_string(),
+        "EXE:ABIVersion".to_string(),
         TagValue::Integer(header.e_ident[8] as i64),
     );
 
     // Object type
     let type_str = header.type_str().to_string();
     metadata.insert(
-        "ELF:ObjectType".to_string(),
+        "EXE:ObjectType".to_string(),
         TagValue::String(type_str.clone()),
     );
 
     // Add ELF:Type as alias for ObjectType (for ExifTool compatibility)
-    metadata.insert("ELF:Type".to_string(), TagValue::String(type_str));
+    metadata.insert("EXE:Type".to_string(), TagValue::String(type_str));
 
     // Machine architecture
     metadata.insert(
-        "ELF:Machine".to_string(),
+        "EXE:Machine".to_string(),
         TagValue::String(header.machine_str().to_string()),
     );
     metadata.insert(
-        "ELF:MachineRaw".to_string(),
+        "EXE:MachineRaw".to_string(),
         TagValue::Integer(header.e_machine as i64),
     );
 
     // Version
     metadata.insert(
-        "ELF:Version".to_string(),
+        "EXE:Version".to_string(),
         TagValue::Integer(header.e_version as i64),
     );
 
     // Add ELF:Version as string as well for ExifTool compatibility
     metadata.insert(
-        "ELF:VersionStr".to_string(),
+        "EXE:VersionStr".to_string(),
         TagValue::String(header.e_version.to_string()),
     );
 
     // Entry point
     if header.e_entry > 0 {
         metadata.insert(
-            "ELF:EntryPoint".to_string(),
+            "EXE:EntryPoint".to_string(),
             TagValue::String(format!("0x{:X}", header.e_entry)),
         );
     }
 
     // Header size
     metadata.insert(
-        "ELF:HeaderSize".to_string(),
+        "EXE:HeaderSize".to_string(),
         TagValue::Integer(header.e_ehsize as i64),
     );
 
     // Flags
     if header.e_flags > 0 {
         metadata.insert(
-            "ELF:Flags".to_string(),
+            "EXE:Flags".to_string(),
             TagValue::String(format!("0x{:X}", header.e_flags)),
         );
     }
 
     // Program header info
     metadata.insert(
-        "ELF:PHOffset".to_string(),
+        "EXE:PHOffset".to_string(),
         TagValue::Integer(header.e_phoff as i64),
     );
     metadata.insert(
-        "ELF:PHSize".to_string(),
+        "EXE:PHSize".to_string(),
         TagValue::Integer(header.e_phentsize as i64),
     );
     metadata.insert(
-        "ELF:PHCount".to_string(),
+        "EXE:PHCount".to_string(),
         TagValue::Integer(header.e_phnum as i64),
     );
 
     // Add ELF:ProgramHeaderCount as alias for PHCount (for ExifTool compatibility)
     metadata.insert(
-        "ELF:ProgramHeaderCount".to_string(),
+        "EXE:ProgramHeaderCount".to_string(),
         TagValue::Integer(header.e_phnum as i64),
     );
 
     // Section header info
     metadata.insert(
-        "ELF:SHOffset".to_string(),
+        "EXE:SHOffset".to_string(),
         TagValue::Integer(header.e_shoff as i64),
     );
     metadata.insert(
-        "ELF:SHSize".to_string(),
+        "EXE:SHSize".to_string(),
         TagValue::Integer(header.e_shentsize as i64),
     );
     metadata.insert(
-        "ELF:SHCount".to_string(),
+        "EXE:SHCount".to_string(),
         TagValue::Integer(header.e_shnum as i64),
     );
 
     // Add ELF:SectionCount as alias for SHCount (for ExifTool compatibility)
     metadata.insert(
-        "ELF:SectionCount".to_string(),
+        "EXE:SectionCount".to_string(),
         TagValue::Integer(header.e_shnum as i64),
     );
 }
@@ -404,7 +404,7 @@ fn extract_program_header_metadata(phdrs: &[ProgramHeader], metadata: &mut Metad
         .filter(|p| p.p_type == pt_type::PT_LOAD)
         .count();
     metadata.insert(
-        "ELF:LoadableSegmentCount".to_string(),
+        "EXE:LoadableSegmentCount".to_string(),
         TagValue::Integer(loadable_count as i64),
     );
 
@@ -412,7 +412,7 @@ fn extract_program_header_metadata(phdrs: &[ProgramHeader], metadata: &mut Metad
     let segment_types: Vec<String> = phdrs.iter().map(|p| p.type_str().to_string()).collect();
     if !segment_types.is_empty() {
         metadata.insert(
-            "ELF:SegmentTypes".to_string(),
+            "EXE:SegmentTypes".to_string(),
             TagValue::String(segment_types.join(", ")),
         );
     }
@@ -423,15 +423,15 @@ fn extract_program_header_metadata(phdrs: &[ProgramHeader], metadata: &mut Metad
     let has_tls = phdrs.iter().any(|p| p.p_type == pt_type::PT_TLS);
 
     metadata.insert(
-        "ELF:HasDynamic".to_string(),
+        "EXE:HasDynamic".to_string(),
         TagValue::Integer(if has_dynamic { 1 } else { 0 }),
     );
     metadata.insert(
-        "ELF:HasInterpreter".to_string(),
+        "EXE:HasInterpreter".to_string(),
         TagValue::Integer(if has_interp { 1 } else { 0 }),
     );
     metadata.insert(
-        "ELF:HasTLS".to_string(),
+        "EXE:HasTLS".to_string(),
         TagValue::Integer(if has_tls { 1 } else { 0 }),
     );
 }
@@ -447,7 +447,7 @@ fn extract_section_metadata(sections: &[SectionHeader], metadata: &mut MetadataM
 
     if !section_names.is_empty() {
         metadata.insert(
-            "ELF:SectionNames".to_string(),
+            "EXE:SectionNames".to_string(),
             TagValue::String(section_names.join(", ")),
         );
     }
@@ -458,25 +458,25 @@ fn extract_section_metadata(sections: &[SectionHeader], metadata: &mut MetadataM
             match name.as_str() {
                 ".text" => {
                     metadata.insert(
-                        "ELF:TextSectionSize".to_string(),
+                        "EXE:TextSectionSize".to_string(),
                         TagValue::Integer(section.sh_size as i64),
                     );
                 }
                 ".data" => {
                     metadata.insert(
-                        "ELF:DataSectionSize".to_string(),
+                        "EXE:DataSectionSize".to_string(),
                         TagValue::Integer(section.sh_size as i64),
                     );
                 }
                 ".bss" => {
                     metadata.insert(
-                        "ELF:BssSectionSize".to_string(),
+                        "EXE:BssSectionSize".to_string(),
                         TagValue::Integer(section.sh_size as i64),
                     );
                 }
                 ".rodata" => {
                     metadata.insert(
-                        "ELF:RodataSectionSize".to_string(),
+                        "EXE:RodataSectionSize".to_string(),
                         TagValue::Integer(section.sh_size as i64),
                     );
                 }
@@ -494,7 +494,7 @@ fn extract_dynamic_metadata(
     // Interpreter
     if let Some(ref interp) = dynamic_info.interpreter {
         metadata.insert(
-            "ELF:Interpreter".to_string(),
+            "EXE:Interpreter".to_string(),
             TagValue::String(interp.clone()),
         );
     }
@@ -502,24 +502,24 @@ fn extract_dynamic_metadata(
     // Needed libraries (shared objects)
     if !dynamic_info.needed.is_empty() {
         metadata.insert(
-            "ELF:SharedObjectCount".to_string(),
+            "EXE:SharedObjectCount".to_string(),
             TagValue::Integer(dynamic_info.needed.len() as i64),
         );
         metadata.insert(
-            "ELF:SharedObjects".to_string(),
+            "EXE:SharedObjects".to_string(),
             TagValue::String(dynamic_info.needed.join(", ")),
         );
     }
 
     // SONAME
     if let Some(ref soname) = dynamic_info.soname {
-        metadata.insert("ELF:SONAME".to_string(), TagValue::String(soname.clone()));
+        metadata.insert("EXE:SONAME".to_string(), TagValue::String(soname.clone()));
     }
 
     // RPATH (deprecated)
     if !dynamic_info.rpath.is_empty() {
         metadata.insert(
-            "ELF:RPATH".to_string(),
+            "EXE:RPATH".to_string(),
             TagValue::String(dynamic_info.rpath.join(":")),
         );
     }
@@ -527,17 +527,17 @@ fn extract_dynamic_metadata(
     // RUNPATH
     if !dynamic_info.runpath.is_empty() {
         metadata.insert(
-            "ELF:RUNPATH".to_string(),
+            "EXE:RUNPATH".to_string(),
             TagValue::String(dynamic_info.runpath.join(":")),
         );
     }
 
     // Flags
     if dynamic_info.has_textrel {
-        metadata.insert("ELF:HasTextRel".to_string(), TagValue::Integer(1));
+        metadata.insert("EXE:HasTextRel".to_string(), TagValue::Integer(1));
     }
     if dynamic_info.bind_now {
-        metadata.insert("ELF:BindNow".to_string(), TagValue::Integer(1));
+        metadata.insert("EXE:BindNow".to_string(), TagValue::Integer(1));
     }
 }
 
@@ -548,36 +548,36 @@ fn extract_symbol_metadata(
 ) {
     if symbol_info.symbol_count > 0 {
         metadata.insert(
-            "ELF:SymbolCount".to_string(),
+            "EXE:SymbolCount".to_string(),
             TagValue::Integer(symbol_info.symbol_count as i64),
         );
     }
 
     if symbol_info.dynamic_symbol_count > 0 {
         metadata.insert(
-            "ELF:DynamicSymbolCount".to_string(),
+            "EXE:DynamicSymbolCount".to_string(),
             TagValue::Integer(symbol_info.dynamic_symbol_count as i64),
         );
     }
 
     if !symbol_info.exported_functions.is_empty() {
         metadata.insert(
-            "ELF:ExportedFunctions".to_string(),
+            "EXE:ExportedFunctions".to_string(),
             TagValue::String(symbol_info.exported_functions.join(", ")),
         );
         metadata.insert(
-            "ELF:ExportedFunctionCount".to_string(),
+            "EXE:ExportedFunctionCount".to_string(),
             TagValue::Integer(symbol_info.exported_functions.len() as i64),
         );
     }
 
     if !symbol_info.imported_functions.is_empty() {
         metadata.insert(
-            "ELF:ImportedFunctions".to_string(),
+            "EXE:ImportedFunctions".to_string(),
             TagValue::String(symbol_info.imported_functions.join(", ")),
         );
         metadata.insert(
-            "ELF:ImportedFunctionCount".to_string(),
+            "EXE:ImportedFunctionCount".to_string(),
             TagValue::Integer(symbol_info.imported_functions.len() as i64),
         );
     }
@@ -592,17 +592,17 @@ fn extract_note_metadata(
 ) {
     // Build ID
     if let Some(id) = build_id {
-        metadata.insert("ELF:BuildID".to_string(), TagValue::String(id.clone()));
+        metadata.insert("EXE:BuildID".to_string(), TagValue::String(id.clone()));
     }
 
     // GNU ABI tag
     if let Some(abi) = extract_gnu_abi_tag(notes, is_little_endian) {
         metadata.insert(
-            "ELF:ABITagOS".to_string(),
+            "EXE:ABITagOS".to_string(),
             TagValue::String(abi.os_name().to_string()),
         );
         metadata.insert(
-            "ELF:ABITagVersion".to_string(),
+            "EXE:ABITagVersion".to_string(),
             TagValue::String(abi.version_string()),
         );
     }
@@ -615,31 +615,31 @@ fn extract_security_metadata(elf_info: &ElfInfo, metadata: &mut MetadataMap) {
         && elf_info.header.e_entry != 0
         && elf_info.dynamic_info.is_pie();
     metadata.insert(
-        "ELF:PIEEnabled".to_string(),
+        "EXE:PIEEnabled".to_string(),
         TagValue::Integer(if is_pie { 1 } else { 0 }),
     );
 
     // RELRO
     metadata.insert(
-        "ELF:RELROEnabled".to_string(),
+        "EXE:RELROEnabled".to_string(),
         TagValue::Integer(if elf_info.has_relro { 1 } else { 0 }),
     );
 
     // Stack canary
     metadata.insert(
-        "ELF:StackCanary".to_string(),
+        "EXE:StackCanary".to_string(),
         TagValue::Integer(if elf_info.has_stack_canary { 1 } else { 0 }),
     );
 
     // Executable stack (NX)
     metadata.insert(
-        "ELF:ExecutableStack".to_string(),
+        "EXE:ExecutableStack".to_string(),
         TagValue::Integer(if elf_info.has_executable_stack { 1 } else { 0 }),
     );
 
     // NX bit (inverse of executable stack - NX enabled means stack is NOT executable)
     metadata.insert(
-        "ELF:NXEnabled".to_string(),
+        "EXE:NXEnabled".to_string(),
         TagValue::Integer(if !elf_info.has_executable_stack { 1 } else { 0 }),
     );
 }

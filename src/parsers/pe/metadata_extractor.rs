@@ -13,11 +13,11 @@ use crate::parsers::pe::structures::{
 /// Extract metadata from DOS header
 pub fn extract_dos_metadata(header: &DosHeader, metadata: &mut MetadataMap) {
     metadata.insert(
-        "PE:DOSSignature".to_string(),
+        "EXE:DOSSignature".to_string(),
         TagValue::String(format!("{:#06X}", header.e_magic)),
     );
     metadata.insert(
-        "PE:PEHeaderOffset".to_string(),
+        "EXE:PEHeaderOffset".to_string(),
         TagValue::Integer(header.e_lfanew as i64),
     );
 }
@@ -35,24 +35,24 @@ pub fn extract_coff_metadata(header: &CoffHeader, metadata: &mut MetadataMap) {
         _ => "Unknown",
     };
     metadata.insert(
-        "PE:MachineType".to_string(),
+        "EXE:MachineType".to_string(),
         TagValue::String(machine_name.to_string()),
     );
     metadata.insert(
-        "PE:MachineTypeRaw".to_string(),
+        "EXE:MachineTypeRaw".to_string(),
         TagValue::Integer(header.machine as i64),
     );
 
     // Number of sections
     metadata.insert(
-        "PE:NumberOfSections".to_string(),
+        "EXE:NumberOfSections".to_string(),
         TagValue::Integer(header.number_of_sections as i64),
     );
 
     // Timestamp (Unix epoch)
     if header.time_date_stamp > 0 {
         metadata.insert(
-            "PE:TimeStamp".to_string(),
+            "EXE:TimeStamp".to_string(),
             TagValue::Integer(header.time_date_stamp as i64),
         );
 
@@ -61,23 +61,23 @@ pub fn extract_coff_metadata(header: &CoffHeader, metadata: &mut MetadataMap) {
         if let Some(dt) = Utc.timestamp_opt(header.time_date_stamp as i64, 0).single() {
             let timestamp_str = dt.format("%Y:%m:%d %H:%M:%S").to_string();
             metadata.insert(
-                "PE:CompileTime".to_string(),
+                "EXE:CompileTime".to_string(),
                 TagValue::String(timestamp_str.clone()),
             );
             // Add PE:Timestamp as string for ExifTool compatibility
-            metadata.insert("PE:Timestamp".to_string(), TagValue::String(timestamp_str));
+            metadata.insert("EXE:Timestamp".to_string(), TagValue::String(timestamp_str));
         }
     }
 
     // Characteristics
     metadata.insert(
-        "PE:Characteristics".to_string(),
+        "EXE:Characteristics".to_string(),
         TagValue::Integer(header.characteristics as i64),
     );
 
     // Add PE:Characteristics as hex string
     metadata.insert(
-        "PE:CharacteristicsHex".to_string(),
+        "EXE:CharacteristicsHex".to_string(),
         TagValue::String(format!("0x{:04X}", header.characteristics)),
     );
 
@@ -103,7 +103,7 @@ pub fn extract_coff_metadata(header: &CoffHeader, metadata: &mut MetadataMap) {
     // Insert decoded characteristics as comma-separated string
     if !flags.is_empty() {
         metadata.insert(
-            "PE:ImageFileCharacteristics".to_string(),
+            "EXE:ImageFileCharacteristics".to_string(),
             TagValue::String(flags.join(", ")),
         );
     }
@@ -119,7 +119,7 @@ pub fn extract_coff_metadata(header: &CoffHeader, metadata: &mut MetadataMap) {
         "Object"
     };
     metadata.insert(
-        "PE:FileType".to_string(),
+        "EXE:FileType".to_string(),
         TagValue::String(file_type.to_string()),
     );
 }
@@ -137,19 +137,19 @@ pub fn extract_optional_metadata(
         _ => "Unknown",
     };
     metadata.insert(
-        "PE:ImageFormat".to_string(),
+        "EXE:ImageFormat".to_string(),
         TagValue::String(image_format.to_string()),
     );
 
     // PEType is an alias for ImageFormat (for ExifTool compatibility)
     metadata.insert(
-        "PE:PEType".to_string(),
+        "EXE:PEType".to_string(),
         TagValue::String(image_format.to_string()),
     );
 
     // Linker version
     metadata.insert(
-        "PE:LinkerVersion".to_string(),
+        "EXE:LinkerVersion".to_string(),
         TagValue::String(format!(
             "{}.{}",
             std_header.major_linker_version, std_header.minor_linker_version
@@ -158,51 +158,51 @@ pub fn extract_optional_metadata(
 
     // Code and data sizes
     metadata.insert(
-        "PE:CodeSize".to_string(),
+        "EXE:CodeSize".to_string(),
         TagValue::Integer(std_header.size_of_code as i64),
     );
     metadata.insert(
-        "PE:InitializedDataSize".to_string(),
+        "EXE:InitializedDataSize".to_string(),
         TagValue::Integer(std_header.size_of_initialized_data as i64),
     );
     metadata.insert(
-        "PE:UninitializedDataSize".to_string(),
+        "EXE:UninitializedDataSize".to_string(),
         TagValue::Integer(std_header.size_of_uninitialized_data as i64),
     );
 
     // Entry point
     metadata.insert(
-        "PE:EntryPoint".to_string(),
+        "EXE:EntryPoint".to_string(),
         TagValue::Integer(std_header.address_of_entry_point as i64),
     );
 
     // Add PE:EntryPoint as hexadecimal string for ExifTool compatibility
     metadata.insert(
-        "PE:EntryPointHex".to_string(),
+        "EXE:EntryPointHex".to_string(),
         TagValue::String(format!("0x{:X}", std_header.address_of_entry_point)),
     );
 
     // Image base
     metadata.insert(
-        "PE:ImageBase".to_string(),
+        "EXE:ImageBase".to_string(),
         TagValue::Integer(nt_header.image_base as i64),
     );
 
     // Add PE:ImageBase as hexadecimal string for ExifTool compatibility
     metadata.insert(
-        "PE:ImageBaseHex".to_string(),
+        "EXE:ImageBaseHex".to_string(),
         TagValue::String(format!("0x{:X}", nt_header.image_base)),
     );
 
     // Add PE:SizeOfImage
     metadata.insert(
-        "PE:SizeOfImage".to_string(),
+        "EXE:SizeOfImage".to_string(),
         TagValue::Integer(nt_header.size_of_image as i64),
     );
 
     // OS version
     metadata.insert(
-        "PE:OSVersion".to_string(),
+        "EXE:OSVersion".to_string(),
         TagValue::String(format!(
             "{}.{}",
             nt_header.major_operating_system_version, nt_header.minor_operating_system_version
@@ -211,7 +211,7 @@ pub fn extract_optional_metadata(
 
     // Image version
     metadata.insert(
-        "PE:ImageVersion".to_string(),
+        "EXE:ImageVersion".to_string(),
         TagValue::String(format!(
             "{}.{}",
             nt_header.major_image_version, nt_header.minor_image_version
@@ -233,17 +233,17 @@ pub fn extract_optional_metadata(
         _ => "Unknown",
     };
     metadata.insert(
-        "PE:Subsystem".to_string(),
+        "EXE:Subsystem".to_string(),
         TagValue::String(subsystem_name.to_string()),
     );
     metadata.insert(
-        "PE:SubsystemRaw".to_string(),
+        "EXE:SubsystemRaw".to_string(),
         TagValue::Integer(nt_header.subsystem as i64),
     );
 
     // Subsystem version
     metadata.insert(
-        "PE:SubsystemVersion".to_string(),
+        "EXE:SubsystemVersion".to_string(),
         TagValue::String(format!(
             "{}.{}",
             nt_header.major_subsystem_version, nt_header.minor_subsystem_version
@@ -253,14 +253,14 @@ pub fn extract_optional_metadata(
     // Checksum
     if nt_header.checksum != 0 {
         metadata.insert(
-            "PE:Checksum".to_string(),
+            "EXE:Checksum".to_string(),
             TagValue::Integer(nt_header.checksum as i64),
         );
     }
 
     // DLL Characteristics
     metadata.insert(
-        "PE:DllCharacteristics".to_string(),
+        "EXE:DllCharacteristics".to_string(),
         TagValue::Integer(nt_header.dll_characteristics as i64),
     );
 
@@ -286,14 +286,14 @@ pub fn extract_optional_metadata(
 
     if !dll_flags.is_empty() {
         metadata.insert(
-            "PE:DllCharacteristicsDecoded".to_string(),
+            "EXE:DllCharacteristicsDecoded".to_string(),
             TagValue::String(dll_flags.join(", ")),
         );
     }
 
     // Security features derived from DLL characteristics
     metadata.insert(
-        "PE:ASLR".to_string(),
+        "EXE:ASLR".to_string(),
         TagValue::Integer(if (nt_header.dll_characteristics & 0x0040) != 0 {
             1
         } else {
@@ -302,7 +302,7 @@ pub fn extract_optional_metadata(
     );
 
     metadata.insert(
-        "PE:DEP".to_string(),
+        "EXE:DEP".to_string(),
         TagValue::Integer(if (nt_header.dll_characteristics & 0x0100) != 0 {
             1
         } else {
@@ -311,7 +311,7 @@ pub fn extract_optional_metadata(
     );
 
     metadata.insert(
-        "PE:ControlFlowGuard".to_string(),
+        "EXE:ControlFlowGuard".to_string(),
         TagValue::Integer(if (nt_header.dll_characteristics & 0x4000) != 0 {
             1
         } else {
@@ -328,47 +328,47 @@ pub fn extract_version_info_metadata(
 ) {
     // Fixed file info
     metadata.insert(
-        "PE:FileVersionNumber".to_string(),
+        "EXE:FileVersionNumber".to_string(),
         TagValue::String(fixed_info.file_version()),
     );
     metadata.insert(
-        "PE:ProductVersionNumber".to_string(),
+        "EXE:ProductVersionNumber".to_string(),
         TagValue::String(fixed_info.product_version()),
     );
     metadata.insert(
-        "PE:FileFlagsMask".to_string(),
+        "EXE:FileFlagsMask".to_string(),
         TagValue::String(format!("{:#06x}", fixed_info.file_flags_mask)),
     );
 
     let flags = fixed_info.file_flags_string();
     if !flags.is_empty() {
         metadata.insert(
-            "PE:FileFlags".to_string(),
+            "EXE:FileFlags".to_string(),
             TagValue::String(flags.join(", ")),
         );
     } else {
         metadata.insert(
-            "PE:FileFlags".to_string(),
+            "EXE:FileFlags".to_string(),
             TagValue::String("(none)".to_string()),
         );
     }
 
     metadata.insert(
-        "PE:FileOS".to_string(),
+        "EXE:FileOS".to_string(),
         TagValue::String(fixed_info.file_os_string().to_string()),
     );
     metadata.insert(
-        "PE:ObjectFileType".to_string(),
+        "EXE:ObjectFileType".to_string(),
         TagValue::String(fixed_info.file_type_string().to_string()),
     );
     metadata.insert(
-        "PE:FileSubtype".to_string(),
+        "EXE:FileSubtype".to_string(),
         TagValue::Integer(fixed_info.file_subtype as i64),
     );
 
     // String file info
     for (key, value) in strings {
-        let tag_name = format!("PE:{}", key);
+        let tag_name = format!("EXE:{}", key);
         metadata.insert(tag_name, TagValue::String(value.clone()));
     }
 }
@@ -376,10 +376,10 @@ pub fn extract_version_info_metadata(
 /// Extract metadata from CodeView RSDS debug info
 pub fn extract_rsds_metadata(rsds: &CodeViewRSDS, metadata: &mut MetadataMap) {
     metadata.insert(
-        "PE:PDBFileName".to_string(),
+        "EXE:PDBFileName".to_string(),
         TagValue::String(rsds.pdb_file_name.clone()),
     );
-    metadata.insert("PE:PDBAge".to_string(), TagValue::Integer(rsds.age as i64));
+    metadata.insert("EXE:PDBAge".to_string(), TagValue::Integer(rsds.age as i64));
 
     // Format GUID as string
     let guid_str = format!(
@@ -401,28 +401,28 @@ pub fn extract_rsds_metadata(rsds: &CodeViewRSDS, metadata: &mut MetadataMap) {
         rsds.guid[14],
         rsds.guid[15]
     );
-    metadata.insert("PE:PDBGUID".to_string(), TagValue::String(guid_str));
+    metadata.insert("EXE:PDBGUID".to_string(), TagValue::String(guid_str));
 }
 
 /// Extract metadata from CodeView NB10 debug info
 pub fn extract_nb10_metadata(nb10: &CodeViewNB10, metadata: &mut MetadataMap) {
     metadata.insert(
-        "PE:PDBFileName".to_string(),
+        "EXE:PDBFileName".to_string(),
         TagValue::String(nb10.pdb_file_name.clone()),
     );
-    metadata.insert("PE:PDBAge".to_string(), TagValue::Integer(nb10.age as i64));
+    metadata.insert("EXE:PDBAge".to_string(), TagValue::Integer(nb10.age as i64));
 
     // Convert timestamp to date
     use chrono::{TimeZone, Utc};
     if let Some(dt) = Utc.timestamp_opt(nb10.timestamp as i64, 0).single() {
         metadata.insert(
-            "PE:PDBCreateDate".to_string(),
+            "EXE:PDBCreateDate".to_string(),
             TagValue::String(dt.format("%Y:%m:%d %H:%M:%S").to_string()),
         );
     }
 
     metadata.insert(
-        "PE:PDBModifyDate".to_string(),
+        "EXE:PDBModifyDate".to_string(),
         TagValue::String("(same as create)".to_string()),
     );
 }
@@ -434,19 +434,19 @@ pub fn extract_rich_header_metadata(
 ) {
     // Indicate Rich Header presence
     metadata.insert(
-        "PE:RichHeaderPresent".to_string(),
+        "EXE:RichHeaderPresent".to_string(),
         TagValue::String("Yes".to_string()),
     );
 
     // XOR key / checksum
     metadata.insert(
-        "PE:RichHeaderChecksum".to_string(),
+        "EXE:RichHeaderChecksum".to_string(),
         TagValue::String(format!("{:#010X}", rich.checksum)),
     );
 
     // Number of tool entries
     metadata.insert(
-        "PE:RichHeaderEntries".to_string(),
+        "EXE:RichHeaderEntries".to_string(),
         TagValue::Integer(rich.entries.len() as i64),
     );
 
@@ -454,7 +454,7 @@ pub fn extract_rich_header_metadata(
     let compiler_info = rich.compiler_info_string();
     if !compiler_info.is_empty() {
         metadata.insert(
-            "PE:RichCompilerInfo".to_string(),
+            "EXE:RichCompilerInfo".to_string(),
             TagValue::String(compiler_info),
         );
     }
@@ -463,14 +463,14 @@ pub fn extract_rich_header_metadata(
     let product_ids = rich.product_ids_string();
     if !product_ids.is_empty() {
         metadata.insert(
-            "PE:RichProductIDs".to_string(),
+            "EXE:RichProductIDs".to_string(),
             TagValue::String(product_ids),
         );
     }
 
     // MD5 hash for forensic comparison
     metadata.insert(
-        "PE:RichHeaderHash".to_string(),
+        "EXE:RichHeaderHash".to_string(),
         TagValue::String(rich.hash_md5()),
     );
 }
@@ -478,34 +478,34 @@ pub fn extract_rich_header_metadata(
 /// Extract metadata from Export Directory
 pub fn extract_export_metadata(export_info: &ExportInfo, metadata: &mut MetadataMap) {
     // Set HasExports flag
-    metadata.insert("PE:HasExports".to_string(), TagValue::Integer(1));
+    metadata.insert("EXE:HasExports".to_string(), TagValue::Integer(1));
 
     // Export DLL name
     metadata.insert(
-        "PE:ExportDLLName".to_string(),
+        "EXE:ExportDLLName".to_string(),
         TagValue::String(export_info.dll_name.clone()),
     );
 
     // Export counts
     metadata.insert(
-        "PE:ExportCount".to_string(),
+        "EXE:ExportCount".to_string(),
         TagValue::Integer(export_info.directory.number_of_functions as i64),
     );
     metadata.insert(
-        "PE:ExportNameCount".to_string(),
+        "EXE:ExportNameCount".to_string(),
         TagValue::Integer(export_info.directory.number_of_names as i64),
     );
 
     // Base ordinal
     metadata.insert(
-        "PE:ExportBase".to_string(),
+        "EXE:ExportBase".to_string(),
         TagValue::Integer(export_info.directory.base as i64),
     );
 
     // Timestamp
     if export_info.directory.time_date_stamp > 0 {
         metadata.insert(
-            "PE:ExportTimestamp".to_string(),
+            "EXE:ExportTimestamp".to_string(),
             TagValue::Integer(export_info.directory.time_date_stamp as i64),
         );
 
@@ -516,7 +516,7 @@ pub fn extract_export_metadata(export_info: &ExportInfo, metadata: &mut Metadata
             .single()
         {
             metadata.insert(
-                "PE:ExportCreateDate".to_string(),
+                "EXE:ExportCreateDate".to_string(),
                 TagValue::String(dt.format("%Y:%m:%d %H:%M:%S").to_string()),
             );
         }
@@ -524,14 +524,14 @@ pub fn extract_export_metadata(export_info: &ExportInfo, metadata: &mut Metadata
 
     // Export characteristics
     metadata.insert(
-        "PE:ExportCharacteristics".to_string(),
+        "EXE:ExportCharacteristics".to_string(),
         TagValue::Integer(export_info.directory.characteristics as i64),
     );
 
     // Forwarded export count
     if export_info.forwarded_count > 0 {
         metadata.insert(
-            "PE:ForwardedExportCount".to_string(),
+            "EXE:ForwardedExportCount".to_string(),
             TagValue::Integer(export_info.forwarded_count as i64),
         );
     }
@@ -540,7 +540,7 @@ pub fn extract_export_metadata(export_info: &ExportInfo, metadata: &mut Metadata
     if !export_info.function_names.is_empty() {
         let functions_str = export_info.function_names.join(", ");
         metadata.insert(
-            "PE:ExportedFunctions".to_string(),
+            "EXE:ExportedFunctions".to_string(),
             TagValue::String(functions_str),
         );
     }
@@ -550,7 +550,7 @@ pub fn extract_export_metadata(export_info: &ExportInfo, metadata: &mut Metadata
 pub fn extract_signature_metadata(sig_info: &SignatureInfo, metadata: &mut MetadataMap) {
     // Signature presence
     metadata.insert(
-        "PE:SignaturePresent".to_string(),
+        "EXE:SignaturePresent".to_string(),
         TagValue::Integer(if sig_info.signature_present { 1 } else { 0 }),
     );
 
@@ -560,27 +560,27 @@ pub fn extract_signature_metadata(sig_info: &SignatureInfo, metadata: &mut Metad
 
     // Signature type
     metadata.insert(
-        "PE:SignatureType".to_string(),
+        "EXE:SignatureType".to_string(),
         TagValue::String(sig_info.signature_type.clone()),
     );
 
     // Certificate count
     metadata.insert(
-        "PE:CertificateCount".to_string(),
+        "EXE:CertificateCount".to_string(),
         TagValue::Integer(sig_info.certificate_count as i64),
     );
 
     // Signer information
     if let Some(ref cn) = sig_info.signer_common_name {
         metadata.insert(
-            "PE:SignerCommonName".to_string(),
+            "EXE:SignerCommonName".to_string(),
             TagValue::String(cn.clone()),
         );
     }
 
     if let Some(ref org) = sig_info.signer_organization {
         metadata.insert(
-            "PE:SignerOrganization".to_string(),
+            "EXE:SignerOrganization".to_string(),
             TagValue::String(org.clone()),
         );
     }
@@ -588,14 +588,14 @@ pub fn extract_signature_metadata(sig_info: &SignatureInfo, metadata: &mut Metad
     // Issuer information
     if let Some(ref cn) = sig_info.issuer_common_name {
         metadata.insert(
-            "PE:IssuerCommonName".to_string(),
+            "EXE:IssuerCommonName".to_string(),
             TagValue::String(cn.clone()),
         );
     }
 
     if let Some(ref org) = sig_info.issuer_organization {
         metadata.insert(
-            "PE:IssuerOrganization".to_string(),
+            "EXE:IssuerOrganization".to_string(),
             TagValue::String(org.clone()),
         );
     }
@@ -603,53 +603,53 @@ pub fn extract_signature_metadata(sig_info: &SignatureInfo, metadata: &mut Metad
     // Certificate details
     if let Some(ref serial) = sig_info.certificate_serial_number {
         metadata.insert(
-            "PE:CertificateSerialNumber".to_string(),
+            "EXE:CertificateSerialNumber".to_string(),
             TagValue::String(serial.clone()),
         );
     }
 
     if let Some(ref not_before) = sig_info.certificate_not_before {
         metadata.insert(
-            "PE:CertificateNotBefore".to_string(),
+            "EXE:CertificateNotBefore".to_string(),
             TagValue::String(not_before.clone()),
         );
     }
 
     if let Some(ref not_after) = sig_info.certificate_not_after {
         metadata.insert(
-            "PE:CertificateNotAfter".to_string(),
+            "EXE:CertificateNotAfter".to_string(),
             TagValue::String(not_after.clone()),
         );
     }
 
     if let Some(ref thumbprint) = sig_info.certificate_thumbprint {
         metadata.insert(
-            "PE:CertificateThumbprint".to_string(),
+            "EXE:CertificateThumbprint".to_string(),
             TagValue::String(thumbprint.clone()),
         );
     }
 
     // Counter-signature information
     metadata.insert(
-        "PE:HasCounterSignature".to_string(),
+        "EXE:HasCounterSignature".to_string(),
         TagValue::Integer(if sig_info.has_counter_signature { 1 } else { 0 }),
     );
 
     if let Some(ref counter_time) = sig_info.counter_signature_time {
         metadata.insert(
-            "PE:CounterSignatureTime".to_string(),
+            "EXE:CounterSignatureTime".to_string(),
             TagValue::String(counter_time.clone()),
         );
     }
 
     // Forensic indicators
     metadata.insert(
-        "PE:SignatureValid".to_string(),
+        "EXE:SignatureValid".to_string(),
         TagValue::Integer(if sig_info.signature_valid { 1 } else { 0 }),
     );
 
     metadata.insert(
-        "PE:CertificateExpired".to_string(),
+        "EXE:CertificateExpired".to_string(),
         TagValue::Integer(if sig_info.certificate_expired { 1 } else { 0 }),
     );
 }
@@ -688,20 +688,20 @@ pub fn extract_import_metadata(imports: &[ImportInfo], metadata: &mut MetadataMa
     // Extract DLL names
     let dll_names: Vec<String> = imports.iter().map(|i| i.dll_name.clone()).collect();
     metadata.insert(
-        "PE:ImportedDLLs".to_string(),
+        "EXE:ImportedDLLs".to_string(),
         TagValue::String(dll_names.join(", ")),
     );
 
     // Count total imports
     let total_imports: usize = imports.iter().map(|i| i.functions.len()).sum();
     metadata.insert(
-        "PE:ImportCount".to_string(),
+        "EXE:ImportCount".to_string(),
         TagValue::Integer(total_imports as i64),
     );
 
     // Count DLLs
     metadata.insert(
-        "PE:ImportedDLLCount".to_string(),
+        "EXE:ImportedDLLCount".to_string(),
         TagValue::Integer(imports.len() as i64),
     );
 
@@ -737,14 +737,14 @@ pub fn extract_import_metadata(imports: &[ImportInfo], metadata: &mut MetadataMa
 
     if !function_list.is_empty() {
         metadata.insert(
-            "PE:ImportedFunctions".to_string(),
+            "EXE:ImportedFunctions".to_string(),
             TagValue::String(function_list.join("; ")),
         );
     }
 
     // Set suspicious imports flag
     metadata.insert(
-        "PE:HasSuspiciousImports".to_string(),
+        "EXE:HasSuspiciousImports".to_string(),
         TagValue::Integer(if has_suspicious { 1 } else { 0 }),
     );
 }
@@ -753,7 +753,7 @@ pub fn extract_import_metadata(imports: &[ImportInfo], metadata: &mut MetadataMa
 pub fn extract_dotnet_metadata(dotnet_info: &DotNetInfo, metadata: &mut MetadataMap) {
     // Indicate .NET presence
     metadata.insert(
-        "PE:DotNet".to_string(),
+        "EXE:DotNet".to_string(),
         TagValue::Integer(if dotnet_info.is_dotnet { 1 } else { 0 }),
     );
 
@@ -764,7 +764,7 @@ pub fn extract_dotnet_metadata(dotnet_info: &DotNetInfo, metadata: &mut Metadata
     // CLR version
     if let Some(ref clr_version) = dotnet_info.clr_version {
         metadata.insert(
-            "PE:CLRVersion".to_string(),
+            "EXE:CLRVersion".to_string(),
             TagValue::String(clr_version.clone()),
         );
     }
@@ -772,7 +772,7 @@ pub fn extract_dotnet_metadata(dotnet_info: &DotNetInfo, metadata: &mut Metadata
     // Assembly name
     if let Some(ref assembly_name) = dotnet_info.assembly_name {
         metadata.insert(
-            "PE:AssemblyName".to_string(),
+            "EXE:AssemblyName".to_string(),
             TagValue::String(assembly_name.clone()),
         );
     }
@@ -780,7 +780,7 @@ pub fn extract_dotnet_metadata(dotnet_info: &DotNetInfo, metadata: &mut Metadata
     // Assembly version
     if let Some(ref assembly_version) = dotnet_info.assembly_version {
         metadata.insert(
-            "PE:AssemblyVersion".to_string(),
+            "EXE:AssemblyVersion".to_string(),
             TagValue::String(assembly_version.clone()),
         );
     }
@@ -788,7 +788,7 @@ pub fn extract_dotnet_metadata(dotnet_info: &DotNetInfo, metadata: &mut Metadata
     // Assembly culture
     if let Some(ref culture) = dotnet_info.assembly_culture {
         metadata.insert(
-            "PE:AssemblyCulture".to_string(),
+            "EXE:AssemblyCulture".to_string(),
             TagValue::String(culture.clone()),
         );
     }
@@ -796,7 +796,7 @@ pub fn extract_dotnet_metadata(dotnet_info: &DotNetInfo, metadata: &mut Metadata
     // Public key token
     if let Some(ref token) = dotnet_info.public_key_token {
         metadata.insert(
-            "PE:PublicKeyToken".to_string(),
+            "EXE:PublicKeyToken".to_string(),
             TagValue::String(token.clone()),
         );
     }
@@ -804,29 +804,29 @@ pub fn extract_dotnet_metadata(dotnet_info: &DotNetInfo, metadata: &mut Metadata
     // Target framework
     if let Some(ref framework) = dotnet_info.target_framework {
         metadata.insert(
-            "PE:TargetFramework".to_string(),
+            "EXE:TargetFramework".to_string(),
             TagValue::String(framework.clone()),
         );
     }
 
     // Runtime flags
     metadata.insert(
-        "PE:ILOnly".to_string(),
+        "EXE:ILOnly".to_string(),
         TagValue::Integer(if dotnet_info.il_only { 1 } else { 0 }),
     );
 
     metadata.insert(
-        "PE:StrongNameSigned".to_string(),
+        "EXE:StrongNameSigned".to_string(),
         TagValue::Integer(if dotnet_info.strong_name_signed { 1 } else { 0 }),
     );
 
     metadata.insert(
-        "PE:Requires32Bit".to_string(),
+        "EXE:Requires32Bit".to_string(),
         TagValue::Integer(if dotnet_info.requires_32bit { 1 } else { 0 }),
     );
 
     metadata.insert(
-        "PE:Prefers32Bit".to_string(),
+        "EXE:Prefers32Bit".to_string(),
         TagValue::Integer(if dotnet_info.prefers_32bit { 1 } else { 0 }),
     );
 }
@@ -862,8 +862,8 @@ mod tests {
         let mut metadata = MetadataMap::new();
         extract_dos_metadata(&header, &mut metadata);
 
-        assert!(metadata.contains_key("PE:DOSSignature"));
-        assert!(metadata.contains_key("PE:PEHeaderOffset"));
+        assert!(metadata.contains_key("EXE:DOSSignature"));
+        assert!(metadata.contains_key("EXE:PEHeaderOffset"));
     }
 
     #[test]
@@ -882,12 +882,12 @@ mod tests {
         extract_coff_metadata(&header, &mut metadata);
 
         assert_eq!(
-            metadata.get_string("PE:MachineType").unwrap(),
+            metadata.get_string("EXE:MachineType").unwrap(),
             "x64 (AMD64)"
         );
-        assert_eq!(metadata.get_integer("PE:NumberOfSections").unwrap(), 5);
-        assert!(metadata.contains_key("PE:CompileTime"));
-        assert_eq!(metadata.get_string("PE:FileType").unwrap(), "Executable");
+        assert_eq!(metadata.get_integer("EXE:NumberOfSections").unwrap(), 5);
+        assert!(metadata.contains_key("EXE:CompileTime"));
+        assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
     }
 
     #[test]
@@ -907,14 +907,14 @@ mod tests {
         extract_rsds_metadata(&rsds, &mut metadata);
 
         // Verify PDB file name
-        assert_eq!(metadata.get_string("PE:PDBFileName").unwrap(), "test.pdb");
+        assert_eq!(metadata.get_string("EXE:PDBFileName").unwrap(), "test.pdb");
 
         // Verify age
-        assert_eq!(metadata.get_integer("PE:PDBAge").unwrap(), 1);
+        assert_eq!(metadata.get_integer("EXE:PDBAge").unwrap(), 1);
 
         // Verify GUID format (note: byte order conversion in GUID formatting)
-        assert!(metadata.contains_key("PE:PDBGUID"));
-        let guid = metadata.get_string("PE:PDBGUID").unwrap();
+        assert!(metadata.contains_key("EXE:PDBGUID"));
+        let guid = metadata.get_string("EXE:PDBGUID").unwrap();
         assert_eq!(guid.len(), 36); // GUID is 32 hex chars + 4 hyphens
         assert!(guid.contains('-'));
     }
@@ -934,19 +934,19 @@ mod tests {
         extract_nb10_metadata(&nb10, &mut metadata);
 
         // Verify PDB file name
-        assert_eq!(metadata.get_string("PE:PDBFileName").unwrap(), "legacy.pdb");
+        assert_eq!(metadata.get_string("EXE:PDBFileName").unwrap(), "legacy.pdb");
 
         // Verify age
-        assert_eq!(metadata.get_integer("PE:PDBAge").unwrap(), 1);
+        assert_eq!(metadata.get_integer("EXE:PDBAge").unwrap(), 1);
 
         // Verify create date was set
-        assert!(metadata.contains_key("PE:PDBCreateDate"));
-        let create_date = metadata.get_string("PE:PDBCreateDate").unwrap();
+        assert!(metadata.contains_key("EXE:PDBCreateDate"));
+        let create_date = metadata.get_string("EXE:PDBCreateDate").unwrap();
         assert!(create_date.starts_with("2021:01:01"));
 
         // Verify modify date placeholder
         assert_eq!(
-            metadata.get_string("PE:PDBModifyDate").unwrap(),
+            metadata.get_string("EXE:PDBModifyDate").unwrap(),
             "(same as create)"
         );
     }
@@ -981,33 +981,33 @@ mod tests {
         extract_export_metadata(&export_info, &mut metadata);
 
         // Verify HasExports flag
-        assert_eq!(metadata.get_integer("PE:HasExports").unwrap(), 1);
+        assert_eq!(metadata.get_integer("EXE:HasExports").unwrap(), 1);
 
         // Verify DLL name
-        assert_eq!(metadata.get_string("PE:ExportDLLName").unwrap(), "test.dll");
+        assert_eq!(metadata.get_string("EXE:ExportDLLName").unwrap(), "test.dll");
 
         // Verify counts
-        assert_eq!(metadata.get_integer("PE:ExportCount").unwrap(), 5);
-        assert_eq!(metadata.get_integer("PE:ExportNameCount").unwrap(), 3);
-        assert_eq!(metadata.get_integer("PE:ExportBase").unwrap(), 1);
+        assert_eq!(metadata.get_integer("EXE:ExportCount").unwrap(), 5);
+        assert_eq!(metadata.get_integer("EXE:ExportNameCount").unwrap(), 3);
+        assert_eq!(metadata.get_integer("EXE:ExportBase").unwrap(), 1);
 
         // Verify timestamp
         assert_eq!(
-            metadata.get_integer("PE:ExportTimestamp").unwrap(),
+            metadata.get_integer("EXE:ExportTimestamp").unwrap(),
             1609459200
         );
-        assert!(metadata.contains_key("PE:ExportCreateDate"));
-        let create_date = metadata.get_string("PE:ExportCreateDate").unwrap();
+        assert!(metadata.contains_key("EXE:ExportCreateDate"));
+        let create_date = metadata.get_string("EXE:ExportCreateDate").unwrap();
         assert!(create_date.starts_with("2021:01:01"));
 
         // Verify characteristics
-        assert_eq!(metadata.get_integer("PE:ExportCharacteristics").unwrap(), 0);
+        assert_eq!(metadata.get_integer("EXE:ExportCharacteristics").unwrap(), 0);
 
         // Verify forwarded count
-        assert_eq!(metadata.get_integer("PE:ForwardedExportCount").unwrap(), 1);
+        assert_eq!(metadata.get_integer("EXE:ForwardedExportCount").unwrap(), 1);
 
         // Verify exported functions
-        let exported_functions = metadata.get_string("PE:ExportedFunctions").unwrap();
+        let exported_functions = metadata.get_string("EXE:ExportedFunctions").unwrap();
         assert!(exported_functions.contains("Function1"));
         assert!(exported_functions.contains("Function2"));
     }
@@ -1043,25 +1043,25 @@ mod tests {
         extract_import_metadata(&imports, &mut metadata);
 
         // Verify imported DLLs
-        let imported_dlls = metadata.get_string("PE:ImportedDLLs").unwrap();
+        let imported_dlls = metadata.get_string("EXE:ImportedDLLs").unwrap();
         assert!(imported_dlls.contains("kernel32.dll"));
         assert!(imported_dlls.contains("user32.dll"));
 
         // Verify import count
-        assert_eq!(metadata.get_integer("PE:ImportCount").unwrap(), 4);
+        assert_eq!(metadata.get_integer("EXE:ImportCount").unwrap(), 4);
 
         // Verify DLL count
-        assert_eq!(metadata.get_integer("PE:ImportedDLLCount").unwrap(), 2);
+        assert_eq!(metadata.get_integer("EXE:ImportedDLLCount").unwrap(), 2);
 
         // Verify imported functions
-        let imported_functions = metadata.get_string("PE:ImportedFunctions").unwrap();
+        let imported_functions = metadata.get_string("EXE:ImportedFunctions").unwrap();
         assert!(imported_functions.contains("kernel32.dll:CreateFileW"));
         assert!(imported_functions.contains("kernel32.dll:VirtualAlloc"));
         assert!(imported_functions.contains("kernel32.dll:#123"));
         assert!(imported_functions.contains("user32.dll:MessageBoxW"));
 
         // Verify suspicious imports flag (VirtualAlloc is suspicious)
-        assert_eq!(metadata.get_integer("PE:HasSuspiciousImports").unwrap(), 1);
+        assert_eq!(metadata.get_integer("EXE:HasSuspiciousImports").unwrap(), 1);
     }
 
     #[test]
@@ -1085,7 +1085,7 @@ mod tests {
         extract_import_metadata(&imports, &mut metadata);
 
         // Verify no suspicious imports
-        assert_eq!(metadata.get_integer("PE:HasSuspiciousImports").unwrap(), 0);
+        assert_eq!(metadata.get_integer("EXE:HasSuspiciousImports").unwrap(), 0);
     }
 
     #[test]
@@ -1095,7 +1095,7 @@ mod tests {
         extract_import_metadata(&imports, &mut metadata);
 
         // Should not add any metadata for empty imports
-        assert!(!metadata.contains_key("PE:ImportedDLLs"));
+        assert!(!metadata.contains_key("EXE:ImportedDLLs"));
     }
 
     #[test]
@@ -1142,21 +1142,21 @@ mod tests {
 
         // Check DllCharacteristics raw value
         assert_eq!(
-            metadata.get_integer("PE:DllCharacteristics").unwrap(),
+            metadata.get_integer("EXE:DllCharacteristics").unwrap(),
             0x4160
         );
 
         // Check decoded flags
-        let decoded = metadata.get_string("PE:DllCharacteristicsDecoded").unwrap();
+        let decoded = metadata.get_string("EXE:DllCharacteristicsDecoded").unwrap();
         assert!(decoded.contains("High entropy VA"));
         assert!(decoded.contains("Dynamic base"));
         assert!(decoded.contains("NX compatible"));
         assert!(decoded.contains("Control flow guard"));
 
         // Check security feature flags
-        assert_eq!(metadata.get_integer("PE:ASLR").unwrap(), 1);
-        assert_eq!(metadata.get_integer("PE:DEP").unwrap(), 1);
-        assert_eq!(metadata.get_integer("PE:ControlFlowGuard").unwrap(), 1);
+        assert_eq!(metadata.get_integer("EXE:ASLR").unwrap(), 1);
+        assert_eq!(metadata.get_integer("EXE:DEP").unwrap(), 1);
+        assert_eq!(metadata.get_integer("EXE:ControlFlowGuard").unwrap(), 1);
     }
 
     #[test]
@@ -1227,7 +1227,7 @@ mod tests {
             extract_optional_metadata(&std_header, &nt_header, &mut metadata);
 
             assert_eq!(
-                metadata.get_string("PE:Subsystem").unwrap(),
+                metadata.get_string("EXE:Subsystem").unwrap(),
                 expected_name,
                 "Failed for subsystem type {}",
                 subsystem_type
