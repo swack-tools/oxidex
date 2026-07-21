@@ -274,6 +274,10 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             // Olympus tag emitted below.
             if key.eq_ignore_ascii_case("FNumber") {
                 metadata.insert("APP12:FNumber".to_string(), tag_value.clone());
+                metadata.insert(
+                    "APP12:Fnumber".to_string(),
+                    TagValue::String(value.clone()),
+                );
             }
 
             // Flash is part of ExifTool's JPEG Picture Info table and belongs
