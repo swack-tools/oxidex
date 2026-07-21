@@ -71,6 +71,7 @@ const KNOWN_TAGS: &[&str] = &[
     "COLOR4",
     "EXP1",
     "EXP2",
+    "EXP3",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -283,6 +284,20 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:EXP2".to_string(), app12_value);
             }
 
+            // ExifTool exposes the Olympus EXP3 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("EXP3") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert(
+                    "APP12:EXP3".to_string(),
+                    app12_value,
+                );
+            }
+
             // ExifTool exposes the continuous-take diagnostic field in the
             // APP12 group using its original name.
             if key.eq_ignore_ascii_case("ContTake") {
@@ -458,6 +473,19 @@ mod camera_type_tests {
         assert_eq!(
             metadata.get_integer("APP12:EXP2"),
             Some(59)
+        );
+    }
+
+    #[test]
+    fn test_olympus_exp3_diagnostic_value() {
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nEXP3=227\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:EXP3"),
+            Some(227)
         );
     }
 
