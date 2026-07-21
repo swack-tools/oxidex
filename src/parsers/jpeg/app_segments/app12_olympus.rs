@@ -249,6 +249,16 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 );
             }
 
+            // ExposureTime in Picture Info is already stored in ExifTool's
+            // display form (for example, "1/155"). Expose the canonical
+            // APP12 tag and preserve the fraction exactly.
+            if tag_name == "ExposureTime" {
+                metadata.insert(
+                    "APP12:ExposureTime".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
             // The source field in JPEG Picture Info records is normally named
             // TimeDate. ExifTool renames this to DateTimeOriginal and exposes
             // it in the APP12 group. Also accept DateTimeOriginal directly
@@ -489,6 +499,19 @@ mod camera_type_tests {
         assert_eq!(
             metadata.get_string("APP12:CameraType"),
             Some("SR84")
+        );
+    }
+
+    #[test]
+    fn test_picture_info_exposure_time_app12_tag() {
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS DIGITAL CAMERA\0[picture info]\r\nExposureTime=1/155\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:ExposureTime"),
+            Some("1/155")
         );
     }
 
