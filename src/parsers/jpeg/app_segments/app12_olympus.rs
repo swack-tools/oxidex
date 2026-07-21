@@ -67,6 +67,7 @@ const KNOWN_TAGS: &[&str] = &[
     "Software",
     "COLOR2",
     "COLOR3",
+    "COLOR4",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -340,6 +341,16 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 };
                 metadata.insert("APP12:COLOR3".to_string(), app12_value);
             }
+
+            // ExifTool exposes the Olympus diagnostic COLOR4 field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("COLOR4") {
+                let app12_value = match value.parse::<i64>() {
+                    Ok(number) => TagValue::Integer(number),
+                    Err(_) => TagValue::String(value.clone()),
+                };
+                metadata.insert("APP12:COLOR4".to_string(), app12_value);
+            }
         }
     }
 }
@@ -606,6 +617,17 @@ fn parse_boolean_value(value: &str) -> TagValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_app12_color4() {
+        let data =
+            b"OLYMPUS OPTICAL CO.,LTD.\r\n[diag info]\r\nCOLOR4=5\r\n";
+
+        let metadata =
+            parse_app12_olympus(data).expect("Olympus APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:COLOR4"), Some(5));
+    }
 
     /// Test parsing basic Olympus Picture Info data with camera type
     #[test]
