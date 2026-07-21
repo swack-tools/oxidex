@@ -41,6 +41,17 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           attempt_build/resolve_request -- the fixer gets
                           before it's nudged, then required, to submit a
                           diff instead of continuing to investigate)
+    max_retries            default 1000 (retries on a transient upstream
+                          failure -- 5xx HTTPError or a completely empty
+                          reply -- before giving up on one model call;
+                          high, not unlimited, to ride out a long outage
+                          rather than blacklist a tag over infrastructure
+                          being down)
+    retry_backoff_seconds  default 2 (first retry's delay; doubles each
+                          subsequent retry)
+    max_retry_backoff_seconds default 120 (caps the exponential backoff's
+                          growth -- otherwise a large max_retries implies
+                          an absurd wait on later attempts)
 
 [reviewer] defaults to [worker] entirely when omitted, so a single table
 covers both the fixer and the reviewer by default -- add [reviewer] only to
@@ -70,6 +81,7 @@ import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
 import time
 import tomllib
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -115,9 +127,33 @@ def extract_diff(response_text):
     return None
 
 
+DEFAULT_RETRYABLE_HTTP_STATUSES = {500, 502, 503, 504}
+DEFAULT_MAX_RETRIES = 1000
+DEFAULT_RETRY_BACKOFF_SECONDS = 2
+DEFAULT_MAX_RETRY_BACKOFF_SECONDS = 120  # cap growth -- 2**1000 would otherwise be absurd
+
+
 def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream=False, thinking=True,
-                temperature=0, timeout=120):
-    """POST a chat-completions request, return the assistant's reply text.
+                temperature=0, timeout=120, max_retries=DEFAULT_MAX_RETRIES,
+                retry_backoff_seconds=DEFAULT_RETRY_BACKOFF_SECONDS,
+                max_retry_backoff_seconds=DEFAULT_MAX_RETRY_BACKOFF_SECONDS, sleep_fn=time.sleep):
+    """POST a chat-completions request, retrying on transient upstream
+    failures, and return the assistant's reply text.
+
+    Retries (with exponential backoff -- retry_backoff_seconds, *2, *4, ...,
+    capped at max_retry_backoff_seconds so a large max_retries doesn't
+    imply an absurd wait -- up to max_retries times) on: a 5xx HTTPError
+    (500/502/503/504 -- server-side, not this request's fault, confirmed
+    to occur in bursts across otherwise-unrelated concurrent workers) or a
+    reply that comes back completely empty (a provider occasionally
+    returns "200 OK" with zero content -- not a legitimate model answer,
+    indistinguishable from a dropped/truncated response, and retrying is
+    cheap compared to burning a whole fix attempt on it). A non-5xx
+    HTTPError (4xx: bad request, auth, etc.) fails immediately -- retrying
+    an actual client-side problem just wastes time and can mask a real
+    config issue. max_retries is high (not unlimited) specifically to ride
+    out a long transient outage rather than give up and blacklist a tag
+    over infrastructure, not the tag itself, being the problem.
 
     When stream is True, the response arrives as OpenAI-compatible SSE
     ("data: {...}" lines terminated by "data: [DONE]") -- each chunk's
@@ -138,6 +174,29 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
     keepalives well past 120s before ever sending real content, so this is
     configurable per [worker]/[reviewer] rather than a fixed value.
     """
+    last_error = None
+    for attempt in range(max_retries + 1):
+        if attempt > 0:
+            sleep_fn(min(retry_backoff_seconds * (2 ** (attempt - 1)), max_retry_backoff_seconds))
+        try:
+            reply = _call_model_once(
+                messages, base_url, api_key, model, max_tokens, reasoning_effort,
+                stream, thinking, temperature, timeout,
+            )
+        except urllib.error.HTTPError as e:
+            if e.code not in DEFAULT_RETRYABLE_HTTP_STATUSES:
+                raise
+            last_error = e
+            continue
+        if not reply:
+            last_error = last_error or RuntimeError("model returned an empty reply")
+            continue
+        return reply
+    raise last_error
+
+
+def _call_model_once(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream, thinking,
+                      temperature, timeout):
     url = base_url.rstrip("/") + "/chat/completions"
     payload = {
         "model": model,
@@ -459,6 +518,9 @@ def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=ra
             config["max_tokens"], config["reasoning_effort"],
             config.get("stream", False), config.get("thinking", True),
             config.get("temperature", 0), config.get("timeout", 120),
+            config.get("max_retries", DEFAULT_MAX_RETRIES),
+            config.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS),
+            config.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),
         )
     except Exception as e:
         return False, f"review call failed: {e}"
@@ -546,6 +608,9 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 config["max_tokens"], config["reasoning_effort"],
                 config.get("stream", False), config.get("thinking", True),
                 config.get("temperature", 0), config.get("timeout", 120),
+                config.get("max_retries", DEFAULT_MAX_RETRIES),
+                config.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS),
+                config.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),
             )
         except Exception as e:
             # Network/timeout/HTTP/malformed-response failures are a normal
@@ -1054,6 +1119,9 @@ def _normalize_model_config(table):
         "temperature": table.get("temperature", 0),
         "timeout": table.get("timeout", 120),
         "max_request_turns": table.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS),
+        "max_retries": table.get("max_retries", DEFAULT_MAX_RETRIES),
+        "retry_backoff_seconds": table.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS),
+        "max_retry_backoff_seconds": table.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),
     }
 
 
@@ -1121,6 +1189,13 @@ def main(argv=None):
         help="Cap how many distinct tags this one process will start work on before stopping "
              "(a tag already started keeps getting retried as normal). Default: unbounded. "
              "See [parallel].max_tags_per_process in config.toml for the parallel-runner default.",
+    )
+    parser.add_argument(
+        "--tags-found-log", default=str(REPO_ROOT / "logs" / "tags-found.log"),
+        help="Every tag actually fixed gets one appended line here (timestamp, worker id, tag "
+             "key, gaps closed) -- point every worker at the same path (outside any worker's own "
+             "worktree, which gets reset between rounds) for a single shared record of exactly "
+             f"which tags were found across a parallel run. Default: {REPO_ROOT / 'logs' / 'tags-found.log'}",
     )
     args = parser.parse_args(argv)
 
@@ -1206,7 +1281,10 @@ def main(argv=None):
     req_manifest_path = req_log_dir / "manifest.log"
 
     def logging_call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
-                            stream=False, thinking=True, temperature=0, timeout=120):
+                            stream=False, thinking=True, temperature=0, timeout=120,
+                            max_retries=DEFAULT_MAX_RETRIES,
+                            retry_backoff_seconds=DEFAULT_RETRY_BACKOFF_SECONDS,
+                            max_retry_backoff_seconds=DEFAULT_MAX_RETRY_BACKOFF_SECONDS):
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         prompt_chars = sum(len(m.get("content", "")) for m in messages)
         req_path = req_log_dir / f"{ts}-request.json"
@@ -1221,6 +1299,7 @@ def main(argv=None):
             reply = call_model(
                 messages, base_url, api_key, model, max_tokens, reasoning_effort,
                 stream, thinking, temperature, timeout,
+                max_retries, retry_backoff_seconds, max_retry_backoff_seconds,
             )
         except Exception as e:
             elapsed = time.time() - t0
@@ -1244,6 +1323,25 @@ def main(argv=None):
     prompt_log_dir.mkdir(parents=True, exist_ok=True)
     worker_label = args.worker_id or "1"
     prompt_log_path = prompt_log_dir / f"process-{worker_label}-prompt.log"
+
+    tags_found_log_path = Path(args.tags_found_log)
+    tags_found_log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def log_tag_found(tag_gap, result):
+        """Append one line to the shared tags-found log -- every worker in
+        a parallel run points --tags-found-log at the same path, so this
+        is a single running record of exactly which tags were found (and
+        by whom, and when), not just each worker's own private log.
+        Appends are small single lines (well under PIPE_BUF), so this is
+        safe without extra locking even with multiple concurrent writers.
+        """
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        gaps_closed = result.get("gaps_closed", "?")
+        line = f"{ts} worker={worker_label} tag={tag_gap['tag_key']} gaps_closed={gaps_closed}\n"
+        with tags_found_log_path.open("a") as f:
+            f.write(line)
+        total = sum(1 for _ in tags_found_log_path.open())
+        timestamped_log(f"[{tag_gap['tag_key']}] logged to {tags_found_log_path} (total tags found so far: {total})")
 
     def real_fix_tag(tag_gap, cfg, previous_attempts=None):
         def recheck(_fmt):
@@ -1285,13 +1383,16 @@ def main(argv=None):
         with prompt_log_path.open("a") as f:
             f.write(banner + prompt_preview + "\n")
 
-        return fix_gap(
+        result = fix_gap(
             single_gap, cfg, recheck_fn=recheck, review_config=review_config,
             git_apply_fn=logging_git_apply, log_fn=timestamped_log,
             call_model_fn=logging_call_model,
             samples_dir=Path(args.cache_dir) / "combined-samples",
             previous_attempts=previous_attempts,
         )
+        if result["status"] == "fixed":
+            log_tag_found(tag_gap, result)
+        return result
 
     summary = run_tag_loop(
         config, find_gaps_fn, real_fix_tag, state_path=args.tag_state_path,

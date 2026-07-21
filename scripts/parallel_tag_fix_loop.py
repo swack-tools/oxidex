@@ -46,6 +46,7 @@ from parallel_model_fix_loop import (
 
 DEFAULT_LOG_DIR = REPO_ROOT / "logs" / "parallel-tag-fix"
 DEFAULT_PROMPT_LOG_DIR = REPO_ROOT / "logs" / "tag-fix-prompts"
+DEFAULT_TAGS_FOUND_LOG = REPO_ROOT / "logs" / "tags-found.log"
 
 # Every in-flight worker's process group, so an interrupted wrapper
 # (Ctrl-C, SIGTERM) can force-terminate all of them rather than leaving
@@ -100,7 +101,8 @@ def _handle_shutdown_signal(signum, frame):
 
 
 def start_worker(worker_id, worktree, cache_dir, log_path, tag_state_path, prompt_log_dir,
-                  max_tag_fails, only_format=None, max_tags_per_process=None):
+                  max_tag_fails, only_format=None, max_tags_per_process=None,
+                  tags_found_log=DEFAULT_TAGS_FOUND_LOG):
     """Launch model_fix_loop.py --blacklist-full in worktree as a
     background process (own process group, POSIX), logging combined
     stdout/stderr to log_path. Returns the Popen handle -- callers poll it
@@ -117,6 +119,7 @@ def start_worker(worker_id, worktree, cache_dir, log_path, tag_state_path, promp
         "--prompt-log-dir", str(prompt_log_dir),
         "--max-tag-fails", str(max_tag_fails),
         "--cache-dir", str(cache_dir),
+        "--tags-found-log", str(tags_found_log),
     ]
     if only_format:
         argv += ["--only-format", only_format]
@@ -191,6 +194,11 @@ def main(argv=None):
     parser.add_argument("--log-dir", default=os.environ.get("MODEL_FIX_LOG_DIR", str(DEFAULT_LOG_DIR)))
     parser.add_argument("--prompt-log-dir", default=str(DEFAULT_PROMPT_LOG_DIR))
     parser.add_argument(
+        "--tags-found-log", default=str(DEFAULT_TAGS_FOUND_LOG),
+        help="Shared log every worker appends to when it actually fixes a tag -- a single "
+             f"running record across the whole parallel run. Default: {DEFAULT_TAGS_FOUND_LOG}",
+    )
+    parser.add_argument(
         "--merge-interval", type=float, default=30,
         help="Seconds between checks for new commits to merge from each worker's branch "
              "while they're all still running (default: 30)",
@@ -224,6 +232,7 @@ def main(argv=None):
     log_base.mkdir(parents=True, exist_ok=True)
     prompt_log_dir = Path(args.prompt_log_dir)
     prompt_log_dir.mkdir(parents=True, exist_ok=True)
+    Path(args.tags_found_log).parent.mkdir(parents=True, exist_ok=True)
 
     print(
         f"{num_workers} workers, shared tag-state {tag_state_path}, "
@@ -244,6 +253,7 @@ def main(argv=None):
         proc, log_file, pgid = start_worker(
             worker_id, path, args.cache_dir, log_path, tag_state_path, prompt_log_dir,
             args.max_tag_fails, only_format=args.only_format, max_tags_per_process=max_tags_per_process,
+            tags_found_log=Path(args.tags_found_log),
         )
         workers[worker_id] = {
             "path": path, "branch": branch, "log_path": log_path,

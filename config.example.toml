@@ -25,6 +25,9 @@ max_prompt_tags = 40
 max_prompt_file_bytes = 60000
 timeout = 600
 max_request_turns = 20
+max_retries = 1000
+retry_backoff_seconds = 2
+max_retry_backoff_seconds = 120
 
 [[worker.models]]
 name = "glm5.2-fast"
@@ -52,6 +55,9 @@ stream = true
 thinking = true
 temperature = 0
 timeout = 600
+max_retries = 1000
+retry_backoff_seconds = 2
+max_retry_backoff_seconds = 120
 
 [[reviewer.models]]
 name = "glm5.2-fast"

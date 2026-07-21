@@ -2,6 +2,7 @@ import json
 import tempfile
 import time
 import unittest
+import urllib.error
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
@@ -151,11 +152,119 @@ class CallModelTests(unittest.TestCase):
         self.assertEqual(body["reasoning_effort"], "max")
 
 
+class CallModelRetryTests(unittest.TestCase):
+    def _http_error(self, code):
+        return urllib.error.HTTPError(
+            url="https://api.example/v1/chat/completions", code=code,
+            msg="err", hdrs=None, fp=None,
+        )
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_retries_on_5xx_then_succeeds(self, mock_urlopen):
+        response_json = json.dumps({"choices": [{"message": {"content": "the diff"}}]}).encode()
+        ok_cm = MagicMock()
+        ok_cm.read.return_value = response_json
+        ok_ctx = MagicMock()
+        ok_ctx.__enter__.return_value = ok_cm
+        mock_urlopen.side_effect = [self._http_error(502), self._http_error(500), ok_ctx]
+
+        sleeps = []
+        result = call_model(
+            [{"role": "user", "content": "fix it"}],
+            base_url="https://api.example/v1", api_key="k", model="m",
+            max_tokens=100, reasoning_effort="max",
+            sleep_fn=sleeps.append,
+        )
+        self.assertEqual(result, "the diff")
+        self.assertEqual(mock_urlopen.call_count, 3)
+        # Exponential: 2s then 4s.
+        self.assertEqual(sleeps, [2, 4])
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_does_not_retry_on_4xx(self, mock_urlopen):
+        mock_urlopen.side_effect = self._http_error(400)
+        with self.assertRaises(urllib.error.HTTPError):
+            call_model(
+                [{"role": "user", "content": "fix it"}],
+                base_url="https://api.example/v1", api_key="k", model="m",
+                max_tokens=100, reasoning_effort="max",
+                sleep_fn=lambda s: self.fail("must not sleep/retry on a 4xx"),
+            )
+        self.assertEqual(mock_urlopen.call_count, 1)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_retries_on_empty_reply_then_succeeds(self, mock_urlopen):
+        empty_cm = MagicMock()
+        empty_cm.read.return_value = json.dumps({"choices": [{"message": {"content": ""}}]}).encode()
+        empty_ctx = MagicMock()
+        empty_ctx.__enter__.return_value = empty_cm
+
+        ok_cm = MagicMock()
+        ok_cm.read.return_value = json.dumps({"choices": [{"message": {"content": "the diff"}}]}).encode()
+        ok_ctx = MagicMock()
+        ok_ctx.__enter__.return_value = ok_cm
+
+        mock_urlopen.side_effect = [empty_ctx, ok_ctx]
+        result = call_model(
+            [{"role": "user", "content": "fix it"}],
+            base_url="https://api.example/v1", api_key="k", model="m",
+            max_tokens=100, reasoning_effort="max",
+            sleep_fn=lambda s: None,
+        )
+        self.assertEqual(result, "the diff")
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_gives_up_after_max_retries(self, mock_urlopen):
+        mock_urlopen.side_effect = self._http_error(503)
+        with self.assertRaises(urllib.error.HTTPError):
+            call_model(
+                [{"role": "user", "content": "fix it"}],
+                base_url="https://api.example/v1", api_key="k", model="m",
+                max_tokens=100, reasoning_effort="max",
+                max_retries=2, sleep_fn=lambda s: None,
+            )
+        # 1 initial attempt + 2 retries = 3 calls total.
+        self.assertEqual(mock_urlopen.call_count, 3)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_backoff_growth_is_capped(self, mock_urlopen):
+        mock_urlopen.side_effect = self._http_error(500)
+        sleeps = []
+        with self.assertRaises(urllib.error.HTTPError):
+            call_model(
+                [{"role": "user", "content": "fix it"}],
+                base_url="https://api.example/v1", api_key="k", model="m",
+                max_tokens=100, reasoning_effort="max",
+                max_retries=5, retry_backoff_seconds=10, max_retry_backoff_seconds=25,
+                sleep_fn=sleeps.append,
+            )
+        # 10, 20, capped at 25, 25, 25 -- never allowed to keep doubling
+        # past max_retry_backoff_seconds.
+        self.assertEqual(sleeps, [10, 20, 25, 25, 25])
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_max_retries_default_is_high_not_unlimited(self, mock_urlopen):
+        mock_urlopen.side_effect = self._http_error(500)
+        with self.assertRaises(urllib.error.HTTPError):
+            call_model(
+                [{"role": "user", "content": "fix it"}],
+                base_url="https://api.example/v1", api_key="k", model="m",
+                max_tokens=100, reasoning_effort="max",
+                max_retry_backoff_seconds=0, sleep_fn=lambda s: None,
+            )
+        # Default max_retries=1000 -> 1001 calls total, not infinite.
+        self.assertEqual(mock_urlopen.call_count, 1001)
+
+
 class CallModelStreamingTests(unittest.TestCase):
     @patch("model_fix_loop.urllib.request.urlopen")
     def test_stream_true_sets_stream_field_in_request_body(self, mock_urlopen):
         mock_cm = MagicMock()
-        mock_cm.__iter__.return_value = iter([b"data: [DONE]\n"])
+        mock_cm.__iter__.return_value = iter([
+            b'data: {"choices":[{"delta":{"content":"hi"}}]}\n',
+            b"data: [DONE]\n",
+        ])
         mock_urlopen.return_value.__enter__.return_value = mock_cm
 
         call_model(
@@ -929,7 +1038,8 @@ class FixGapReviewTests(unittest.TestCase):
         stream_values_seen = []
 
         def tracking_call_model_fn(messages, base_url, api_key, model, max_tokens, reasoning_effort,
-                                    stream=False, thinking=True, temperature=0, timeout=120):
+                                    stream=False, thinking=True, temperature=0, timeout=120,
+                                    max_retries=1000, retry_backoff_seconds=2, max_retry_backoff_seconds=120):
             stream_values_seen.append(stream)
             if len(stream_values_seen) == 1:
                 return "```diff\n--- a/x\n+++ b/x\n```\n"
@@ -959,7 +1069,8 @@ class FixGapReviewTests(unittest.TestCase):
         thinking_values_seen = []
 
         def tracking_call_model_fn(messages, base_url, api_key, model, max_tokens, reasoning_effort,
-                                    stream=False, thinking=True, temperature=0, timeout=120):
+                                    stream=False, thinking=True, temperature=0, timeout=120,
+                                    max_retries=1000, retry_backoff_seconds=2, max_retry_backoff_seconds=120):
             thinking_values_seen.append(thinking)
             if len(thinking_values_seen) == 1:
                 return "```diff\n--- a/x\n+++ b/x\n```\n"
@@ -986,7 +1097,8 @@ class FixGapReviewTests(unittest.TestCase):
         temperature_values_seen = []
 
         def tracking_call_model_fn(messages, base_url, api_key, model, max_tokens, reasoning_effort,
-                                    stream=False, thinking=True, temperature=0, timeout=120):
+                                    stream=False, thinking=True, temperature=0, timeout=120,
+                                    max_retries=1000, retry_backoff_seconds=2, max_retry_backoff_seconds=120):
             temperature_values_seen.append(temperature)
             if len(temperature_values_seen) == 1:
                 return "```diff\n--- a/x\n+++ b/x\n```\n"
