@@ -264,7 +264,18 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     }
 
                     // Convert tag to metadata
-                    let tag_name = lookup_tag_name(*tag_id, ifd_name);
+                    // Panasonic RW2 stores BitsPerSample in its proprietary
+                    // IFD0 tag 0x000A instead of the standard TIFF tag 0x0102.
+                    // Use the standard tag ID for name lookup so this is
+                    // exposed as the canonical EXIF BitsPerSample tag.
+                    let canonical_tag_id =
+                        if format == RawFormat::PanasonicRW2 && ifd_index == 0 && *tag_id == 0x000A
+                        {
+                            0x0102
+                        } else {
+                            *tag_id
+                        };
+                    let tag_name = lookup_tag_name(canonical_tag_id, ifd_name);
                     let tag_value =
                         raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order);
                     metadata.insert(tag_name, tag_value);
