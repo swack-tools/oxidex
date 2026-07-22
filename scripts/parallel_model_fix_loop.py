@@ -29,7 +29,7 @@ import threading
 import time
 from pathlib import Path
 
-from find_tag_gaps import REPO_ROOT, group_gaps_by_format, load_comparison_report, run_full_comparison
+from find_tag_gaps import OXIDEX_HOME, REPO_ROOT, group_gaps_by_format, load_comparison_report, run_full_comparison
 from model_fix_loop import DEFAULT_CONFIG_PATH
 
 # Each worker runs a full `cargo test --workspace` before committing --
@@ -41,8 +41,9 @@ DEFAULT_MAX_PARALLEL = min(20, os.cpu_count() or 4)
 
 # Per-worker log files default here instead of /tmp: /tmp is wiped on
 # reboot (and never included in Time Machine backups), which otherwise
-# destroys the only record of why a run's fixes did or didn't land.
-DEFAULT_LOG_DIR = REPO_ROOT / "logs" / "parallel-model-fix"
+# destroys the only record of why a run's fixes did or didn't land. Also
+# not REPO_ROOT-relative -- see OXIDEX_HOME's docstring in find_tag_gaps.py.
+DEFAULT_LOG_DIR = OXIDEX_HOME / "logs" / "parallel-model-fix"
 
 # Every in-flight worker's process group, so an interrupted wrapper
 # (Ctrl-C, SIGTERM) can force-terminate all of them rather than leaving
@@ -429,7 +430,7 @@ def main(argv=None, run_round_fn=run_round, sleep_fn=time.sleep):
     parser.add_argument("--timeout", type=int, default=None, help="Per-worker timeout in seconds (default: none)")
     parser.add_argument(
         "--worktree-dir",
-        default=os.environ.get("MODEL_FIX_WORKTREE_DIR", "/tmp/oxidex-parallel-fix"),  # nosec B108
+        default=os.environ.get("MODEL_FIX_WORKTREE_DIR", str(OXIDEX_HOME / "worktrees" / "parallel-fix")),
     )
     parser.add_argument(
         "--log-dir",

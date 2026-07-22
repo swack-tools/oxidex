@@ -90,6 +90,7 @@ import urllib.request
 from pathlib import Path
 
 from find_tag_gaps import (
+    OXIDEX_HOME,
     REPO_ROOT,
     group_gaps_by_format,
     load_comparison_report,
@@ -1312,7 +1313,7 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
     }
 
 
-DEFAULT_TAG_STATE_PATH = REPO_ROOT / "logs" / "model-fix-tag-state.json"
+DEFAULT_TAG_STATE_PATH = OXIDEX_HOME / "logs" / "model-fix-tag-state.json"
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config.toml"
 
 
@@ -1455,7 +1456,7 @@ def main(argv=None):
              "the same path to coordinate them via --worker-id claims.",
     )
     parser.add_argument(
-        "--prompt-log-dir", default=str(REPO_ROOT / "logs" / "tag-fix-prompts"),
+        "--prompt-log-dir", default=str(OXIDEX_HOME / "logs" / "tag-fix-prompts"),
         help="Directory for process-<worker-id>-prompt.log, which every round's full prompt "
              "is appended to (also printed to stdout).",
     )
@@ -1466,11 +1467,11 @@ def main(argv=None):
              f"[parallel].max_tags_per_process in config.toml, or {DEFAULT_MAX_TAGS_PER_PROCESS} if absent.",
     )
     parser.add_argument(
-        "--tags-found-log", default=str(REPO_ROOT / "logs" / "tags-found.log"),
+        "--tags-found-log", default=str(OXIDEX_HOME / "logs" / "tags-found.log"),
         help="Every tag actually fixed gets one appended line here (timestamp, worker id, tag "
              "key, gaps closed) -- point every worker at the same path (outside any worker's own "
              "worktree, which gets reset between rounds) for a single shared record of exactly "
-             f"which tags were found across a parallel run. Default: {REPO_ROOT / 'logs' / 'tags-found.log'}",
+             f"which tags were found across a parallel run. Default: {OXIDEX_HOME / 'logs' / 'tags-found.log'}",
     )
     args = parser.parse_args(argv)
 
@@ -1529,7 +1530,7 @@ def main(argv=None):
     # calls still revert a rejected/failed diff from the working tree right
     # after this logs it, so this directory is the only durable record of
     # what was tried each round.
-    diff_log_dir = REPO_ROOT / "logs" / "model-fix-diffs"
+    diff_log_dir = OXIDEX_HOME / "logs" / "model-fix-diffs"
     diff_log_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = diff_log_dir / "manifest.log"
 
@@ -1551,7 +1552,7 @@ def main(argv=None):
     # response (or the exact error) saved right after, so "is it even
     # talking to the model, and what did it get back" never has to be
     # guessed at from a timeout/exception message alone.
-    req_log_dir = REPO_ROOT / "logs" / "model-fix-requests"
+    req_log_dir = OXIDEX_HOME / "logs" / "model-fix-requests"
     req_log_dir.mkdir(parents=True, exist_ok=True)
     req_manifest_path = req_log_dir / "manifest.log"
 

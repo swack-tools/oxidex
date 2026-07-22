@@ -31,12 +31,13 @@ in-flight parallel run, and does nothing but wait if neither is running.
 
 Usage:
     uv run scripts/watch_parallel_fix.py
-    uv run scripts/watch_parallel_fix.py --log-dir logs/parallel-tag-fix --interval 2
-    uv run scripts/watch_parallel_fix.py --log-dir /tmp/oxidex-parallel-fix-logs  # old per-format mode
+    uv run scripts/watch_parallel_fix.py --log-dir ~/.oxidex/logs/parallel-tag-fix --interval 2
+    uv run scripts/watch_parallel_fix.py --log-dir ~/.oxidex/logs/parallel-model-fix  # old per-format mode
 """
 import argparse
 import datetime
 import json
+import os
 import re
 import shutil
 import sys
@@ -63,7 +64,11 @@ BULLET = "●"  # ●
 
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TAGCMP_DIR = "/tmp"  # nosec B108 -- find_tag_gaps.run_format_comparison's own hardcoded output location
-DEFAULT_WORKTREE_DIR = "/tmp/oxidex-parallel-tag-fix"  # nosec B108 -- parallel_tag_fix_loop.py's own default
+
+# Kept in sync with find_tag_gaps.py's own OXIDEX_HOME -- not imported directly
+# since this script is meant to run standalone against any worktree's logs.
+OXIDEX_HOME = Path(os.environ.get("OXIDEX_HOME", str(Path.home() / ".oxidex")))
+DEFAULT_WORKTREE_DIR = str(OXIDEX_HOME / "worktrees" / "parallel-tag-fix")  # parallel_tag_fix_loop.py's own default
 
 # Matched against a log file's lines, most recent first -- the first
 # pattern to hit wins, so more specific/terminal states (STOPPED, FIXED)
@@ -857,7 +862,7 @@ def main(argv=None, sleep_fn=time.sleep, stdout=sys.stdout, now_fn=time.time):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--log-dir",
-        default="/tmp/oxidex-parallel-fix-logs",  # nosec B108
+        default=str(OXIDEX_HOME / "logs" / "parallel-tag-fix"),
         help="Directory of per-format .log files (parallel_model_fix_loop.py's --log-dir) or "
              "per-worker worker-<N>.log files (parallel_tag_fix_loop.py's --log-dir) -- "
              "auto-detected by filename shape.",

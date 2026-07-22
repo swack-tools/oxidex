@@ -24,6 +24,14 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# Fixed, worktree-independent home for durable state (logs, persistent
+# worker worktrees) written by the model-fix/tag-fix loops. Deliberately
+# NOT REPO_ROOT-relative: these scripts are routinely run from many
+# different git worktrees of this repo, and REPO_ROOT-relative paths used
+# to scatter a single logical run's logs across whichever worktree
+# happened to be cwd when it was launched.
+OXIDEX_HOME = Path(os.environ.get("OXIDEX_HOME", str(Path.home() / ".oxidex")))
+
 # Best-effort format -> source directory/file map, used to hand the model
 # real context (it has no file-search tool of its own -- single-shot patch
 # generation only). Not authoritative; unlisted formats fall back to a

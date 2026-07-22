@@ -34,7 +34,7 @@ import time
 import tomllib
 from pathlib import Path
 
-from find_tag_gaps import REPO_ROOT
+from find_tag_gaps import OXIDEX_HOME, REPO_ROOT
 from model_fix_loop import DEFAULT_CONFIG_PATH, DEFAULT_TAG_STATE_PATH
 
 from parallel_model_fix_loop import (
@@ -45,9 +45,9 @@ from parallel_model_fix_loop import (
     remove_worktree,
 )
 
-DEFAULT_LOG_DIR = REPO_ROOT / "logs" / "parallel-tag-fix"
-DEFAULT_PROMPT_LOG_DIR = REPO_ROOT / "logs" / "tag-fix-prompts"
-DEFAULT_TAGS_FOUND_LOG = REPO_ROOT / "logs" / "tags-found.log"
+DEFAULT_LOG_DIR = OXIDEX_HOME / "logs" / "parallel-tag-fix"
+DEFAULT_PROMPT_LOG_DIR = OXIDEX_HOME / "logs" / "tag-fix-prompts"
+DEFAULT_TAGS_FOUND_LOG = OXIDEX_HOME / "logs" / "tags-found.log"
 
 # Each worker should only ever hold one tag at a time -- respawning
 # frequently is what makes the merge-then-respawn design (see the two-pass
@@ -298,7 +298,7 @@ def main(argv=None):
              "worktree (which gets reset between rounds) so it actually persists and coordinates "
              f"across workers. Default: {DEFAULT_TAG_STATE_PATH}",
     )
-    parser.add_argument("--worktree-dir", default=os.environ.get("MODEL_FIX_WORKTREE_DIR", "/tmp/oxidex-parallel-tag-fix"))  # nosec B108
+    parser.add_argument("--worktree-dir", default=os.environ.get("MODEL_FIX_WORKTREE_DIR", str(OXIDEX_HOME / "worktrees" / "parallel-tag-fix")))
     parser.add_argument("--log-dir", default=os.environ.get("MODEL_FIX_LOG_DIR", str(DEFAULT_LOG_DIR)))
     parser.add_argument("--prompt-log-dir", default=str(DEFAULT_PROMPT_LOG_DIR))
     parser.add_argument(
