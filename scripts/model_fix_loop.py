@@ -1555,6 +1555,7 @@ def main(argv=None):
     req_log_dir = OXIDEX_HOME / "logs" / "model-fix-requests"
     req_log_dir.mkdir(parents=True, exist_ok=True)
     req_manifest_path = req_log_dir / "manifest.log"
+    worker_label = args.worker_id or "1"
 
     def make_logging_call_model(phase):
         """Build a call_model_fn wrapper tagged with phase ("fixer" or
@@ -1565,6 +1566,12 @@ def main(argv=None):
         for a dashboard trying to report separate fixer/reviewer request
         counts and latencies without guessing. Two instances of this
         (one per phase) replace that single shared closure.
+
+        Every line also carries worker=worker_label: req_log_dir is a
+        single OXIDEX_HOME-fixed location shared by every worker/format
+        process (not a per-worktree path), so without this tag there'd be
+        no way to tell whose call a given manifest.log line was after the
+        fact -- see watch_parallel_fix.py's entries_for_worker.
         """
         def logging_call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
                                 stream=False, thinking=True, temperature=0, timeout=120,
@@ -1591,7 +1598,10 @@ def main(argv=None):
                 # inside call_model's own loop was invisible there.
                 timestamped_log(msg)
                 with req_manifest_path.open("a") as f:
-                    f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} phase={phase} model={model} RETRY {msg}\n")
+                    f.write(
+                        f"{time.strftime('%Y-%m-%dT%H:%M:%S')} phase={phase} worker={worker_label} "
+                        f"model={model} RETRY {msg}\n"
+                    )
 
             try:
                 reply = call_model(
@@ -1604,8 +1614,8 @@ def main(argv=None):
                 elapsed = time.time() - t0
                 with req_manifest_path.open("a") as f:
                     f.write(
-                        f"{ts} phase={phase} model={model} prompt_chars={prompt_chars} "
-                        f"elapsed={elapsed:.1f}s ERROR={e}\n"
+                        f"{ts} phase={phase} worker={worker_label} model={model} "
+                        f"prompt_chars={prompt_chars} elapsed={elapsed:.1f}s ERROR={e}\n"
                     )
                 raise
             elapsed = time.time() - t0
@@ -1613,8 +1623,8 @@ def main(argv=None):
             reply_path.write_text(reply)
             with req_manifest_path.open("a") as f:
                 f.write(
-                    f"{ts} phase={phase} model={model} prompt_chars={prompt_chars} "
-                    f"elapsed={elapsed:.1f}s reply_chars={len(reply)} OK\n"
+                    f"{ts} phase={phase} worker={worker_label} model={model} "
+                    f"prompt_chars={prompt_chars} elapsed={elapsed:.1f}s reply_chars={len(reply)} OK\n"
                 )
             return reply
 
@@ -1625,7 +1635,6 @@ def main(argv=None):
 
     prompt_log_dir = Path(args.prompt_log_dir)
     prompt_log_dir.mkdir(parents=True, exist_ok=True)
-    worker_label = args.worker_id or "1"
     prompt_log_path = prompt_log_dir / f"process-{worker_label}-prompt.log"
 
     tags_found_log_path = Path(args.tags_found_log)

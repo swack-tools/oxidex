@@ -8,16 +8,15 @@ from unittest.mock import patch
 
 from watch_parallel_fix import (
     BRIGHT_GREEN,
-    GREEN,
     RED,
     YELLOW,
-    aggregate_manifest_entries,
     bar_color,
     blacklist_stats,
-    count_tags_found,
     discover_format_progress,
     discover_formats,
+    discover_worker_ids,
     discover_workers,
+    entries_for_worker,
     find_active_log_dir,
     format_relative,
     found_stats,
@@ -27,109 +26,18 @@ from watch_parallel_fix import (
     parse_current_round_start,
     parse_current_tag_progress,
     parse_manifest_log,
-    parse_round_and_tag,
-    parse_status,
     parse_tags_found_log,
     parse_timestamp,
     parse_worker_log_status,
     parse_wrapper_log,
-    render,
     render_dashboard,
     render_format_progress,
     render_progress_bar,
-    render_workers,
     request_stats,
     tag_iteration,
-    worker_manifest_path,
+    worker_log_path,
+    worker_worktree_name,
 )
-
-
-class ParseStatusTests(unittest.TestCase):
-    def _write(self, tmpdir, text):
-        path = Path(tmpdir) / "JPEG.log"
-        path.write_text(text)
-        return path
-
-    def test_missing_file_is_waiting(self):
-        label, color, detail = parse_status(Path("/nonexistent/JPEG.log"))
-        self.assertEqual(label, "waiting")
-
-    def test_empty_file_is_waiting(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = self._write(tmpdir, "")
-            label, color, detail = parse_status(path)
-            self.assertEqual(label, "waiting")
-
-    def test_unrecognized_output_is_busy_with_last_line_as_detail(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = self._write(tmpdir, "   Compiling oxidex v1.2.1\n   Compiling foo v0.1.0\n")
-            label, color, detail = parse_status(path)
-            self.assertEqual(label, "busy")
-            self.assertIn("Compiling foo", detail)
-
-    def test_gap_delta_closing_gaps_is_green(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = self._write(tmpdir, "[JPEG] gaps 12 -> 9\n")
-            label, color, detail = parse_status(path)
-            self.assertEqual(label, "attempt")
-            self.assertEqual(color, GREEN)
-            self.assertIn("(+3)", detail)
-
-    def test_gap_delta_regressing_is_red(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = self._write(tmpdir, "[JPEG] gaps 9 -> 12\n")
-            label, color, detail = parse_status(path)
-            self.assertEqual(color, RED)
-            self.assertIn("(-3)", detail)
-
-    def test_gap_delta_unchanged_is_yellow(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = self._write(tmpdir, "[JPEG] gaps 9 -> 9\n")
-            label, color, detail = parse_status(path)
-            self.assertEqual(color, YELLOW)
-
-    def test_fixed_line_wins_over_earlier_gap_delta_line(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = self._write(
-                tmpdir,
-                "[JPEG] gaps 12 -> 9\n[JPEG] FIXED: closed 3 gaps (committed)\n",
-            )
-            label, color, detail = parse_status(path)
-            self.assertEqual(label, "fixed")
-            self.assertEqual(color, GREEN)
-            self.assertIn("+3 gaps closed", detail)
-
-    def test_review_rejected_is_yellow(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = self._write(tmpdir, "[JPEG] review REJECTED: hardcodes sample value\n")
-            label, color, detail = parse_status(path)
-            self.assertEqual(label, "rejected")
-            self.assertEqual(color, YELLOW)
-
-    def test_gap_count_did_not_decrease_is_reverted_red(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = self._write(tmpdir, "[JPEG] gap count did not decrease, reverting\n")
-            label, color, detail = parse_status(path)
-            self.assertEqual(label, "reverted")
-            self.assertEqual(color, RED)
-
-    def test_build_failed_is_red(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = self._write(tmpdir, "[JPEG] build failed: no diff in model response\n")
-            label, color, detail = parse_status(path)
-            self.assertEqual(label, "build-fail")
-            self.assertEqual(color, RED)
-
-    def test_stopped_summary_is_done_and_wins_over_everything_earlier(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = self._write(
-                tmpdir,
-                "[JPEG] gaps 12 -> 9\n[JPEG] FIXED: closed 3 gaps (committed)\n"
-                "stopped after 3 rounds\n  fixed:   1 formats\n",
-            )
-            label, color, detail = parse_status(path)
-            self.assertEqual(label, "done")
-            self.assertIn("stopped after 3 rounds", detail)
 
 
 class ParseWorkerLogStatusTests(unittest.TestCase):
@@ -564,16 +472,6 @@ class FindActiveLogDirTests(unittest.TestCase):
             self.assertEqual(find_active_log_dir([fresh, stale]), fresh)
 
 
-class RenderTests(unittest.TestCase):
-    def test_includes_a_line_per_format(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp = Path(tmpdir)
-            (tmp / "NEF.log").write_text("[NEF] gaps 5 -> 2\n")
-            output = render(tmp, ["NEF"])
-            self.assertIn("NEF", output)
-            self.assertIn("attempt", output)
-
-
 class MainLoopTests(unittest.TestCase):
     def test_waits_until_a_log_file_appears_then_renders_and_exits_on_interrupt(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -620,33 +518,6 @@ class MainLoopTests(unittest.TestCase):
             self.assertIn("NEF", out.getvalue())
 
 
-class ParseRoundAndTagTests(unittest.TestCase):
-    def test_missing_file_returns_none_none(self):
-        round_num, tag = parse_round_and_tag(Path("/nonexistent/worker-1.log"))
-        self.assertIsNone(round_num)
-        self.assertIsNone(tag)
-
-    def test_extracts_most_recent_round_and_tag(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "worker-1.log"
-            path.write_text(
-                "[2026-07-20T19:00:00] round 1: attempting JPEG:EXIF:LensModel\n"
-                "[2026-07-20T19:00:05] [JPEG:EXIF:LensModel] build failed: no diff\n"
-                "[2026-07-20T19:01:00] round 2: attempting JPEG:APP12:CAM1\n"
-            )
-            round_num, tag = parse_round_and_tag(path)
-            self.assertEqual(round_num, 2)
-            self.assertEqual(tag, "JPEG:APP12:CAM1")
-
-    def test_no_round_line_yet_returns_none_none(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "worker-1.log"
-            path.write_text("   Compiling oxidex v1.2.1\n")
-            round_num, tag = parse_round_and_tag(path)
-            self.assertIsNone(round_num)
-            self.assertIsNone(tag)
-
-
 class DiscoverWorkersTests(unittest.TestCase):
     def test_lists_worker_ids_sorted_numerically(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -666,45 +537,40 @@ class DiscoverWorkersTests(unittest.TestCase):
             self.assertEqual(discover_formats(tmp), ["NEF"])
 
 
-class CountTagsFoundTests(unittest.TestCase):
-    def test_missing_file_is_zero(self):
-        self.assertEqual(count_tags_found(Path("/nonexistent/tags-found.log")), 0)
-
-    def test_counts_non_blank_lines(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "tags-found.log"
-            path.write_text(
-                "2026-07-20T19:00:00 worker=1 tag=JPEG:EXIF:LensModel gaps_closed=1\n"
-                "2026-07-20T19:05:00 worker=3 tag=JPEG:APP12:CAM1 gaps_closed=1\n"
-                "\n"
-            )
-            self.assertEqual(count_tags_found(path), 2)
-
-
-class RenderWorkersTests(unittest.TestCase):
-    def test_includes_worker_round_tag_and_aggregate_count(self):
+class DiscoverWorkerIdsTests(unittest.TestCase):
+    def test_tag_mode_from_worker_n_logs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            (tmp / "worker-1.log").write_text(
-                "round 3: attempting JPEG:EXIF:LensModel\n[JPEG:EXIF:LensModel] gaps 5 -> 2\n"
-            )
-            tags_found_log = tmp / "tags-found.log"
-            tags_found_log.write_text("2026-07-20T19:00:00 worker=2 tag=X gaps_closed=1\n")
+            (tmp / "worker-1.log").write_text("")
+            (tmp / "worker-2.log").write_text("")
+            self.assertEqual(discover_worker_ids(tmp), ([1, 2], "tag"))
 
-            output = render_workers(tmp, [1], tags_found_log)
-            self.assertIn("worker-1", output)
-            self.assertIn("round 3", output)
-            self.assertIn("JPEG:EXIF:LensModel", output)
-            self.assertIn("tags found so far", output)
-            self.assertIn("1", output)  # the aggregate count
-
-    def test_worker_with_no_round_yet_shows_placeholder(self):
+    def test_format_mode_from_format_logs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            (tmp / "worker-1.log").write_text("   Compiling oxidex v1.2.1\n")
-            output = render_workers(tmp, [1], tmp / "tags-found.log")
-            self.assertIn("round -", output)
-            self.assertIn("(none yet)", output)
+            (tmp / "JPEG.log").write_text("")
+            (tmp / "NEF.log").write_text("")
+            self.assertEqual(discover_worker_ids(tmp), (["JPEG", "NEF"], "format"))
+
+    def test_empty_dir_is_format_mode_with_no_ids(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.assertEqual(discover_worker_ids(Path(tmpdir)), ([], "format"))
+
+
+class WorkerWorktreeNameTests(unittest.TestCase):
+    def test_tag_mode_uses_numeric_worker_naming(self):
+        self.assertEqual(worker_worktree_name(3, "tag"), "model-fix-tag-worker-3")
+
+    def test_format_mode_uses_lowercase_format_naming(self):
+        self.assertEqual(worker_worktree_name("JPEG", "format"), "model-fix-jpeg")
+
+
+class WorkerLogPathTests(unittest.TestCase):
+    def test_tag_mode_path(self):
+        self.assertEqual(worker_log_path(Path("/logs"), 3, "tag"), Path("/logs/worker-3.log"))
+
+    def test_format_mode_path(self):
+        self.assertEqual(worker_log_path(Path("/logs"), "JPEG", "format"), Path("/logs/JPEG.log"))
 
 
 class RenderDashboardTests(unittest.TestCase):
@@ -771,6 +637,44 @@ class RenderDashboardTests(unittest.TestCase):
             self.assertIn("gpt-5.6-sol", output)
             self.assertIn("@max", output)
             self.assertIn("Reviewer:", output)
+
+    def test_format_mode_renders_the_same_rich_dashboard(self):
+        # parallel_model_fix_loop.py's workers run the exact same
+        # run_tag_loop machinery as parallel_tag_fix_loop.py's (see
+        # model_fix_loop.py's main -- --only-format just filters which
+        # gaps are considered), so mode="format" should get everything
+        # mode="tag" gets: round/tag tracking, blacklist stats, model
+        # config, request stats -- just keyed by format name instead of
+        # a numeric worker id.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            (tmp / "JPEG.log").write_text(
+                "[2026-07-21T10:00:00] round 1: attempting JPEG:APP12:ImageSize\n"
+            )
+            worktree_dir = tmp / "worktrees"
+            worker_dir = worktree_dir / "model-fix-jpeg"
+            worker_dir.mkdir(parents=True)
+            (worker_dir / "config.toml").write_text(
+                '[worker]\nreasoning_effort = "max"\n[[worker.models]]\nname = "gpt-5.6-sol"\n'
+            )
+            manifest_path = tmp / "model-fix-requests" / "manifest.log"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                "2026-07-21T10:00:01 phase=fixer worker=JPEG model=gpt-5.6-sol prompt_chars=100 "
+                "elapsed=12.0s reply_chars=10 OK\n"
+            )
+            output = render_dashboard(
+                tmp, ["JPEG"], tmp / "tags-found.log", tmp / "state.json", tmp / "wrapper.log",
+                format_progress={}, max_tag_fails=10, now=time.time(), worktree_dir=worktree_dir,
+                manifest_path=manifest_path, mode="format",
+            )
+            self.assertIn("OXIDEX TAG-FIX DASHBOARD", output)
+            self.assertIn("JPEG", output)
+            self.assertIn("JPEG:APP12:ImageSize", output)
+            self.assertIn("Fixer:", output)
+            self.assertIn("gpt-5.6-sol", output)
+            self.assertIn("Requests:", output)
+            self.assertNotIn("worker-JPEG", output)  # format-mode row label has no "worker-" prefix
 
 
 class LoadTagStateTests(unittest.TestCase):
@@ -847,22 +751,34 @@ class ParseManifestLogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "manifest.log"
             path.write_text(
-                "2026-07-21T10:00:00 phase=fixer model=gpt-5.6-sol prompt_chars=1200 "
+                "2026-07-21T10:00:00 phase=fixer worker=1 model=gpt-5.6-sol prompt_chars=1200 "
                 "elapsed=12.3s reply_chars=500 OK\n"
-                "2026-07-21T10:05:00 phase=fixer model=gpt-5.6-sol RETRY model call retry "
+                "2026-07-21T10:05:00 phase=fixer worker=1 model=gpt-5.6-sol RETRY model call retry "
                 "1/1000 after RuntimeError('empty reply'), waiting 2s\n"
-                "2026-07-21T10:06:00 phase=reviewer model=gpt-5.6-sol prompt_chars=200 "
+                "2026-07-21T10:06:00 phase=reviewer worker=2 model=gpt-5.6-sol prompt_chars=200 "
                 "elapsed=1.5s reply_chars=10 OK\n"
-                "2026-07-21T10:10:00 phase=fixer model=gpt-5.6-sol prompt_chars=900 "
+                "2026-07-21T10:10:00 phase=fixer worker=JPEG model=gpt-5.6-sol prompt_chars=900 "
                 "elapsed=45.0s ERROR=<urlopen error DNS failure>\n"
             )
             entries = parse_manifest_log(path)
             # 3 completed calls (OK/ERROR); the RETRY line is excluded --
             # it has no elapsed time of its own to report a latency for.
             self.assertEqual(len(entries), 3)
-            self.assertEqual(entries[0], ("2026-07-21T10:00:00", "fixer", 12.3, True))
-            self.assertEqual(entries[1], ("2026-07-21T10:06:00", "reviewer", 1.5, True))
-            self.assertEqual(entries[2], ("2026-07-21T10:10:00", "fixer", 45.0, False))
+            self.assertEqual(entries[0], ("2026-07-21T10:00:00", "fixer", 12.3, True, "1"))
+            self.assertEqual(entries[1], ("2026-07-21T10:06:00", "reviewer", 1.5, True, "2"))
+            self.assertEqual(entries[2], ("2026-07-21T10:10:00", "fixer", 45.0, False, "JPEG"))
+
+
+class EntriesForWorkerTests(unittest.TestCase):
+    def test_filters_by_worker_label_and_drops_the_tag(self):
+        entries = [
+            ("2026-07-21T10:00:00", "fixer", 12.3, True, "1"),
+            ("2026-07-21T10:06:00", "reviewer", 1.5, True, "2"),
+            ("2026-07-21T10:10:00", "fixer", 45.0, False, "JPEG"),
+        ]
+        self.assertEqual(entries_for_worker(entries, 1), [("2026-07-21T10:00:00", "fixer", 12.3, True)])
+        self.assertEqual(entries_for_worker(entries, "JPEG"), [("2026-07-21T10:10:00", "fixer", 45.0, False)])
+        self.assertEqual(entries_for_worker(entries, 99), [])
 
 
 class RequestStatsTests(unittest.TestCase):
@@ -938,60 +854,66 @@ class ParseCurrentRoundStartTests(unittest.TestCase):
             self.assertEqual(parse_current_round_start(path), parse_timestamp("2026-07-21T10:05:00"))
 
 
-class AggregateManifestEntriesTests(unittest.TestCase):
-    def test_combines_entries_across_workers(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            for worker_id, elapsed in ((1, "10.0"), (2, "20.0")):
-                path = worker_manifest_path(tmpdir, worker_id)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(
-                    f"2026-07-21T10:00:00 phase=fixer model=gpt-5.6-sol prompt_chars=100 "
-                    f"elapsed={elapsed}s reply_chars=10 OK\n"
-                )
-            entries = aggregate_manifest_entries(tmpdir, [1, 2])
-            self.assertEqual(len(entries), 2)
-
-    def test_missing_worker_worktree_contributes_nothing(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            entries = aggregate_manifest_entries(tmpdir, [1, 2, 3])
-            self.assertEqual(entries, [])
-
-
 class RenderDashboardRequestStatsTests(unittest.TestCase):
     def test_includes_aggregate_and_per_worker_request_stats(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            worktree_dir = tmp / "worktrees"
             (tmp / "worker-1.log").write_text(
                 "[2026-07-21T10:00:00] round 1: attempting JPEG:APP12:CAM1\n"
             )
-            manifest_path = worker_manifest_path(worktree_dir, 1)
+            manifest_path = tmp / "model-fix-requests" / "manifest.log"
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest_path.write_text(
-                "2026-07-21T10:00:01 phase=fixer model=gpt-5.6-sol prompt_chars=100 "
+                "2026-07-21T10:00:01 phase=fixer worker=1 model=gpt-5.6-sol prompt_chars=100 "
                 "elapsed=12.0s reply_chars=10 OK\n"
-                "2026-07-21T10:00:30 phase=reviewer model=gpt-5.6-sol prompt_chars=50 "
+                "2026-07-21T10:00:30 phase=reviewer worker=1 model=gpt-5.6-sol prompt_chars=50 "
                 "elapsed=3.0s reply_chars=5 OK\n"
             )
             now = parse_timestamp("2026-07-21T10:01:00")
             output = render_dashboard(
                 tmp, [1], tmp / "tags-found.log", tmp / "state.json", tmp / "wrapper.log",
-                format_progress={}, max_tag_fails=10, now=now, worktree_dir=worktree_dir,
+                format_progress={}, max_tag_fails=10, now=now, manifest_path=manifest_path,
             )
             self.assertIn("API requests:", output)
             self.assertIn("Requests:", output)
             self.assertIn("this round:", output)
             self.assertIn("2", output)  # aggregate: 1 fixer + 1 reviewer request seen somewhere
 
-    def test_no_manifest_log_yet_skips_the_requests_line(self):
+    def test_entries_from_other_workers_dont_pollute_this_workers_row(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            worktree_dir = tmp / "worktrees"
-            (worktree_dir / "model-fix-tag-worker-1").mkdir(parents=True)
+            (tmp / "worker-1.log").write_text(
+                "[2026-07-21T10:00:00] round 1: attempting JPEG:APP12:CAM1\n"
+            )
+            manifest_path = tmp / "model-fix-requests" / "manifest.log"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                "2026-07-21T10:00:01 phase=fixer worker=1 model=gpt-5.6-sol prompt_chars=100 "
+                "elapsed=12.0s reply_chars=10 OK\n"
+                "2026-07-21T10:00:30 phase=fixer worker=2 model=gpt-5.6-sol prompt_chars=50 "
+                "elapsed=99.0s reply_chars=5 OK\n"
+            )
+            output = render_dashboard(
+                tmp, [1], tmp / "tags-found.log", tmp / "state.json", tmp / "wrapper.log",
+                format_progress={}, max_tag_fails=10, now=time.time(), manifest_path=manifest_path,
+            )
+            # worker 1's own Requests: line must reflect just its 1 fixer call
+            # (mean/median 12.0s) -- not worker 2's 99.0s call bleeding in now
+            # that both share one manifest.log. The aggregate API requests:
+            # line legitimately mentions 99.0s (it's the most recent call
+            # overall), so assert on worker 1's own "Requests:" line specifically.
+            requests_line = next(line for line in output.splitlines() if "Requests:" in line)
+            self.assertIn("1", requests_line)
+            self.assertIn("12.0s", requests_line)
+            self.assertNotIn("99.0s", requests_line)
+
+    def test_no_manifest_path_skips_the_requests_line(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
             (tmp / "worker-1.log").write_text("round 1: attempting JPEG:APP12:CAM1\n")
             output = render_dashboard(
                 tmp, [1], tmp / "tags-found.log", tmp / "state.json", tmp / "wrapper.log",
-                format_progress={}, max_tag_fails=10, now=time.time(), worktree_dir=worktree_dir,
+                format_progress={}, max_tag_fails=10, now=time.time(),
             )
             self.assertNotIn("Requests:", output)
 
@@ -1022,6 +944,31 @@ class MainLoopWorkerModeTests(unittest.TestCase):
             self.assertIn("worker-1", out.getvalue())
             self.assertIn("OXIDEX TAG-FIX DASHBOARD", out.getvalue())
             self.assertIn("Tags found:", out.getvalue())
+
+    def test_auto_detects_format_mode_from_parallel_model_fix_loop_logs(self):
+        # The same rich dashboard main() renders for parallel_tag_fix_loop.py's
+        # worker-<N>.log runs must also come up for parallel_model_fix_loop.py's
+        # <FORMAT>.log runs -- no separate, poorer fallback view.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            sleeps = []
+
+            def fake_sleep(interval):
+                sleeps.append(interval)
+                if len(sleeps) == 1:
+                    (tmp / "JPEG.log").write_text(
+                        "[2026-07-20T19:00:00] round 1: attempting JPEG:APP12:ImageSize\n"
+                    )
+                elif len(sleeps) == 2:
+                    raise KeyboardInterrupt
+
+            out = io.StringIO()
+            exit_code = main(["--log-dir", str(tmp), "--interval", "0.1"], sleep_fn=fake_sleep, stdout=out)
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("OXIDEX TAG-FIX DASHBOARD", out.getvalue())
+            self.assertIn("JPEG", out.getvalue())
+            self.assertIn("JPEG:APP12:ImageSize", out.getvalue())
 
 
 if __name__ == "__main__":

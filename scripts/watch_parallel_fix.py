@@ -68,7 +68,13 @@ DEFAULT_TAGCMP_DIR = "/tmp"  # nosec B108 -- find_tag_gaps.run_format_comparison
 # Kept in sync with find_tag_gaps.py's own OXIDEX_HOME -- not imported directly
 # since this script is meant to run standalone against any worktree's logs.
 OXIDEX_HOME = Path(os.environ.get("OXIDEX_HOME", str(Path.home() / ".oxidex")))
-DEFAULT_WORKTREE_DIR = str(OXIDEX_HOME / "worktrees" / "parallel-tag-fix")  # parallel_tag_fix_loop.py's own default
+# One worktree base per wrapper -- see their own --worktree-dir defaults.
+# main() picks between these by detected mode when --worktree-dir isn't
+# passed explicitly, the same way --log-dir auto-detects (see find_active_log_dir).
+DEFAULT_WORKTREE_DIR_BY_MODE = {
+    "tag": str(OXIDEX_HOME / "worktrees" / "parallel-tag-fix"),
+    "format": str(OXIDEX_HOME / "worktrees" / "parallel-fix"),
+}
 
 # Matched against a log file's lines, most recent first -- the first
 # pattern to hit wins, so more specific/terminal states (STOPPED, FIXED)
@@ -114,51 +120,16 @@ WORKER_CRASHED_RE = re.compile(r"^\[worker (\d+)\] CRASHED")
 # share this ComparisonReport shape.
 TAGCMP_FILENAME_RE = re.compile(r"^tagcmp-.+\.json$")
 
-# A worker's own logs/model-fix-requests/manifest.log -- one completed
-# (OK or ERROR) API call per line, phase-tagged (see model_fix_loop.py's
-# make_logging_call_model). RETRY lines use a different shape entirely
-# and are intentionally not matched by this -- see parse_manifest_log.
+# The shared logs/model-fix-requests/manifest.log every worker/format
+# process appends to -- one completed (OK or ERROR) API call per line,
+# phase- and worker-tagged (see model_fix_loop.py's make_logging_call_model).
+# RETRY lines use a different shape entirely and are intentionally not
+# matched by this -- see parse_manifest_log.
 MANIFEST_ENTRY_RE = re.compile(
-    r"^(?P<ts>\S+) phase=(?P<phase>fixer|reviewer) model=(?P<model>\S+) "
+    r"^(?P<ts>\S+) phase=(?P<phase>fixer|reviewer) worker=(?P<worker>\S+) model=(?P<model>\S+) "
     r"prompt_chars=(?P<prompt_chars>\d+) elapsed=(?P<elapsed>[\d.]+)s "
     r"(?:reply_chars=\d+ )?(?P<rest>OK|ERROR=.*)$"
 )
-
-
-def parse_status(log_path):
-    """Return (label, color, detail) describing a worker's most recent
-    understood state, scanning its log file from the end. A missing or
-    empty file just means the worker hasn't started writing yet -- not an
-    error -- so it's reported as "waiting", not a failure.
-    """
-    try:
-        lines = log_path.read_text(errors="replace").splitlines()
-    except OSError:
-        return "waiting", DIM, ""
-    if not lines:
-        return "waiting", DIM, ""
-
-    for line in reversed(lines):
-        if STOPPED_RE.search(line):
-            return "done", CYAN, line.strip()
-        fixed_match = FIXED_RE.search(line)
-        if fixed_match:
-            return "fixed", GREEN, f"+{fixed_match.group(1)} gaps closed"
-        if REJECT_RE.search(line):
-            return "rejected", YELLOW, line.strip()
-        if REGRESSED_RE.search(line):
-            return "reverted", RED, line.strip()
-        if BUILD_FAILED_RE.search(line):
-            return "build-fail", RED, line.strip()
-        m = GAP_DELTA_RE.search(line)
-        if m:
-            before, after = int(m.group(1)), int(m.group(2))
-            delta = before - after
-            sign = f"+{delta}" if delta > 0 else str(delta)
-            color = GREEN if delta > 0 else (RED if delta < 0 else YELLOW)
-            return "attempt", color, f"gaps {before}->{after} ({sign})"
-
-    return "busy", DIM, lines[-1].strip()[:60]
 
 
 def parse_worker_log_status(log_path):
@@ -217,22 +188,6 @@ def parse_worker_log_status(log_path):
             return "waiting", DIM, line.strip()
 
     return "busy", DIM, lines[-1].strip()[:60]
-
-
-def parse_round_and_tag(log_path):
-    """Return (round_num, tag_key) from the most recent "round N:
-    attempting TAG" line in a worker's log, or (None, None) if it hasn't
-    logged one yet (e.g. still building/comparing before its first pick).
-    """
-    try:
-        lines = log_path.read_text(errors="replace").splitlines()
-    except OSError:
-        return None, None
-    for line in reversed(lines):
-        m = ROUND_TAG_RE.search(line)
-        if m:
-            return int(m.group(1)), m.group(2)
-    return None, None
 
 
 def parse_current_tag_progress(log_path):
@@ -298,16 +253,6 @@ def discover_workers(log_dir):
         if m:
             ids.append(int(m.group(1)))
     return sorted(ids)
-
-
-def count_tags_found(tags_found_log):
-    """Number of tags fixed so far across every worker -- one line per fix
-    in the shared log every worker appends to (see model_fix_loop.py's
-    --tags-found-log). 0 if the log doesn't exist yet."""
-    try:
-        return sum(1 for line in tags_found_log.read_text(errors="replace").splitlines() if line.strip())
-    except OSError:
-        return 0
 
 
 def parse_timestamp(ts_str):
@@ -484,7 +429,41 @@ def _model_names(models_table):
     return [m if isinstance(m, str) else m.get("name", "?") for m in (models_table or [])]
 
 
-def load_worker_model_config(worktree_dir, worker_id):
+def worker_worktree_name(worker_id, mode):
+    """The worktree subdirectory name for one worker/format's own
+    persistent checkout -- model-fix-tag-worker-<N> for
+    parallel_tag_fix_loop.py's numeric worker ids (see its own
+    worktree_path), model-fix-<lowercase format> for
+    parallel_model_fix_loop.py's format-name ids (see its own, separate
+    worktree_path -- same helper name, different naming scheme)."""
+    if mode == "format":
+        return f"model-fix-{str(worker_id).lower()}"
+    return f"model-fix-tag-worker-{worker_id}"
+
+
+def worker_log_path(log_dir, worker_id, mode):
+    """This worker/format's own combined stdout/stderr log -- worker-<N>.log
+    for tag mode (parallel_tag_fix_loop.py), <FORMAT>.log for format mode
+    (parallel_model_fix_loop.py)."""
+    if mode == "format":
+        return log_dir / f"{worker_id}.log"
+    return log_dir / f"worker-{worker_id}.log"
+
+
+def discover_worker_ids(log_dir):
+    """(worker_ids, mode) for whichever wrapper's logs are present in
+    log_dir: numeric ids with mode "tag" for parallel_tag_fix_loop.py's
+    worker-<N>.log files, or format-name ids with mode "format" for
+    parallel_model_fix_loop.py's <FORMAT>.log files. The two wrappers
+    write to different log dirs (see find_active_log_dir), so in practice
+    exactly one shape is ever present; tag ids win if somehow both are."""
+    tag_ids = discover_workers(log_dir)
+    if tag_ids:
+        return tag_ids, "tag"
+    return discover_formats(log_dir), "format"
+
+
+def load_worker_model_config(worktree_dir, worker_id, mode="tag"):
     """(fixer_models, fixer_reasoning, reviewer_models, reviewer_reasoning)
     read directly from this worker's own config.toml copy -- each
     worktree gets one at creation time (see
@@ -505,7 +484,7 @@ def load_worker_model_config(worktree_dir, worker_id):
     values are None if config.toml can't be read (worktree gone, or this
     worker id never started).
     """
-    path = Path(worktree_dir) / f"model-fix-tag-worker-{worker_id}" / "config.toml"
+    path = Path(worktree_dir) / worker_worktree_name(worker_id, mode) / "config.toml"
     try:
         with open(path, "rb") as f:
             data = tomllib.load(f)
@@ -519,20 +498,12 @@ def load_worker_model_config(worktree_dir, worker_id):
     )
 
 
-def worker_manifest_path(worktree_dir, worker_id):
-    """Path to a worker's own request audit trail -- see
-    model_fix_loop.py main()'s make_logging_call_model, which writes
-    req_log_dir relative to REPO_ROOT as resolved *inside that worker's
-    own worktree* (each is a full checkout with its own copy of
-    scripts/model_fix_loop.py), not a path shared across workers."""
-    return Path(worktree_dir) / f"model-fix-tag-worker-{worker_id}" / "logs" / "model-fix-requests" / "manifest.log"
-
-
 def parse_manifest_log(path):
-    """[(timestamp_str, phase, elapsed_seconds, ok), ...] in file order,
-    from a worker's own manifest.log (see model_fix_loop.py's
-    make_logging_call_model) -- one entry per COMPLETED API call, fixer
-    or reviewer, success or failure, each with its own elapsed time.
+    """[(timestamp_str, phase, elapsed_seconds, ok, worker), ...] in file
+    order, from the shared manifest.log every worker/format process
+    appends to (see model_fix_loop.py's make_logging_call_model) -- one
+    entry per COMPLETED API call, fixer or reviewer, success or failure,
+    each with its own elapsed time.
 
     RETRY lines (call_model's own internal retry, logged before the
     retried attempt actually happens) are deliberately excluded: they
@@ -549,8 +520,24 @@ def parse_manifest_log(path):
     for line in text.splitlines():
         m = MANIFEST_ENTRY_RE.match(line)
         if m:
-            entries.append((m.group("ts"), m.group("phase"), float(m.group("elapsed")), m.group("rest") == "OK"))
+            entries.append((
+                m.group("ts"), m.group("phase"), float(m.group("elapsed")),
+                m.group("rest") == "OK", m.group("worker"),
+            ))
     return entries
+
+
+def entries_for_worker(entries, worker_id):
+    """Filter parse_manifest_log's entries down to just one worker/format's
+    own calls, dropping the worker tag back off to match request_stats'
+    plain (ts, phase, elapsed, ok) shape. Necessary because every worker
+    now shares one manifest.log (model_fix_loop.py's req_log_dir is a
+    single OXIDEX_HOME-fixed location, not per-worktree) -- parse the
+    shared file once with parse_manifest_log and reuse that same list both
+    unfiltered (the dashboard-wide aggregate) and filtered through this
+    (each worker's own row)."""
+    label = str(worker_id)
+    return [(ts, phase, elapsed, ok) for ts, phase, elapsed, ok, worker in entries if worker == label]
 
 
 def _mean(values):
@@ -609,18 +596,6 @@ def parse_current_round_start(log_path):
             ts_match = LOG_TIMESTAMP_RE.match(line)
             return parse_timestamp(ts_match.group(1)) if ts_match else None
     return None
-
-
-def aggregate_manifest_entries(worktree_dir, worker_ids):
-    """All manifest.log entries across every given worker id, combined --
-    for a dashboard-wide aggregate (see request_stats). A worker whose
-    worktree/manifest.log no longer exists (e.g. a slot retired after
-    exhausting its crash-retry cap) simply contributes nothing, rather
-    than breaking the aggregate."""
-    entries = []
-    for worker_id in worker_ids:
-        entries.extend(parse_manifest_log(worker_manifest_path(worktree_dir, worker_id)))
-    return entries
 
 
 def _format_latency_stats(stats, color):
@@ -717,33 +692,6 @@ def render_format_progress(progress, width=40):
     return lines
 
 
-def render(log_dir, formats):
-    lines = [f"{BOLD}parallel_model_fix_loop.py -- watching {log_dir}{RESET}", ""]
-    for fmt in formats:
-        label, color, detail = parse_status(log_dir / f"{fmt}.log")
-        lines.append(f"  {fmt:<10} {color}{label:<10}{RESET} {detail}")
-    return "\n".join(lines)
-
-
-def render_workers(log_dir, worker_ids, tags_found_log):
-    total_found = count_tags_found(tags_found_log)
-    lines = [
-        f"{BOLD}parallel_tag_fix_loop.py -- watching {log_dir}{RESET}",
-        f"{BOLD}tags found so far (all workers): {GREEN}{total_found}{RESET}{BOLD} "
-        f"(see {tags_found_log}){RESET}",
-        "",
-    ]
-    for worker_id in worker_ids:
-        log_path = log_dir / f"worker-{worker_id}.log"
-        round_num, tag = parse_round_and_tag(log_path)
-        label, color, detail = parse_status(log_path)
-        round_str = f"round {round_num}" if round_num is not None else "round -"
-        tag_str = tag or "(none yet)"
-        lines.append(
-            f"  worker-{worker_id:<3} {round_str:<10} {tag_str:<28} "
-            f"{color}{label:<10}{RESET} {detail}"
-        )
-    return "\n".join(lines)
 
 
 def _box_line(text, width, color=BRIGHT_WHITE):
@@ -752,14 +700,22 @@ def _box_line(text, width, color=BRIGHT_WHITE):
 
 
 def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrapper_log_path,
-                      format_progress, max_tag_fails, now, term_width=100, worktree_dir=None):
-    """The full per-tag dashboard: header, aggregate found/blacklist
-    stats, a colored progress bar per known format, then one detail row
-    per worker (status, current round/tag, when it launched onto that
+                      format_progress, max_tag_fails, now, term_width=100, worktree_dir=None,
+                      manifest_path=None, mode="tag"):
+    """The full dashboard: header, aggregate found/blacklist stats, a
+    colored progress bar per known format, then one detail row per
+    worker/format (status, current round/tag, when it launched onto that
     tag, lifetime restart/crash/personal-blacklist counts, and its
     configured fixer/reviewer model pool + reasoning level, read fresh
     from that worker's own config.toml copy -- see
-    load_worker_model_config)."""
+    load_worker_model_config).
+
+    mode is "tag" for parallel_tag_fix_loop.py's numeric worker ids
+    (worker-<N>.log) or "format" for parallel_model_fix_loop.py's
+    format-name ids (<FORMAT>.log) -- see discover_worker_ids, which
+    picks it automatically from whatever's actually in log_dir. Every
+    other per-mode difference (log path, worktree subdirectory name)
+    flows from this one flag."""
     width = max(60, term_width)
     state = load_tag_state(tag_state_path)
     bl_stats = blacklist_stats(state, now)
@@ -791,9 +747,12 @@ def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrappe
         f"{DIM}|{RESET}  {YELLOW}{bl_stats['last_hour']}{RESET} last hour  "
         f"{DIM}|{RESET}  {YELLOW}{bl_stats['last_24h']}{RESET} last 24h"
     )
-    if worktree_dir is not None:
-        all_entries = aggregate_manifest_entries(worktree_dir, worker_ids)
-        agg_stats = request_stats(all_entries)
+    all_entries = parse_manifest_log(manifest_path) if manifest_path is not None else []
+    if manifest_path is not None:
+        # request_stats wants request_stats' plain 4-tuple shape; all_entries
+        # (parse_manifest_log's raw output) carries a 5th worker field, kept
+        # around so the per-worker loop below can filter it via entries_for_worker.
+        agg_stats = request_stats([entry[:4] for entry in all_entries])
         last_str = "never"
         if agg_stats["last"] is not None:
             last_str = (
@@ -818,7 +777,7 @@ def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrappe
         lines.append(f"  {DIM}no workers found in {log_dir}{RESET}")
     tag_width = 34
     for worker_id in worker_ids:
-        log_path = log_dir / f"worker-{worker_id}.log"
+        log_path = worker_log_path(log_dir, worker_id, mode)
         _round_num, tag_key, launched_at = parse_current_tag_progress(log_path)
         label, color, detail = parse_worker_log_status(log_path)
         wid = str(worker_id)
@@ -829,9 +788,10 @@ def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrappe
         iter_str = f"{iteration}/{max_tag_fails}" if iteration is not None else "-"
         tag_str = (tag_key or "-")[:tag_width]
         launched_str = format_relative(now - launched_at) if launched_at is not None else "-"
+        row_label = f"worker-{worker_id:<3}" if mode == "tag" else f"{worker_id:<10}"
 
         lines.append(
-            f"  {BOLD}worker-{worker_id:<3}{RESET} "
+            f"  {BOLD}{row_label}{RESET} "
             f"{color}{BULLET}{RESET} {color}{label:<11}{RESET} "
             f"iter {BOLD}{iter_str:<6}{RESET} "
             f"{CYAN}{tag_str:<{tag_width}}{RESET} "
@@ -842,7 +802,7 @@ def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrappe
         )
         if worktree_dir is not None:
             fixer_models, fixer_reasoning, reviewer_models, reviewer_reasoning = load_worker_model_config(
-                worktree_dir, worker_id
+                worktree_dir, worker_id, mode
             )
             if fixer_models is not None:
                 lines.append(
@@ -852,7 +812,8 @@ def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrappe
                     f"{DIM}@{reviewer_reasoning}{RESET}"
                 )
 
-            manifest_entries = parse_manifest_log(worker_manifest_path(worktree_dir, worker_id))
+        if manifest_path is not None:
+            manifest_entries = entries_for_worker(all_entries, worker_id)
             if manifest_entries:
                 lifetime_stats = request_stats(manifest_entries)
                 round_start = parse_current_round_start(log_path)
@@ -909,6 +870,14 @@ def main(argv=None, sleep_fn=time.sleep, stdout=sys.stdout, now_fn=time.time):
              "<log-dir's parent>/parallel-wrapper.log.",
     )
     parser.add_argument(
+        "--manifest-log",
+        default=None,
+        help="The shared request-audit manifest.log every worker/format appends to (see "
+             "model_fix_loop.py's make_logging_call_model) -- one location for both wrappers, "
+             "since model_fix_loop.py's own req_log_dir is OXIDEX_HOME-fixed, not per-worktree. "
+             "Default: <log-dir's parent>/model-fix-requests/manifest.log.",
+    )
+    parser.add_argument(
         "--tagcmp-dir",
         default=DEFAULT_TAGCMP_DIR,
         help="Directory holding tagcmp-<FORMAT>.json comparison reports -- "
@@ -929,10 +898,13 @@ def main(argv=None, sleep_fn=time.sleep, stdout=sys.stdout, now_fn=time.time):
     )
     parser.add_argument(
         "--worktree-dir",
-        default=DEFAULT_WORKTREE_DIR,
-        help="Base directory of each worker's own persistent worktree (parallel_tag_fix_loop.py's "
-             "own --worktree-dir), used to read each worker's config.toml copy for its fixer/"
-             f"reviewer model pool and reasoning level. Default: {DEFAULT_WORKTREE_DIR}",
+        default=None,
+        help="Base directory of each worker/format's own persistent worktree (parallel_tag_fix_loop.py's "
+             "or parallel_model_fix_loop.py's own --worktree-dir), used to read each worker's "
+             "config.toml copy for its fixer/reviewer model pool and reasoning level. Default: "
+             "auto-detect by mode, same as --log-dir -- "
+             f"{DEFAULT_WORKTREE_DIR_BY_MODE['tag']} for tag mode, "
+             f"{DEFAULT_WORKTREE_DIR_BY_MODE['format']} for format mode.",
     )
     parser.add_argument("--interval", type=float, default=0.5, help="Redraw interval in seconds")
     args = parser.parse_args(argv)
@@ -961,21 +933,22 @@ def main(argv=None, sleep_fn=time.sleep, stdout=sys.stdout, now_fn=time.time):
     wrapper_log_path = (
         Path(args.wrapper_log) if args.wrapper_log else log_dir.parent / "parallel-wrapper.log"
     )
+    manifest_path = (
+        Path(args.manifest_log) if args.manifest_log else log_dir.parent / "model-fix-requests" / "manifest.log"
+    )
 
     try:
         while True:
-            worker_ids = discover_workers(log_dir)
+            worker_ids, mode = discover_worker_ids(log_dir)
+            worktree_dir = args.worktree_dir or DEFAULT_WORKTREE_DIR_BY_MODE[mode]
             term_width = shutil.get_terminal_size(fallback=(100, 24)).columns
+            format_progress = discover_format_progress(args.tagcmp_dir, args.repo_root)
             stdout.write("\x1b[2J\x1b[H")  # clear screen, cursor home
-            if worker_ids:
-                format_progress = discover_format_progress(args.tagcmp_dir, args.repo_root)
-                stdout.write(render_dashboard(
-                    log_dir, worker_ids, tags_found_log, tag_state_path, wrapper_log_path,
-                    format_progress, args.max_tag_fails, now_fn(), term_width, args.worktree_dir,
-                ) + "\n")
-            else:
-                formats = discover_formats(log_dir)
-                stdout.write(render(log_dir, formats) + "\n")
+            stdout.write(render_dashboard(
+                log_dir, worker_ids, tags_found_log, tag_state_path, wrapper_log_path,
+                format_progress, args.max_tag_fails, now_fn(), term_width, worktree_dir,
+                manifest_path, mode,
+            ) + "\n")
             stdout.flush()
             sleep_fn(args.interval)
     except KeyboardInterrupt:

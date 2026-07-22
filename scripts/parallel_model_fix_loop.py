@@ -259,7 +259,12 @@ def run_worker(fmt, worktree, cache_dir, log_path, timeout=None):
     env["PYTHONUNBUFFERED"] = "1"
     with open(log_path, "w") as log_file:
         proc = subprocess.Popen(  # nosec B603
-            ["uv", "run", "scripts/model_fix_loop.py", "--only-format", fmt],
+            # --worker-id tags this format's manifest.log lines (see
+            # model_fix_loop.py's make_logging_call_model) -- req_log_dir is
+            # a single OXIDEX_HOME-fixed location every format's worker
+            # shares, so without a distinct id per format, watch_parallel_fix.py
+            # couldn't attribute a shared manifest.log line back to this fmt.
+            ["uv", "run", "scripts/model_fix_loop.py", "--only-format", fmt, "--worker-id", fmt],
             cwd=worktree, env=env, stdout=log_file, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
