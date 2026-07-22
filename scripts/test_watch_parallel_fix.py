@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from watch_parallel_fix import (
     BRIGHT_GREEN,
@@ -17,6 +18,7 @@ from watch_parallel_fix import (
     discover_format_progress,
     discover_formats,
     discover_workers,
+    find_active_log_dir,
     format_relative,
     found_stats,
     load_tag_state,
@@ -530,6 +532,38 @@ class DiscoverFormatsTests(unittest.TestCase):
             self.assertEqual(discover_formats(tmp), ["AVI", "NEF"])
 
 
+class FindActiveLogDirTests(unittest.TestCase):
+    def test_returns_none_when_no_candidate_has_logs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            empty_a, empty_b = tmp / "a", tmp / "b"
+            empty_a.mkdir()
+            self.assertIsNone(find_active_log_dir([empty_a, empty_b]))
+
+    def test_picks_the_only_candidate_with_logs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            with_logs, without_logs = tmp / "a", tmp / "b"
+            with_logs.mkdir()
+            without_logs.mkdir()
+            (with_logs / "NEF.log").write_text("")
+            self.assertEqual(find_active_log_dir([without_logs, with_logs]), with_logs)
+
+    def test_prefers_the_more_recently_modified_candidate(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            stale, fresh = tmp / "stale", tmp / "fresh"
+            stale.mkdir()
+            fresh.mkdir()
+            stale_log = stale / "NEF.log"
+            stale_log.write_text("")
+            time.sleep(0.01)
+            fresh_log = fresh / "worker-1.log"
+            fresh_log.write_text("")
+            self.assertEqual(find_active_log_dir([stale, fresh]), fresh)
+            self.assertEqual(find_active_log_dir([fresh, stale]), fresh)
+
+
 class RenderTests(unittest.TestCase):
     def test_includes_a_line_per_format(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -560,6 +594,30 @@ class MainLoopTests(unittest.TestCase):
             self.assertIn("Waiting for logs", out.getvalue())
             self.assertIn("NEF", out.getvalue())
             self.assertEqual(sleeps, [0.1, 0.1])
+
+    def test_without_explicit_log_dir_auto_detects_between_the_two_wrapper_defaults(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            oxidex_home = Path(tmpdir)
+            model_fix_dir = oxidex_home / "logs" / "parallel-model-fix"
+            tag_fix_dir = oxidex_home / "logs" / "parallel-tag-fix"
+            model_fix_dir.mkdir(parents=True)
+            sleeps = []
+
+            def fake_sleep(interval):
+                sleeps.append(interval)
+                if len(sleeps) == 1:
+                    (model_fix_dir / "NEF.log").write_text("[NEF] gaps 5 -> 2\n")
+                elif len(sleeps) == 2:
+                    raise KeyboardInterrupt
+
+            out = io.StringIO()
+            with patch("watch_parallel_fix.OXIDEX_HOME", oxidex_home):
+                exit_code = main(["--interval", "0.1"], sleep_fn=fake_sleep, stdout=out)
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn(str(tag_fix_dir), out.getvalue())
+            self.assertIn(str(model_fix_dir), out.getvalue())
+            self.assertIn("NEF", out.getvalue())
 
 
 class ParseRoundAndTagTests(unittest.TestCase):

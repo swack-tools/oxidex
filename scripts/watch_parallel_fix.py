@@ -268,6 +268,24 @@ def parse_current_tag_progress(log_path):
     return last_round, last_tag, launched_at
 
 
+def find_active_log_dir(candidates):
+    """Of the given candidate directories, return whichever has *.log files,
+    preferring the one with the most recently modified file if more than one
+    does (the other is presumably stale output left over from an earlier,
+    now-finished run). None if none of them have any log files yet."""
+    best, best_mtime = None, None
+    for candidate in candidates:
+        if not candidate.is_dir():
+            continue
+        mtimes = [p.stat().st_mtime for p in candidate.glob("*.log")]
+        if not mtimes:
+            continue
+        mtime = max(mtimes)
+        if best_mtime is None or mtime > best_mtime:
+            best, best_mtime = candidate, mtime
+    return best
+
+
 def discover_formats(log_dir):
     return sorted(p.stem for p in log_dir.glob("*.log") if not WORKER_LOG_RE.match(p.name))
 
@@ -862,10 +880,13 @@ def main(argv=None, sleep_fn=time.sleep, stdout=sys.stdout, now_fn=time.time):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--log-dir",
-        default=str(OXIDEX_HOME / "logs" / "parallel-tag-fix"),
+        default=None,
         help="Directory of per-format .log files (parallel_model_fix_loop.py's --log-dir) or "
              "per-worker worker-<N>.log files (parallel_tag_fix_loop.py's --log-dir) -- "
-             "auto-detected by filename shape.",
+             "auto-detected by filename shape. Default: auto-detect which wrapper is actually "
+             f"running by checking both {OXIDEX_HOME / 'logs' / 'parallel-tag-fix'} and "
+             f"{OXIDEX_HOME / 'logs' / 'parallel-model-fix'}, picking whichever has the more "
+             "recently modified log file.",
     )
     parser.add_argument(
         "--tags-found-log",
@@ -916,7 +937,21 @@ def main(argv=None, sleep_fn=time.sleep, stdout=sys.stdout, now_fn=time.time):
     parser.add_argument("--interval", type=float, default=0.5, help="Redraw interval in seconds")
     args = parser.parse_args(argv)
 
-    log_dir = Path(args.log_dir)
+    if args.log_dir:
+        log_dir = Path(args.log_dir)
+        stdout.write(f"Waiting for logs to appear in {log_dir}...\n")
+        stdout.flush()
+        while not log_dir.is_dir() or not any(log_dir.glob("*.log")):
+            sleep_fn(args.interval)
+    else:
+        candidates = [OXIDEX_HOME / "logs" / "parallel-tag-fix", OXIDEX_HOME / "logs" / "parallel-model-fix"]
+        stdout.write(f"Waiting for logs to appear in {candidates[0]} or {candidates[1]}...\n")
+        stdout.flush()
+        log_dir = find_active_log_dir(candidates)
+        while log_dir is None:
+            sleep_fn(args.interval)
+            log_dir = find_active_log_dir(candidates)
+
     tags_found_log = (
         Path(args.tags_found_log) if args.tags_found_log else log_dir.parent / "tags-found.log"
     )
@@ -926,11 +961,6 @@ def main(argv=None, sleep_fn=time.sleep, stdout=sys.stdout, now_fn=time.time):
     wrapper_log_path = (
         Path(args.wrapper_log) if args.wrapper_log else log_dir.parent / "parallel-wrapper.log"
     )
-
-    stdout.write(f"Waiting for logs to appear in {log_dir}...\n")
-    stdout.flush()
-    while not log_dir.is_dir() or not any(log_dir.glob("*.log")):
-        sleep_fn(args.interval)
 
     try:
         while True:
