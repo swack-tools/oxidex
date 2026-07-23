@@ -268,6 +268,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // IFD0 tag 0x000A instead of the standard TIFF tag 0x0102.
                     // Use the standard tag ID for name lookup so this is
                     // exposed as the canonical EXIF BitsPerSample tag.
+                    //
+                    // BlackLevelBlue is PanasonicRaw tag 0x001E and has no
+                    // equivalent standard TIFF tag ID, so name it explicitly.
                     let canonical_tag_id =
                         if format == RawFormat::PanasonicRW2 && ifd_index == 0 && *tag_id == 0x000A
                         {
@@ -275,7 +278,14 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         } else {
                             *tag_id
                         };
-                    let tag_name = lookup_tag_name(canonical_tag_id, ifd_name);
+                    let tag_name = if format == RawFormat::PanasonicRW2
+                        && ifd_index == 0
+                        && *tag_id == 0x001E
+                    {
+                        format!("{}:BlackLevelBlue", ifd_name)
+                    } else {
+                        lookup_tag_name(canonical_tag_id, ifd_name)
+                    };
                     let tag_value =
                         raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order);
                     metadata.insert(tag_name, tag_value);
@@ -513,6 +523,35 @@ mod cfa_pattern2_tests {
         assert_eq!(
             decode_exif_cfa_pattern2(&bytes, ByteOrder::LittleEndian),
             None
+        );
+    }
+}
+
+#[cfg(test)]
+mod panasonic_rw2_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_black_level_blue_from_panasonic_raw_tag() {
+        // Little-endian RW2 header followed by an IFD containing one SHORT
+        // entry: PanasonicRaw tag 0x001E (BlackLevelBlue) with value zero.
+        let data = [
+            b'I', b'I', 0x55, 0x00, // RW2 byte order and magic
+            0x08, 0x00, 0x00, 0x00, // first IFD offset
+            0x01, 0x00, // entry count
+            0x1e, 0x00, // tag: BlackLevelBlue
+            0x03, 0x00, // type: SHORT
+            0x01, 0x00, 0x00, 0x00, // count: 1
+            0x00, 0x00, 0x00, 0x00, // value: 0
+            0x00, 0x00, 0x00, 0x00, // next IFD offset
+        ];
+
+        let metadata =
+            parse_raw_metadata(&data, RawFormat::PanasonicRW2).expect("valid synthetic RW2");
+
+        assert!(
+            metadata.contains_key("IFD0:BlackLevelBlue"),
+            "PanasonicRaw tag 0x001E should use its canonical EXIF name"
         );
     }
 }
