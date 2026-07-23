@@ -22,6 +22,7 @@ from model_fix_loop import (
     cargo_test_workspace,
     call_model,
     detect_duplicate_tag_insertion,
+    estimate_tokens,
     expand_gaps_to_tags,
     extract_diff,
     append_format_memory_note,
@@ -46,6 +47,7 @@ from model_fix_loop import (
     run_tag_loop,
     tag_key_for,
     tag_literal_for_gap,
+    truncate_to_token_budget,
 )
 
 
@@ -141,6 +143,32 @@ class ExtractDiffTests(unittest.TestCase):
         diff = extract_diff(text)
         self.assertIsNotNone(diff)
         self.assertTrue(diff.startswith("--- a/foo.rs"))
+
+
+class EstimateTokensTests(unittest.TestCase):
+    def test_roughly_four_chars_per_token(self):
+        self.assertEqual(estimate_tokens("a" * 400), 100)
+
+    def test_never_returns_zero_for_nonempty_text(self):
+        self.assertEqual(estimate_tokens("hi"), 1)
+
+
+class TruncateToTokenBudgetTests(unittest.TestCase):
+    def test_leaves_short_text_untouched(self):
+        text = "short prompt"
+        self.assertEqual(truncate_to_token_budget(text, max_tokens=100), text)
+
+    def test_truncates_long_text_and_appends_marker(self):
+        text = "x" * 100_000
+        result = truncate_to_token_budget(text, max_tokens=10)
+        self.assertLess(len(result), len(text))
+        self.assertTrue(result.startswith("x" * 40))
+        self.assertIn("truncated to fit the ~10-token budget", result)
+
+    def test_truncation_keeps_the_start_of_the_text(self):
+        text = "KEEP_THIS_PREFIX" + "z" * 100_000
+        result = truncate_to_token_budget(text, max_tokens=10)
+        self.assertTrue(result.startswith("KEEP_THIS_PREFIX"))
 
 
 class CallModelTests(unittest.TestCase):
@@ -933,6 +961,39 @@ class BuildPromptTests(unittest.TestCase):
             )
             prompt = build_prompt(make_gap(gap_count=2), sweep_review_log_path=log_path)
         self.assertNotIn("Recent sweep-review outcomes", prompt)
+
+
+class BuildPromptTokenBudgetTests(unittest.TestCase):
+    def test_always_explains_the_patch_chunking_protocol(self):
+        prompt = build_prompt(make_gap(gap_count=2))
+        self.assertIn("PATCH 1/N", prompt)
+        self.assertIn("```diff", prompt)
+
+    def test_mentions_the_configured_token_budget(self):
+        prompt = build_prompt(make_gap(gap_count=2), max_prompt_tokens=4096)
+        self.assertIn("roughly 4096 tokens", prompt)
+
+    def test_default_prompt_fits_within_the_default_token_budget(self):
+        gap = make_gap(gap_count=2)
+        prompt = build_prompt(gap)
+        self.assertLessEqual(estimate_tokens(prompt), 4096)
+
+    def test_a_tiny_token_budget_truncates_the_prompt(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            (tmp / "big.rs").write_text("x" * 100_000)
+            gap = {
+                "format": "JPEG", "missing_tags": [], "value_differences": [],
+                "gap_count": 0, "parser_files": ["big.rs"],
+            }
+            prompt = build_prompt(
+                gap, repo_root=tmp, max_tags=40, max_file_bytes=200_000, max_prompt_tokens=50,
+            )
+        self.assertIn("truncated to fit the ~50-token budget", prompt)
+        # Far short of what the untruncated prompt (100,000-char file alone) would be --
+        # the exact length includes the marker text's own overhead, so this checks
+        # order-of-magnitude truncation happened rather than an exact byte count.
+        self.assertLess(len(prompt), 1000)
 
 
 class LoadRecentSweepReviewsTests(unittest.TestCase):
@@ -1777,6 +1838,156 @@ class AttemptBuildTests(unittest.TestCase):
         )
         # 20 REQUEST turns + 1 nudge turn + 1 final failing call = 22.
         self.assertEqual(len(calls), 22)
+
+    def test_reassembles_a_diff_sent_as_patch_chunks(self):
+        replies = [
+            "PATCH 1/2\n```diff\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n```\n",
+            "PATCH 2/2\n```diff\n+new\n```\n",
+        ]
+        calls = []
+
+        def fake_call_model(messages, *a):
+            calls.append(1)
+            return replies[len(calls) - 1]
+
+        applied_diffs = []
+
+        def fake_git_apply(diff, root):
+            applied_diffs.append(diff)
+            return True, "ok"
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=fake_git_apply,
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
+        self.assertEqual(len(calls), 2)
+        # The two chunks concatenate back into exactly the original diff.
+        self.assertEqual(applied_diffs, ["--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n"])
+        self.assertEqual(diff, applied_diffs[0])
+
+    def test_prompts_for_the_next_chunk_between_patch_messages(self):
+        def fake_call_model(messages, *a):
+            if len(messages) == 1:
+                return "PATCH 1/2\n```diff\n--- a/x\n+++ b/x\n```\n"
+            # Second call: the harness must have asked for the missing chunk.
+            self.assertIn("missing chunk(s) 2", messages[-1]["content"])
+            return "PATCH 2/2\n```diff\n@@ -1 +1 @@\n-old\n+new\n```\n"
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
+
+    def test_asks_to_resend_a_patch_chunk_missing_its_diff_fence(self):
+        replies = [
+            "PATCH 1/2\nI'll send the diff shortly.",  # malformed -- no ```diff block
+            "PATCH 1/2\n```diff\n--- a/x\n+++ b/x\n```\n",
+            "PATCH 2/2\n```diff\n@@ -1 +1 @@\n-old\n+new\n```\n",
+        ]
+        calls = []
+
+        def fake_call_model(messages, *a):
+            calls.append(1)
+            if len(calls) == 2:
+                self.assertIn("didn't include a", messages[-1]["content"])
+            return replies[len(calls) - 1]
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
+        self.assertEqual(len(calls), 3)
+
+    def test_handles_out_of_order_chunk_delivery(self):
+        # Chunk 3/3 arrives before chunk 2/3 -- reassembly must notice the
+        # gap (not just check "is this reply's own index the last one")
+        # and, once complete, concatenate in INDEX order, not receipt order.
+        replies = [
+            "PATCH 1/3\n```diff\n--- a/x\n```\n",
+            "PATCH 3/3\n```diff\n+new\n```\n",
+            "PATCH 2/3\n```diff\n+++ b/x\n@@ -1 +1 @@\n-old\n```\n",
+        ]
+        calls = []
+
+        def fake_call_model(messages, *a):
+            calls.append(1)
+            if len(calls) == 2:
+                self.assertIn("missing chunk(s) 2, 3", messages[-1]["content"])
+            if len(calls) == 3:
+                self.assertIn("missing chunk(s) 2", messages[-1]["content"])
+            return replies[len(calls) - 1]
+
+        applied_diffs = []
+
+        def fake_git_apply(diff, root):
+            applied_diffs.append(diff)
+            return True, "ok"
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=fake_git_apply,
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(applied_diffs, ["--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n"])
+
+    def test_fails_with_specific_reason_when_patch_chunking_exceeds_safety_limit(self):
+        # A misbehaving/looping model keeps declaring more chunks than any
+        # reasonable diff would need -- this must not stall the attempt
+        # forever.
+        def fake_call_model(messages, *a):
+            return "PATCH 1/1000\n```diff\n--- a/x\n+++ b/x\n```\n"
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertIn("patch chunking exceeded safety limit", reason)
+
+    def test_rejects_a_patch_header_with_index_greater_than_total(self):
+        def fake_call_model(messages, *a):
+            return "PATCH 5/2\n```diff\n--- a/x\n+++ b/x\n```\n"
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertIn("patch chunking exceeded safety limit", reason)
 
 
 class FixGapFailureTests(unittest.TestCase):

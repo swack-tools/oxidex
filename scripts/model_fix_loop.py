@@ -15,7 +15,14 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           model call (fixer attempt or reviewer verdict), so
                           a run rotates across the whole pool rather than
                           pinning to one model.
-    max_tokens           default 4096
+    max_tokens           default 4096 (cap on the model's own reply length)
+    max_prompt_tokens     default 4096 (worker only; hard cap on the built
+                          prompt itself -- see estimate_tokens/
+                          truncate_to_token_budget -- a ~4 chars/token
+                          estimate, no real tokenizer dependency. If the
+                          model's own diff would exceed this in one reply,
+                          the prompt tells it to split into "PATCH i/N"
+                          chunks instead -- see attempt_build.)
     reasoning_effort      default "max"
     max_prompt_tags       default 40 (worker only; per-attempt cap on
                           missing_tags/value_differences shown -- the rest
@@ -131,6 +138,40 @@ def extract_diff(response_text):
     if stripped.startswith("diff --git") or stripped.startswith("--- "):
         return strip_patch_sentinels(stripped)
     return None
+
+
+def estimate_tokens(text):
+    """Rough token-count estimate (~4 chars/token, the standard rule of
+    thumb for English/code with GPT-style BPE tokenizers). This script
+    intentionally has no real tokenizer dependency (it's a uv inline
+    script with `dependencies = []`) -- this is a deliberately cheap
+    approximation, good enough for staying under a request's token
+    budget without pulling in tiktoken or similar just for that."""
+    return max(1, len(text) // 4)
+
+
+DEFAULT_MAX_PROMPT_TOKENS = 4096
+
+
+def truncate_to_token_budget(text, max_tokens=DEFAULT_MAX_PROMPT_TOKENS):
+    """Hard-truncate text to fit within max_tokens (see estimate_tokens
+    for the char/token conversion), keeping the START of the text (the
+    framing/instructions/gap description come first in build_prompt's
+    output; the large appended reference sections -- parser file
+    contents, Perl snippets, memory -- are the least essential once a
+    budget this tight is in play) and appending a truncation marker.
+    build_prompt's own per-section caps (max_tags, max_file_bytes, etc.)
+    already try to keep prompts reasonable; this is the final backstop
+    so lowering config's max_prompt_tokens alone is enough to guarantee
+    the bound, without having to separately retune every section cap."""
+    max_chars = max_tokens * 4
+    if len(text) <= max_chars:
+        return text
+    return (
+        text[:max_chars]
+        + f"\n\n...(prompt truncated to fit the ~{max_tokens}-token budget; "
+        "ask for specific files via REQUEST: if you need something that got cut)"
+    )
 
 
 DEFAULT_RETRYABLE_HTTP_STATUSES = {500, 502, 503, 504}
@@ -1083,7 +1124,8 @@ def build_exact_sample_block(gap, samples_dir):
 def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                   max_file_bytes=DEFAULT_MAX_PROMPT_FILE_BYTES, samples_dir=None,
                   max_samples_listed=DEFAULT_MAX_SAMPLE_FILES_LISTED, previous_attempts=None,
-                  perl_lib_dir=None, sweep_review_log_path=None, format_memory_dir=None):
+                  perl_lib_dir=None, sweep_review_log_path=None, format_memory_dir=None,
+                  max_prompt_tokens=DEFAULT_MAX_PROMPT_TOKENS):
     """Format one gap into a model prompt, capped so a huge format (e.g.
     JPEG with thousands of gaps and dozens of parser files) becomes an
     iterative, tractable request instead of one impossibly large prompt.
@@ -1196,7 +1238,7 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
 
     attempts_block = format_previous_attempts(previous_attempts)
 
-    return (
+    prompt = (
         f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
         f"Missing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
         f"Value differences (both extract it, values disagree):\n{diffs}"
@@ -1217,8 +1259,21 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
         "approach on a later round. Then provide a single unified diff (in a ```diff fenced block) "
         "that fixes as many of these gaps as you can correctly verify. For value differences, only "
         "fix genuine bugs, not benign formatting differences. If more gaps exist than are shown "
-        "above, that's expected -- just fix what's shown here, and future rounds will address the rest."
+        "above, that's expected -- just fix what's shown here, and future rounds will address the rest.\n\n"
+        f"Your reply is capped at roughly {max_prompt_tokens} tokens (~{max_prompt_tokens * 4} "
+        "characters). If your finished diff would exceed that in one reply, do NOT send a partial or "
+        "truncated diff -- instead split it into consecutive chunks and send ONLY the first one, "
+        "formatted exactly as:\n"
+        "PATCH 1/N\n"
+        "```diff\n"
+        "<the first chunk of the diff -- a clean prefix, not necessarily a complete file>\n"
+        "```\n"
+        "where N is the total number of chunks you intend to send. You'll be prompted for each next "
+        "chunk in turn (\"PATCH 2/N\", then \"PATCH 3/N\", ...) until you send chunk N/N; all chunks "
+        "are concatenated back together in order before being applied, so split at any convenient "
+        "point -- mid-hunk is fine, just don't repeat or skip any lines across the boundary."
     )
+    return truncate_to_token_budget(prompt, max_prompt_tokens)
 
 
 FORMAT_SAMPLE_EXTENSIONS = {
@@ -1349,6 +1404,10 @@ REQUEST_RE = re.compile(r"^REQUEST:\s*(.+)$", re.IGNORECASE)
 DEFAULT_MAX_REQUEST_TURNS = 20  # investigation turns before a diff is still required
 DEFAULT_HEXDUMP_BYTES = 2048
 
+PATCH_HEADER_RE = re.compile(r"^PATCH\s+(\d+)\s*/\s*(\d+)\b", re.IGNORECASE)
+DEFAULT_MAX_PATCH_CHUNKS = 40  # hard safety cap, independent of the declared N -- a
+# misbehaving/looping model must not be able to stall an attempt forever
+
 
 def hex_dump(data, max_bytes=DEFAULT_HEXDUMP_BYTES):
     """Render up to max_bytes of data as classic 16-bytes-per-line hex+ASCII,
@@ -1413,11 +1472,25 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     repair round-trip can land on a different model -- potentially a
     different provider entirely -- from config["models"] than the initial
     attempt. Each spec is a {"name", "base_url", "api_key"} dict.
+
+    A single reply is capped at config["max_tokens"] (see build_prompt's
+    matching config["max_prompt_tokens"] on the request side), so a large
+    diff may not fit in one turn. build_prompt tells the model to split
+    such a diff into "PATCH i/N" chunks instead of truncating it silently
+    -- see PATCH_HEADER_RE below. Each chunk is accumulated (up to
+    DEFAULT_MAX_PATCH_CHUNKS turns, a safety ceiling independent of N, in
+    case of a misbehaving/looping model) and, once chunk N/N arrives with
+    every chunk 1..N present, concatenated back into one diff and applied
+    exactly like a normal single-reply diff -- this doesn't consume a
+    separate diff_attempts_used slot per chunk, only once the full diff is
+    assembled and ready to apply.
     """
     max_request_turns = config.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS)
     request_turns_used = 0
     diff_attempts_used = 0
     nudged_to_stop_investigating = False
+    patch_chunks = {}
+    patch_turns_used = 0
     while diff_attempts_used < 2:  # one initial attempt + one repair round-trip
         model_spec = pick_model_fn(config["models"])
         try:
@@ -1467,14 +1540,60 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 continue
             return False, "no diff in model response (exhausted request budget)", None, messages
 
-        diff = extract_diff(reply)
-        if diff is None:
-            return False, "no diff in model response", None, messages
+        patch_match = PATCH_HEADER_RE.match(reply.strip())
+        if patch_match:
+            chunk_index, chunk_total = int(patch_match.group(1)), int(patch_match.group(2))
+            if (
+                patch_turns_used >= DEFAULT_MAX_PATCH_CHUNKS
+                or chunk_index < 1 or chunk_total < 1 or chunk_index > chunk_total
+            ):
+                return (
+                    False, "no diff in model response (patch chunking exceeded safety limit)",
+                    None, messages,
+                )
+            patch_turns_used += 1
+            chunk_diff = extract_diff(reply)
+            if chunk_diff is None:
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"That \"PATCH {chunk_index}/{chunk_total}\" message didn't include a "
+                        "```diff fenced block -- resend just this chunk with the diff content "
+                        "included."
+                    ),
+                })
+                continue
+            patch_chunks[chunk_index] = chunk_diff
+            # Check completeness by CONTENT (every index 1..chunk_total
+            # present), not by whether this reply's own index equals
+            # chunk_total -- chunks can arrive out of order (e.g. N/N sent
+            # before some earlier index), and checking only "is this the
+            # last-numbered chunk" would otherwise miss a real gap left by
+            # an out-of-order delivery, or re-request an already-received
+            # chunk forever.
+            missing = [i for i in range(1, chunk_total + 1) if i not in patch_chunks]
+            if missing:
+                missing_str = ", ".join(str(i) for i in missing)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"Received chunk {chunk_index}/{chunk_total}. Still missing chunk(s) "
+                        f"{missing_str} -- send the next one now, in the same "
+                        f"\"PATCH i/{chunk_total}\" + ```diff fenced block format."
+                    ),
+                })
+                continue
+            diff = "".join(patch_chunks[i] for i in range(1, chunk_total + 1))
+        else:
+            diff = extract_diff(reply)
+            if diff is None:
+                return False, "no diff in model response", None, messages
 
         diff_attempts_used += 1
         applied, apply_msg = git_apply_fn(diff, repo_root)
         if not applied:
             git_checkout_clean_fn(repo_root)
+            patch_chunks = {}  # a resend may be a fresh single diff or a fresh chunk sequence
             messages.append({
                 "role": "user",
                 "content": f"That diff did not apply: {apply_msg}\nPlease resend a corrected diff.",
@@ -1486,6 +1605,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
             return True, None, diff, messages
 
         git_checkout_clean_fn(repo_root)
+        patch_chunks = {}
         messages.append({
             "role": "user",
             "content": f"The build failed:\n{build_err}\nPlease resend a corrected diff.",
@@ -1611,6 +1731,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         sweep_review_log_path=sweep_review_log_path,
         format_memory_dir=format_memory_dir,
         previous_attempts=previous_attempts,
+        max_prompt_tokens=config.get("max_prompt_tokens", DEFAULT_MAX_PROMPT_TOKENS),
     )}]
 
     rounds = []  # every non-fixed round: {"diff", "reason", "critique"} -- see run_tag_loop
@@ -2112,6 +2233,7 @@ def _normalize_model_config(table):
             for m in (table.get("models") or [])
         ],
         "max_tokens": table.get("max_tokens", 4096),
+        "max_prompt_tokens": table.get("max_prompt_tokens", DEFAULT_MAX_PROMPT_TOKENS),
         "reasoning_effort": table.get("reasoning_effort", "max"),
         "max_prompt_tags": table.get("max_prompt_tags", DEFAULT_MAX_PROMPT_TAGS),
         "max_prompt_file_bytes": table.get("max_prompt_file_bytes", DEFAULT_MAX_PROMPT_FILE_BYTES),
@@ -2452,6 +2574,7 @@ def main(argv=None):
             perl_lib_dir=perl_lib_dir,
             sweep_review_log_path=sweep_review_log_path,
             format_memory_dir=format_memory_dir,
+            max_prompt_tokens=cfg.get("max_prompt_tokens", DEFAULT_MAX_PROMPT_TOKENS),
         )
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         banner = f"\n{'=' * 20} [{ts}] worker={worker_label} tag={tag_gap['tag_key']} {'=' * 20}\n"
