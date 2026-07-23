@@ -391,6 +391,14 @@ def run_round(args, config_path):
 
 
 def main(argv=None, run_round_fn=run_round, sleep_fn=time.sleep):
+    # The same buffering issue fixed for workers (PYTHONUNBUFFERED in
+    # run_worker's env) also applies to this wrapper process itself when its
+    # own stdout is redirected to a file (e.g. `nohup ... > out.log &`)
+    # rather than a TTY -- confirmed live: its print() status lines sat
+    # completely unflushed, making it impossible to tell what it was doing
+    # (mid-merge? stuck? just sleeping?) without attaching a debugger. See
+    # parallel_tag_fix_loop.py's main() for the sibling fix.
+    sys.stdout.reconfigure(line_buffering=True)
     # An interrupted wrapper (Ctrl-C, SIGTERM) must not leave worker
     # process trees (cargo build/test, rustc) running unsupervised.
     signal.signal(signal.SIGINT, _handle_shutdown_signal)
