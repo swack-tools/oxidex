@@ -16,6 +16,7 @@ from model_fix_loop import (
     build_format_overview_block,
     build_perl_reference_block,
     build_prompt,
+    build_reply_shape_manifest,
     build_review_prompt,
     critique_failed_attempt,
     cargo_build,
@@ -53,6 +54,7 @@ from model_fix_loop import (
     run_tag_loop,
     tag_key_for,
     tag_literal_for_gap,
+    TERMINAL_REMINDER,
     truncate_to_token_budget,
 )
 
@@ -1057,6 +1059,33 @@ class BuildPromptTokenBudgetTests(unittest.TestCase):
         # the exact length includes the marker text's own overhead, so this checks
         # order-of-magnitude truncation happened rather than an exact byte count.
         self.assertLess(len(prompt), 1000)
+
+
+class BuildPromptOrderingTests(unittest.TestCase):
+    def test_static_sections_precede_gap_content(self):
+        prompt = build_prompt(make_gap(gap_count=2))
+        gap_pos = prompt.index("Missing entirely")
+        self.assertLess(prompt.index("CRITICAL RUST ARCHITECTURE CONSTRAINTS"), gap_pos)
+        self.assertLess(prompt.index("Lessons from mistakes"), gap_pos)
+        self.assertLess(prompt.index("exactly one of these four shapes"), gap_pos)
+
+    def test_volatile_history_comes_after_gap_content(self):
+        attempts = [{"diff": "--- a/x\n", "status": "failed", "reason": "build failed"}]
+        prompt = build_prompt(make_gap(gap_count=2), previous_attempts=attempts)
+        self.assertGreater(
+            prompt.index("Previous attempts on this exact tag"),
+            prompt.index("Missing entirely"),
+        )
+
+    def test_terminal_reminder_is_the_last_line(self):
+        prompt = build_prompt(make_gap(gap_count=2))
+        self.assertTrue(prompt.rstrip().endswith(TERMINAL_REMINDER.rstrip()))
+
+    def test_manifest_lists_all_four_shapes_and_range_syntax(self):
+        manifest = build_reply_shape_manifest(4096)
+        for needle in ("REQUEST:", "VERIFY", "PATCH 1/N", "Plan + diff",
+                       ":<start>-<end>", "roughly 4096 tokens", "ephemeral"):
+            self.assertIn(needle, manifest)
 
 
 class RustArchitectureConstraintsTests(unittest.TestCase):

@@ -1003,6 +1003,28 @@ Lessons from mistakes a human reviewer previously caught in this loop's own outp
 """.strip()
 
 
+def build_reply_shape_manifest(max_prompt_tokens):
+    """The complete reply protocol, stated once near the top of the
+    prompt (stable text -> provider prompt-cache friendly; early text ->
+    survives truncate_to_token_budget, which keeps the head)."""
+    return f"""You are operating in an ephemeral, isolated git worktree; broken builds during investigation are expected and cost nothing -- probe aggressively with VERIFY rather than guessing.
+
+Every reply must be exactly one of these four shapes:
+
+1. REQUEST: <path> -- see a source file or a sample file (a bare line, nothing else in the reply). Add :<start>-<end> after a source path (e.g. REQUEST: src/parsers/x.rs:40-120) to get just that 1-indexed line range -- prefer a range for anything large.
+2. VERIFY -- trial-compile a candidate change without committing to it: the line "VERIFY" followed by exactly ONE ```diff fenced block. The diff is applied, `cargo check` runs, the tail of its output comes back, and the change is REVERTED -- your final diff must still contain the complete change.
+3. PATCH 1/N -- if your finished diff would exceed roughly {max_prompt_tokens} tokens (~{max_prompt_tokens * 4} characters) in one reply, split it into N consecutive chunks and send the first as the line "PATCH 1/N" followed by ONE ```diff fenced chunk; you'll be prompted for each next chunk. Chunks are concatenated in order before applying, so split anywhere (mid-hunk is fine) -- never repeat or skip lines across a boundary.
+4. Plan + diff -- first, 2-3 sentences: which tag(s) you're fixing, where in the code, what you learned from the previous turn's output, and (on a retry) what you're doing differently from the failed attempt(s) above and why. Then exactly ONE ```diff fenced block containing the complete unified diff.
+
+Shapes 1-3 are control signals: the control line must be the VERY FIRST line of the reply, with no narrative before it."""
+
+
+TERMINAL_REMINDER = (
+    "Reply now with exactly one of the four shapes defined at the top: "
+    "REQUEST, VERIFY, PATCH i/N, or plan + a single ```diff block."
+)
+
+
 DEFAULT_MAX_FORMAT_MEMORY_CHARS = 4000
 
 
@@ -1230,6 +1252,11 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     reviewer's verdicts on specific merged/rejected commits), this is the
     loop's own accumulated, periodically-condensed account of everything
     tried on this format so far. None omits this section.
+
+    Sections are ordered static-first (constraints/pitfalls/manifest),
+    then per-tag content, then volatile history, so the byte-stable
+    prefix is maximal for provider prompt caching and survives
+    head-keeping truncation.
     """
     missing_shown = gap["missing_tags"][:max_tags]
     missing_omitted = len(gap["missing_tags"]) - len(missing_shown)
@@ -1275,12 +1302,8 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
         if sample_paths:
             listed = "\n".join(f"  - {p.relative_to(samples_dir)}" for p in sample_paths)
             samples_block = (
-                f"\n\nReal sample files available for this format (relative to the samples dir):\n{listed}\n\n"
-                "If you need to see actual raw bytes to understand the binary layout instead of "
-                "guessing from the tag values above, respond with EXACTLY one line "
-                "\"REQUEST: <path>\" (a path from the list above, or a source file under src/) "
-                "instead of a diff, and you'll get a hex dump (for samples) or the file's text back "
-                "in the next turn to work from."
+                f"\n\nReal sample files available for this format (relative to the samples dir):\n{listed}\n"
+                "(REQUEST one -- shape 1 above -- to get a hex dump of its raw bytes.)"
             )
 
     exact_sample_block = build_exact_sample_block(gap, samples_dir)
@@ -1308,8 +1331,12 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
 
     attempts_block = format_previous_attempts(previous_attempts)
 
+    manifest = build_reply_shape_manifest(max_prompt_tokens)
     prompt = (
         f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
+        f"{RUST_ARCHITECTURE_CONSTRAINTS}\n\n"
+        f"{KNOWN_PITFALLS}\n\n"
+        f"{manifest}\n\n"
         f"Missing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
         f"Value differences (both extract it, values disagree):\n{diffs}"
         f"{overview_block}\n\n"
@@ -1320,29 +1347,10 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
         f"{sweep_review_block}"
         f"{memory_block}"
         f"{attempts_block}\n\n"
-        f"{RUST_ARCHITECTURE_CONSTRAINTS}\n\n"
-        f"{KNOWN_PITFALLS}\n\n"
-        "If you need to see actual raw bytes or another file before you can proceed, send ONLY the "
-        "\"REQUEST: <path>\" line described above -- nothing else in that response.\n\n"
-        "Otherwise: first, in 2-3 sentences, state your plan -- which tag(s) you're fixing, where in "
-        "the code you'll change it, and (if this is a retry) specifically what you're doing "
-        "differently from the previous attempt(s) above and why, so you don't repeat a broken "
-        "approach on a later round. Then provide a single unified diff (in a ```diff fenced block) "
-        "that fixes as many of these gaps as you can correctly verify. For value differences, only "
-        "fix genuine bugs, not benign formatting differences. If more gaps exist than are shown "
-        "above, that's expected -- just fix what's shown here, and future rounds will address the rest.\n\n"
-        f"Your reply is capped at roughly {max_prompt_tokens} tokens (~{max_prompt_tokens * 4} "
-        "characters). If your finished diff would exceed that in one reply, do NOT send a partial or "
-        "truncated diff -- instead split it into consecutive chunks and send ONLY the first one, "
-        "formatted exactly as:\n"
-        "PATCH 1/N\n"
-        "```diff\n"
-        "<the first chunk of the diff -- a clean prefix, not necessarily a complete file>\n"
-        "```\n"
-        "where N is the total number of chunks you intend to send. You'll be prompted for each next "
-        "chunk in turn (\"PATCH 2/N\", then \"PATCH 3/N\", ...) until you send chunk N/N; all chunks "
-        "are concatenated back together in order before being applied, so split at any convenient "
-        "point -- mid-hunk is fine, just don't repeat or skip any lines across the boundary."
+        "For value differences, only fix genuine bugs, not benign formatting differences. "
+        "If more gaps exist than are shown above, that's expected -- fix what's shown here; "
+        "future rounds will address the rest.\n\n"
+        f"{TERMINAL_REMINDER}"
     )
     return truncate_to_token_budget(prompt, max_prompt_tokens)
 
