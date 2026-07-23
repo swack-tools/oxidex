@@ -280,8 +280,8 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // Use the standard tag ID for name lookup so this is
                     // exposed as the canonical EXIF BitsPerSample tag.
                     //
-                    // BlackLevelGreen and BlackLevelBlue are PanasonicRaw
-                    // tags 0x001D and 0x001E and have no equivalent standard
+                    // BlackLevelRed, BlackLevelGreen, and BlackLevelBlue are
+                    // PanasonicRaw tags 0x001C, 0x001D, and 0x001E and have no equivalent standard
                     // TIFF tag IDs, so name them explicitly.
                     let canonical_tag_id =
                         if format == RawFormat::PanasonicRW2 && ifd_index == 0 && *tag_id == 0x000A
@@ -291,6 +291,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             *tag_id
                         };
                     let tag_name = match (format, ifd_index, *tag_id) {
+                        (RawFormat::PanasonicRW2, 0, 0x001C) => {
+                            format!("{}:BlackLevelRed", ifd_name)
+                        }
                         (RawFormat::PanasonicRW2, 0, 0x001D) => {
                             format!("{}:BlackLevelGreen", ifd_name)
                         }
