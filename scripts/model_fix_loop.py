@@ -1855,6 +1855,13 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
 DEFAULT_MAX_REPAIR_ROUNDS = 5
 DEFAULT_MAX_TEST_OUTPUT_CHARS = 3000
 
+# attempt_build's exception path is the single producer of this prefix
+# (its `return False, f"model call failed: {e}", ...`); fix_gap and
+# run_tag_loop both key off it to recognize infrastructure
+# (rate-limit/network/provider) failures that say nothing about the tag
+# or the diff.
+INFRA_FAILURE_PREFIX = "model call failed:"
+
 
 def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             critique_call_model_fn=None,
@@ -1982,11 +1989,20 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         """Shared tail for every non-"fixed"/"duplicate" outcome: get a
         critique, record the round, and either return a final failure
         dict (last round) or append a repair turn and let the caller's
-        loop continue to the next round."""
-        critique = critique_fn(
-            gap, diff, failure_kind, reason, config,
-            call_model_fn=critique_call_model_fn, pick_model_fn=pick_model_fn,
-        )
+        loop continue to the next round.
+
+        An infrastructure failure (reason starts with
+        INFRA_FAILURE_PREFIX) skips critique_fn entirely and uses the
+        reason itself as the critique: critiquing a rate-limit error
+        wastes a model call that will usually itself be rate-limited,
+        and produces no signal about the tag or the diff."""
+        if reason.startswith(INFRA_FAILURE_PREFIX):
+            critique = reason
+        else:
+            critique = critique_fn(
+                gap, diff, failure_kind, reason, config,
+                call_model_fn=critique_call_model_fn, pick_model_fn=pick_model_fn,
+            )
         rounds.append({"diff": diff, "reason": reason, "critique": critique})
         if round_index == max_repair_rounds - 1:
             return {"format": fmt, "status": "failed", "reason": reason, "diff": diff, "rounds": rounds}
@@ -2367,35 +2383,61 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             log_fn(f"[{tag_gap['tag_key']}] SKIPPED (already fixed elsewhere)")
         else:
             failed.append({"tag_key": tag_gap["tag_key"], **result})
-            entry["fails"] = entry.get("fails", 0) + 1
-            # fix_gap's own "rounds" is every internal repair sub-attempt
-            # (build failure, gap-not-closed, test regression, or review
-            # rejection), each with its own critique -- persist all of
-            # them, not just the call's final outcome, so a future round
-            # sees the whole arc of what was tried and why each step
-            # failed. Falls back to one flattened entry (no critique) for
-            # a caller whose fix_gap_fn doesn't return "rounds".
-            for sub_round in result.get("rounds") or [
+            rounds_list = result.get("rounds") or [
                 {"diff": result.get("diff"), "reason": result.get("reason", "unknown"), "critique": None}
-            ]:
-                entry.setdefault("attempts", []).append({
-                    "round": entry["fails"], "diff": sub_round.get("diff"),
-                    "reason": sub_round.get("reason", "unknown"), "critique": sub_round.get("critique"),
-                })
-            if entry["fails"] >= max_fails:
-                entry["blacklisted"] = True
-                # Both persisted alongside "blacklisted" (not just logged)
-                # so a dashboard reading tag-state.json later -- possibly
-                # long after this worker's own log has been truncated by a
-                # respawn -- can still answer "when" and "by which worker"
-                # for every blacklist event, not just the current count.
-                entry["blacklisted_at"] = time.time()
-                entry["blacklisted_by"] = worker_id
-                log_fn(f"[{tag_gap['tag_key']}] blacklisted after {entry['fails']} failed attempts")
-                if git_checkout_clean_fn and repo_root:
-                    git_checkout_clean_fn(repo_root)
+            ]
+            infra_only = all(
+                str(r.get("reason", "")).startswith(INFRA_FAILURE_PREFIX) for r in rounds_list
+            )
+            if infra_only:
+                # Every round was an infrastructure failure (rate limit,
+                # network, provider error -- see INFRA_FAILURE_PREFIX)
+                # -- that isn't the tag's fault, and counting it lets a
+                # rate-limit storm blacklist every active tag; just as
+                # bad, persisting the junk rounds clutters every future
+                # prompt for this tag. Report it (failed above) but
+                # charge nothing: no fail increment, no attempt history,
+                # no blacklist check.
+                log_fn(
+                    f"[{tag_gap['tag_key']}] infrastructure failure "
+                    f"(not counted against fail budget): {result.get('reason', 'unknown')}"
+                )
             else:
-                log_fn(f"[{tag_gap['tag_key']}] failed attempt {entry['fails']}/{max_fails}")
+                entry["fails"] = entry.get("fails", 0) + 1
+                # fix_gap's own "rounds" is every internal repair sub-attempt
+                # (build failure, gap-not-closed, test regression, or review
+                # rejection), each with its own critique -- persist all of
+                # them, not just the call's final outcome, so a future round
+                # sees the whole arc of what was tried and why each step
+                # failed. Falls back to one flattened entry (no critique) for
+                # a caller whose fix_gap_fn doesn't return "rounds".
+                # Infrastructure-failure rounds inside a mixed result are
+                # dropped -- they carry no signal about the tag -- keeping
+                # only the real-signal rounds (with a fall-back to
+                # everything should filtering somehow leave nothing).
+                real_rounds = [
+                    r for r in rounds_list
+                    if not str(r.get("reason", "")).startswith(INFRA_FAILURE_PREFIX)
+                ]
+                for sub_round in real_rounds or rounds_list:
+                    entry.setdefault("attempts", []).append({
+                        "round": entry["fails"], "diff": sub_round.get("diff"),
+                        "reason": sub_round.get("reason", "unknown"), "critique": sub_round.get("critique"),
+                    })
+                if entry["fails"] >= max_fails:
+                    entry["blacklisted"] = True
+                    # Both persisted alongside "blacklisted" (not just logged)
+                    # so a dashboard reading tag-state.json later -- possibly
+                    # long after this worker's own log has been truncated by a
+                    # respawn -- can still answer "when" and "by which worker"
+                    # for every blacklist event, not just the current count.
+                    entry["blacklisted_at"] = time.time()
+                    entry["blacklisted_by"] = worker_id
+                    log_fn(f"[{tag_gap['tag_key']}] blacklisted after {entry['fails']} failed attempts")
+                    if git_checkout_clean_fn and repo_root:
+                        git_checkout_clean_fn(repo_root)
+                else:
+                    log_fn(f"[{tag_gap['tag_key']}] failed attempt {entry['fails']}/{max_fails}")
             state[tag_gap["tag_key"]] = entry
 
         save_state_fn(state_path, state)

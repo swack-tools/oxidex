@@ -2709,6 +2709,30 @@ class FixGapCritiqueTests(unittest.TestCase):
         self.assertEqual(result["status"], "duplicate")
         self.assertEqual(critique_calls, [])
 
+    def test_infra_failure_skips_the_critique_model_call(self):
+        # Critiquing a rate-limit error wastes a model call that will
+        # usually itself be rate-limited, and produces no signal about
+        # the tag or the diff -- fix_gap must use the reason itself as
+        # the critique instead of calling critique_fn.
+        gap = make_gap(gap_count=2)
+        critique_calls = []
+        infra_reason = "model call failed: HTTP Error 429: Too Many Requests"
+
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (False, infra_reason, None, messages),
+            critique_fn=lambda *a, **kwargs: critique_calls.append(1) or "should never be used",
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: self.fail("should not commit"),
+            repo_root=Path("/fake/repo"),
+            max_repair_rounds=2,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(critique_calls, [])
+        self.assertEqual(len(result["rounds"]), 2)
+        for r in result["rounds"]:
+            self.assertEqual(r["critique"], infra_reason)
+
 
 class FixGapReviewTests(unittest.TestCase):
     def test_retries_once_when_review_rejects_then_approves(self):
@@ -3690,6 +3714,74 @@ class RunTagLoopTests(unittest.TestCase):
         )
         self.assertEqual(result["rounds"], 1)
         self.assertTrue(any("refresh skipped" in line for line in logged))
+
+
+class RunTagLoopInfraFailureTests(unittest.TestCase):
+    """An infrastructure failure (attempt_build's "model call failed:"
+    reason -- rate limit, network, provider error) says nothing about
+    the tag or the diff, so it must not be charged against the tag's
+    fail budget or persisted into its attempt history -- otherwise a
+    rate-limit storm blacklists every active tag and litters each tag's
+    prompt-visible history with junk 429 entries."""
+
+    _state_io = RunTagLoopTests._state_io
+
+    def test_pure_infra_failure_does_not_increment_fails_or_blacklist(self):
+        gaps = [make_gap()]
+        infra_reason = "model call failed: HTTP Error 429: Too Many Requests"
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            return {
+                "status": "failed", "reason": infra_reason, "diff": None,
+                "rounds": [{"diff": None, "reason": infra_reason, "critique": None}],
+            }
+
+        store, load, save = self._state_io()
+        result = run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=4, max_fails=2,
+        )
+        # 4 pure-infra rounds against max_fails=2 would have blacklisted
+        # twice over if they counted -- the tag must come out untouched.
+        entry = store.get("NEF:EXIF:LensModel", {})
+        self.assertEqual(entry.get("fails", 0), 0)
+        self.assertFalse(entry.get("blacklisted", False))
+        self.assertEqual(entry.get("attempts", []), [])
+        # Still reported in this run's summary -- just not charged.
+        self.assertEqual(len(result["failed"]), 4)
+
+    def test_mixed_result_counts_fail_but_drops_infra_rounds_from_attempts(self):
+        gaps = [make_gap()]
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            if tag_gap["tag_key"] == "NEF:EXIF:LensModel":
+                return {
+                    "status": "failed", "reason": "cargo build failed: error[E0308]",
+                    "diff": "diff-real",
+                    "rounds": [
+                        {"diff": None,
+                         "reason": "model call failed: HTTP Error 429: Too Many Requests",
+                         "critique": None},
+                        {"diff": "diff-real", "reason": "cargo build failed: error[E0308]",
+                         "critique": "type mismatch"},
+                    ],
+                }
+            return {"status": "fixed", "gaps_closed": 1}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1, max_fails=10,
+        )
+        # The real build failure still costs a fail, but only the round
+        # with real signal is persisted -- the 429 noise is dropped.
+        entry = store["NEF:EXIF:LensModel"]
+        self.assertEqual(entry["fails"], 1)
+        self.assertEqual(len(entry["attempts"]), 1)
+        self.assertEqual(entry["attempts"][0]["reason"], "cargo build failed: error[E0308]")
+        self.assertEqual(entry["attempts"][0]["critique"], "type mismatch")
 
 
 if __name__ == "__main__":
