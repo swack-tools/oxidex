@@ -124,6 +124,19 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
         TagValue::Integer(header.filetype as i64),
     );
 
+    // CPU architecture width
+    metadata.insert(
+        "EXE:CPUArchitecture".to_string(),
+        TagValue::String(
+            if header.is_64bit {
+                "64 bit"
+            } else {
+                "32 bit"
+            }
+            .to_string(),
+        ),
+    );
+
     // Is 64-bit
     metadata.insert(
         "EXE:Is64Bit".to_string(),

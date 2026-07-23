@@ -344,6 +344,10 @@ mod tests {
 
         // Check basic fields
         assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM64");
+        assert_eq!(
+            metadata.get_string("EXE:CPUArchitecture").unwrap(),
+            "64 bit"
+        );
         assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
         assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
         assert_eq!(metadata.get_integer("EXE:IsPIE").unwrap(), 1);
