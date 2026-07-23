@@ -22,6 +22,7 @@ from model_fix_loop import (
     cargo_check,
     cargo_test_workspace,
     call_model,
+    compact_messages,
     detect_duplicate_tag_insertion,
     estimate_tokens,
     expand_gaps_to_tags,
@@ -173,6 +174,59 @@ class TruncateToTokenBudgetTests(unittest.TestCase):
         text = "KEEP_THIS_PREFIX" + "z" * 100_000
         result = truncate_to_token_budget(text, max_tokens=10)
         self.assertTrue(result.startswith("KEEP_THIS_PREFIX"))
+
+
+class CompactMessagesTests(unittest.TestCase):
+    def _messages(self):
+        big = "x" * 8000   # ~2000 estimated tokens
+        return [
+            {"role": "user", "content": "initial prompt " + "p" * 8000},
+            {"role": "assistant", "content": "REQUEST: src/a.rs"},
+            {"role": "user", "content": "Contents of src/a.rs:\n" + big},
+            {"role": "assistant", "content": "REQUEST: src/b.rs"},
+            {"role": "user", "content": "Contents of src/b.rs:\n" + big},
+            {"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```"},
+            {"role": "user", "content": "That diff did not apply: whitespace\nPlease resend a corrected diff."},
+        ]
+
+    def test_below_trigger_returns_messages_unchanged(self):
+        messages = self._messages()
+        result = compact_messages(messages, trigger_tokens=10_000_000)
+        self.assertEqual(result, messages)
+
+    def test_above_trigger_stubs_old_large_user_turns_only(self):
+        messages = self._messages()
+        result = compact_messages(messages, trigger_tokens=100, keep_recent=2)
+        # message 0 (initial prompt) is never touched
+        self.assertEqual(result[0], messages[0])
+        # assistant turns are never touched
+        self.assertEqual(result[1], messages[1])
+        self.assertEqual(result[3], messages[3])
+        self.assertEqual(result[5], messages[5])
+        # old large served payloads are stubbed
+        self.assertIn("[earlier content elided for space:", result[2]["content"])
+        self.assertIn("Contents of src/a.rs:", result[2]["content"])  # first line kept
+        # the last keep_recent=2 messages are untouched
+        self.assertEqual(result[5], messages[5])
+        self.assertEqual(result[6], messages[6])
+
+    def test_small_user_turns_are_not_stubbed(self):
+        messages = self._messages()
+        result = compact_messages(messages, trigger_tokens=100, keep_recent=0)
+        # the small repair prompt (message 6) is under the elide floor
+        self.assertEqual(result[6], messages[6])
+
+    def test_compaction_is_idempotent(self):
+        messages = self._messages()
+        once = compact_messages(messages, trigger_tokens=100, keep_recent=2)
+        twice = compact_messages(once, trigger_tokens=100, keep_recent=2)
+        self.assertEqual(once, twice)
+
+    def test_original_list_is_not_mutated(self):
+        messages = self._messages()
+        snapshot = [dict(m) for m in messages]
+        compact_messages(messages, trigger_tokens=100, keep_recent=2)
+        self.assertEqual(messages, snapshot)
 
 
 class CallModelTests(unittest.TestCase):
@@ -2146,6 +2200,35 @@ class AttemptBuildTests(unittest.TestCase):
             config=dict(CONFIG, max_request_repeats=1),
             repo_root=Path("/fake/repo"),
         )
+        self.assertTrue(built)
+
+    def test_conversation_is_compacted_when_over_the_trigger(self):
+        big_answer = "Contents of src/a.rs:\n" + "y" * 60_000
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) <= 2:
+                return f"REQUEST: src/a{len(replies)}.rs"
+            # By the 3rd call, the first served payload must be stubbed.
+            stub_turns = [m for m in messages if "[earlier content elided for space:" in m["content"]]
+            self.assertGreaterEqual(len(stub_turns), 1)
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "a1.rs").write_text("y" * 60_000)
+            (repo / "src" / "a2.rs").write_text("y" * 60_000)
+            built, reason, diff, messages = attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, compaction_trigger_tokens=5000, compaction_keep_recent_turns=1),
+                repo_root=repo,
+            )
         self.assertTrue(built)
 
 

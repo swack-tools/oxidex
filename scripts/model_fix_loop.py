@@ -174,6 +174,51 @@ def truncate_to_token_budget(text, max_tokens=DEFAULT_MAX_PROMPT_TOKENS):
     )
 
 
+DEFAULT_COMPACTION_TRIGGER_TOKENS = 12_000
+DEFAULT_COMPACTION_KEEP_RECENT_TURNS = 4
+DEFAULT_COMPACTION_MIN_ELIDE_TOKENS = 1000
+_COMPACTION_STUB_PREFIX = "[earlier content elided for space:"
+
+
+def compact_messages(messages, trigger_tokens=DEFAULT_COMPACTION_TRIGGER_TOKENS,
+                     keep_recent=DEFAULT_COMPACTION_KEEP_RECENT_TURNS):
+    """Shrink a long conversation by stubbing out stale served payloads.
+
+    Once the whole conversation's estimated tokens exceed trigger_tokens,
+    older USER turns carrying large served content (REQUEST answers,
+    VERIFY outputs -- anything over DEFAULT_COMPACTION_MIN_ELIDE_TOKENS)
+    are replaced with a one-line stub naming what was elided and how to
+    get it back. Never touched: message 0 (the initial prompt), the last
+    keep_recent messages, and every assistant message (the model's own
+    diffs/PATCH chunks must survive verbatim for chunk reassembly and
+    repair context). Pure -- returns a new list; idempotent -- stubs are
+    recognized and skipped on a second pass.
+    """
+    total = sum(estimate_tokens(m["content"]) for m in messages)
+    if total <= trigger_tokens:
+        return list(messages)
+    compacted = list(messages)
+    cutoff = max(1, len(compacted) - keep_recent)
+    for i in range(1, cutoff):
+        msg = compacted[i]
+        if msg["role"] != "user":
+            continue
+        content = msg["content"]
+        if content.startswith(_COMPACTION_STUB_PREFIX):
+            continue
+        if estimate_tokens(content) <= DEFAULT_COMPACTION_MIN_ELIDE_TOKENS:
+            continue
+        first_line = content.split("\n", 1)[0][:120]
+        compacted[i] = {
+            "role": "user",
+            "content": (
+                f"{_COMPACTION_STUB_PREFIX} {first_line} ... "
+                "Re-REQUEST it (ideally with a line range) if still needed.]"
+            ),
+        }
+    return compacted
+
+
 DEFAULT_RETRYABLE_HTTP_STATUSES = {500, 502, 503, 504}
 DEFAULT_MAX_RETRIES = 1000
 DEFAULT_RETRY_BACKOFF_SECONDS = 2
@@ -1577,6 +1622,11 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     patch_chunks = {}
     patch_turns_used = 0
     while diff_attempts_used < 2:  # one initial attempt + one repair round-trip
+        messages[:] = compact_messages(
+            messages,
+            trigger_tokens=config.get("compaction_trigger_tokens", DEFAULT_COMPACTION_TRIGGER_TOKENS),
+            keep_recent=config.get("compaction_keep_recent_turns", DEFAULT_COMPACTION_KEEP_RECENT_TURNS),
+        )
         model_spec = pick_model_fn(config["models"])
         try:
             reply = call_model_fn(
