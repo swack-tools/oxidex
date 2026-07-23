@@ -76,6 +76,7 @@ Usage:
     uv run scripts/model_fix_loop.py --config /path/to/config.toml
 """
 import argparse
+import functools
 import json
 import os
 import random
@@ -501,6 +502,218 @@ def format_previous_attempts(previous_attempts, max_diff_chars=DEFAULT_MAX_ATTEM
     )
 
 
+DEFAULT_MAX_PERL_SNIPPETS = 4
+DEFAULT_MAX_PERL_SNIPPET_CHARS = 5000
+PERL_TAG_ID_RE = re.compile(r"^\s*(0x[0-9A-Fa-f]+|'[^']*'|\"[^\"]*\"|\d+)\s*=>\s*\{")
+PERL_TABLE_HEADER_RE = re.compile(r"^%(Image::ExifTool::\S+)\s*=\s*\(")
+PERL_GROUPS_RE = re.compile(r"^\s*GROUPS\s*=>")
+
+
+@functools.lru_cache(maxsize=1)
+def resolve_exiftool_perl_lib_dir():
+    """Locate the real ExifTool Perl module directory (Image/ExifTool/*.pm)
+    so build_prompt can show the fixer ExifTool's own ground-truth parsing
+    logic for a tag -- not just its name and a value it has to
+    reverse-engineer a Rust port for from scratch. This is exactly the gap
+    behind bugs a human reviewer caught this session that the fixer's own
+    build+test pass couldn't: a NEF fix assigned tag 0xA302 the name
+    "CFAPattern2" when ExifTool's own source calls it "CFAPattern" (0x828E
+    is the real CFAPattern2), because nothing had ever shown the fixer
+    ExifTool's actual Exif.pm entries to compare its guess against.
+
+    The bare system perl doesn't have Image::ExifTool installed as a
+    regular module -- exiftool bundles its own copy and adds it to @INC
+    itself -- so this can't just `use Image::ExifTool` and read $INC.
+    Homebrew's exiftool formula patches the exact lib path directly into
+    the installed script instead (an `unshift @INC, "<path>/lib/perl5"`
+    line added to its BEGIN block), so this reads it straight from there:
+    works for whatever exiftool is actually on PATH, on whatever machine,
+    without hardcoding a version-specific Cellar path that breaks on the
+    next `brew upgrade`.
+    """
+    exe = shutil.which("exiftool")
+    if not exe:
+        return None
+    try:
+        content = Path(exe).read_text(errors="ignore")
+    except OSError:
+        return None
+    match = re.search(r'unshift @INC, "([^"]+/lib/perl5)"', content)
+    if not match:
+        return None
+    lib_dir = Path(match.group(1)) / "Image" / "ExifTool"
+    return lib_dir if lib_dir.is_dir() else None
+
+
+def _find_perl_tag_block(lines, name_line_idx, context_before_max=15, context_after_max=60):
+    """Given the line index of a `Name => 'TagName'` match, find the
+    surrounding tag-definition block's start (the enclosing `<id> => {`
+    line) and end (the matching `},`/`}` at that same indentation), using
+    indentation as a lightweight brace-matcher -- ExifTool's source is
+    consistently indented, so this is far simpler than a real Perl parser
+    and good enough for "show the fixer the tag's own hash entry". Falls
+    back to a small fixed window around the Name line if no `<id> => {`
+    opener is found nearby (e.g. a Composite tag defined differently),
+    rather than returning nothing.
+    """
+    start_idx = None
+    lookback_floor = max(0, name_line_idx - context_before_max)
+    for i in range(name_line_idx, lookback_floor - 1, -1):
+        if PERL_TAG_ID_RE.match(lines[i]):
+            start_idx = i
+            break
+    if start_idx is None:
+        start_idx = max(0, name_line_idx - 2)
+
+    # Some simple tags are defined entirely on one line, e.g.
+    # `0x1e => { Name => 'X', Writable => 'int16u' }, #comment` -- if the
+    # opener line's braces are already balanced, that line IS the whole
+    # block. Scanning forward from it would otherwise walk straight into
+    # whatever tag happens to be defined next.
+    opener = lines[start_idx].split("#", 1)[0]
+    if opener.count("{") > 0 and opener.count("{") <= opener.count("}"):
+        return start_idx, start_idx
+
+    indent = len(lines[start_idx]) - len(lines[start_idx].lstrip(" "))
+    lookahead_ceiling = min(len(lines), start_idx + context_after_max)
+    end_idx = lookahead_ceiling - 1
+    for i in range(start_idx + 1, lookahead_ceiling):
+        stripped = lines[i].strip()
+        line_indent = len(lines[i]) - len(lines[i].lstrip(" "))
+        if stripped in ("},", "}") and line_indent == indent:
+            end_idx = i
+            break
+    return start_idx, end_idx
+
+
+def _find_perl_table_context(lines, block_start_idx, lookback=250):
+    """Best-effort table name + GROUPS line for a tag block, found by
+    scanning backward from its start for the nearest `%Image::ExifTool::X
+    = (` table header, then forward a few lines from there for GROUPS --
+    tells the fixer which ExifTool table (and therefore which group/IFD
+    naming convention) a tag belongs to, exactly the context that was
+    missing when a fixer this session guessed "EXIF:" instead of a
+    Panasonic RAW table's real "IFD0" group.
+    """
+    floor = max(0, block_start_idx - lookback)
+    table_name = None
+    table_line_idx = None
+    for i in range(block_start_idx, floor - 1, -1):
+        match = PERL_TABLE_HEADER_RE.match(lines[i])
+        if match:
+            table_name = match.group(1)
+            table_line_idx = i
+            break
+    if table_name is None:
+        return None, None
+    groups_line = None
+    for i in range(table_line_idx, min(len(lines), table_line_idx + 10)):
+        if PERL_GROUPS_RE.match(lines[i]):
+            groups_line = lines[i].strip()
+            break
+    return table_name, groups_line
+
+
+def extract_perl_tag_snippet(tag_name, lib_dir, tag_id=None, max_chars=DEFAULT_MAX_PERL_SNIPPET_CHARS):
+    """Find tag_name's (or tag_id's, if given) definition in ExifTool's
+    real Perl source under lib_dir and return a formatted block showing
+    its file, table, GROUPS, and the tag's own hash entry -- or None if
+    lib_dir is unavailable or nothing matches (e.g. a derived Composite
+    tag with no simple literal definition to find).
+
+    Searches by exact tag ID first when given -- most precise, since it
+    distinguishes tags ExifTool happens to give very similar names (e.g.
+    CFAPattern vs CFAPattern2) -- falling back to an exact `Name =>
+    'tag_name'` match otherwise.
+    """
+    if lib_dir is None:
+        return None
+    id_pattern = None
+    if tag_id:
+        normalized = tag_id.lower().replace("0x", "").lstrip("0") or "0"
+        id_pattern = re.compile(rf"^\s*0x0*{re.escape(normalized)}\s*=>\s*\{{")
+    name_pattern = re.compile(r"Name\s*=>\s*['\"]" + re.escape(tag_name) + r"['\"]")
+
+    for pm_path in sorted(lib_dir.glob("*.pm")):
+        try:
+            text = pm_path.read_text(errors="ignore")
+        except OSError:
+            continue
+        lines = text.splitlines()
+        match_idx = None
+        if id_pattern:
+            for i, line in enumerate(lines):
+                if id_pattern.match(line):
+                    match_idx = i
+                    break
+        if match_idx is None:
+            for i, line in enumerate(lines):
+                if name_pattern.search(line):
+                    match_idx = i
+                    break
+        if match_idx is None:
+            continue
+
+        start_idx, end_idx = _find_perl_tag_block(lines, match_idx)
+        table_name, groups_line = _find_perl_table_context(lines, start_idx)
+        snippet = "\n".join(lines[start_idx:end_idx + 1])
+        if len(snippet) > max_chars:
+            snippet = snippet[:max_chars] + "\n... (truncated)"
+        header = pm_path.name
+        if table_name:
+            header += f", table {table_name}"
+        header_block = f"--- {header} ---"
+        if groups_line:
+            header_block += f"\n{groups_line}"
+        return f"{header_block}\n```perl\n{snippet}\n```"
+    return None
+
+
+def build_perl_reference_block(gap, lib_dir, max_tags_shown=DEFAULT_MAX_PERL_SNIPPETS):
+    """Collect ExifTool's real Perl source for as many of this gap's tags
+    as can be found, capped the same way missing_tags/parser_files are --
+    the point is grounding the fixer in ExifTool's actual parsing logic
+    for the tags actually in front of it this round, not an exhaustive
+    reference dump."""
+    if lib_dir is None:
+        return ""
+    seen = set()
+    candidates = []
+    for t in gap["missing_tags"]:
+        name = t.get("name")
+        if name and name not in seen:
+            seen.add(name)
+            candidates.append((name, t.get("tag_id")))
+    for d in gap["value_differences"]:
+        name = d["tag_key"].split(":")[-1]
+        if name not in seen:
+            seen.add(name)
+            candidates.append((name, None))
+
+    blocks = []
+    for name, tag_id in candidates[:max_tags_shown]:
+        snippet = extract_perl_tag_snippet(name, lib_dir, tag_id=tag_id)
+        if snippet:
+            blocks.append(snippet)
+    if not blocks:
+        return ""
+    return (
+        "\n\nExifTool's own Perl source for these tags (ground truth for how ExifTool "
+        "actually parses/formats them -- port the logic, not a guess at it; if the Rust "
+        "port needs to differ, know exactly what you're diverging from and why):\n\n"
+        + "\n\n".join(blocks)
+    )
+
+
+KNOWN_PITFALLS = """
+Lessons from mistakes a human reviewer previously caught in this loop's own output (avoid repeating these):
+- Never hardcode a group prefix like "EXIF:" on a tag name. Use this codebase's existing lookup_tag_name()/tag_db (or whatever the surrounding code in the file you're editing already uses) so the prefix matches the IFD/table the tag was actually parsed from, consistent with every neighboring tag -- a hardcoded prefix that diverges from the file's own convention has been wrong every time.
+- Before writing a new decoder, grep the codebase for the tag's name (e.g. `rg CFAPattern` or `rg TagName`). A correct, already-tested implementation may exist elsewhere (e.g. under src/core/) that just isn't wired into the code path you're fixing -- reuse or match it, don't reinvent it with different (possibly conflicting) logic.
+- Two ExifTool tags can have very similar names for genuinely different tag IDs (e.g. CFAPattern at 0xA302 vs CFAPattern2 at 0x828E). Always match by the exact tag ID shown in ExifTool's source, never by name similarity or memory of what a tag "should" be called.
+- Verify a tag's display format against ExifTool's actual default text output (what `exiftool file` prints), not `-j`/JSON output -- JSON array/bracket syntax (e.g. [1,2]) is JSON's own serialization, not ExifTool's plain-text tag-value convention (which is usually comma-space-separated, e.g. "1, 2").
+""".strip()
+
+
 DEFAULT_INLINE_SAMPLE_MAX_BYTES = 4096
 
 
@@ -550,7 +763,8 @@ def build_exact_sample_block(gap, samples_dir):
 
 def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                   max_file_bytes=DEFAULT_MAX_PROMPT_FILE_BYTES, samples_dir=None,
-                  max_samples_listed=DEFAULT_MAX_SAMPLE_FILES_LISTED, previous_attempts=None):
+                  max_samples_listed=DEFAULT_MAX_SAMPLE_FILES_LISTED, previous_attempts=None,
+                  perl_lib_dir=None):
     """Format one gap into a model prompt, capped so a huge format (e.g.
     JPEG with thousands of gaps and dozens of parser files) becomes an
     iterative, tractable request instead of one impossibly large prompt.
@@ -566,6 +780,13 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
 
     previous_attempts, if given, is this tag's persisted attempt history
     (run_tag_loop's per-tag "attempts" list) -- see format_previous_attempts.
+
+    perl_lib_dir, if given (see resolve_exiftool_perl_lib_dir), is used to
+    include ExifTool's own Perl source for this gap's tags -- see
+    build_perl_reference_block. None (the default) omits this section
+    entirely rather than resolving it implicitly, so callers that don't
+    pass it (including every existing test) keep their original,
+    environment-independent output.
     """
     missing_shown = gap["missing_tags"][:max_tags]
     missing_omitted = len(gap["missing_tags"]) - len(missing_shown)
@@ -621,6 +842,8 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
 
     exact_sample_block = build_exact_sample_block(gap, samples_dir)
 
+    perl_block = build_perl_reference_block(gap, perl_lib_dir)
+
     attempts_block = format_previous_attempts(previous_attempts)
 
     return (
@@ -630,7 +853,9 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
         f"Likely relevant source files:\n{files}"
         f"{samples_block}"
         f"{exact_sample_block}"
+        f"{perl_block}"
         f"{attempts_block}\n\n"
+        f"{KNOWN_PITFALLS}\n\n"
         "Respond with a single unified diff (in a ```diff fenced block) that fixes as many of these gaps "
         "as you can correctly verify. For value differences, only fix genuine bugs, not benign formatting "
         "differences. Do not include any explanation outside the diff. If more gaps exist than are shown "
@@ -874,7 +1099,8 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             attempt_build_fn=attempt_build, review_fn=review_verdict,
             pick_model_fn=random.choice, log_fn=print,
             review_config=None, recheck_fn=None, repo_root=None, samples_dir=None,
-            previous_attempts=None, detect_duplicate_fn=detect_duplicate_tag_insertion):
+            previous_attempts=None, detect_duplicate_fn=detect_duplicate_tag_insertion,
+            perl_lib_dir=None):
     """Attempt to close one format's gaps via a single-shot patch. Up to
     two candidates: the initial fix, and one repair round-trip if a
     reviewer rejects the first. Returns a result dict.
@@ -922,6 +1148,11 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     status "duplicate" -- distinct from "failed" so run_tag_loop knows
     not to count it against this tag's fail budget; it isn't this tag's
     fault that another worker got there first.
+
+    perl_lib_dir, if given, is passed straight through to build_prompt
+    (see resolve_exiftool_perl_lib_dir/build_perl_reference_block) so the
+    initial prompt includes ExifTool's own Perl source for this gap's
+    tags, not just on a repair round-trip.
     """
     repo_root = repo_root or REPO_ROOT
     review_config = review_config or config
@@ -932,6 +1163,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         max_tags=config["max_prompt_tags"],
         max_file_bytes=config["max_prompt_file_bytes"],
         samples_dir=samples_dir,
+        perl_lib_dir=perl_lib_dir,
         previous_attempts=previous_attempts,
     )}]
 
@@ -1656,6 +1888,12 @@ def main(argv=None):
         total = sum(1 for _ in tags_found_log_path.open())
         timestamped_log(f"[{tag_gap['tag_key']}] logged to {tags_found_log_path} (total tags found so far: {total})")
 
+    # Resolved once (cached -- see resolve_exiftool_perl_lib_dir) rather than
+    # per-tag: None on a machine without exiftool on PATH, in which case
+    # build_prompt's Perl-reference section is silently omitted, same as
+    # samples_dir being unavailable.
+    perl_lib_dir = resolve_exiftool_perl_lib_dir()
+
     def real_fix_tag(tag_gap, cfg, previous_attempts=None):
         def recheck(_fmt):
             # _fmt is ignored -- tag_gap already knows its own format;
@@ -1689,6 +1927,7 @@ def main(argv=None):
             max_tags=cfg["max_prompt_tags"], max_file_bytes=cfg["max_prompt_file_bytes"],
             samples_dir=Path(args.cache_dir) / "combined-samples",
             previous_attempts=previous_attempts,
+            perl_lib_dir=perl_lib_dir,
         )
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         banner = f"\n{'=' * 20} [{ts}] worker={worker_label} tag={tag_gap['tag_key']} {'=' * 20}\n"
@@ -1702,6 +1941,7 @@ def main(argv=None):
             call_model_fn=logging_call_model_fixer, review_call_model_fn=logging_call_model_reviewer,
             samples_dir=Path(args.cache_dir) / "combined-samples",
             previous_attempts=previous_attempts,
+            perl_lib_dir=perl_lib_dir,
         )
         if result["status"] == "fixed":
             log_tag_found(tag_gap, result)

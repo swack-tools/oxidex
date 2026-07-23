@@ -7,9 +7,11 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from model_fix_loop import (
+    KNOWN_PITFALLS,
     _normalize_model_config,
     attempt_build,
     build_exact_sample_block,
+    build_perl_reference_block,
     build_prompt,
     build_review_prompt,
     cargo_build,
@@ -18,6 +20,7 @@ from model_fix_loop import (
     detect_duplicate_tag_insertion,
     expand_gaps_to_tags,
     extract_diff,
+    extract_perl_tag_snippet,
     extract_review_verdict,
     file_content_at_head,
     fix_gap,
@@ -851,6 +854,160 @@ class BuildPromptTests(unittest.TestCase):
         prompt = build_prompt(gap, max_tags=40, max_file_bytes=60_000)
         self.assertNotIn("more, not shown", prompt)
         self.assertNotIn("additional file(s) omitted", prompt)
+
+    def test_always_includes_known_pitfalls(self):
+        prompt = build_prompt(make_gap(gap_count=1))
+        self.assertIn(KNOWN_PITFALLS, prompt)
+
+    def test_omits_perl_reference_section_when_lib_dir_not_given(self):
+        prompt = build_prompt(make_gap(gap_count=1))
+        self.assertNotIn("ExifTool's own Perl source", prompt)
+
+    def test_includes_perl_reference_section_when_lib_dir_given(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lib_dir = Path(tmpdir)
+            (lib_dir / "Exif.pm").write_text(EXIFTOOL_PM_FIXTURE)
+            gap = {
+                "format": "NEF",
+                "missing_tags": [
+                    {"family": "EXIF", "name": "CFAPattern2", "value": "2 1 1 0",
+                     "tag_id": None, "source_file": None},
+                ],
+                "value_differences": [],
+                "gap_count": 1,
+                "parser_files": [],
+            }
+            prompt = build_prompt(gap, perl_lib_dir=lib_dir)
+        self.assertIn("ExifTool's own Perl source", prompt)
+        self.assertIn("CFAPattern2", prompt)
+        self.assertIn("Format => 'int8u'", prompt)
+
+
+# A minimal but realistic fixture mirroring Exif.pm's actual structure: one
+# table with GROUPS and two tags whose names collide on a shared prefix
+# (CFAPattern / CFAPattern2) at genuinely different IDs -- the exact
+# real-world case (0xA302 vs 0x828E) a fixer got backwards this session.
+EXIFTOOL_PM_FIXTURE = """package Image::ExifTool::Exif;
+
+%Image::ExifTool::Exif::Main = (
+    GROUPS => { 0 => 'EXIF', 1 => 'ExifIFD', 2 => 'Image' },
+    WRITE_PROC => \\&Image::ExifTool::Exif::WriteExif,
+    0x828e => {
+        Name => 'CFAPattern2',
+        Format => 'int8u',
+        Protected => 1,
+        Writable => 'int8u',
+        Count => -1,
+    },
+    0xa302 => {
+        Name => 'CFAPattern',
+        Writable => 'undef',
+        RawConv => 'Image::ExifTool::Exif::DecodeCFAPattern($self, $val)',
+        PrintConv => 'Image::ExifTool::Exif::PrintCFAPattern($val)',
+    },
+);
+
+1;
+"""
+
+
+class ExtractPerlTagSnippetTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.lib_dir = Path(self.tmpdir.name)
+        (self.lib_dir / "Exif.pm").write_text(EXIFTOOL_PM_FIXTURE)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_returns_none_when_lib_dir_is_none(self):
+        self.assertIsNone(extract_perl_tag_snippet("CFAPattern2", None))
+
+    def test_returns_none_when_tag_not_found(self):
+        self.assertIsNone(extract_perl_tag_snippet("NoSuchTag", self.lib_dir))
+
+    def test_finds_tag_by_exact_name_and_includes_table_context(self):
+        snippet = extract_perl_tag_snippet("CFAPattern2", self.lib_dir)
+        self.assertIsNotNone(snippet)
+        self.assertIn("Exif.pm", snippet)
+        self.assertIn("Image::ExifTool::Exif::Main", snippet)
+        self.assertIn("GROUPS => { 0 => 'EXIF', 1 => 'ExifIFD', 2 => 'Image' }", snippet)
+        self.assertIn("0x828e", snippet)
+        self.assertIn("Format => 'int8u'", snippet)
+        # Must not bleed into the neighboring CFAPattern (0xa302) block.
+        self.assertNotIn("DecodeCFAPattern", snippet)
+
+    def test_similarly_named_tag_does_not_cross_match(self):
+        """CFAPattern (0xa302) and CFAPattern2 (0x828e) must resolve to
+        their own distinct blocks -- a substring/fuzzy match here would
+        silently reproduce the exact bug this feature exists to prevent."""
+        snippet = extract_perl_tag_snippet("CFAPattern", self.lib_dir)
+        self.assertIsNotNone(snippet)
+        self.assertIn("0xa302", snippet)
+        self.assertIn("DecodeCFAPattern", snippet)
+        self.assertNotIn("Count => -1", snippet)
+
+    def test_tag_id_disambiguates_when_names_would_be_ambiguous(self):
+        snippet = extract_perl_tag_snippet("CFAPattern2", self.lib_dir, tag_id="0x828E")
+        self.assertIn("0x828e", snippet)
+        self.assertIn("Format => 'int8u'", snippet)
+
+
+class BuildPerlReferenceBlockTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.lib_dir = Path(self.tmpdir.name)
+        (self.lib_dir / "Exif.pm").write_text(EXIFTOOL_PM_FIXTURE)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_empty_when_lib_dir_is_none(self):
+        gap = make_gap(gap_count=1)
+        self.assertEqual(build_perl_reference_block(gap, None), "")
+
+    def test_pulls_snippets_for_missing_and_diff_tags(self):
+        gap = {
+            "format": "NEF",
+            "missing_tags": [
+                {"family": "EXIF", "name": "CFAPattern2", "value": "x", "tag_id": None, "source_file": None},
+            ],
+            "value_differences": [
+                {"tag_key": "NEF:ExifIFD:CFAPattern", "exiftool_value": "a", "oxidex_value": "b", "source_file": None},
+            ],
+            "gap_count": 2,
+            "parser_files": [],
+        }
+        block = build_perl_reference_block(gap, self.lib_dir)
+        self.assertIn("CFAPattern2", block)
+        self.assertIn("0x828e", block)
+        self.assertIn("0xa302", block)
+
+    def test_caps_at_max_tags_shown(self):
+        gap = {
+            "format": "NEF",
+            "missing_tags": [
+                {"family": "EXIF", "name": "CFAPattern2", "value": "x", "tag_id": None, "source_file": None},
+                {"family": "EXIF", "name": "CFAPattern", "value": "y", "tag_id": None, "source_file": None},
+            ],
+            "value_differences": [],
+            "gap_count": 2,
+            "parser_files": [],
+        }
+        block = build_perl_reference_block(gap, self.lib_dir, max_tags_shown=1)
+        self.assertEqual(block.count("--- Exif.pm"), 1)
+
+    def test_empty_when_no_tags_found_in_lib(self):
+        gap = {
+            "format": "NEF",
+            "missing_tags": [
+                {"family": "EXIF", "name": "TotallyUnknownTag", "value": "x", "tag_id": None, "source_file": None},
+            ],
+            "value_differences": [],
+            "gap_count": 1,
+            "parser_files": [],
+        }
+        self.assertEqual(build_perl_reference_block(gap, self.lib_dir), "")
 
 
 class BuildReviewPromptTests(unittest.TestCase):
