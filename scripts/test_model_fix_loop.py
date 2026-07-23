@@ -2179,7 +2179,6 @@ class AttemptBuildTests(unittest.TestCase):
         self.assertIn("patch chunking exceeded safety limit", reason)
 
     def test_third_identical_request_gets_pivot_nudge_instead_of_content(self):
-        served = []
         replies = []
 
         def fake_call_model(messages, *a):
@@ -2255,7 +2254,6 @@ class AttemptBuildTests(unittest.TestCase):
         self.assertTrue(built)
 
     def test_conversation_is_compacted_when_over_the_trigger(self):
-        big_answer = "Contents of src/a.rs:\n" + "y" * 60_000
         replies = []
 
         def fake_call_model(messages, *a):

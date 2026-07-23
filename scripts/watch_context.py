@@ -452,7 +452,7 @@ def main(argv=None, stdout=sys.stdout, now_fn=time.time):
             )
         )
     except KeyboardInterrupt:
-        pass
+        pass  # Ctrl-C is the normal way to leave the live dashboard, not an error
     return 0
 
 
