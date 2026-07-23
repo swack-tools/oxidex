@@ -17,6 +17,7 @@
 base_url = "https://pass.wafer.ai/v1"
 api_key = "your-api-key-here"
 max_tokens = 4096
+max_prompt_tokens = 4096
 reasoning_effort = "low"
 stream = true
 thinking = false
@@ -25,23 +26,34 @@ max_prompt_tags = 40
 max_prompt_file_bytes = 60000
 timeout = 600
 max_request_turns = 20
+max_request_repeats = 3
+max_verify_turns = 10
+compaction_trigger_tokens = 12000
+compaction_keep_recent_turns = 4
 max_retries = 1000
 retry_backoff_seconds = 2
 max_retry_backoff_seconds = 120
 
+# Tiered routing: explore-phase turns (investigation, REQUEST/VERIFY
+# round-trips) use the cheap fast model; patch-phase turns (final diffs,
+# repairs, retries) use the strongest model. Omit "phase" on an entry to
+# use it for both.
 [[worker.models]]
-name = "glm5.2-fast"
+name = "gpt-5.6-terra"
+phase = "explore"
+reasoning_effort = "medium"
 
 [[worker.models]]
-name = "MiniMax-M3"
+name = "gpt-5.6-sol"
+phase = "patch"
+reasoning_effort = "max"
 
-[[worker.models]]
-name = "Kimi-K2.6"
-
-[[worker.models]]
-name = "accounts/fireworks/routers/kimi-k2p7-code-fast"
-base_url = "https://api.fireworks.ai/inference/v1"
-api_key = "your-fireworks-api-key-here"
+# Mixed-provider example: an entry with its own base_url/api_key pulls that
+# one model from a different provider (see the header comment above).
+# [[worker.models]]
+# name = "accounts/fireworks/routers/kimi-k2p7-code-fast"
+# base_url = "https://api.fireworks.ai/inference/v1"
+# api_key = "your-fireworks-api-key-here"
 
 # Optional: omit this table entirely to have the reviewer reuse [worker]'s
 # pool/config exactly. Add it to review with a different model pool and/or

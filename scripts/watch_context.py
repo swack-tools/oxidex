@@ -57,6 +57,17 @@ BRIGHT_WHITE = "\x1b[97m"
 OXIDEX_HOME = Path(os.environ.get("OXIDEX_HOME", str(Path.home() / ".oxidex")))
 DEFAULT_REQ_LOG_DIR = OXIDEX_HOME / "logs" / "model-fix-requests"
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(text):
+    """curses draws plain characters, not ANSI escape sequences -- the
+    interactive dashboard reuses render_worker_detail's already-colored
+    output (rather than a separate uncolored render path) and strips the
+    color codes back out, so overview/--once mode keeps its color and
+    the interactive mode doesn't show literal escape-code garbage."""
+    return ANSI_RE.sub("", text)
+
 # Matches both shapes manifest.log's make_logging_call_model writes:
 #   "{ts} phase={phase} worker={worker} model={model} prompt_chars={n} elapsed={n}s reply_chars={n} OK"
 #   "{ts} phase={phase} worker={worker} model={model} RETRY {msg}"
@@ -245,7 +256,153 @@ def render_worker_detail(worker, calls, req_log_dir, phase, term_width, now_fn=t
     return "\n".join(lines)
 
 
-def main(argv=None, sleep_fn=time.sleep, stdout=sys.stdout, now_fn=time.time):
+def clamp_index(index, count):
+    """Keep a worker-list index in [0, count-1] -- 0 if the list is empty
+    (nothing to select, but never a negative or out-of-range index for
+    the next render to index into)."""
+    if count == 0:
+        return 0
+    return max(0, min(index, count - 1))
+
+
+def compute_max_scroll(num_lines, viewport_height):
+    """How far the view can scroll down before the last line reaches the
+    top of the viewport -- never negative (a short body just doesn't
+    scroll at all)."""
+    return max(0, num_lines - viewport_height)
+
+
+# Default key-code mapping for handle_navigation_key -- real curses
+# constants (only resolvable once curses.initscr() has run) are passed
+# in by run_interactive_dashboard; tests pass plain-int fakes instead so
+# this logic is exercisable without a real terminal.
+def default_curses_key_codes():
+    import curses
+    return {
+        "left": curses.KEY_LEFT, "right": curses.KEY_RIGHT,
+        "up": curses.KEY_UP, "down": curses.KEY_DOWN,
+        "page_up": curses.KEY_PPAGE, "page_down": curses.KEY_NPAGE,
+        "quit": ord("q"), "toggle_phase": ord("p"),
+        "vim_up": ord("k"), "vim_down": ord("j"),
+    }
+
+
+def handle_navigation_key(key, state, key_codes, worker_count, page_size):
+    """Pure state transition: given a keypress and the current UI state
+    dict ({"worker_index", "scroll_offset", "phase"}), return the new
+    state dict (scroll/worker-index re-clamped by the caller after
+    re-rendering, since the new worker's content length isn't known
+    here) and whether to quit. No I/O, no curses import required at
+    call time -- key_codes lets tests exercise every branch with plain
+    integers instead of needing a real curses session.
+    """
+    worker_index = state["worker_index"]
+    scroll_offset = state["scroll_offset"]
+    phase = state["phase"]
+
+    if key == key_codes["quit"]:
+        return state, True
+    if key == key_codes["left"]:
+        worker_index = clamp_index(worker_index - 1, worker_count)
+        scroll_offset = 0
+    elif key == key_codes["right"]:
+        worker_index = clamp_index(worker_index + 1, worker_count)
+        scroll_offset = 0
+    elif key in (key_codes["up"], key_codes["vim_up"]):
+        scroll_offset = max(0, scroll_offset - 1)
+    elif key in (key_codes["down"], key_codes["vim_down"]):
+        scroll_offset += 1
+    elif key == key_codes["page_up"]:
+        scroll_offset = max(0, scroll_offset - page_size)
+    elif key == key_codes["page_down"]:
+        scroll_offset += page_size
+    elif key == key_codes["toggle_phase"]:
+        phase = "reviewer" if phase == "fixer" else "fixer"
+        scroll_offset = 0
+
+    return {"worker_index": worker_index, "scroll_offset": scroll_offset, "phase": phase}, False
+
+
+def render_interactive_frame(state, latest_by_worker, req_log_dir, width, height, now_fn=time.time):
+    """Build the full plain-text frame (header + visible slice of the
+    selected worker's detail view) for one redraw. Pure given its
+    inputs -- no curses calls -- so it's directly testable;
+    run_interactive_dashboard is the thin curses-I/O wrapper around it.
+    Returns (lines_to_draw, max_scroll).
+    """
+    workers = sorted(latest_by_worker)
+    if not workers:
+        return ["No model calls logged yet."], 0
+
+    worker_index = clamp_index(state["worker_index"], len(workers))
+    worker = workers[worker_index]
+    calls = latest_by_worker[worker]
+    body = strip_ansi(render_worker_detail(worker, calls, req_log_dir, state["phase"], width, now_fn=now_fn))
+    body_lines = body.split("\n")
+    viewport_height = max(1, height - 1)  # row 0 reserved for the header
+    max_scroll = compute_max_scroll(len(body_lines), viewport_height)
+    scroll_offset = max(0, min(state["scroll_offset"], max_scroll))
+
+    header = (
+        f"[{worker_index + 1}/{len(workers)}] {worker} ({state['phase']})  "
+        "←/→ switch worker  ↑/↓ scroll  PgUp/PgDn  p toggle phase  q quit"
+    )
+    visible = body_lines[scroll_offset:scroll_offset + viewport_height]
+    return [header] + visible, max_scroll
+
+
+def run_interactive_dashboard(stdscr, req_log_dir, refresh_interval=1.0, now_fn=time.time,
+                               initial_worker=None, initial_phase="fixer"):
+    """curses main loop: redraws on a timer (so the view stays live even
+    with no keypress) and reacts instantly to arrow/page/phase/quit keys
+    in between. All actual state transitions and rendering happen in
+    handle_navigation_key/render_interactive_frame -- this function is
+    just the curses glue (screen setup, the input/redraw loop, catching
+    the harmless "wrote to the bottom-right cell" error curses raises
+    on some terminals).
+    """
+    import curses
+
+    curses.curs_set(0)
+    stdscr.nodelay(True)
+    stdscr.timeout(int(refresh_interval * 1000))
+    key_codes = default_curses_key_codes()
+
+    manifest_path = req_log_dir / "manifest.log"
+    state = {"worker_index": 0, "scroll_offset": 0, "phase": initial_phase}
+    if initial_worker:
+        entries = load_manifest_entries(manifest_path)
+        workers = sorted(latest_calls_per_worker(entries))
+        if initial_worker in workers:
+            state["worker_index"] = workers.index(initial_worker)
+
+    while True:
+        entries = load_manifest_entries(manifest_path)
+        latest_by_worker = latest_calls_per_worker(entries)
+        height, width = stdscr.getmaxyx()
+
+        lines, max_scroll = render_interactive_frame(state, latest_by_worker, req_log_dir, width, height, now_fn=now_fn)
+        state["scroll_offset"] = max(0, min(state["scroll_offset"], max_scroll))
+
+        stdscr.erase()
+        for row, line in enumerate(lines[:height]):
+            try:
+                stdscr.addstr(row, 0, line[:max(0, width - 1)])
+            except curses.error:
+                pass  # bottom-right-cell write; curses quirk, not a real error
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if key == -1:
+            continue  # no key pressed within the timeout -- just redraw (picks up new log data)
+        worker_count = len(latest_by_worker)
+        page_size = max(1, height - 1)
+        state, should_quit = handle_navigation_key(key, state, key_codes, worker_count, page_size)
+        if should_quit:
+            return
+
+
+def main(argv=None, stdout=sys.stdout, now_fn=time.time):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--req-log-dir", default=str(DEFAULT_REQ_LOG_DIR),
@@ -253,41 +410,50 @@ def main(argv=None, sleep_fn=time.sleep, stdout=sys.stdout, now_fn=time.time):
     )
     parser.add_argument(
         "--worker", default=None,
-        help="Show this one worker's full latest prompt + response instead of the overview table "
-             "(worker id matches --worker-id, typically the format name, e.g. JPEG, RW2).",
+        help="Start pre-selected on this worker (worker id matches --worker-id, typically the "
+             "format name, e.g. JPEG, RW2) -- left/right arrow keys still switch to any other "
+             "worker from there. With --once, shows only this worker's detail and exits.",
     )
     parser.add_argument(
         "--phase", default="fixer", choices=["fixer", "reviewer"],
-        help="Which phase's latest call to show in --worker detail mode (default: fixer).",
+        help="Which phase's latest call to show initially (default: fixer; 'p' toggles it live).",
     )
     parser.add_argument("--interval", type=float, default=1.0, help="Redraw interval in seconds")
-    parser.add_argument("--once", action="store_true", help="Render once and exit, instead of looping")
+    parser.add_argument(
+        "--once", action="store_true",
+        help="Render one plain-text frame and exit, instead of the interactive dashboard -- for "
+             "scripting/piping output rather than an interactive terminal session.",
+    )
     args = parser.parse_args(argv)
 
     req_log_dir = Path(args.req_log_dir)
     manifest_path = req_log_dir / "manifest.log"
 
-    try:
-        while True:
-            entries = load_manifest_entries(manifest_path)
-            latest_by_worker = latest_calls_per_worker(entries)
-            term_width = shutil.get_terminal_size(fallback=(100, 24)).columns
-
-            if args.worker:
-                calls = latest_by_worker.get(args.worker)
-                body = render_worker_detail(args.worker, calls, req_log_dir, args.phase, term_width, now_fn=now_fn)
-            else:
-                body = render_overview(latest_by_worker, term_width, now_fn=now_fn)
-
-            stdout.write("\x1b[2J\x1b[H")  # clear screen, cursor home
-            stdout.write(body + "\n")
-            stdout.flush()
-
-            if args.once:
-                return 0
-            sleep_fn(args.interval)
-    except KeyboardInterrupt:
+    if args.once:
+        entries = load_manifest_entries(manifest_path)
+        latest_by_worker = latest_calls_per_worker(entries)
+        term_width = shutil.get_terminal_size(fallback=(100, 24)).columns
+        if args.worker:
+            calls = latest_by_worker.get(args.worker)
+            body = render_worker_detail(args.worker, calls, req_log_dir, args.phase, term_width, now_fn=now_fn)
+        else:
+            body = render_overview(latest_by_worker, term_width, now_fn=now_fn)
+        stdout.write("\x1b[2J\x1b[H")
+        stdout.write(body + "\n")
+        stdout.flush()
         return 0
+
+    import curses
+    try:
+        curses.wrapper(
+            lambda stdscr: run_interactive_dashboard(
+                stdscr, req_log_dir, refresh_interval=args.interval, now_fn=now_fn,
+                initial_worker=args.worker, initial_phase=args.phase,
+            )
+        )
+    except KeyboardInterrupt:
+        pass  # Ctrl-C is the normal way to leave the live dashboard, not an error
+    return 0
 
 
 if __name__ == "__main__":

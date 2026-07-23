@@ -1,12 +1,14 @@
 import io
 import json
-import re
 import tempfile
 import unittest
 from pathlib import Path
 
 from watch_context import (
+    clamp_index,
+    compute_max_scroll,
     format_elapsed_ago,
+    handle_navigation_key,
     latest_calls_per_worker,
     load_manifest_entries,
     load_request_messages,
@@ -14,15 +16,17 @@ from watch_context import (
     main,
     parse_manifest_line,
     render_call_summary,
+    render_interactive_frame,
     render_overview,
     render_worker_detail,
+    strip_ansi,
 )
 
-ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-
-
-def strip_ansi(s):
-    return ANSI_RE.sub("", s)
+FAKE_KEY_CODES = {
+    "left": 1, "right": 2, "up": 3, "down": 4,
+    "page_up": 5, "page_down": 6, "quit": 7, "toggle_phase": 8,
+    "vim_up": 9, "vim_down": 10,
+}
 
 
 class ParseManifestLineTests(unittest.TestCase):
@@ -167,7 +171,7 @@ class RenderOverviewTests(unittest.TestCase):
 
 class RenderWorkerDetailTests(unittest.TestCase):
     def test_no_call_for_worker(self):
-        rendered = strip_ansi(render_worker_detail("X", None, Path("/tmp"), "fixer", 100))
+        rendered = strip_ansi(render_worker_detail("X", None, Path("/nonexistent-req-log-dir"), "fixer", 100))
         self.assertIn("No fixer call logged yet", rendered)
 
     def test_shows_sent_and_received_sections(self):
@@ -197,6 +201,188 @@ class RenderWorkerDetailTests(unittest.TestCase):
                 render_worker_detail("JPEG", calls, req_log_dir, "fixer", 100, now_fn=lambda: 0)
             )
         self.assertIn("no response yet", rendered)
+
+
+class ClampIndexTests(unittest.TestCase):
+    def test_within_range_unchanged(self):
+        self.assertEqual(clamp_index(2, 5), 2)
+
+    def test_negative_clamps_to_zero(self):
+        self.assertEqual(clamp_index(-1, 5), 0)
+
+    def test_too_large_clamps_to_last(self):
+        self.assertEqual(clamp_index(99, 5), 4)
+
+    def test_empty_count_returns_zero(self):
+        self.assertEqual(clamp_index(0, 0), 0)
+        self.assertEqual(clamp_index(-3, 0), 0)
+
+
+class ComputeMaxScrollTests(unittest.TestCase):
+    def test_content_taller_than_viewport(self):
+        self.assertEqual(compute_max_scroll(100, 20), 80)
+
+    def test_content_shorter_than_viewport_is_zero(self):
+        self.assertEqual(compute_max_scroll(5, 20), 0)
+
+    def test_exact_fit_is_zero(self):
+        self.assertEqual(compute_max_scroll(20, 20), 0)
+
+
+class HandleNavigationKeyTests(unittest.TestCase):
+    def make_state(self, worker_index=1, scroll_offset=5, phase="fixer"):
+        return {"worker_index": worker_index, "scroll_offset": scroll_offset, "phase": phase}
+
+    def test_quit_key_signals_quit_without_changing_state(self):
+        state = self.make_state()
+        new_state, should_quit = handle_navigation_key(
+            FAKE_KEY_CODES["quit"], state, FAKE_KEY_CODES, worker_count=3, page_size=5
+        )
+        self.assertTrue(should_quit)
+        self.assertIs(new_state, state)
+
+    def test_right_advances_worker_and_resets_scroll(self):
+        state = self.make_state(worker_index=0, scroll_offset=7)
+        new_state, should_quit = handle_navigation_key(
+            FAKE_KEY_CODES["right"], state, FAKE_KEY_CODES, worker_count=3, page_size=5
+        )
+        self.assertFalse(should_quit)
+        self.assertEqual(new_state["worker_index"], 1)
+        self.assertEqual(new_state["scroll_offset"], 0)
+
+    def test_right_wraps_at_upper_bound_via_clamp(self):
+        state = self.make_state(worker_index=2, scroll_offset=0)
+        new_state, _ = handle_navigation_key(
+            FAKE_KEY_CODES["right"], state, FAKE_KEY_CODES, worker_count=3, page_size=5
+        )
+        self.assertEqual(new_state["worker_index"], 2)  # clamped, not wrapped past last
+
+    def test_left_retreats_worker_and_resets_scroll(self):
+        state = self.make_state(worker_index=2, scroll_offset=9)
+        new_state, _ = handle_navigation_key(
+            FAKE_KEY_CODES["left"], state, FAKE_KEY_CODES, worker_count=3, page_size=5
+        )
+        self.assertEqual(new_state["worker_index"], 1)
+        self.assertEqual(new_state["scroll_offset"], 0)
+
+    def test_left_clamps_at_lower_bound(self):
+        state = self.make_state(worker_index=0, scroll_offset=0)
+        new_state, _ = handle_navigation_key(
+            FAKE_KEY_CODES["left"], state, FAKE_KEY_CODES, worker_count=3, page_size=5
+        )
+        self.assertEqual(new_state["worker_index"], 0)
+
+    def test_down_and_vim_down_increment_scroll(self):
+        state = self.make_state(scroll_offset=2)
+        new_state, _ = handle_navigation_key(
+            FAKE_KEY_CODES["down"], state, FAKE_KEY_CODES, worker_count=3, page_size=5
+        )
+        self.assertEqual(new_state["scroll_offset"], 3)
+
+        state2 = self.make_state(scroll_offset=2)
+        new_state2, _ = handle_navigation_key(
+            FAKE_KEY_CODES["vim_down"], state2, FAKE_KEY_CODES, worker_count=3, page_size=5
+        )
+        self.assertEqual(new_state2["scroll_offset"], 3)
+
+    def test_up_and_vim_up_decrement_scroll_not_below_zero(self):
+        state = self.make_state(scroll_offset=2)
+        new_state, _ = handle_navigation_key(
+            FAKE_KEY_CODES["up"], state, FAKE_KEY_CODES, worker_count=3, page_size=5
+        )
+        self.assertEqual(new_state["scroll_offset"], 1)
+
+        state2 = self.make_state(scroll_offset=0)
+        new_state2, _ = handle_navigation_key(
+            FAKE_KEY_CODES["vim_up"], state2, FAKE_KEY_CODES, worker_count=3, page_size=5
+        )
+        self.assertEqual(new_state2["scroll_offset"], 0)
+
+    def test_page_down_advances_by_page_size(self):
+        state = self.make_state(scroll_offset=2)
+        new_state, _ = handle_navigation_key(
+            FAKE_KEY_CODES["page_down"], state, FAKE_KEY_CODES, worker_count=3, page_size=10
+        )
+        self.assertEqual(new_state["scroll_offset"], 12)
+
+    def test_page_up_retreats_by_page_size_not_below_zero(self):
+        state = self.make_state(scroll_offset=5)
+        new_state, _ = handle_navigation_key(
+            FAKE_KEY_CODES["page_up"], state, FAKE_KEY_CODES, worker_count=3, page_size=10
+        )
+        self.assertEqual(new_state["scroll_offset"], 0)
+
+    def test_toggle_phase_flips_and_resets_scroll(self):
+        state = self.make_state(scroll_offset=4, phase="fixer")
+        new_state, _ = handle_navigation_key(
+            FAKE_KEY_CODES["toggle_phase"], state, FAKE_KEY_CODES, worker_count=3, page_size=5
+        )
+        self.assertEqual(new_state["phase"], "reviewer")
+        self.assertEqual(new_state["scroll_offset"], 0)
+
+        state2 = self.make_state(scroll_offset=4, phase="reviewer")
+        new_state2, _ = handle_navigation_key(
+            FAKE_KEY_CODES["toggle_phase"], state2, FAKE_KEY_CODES, worker_count=3, page_size=5
+        )
+        self.assertEqual(new_state2["phase"], "fixer")
+
+    def test_unknown_key_leaves_state_unchanged(self):
+        state = self.make_state()
+        new_state, should_quit = handle_navigation_key(
+            999, state, FAKE_KEY_CODES, worker_count=3, page_size=5
+        )
+        self.assertFalse(should_quit)
+        self.assertEqual(new_state, state)
+
+
+class RenderInteractiveFrameTests(unittest.TestCase):
+    def test_empty_workers_shows_placeholder(self):
+        state = {"worker_index": 0, "scroll_offset": 0, "phase": "fixer"}
+        lines, max_scroll = render_interactive_frame(state, {}, Path("/nonexistent-req-log-dir"), width=80, height=24)
+        self.assertEqual(lines, ["No model calls logged yet."])
+        self.assertEqual(max_scroll, 0)
+
+    def test_header_shows_worker_position_and_phase(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            req_log_dir = Path(tmpdir)
+            latest = {
+                "JPEG": {"fixer": {"status": "OK", "ts": "2026-07-23T11:00:00", "phase": "fixer", "model": "m"}},
+                "RW2": {"fixer": None},
+            }
+            state = {"worker_index": 0, "scroll_offset": 0, "phase": "fixer"}
+            lines, _ = render_interactive_frame(
+                state, latest, req_log_dir, width=80, height=24, now_fn=lambda: 0
+            )
+        self.assertIn("[1/2] JPEG (fixer)", lines[0])
+        self.assertIn("q quit", lines[0])
+
+    def test_worker_index_out_of_range_is_clamped(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            req_log_dir = Path(tmpdir)
+            latest = {"JPEG": {"fixer": None}}
+            state = {"worker_index": 99, "scroll_offset": 0, "phase": "fixer"}
+            lines, _ = render_interactive_frame(
+                state, latest, req_log_dir, width=80, height=24, now_fn=lambda: 0
+            )
+        self.assertIn("[1/1] JPEG", lines[0])
+
+    def test_scroll_offset_clamped_to_max_scroll(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            req_log_dir = Path(tmpdir)
+            (req_log_dir / "2026-07-23T11:00:00-fixer-request.json").write_text(
+                json.dumps({"messages": [{"role": "user", "content": "line\n" * 200}]})
+            )
+            (req_log_dir / "2026-07-23T11:00:00-fixer-response.txt").write_text("resp")
+            latest = {
+                "JPEG": {"fixer": {"status": "OK", "ts": "2026-07-23T11:00:00", "phase": "fixer", "model": "m"}},
+            }
+            state = {"worker_index": 0, "scroll_offset": 999999, "phase": "fixer"}
+            lines, max_scroll = render_interactive_frame(
+                state, latest, req_log_dir, width=80, height=10, now_fn=lambda: 0
+            )
+        self.assertGreater(max_scroll, 0)
+        # header + visible body, never exceeding the requested height
+        self.assertLessEqual(len(lines), 10)
 
 
 class MainTests(unittest.TestCase):
