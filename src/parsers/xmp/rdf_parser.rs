@@ -245,8 +245,9 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
     }
 
     // AboutCvTerm is an IPTC Extension bag of structures. ExifTool flattens
-    // the CvId field from every structure into AboutCvTermCvId.
-    let about_cv_term_cv_ids = extract_about_cv_term_cv_ids(xml_bytes)?;
+    // fields from every structure into list-valued AboutCvTerm tags.
+    let (about_cv_term_cv_ids, about_cv_term_names) =
+        extract_about_cv_term_values(xml_bytes)?;
     if !about_cv_term_cv_ids.is_empty() {
         const TAG: &str = "XMP:AboutCvTermCvId";
 
@@ -254,6 +255,15 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
         // added later.
         results.retain(|(tag, _)| tag != TAG);
         results.push((TAG.to_string(), about_cv_term_cv_ids.join(", ")));
+    }
+
+    if !about_cv_term_names.is_empty() {
+        const TAG: &str = "XMP:AboutCvTermName";
+
+        // Avoid duplicate output if generic structured-property support is
+        // added later.
+        results.retain(|(tag, _)| tag != TAG);
+        results.push((TAG.to_string(), about_cv_term_names.join(", ")));
     }
 
     // Post-process results to apply formatting for specific tags
@@ -268,24 +278,27 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
     Ok(results)
 }
 
-/// Extracts CvId values from the IPTC Extension AboutCvTerm structured bag.
+/// Extracts flattened fields from the IPTC Extension AboutCvTerm structured bag.
 ///
 /// A second, focused pass is used because the general RDF parser treats an
 /// entire collection as one property and cannot distinguish fields in
 /// resource-valued `rdf:li` entries.
-fn extract_about_cv_term_cv_ids(xml_bytes: &[u8]) -> Result<Vec<String>> {
+fn extract_about_cv_term_values(xml_bytes: &[u8]) -> Result<(Vec<String>, Vec<String>)> {
     const IPTC_EXT_NAMESPACE: &str = "http://iptc.org/std/Iptc4xmpExt/2008-02-29/";
 
     let mut reader = Reader::from_reader(xml_bytes);
     reader.config_mut().trim_text(true);
 
     let mut resolver = NamespaceResolver::new();
-    let mut results = Vec::new();
+    let mut cv_ids = Vec::new();
+    let mut cv_term_names = Vec::new();
     let mut buf = Vec::new();
     let mut depth = 0usize;
     let mut about_cv_term_depth: Option<usize> = None;
     let mut cv_id_depth: Option<usize> = None;
+    let mut cv_term_name_depth: Option<usize> = None;
     let mut current_cv_id = String::new();
+    let mut current_cv_term_name = String::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -314,6 +327,17 @@ fn extract_about_cv_term_cv_ids(xml_bytes: &[u8]) -> Result<Vec<String>> {
                 {
                     cv_id_depth = Some(depth);
                     current_cv_id.clear();
+                } else if about_cv_term_depth.is_some()
+                    && cv_term_name_depth.is_none()
+                    && is_property_in_namespace(
+                        &tag_name,
+                        "CvTermName",
+                        IPTC_EXT_NAMESPACE,
+                        &resolver,
+                    )
+                {
+                    cv_term_name_depth = Some(depth);
+                    current_cv_term_name.clear();
                 }
             }
 
@@ -330,10 +354,28 @@ fn extract_about_cv_term_cv_ids(xml_bytes: &[u8]) -> Result<Vec<String>> {
                 {
                     let value = current_cv_id.trim();
                     if !value.is_empty() {
-                        results.push(value.to_string());
+                        cv_ids.push(value.to_string());
                     }
                     current_cv_id.clear();
                     cv_id_depth = None;
+                }
+
+                if cv_term_name_depth == Some(depth)
+                    && is_property_in_namespace(
+                        &tag_name,
+                        "CvTermName",
+                        IPTC_EXT_NAMESPACE,
+                        &resolver,
+                    )
+                {
+                    // CvTermName is normally an rdf:Alt. Text collected from
+                    // its nested rdf:li is the flattened value ExifTool emits.
+                    let value = current_cv_term_name.trim();
+                    if !value.is_empty() {
+                        cv_term_names.push(value.to_string());
+                    }
+                    current_cv_term_name.clear();
+                    cv_term_name_depth = None;
                 }
 
                 if about_cv_term_depth == Some(depth)
@@ -351,27 +393,46 @@ fn extract_about_cv_term_cv_ids(xml_bytes: &[u8]) -> Result<Vec<String>> {
             }
 
             Ok(Event::Text(e)) => {
-                if cv_id_depth.is_some()
+                if (cv_id_depth.is_some() || cv_term_name_depth.is_some())
                     && let Ok(decoded) = e.xml10_content()
                 {
                     let unescaped =
                         quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
-                    current_cv_id.push_str(&unescaped);
+                    if cv_id_depth.is_some() {
+                        current_cv_id.push_str(&unescaped);
+                    }
+                    if cv_term_name_depth.is_some() {
+                        current_cv_term_name.push_str(&unescaped);
+                    }
                 }
             }
 
             Ok(Event::GeneralRef(e)) => {
-                if cv_id_depth.is_some()
+                if (cv_id_depth.is_some() || cv_term_name_depth.is_some())
                     && let Ok(entity_name) = e.xml10_content()
                 {
                     if let Ok(Some(ch)) = e.resolve_char_ref() {
-                        current_cv_id.push(ch);
+                        if cv_id_depth.is_some() {
+                            current_cv_id.push(ch);
+                        }
+                        if cv_term_name_depth.is_some() {
+                            current_cv_term_name.push(ch);
+                        }
                     } else if let Some(resolved) = resolve_predefined_entity(&entity_name) {
-                        current_cv_id.push_str(resolved);
+                        if cv_id_depth.is_some() {
+                            current_cv_id.push_str(resolved);
+                        }
+                        if cv_term_name_depth.is_some() {
+                            current_cv_term_name.push_str(resolved);
+                        }
                     } else {
-                        current_cv_id.push('&');
-                        current_cv_id.push_str(&entity_name);
-                        current_cv_id.push(';');
+                        let unresolved = format!("&{};", entity_name);
+                        if cv_id_depth.is_some() {
+                            current_cv_id.push_str(&unresolved);
+                        }
+                        if cv_term_name_depth.is_some() {
+                            current_cv_term_name.push_str(&unresolved);
+                        }
                     }
                 }
             }
@@ -393,7 +454,7 @@ fn extract_about_cv_term_cv_ids(xml_bytes: &[u8]) -> Result<Vec<String>> {
         buf.clear();
     }
 
-    Ok(results)
+    Ok((cv_ids, cv_term_names))
 }
 
 /// Checks a property's local name and resolved namespace URI.
@@ -416,7 +477,7 @@ mod about_cv_term_tests {
     use super::*;
 
     #[test]
-    fn test_extract_about_cv_term_cv_ids() {
+    fn test_extract_about_cv_term_values() {
         let xml = br#"
             <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
               <rdf:Description
@@ -442,13 +503,19 @@ mod about_cv_term_tests {
         "#;
 
         let result = parse_xmp(xml).unwrap();
-        let values: Vec<_> = result
+        let cv_ids: Vec<_> = result
             .iter()
             .filter(|(tag, _)| tag == "XMP:AboutCvTermCvId")
             .map(|(_, value)| value.as_str())
             .collect();
+        let names: Vec<_> = result
+            .iter()
+            .filter(|(tag, _)| tag == "XMP:AboutCvTermName")
+            .map(|(_, value)| value.as_str())
+            .collect();
 
-        assert_eq!(values, vec!["1, 2, 3"]);
+        assert_eq!(cv_ids, vec!["1, 2, 3"]);
+        assert_eq!(names, vec!["one, two, three"]);
     }
 }
 
