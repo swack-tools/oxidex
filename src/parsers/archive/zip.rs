@@ -6,6 +6,9 @@ use std::io::Cursor;
 use zip::ZipArchive;
 
 const ZIP_SIGNATURE: &[u8] = b"PK";
+const ZIP_LOCAL_FILE_HEADER_SIGNATURE: &[u8] = b"PK\x03\x04";
+const ZIP_LOCAL_FILE_HEADER_PREFIX_SIZE: usize = 8;
+const ZIP_LOCAL_FILE_BIT_FLAG_OFFSET: usize = 6;
 
 /// Parser for ZIP archive files
 ///
@@ -16,6 +19,26 @@ const ZIP_SIGNATURE: &[u8] = b"PK";
 pub struct ZipParser;
 
 impl ZipParser {
+    /// Reads the general-purpose bit flag from the first local file header.
+    ///
+    /// The flag is a little-endian 16-bit value at offset 6 from the start of
+    /// a local file header.
+    fn read_first_local_file_bit_flag(reader: &dyn FileReader) -> Result<Option<u16>> {
+        if reader.size() < ZIP_LOCAL_FILE_HEADER_PREFIX_SIZE as u64 {
+            return Ok(None);
+        }
+
+        let header = reader.read(0, ZIP_LOCAL_FILE_HEADER_PREFIX_SIZE)?;
+        if !header.starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+            return Ok(None);
+        }
+
+        Ok(Some(u16::from_le_bytes([
+            header[ZIP_LOCAL_FILE_BIT_FLAG_OFFSET],
+            header[ZIP_LOCAL_FILE_BIT_FLAG_OFFSET + 1],
+        ])))
+    }
+
     /// Converts DOS DateTime to ISO 8601 format string
     ///
     /// DOS datetime format:
@@ -78,6 +101,13 @@ impl FormatParser for ZipParser {
         }
 
         let mut metadata = MetadataMap::new();
+
+        if let Some(bit_flag) = Self::read_first_local_file_bit_flag(reader)? {
+            metadata.insert(
+                "ZIP:ZipBitFlag".to_string(),
+                TagValue::new_integer(bit_flag as i64),
+            );
+        }
 
         // Read entire file into memory for zip crate
         let size = reader.size() as usize;
@@ -444,6 +474,18 @@ mod tests {
         let dt = zip::DateTime::from_date_and_time(1980, 1, 1, 0, 0, 0).unwrap();
         let iso = ZipParser::datetime_to_iso8601(dt);
         assert_eq!(iso, "1980-01-01T00:00:00");
+    }
+
+    #[test]
+    fn test_zip_bit_flag_extraction() {
+        // Local file header with general-purpose bit flag 0x1234.
+        let data = b"PK\x03\x04\x0a\x00\x34\x12";
+        let reader = BufferedReader::from_bytes(data);
+
+        assert_eq!(
+            ZipParser::read_first_local_file_bit_flag(&reader).unwrap(),
+            Some(0x1234)
+        );
     }
 
     #[test]
