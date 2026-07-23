@@ -423,7 +423,6 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:JPEG1".to_string(), app12_value);
             }
 
-
             // ExifTool exposes the Olympus IMbb diagnostic field in the
             // APP12 group using its original mixed-case name.
             if key.eq_ignore_ascii_case("IMbb") {

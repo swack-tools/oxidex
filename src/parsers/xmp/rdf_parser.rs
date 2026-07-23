@@ -246,8 +246,7 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
 
     // AboutCvTerm is an IPTC Extension bag of structures. ExifTool flattens
     // fields from every structure into list-valued AboutCvTerm tags.
-    let (about_cv_term_cv_ids, about_cv_term_names) =
-        extract_about_cv_term_values(xml_bytes)?;
+    let (about_cv_term_cv_ids, about_cv_term_names) = extract_about_cv_term_values(xml_bytes)?;
     if !about_cv_term_cv_ids.is_empty() {
         const TAG: &str = "XMP:AboutCvTermCvId";
 
@@ -318,12 +317,7 @@ fn extract_about_cv_term_values(xml_bytes: &[u8]) -> Result<(Vec<String>, Vec<St
                     about_cv_term_depth = Some(depth);
                 } else if about_cv_term_depth.is_some()
                     && cv_id_depth.is_none()
-                    && is_property_in_namespace(
-                        &tag_name,
-                        "CvId",
-                        IPTC_EXT_NAMESPACE,
-                        &resolver,
-                    )
+                    && is_property_in_namespace(&tag_name, "CvId", IPTC_EXT_NAMESPACE, &resolver)
                 {
                     cv_id_depth = Some(depth);
                     current_cv_id.clear();
@@ -345,12 +339,7 @@ fn extract_about_cv_term_values(xml_bytes: &[u8]) -> Result<(Vec<String>, Vec<St
                 let tag_name = extract_tag_name_from_bytes(e.name().as_ref())?;
 
                 if cv_id_depth == Some(depth)
-                    && is_property_in_namespace(
-                        &tag_name,
-                        "CvId",
-                        IPTC_EXT_NAMESPACE,
-                        &resolver,
-                    )
+                    && is_property_in_namespace(&tag_name, "CvId", IPTC_EXT_NAMESPACE, &resolver)
                 {
                     let value = current_cv_id.trim();
                     if !value.is_empty() {
