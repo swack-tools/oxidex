@@ -727,6 +727,64 @@ Lessons from mistakes a human reviewer previously caught in this loop's own outp
 """.strip()
 
 
+DEFAULT_MAX_SWEEP_REVIEW_ENTRIES = 6
+
+
+def load_recent_sweep_reviews(log_path, format_name, max_entries=DEFAULT_MAX_SWEEP_REVIEW_ENTRIES):
+    """Read scripts/log_sweep_review.py's JSONL log and return the most
+    recent entries for format_name, newest first, capped at max_entries.
+
+    Unlike format_previous_attempts (which only ever sees a build/test
+    failure on the *exact same tag* being retried), this surfaces actual
+    sweep-review verdicts -- both accepted and rejected -- across every
+    tag in this format, so a fixer working on a *different* tag in the
+    same format still benefits from what a reviewer already found there
+    (a naming convention that was wrong, a duplicate that already
+    existed, a formatting guess that didn't match real ExifTool output).
+
+    Missing/corrupt log or nothing for this format: returns [] -- this is
+    advisory context, never a hard dependency (matches
+    load_tag_state's own "missing file = nothing recorded yet" handling).
+    """
+    if not log_path.exists():
+        return []
+    entries = []
+    try:
+        with log_path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("format") == format_name:
+                    entries.append(entry)
+    except OSError:
+        return []
+    entries.reverse()  # file is append-order (oldest first); newest first for display
+    return entries[:max_entries]
+
+
+def format_sweep_review_history(entries):
+    """Render load_recent_sweep_reviews' output into a prompt section."""
+    if not entries:
+        return ""
+    lines = []
+    for entry in entries:
+        verdict = entry.get("verdict", "unknown").upper()
+        tag = entry.get("tag", "?")
+        reason = entry.get("reason", "no reason given")
+        lines.append(f"  - {verdict} {tag}: {reason}")
+    return (
+        "\n\nRecent sweep-review outcomes for this format (a human reviewer's actual "
+        "verdicts on other fixes in this format -- REJECTED means a diff that built and "
+        "tested fine was still wrong; learn the specific reason, not just that it failed):\n"
+        + "\n".join(lines)
+    )
+
+
 DEFAULT_INLINE_SAMPLE_MAX_BYTES = 4096
 
 
@@ -777,7 +835,7 @@ def build_exact_sample_block(gap, samples_dir):
 def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                   max_file_bytes=DEFAULT_MAX_PROMPT_FILE_BYTES, samples_dir=None,
                   max_samples_listed=DEFAULT_MAX_SAMPLE_FILES_LISTED, previous_attempts=None,
-                  perl_lib_dir=None):
+                  perl_lib_dir=None, sweep_review_log_path=None):
     """Format one gap into a model prompt, capped so a huge format (e.g.
     JPEG with thousands of gaps and dozens of parser files) becomes an
     iterative, tractable request instead of one impossibly large prompt.
@@ -800,6 +858,11 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     entirely rather than resolving it implicitly, so callers that don't
     pass it (including every existing test) keep their original,
     environment-independent output.
+
+    sweep_review_log_path, if given, is used to include recent human
+    sweep-review verdicts (accepted/rejected, with reasons) for this
+    gap's format -- see load_recent_sweep_reviews/format_sweep_review_history.
+    None (the default) omits this section, same reasoning as perl_lib_dir.
     """
     missing_shown = gap["missing_tags"][:max_tags]
     missing_omitted = len(gap["missing_tags"]) - len(missing_shown)
@@ -857,6 +920,12 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
 
     perl_block = build_perl_reference_block(gap, perl_lib_dir)
 
+    sweep_review_block = ""
+    if sweep_review_log_path is not None:
+        sweep_review_block = format_sweep_review_history(
+            load_recent_sweep_reviews(sweep_review_log_path, gap["format"])
+        )
+
     attempts_block = format_previous_attempts(previous_attempts)
 
     return (
@@ -867,6 +936,7 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
         f"{samples_block}"
         f"{exact_sample_block}"
         f"{perl_block}"
+        f"{sweep_review_block}"
         f"{attempts_block}\n\n"
         f"{KNOWN_PITFALLS}\n\n"
         "Respond with a single unified diff (in a ```diff fenced block) that fixes as many of these gaps "
@@ -1113,7 +1183,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             pick_model_fn=random.choice, log_fn=print,
             review_config=None, recheck_fn=None, repo_root=None, samples_dir=None,
             previous_attempts=None, detect_duplicate_fn=detect_duplicate_tag_insertion,
-            perl_lib_dir=None):
+            perl_lib_dir=None, sweep_review_log_path=None):
     """Attempt to close one format's gaps via a single-shot patch. Up to
     two candidates: the initial fix, and one repair round-trip if a
     reviewer rejects the first. Returns a result dict.
@@ -1166,6 +1236,10 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     (see resolve_exiftool_perl_lib_dir/build_perl_reference_block) so the
     initial prompt includes ExifTool's own Perl source for this gap's
     tags, not just on a repair round-trip.
+
+    sweep_review_log_path, if given, is passed straight through to
+    build_prompt (see load_recent_sweep_reviews/format_sweep_review_history)
+    so the prompt includes recent human sweep-review verdicts for this format.
     """
     repo_root = repo_root or REPO_ROOT
     review_config = review_config or config
@@ -1177,6 +1251,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         max_file_bytes=config["max_prompt_file_bytes"],
         samples_dir=samples_dir,
         perl_lib_dir=perl_lib_dir,
+        sweep_review_log_path=sweep_review_log_path,
         previous_attempts=previous_attempts,
     )}]
 
@@ -1718,6 +1793,12 @@ def main(argv=None):
              "worktree, which gets reset between rounds) for a single shared record of exactly "
              f"which tags were found across a parallel run. Default: {OXIDEX_HOME / 'logs' / 'tags-found.log'}",
     )
+    parser.add_argument(
+        "--sweep-review-log", default=str(OXIDEX_HOME / "logs" / "sweep-review-history.jsonl"),
+        help="scripts/log_sweep_review.py's JSONL log of human sweep-review verdicts "
+             "(accepted/rejected, with reasons) -- read back into the prompt for this gap's "
+             f"format if present. Default: {OXIDEX_HOME / 'logs' / 'sweep-review-history.jsonl'}",
+    )
     args = parser.parse_args(argv)
 
     config_path = Path(args.config)
@@ -1907,6 +1988,11 @@ def main(argv=None):
     # samples_dir being unavailable.
     perl_lib_dir = resolve_exiftool_perl_lib_dir()
 
+    # A missing/empty file (no verdicts logged yet, or none for this format)
+    # is handled by load_recent_sweep_reviews itself -- always pass the
+    # configured path rather than checking existence here first.
+    sweep_review_log_path = Path(args.sweep_review_log)
+
     def real_fix_tag(tag_gap, cfg, previous_attempts=None):
         def recheck(_fmt):
             # _fmt is ignored -- tag_gap already knows its own format;
@@ -1941,6 +2027,7 @@ def main(argv=None):
             samples_dir=Path(args.cache_dir) / "combined-samples",
             previous_attempts=previous_attempts,
             perl_lib_dir=perl_lib_dir,
+            sweep_review_log_path=sweep_review_log_path,
         )
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         banner = f"\n{'=' * 20} [{ts}] worker={worker_label} tag={tag_gap['tag_key']} {'=' * 20}\n"
@@ -1955,6 +2042,7 @@ def main(argv=None):
             samples_dir=Path(args.cache_dir) / "combined-samples",
             previous_attempts=previous_attempts,
             perl_lib_dir=perl_lib_dir,
+            sweep_review_log_path=sweep_review_log_path,
         )
         if result["status"] == "fixed":
             log_tag_found(tag_gap, result)
