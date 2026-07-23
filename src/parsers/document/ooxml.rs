@@ -11,9 +11,7 @@ use zip::ZipArchive;
 ///
 /// ExifTool exposes this header field as `ZIP:ZipBitFlag`.
 fn extract_zip_bit_flag(data: &[u8]) -> Option<u16> {
-    let header_offset = data
-        .windows(4)
-        .position(|window| window == b"PK\x03\x04")?;
+    let header_offset = data.windows(4).position(|window| window == b"PK\x03\x04")?;
     let flag_bytes = data.get(header_offset + 6..header_offset + 8)?;
 
     Some(u16::from_le_bytes([flag_bytes[0], flag_bytes[1]]))

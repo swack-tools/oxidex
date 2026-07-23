@@ -233,9 +233,7 @@ impl FormatParser for MachOParser {
         if let Some(header) = &info.header {
             metadata.insert(
                 "EXE:CPUArchitecture".to_string(),
-                TagValue::String(
-                    if header.is_64bit { "64 bit" } else { "32 bit" }.to_string(),
-                ),
+                TagValue::String(if header.is_64bit { "64 bit" } else { "32 bit" }.to_string()),
             );
         }
 
