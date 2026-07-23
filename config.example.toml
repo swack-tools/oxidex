@@ -17,6 +17,7 @@
 base_url = "https://pass.wafer.ai/v1"
 api_key = "your-api-key-here"
 max_tokens = 4096
+max_prompt_tokens = 4096
 reasoning_effort = "low"
 stream = true
 thinking = false
