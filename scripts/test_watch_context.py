@@ -171,7 +171,7 @@ class RenderOverviewTests(unittest.TestCase):
 
 class RenderWorkerDetailTests(unittest.TestCase):
     def test_no_call_for_worker(self):
-        rendered = strip_ansi(render_worker_detail("X", None, Path("/tmp"), "fixer", 100))
+        rendered = strip_ansi(render_worker_detail("X", None, Path("/nonexistent-req-log-dir"), "fixer", 100))
         self.assertIn("No fixer call logged yet", rendered)
 
     def test_shows_sent_and_received_sections(self):
@@ -338,7 +338,7 @@ class HandleNavigationKeyTests(unittest.TestCase):
 class RenderInteractiveFrameTests(unittest.TestCase):
     def test_empty_workers_shows_placeholder(self):
         state = {"worker_index": 0, "scroll_offset": 0, "phase": "fixer"}
-        lines, max_scroll = render_interactive_frame(state, {}, Path("/tmp"), width=80, height=24)
+        lines, max_scroll = render_interactive_frame(state, {}, Path("/nonexistent-req-log-dir"), width=80, height=24)
         self.assertEqual(lines, ["No model calls logged yet."])
         self.assertEqual(max_scroll, 0)
 
