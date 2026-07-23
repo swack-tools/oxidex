@@ -497,6 +497,18 @@ def cargo_build(repo_root):
     return result.returncode == 0, result.stderr
 
 
+def cargo_check(repo_root):
+    """Fast compile-only check (no codegen, no tests) for VERIFY trial
+    diffs -- see attempt_build. Returns (success, output), stdout+stderr
+    combined (cargo check's errors go to stderr, but warnings/summaries
+    can land on stdout)."""
+    result = subprocess.run(  # nosec B603
+        ["cargo", "check", "--workspace"],
+        capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
+    )
+    return result.returncode == 0, result.stdout + result.stderr
+
+
 def cargo_test_workspace(repo_root):
     """Run the full workspace test suite. Returns (success, output) --
     output is stdout+stderr combined (cargo test's failure detail --
@@ -1423,6 +1435,10 @@ PATCH_HEADER_RE = re.compile(r"^PATCH\s+(\d+)\s*/\s*(\d+)\b", re.IGNORECASE)
 DEFAULT_MAX_PATCH_CHUNKS = 40  # hard safety cap, independent of the declared N -- a
 # misbehaving/looping model must not be able to stall an attempt forever
 
+VERIFY_RE = re.compile(r"^VERIFY\b", re.IGNORECASE)
+DEFAULT_MAX_VERIFY_TURNS = 10   # trial-compile turns per attempt_build invocation
+DEFAULT_MAX_CHECK_OUTPUT_CHARS = 3000  # tail-trim: Rust errors summarize at the end
+
 
 def hex_dump(data, max_bytes=DEFAULT_HEXDUMP_BYTES):
     """Render up to max_bytes of data as classic 16-bytes-per-line hex+ASCII,
@@ -1513,7 +1529,7 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
 
 def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_fn,
                    cargo_build_fn, config, repo_root, pick_model_fn=random.choice,
-                   samples_dir=None):
+                   samples_dir=None, cargo_check_fn=None):
     """Try to get a working build via a bounded conversation: up to
     config["max_request_turns"] turns where the model can ask to see more
     context (REQUEST: <path> -- see resolve_request) before it must submit
@@ -1539,11 +1555,23 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     exactly like a normal single-reply diff -- this doesn't consume a
     separate diff_attempts_used slot per chunk, only once the full diff is
     assembled and ready to apply.
+
+    cargo_check_fn(repo_root) -> (success, output), if provided, enables
+    the VERIFY protocol: a reply of "VERIFY" plus one ```diff fenced
+    block gets that diff applied, cargo-checked, REVERTED, and the
+    tail-trimmed check output fed back -- a trial compile that never
+    consumes one of the 2 real diff attempts. Bounded by
+    config["max_verify_turns"] (default DEFAULT_MAX_VERIFY_TURNS).
+    None (the default) keeps VERIFY off: such replies get an
+    "unavailable" message, so old callers and tests are unaffected.
     """
     max_request_turns = config.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS)
     request_turns_used = 0
     max_request_repeats = config.get("max_request_repeats", DEFAULT_MAX_REQUEST_REPEATS)
     request_counts = {}
+    max_verify_turns = config.get("max_verify_turns", DEFAULT_MAX_VERIFY_TURNS)
+    verify_turns_used = 0
+    verify_rejections = 0
     diff_attempts_used = 0
     nudged_to_stop_investigating = False
     patch_chunks = {}
@@ -1612,6 +1640,60 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 })
                 continue
             return False, "no diff in model response (exhausted request budget)", None, messages
+
+        if VERIFY_RE.match(reply.strip()):
+            if cargo_check_fn is None or verify_turns_used >= max_verify_turns:
+                verify_rejections += 1
+                if verify_rejections >= 2:
+                    return (
+                        False, "no diff in model response (exhausted verify budget)",
+                        None, messages,
+                    )
+                detail = (
+                    "VERIFY is unavailable in this run"
+                    if cargo_check_fn is None
+                    else f"VERIFY budget ({max_verify_turns}) exhausted"
+                )
+                messages.append({
+                    "role": "user",
+                    "content": f"{detail} -- submit your final diff now (or a REQUEST if you must).",
+                })
+                continue
+            verify_turns_used += 1
+            trial_diff = extract_diff(reply)
+            if trial_diff is None:
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "That VERIFY had no ```diff fenced block -- resend as the line "
+                        "\"VERIFY\" followed by exactly one fenced diff of the change to trial-compile."
+                    ),
+                })
+                continue
+            applied, apply_msg = git_apply_fn(trial_diff, repo_root)
+            if not applied:
+                git_checkout_clean_fn(repo_root)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"VERIFY diff did not apply: {apply_msg}\n"
+                        "Fix it and re-VERIFY, or submit your final diff."
+                    ),
+                })
+                continue
+            check_ok, check_output = cargo_check_fn(repo_root)
+            git_checkout_clean_fn(repo_root)
+            tail = check_output[-DEFAULT_MAX_CHECK_OUTPUT_CHARS:]
+            verdict = "PASSED" if check_ok else "FAILED"
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"VERIFY result: cargo check {verdict}. The trial change has been REVERTED -- "
+                    "the worktree is clean again, so your final diff must contain the complete change.\n"
+                    f"{tail}"
+                ),
+            })
+            continue
 
         patch_match = PATCH_HEADER_RE.match(reply.strip())
         if patch_match:
@@ -1696,6 +1778,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             git_apply_fn=git_apply,
             git_checkout_clean_fn=git_checkout_clean, git_commit_fn=git_commit,
             cargo_build_fn=cargo_build, cargo_test_workspace_fn=cargo_test_workspace,
+            cargo_check_fn=cargo_check,
             attempt_build_fn=attempt_build, review_fn=review_verdict,
             critique_fn=critique_failed_attempt,
             pick_model_fn=random.choice, log_fn=print,
@@ -1745,6 +1828,8 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     pick_model_fn is threaded into both attempt_build_fn and review_fn, so
     a single injected fake can make an entire fix_gap call deterministic
     in tests despite config["models"] holding multiple entries.
+
+    cargo_check_fn is threaded to attempt_build_fn for the VERIFY protocol.
 
     log_fn(str) is called with a one-line status update at every decision
     point (build result, gap delta, review verdict, commit) -- defaults to
@@ -1839,6 +1924,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             git_checkout_clean_fn=git_checkout_clean_fn, cargo_build_fn=cargo_build_fn,
             config=config, repo_root=repo_root, pick_model_fn=pick_model_fn,
             samples_dir=samples_dir,
+            cargo_check_fn=cargo_check_fn,
         )
         if not built:
             log_fn(f"[{fmt}] build failed: {reason}")

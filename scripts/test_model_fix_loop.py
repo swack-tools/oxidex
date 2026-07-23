@@ -19,6 +19,7 @@ from model_fix_loop import (
     build_review_prompt,
     critique_failed_attempt,
     cargo_build,
+    cargo_check,
     cargo_test_workspace,
     call_model,
     detect_duplicate_tag_insertion,
@@ -2146,6 +2147,118 @@ class AttemptBuildTests(unittest.TestCase):
             repo_root=Path("/fake/repo"),
         )
         self.assertTrue(built)
+
+
+class CargoCheckTests(unittest.TestCase):
+    @patch("model_fix_loop.subprocess.run")
+    def test_returns_success_and_combined_output(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="checked ok\n", stderr="warn\n")
+        ok, output = cargo_check(Path("/fake/repo"))
+        self.assertTrue(ok)
+        self.assertEqual(output, "checked ok\nwarn\n")
+        self.assertEqual(mock_run.call_args[0][0], ["cargo", "check", "--workspace"])
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_nonzero_exit_is_failure(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=101, stdout="", stderr="error[E0308]\n")
+        ok, output = cargo_check(Path("/fake/repo"))
+        self.assertFalse(ok)
+        self.assertIn("E0308", output)
+
+
+class AttemptBuildVerifyTests(unittest.TestCase):
+    def _run(self, fake_call_model, cargo_check_fn, config=None, git_apply_fn=None):
+        cleans = []
+        return attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=git_apply_fn or (lambda diff, root: (True, "ok")),
+            git_checkout_clean_fn=lambda root: cleans.append(1),
+            cargo_build_fn=lambda root: (True, ""),
+            config=config or CONFIG,
+            repo_root=Path("/fake/repo"),
+            cargo_check_fn=cargo_check_fn,
+        ), cleans
+
+    def test_verify_applies_checks_reverts_and_reports(self):
+        checks = []
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) == 1:
+                return "VERIFY\n```diff\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n```\n"
+            self.assertIn("cargo check FAILED", messages[-1]["content"])
+            self.assertIn("mismatched types", messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        def fake_check(root):
+            checks.append(1)
+            return False, "error[E0308]: mismatched types"
+
+        (built, reason, diff, messages), cleans = self._run(fake_call_model, fake_check)
+        self.assertTrue(built)
+        self.assertEqual(len(checks), 1)
+        self.assertGreaterEqual(len(cleans), 1)  # trial change was reverted
+
+    def test_verify_passing_check_reports_passed(self):
+        def fake_call_model(messages, *a):
+            if len(messages) == 1:
+                return "VERIFY\n```diff\n--- a/x\n+++ b/x\n```\n"
+            self.assertIn("cargo check PASSED", messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        (built, _, _, _), _ = self._run(fake_call_model, lambda root: (True, "clean"))
+        self.assertTrue(built)
+
+    def test_verify_never_consumes_a_diff_attempt(self):
+        # Two VERIFYs then two failing real diffs: the 2-diff-attempt
+        # budget must still allow both real diffs.
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) <= 2:
+                return "VERIFY\n```diff\n--- a/x\n+++ b/x\n```\n"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        (built, reason, _, _), _ = self._run(
+            lambda m, *a: fake_call_model(m, *a),
+            lambda root: (True, "ok"),
+        )
+        # 3rd call is a real diff that applies and builds -> success.
+        self.assertTrue(built)
+        self.assertEqual(len(replies), 3)
+
+    def test_verify_without_cargo_check_fn_gets_unavailable_message(self):
+        def fake_call_model(messages, *a):
+            if len(messages) == 1:
+                return "VERIFY\n```diff\n--- a/x\n+++ b/x\n```\n"
+            self.assertIn("VERIFY is unavailable", messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        (built, _, _, _), _ = self._run(fake_call_model, None)
+        self.assertTrue(built)
+
+    def test_verify_with_no_diff_block_consumes_a_turn_and_asks_again(self):
+        def fake_call_model(messages, *a):
+            if len(messages) == 1:
+                return "VERIFY\nI'll test changing the offset."
+            self.assertIn("no ```diff fenced block", messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        (built, _, _, _), _ = self._run(fake_call_model, lambda root: (True, "ok"))
+        self.assertTrue(built)
+
+    def test_verify_budget_exhaustion_demands_final_diff_then_fails_on_refusal(self):
+        result, _ = self._run(
+            lambda messages, *a: "VERIFY\n```diff\n--- a/x\n+++ b/x\n```\n",
+            lambda root: (True, "ok"),
+            config=dict(CONFIG, max_verify_turns=2),
+        )
+        built, reason, diff, messages = result
+        self.assertFalse(built)
+        self.assertIn("verify budget", reason)
 
 
 class FixGapFailureTests(unittest.TestCase):
