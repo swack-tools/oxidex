@@ -92,6 +92,7 @@ const KNOWN_TAGS: &[&str] = &[
     "IMgg",
     "IMrb",
     "IMrr",
+    "JPEG1",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -409,6 +410,18 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:EXP3".to_string(), app12_value);
+            }
+
+            // JPEG1 is an Olympus diagnostic field containing a decimal
+            // value. ExifTool exposes it under its original name in the
+            // APP12 group.
+            if key.eq_ignore_ascii_case("JPEG1") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:JPEG1".to_string(), app12_value);
             }
 
             // ExifTool exposes the Olympus IMbb diagnostic field in the
