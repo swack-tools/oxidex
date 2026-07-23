@@ -7,6 +7,18 @@ use quick_xml::events::Event;
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
+/// Extract the general-purpose bit flag from the first ZIP local file header.
+///
+/// ExifTool exposes this header field as `ZIP:ZipBitFlag`.
+fn extract_zip_bit_flag(data: &[u8]) -> Option<u16> {
+    let header_offset = data
+        .windows(4)
+        .position(|window| window == b"PK\x03\x04")?;
+    let flag_bytes = data.get(header_offset + 6..header_offset + 8)?;
+
+    Some(u16::from_le_bytes([flag_bytes[0], flag_bytes[1]]))
+}
+
 /// DOCX parser
 pub struct DocxParser;
 
@@ -17,6 +29,7 @@ impl FormatParser for DocxParser {
         // Read as ZIP
         let size = reader.size() as usize;
         let file_data = reader.read(0, size)?;
+        let zip_bit_flag = extract_zip_bit_flag(file_data);
         let cursor = Cursor::new(file_data);
         let mut archive = ZipArchive::new(cursor)
             .map_err(|e| ExifToolError::parse_error(format!("Not a valid DOCX: {}", e)))?;
@@ -27,6 +40,13 @@ impl FormatParser for DocxParser {
 
         if !has_content_types || !has_word_doc {
             return Err(ExifToolError::parse_error("Not a valid DOCX file"));
+        }
+
+        if let Some(bit_flag) = zip_bit_flag {
+            metadata.insert(
+                "ZIP:ZipBitFlag".to_string(),
+                TagValue::new_integer(i64::from(bit_flag)),
+            );
         }
 
         // Parse core.xml for metadata
@@ -82,6 +102,26 @@ impl FormatParser for DocxParser {
 
     fn supports_format(&self, format: FileFormat) -> bool {
         matches!(format, FileFormat::DOCX)
+    }
+}
+
+#[cfg(test)]
+mod zip_bit_flag_tests {
+    use super::extract_zip_bit_flag;
+
+    #[test]
+    fn extracts_zip_bit_flag_from_local_header() {
+        let unflagged = b"PK\x03\x04\x14\x00\x00\x00\x08\x00";
+        assert_eq!(extract_zip_bit_flag(unflagged), Some(0));
+
+        let flagged = b"prefixPK\x03\x04\x14\x00\x08\x08\x08\x00";
+        assert_eq!(extract_zip_bit_flag(flagged), Some(0x0808));
+    }
+
+    #[test]
+    fn rejects_truncated_or_missing_local_header() {
+        assert_eq!(extract_zip_bit_flag(b"not a zip file"), None);
+        assert_eq!(extract_zip_bit_flag(b"PK\x03\x04\x14\x00"), None);
     }
 }
 
