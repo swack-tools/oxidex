@@ -80,6 +80,10 @@ const KNOWN_TAGS: &[&str] = &[
     "JPEG1",
     "MODE1",
     "MODE2",
+    "MODE3",
+    "MODE4",
+    "MODE5",
+    "MODE6",
     "FCS1",
     "FCS2",
     "FCS3",
@@ -437,20 +441,18 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:JPEG1".to_string(), app12_value);
             }
 
-            // ExifTool exposes the Olympus MODE1 and MODE2 diagnostic fields
-            // in the APP12 group using their original names.
-            if key.eq_ignore_ascii_case("MODE1") || key.eq_ignore_ascii_case("MODE2") {
+            // ExifTool exposes the Olympus MODE1..MODE6 diagnostic fields in
+            // the APP12 group using their original names.
+            let mode_upper = key.to_ascii_uppercase();
+            if matches!(
+                mode_upper.as_str(),
+                "MODE1" | "MODE2" | "MODE3" | "MODE4" | "MODE5" | "MODE6"
+            ) {
                 let app12_value = value
                     .parse::<i64>()
                     .map(TagValue::Integer)
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
-                let app12_tag = if key.eq_ignore_ascii_case("MODE1") {
-                    "APP12:MODE1"
-                } else {
-                    "APP12:MODE2"
-                };
-
-                metadata.insert(app12_tag.to_string(), app12_value);
+                metadata.insert(format!("APP12:{}", mode_upper), app12_value);
             }
 
             // ExifTool exposes the Olympus IMbb diagnostic field in the
@@ -859,6 +861,23 @@ mod camera_type_tests {
                 .expect("Olympus Picture Info should parse");
 
         assert_eq!(metadata.get_integer("APP12:LightS"), Some(1));
+    }
+
+    #[test]
+    fn test_olympus_mode3_through_mode6_app12_tags() {
+        // MODE1/MODE2 were already exposed under the APP12 group; MODE3..MODE6
+        // (seen in OlympusD620L.jpg) previously only got the generic Olympus:
+        // prefix. ExifTool reports all six under the APP12/PictureInfo group.
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS OPTICAL CO.,LTD.\0[picture info]\r\n\
+              MODE3=0\r\nMODE4=0\r\nMODE5=1\r\nMODE6=1\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        assert_eq!(metadata.get_integer("APP12:MODE3"), Some(0));
+        assert_eq!(metadata.get_integer("APP12:MODE4"), Some(0));
+        assert_eq!(metadata.get_integer("APP12:MODE5"), Some(1));
+        assert_eq!(metadata.get_integer("APP12:MODE6"), Some(1));
     }
 
     #[test]
