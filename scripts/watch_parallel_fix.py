@@ -40,7 +40,7 @@ import json
 import os
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
 import time
 import tomllib
@@ -410,7 +410,7 @@ def git_landed_log(repo_root):
     directory): the dashboard must never crash over a stat line.
     """
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 -- fixed argv, no untrusted input
             ["git", "log", "--no-merges", "--since=24 hours",
              "--format=%ct%x09%s", "--", "src/"],
             capture_output=True, text=True, cwd=repo_root,
