@@ -7,6 +7,18 @@ use quick_xml::events::Event;
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
+/// Read the general-purpose bit flag from the first ZIP local file header.
+///
+/// ExifTool reports this ZIP container field as `ZIP:ZipBitFlag`.
+fn parse_zip_bit_flag(data: &[u8]) -> Option<u16> {
+    let header = data.get(..8)?;
+    if !header.starts_with(b"PK\x03\x04") {
+        return None;
+    }
+
+    Some(u16::from_le_bytes([header[6], header[7]]))
+}
+
 /// DOCX parser
 pub struct DocxParser;
 
@@ -17,6 +29,7 @@ impl FormatParser for DocxParser {
         // Read as ZIP
         let size = reader.size() as usize;
         let file_data = reader.read(0, size)?;
+        let zip_bit_flag = parse_zip_bit_flag(file_data);
         let cursor = Cursor::new(file_data);
         let mut archive = ZipArchive::new(cursor)
             .map_err(|e| ExifToolError::parse_error(format!("Not a valid DOCX: {}", e)))?;
@@ -27,6 +40,13 @@ impl FormatParser for DocxParser {
 
         if !has_content_types || !has_word_doc {
             return Err(ExifToolError::parse_error("Not a valid DOCX file"));
+        }
+
+        if let Some(bit_flag) = zip_bit_flag {
+            metadata.insert(
+                "ZIP:ZipBitFlag".to_string(),
+                TagValue::new_integer(i64::from(bit_flag)),
+            );
         }
 
         // Parse core.xml for metadata
