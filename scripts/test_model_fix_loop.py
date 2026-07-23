@@ -41,7 +41,9 @@ from model_fix_loop import (
     load_recent_sweep_reviews,
     load_toml_config,
     make_single_tag_gap,
+    parse_request_range,
     refresh_worktree,
+    resolve_request,
     review_verdict,
     RUST_ARCHITECTURE_CONSTRAINTS,
     run_loop,
@@ -1017,6 +1019,63 @@ class RustArchitectureConstraintsTests(unittest.TestCase):
     def test_build_prompt_includes_the_constraints_block(self):
         prompt = build_prompt(make_gap(gap_count=2))
         self.assertIn("CRITICAL RUST ARCHITECTURE CONSTRAINTS", prompt)
+
+
+class ParseRequestRangeTests(unittest.TestCase):
+    def test_plain_path_has_no_range(self):
+        self.assertEqual(parse_request_range("src/parsers/x.rs"), ("src/parsers/x.rs", None, None))
+
+    def test_valid_range_is_parsed(self):
+        self.assertEqual(parse_request_range("src/parsers/x.rs:40-120"), ("src/parsers/x.rs", 40, 120))
+
+    def test_whitespace_is_stripped(self):
+        self.assertEqual(parse_request_range("  src/x.rs:1-5  "), ("src/x.rs", 1, 5))
+
+    def test_inverted_range_strips_suffix_and_falls_back_to_whole_file(self):
+        self.assertEqual(parse_request_range("src/x.rs:9-3"), ("src/x.rs", None, None))
+
+    def test_zero_start_strips_suffix_and_falls_back(self):
+        self.assertEqual(parse_request_range("src/x.rs:0-5"), ("src/x.rs", None, None))
+
+    def test_non_numeric_suffix_is_just_part_of_the_path(self):
+        self.assertEqual(parse_request_range("src/x.rs:a-b"), ("src/x.rs:a-b", None, None))
+
+
+class ResolveRequestRangeTests(unittest.TestCase):
+    def _make_repo(self, tmpdir):
+        repo = Path(tmpdir)
+        (repo / "src").mkdir()
+        (repo / "src" / "big.rs").write_text("\n".join(f"line{i}" for i in range(1, 101)))
+        return repo
+
+    def test_range_returns_numbered_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:5-7", repo, None)
+        self.assertIn("Lines 5-7 of src/big.rs", answer)
+        self.assertIn("5: line5", answer)
+        self.assertIn("7: line7", answer)
+        self.assertNotIn("line8", answer)
+
+    def test_range_end_is_clamped_to_file_length(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:98-500", repo, None)
+        self.assertIn("Lines 98-100 of src/big.rs", answer)
+        self.assertIn("100: line100", answer)
+
+    def test_range_start_past_eof_returns_guidance_not_content(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:500-600", repo, None)
+        self.assertIn("only 100 lines", answer)
+
+    def test_sample_files_ignore_ranges_and_hex_dump_whole_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            samples = Path(tmpdir)
+            (samples / "EXE.dylib").write_bytes(b"\xfe\xed\xfa\xcf1234")
+            answer = resolve_request("EXE.dylib:1-2", Path("/nonexistent"), samples)
+        self.assertIn("Hex dump of EXE.dylib", answer)
 
 
 class LoadRecentSweepReviewsTests(unittest.TestCase):

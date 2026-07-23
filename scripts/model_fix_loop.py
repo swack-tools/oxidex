@@ -1436,16 +1436,43 @@ def hex_dump(data, max_bytes=DEFAULT_HEXDUMP_BYTES):
     return "\n".join(lines)
 
 
+REQUEST_RANGE_RE = re.compile(r"^(.*?):(\d+)-(\d+)$")
+
+
+def parse_request_range(path_str):
+    """Split a "path:START-END" request into (path, start, end).
+
+    Returns (path, None, None) when there's no numeric range suffix. A
+    range-shaped suffix with start < 1 or start > end strips the suffix
+    but returns no range -- whole-file fallback -- rather than failing
+    the entire request over a typo'd range. A non-numeric suffix (e.g.
+    "x.rs:a-b") isn't range-shaped at all, so it stays part of the path
+    and fails resolution with the normal could-not-resolve message.
+    """
+    stripped = path_str.strip()
+    m = REQUEST_RANGE_RE.match(stripped)
+    if not m:
+        return stripped, None, None
+    start, end = int(m.group(2)), int(m.group(3))
+    if start < 1 or end < start:
+        return m.group(1), None, None
+    return m.group(1), start, end
+
+
 def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
     """Answer a model's "REQUEST: <path>" turn -- a hex dump if the path
     resolves under samples_dir (real binary sample data), the raw text if
     it resolves under repo_root (more source to read), or a rejection
     message otherwise. Path traversal outside both roots is refused.
+    A "path:START-END" suffix on a source file returns just that 1-indexed
+    inclusive line range, numbered; samples always get the whole-file hex
+    dump.
     """
+    path_part, range_start, range_end = parse_request_range(path_str)
     candidates = []
     if samples_dir is not None:
-        candidates.append((Path(samples_dir) / path_str.strip(), "sample"))
-    candidates.append((repo_root / path_str.strip(), "source"))
+        candidates.append((Path(samples_dir) / path_part, "sample"))
+    candidates.append((repo_root / path_part, "source"))
 
     for candidate, kind in candidates:
         try:
@@ -1460,14 +1487,27 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
         if kind == "sample":
             data = resolved.read_bytes()
             return (
-                f"Hex dump of {path_str} ({len(data)} bytes total, "
+                f"Hex dump of {path_part} ({len(data)} bytes total, "
                 f"showing first {min(len(data), DEFAULT_HEXDUMP_BYTES)}):\n"
                 f"{hex_dump(data)}"
             )
-        content = resolved.read_text(errors="replace")[:max_text_bytes]
-        return f"Contents of {path_str}:\n{content}"
+        content = resolved.read_text(errors="replace")
+        if range_start is not None:
+            lines = content.splitlines()
+            if range_start > len(lines):
+                return (
+                    f"{path_part} has only {len(lines)} lines -- the requested range "
+                    f"{range_start}-{range_end} starts past the end. Request a range within the file."
+                )
+            clamped_end = min(range_end, len(lines))
+            numbered = "\n".join(
+                f"{i}: {line}"
+                for i, line in enumerate(lines[range_start - 1:clamped_end], start=range_start)
+            )
+            return f"Lines {range_start}-{clamped_end} of {path_part}:\n{numbered}"
+        return f"Contents of {path_part}:\n{content[:max_text_bytes]}"
 
-    return f"Could not resolve {path_str!r} under the samples dir or repo root -- try a path from the list shown."
+    return f"Could not resolve {path_part!r} under the samples dir or repo root -- try a path from the list shown."
 
 
 def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_fn,
