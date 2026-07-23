@@ -634,7 +634,20 @@ def extract_perl_tag_snippet(tag_name, lib_dir, tag_id=None, max_chars=DEFAULT_M
         id_pattern = re.compile(rf"^\s*0x0*{re.escape(normalized)}\s*=>\s*\{{")
     name_pattern = re.compile(r"Name\s*=>\s*['\"]" + re.escape(tag_name) + r"['\"]")
 
-    for pm_path in sorted(lib_dir.glob("*.pm")):
+    # Exif.pm is the authoritative source for standard EXIF/TIFF-based tags
+    # shared across most formats this loop fixes (JPEG, the RAW formats,
+    # TIFF itself), so it's searched first -- a plain alphabetical sweep
+    # otherwise risks matching a same-named tag in some unrelated vendor
+    # module first (e.g. a generic "Album" tag resolving to Audible.pm's
+    # own metadata table instead of the tag actually meant here), which
+    # would mislead the fixer worse than showing it nothing at all.
+    all_pm_paths = sorted(lib_dir.glob("*.pm"))
+    exif_pm = lib_dir / "Exif.pm"
+    ordered_paths = ([exif_pm] if exif_pm in all_pm_paths else []) + [
+        p for p in all_pm_paths if p != exif_pm
+    ]
+
+    for pm_path in ordered_paths:
         try:
             text = pm_path.read_text(errors="ignore")
         except OSError:
