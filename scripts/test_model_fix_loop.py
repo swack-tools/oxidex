@@ -43,6 +43,7 @@ from model_fix_loop import (
     load_recent_sweep_reviews,
     load_toml_config,
     make_single_tag_gap,
+    models_for_phase,
     parse_request_range,
     refresh_worktree,
     resolve_request,
@@ -89,15 +90,17 @@ class NormalizeModelConfigTests(unittest.TestCase):
             "thinking": False, "temperature": 0.7,
         })
         self.assertEqual(config["models"], [
-            {"name": "m1", "base_url": "u", "api_key": "k"},
-            {"name": "m2", "base_url": "u", "api_key": "k"},
+            {"name": "m1", "base_url": "u", "api_key": "k", "phase": None, "reasoning_effort": None},
+            {"name": "m2", "base_url": "u", "api_key": "k", "phase": None, "reasoning_effort": None},
         ])
         self.assertEqual(config["max_tokens"], 16)
         self.assertEqual(config["stream"], True)
 
     def test_string_model_entries_inherit_table_base_url_and_api_key(self):
         config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
-        self.assertEqual(config["models"], [{"name": "m", "base_url": "u", "api_key": "k"}])
+        self.assertEqual(config["models"], [
+            {"name": "m", "base_url": "u", "api_key": "k", "phase": None, "reasoning_effort": None},
+        ])
 
     def test_table_model_entries_can_override_base_url_and_api_key(self):
         config = _normalize_model_config({
@@ -108,8 +111,10 @@ class NormalizeModelConfigTests(unittest.TestCase):
             ],
         })
         self.assertEqual(config["models"], [
-            {"name": "shared-provider-model", "base_url": "u", "api_key": "k"},
-            {"name": "other-provider-model", "base_url": "https://other.example/v1", "api_key": "other-key"},
+            {"name": "shared-provider-model", "base_url": "u", "api_key": "k",
+             "phase": None, "reasoning_effort": None},
+            {"name": "other-provider-model", "base_url": "https://other.example/v1", "api_key": "other-key",
+             "phase": None, "reasoning_effort": None},
         ])
 
     def test_rejects_unrecognized_keys_on_a_models_entry_instead_of_silently_dropping_them(self):
@@ -2342,6 +2347,159 @@ class AttemptBuildVerifyTests(unittest.TestCase):
         built, reason, diff, messages = result
         self.assertFalse(built)
         self.assertIn("verify budget", reason)
+
+
+class ModelsForPhaseTests(unittest.TestCase):
+    TERRA = {"name": "gpt-5.6-terra", "base_url": "u", "api_key": "k", "phase": "explore", "reasoning_effort": "medium"}
+    SOL = {"name": "gpt-5.6-sol", "base_url": "u", "api_key": "k", "phase": "patch", "reasoning_effort": "max"}
+    UNTAGGED = {"name": "any", "base_url": "u", "api_key": "k"}
+
+    def test_filters_to_matching_phase(self):
+        pool = [self.TERRA, self.SOL]
+        self.assertEqual(models_for_phase(pool, "explore"), [self.TERRA])
+        self.assertEqual(models_for_phase(pool, "patch"), [self.SOL])
+
+    def test_untagged_entries_belong_to_every_phase(self):
+        pool = [self.TERRA, self.UNTAGGED]
+        self.assertEqual(models_for_phase(pool, "patch"), [self.UNTAGGED])
+        self.assertEqual(models_for_phase(pool, "explore"), [self.TERRA, self.UNTAGGED])
+
+    def test_empty_filter_falls_back_to_full_pool(self):
+        pool = [self.TERRA]
+        self.assertEqual(models_for_phase(pool, "patch"), [self.TERRA])
+
+
+class ModelSpecPhaseTests(unittest.TestCase):
+    def test_phase_and_reasoning_effort_are_accepted(self):
+        config = _normalize_model_config({
+            "base_url": "u", "api_key": "k",
+            "models": [{"name": "m", "phase": "explore", "reasoning_effort": "medium"}],
+        })
+        self.assertEqual(config["models"][0]["phase"], "explore")
+        self.assertEqual(config["models"][0]["reasoning_effort"], "medium")
+
+    def test_missing_phase_and_effort_default_to_none(self):
+        config = _normalize_model_config({
+            "base_url": "u", "api_key": "k", "models": ["bare-name"],
+        })
+        self.assertIsNone(config["models"][0].get("phase"))
+        self.assertIsNone(config["models"][0].get("reasoning_effort"))
+
+    def test_invalid_phase_raises_at_load(self):
+        with self.assertRaises(ValueError):
+            _normalize_model_config({
+                "base_url": "u", "api_key": "k",
+                "models": [{"name": "m", "phase": "turbo"}],
+            })
+
+    def test_unknown_key_still_raises(self):
+        with self.assertRaises(ValueError):
+            _normalize_model_config({
+                "base_url": "u", "api_key": "k",
+                "models": [{"name": "m", "max_tokens": 4096}],
+            })
+
+
+class AttemptBuildPhaseRoutingTests(unittest.TestCase):
+    TERRA = {"name": "gpt-5.6-terra", "base_url": "u", "api_key": "k", "phase": "explore", "reasoning_effort": "medium"}
+    SOL = {"name": "gpt-5.6-sol", "base_url": "u", "api_key": "k", "phase": "patch", "reasoning_effort": "max"}
+
+    def test_explore_then_patch_pools_across_a_repair(self):
+        pools_seen = []
+
+        def tracking_pick(models):
+            pools_seen.append([m["name"] for m in models])
+            return models[0]
+
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) == 1:
+                return "REQUEST: src/a.rs"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        apply_results = iter([(False, "does not apply"), (True, "ok")])
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: next(apply_results),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=dict(CONFIG, models=[self.TERRA, self.SOL]),
+            repo_root=Path("/fake/repo"),
+            pick_model_fn=tracking_pick,
+        )
+        self.assertTrue(built)
+        # Call 1: fresh attempt -> explore (terra). Call 2: after a served
+        # REQUEST answer -> still explore. Call 3: after an apply-failure
+        # repair prompt -> patch (sol).
+        self.assertEqual(pools_seen[0], ["gpt-5.6-terra"])
+        self.assertEqual(pools_seen[1], ["gpt-5.6-terra"])
+        self.assertEqual(pools_seen[2], ["gpt-5.6-sol"])
+
+    def test_reinvocation_with_existing_conversation_starts_in_patch_phase(self):
+        pools_seen = []
+
+        def tracking_pick(models):
+            pools_seen.append([m["name"] for m in models])
+            return models[0]
+
+        built, reason, diff, messages = attempt_build(
+            [
+                {"role": "user", "content": "fix format X"},
+                {"role": "assistant", "content": "```diff\nbad\n```"},
+                {"role": "user", "content": "That attempt failed (build_failed): ...\nPlease resend a corrected diff."},
+            ],
+            call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=dict(CONFIG, models=[self.TERRA, self.SOL]),
+            repo_root=Path("/fake/repo"),
+            pick_model_fn=tracking_pick,
+        )
+        self.assertTrue(built)
+        self.assertEqual(pools_seen[0], ["gpt-5.6-sol"])
+
+    def test_per_entry_reasoning_effort_reaches_the_call(self):
+        efforts_seen = []
+
+        def fake_call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort, *a):
+            efforts_seen.append(reasoning_effort)
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        built, *_ = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=dict(CONFIG, models=[self.TERRA]),
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
+        self.assertEqual(efforts_seen, ["medium"])
+
+
+class CritiqueUsesExploreTierTests(unittest.TestCase):
+    def test_critique_picks_from_the_explore_pool(self):
+        terra = {"name": "terra", "base_url": "u", "api_key": "k", "phase": "explore"}
+        sol = {"name": "sol", "base_url": "u", "api_key": "k", "phase": "patch"}
+        pools_seen = []
+
+        def tracking_pick(models):
+            pools_seen.append([m["name"] for m in models])
+            return models[0]
+
+        config = dict(CONFIG, models=[terra, sol])
+        critique = critique_failed_attempt(
+            make_gap(gap_count=1), "--- a/x\n", "build_failed", "error", config,
+            call_model_fn=lambda *a: "try a different offset",
+            pick_model_fn=tracking_pick,
+        )
+        self.assertEqual(critique, "try a different offset")
+        self.assertEqual(pools_seen, [["terra"]])
 
 
 class FixGapFailureTests(unittest.TestCase):

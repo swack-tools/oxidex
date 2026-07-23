@@ -1066,12 +1066,12 @@ def summarize_format_memory(memory_dir, format_name, config,
     if len(current) <= max_chars:
         return False
     try:
-        model_spec = pick_model_fn(config["models"])
+        model_spec = pick_model_fn(models_for_phase(config["models"], "explore"))
         prompt = build_format_memory_summary_prompt(format_name, current)
         reply = call_model_fn(
             [{"role": "user", "content": prompt}],
             model_spec["base_url"], model_spec["api_key"], model_spec["name"],
-            config["max_tokens"], config["reasoning_effort"],
+            config["max_tokens"], model_spec.get("reasoning_effort") or config["reasoning_effort"],
             config.get("stream", False), config.get("thinking", True),
             config.get("temperature", 0), config.get("timeout", 120),
             config.get("max_retries", DEFAULT_MAX_RETRIES),
@@ -1415,7 +1415,7 @@ def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=ra
         reply = call_model_fn(
             [{"role": "user", "content": prompt}],
             model_spec["base_url"], model_spec["api_key"], model_spec["name"],
-            config["max_tokens"], config["reasoning_effort"],
+            config["max_tokens"], model_spec.get("reasoning_effort") or config["reasoning_effort"],
             config.get("stream", False), config.get("thinking", True),
             config.get("temperature", 0), config.get("timeout", 120),
             config.get("max_retries", DEFAULT_MAX_RETRIES),
@@ -1454,12 +1454,12 @@ def critique_failed_attempt(gap, diff, failure_kind, failure_detail, config,
     must never be allowed to abort the fixer's own retry loop.
     """
     try:
-        model_spec = pick_model_fn(config["models"])
+        model_spec = pick_model_fn(models_for_phase(config["models"], "explore"))
         prompt = build_failure_critique_prompt(gap, diff, failure_kind, failure_detail)
         reply = call_model_fn(
             [{"role": "user", "content": prompt}],
             model_spec["base_url"], model_spec["api_key"], model_spec["name"],
-            config["max_tokens"], config["reasoning_effort"],
+            config["max_tokens"], model_spec.get("reasoning_effort") or config["reasoning_effort"],
             config.get("stream", False), config.get("thinking", True),
             config.get("temperature", 0), config.get("timeout", 120),
             config.get("max_retries", DEFAULT_MAX_RETRIES),
@@ -1621,17 +1621,18 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     nudged_to_stop_investigating = False
     patch_chunks = {}
     patch_turns_used = 0
+    current_phase = "explore" if len(messages) == 1 else "patch"
     while diff_attempts_used < 2:  # one initial attempt + one repair round-trip
         messages[:] = compact_messages(
             messages,
             trigger_tokens=config.get("compaction_trigger_tokens", DEFAULT_COMPACTION_TRIGGER_TOKENS),
             keep_recent=config.get("compaction_keep_recent_turns", DEFAULT_COMPACTION_KEEP_RECENT_TURNS),
         )
-        model_spec = pick_model_fn(config["models"])
+        model_spec = pick_model_fn(models_for_phase(config["models"], current_phase))
         try:
             reply = call_model_fn(
                 messages, model_spec["base_url"], model_spec["api_key"], model_spec["name"],
-                config["max_tokens"], config["reasoning_effort"],
+                config["max_tokens"], model_spec.get("reasoning_effort") or config["reasoning_effort"],
                 config.get("stream", False), config.get("thinking", True),
                 config.get("temperature", 0), config.get("timeout", 120),
                 config.get("max_retries", DEFAULT_MAX_RETRIES),
@@ -1668,9 +1669,11 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                             "(REQUEST: path:START-END), or submit your best diff now."
                         ),
                     })
+                    current_phase = "patch"
                 else:
                     answer = resolve_request(request_match.group(1), repo_root, samples_dir)
                     messages.append({"role": "user", "content": answer})
+                    current_phase = "explore"
                 continue
             if not nudged_to_stop_investigating:
                 # Previously fell straight through to extract_diff on this
@@ -1688,6 +1691,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                         "fully certain."
                     ),
                 })
+                current_phase = "patch"
                 continue
             return False, "no diff in model response (exhausted request budget)", None, messages
 
@@ -1708,6 +1712,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                     "role": "user",
                     "content": f"{detail} -- submit your final diff now (or a REQUEST if you must).",
                 })
+                current_phase = "explore"
                 continue
             verify_turns_used += 1
             trial_diff = extract_diff(reply)
@@ -1719,6 +1724,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                         "\"VERIFY\" followed by exactly one fenced diff of the change to trial-compile."
                     ),
                 })
+                current_phase = "explore"
                 continue
             applied, apply_msg = git_apply_fn(trial_diff, repo_root)
             if not applied:
@@ -1730,6 +1736,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                         "Fix it and re-VERIFY, or submit your final diff."
                     ),
                 })
+                current_phase = "explore"
                 continue
             check_ok, check_output = cargo_check_fn(repo_root)
             git_checkout_clean_fn(repo_root)
@@ -1743,6 +1750,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                     f"{tail}"
                 ),
             })
+            current_phase = "explore"
             continue
 
         patch_match = PATCH_HEADER_RE.match(reply.strip())
@@ -1767,6 +1775,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                         "included."
                     ),
                 })
+                current_phase = "patch"
                 continue
             patch_chunks[chunk_index] = chunk_diff
             # Check completeness by CONTENT (every index 1..chunk_total
@@ -1787,6 +1796,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                         f"\"PATCH i/{chunk_total}\" + ```diff fenced block format."
                     ),
                 })
+                current_phase = "patch"
                 continue
             diff = "".join(patch_chunks[i] for i in range(1, chunk_total + 1))
         else:
@@ -1803,6 +1813,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 "role": "user",
                 "content": f"That diff did not apply: {apply_msg}\nPlease resend a corrected diff.",
             })
+            current_phase = "patch"
             continue
 
         built, build_err = cargo_build_fn(repo_root)
@@ -1815,6 +1826,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
             "role": "user",
             "content": f"The build failed:\n{build_err}\nPlease resend a corrected diff.",
         })
+        current_phase = "patch"
 
     return False, "no working fix after repair attempt", None, messages
 
@@ -2392,7 +2404,17 @@ def load_toml_config(path):
         return tomllib.load(f)
 
 
-_KNOWN_MODEL_SPEC_KEYS = {"name", "base_url", "api_key"}
+_KNOWN_MODEL_SPEC_KEYS = {"name", "base_url", "api_key", "phase", "reasoning_effort"}
+_VALID_MODEL_PHASES = {"explore", "patch"}
+
+
+def models_for_phase(models, phase):
+    """Filter a model pool to entries tagged for `phase` -- untagged
+    entries (phase absent/None) are eligible for every phase. Falls back
+    to the full pool when the filter would be empty, so a config with no
+    phase tags behaves exactly as before this feature existed."""
+    matching = [m for m in models if m.get("phase") in (None, phase)]
+    return matching or models
 
 
 def _normalize_model_spec(entry, default_base_url, default_api_key):
@@ -2404,8 +2426,8 @@ def _normalize_model_spec(entry, default_base_url, default_api_key):
     single pool can mix providers -- e.g. one wafer.ai model alongside a
     Fireworks-hosted one with its own key.
 
-    Only name/base_url/api_key are recognized on an entry -- max_tokens,
-    reasoning_effort, stream, thinking, and temperature belong on the
+    Only name/base_url/api_key/phase/reasoning_effort are recognized on an
+    entry -- max_tokens, stream, thinking, and temperature belong on the
     parent [worker]/[reviewer] table, shared across every model in the
     pool. A misplaced key there raises immediately instead of being
     silently dropped, which is exactly what happened when max_tokens got
@@ -2413,19 +2435,28 @@ def _normalize_model_spec(entry, default_base_url, default_api_key):
     took effect, and nothing in the run reported that.
     """
     if isinstance(entry, str):
-        return {"name": entry, "base_url": default_base_url, "api_key": default_api_key}
+        return {"name": entry, "base_url": default_base_url, "api_key": default_api_key,
+                "phase": None, "reasoning_effort": None}
     unknown = set(entry) - _KNOWN_MODEL_SPEC_KEYS
     if unknown:
         raise ValueError(
             f"unrecognized key(s) {sorted(unknown)} on a models[] entry ({entry.get('name', '?')!r}) -- "
-            "only name/base_url/api_key belong on an individual model entry; max_tokens, "
-            "reasoning_effort, stream, thinking, and temperature belong on the parent "
+            "only name/base_url/api_key/phase/reasoning_effort belong on an individual model entry; "
+            "max_tokens, stream, thinking, and temperature belong on the parent "
             "[worker]/[reviewer] table instead, shared across every model in the pool"
+        )
+    phase = entry.get("phase")
+    if phase is not None and phase not in _VALID_MODEL_PHASES:
+        raise ValueError(
+            f"invalid phase {phase!r} on models[] entry {entry.get('name', '?')!r} -- "
+            f"must be one of {sorted(_VALID_MODEL_PHASES)} (or omitted for both phases)"
         )
     return {
         "name": entry["name"],
         "base_url": entry.get("base_url", default_base_url),
         "api_key": entry.get("api_key", default_api_key),
+        "phase": phase,
+        "reasoning_effort": entry.get("reasoning_effort"),
     }
 
 
