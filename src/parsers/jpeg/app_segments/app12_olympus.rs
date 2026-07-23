@@ -50,6 +50,7 @@ const KNOWN_TAGS: &[&str] = &[
     "ExposureBias",
     "FNumber",
     "Flash",
+    "LightS",
     "Macro",
     "Zoom",
     "Resolution",
@@ -352,6 +353,17 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:ColorMode".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus LightS diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("LightS") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:LightS".to_string(), app12_value);
             }
 
             // ExifTool exposes these Olympus diagnostic fields in the APP12
@@ -838,6 +850,15 @@ mod camera_type_tests {
                 .expect("Olympus Picture Info should parse");
 
         assert_eq!(metadata.get_integer("APP12:ColorMode"), Some(1));
+    }
+
+    #[test]
+    fn test_olympus_lights_app12_tag() {
+        let metadata =
+            parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0[picture info]\r\nLightS=1\r\n")
+                .expect("Olympus Picture Info should parse");
+
+        assert_eq!(metadata.get_integer("APP12:LightS"), Some(1));
     }
 
     #[test]
