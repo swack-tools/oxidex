@@ -43,6 +43,7 @@ from model_fix_loop import (
     make_single_tag_gap,
     refresh_worktree,
     review_verdict,
+    RUST_ARCHITECTURE_CONSTRAINTS,
     run_loop,
     run_tag_loop,
     tag_key_for,
@@ -994,6 +995,28 @@ class BuildPromptTokenBudgetTests(unittest.TestCase):
         # the exact length includes the marker text's own overhead, so this checks
         # order-of-magnitude truncation happened rather than an exact byte count.
         self.assertLess(len(prompt), 1000)
+
+
+class RustArchitectureConstraintsTests(unittest.TestCase):
+    def test_block_contains_the_six_core_directives(self):
+        for needle in (
+            "Box<dyn Any>",            # no dynamic-typing crutches
+            "regex",                   # no regex on binary
+            "self-referential",        # no self-referential IFD structs
+            "lookup_tag_name()",       # no inlined lookup tables
+            "global mutable state",    # no new globals
+            "unwrap()",                # no unwrap/panic on parsed data
+        ):
+            self.assertIn(needle, RUST_ARCHITECTURE_CONSTRAINTS)
+
+    def test_block_contains_endianness_and_builtin_map_bullets(self):
+        self.assertIn("function signatures", RUST_ARCHITECTURE_CONSTRAINTS)
+        self.assertIn("u32::from_be_bytes", RUST_ARCHITECTURE_CONSTRAINTS)
+        self.assertIn("u32::from_le_bytes", RUST_ARCHITECTURE_CONSTRAINTS)
+
+    def test_build_prompt_includes_the_constraints_block(self):
+        prompt = build_prompt(make_gap(gap_count=2))
+        self.assertIn("CRITICAL RUST ARCHITECTURE CONSTRAINTS", prompt)
 
 
 class LoadRecentSweepReviewsTests(unittest.TestCase):

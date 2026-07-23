@@ -924,6 +924,19 @@ def build_format_overview_block(lib_dir, perl_reference_block):
     return f"\n\n{ARCHITECTURE_PRIMER}{notes_section}"
 
 
+RUST_ARCHITECTURE_CONSTRAINTS = """
+CRITICAL RUST ARCHITECTURE CONSTRAINTS (porting ExifTool's Perl to Rust -- do not write "Perl in Rust"):
+- No dynamic-typing crutches. Do not introduce Box<dyn Any>, serde_json::Value, or a new ad hoc HashMap<String, X> as a stand-in for Perl's autovivified hashes -- use this codebase's own TagValue enum and MetadataMap (see src/core/), which already exist for exactly this.
+- No regex crate for binary/byte-level parsing. This is a memory-mapped/byte-slice format; slice &[u8] directly (or use nom/winnow if the surrounding file already does) rather than treating binary data as UTF-8 text a regex can search.
+- No self-referential structs for IFD/directory trees (a struct holding a reference to its own parent or child). Store an absolute byte offset (usize) or index instead, exactly like ExifTool's own IFD-offset-based traversal.
+- Do not inline a large hardcoded lookup table (e.g. a full MakerNote-style tag dictionary) directly into a diff. If a tag needs a name/ID lookup, wire it through this codebase's existing tag database (oxidex-tags-*, lookup_tag_name()) instead of hand-writing a new static table.
+- No new global mutable state (a `static mut`, or a bare `static` with interior mutability introduced just for this fix). Thread whatever context (byte order, base offset) is needed as an explicit parameter, matching how neighboring functions in the file already do it.
+- No unwrap()/expect()/panic!() on data derived from the file being parsed. A real-world file can be corrupt or unexpected; propagate errors via this codebase's Result<T, ExifToolError> (see src/error/) so a single malformed tag can't crash the whole parse.
+- Endianness travels through function signatures -- an explicit byte-order parameter or the file's existing endian-aware reader type -- never through globals or implicit state (ExifTool's own Perl mutates a global byte order; do not mirror that).
+- Common Perl-builtin translations: unpack("N",...) -> u32::from_be_bytes, unpack("V",...) -> u32::from_le_bytes, unpack("n",...)/unpack("v",...) -> u16::from_be_bytes/u16::from_le_bytes, substr($v, off, len) -> a bounds-checked slice &v[off..off + len].
+""".strip()
+
+
 KNOWN_PITFALLS = """
 Lessons from mistakes a human reviewer previously caught in this loop's own output (avoid repeating these):
 - Never hardcode a group prefix like "EXIF:" on a tag name. Use this codebase's existing lookup_tag_name()/tag_db (or whatever the surrounding code in the file you're editing already uses) so the prefix matches the IFD/table the tag was actually parsed from, consistent with every neighboring tag -- a hardcoded prefix that diverges from the file's own convention has been wrong every time.
@@ -1250,6 +1263,7 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
         f"{sweep_review_block}"
         f"{memory_block}"
         f"{attempts_block}\n\n"
+        f"{RUST_ARCHITECTURE_CONSTRAINTS}\n\n"
         f"{KNOWN_PITFALLS}\n\n"
         "If you need to see actual raw bytes or another file before you can proceed, send ONLY the "
         "\"REQUEST: <path>\" line described above -- nothing else in that response.\n\n"
