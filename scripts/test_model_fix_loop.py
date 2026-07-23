@@ -7,23 +7,32 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from model_fix_loop import (
+    ARCHITECTURE_PRIMER,
     KNOWN_PITFALLS,
     _normalize_model_config,
     attempt_build,
     build_exact_sample_block,
+    build_failure_critique_prompt,
+    build_format_overview_block,
     build_perl_reference_block,
     build_prompt,
     build_review_prompt,
+    critique_failed_attempt,
     cargo_build,
     cargo_test_workspace,
     call_model,
     detect_duplicate_tag_insertion,
     expand_gaps_to_tags,
     extract_diff,
+    append_format_memory_note,
+    extract_perl_table_notes,
     extract_perl_tag_snippet,
     extract_review_verdict,
     file_content_at_head,
     fix_gap,
+    format_previous_attempts,
+    load_format_memory,
+    summarize_format_memory,
     format_sweep_review_history,
     git_apply,
     git_checkout_clean,
@@ -732,13 +741,20 @@ class CargoBuildTests(unittest.TestCase):
 class CargoTestWorkspaceTests(unittest.TestCase):
     @patch("model_fix_loop.subprocess.run")
     def test_true_on_zero_exit(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0)
-        self.assertTrue(cargo_test_workspace(Path("/fake/repo")))
+        mock_run.return_value = MagicMock(returncode=0, stdout="all good", stderr="")
+        success, output = cargo_test_workspace(Path("/fake/repo"))
+        self.assertTrue(success)
+        self.assertEqual(output, "all good")
 
     @patch("model_fix_loop.subprocess.run")
-    def test_false_on_nonzero_exit(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=1)
-        self.assertFalse(cargo_test_workspace(Path("/fake/repo")))
+    def test_false_on_nonzero_exit_includes_combined_output(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="test result: FAILED. 1 failed", stderr="thread panicked",
+        )
+        success, output = cargo_test_workspace(Path("/fake/repo"))
+        self.assertFalse(success)
+        self.assertIn("test result: FAILED", output)
+        self.assertIn("thread panicked", output)
 
 
 def make_gap(gap_count=2):
@@ -981,6 +997,10 @@ EXIFTOOL_PM_FIXTURE = """package Image::ExifTool::Exif;
 %Image::ExifTool::Exif::Main = (
     GROUPS => { 0 => 'EXIF', 1 => 'ExifIFD', 2 => 'Image' },
     WRITE_PROC => \\&Image::ExifTool::Exif::WriteExif,
+    NOTES => q{
+        This table documents the standard EXIF tags found in the ExifIFD.
+        See the JEITA/CIPA specification for the full tag list.
+    },
     0x828e => {
         Name => 'CFAPattern2',
         Format => 'int8u',
@@ -1042,6 +1062,79 @@ class ExtractPerlTagSnippetTests(unittest.TestCase):
         self.assertIn("Format => 'int8u'", snippet)
 
 
+EXE_PM_FIXTURE = """package Image::ExifTool::EXE;
+
+%Image::ExifTool::EXE::MachO = (
+    GROUPS => { 2 => 'Other' },
+    NOTES => q{
+        Information extracted from Mach-O (Mac OS X) executable files.
+    },
+    0 => 'CPUArchitecture',
+    1 => 'CPUByteOrder',
+);
+
+%Image::ExifTool::EXE::PEF = (
+    GROUPS => { 2 => 'Other' },
+    NOTES => q{
+        Information extracted from PEF (Classic MacOS) executable files.
+    },
+    2 => {
+        Name => 'CPUArchitecture',
+        Format => 'undef[4]',
+        PrintConv => {
+            pwpc => 'PowerPC',
+            m68k => '68000',
+        },
+    },
+);
+
+1;
+"""
+
+
+class ExtractPerlTagSnippetBareFormAndFormatHintTests(unittest.TestCase):
+    """Regression coverage for a real bug caught while building a
+    MachO:EXE:CPUArchitecture example prompt: EXE.pm defines
+    "CPUArchitecture" bare (no `Name =>` key) in its MachO table but
+    with an explicit `Name =>` key in its PEF table, so a plain
+    first-name-match search picked PEF's entry for a MachO gap."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.lib_dir = Path(self.tmpdir.name)
+        (self.lib_dir / "Exif.pm").write_text(EXIFTOOL_PM_FIXTURE)
+        (self.lib_dir / "EXE.pm").write_text(EXE_PM_FIXTURE)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_bare_form_entry_is_found_by_default_document_order(self):
+        # MachO's bare `0 => 'CPUArchitecture'` entry appears earlier in
+        # the file than PEF's explicit `Name =>` entry, so even with no
+        # format_hint it must win on true document order -- the bug this
+        # regression-tests was the bare form being skipped entirely (never
+        # matched at all), not merely losing a tiebreak.
+        snippet = extract_perl_tag_snippet("CPUArchitecture", self.lib_dir)
+        self.assertIsNotNone(snippet)
+        self.assertIn("Image::ExifTool::EXE::MachO", snippet)
+        self.assertIn("0 => 'CPUArchitecture'", snippet)
+
+    def test_format_hint_prefers_matching_table_over_document_order(self):
+        snippet = extract_perl_tag_snippet("CPUArchitecture", self.lib_dir, format_hint="MachO")
+        self.assertIn("Image::ExifTool::EXE::MachO", snippet)
+        self.assertIn("0 => 'CPUArchitecture'", snippet)
+        self.assertNotIn("PowerPC", snippet)
+
+    def test_format_hint_for_other_table_picks_that_one_instead(self):
+        snippet = extract_perl_tag_snippet("CPUArchitecture", self.lib_dir, format_hint="PEF")
+        self.assertIn("Image::ExifTool::EXE::PEF", snippet)
+        self.assertIn("PowerPC", snippet)
+
+    def test_unmatched_format_hint_falls_back_to_document_order(self):
+        snippet = extract_perl_tag_snippet("CPUArchitecture", self.lib_dir, format_hint="ELF")
+        self.assertIn("Image::ExifTool::EXE::MachO", snippet)
+
+
 class BuildPerlReferenceBlockTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -1099,6 +1192,75 @@ class BuildPerlReferenceBlockTests(unittest.TestCase):
         self.assertEqual(build_perl_reference_block(gap, self.lib_dir), "")
 
 
+class ExtractPerlTableNotesTests(unittest.TestCase):
+    def test_finds_notes_block(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "Exif.pm"
+            path.write_text(EXIFTOOL_PM_FIXTURE)
+            notes = extract_perl_table_notes(path)
+        self.assertIsNotNone(notes)
+        self.assertIn("standard EXIF tags found in the ExifIFD", notes)
+
+    def test_returns_none_when_no_notes_block(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "NoNotes.pm"
+            path.write_text("package Image::ExifTool::NoNotes;\n%Main = (\n    0x1 => { Name => 'X' },\n);\n")
+            self.assertIsNone(extract_perl_table_notes(path))
+
+    def test_returns_none_for_missing_file(self):
+        self.assertIsNone(extract_perl_table_notes(Path("/nonexistent/Foo.pm")))
+
+    def test_handles_parenthesis_delimiter(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "Paren.pm"
+            path.write_text(
+                "%Main = (\n"
+                "    NOTES => q(\n"
+                "        This table uses parenthesis delimiters instead of braces.\n"
+                "    ),\n"
+                ");\n"
+            )
+            notes = extract_perl_table_notes(path)
+        self.assertIn("parenthesis delimiters", notes)
+
+
+class BuildFormatOverviewBlockTests(unittest.TestCase):
+    def test_always_includes_architecture_primer(self):
+        block = build_format_overview_block(None, "")
+        self.assertIn(ARCHITECTURE_PRIMER, block)
+
+    def test_includes_notes_for_modules_found_in_perl_reference_block(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lib_dir = Path(tmpdir)
+            (lib_dir / "Exif.pm").write_text(EXIFTOOL_PM_FIXTURE)
+            perl_block = "--- Exif.pm, table Image::ExifTool::Exif::Main ---\n```perl\n...\n```"
+            block = build_format_overview_block(lib_dir, perl_block)
+        self.assertIn("standard EXIF tags found in the ExifIFD", block)
+
+    def test_no_notes_section_when_lib_dir_is_none(self):
+        block = build_format_overview_block(None, "--- Exif.pm ---\n```perl\n...\n```")
+        self.assertNotIn("ExifTool's own documentation", block)
+
+    def test_finds_module_header_when_preceded_by_lead_in_text(self):
+        # Regression test: build_perl_reference_block's real output always
+        # starts with an intro paragraph before the "--- module.pm ---"
+        # header line -- a synthetic fixture that put the header at
+        # position 0 of the string masked a bug where the header regex,
+        # missing re.MULTILINE, only matched "^" at the start of the
+        # whole string and therefore never found the header (and thus
+        # never included NOTES) in real prompts at all.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lib_dir = Path(tmpdir)
+            (lib_dir / "Exif.pm").write_text(EXIFTOOL_PM_FIXTURE)
+            perl_block = (
+                "\n\nExifTool's own Perl source for these tags (ground truth for how "
+                "ExifTool actually parses/formats them):\n\n"
+                "--- Exif.pm, table Image::ExifTool::Exif::Main ---\n```perl\n...\n```"
+            )
+            block = build_format_overview_block(lib_dir, perl_block)
+        self.assertIn("standard EXIF tags found in the ExifIFD", block)
+
+
 class BuildReviewPromptTests(unittest.TestCase):
     def test_includes_diff_and_tag_names(self):
         gap = make_gap(gap_count=2)  # missing: EXIF:LensModel; diff: EXIF:ISO
@@ -1126,6 +1288,173 @@ class ExtractReviewVerdictTests(unittest.TestCase):
         approved, reason = extract_review_verdict("I'm not sure about this one.")
         self.assertFalse(approved)
         self.assertIn("unparseable review verdict", reason)
+
+
+class FormatMemoryTests(unittest.TestCase):
+    def test_load_missing_returns_empty_string(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.assertEqual(load_format_memory(Path(tmpdir), "NEF"), "")
+
+    def test_append_then_load_round_trips(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_dir = Path(tmpdir)
+            append_format_memory_note(memory_dir, "NEF", "Tried BlackLevelBlue, rejected.", now_fn=lambda: 1_700_000_000)
+            text = load_format_memory(memory_dir, "NEF")
+        self.assertIn("Tried BlackLevelBlue, rejected.", text)
+
+    def test_append_accumulates_across_calls(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_dir = Path(tmpdir)
+            append_format_memory_note(memory_dir, "NEF", "First note.")
+            append_format_memory_note(memory_dir, "NEF", "Second note.")
+            text = load_format_memory(memory_dir, "NEF")
+        self.assertIn("First note.", text)
+        self.assertIn("Second note.", text)
+
+    def test_notes_for_different_formats_dont_mix(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_dir = Path(tmpdir)
+            append_format_memory_note(memory_dir, "NEF", "NEF-specific note.")
+            append_format_memory_note(memory_dir, "JPEG", "JPEG-specific note.")
+            nef_text = load_format_memory(memory_dir, "NEF")
+        self.assertIn("NEF-specific note.", nef_text)
+        self.assertNotIn("JPEG-specific note.", nef_text)
+
+    def test_summarize_no_op_when_under_threshold(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_dir = Path(tmpdir)
+            append_format_memory_note(memory_dir, "NEF", "short")
+            called = []
+            did_summarize = summarize_format_memory(
+                memory_dir, "NEF", CONFIG,
+                call_model_fn=lambda *a, **k: called.append(1),
+                max_chars=1000,
+            )
+        self.assertFalse(did_summarize)
+        self.assertEqual(called, [])
+
+    def test_summarize_condenses_when_over_threshold(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_dir = Path(tmpdir)
+            for i in range(20):
+                append_format_memory_note(memory_dir, "NEF", f"note number {i} with some padding text here")
+            before = load_format_memory(memory_dir, "NEF")
+            did_summarize = summarize_format_memory(
+                memory_dir, "NEF", CONFIG,
+                call_model_fn=lambda messages, *a, **k: "- Condensed: use IFD0: prefix for RAW tags.",
+                max_chars=200,
+            )
+            after = load_format_memory(memory_dir, "NEF")
+        self.assertTrue(did_summarize)
+        self.assertLess(len(after), len(before))
+        self.assertIn("Condensed: use IFD0: prefix", after)
+
+    def test_summarize_leaves_memory_untouched_on_call_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_dir = Path(tmpdir)
+            for i in range(20):
+                append_format_memory_note(memory_dir, "NEF", f"note number {i} with some padding text here")
+            before = load_format_memory(memory_dir, "NEF")
+
+            def raising(*a, **k):
+                raise TimeoutError("timed out")
+
+            did_summarize = summarize_format_memory(
+                memory_dir, "NEF", CONFIG, call_model_fn=raising, max_chars=200,
+            )
+            after = load_format_memory(memory_dir, "NEF")
+        self.assertFalse(did_summarize)
+        self.assertEqual(before, after)
+
+    def test_summarize_leaves_memory_untouched_on_empty_reply(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_dir = Path(tmpdir)
+            for i in range(20):
+                append_format_memory_note(memory_dir, "NEF", f"note number {i} with some padding text here")
+            before = load_format_memory(memory_dir, "NEF")
+            did_summarize = summarize_format_memory(
+                memory_dir, "NEF", CONFIG, call_model_fn=lambda *a, **k: "   ", max_chars=200,
+            )
+            after = load_format_memory(memory_dir, "NEF")
+        self.assertFalse(did_summarize)
+        self.assertEqual(before, after)
+
+
+class BuildPromptFormatMemoryTests(unittest.TestCase):
+    def test_omitted_when_dir_not_given(self):
+        prompt = build_prompt(make_gap(gap_count=1))
+        self.assertNotIn("Accumulated notes from previous rounds", prompt)
+
+    def test_included_when_present(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_dir = Path(tmpdir)
+            append_format_memory_note(memory_dir, "NEF", "Watch out for hardcoded prefixes.")
+            prompt = build_prompt(make_gap(gap_count=1), format_memory_dir=memory_dir)
+        self.assertIn("Accumulated notes from previous rounds", prompt)
+        self.assertIn("Watch out for hardcoded prefixes.", prompt)
+
+    def test_omitted_when_dir_given_but_empty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prompt = build_prompt(make_gap(gap_count=1), format_memory_dir=Path(tmpdir))
+        self.assertNotIn("Accumulated notes from previous rounds", prompt)
+
+
+class FormatPreviousAttemptsTests(unittest.TestCase):
+    def test_empty_returns_empty_string(self):
+        self.assertEqual(format_previous_attempts([]), "")
+        self.assertEqual(format_previous_attempts(None), "")
+
+    def test_includes_reason_without_critique(self):
+        rendered = format_previous_attempts([{"diff": "d", "reason": "build failed"}])
+        self.assertIn("Failed because: build failed", rendered)
+        self.assertNotIn("Reviewer critique", rendered)
+
+    def test_includes_critique_when_present(self):
+        rendered = format_previous_attempts([
+            {"diff": "d", "reason": "test_regressed", "critique": "off-by-one in the loop bound"},
+        ])
+        self.assertIn("Failed because: test_regressed", rendered)
+        self.assertIn("Reviewer critique: off-by-one in the loop bound", rendered)
+
+
+class BuildFailureCritiquePromptTests(unittest.TestCase):
+    def test_includes_failure_kind_detail_and_diff(self):
+        gap = make_gap()
+        prompt = build_failure_critique_prompt(gap, "--- a/x\n+++ b/x\n", "build_failed", "compile error: E0308")
+        self.assertIn("build_failed", prompt)
+        self.assertIn("compile error: E0308", prompt)
+        self.assertIn("--- a/x\n+++ b/x\n", prompt)
+
+    def test_handles_missing_diff(self):
+        gap = make_gap()
+        prompt = build_failure_critique_prompt(gap, None, "build_failed", "no diff in model response")
+        self.assertIn("No diff was produced", prompt)
+
+
+class CritiqueFailedAttemptTests(unittest.TestCase):
+    def test_returns_model_critique(self):
+        gap = make_gap()
+        critique = critique_failed_attempt(
+            gap, "--- a/x\n+++ b/x\n", "test_regressed", "assertion failed",
+            {"base_url": "u", "api_key": "k", "models": [{"name": "m", "base_url": "u", "api_key": "k"}],
+             "max_tokens": 4096, "reasoning_effort": "max"},
+            call_model_fn=lambda messages, *a: "  Root cause: off-by-one in the loop bound.  ",
+        )
+        self.assertEqual(critique, "Root cause: off-by-one in the loop bound.")
+
+    def test_falls_back_to_failure_detail_when_call_fails(self):
+        gap = make_gap()
+
+        def raising(messages, *a):
+            raise TimeoutError("timed out")
+
+        critique = critique_failed_attempt(
+            gap, "--- a/x\n+++ b/x\n", "build_failed", "compile error: E0308",
+            {"base_url": "u", "api_key": "k", "models": [{"name": "m", "base_url": "u", "api_key": "k"}],
+             "max_tokens": 4096, "reasoning_effort": "max"},
+            call_model_fn=raising,
+        )
+        self.assertEqual(critique, "compile error: E0308")
 
 
 class ReviewVerdictTests(unittest.TestCase):
@@ -1209,7 +1538,7 @@ class FixGapHappyPathTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: commit_calls.append(msg),
             cargo_build_fn=lambda root: (True, ""),
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             review_fn=lambda g, diff, config, **kwargs: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -1465,7 +1794,7 @@ class FixGapFailureTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: self.fail("should not commit"),
             cargo_build_fn=lambda root: (True, ""),
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 2,
             repo_root=Path("/fake/repo"),
         )
@@ -1486,12 +1815,131 @@ class FixGapFailureTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: self.fail("should not commit"),
             cargo_build_fn=lambda root: (True, ""),
-            cargo_test_workspace_fn=lambda root: False,
+            cargo_test_workspace_fn=lambda root: (False, "test output"),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
         self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["reason"], "cargo test --workspace regressed")
+        self.assertIn("cargo test --workspace regressed", result["reason"])
+        self.assertIn("test output", result["reason"])
+
+
+class FixGapCritiqueTests(unittest.TestCase):
+    """Every non-fixed round -- not just a review rejection -- now gets a
+    critique and a chance to retry, up to max_repair_rounds. See fix_gap's
+    critique_and_continue helper."""
+
+    def test_test_regression_critique_sees_actual_failure_output(self):
+        gap = make_gap(gap_count=2)
+        critique_reasons = []
+
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            critique_fn=lambda g, diff, fk, reason, cfg, **kwargs: critique_reasons.append(reason) or "critique",
+            cargo_test_workspace_fn=lambda root: (False, "thread 'x' panicked: assertion failed"),
+            git_checkout_clean_fn=lambda root: None,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+            max_repair_rounds=1,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("thread 'x' panicked: assertion failed", critique_reasons[0])
+
+    def test_build_failure_gets_critiqued_and_retried(self):
+        gap = make_gap(gap_count=2)
+        critique_calls = []
+
+        def fake_critique(g, diff, failure_kind, reason, cfg, **kwargs):
+            critique_calls.append((failure_kind, reason))
+            return f"critique for {failure_kind}"
+
+        attempt_count = [0]
+
+        def fake_attempt_build(messages, **kwargs):
+            attempt_count[0] += 1
+            if attempt_count[0] < 3:
+                return False, "compile error: mismatched types", None, messages
+            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=fake_attempt_build,
+            critique_fn=fake_critique,
+            review_fn=lambda g, diff, config, **kwargs: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: None,
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(len(critique_calls), 2)  # rounds 1 and 2 failed to build
+        self.assertEqual(critique_calls[0][0], "build_failed")
+        self.assertEqual(len(result["rounds"]), 2)
+        self.assertEqual(result["rounds"][0]["reason"], "compile error: mismatched types")
+        self.assertEqual(result["rounds"][0]["critique"], "critique for build_failed")
+
+    def test_critique_is_fed_back_into_the_conversation(self):
+        gap = make_gap(gap_count=2)
+        seen_messages = []
+
+        def fake_attempt_build(messages, **kwargs):
+            seen_messages.append(list(messages))
+            if len(seen_messages) == 1:
+                return False, "gap_not_closed reason", None, messages
+            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=fake_attempt_build,
+            critique_fn=lambda g, diff, fk, reason, cfg, **kwargs: "root cause: X, try Y instead",
+            review_fn=lambda g, diff, config, **kwargs: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: None,
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+
+        self.assertEqual(len(seen_messages), 2)
+        second_call_messages = seen_messages[1]
+        last_user_msg = [m for m in second_call_messages if m["role"] == "user"][-1]
+        self.assertIn("root cause: X, try Y instead", last_user_msg["content"])
+
+    def test_gives_up_after_max_repair_rounds_with_full_round_history(self):
+        gap = make_gap(gap_count=2)
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (False, "always broken", None, messages),
+            critique_fn=lambda g, diff, fk, reason, cfg, **kwargs: f"critique: {reason}",
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: self.fail("should not commit"),
+            repo_root=Path("/fake/repo"),
+            max_repair_rounds=3,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(len(result["rounds"]), 3)
+        self.assertTrue(all(r["critique"] == "critique: always broken" for r in result["rounds"]))
+
+    def test_duplicate_short_circuits_without_consuming_a_critique(self):
+        gap = make_single_tag_gap_dict()
+        critique_calls = []
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            critique_fn=lambda *a, **kwargs: critique_calls.append(1),
+            detect_duplicate_fn=lambda diff, tag, root: True,
+            git_checkout_clean_fn=lambda root: None,
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertEqual(result["status"], "duplicate")
+        self.assertEqual(critique_calls, [])
 
 
 class FixGapReviewTests(unittest.TestCase):
@@ -1518,7 +1966,7 @@ class FixGapReviewTests(unittest.TestCase):
             review_fn=fake_review,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: commit_calls.append(msg),
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -1542,14 +1990,16 @@ class FixGapReviewTests(unittest.TestCase):
             review_fn=lambda g, diff, config, **kwargs: (False, "hardcodes the sample value"),
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: self.fail("should not commit"),
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
+            max_repair_rounds=2,
         )
 
         self.assertEqual(result["status"], "failed")
-        self.assertIn("rejected by review after repair attempt", result["reason"])
+        self.assertIn("rejected by review", result["reason"])
         self.assertIn("hardcodes the sample value", result["reason"])
+        self.assertEqual(len(result["rounds"]), 2)
 
     def test_review_uses_fix_gaps_injected_call_model_fn(self):
         gap = make_gap(gap_count=2)
@@ -1569,7 +2019,7 @@ class FixGapReviewTests(unittest.TestCase):
             attempt_build_fn=fake_attempt_build,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -1605,7 +2055,7 @@ class FixGapReviewTests(unittest.TestCase):
             attempt_build_fn=fake_attempt_build,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -1635,7 +2085,7 @@ class FixGapReviewTests(unittest.TestCase):
             attempt_build_fn=fake_attempt_build,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -1663,7 +2113,7 @@ class FixGapReviewTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
             cargo_build_fn=lambda root: (True, ""),
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -1694,7 +2144,7 @@ class FixGapReviewTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
             cargo_build_fn=lambda root: (True, ""),
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -1722,7 +2172,7 @@ class FixGapReviewTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
             cargo_build_fn=lambda root: (True, ""),
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -1756,7 +2206,7 @@ class FixGapReviewTests(unittest.TestCase):
             review_config=review_config,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -1789,7 +2239,7 @@ class FixGapReviewTests(unittest.TestCase):
             review_fn=fake_review,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -1817,7 +2267,7 @@ class FixGapDuplicateDetectionTests(unittest.TestCase):
             detect_duplicate_fn=lambda diff, tag_literal, repo_root: True,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: self.fail("must not commit a detected duplicate"),
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -1837,7 +2287,7 @@ class FixGapDuplicateDetectionTests(unittest.TestCase):
             detect_duplicate_fn=lambda diff, tag_literal, repo_root: False,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: commit_calls.append(msg),
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -1859,7 +2309,7 @@ class FixGapDuplicateDetectionTests(unittest.TestCase):
             detect_duplicate_fn=lambda diff, tag_literal, repo_root: detect_calls.append(tag_literal) or False,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
-            cargo_test_workspace_fn=lambda root: True,
+            cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
@@ -2179,6 +2629,35 @@ class RunTagLoopTests(unittest.TestCase):
         self.assertEqual(seen_history[1][0]["reason"], "attempt 1 failed")
         self.assertEqual(len(seen_history[2]), 2)
         self.assertEqual(seen_history[2][1]["diff"], "diff-2")
+
+    def test_persists_every_internal_round_with_its_own_critique(self):
+        """fix_gap's own "rounds" (its internal repair sub-attempts, each
+        with a critique -- see FixGapCritiqueTests) all get persisted as
+        separate attempts, not flattened into one entry per run_tag_loop
+        call."""
+        gaps = [make_gap()]
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            if tag_gap["tag_key"] == "NEF:EXIF:LensModel":
+                return {
+                    "status": "failed", "reason": "final reason", "diff": "final-diff",
+                    "rounds": [
+                        {"diff": "diff-a", "reason": "build_failed: syntax error", "critique": "missing semicolon"},
+                        {"diff": "diff-b", "reason": "test_regressed", "critique": "broke an unrelated test"},
+                    ],
+                }
+            return {"status": "fixed", "gaps_closed": 1}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1, max_fails=10,
+        )
+        attempts = store["NEF:EXIF:LensModel"]["attempts"]
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0]["critique"], "missing semicolon")
+        self.assertEqual(attempts[1]["critique"], "broke an unrelated test")
 
     def test_blacklist_full_stops_instead_of_resetting(self):
         gaps = [make_gap()]
