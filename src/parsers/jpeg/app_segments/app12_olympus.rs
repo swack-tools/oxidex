@@ -77,6 +77,7 @@ const KNOWN_TAGS: &[&str] = &[
     "EXP2",
     "EXP3",
     "JPEG1",
+    "MODE1",
     "FCS1",
     "FCS2",
     "FCS3",
@@ -421,6 +422,17 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:JPEG1".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus MODE1 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("MODE1") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:MODE1".to_string(), app12_value);
             }
 
 
