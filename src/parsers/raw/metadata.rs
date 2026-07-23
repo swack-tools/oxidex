@@ -949,16 +949,90 @@ fn extract_nef_tags(metadata: &mut MetadataMap) {
 /// - Implement ISO Base Media File Format parser
 /// - Extract metadata from CR3 boxes (similar to MP4 atoms)
 /// - Parse Canon-specific metadata boxes
-fn parse_cr3(_data: &[u8], format: RawFormat) -> Result<MetadataMap> {
+/// Locate the Canon CR3 `CMT1` metadata box and return its TIFF payload.
+///
+/// CR3 is an ISO Base Media container; Canon stores the primary image's
+/// standard EXIF/TIFF metadata in a `CMT1` box (nested under a Canon UUID
+/// box inside `moov`). Rather than walk the full box hierarchy, this scans
+/// for the `CMT1` box type and validates both the preceding 4-byte
+/// big-endian size field and that the payload begins with a TIFF header, so
+/// a coincidental `CMT1` byte sequence in image data is not mistaken for the
+/// box.
+fn find_cr3_cmt1_tiff(data: &[u8]) -> Option<&[u8]> {
+    let mut cursor = 0;
+    while cursor + 4 <= data.len() {
+        let rel = data[cursor..].windows(4).position(|w| w == b"CMT1")?;
+        let type_offset = cursor + rel;
+        cursor = type_offset + 4;
+        if type_offset < 4 {
+            continue;
+        }
+
+        // ISO BMF box: [size: u32 BE][type: 4][payload]. Canon's CMT1 uses a
+        // normal 32-bit size, so the size==0/1 extended forms are ignored.
+        let box_start = type_offset - 4;
+        let box_size = u32::from_be_bytes([
+            data[box_start],
+            data[box_start + 1],
+            data[box_start + 2],
+            data[box_start + 3],
+        ]) as usize;
+        let payload_start = type_offset + 4;
+        let box_end = match box_start.checked_add(box_size) {
+            Some(end) if box_size >= 8 && end <= data.len() && end > payload_start => end,
+            _ => continue,
+        };
+
+        let payload = &data[payload_start..box_end];
+        if payload.starts_with(b"II*\0") || payload.starts_with(b"MM\x00*") {
+            return Some(payload);
+        }
+    }
+    None
+}
+
+/// Read the Artist tag (0x013B) from a CMT1 TIFF payload's IFD0.
+///
+/// ExifTool reports Artist for CR3 files even when the stored value is an
+/// empty ASCII string, so an entry that is present but empty still yields a
+/// tag (empty-string value), distinct from an absent Artist tag (None).
+fn extract_cr3_cmt1_artist(tiff: &[u8]) -> Option<TagValue> {
+    if tiff.len() < 8 {
+        return None;
+    }
+    let byte_order = detect_byte_order(tiff).ok()?;
+    let ifd0_offset = read_u32(&tiff[4..8], byte_order) as u64;
+    let reader = SliceReader::new(tiff);
+    let tags = parse_ifd(&reader, ifd0_offset, byte_order).ok()?;
+    for (tag_id, field_type, value_count, raw_bytes) in &tags {
+        if *tag_id == 0x013B {
+            return Some(raw_bytes_to_simple_tag_value(
+                raw_bytes.as_ref(),
+                *field_type,
+                *value_count,
+                byte_order,
+            ));
+        }
+    }
+    None
+}
+
+fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
     metadata.insert(
         "File:FileType".to_string(),
         TagValue::new_string(format!("{:?}", format)),
     );
 
-    // TODO: Implement full CR3 parsing
-    // CR3 uses ISO Base Media Format (similar to MP4/QuickTime)
-    // Will require box/atom parser similar to QuickTime parser
+    // Full CR3 box parsing is still a TODO (CR3 uses ISO Base Media Format;
+    // a QuickTime-style box/atom parser will replace this). For now, extract
+    // the Artist tag from the CMT1 box specifically -- ExifTool reports it
+    // for CR3 even when its value is an empty ASCII string.
+    if let Some(tiff) = find_cr3_cmt1_tiff(data) {
+        if let Some(artist) = extract_cr3_cmt1_artist(tiff) {
+            metadata.insert(lookup_tag_name(0x013B, "IFD0"), artist);
+        }
+    }
 
     Ok(metadata)
 }
@@ -2117,6 +2191,70 @@ impl<'a> FileReader for SliceReader<'a> {
 }
 
 // ===== Unit Tests =====
+
+#[cfg(test)]
+mod cr3_cmt1_artist_tests {
+    use super::*;
+
+    /// Build a minimal CR3-shaped buffer: a `CMT1` box whose payload is a
+    /// little-endian TIFF with a single IFD0 entry -- Artist (0x013B, ASCII)
+    /// -- holding `artist` (its trailing NUL included in the count). The
+    /// value is kept <= 4 bytes so it fits inline in the IFD entry.
+    fn build_cr3_with_artist(artist: &[u8]) -> Vec<u8> {
+        assert!(
+            artist.len() <= 4,
+            "test helper only inlines <=4-byte values"
+        );
+        let mut inline = [0u8; 4];
+        inline[..artist.len()].copy_from_slice(artist);
+
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II*\0"); // little-endian TIFF
+        tiff.extend_from_slice(&8u32.to_le_bytes()); // IFD0 at offset 8
+        tiff.extend_from_slice(&1u16.to_le_bytes()); // 1 entry
+        tiff.extend_from_slice(&0x013Bu16.to_le_bytes()); // tag = Artist
+        tiff.extend_from_slice(&2u16.to_le_bytes()); // type = ASCII
+        tiff.extend_from_slice(&(artist.len() as u32).to_le_bytes()); // count
+        tiff.extend_from_slice(&inline); // inline value
+        tiff.extend_from_slice(&0u32.to_le_bytes()); // next IFD = 0
+
+        let mut data = Vec::new();
+        data.extend_from_slice(b"\0\0\0\x18ftypcrx "); // plausible leading box
+        let box_size = (8 + tiff.len()) as u32;
+        data.extend_from_slice(&box_size.to_be_bytes()); // CMT1 box size (BE)
+        data.extend_from_slice(b"CMT1");
+        data.extend_from_slice(&tiff);
+        data
+    }
+
+    #[test]
+    fn extracts_artist_from_cmt1_box() {
+        let data = build_cr3_with_artist(b"Jo\0");
+        let metadata = parse_cr3(&data, RawFormat::CanonCR3).unwrap();
+        assert_eq!(
+            metadata.get("IFD0:Artist"),
+            Some(&TagValue::new_string("Jo".to_string()))
+        );
+    }
+
+    #[test]
+    fn preserves_empty_artist_value() {
+        // ExifTool reports Artist for CR3 even when it is an empty string;
+        // a present-but-empty entry must still yield the tag.
+        let data = build_cr3_with_artist(b"\0");
+        let metadata = parse_cr3(&data, RawFormat::CanonCR3).unwrap();
+        assert_eq!(
+            metadata.get("IFD0:Artist"),
+            Some(&TagValue::new_string(String::new()))
+        );
+    }
+
+    #[test]
+    fn no_artist_tag_when_no_cmt1_box() {
+        let metadata = parse_cr3(b"\0\0\0\x18ftypcrx not a cmt box", RawFormat::CanonCR3).unwrap();
+        assert!(metadata.get("IFD0:Artist").is_none());
+    }
+}
 
 #[cfg(test)]
 mod tests {
