@@ -305,12 +305,7 @@ fn extract_about_cv_term_cv_ids(xml_bytes: &[u8]) -> Result<Vec<String>> {
                     about_cv_term_depth = Some(depth);
                 } else if about_cv_term_depth.is_some()
                     && cv_id_depth.is_none()
-                    && is_property_in_namespace(
-                        &tag_name,
-                        "CvId",
-                        IPTC_EXT_NAMESPACE,
-                        &resolver,
-                    )
+                    && is_property_in_namespace(&tag_name, "CvId", IPTC_EXT_NAMESPACE, &resolver)
                 {
                     cv_id_depth = Some(depth);
                     current_cv_id.clear();
@@ -321,12 +316,7 @@ fn extract_about_cv_term_cv_ids(xml_bytes: &[u8]) -> Result<Vec<String>> {
                 let tag_name = extract_tag_name_from_bytes(e.name().as_ref())?;
 
                 if cv_id_depth == Some(depth)
-                    && is_property_in_namespace(
-                        &tag_name,
-                        "CvId",
-                        IPTC_EXT_NAMESPACE,
-                        &resolver,
-                    )
+                    && is_property_in_namespace(&tag_name, "CvId", IPTC_EXT_NAMESPACE, &resolver)
                 {
                     let value = current_cv_id.trim();
                     if !value.is_empty() {

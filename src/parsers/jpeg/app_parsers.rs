@@ -838,8 +838,7 @@ mod tests {
     #[test]
     fn test_parse_olympus_app12_jpeg1() {
         // Diagnostic data from OlympusD620L.jpg.
-        let data =
-            b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nJPEG1=696880\r\n";
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nJPEG1=696880\r\n";
 
         let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
             .expect("valid Olympus Picture Info APP12 data should parse");
