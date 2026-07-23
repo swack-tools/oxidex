@@ -14,7 +14,11 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           -- one is picked at random for every individual
                           model call (fixer attempt or reviewer verdict), so
                           a run rotates across the whole pool rather than
-                          pinning to one model.
+                          pinning to one model. Each entry may also set
+                          phase = "explore"|"patch" (which conversation
+                          turns it serves -- see models_for_phase) and
+                          reasoning_effort (per-model override of the
+                          table default).
     max_tokens           default 4096 (cap on the model's own reply length)
     max_prompt_tokens     default 4096 (worker only; hard cap on the built
                           prompt itself -- see estimate_tokens/
@@ -23,6 +27,15 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           model's own diff would exceed this in one reply,
                           the prompt tells it to split into "PATCH i/N"
                           chunks instead -- see attempt_build.)
+    max_request_repeats    default 3 (worker only; identical REQUESTs before
+                          a pivot nudge replaces the served content)
+    max_verify_turns       default 10 (worker only; VERIFY trial-compile
+                          turns per attempt -- see attempt_build)
+    compaction_trigger_tokens      default 12000; conversation size (est.
+                          tokens) beyond which stale served payloads are
+                          stubbed -- see compact_messages
+    compaction_keep_recent_turns   default 4; most-recent messages exempt
+                          from compaction
     reasoning_effort      default "max"
     max_prompt_tags       default 40 (worker only; per-attempt cap on
                           missing_tags/value_differences shown -- the rest
@@ -172,6 +185,51 @@ def truncate_to_token_budget(text, max_tokens=DEFAULT_MAX_PROMPT_TOKENS):
         + f"\n\n...(prompt truncated to fit the ~{max_tokens}-token budget; "
         "ask for specific files via REQUEST: if you need something that got cut)"
     )
+
+
+DEFAULT_COMPACTION_TRIGGER_TOKENS = 12_000
+DEFAULT_COMPACTION_KEEP_RECENT_TURNS = 4
+DEFAULT_COMPACTION_MIN_ELIDE_TOKENS = 1000
+_COMPACTION_STUB_PREFIX = "[earlier content elided for space:"
+
+
+def compact_messages(messages, trigger_tokens=DEFAULT_COMPACTION_TRIGGER_TOKENS,
+                     keep_recent=DEFAULT_COMPACTION_KEEP_RECENT_TURNS):
+    """Shrink a long conversation by stubbing out stale served payloads.
+
+    Once the whole conversation's estimated tokens exceed trigger_tokens,
+    older USER turns carrying large served content (REQUEST answers,
+    VERIFY outputs -- anything over DEFAULT_COMPACTION_MIN_ELIDE_TOKENS)
+    are replaced with a one-line stub naming what was elided and how to
+    get it back. Never touched: message 0 (the initial prompt), the last
+    keep_recent messages, and every assistant message (the model's own
+    diffs/PATCH chunks must survive verbatim for chunk reassembly and
+    repair context). Pure -- returns a new list; idempotent -- stubs are
+    recognized and skipped on a second pass.
+    """
+    total = sum(estimate_tokens(m["content"]) for m in messages)
+    if total <= trigger_tokens:
+        return list(messages)
+    compacted = list(messages)
+    cutoff = max(1, len(compacted) - keep_recent)
+    for i in range(1, cutoff):
+        msg = compacted[i]
+        if msg["role"] != "user":
+            continue
+        content = msg["content"]
+        if content.startswith(_COMPACTION_STUB_PREFIX):
+            continue
+        if estimate_tokens(content) <= DEFAULT_COMPACTION_MIN_ELIDE_TOKENS:
+            continue
+        first_line = content.split("\n", 1)[0][:120]
+        compacted[i] = {
+            "role": "user",
+            "content": (
+                f"{_COMPACTION_STUB_PREFIX} {first_line} ... "
+                "Re-REQUEST it (ideally with a line range) if still needed.]"
+            ),
+        }
+    return compacted
 
 
 DEFAULT_RETRYABLE_HTTP_STATUSES = {500, 502, 503, 504}
@@ -495,6 +553,18 @@ def cargo_build(repo_root):
         capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
     )
     return result.returncode == 0, result.stderr
+
+
+def cargo_check(repo_root):
+    """Fast compile-only check (no codegen, no tests) for VERIFY trial
+    diffs -- see attempt_build. Returns (success, output), stdout+stderr
+    combined (cargo check's errors go to stderr, but warnings/summaries
+    can land on stdout)."""
+    result = subprocess.run(  # nosec B603
+        ["cargo", "check", "--workspace"],
+        capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
+    )
+    return result.returncode == 0, result.stdout + result.stderr
 
 
 def cargo_test_workspace(repo_root):
@@ -924,6 +994,19 @@ def build_format_overview_block(lib_dir, perl_reference_block):
     return f"\n\n{ARCHITECTURE_PRIMER}{notes_section}"
 
 
+RUST_ARCHITECTURE_CONSTRAINTS = """
+CRITICAL RUST ARCHITECTURE CONSTRAINTS (porting ExifTool's Perl to Rust -- do not write "Perl in Rust"):
+- No dynamic-typing crutches. Do not introduce Box<dyn Any>, serde_json::Value, or a new ad hoc HashMap<String, X> as a stand-in for Perl's autovivified hashes -- use this codebase's own TagValue enum and MetadataMap (see src/core/), which already exist for exactly this.
+- No regex crate for binary/byte-level parsing. This is a memory-mapped/byte-slice format; slice &[u8] directly (or use nom/winnow if the surrounding file already does) rather than treating binary data as UTF-8 text a regex can search.
+- No self-referential structs for IFD/directory trees (a struct holding a reference to its own parent or child). Store an absolute byte offset (usize) or index instead, exactly like ExifTool's own IFD-offset-based traversal.
+- Do not inline a large hardcoded lookup table (e.g. a full MakerNote-style tag dictionary) directly into a diff. If a tag needs a name/ID lookup, wire it through this codebase's existing tag database (oxidex-tags-*, lookup_tag_name()) instead of hand-writing a new static table.
+- No new global mutable state (a `static mut`, or a bare `static` with interior mutability introduced just for this fix). Thread whatever context (byte order, base offset) is needed as an explicit parameter, matching how neighboring functions in the file already do it.
+- No unwrap()/expect()/panic!() on data derived from the file being parsed. A real-world file can be corrupt or unexpected; propagate errors via this codebase's Result<T, ExifToolError> (see src/error/) so a single malformed tag can't crash the whole parse.
+- Endianness travels through function signatures -- an explicit byte-order parameter or the file's existing endian-aware reader type -- never through globals or implicit state (ExifTool's own Perl mutates a global byte order; do not mirror that).
+- Common Perl-builtin translations: unpack("N",...) -> u32::from_be_bytes, unpack("V",...) -> u32::from_le_bytes, unpack("n",...)/unpack("v",...) -> u16::from_be_bytes/u16::from_le_bytes, substr($v, off, len) -> a bounds-checked slice &v[off..off + len].
+""".strip()
+
+
 KNOWN_PITFALLS = """
 Lessons from mistakes a human reviewer previously caught in this loop's own output (avoid repeating these):
 - Never hardcode a group prefix like "EXIF:" on a tag name. Use this codebase's existing lookup_tag_name()/tag_db (or whatever the surrounding code in the file you're editing already uses) so the prefix matches the IFD/table the tag was actually parsed from, consistent with every neighboring tag -- a hardcoded prefix that diverges from the file's own convention has been wrong every time.
@@ -931,6 +1014,28 @@ Lessons from mistakes a human reviewer previously caught in this loop's own outp
 - Two ExifTool tags can have very similar names for genuinely different tag IDs (e.g. CFAPattern at 0xA302 vs CFAPattern2 at 0x828E). Always match by the exact tag ID shown in ExifTool's source, never by name similarity or memory of what a tag "should" be called.
 - Verify a tag's display format against ExifTool's actual default text output (what `exiftool file` prints), not `-j`/JSON output -- JSON array/bracket syntax (e.g. [1,2]) is JSON's own serialization, not ExifTool's plain-text tag-value convention (which is usually comma-space-separated, e.g. "1, 2").
 """.strip()
+
+
+def build_reply_shape_manifest(max_prompt_tokens):
+    """The complete reply protocol, stated once near the top of the
+    prompt (stable text -> provider prompt-cache friendly; early text ->
+    survives truncate_to_token_budget, which keeps the head)."""
+    return f"""You are operating in an ephemeral, isolated git worktree; broken builds during investigation are expected and cost nothing -- probe aggressively with VERIFY rather than guessing.
+
+Every reply must be exactly one of these four shapes:
+
+1. REQUEST: <path> -- see a source file or a sample file (a bare line, nothing else in the reply). Add :<start>-<end> after a source path (e.g. REQUEST: src/parsers/x.rs:40-120) to get just that 1-indexed line range -- prefer a range for anything large.
+2. VERIFY -- trial-compile a candidate change without committing to it: the line "VERIFY" followed by exactly ONE ```diff fenced block. The diff is applied, `cargo check` runs, the tail of its output comes back, and the change is REVERTED -- your final diff must still contain the complete change.
+3. PATCH 1/N -- if your finished diff would exceed roughly {max_prompt_tokens} tokens (~{max_prompt_tokens * 4} characters) in one reply, split it into N consecutive chunks and send the first as the line "PATCH 1/N" followed by ONE ```diff fenced chunk; you'll be prompted for each next chunk. Chunks are concatenated in order before applying, so split anywhere (mid-hunk is fine) -- never repeat or skip lines across a boundary.
+4. Plan + diff -- first, 2-3 sentences: which tag(s) you're fixing, where in the code, what you learned from the previous turn's output, and (on a retry) what you're doing differently from the failed attempt(s) above and why. Then exactly ONE ```diff fenced block containing the complete unified diff.
+
+Shapes 1-3 are control signals: the control line must be the VERY FIRST line of the reply, with no narrative before it."""
+
+
+TERMINAL_REMINDER = (
+    "Reply now with exactly one of the four shapes defined at the top: "
+    "REQUEST, VERIFY, PATCH i/N, or plan + a single ```diff block."
+)
 
 
 DEFAULT_MAX_FORMAT_MEMORY_CHARS = 4000
@@ -996,12 +1101,12 @@ def summarize_format_memory(memory_dir, format_name, config,
     if len(current) <= max_chars:
         return False
     try:
-        model_spec = pick_model_fn(config["models"])
+        model_spec = pick_model_fn(models_for_phase(config["models"], "explore"))
         prompt = build_format_memory_summary_prompt(format_name, current)
         reply = call_model_fn(
             [{"role": "user", "content": prompt}],
             model_spec["base_url"], model_spec["api_key"], model_spec["name"],
-            config["max_tokens"], config["reasoning_effort"],
+            config["max_tokens"], model_spec.get("reasoning_effort") or config["reasoning_effort"],
             config.get("stream", False), config.get("thinking", True),
             config.get("temperature", 0), config.get("timeout", 120),
             config.get("max_retries", DEFAULT_MAX_RETRIES),
@@ -1160,6 +1265,11 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     reviewer's verdicts on specific merged/rejected commits), this is the
     loop's own accumulated, periodically-condensed account of everything
     tried on this format so far. None omits this section.
+
+    Sections are ordered static-first (constraints/pitfalls/manifest),
+    then per-tag content, then volatile history, so the byte-stable
+    prefix is maximal for provider prompt caching and survives
+    head-keeping truncation.
     """
     missing_shown = gap["missing_tags"][:max_tags]
     missing_omitted = len(gap["missing_tags"]) - len(missing_shown)
@@ -1205,12 +1315,8 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
         if sample_paths:
             listed = "\n".join(f"  - {p.relative_to(samples_dir)}" for p in sample_paths)
             samples_block = (
-                f"\n\nReal sample files available for this format (relative to the samples dir):\n{listed}\n\n"
-                "If you need to see actual raw bytes to understand the binary layout instead of "
-                "guessing from the tag values above, respond with EXACTLY one line "
-                "\"REQUEST: <path>\" (a path from the list above, or a source file under src/) "
-                "instead of a diff, and you'll get a hex dump (for samples) or the file's text back "
-                "in the next turn to work from."
+                f"\n\nReal sample files available for this format (relative to the samples dir):\n{listed}\n"
+                "(REQUEST one -- shape 1 above -- to get a hex dump of its raw bytes.)"
             )
 
     exact_sample_block = build_exact_sample_block(gap, samples_dir)
@@ -1238,8 +1344,12 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
 
     attempts_block = format_previous_attempts(previous_attempts)
 
+    manifest = build_reply_shape_manifest(max_prompt_tokens)
     prompt = (
         f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
+        f"{RUST_ARCHITECTURE_CONSTRAINTS}\n\n"
+        f"{KNOWN_PITFALLS}\n\n"
+        f"{manifest}\n\n"
         f"Missing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
         f"Value differences (both extract it, values disagree):\n{diffs}"
         f"{overview_block}\n\n"
@@ -1250,28 +1360,10 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
         f"{sweep_review_block}"
         f"{memory_block}"
         f"{attempts_block}\n\n"
-        f"{KNOWN_PITFALLS}\n\n"
-        "If you need to see actual raw bytes or another file before you can proceed, send ONLY the "
-        "\"REQUEST: <path>\" line described above -- nothing else in that response.\n\n"
-        "Otherwise: first, in 2-3 sentences, state your plan -- which tag(s) you're fixing, where in "
-        "the code you'll change it, and (if this is a retry) specifically what you're doing "
-        "differently from the previous attempt(s) above and why, so you don't repeat a broken "
-        "approach on a later round. Then provide a single unified diff (in a ```diff fenced block) "
-        "that fixes as many of these gaps as you can correctly verify. For value differences, only "
-        "fix genuine bugs, not benign formatting differences. If more gaps exist than are shown "
-        "above, that's expected -- just fix what's shown here, and future rounds will address the rest.\n\n"
-        f"Your reply is capped at roughly {max_prompt_tokens} tokens (~{max_prompt_tokens * 4} "
-        "characters). If your finished diff would exceed that in one reply, do NOT send a partial or "
-        "truncated diff -- instead split it into consecutive chunks and send ONLY the first one, "
-        "formatted exactly as:\n"
-        "PATCH 1/N\n"
-        "```diff\n"
-        "<the first chunk of the diff -- a clean prefix, not necessarily a complete file>\n"
-        "```\n"
-        "where N is the total number of chunks you intend to send. You'll be prompted for each next "
-        "chunk in turn (\"PATCH 2/N\", then \"PATCH 3/N\", ...) until you send chunk N/N; all chunks "
-        "are concatenated back together in order before being applied, so split at any convenient "
-        "point -- mid-hunk is fine, just don't repeat or skip any lines across the boundary."
+        "For value differences, only fix genuine bugs, not benign formatting differences. "
+        "If more gaps exist than are shown above, that's expected -- fix what's shown here; "
+        "future rounds will address the rest.\n\n"
+        f"{TERMINAL_REMINDER}"
     )
     return truncate_to_token_budget(prompt, max_prompt_tokens)
 
@@ -1344,7 +1436,7 @@ def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=ra
         reply = call_model_fn(
             [{"role": "user", "content": prompt}],
             model_spec["base_url"], model_spec["api_key"], model_spec["name"],
-            config["max_tokens"], config["reasoning_effort"],
+            config["max_tokens"], model_spec.get("reasoning_effort") or config["reasoning_effort"],
             config.get("stream", False), config.get("thinking", True),
             config.get("temperature", 0), config.get("timeout", 120),
             config.get("max_retries", DEFAULT_MAX_RETRIES),
@@ -1383,12 +1475,12 @@ def critique_failed_attempt(gap, diff, failure_kind, failure_detail, config,
     must never be allowed to abort the fixer's own retry loop.
     """
     try:
-        model_spec = pick_model_fn(config["models"])
+        model_spec = pick_model_fn(models_for_phase(config["models"], "explore"))
         prompt = build_failure_critique_prompt(gap, diff, failure_kind, failure_detail)
         reply = call_model_fn(
             [{"role": "user", "content": prompt}],
             model_spec["base_url"], model_spec["api_key"], model_spec["name"],
-            config["max_tokens"], config["reasoning_effort"],
+            config["max_tokens"], model_spec.get("reasoning_effort") or config["reasoning_effort"],
             config.get("stream", False), config.get("thinking", True),
             config.get("temperature", 0), config.get("timeout", 120),
             config.get("max_retries", DEFAULT_MAX_RETRIES),
@@ -1402,11 +1494,16 @@ def critique_failed_attempt(gap, diff, failure_kind, failure_detail, config,
 
 REQUEST_RE = re.compile(r"^REQUEST:\s*(.+)$", re.IGNORECASE)
 DEFAULT_MAX_REQUEST_TURNS = 20  # investigation turns before a diff is still required
+DEFAULT_MAX_REQUEST_REPEATS = 3  # identical REQUESTs before a pivot nudge replaces the content
 DEFAULT_HEXDUMP_BYTES = 2048
 
 PATCH_HEADER_RE = re.compile(r"^PATCH\s+(\d+)\s*/\s*(\d+)\b", re.IGNORECASE)
 DEFAULT_MAX_PATCH_CHUNKS = 40  # hard safety cap, independent of the declared N -- a
 # misbehaving/looping model must not be able to stall an attempt forever
+
+VERIFY_RE = re.compile(r"^VERIFY\b", re.IGNORECASE)
+DEFAULT_MAX_VERIFY_TURNS = 10   # trial-compile turns per attempt_build invocation
+DEFAULT_MAX_CHECK_OUTPUT_CHARS = 3000  # tail-trim: Rust errors summarize at the end
 
 
 def hex_dump(data, max_bytes=DEFAULT_HEXDUMP_BYTES):
@@ -1422,16 +1519,43 @@ def hex_dump(data, max_bytes=DEFAULT_HEXDUMP_BYTES):
     return "\n".join(lines)
 
 
+REQUEST_RANGE_RE = re.compile(r"^(.*?):(\d+)-(\d+)$")
+
+
+def parse_request_range(path_str):
+    """Split a "path:START-END" request into (path, start, end).
+
+    Returns (path, None, None) when there's no numeric range suffix. A
+    range-shaped suffix with start < 1 or start > end strips the suffix
+    but returns no range -- whole-file fallback -- rather than failing
+    the entire request over a typo'd range. A non-numeric suffix (e.g.
+    "x.rs:a-b") isn't range-shaped at all, so it stays part of the path
+    and fails resolution with the normal could-not-resolve message.
+    """
+    stripped = path_str.strip()
+    m = REQUEST_RANGE_RE.match(stripped)
+    if not m:
+        return stripped, None, None
+    start, end = int(m.group(2)), int(m.group(3))
+    if start < 1 or end < start:
+        return m.group(1), None, None
+    return m.group(1), start, end
+
+
 def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
     """Answer a model's "REQUEST: <path>" turn -- a hex dump if the path
     resolves under samples_dir (real binary sample data), the raw text if
     it resolves under repo_root (more source to read), or a rejection
     message otherwise. Path traversal outside both roots is refused.
+    A "path:START-END" suffix on a source file returns just that 1-indexed
+    inclusive line range, numbered; samples always get the whole-file hex
+    dump.
     """
+    path_part, range_start, range_end = parse_request_range(path_str)
     candidates = []
     if samples_dir is not None:
-        candidates.append((Path(samples_dir) / path_str.strip(), "sample"))
-    candidates.append((repo_root / path_str.strip(), "source"))
+        candidates.append((Path(samples_dir) / path_part, "sample"))
+    candidates.append((repo_root / path_part, "source"))
 
     for candidate, kind in candidates:
         try:
@@ -1446,19 +1570,32 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
         if kind == "sample":
             data = resolved.read_bytes()
             return (
-                f"Hex dump of {path_str} ({len(data)} bytes total, "
+                f"Hex dump of {path_part} ({len(data)} bytes total, "
                 f"showing first {min(len(data), DEFAULT_HEXDUMP_BYTES)}):\n"
                 f"{hex_dump(data)}"
             )
-        content = resolved.read_text(errors="replace")[:max_text_bytes]
-        return f"Contents of {path_str}:\n{content}"
+        content = resolved.read_text(errors="replace")
+        if range_start is not None:
+            lines = content.splitlines()
+            if range_start > len(lines):
+                return (
+                    f"{path_part} has only {len(lines)} lines -- the requested range "
+                    f"{range_start}-{range_end} starts past the end. Request a range within the file."
+                )
+            clamped_end = min(range_end, len(lines))
+            numbered = "\n".join(
+                f"{i}: {line}"
+                for i, line in enumerate(lines[range_start - 1:clamped_end], start=range_start)
+            )
+            return f"Lines {range_start}-{clamped_end} of {path_part}:\n{numbered}"
+        return f"Contents of {path_part}:\n{content[:max_text_bytes]}"
 
-    return f"Could not resolve {path_str!r} under the samples dir or repo root -- try a path from the list shown."
+    return f"Could not resolve {path_part!r} under the samples dir or repo root -- try a path from the list shown."
 
 
 def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_fn,
                    cargo_build_fn, config, repo_root, pick_model_fn=random.choice,
-                   samples_dir=None):
+                   samples_dir=None, cargo_check_fn=None):
     """Try to get a working build via a bounded conversation: up to
     config["max_request_turns"] turns where the model can ask to see more
     context (REQUEST: <path> -- see resolve_request) before it must submit
@@ -1484,19 +1621,39 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     exactly like a normal single-reply diff -- this doesn't consume a
     separate diff_attempts_used slot per chunk, only once the full diff is
     assembled and ready to apply.
+
+    cargo_check_fn(repo_root) -> (success, output), if provided, enables
+    the VERIFY protocol: a reply of "VERIFY" plus one ```diff fenced
+    block gets that diff applied, cargo-checked, REVERTED, and the
+    tail-trimmed check output fed back -- a trial compile that never
+    consumes one of the 2 real diff attempts. Bounded by
+    config["max_verify_turns"] (default DEFAULT_MAX_VERIFY_TURNS).
+    None (the default) keeps VERIFY off: such replies get an
+    "unavailable" message, so old callers and tests are unaffected.
     """
     max_request_turns = config.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS)
     request_turns_used = 0
+    max_request_repeats = config.get("max_request_repeats", DEFAULT_MAX_REQUEST_REPEATS)
+    request_counts = {}
+    max_verify_turns = config.get("max_verify_turns", DEFAULT_MAX_VERIFY_TURNS)
+    verify_turns_used = 0
+    verify_rejections = 0
     diff_attempts_used = 0
     nudged_to_stop_investigating = False
     patch_chunks = {}
     patch_turns_used = 0
+    current_phase = "explore" if len(messages) == 1 else "patch"
     while diff_attempts_used < 2:  # one initial attempt + one repair round-trip
-        model_spec = pick_model_fn(config["models"])
+        messages[:] = compact_messages(
+            messages,
+            trigger_tokens=config.get("compaction_trigger_tokens", DEFAULT_COMPACTION_TRIGGER_TOKENS),
+            keep_recent=config.get("compaction_keep_recent_turns", DEFAULT_COMPACTION_KEEP_RECENT_TURNS),
+        )
+        model_spec = pick_model_fn(models_for_phase(config["models"], current_phase))
         try:
             reply = call_model_fn(
                 messages, model_spec["base_url"], model_spec["api_key"], model_spec["name"],
-                config["max_tokens"], config["reasoning_effort"],
+                config["max_tokens"], model_spec.get("reasoning_effort") or config["reasoning_effort"],
                 config.get("stream", False), config.get("thinking", True),
                 config.get("temperature", 0), config.get("timeout", 120),
                 config.get("max_retries", DEFAULT_MAX_RETRIES),
@@ -1516,10 +1673,28 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
 
         request_match = REQUEST_RE.match(reply.strip())
         if request_match:
+            normalized = request_match.group(1).strip()
+            request_counts[normalized] = request_counts.get(normalized, 0) + 1
             if request_turns_used < max_request_turns:
                 request_turns_used += 1
-                answer = resolve_request(request_match.group(1), repo_root, samples_dir)
-                messages.append({"role": "user", "content": answer})
+                if request_counts[normalized] >= max_request_repeats:
+                    # Dead-end: the same path over and over. Re-serving
+                    # identical content burns budget without advancing
+                    # anything -- course-correct instead.
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"You've now requested {normalized!r} {request_counts[normalized]} times -- "
+                            "it was already provided in full and re-reading it will not change anything. "
+                            "Pivot: request a DIFFERENT file, narrow to a line range "
+                            "(REQUEST: path:START-END), or submit your best diff now."
+                        ),
+                    })
+                    current_phase = "patch"
+                else:
+                    answer = resolve_request(request_match.group(1), repo_root, samples_dir)
+                    messages.append({"role": "user", "content": answer})
+                    current_phase = "explore"
                 continue
             if not nudged_to_stop_investigating:
                 # Previously fell straight through to extract_diff on this
@@ -1537,8 +1712,67 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                         "fully certain."
                     ),
                 })
+                current_phase = "patch"
                 continue
             return False, "no diff in model response (exhausted request budget)", None, messages
+
+        if VERIFY_RE.match(reply.strip()):
+            if cargo_check_fn is None or verify_turns_used >= max_verify_turns:
+                verify_rejections += 1
+                if verify_rejections >= 2:
+                    return (
+                        False, "no diff in model response (exhausted verify budget)",
+                        None, messages,
+                    )
+                detail = (
+                    "VERIFY is unavailable in this run"
+                    if cargo_check_fn is None
+                    else f"VERIFY budget ({max_verify_turns}) exhausted"
+                )
+                messages.append({
+                    "role": "user",
+                    "content": f"{detail} -- submit your final diff now (or a REQUEST if you must).",
+                })
+                current_phase = "explore"
+                continue
+            verify_turns_used += 1
+            trial_diff = extract_diff(reply)
+            if trial_diff is None:
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "That VERIFY had no ```diff fenced block -- resend as the line "
+                        "\"VERIFY\" followed by exactly one fenced diff of the change to trial-compile."
+                    ),
+                })
+                current_phase = "explore"
+                continue
+            applied, apply_msg = git_apply_fn(trial_diff, repo_root)
+            if not applied:
+                git_checkout_clean_fn(repo_root)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"VERIFY diff did not apply: {apply_msg}\n"
+                        "Fix it and re-VERIFY, or submit your final diff."
+                    ),
+                })
+                current_phase = "explore"
+                continue
+            check_ok, check_output = cargo_check_fn(repo_root)
+            git_checkout_clean_fn(repo_root)
+            tail = check_output[-DEFAULT_MAX_CHECK_OUTPUT_CHARS:]
+            verdict = "PASSED" if check_ok else "FAILED"
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"VERIFY result: cargo check {verdict}. The trial change has been REVERTED -- "
+                    "the worktree is clean again, so your final diff must contain the complete change.\n"
+                    f"{tail}"
+                ),
+            })
+            current_phase = "explore"
+            continue
 
         patch_match = PATCH_HEADER_RE.match(reply.strip())
         if patch_match:
@@ -1562,6 +1796,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                         "included."
                     ),
                 })
+                current_phase = "patch"
                 continue
             patch_chunks[chunk_index] = chunk_diff
             # Check completeness by CONTENT (every index 1..chunk_total
@@ -1582,6 +1817,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                         f"\"PATCH i/{chunk_total}\" + ```diff fenced block format."
                     ),
                 })
+                current_phase = "patch"
                 continue
             diff = "".join(patch_chunks[i] for i in range(1, chunk_total + 1))
         else:
@@ -1598,6 +1834,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 "role": "user",
                 "content": f"That diff did not apply: {apply_msg}\nPlease resend a corrected diff.",
             })
+            current_phase = "patch"
             continue
 
         built, build_err = cargo_build_fn(repo_root)
@@ -1610,6 +1847,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
             "role": "user",
             "content": f"The build failed:\n{build_err}\nPlease resend a corrected diff.",
         })
+        current_phase = "patch"
 
     return False, "no working fix after repair attempt", None, messages
 
@@ -1623,6 +1861,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             git_apply_fn=git_apply,
             git_checkout_clean_fn=git_checkout_clean, git_commit_fn=git_commit,
             cargo_build_fn=cargo_build, cargo_test_workspace_fn=cargo_test_workspace,
+            cargo_check_fn=cargo_check,
             attempt_build_fn=attempt_build, review_fn=review_verdict,
             critique_fn=critique_failed_attempt,
             pick_model_fn=random.choice, log_fn=print,
@@ -1672,6 +1911,8 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     pick_model_fn is threaded into both attempt_build_fn and review_fn, so
     a single injected fake can make an entire fix_gap call deterministic
     in tests despite config["models"] holding multiple entries.
+
+    cargo_check_fn is threaded to attempt_build_fn for the VERIFY protocol.
 
     log_fn(str) is called with a one-line status update at every decision
     point (build result, gap delta, review verdict, commit) -- defaults to
@@ -1766,6 +2007,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             git_checkout_clean_fn=git_checkout_clean_fn, cargo_build_fn=cargo_build_fn,
             config=config, repo_root=repo_root, pick_model_fn=pick_model_fn,
             samples_dir=samples_dir,
+            cargo_check_fn=cargo_check_fn,
         )
         if not built:
             log_fn(f"[{fmt}] build failed: {reason}")
@@ -2183,7 +2425,17 @@ def load_toml_config(path):
         return tomllib.load(f)
 
 
-_KNOWN_MODEL_SPEC_KEYS = {"name", "base_url", "api_key"}
+_KNOWN_MODEL_SPEC_KEYS = {"name", "base_url", "api_key", "phase", "reasoning_effort"}
+_VALID_MODEL_PHASES = {"explore", "patch"}
+
+
+def models_for_phase(models, phase):
+    """Filter a model pool to entries tagged for `phase` -- untagged
+    entries (phase absent/None) are eligible for every phase. Falls back
+    to the full pool when the filter would be empty, so a config with no
+    phase tags behaves exactly as before this feature existed."""
+    matching = [m for m in models if m.get("phase") in (None, phase)]
+    return matching or models
 
 
 def _normalize_model_spec(entry, default_base_url, default_api_key):
@@ -2195,8 +2447,8 @@ def _normalize_model_spec(entry, default_base_url, default_api_key):
     single pool can mix providers -- e.g. one wafer.ai model alongside a
     Fireworks-hosted one with its own key.
 
-    Only name/base_url/api_key are recognized on an entry -- max_tokens,
-    reasoning_effort, stream, thinking, and temperature belong on the
+    Only name/base_url/api_key/phase/reasoning_effort are recognized on an
+    entry -- max_tokens, stream, thinking, and temperature belong on the
     parent [worker]/[reviewer] table, shared across every model in the
     pool. A misplaced key there raises immediately instead of being
     silently dropped, which is exactly what happened when max_tokens got
@@ -2204,19 +2456,28 @@ def _normalize_model_spec(entry, default_base_url, default_api_key):
     took effect, and nothing in the run reported that.
     """
     if isinstance(entry, str):
-        return {"name": entry, "base_url": default_base_url, "api_key": default_api_key}
+        return {"name": entry, "base_url": default_base_url, "api_key": default_api_key,
+                "phase": None, "reasoning_effort": None}
     unknown = set(entry) - _KNOWN_MODEL_SPEC_KEYS
     if unknown:
         raise ValueError(
             f"unrecognized key(s) {sorted(unknown)} on a models[] entry ({entry.get('name', '?')!r}) -- "
-            "only name/base_url/api_key belong on an individual model entry; max_tokens, "
-            "reasoning_effort, stream, thinking, and temperature belong on the parent "
+            "only name/base_url/api_key/phase/reasoning_effort belong on an individual model entry; "
+            "max_tokens, stream, thinking, and temperature belong on the parent "
             "[worker]/[reviewer] table instead, shared across every model in the pool"
+        )
+    phase = entry.get("phase")
+    if phase is not None and phase not in _VALID_MODEL_PHASES:
+        raise ValueError(
+            f"invalid phase {phase!r} on models[] entry {entry.get('name', '?')!r} -- "
+            f"must be one of {sorted(_VALID_MODEL_PHASES)} (or omitted for both phases)"
         )
     return {
         "name": entry["name"],
         "base_url": entry.get("base_url", default_base_url),
         "api_key": entry.get("api_key", default_api_key),
+        "phase": phase,
+        "reasoning_effort": entry.get("reasoning_effort"),
     }
 
 
@@ -2243,6 +2504,10 @@ def _normalize_model_config(table):
         "timeout": table.get("timeout", 120),
         "max_request_turns": table.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS),
         "max_repair_rounds": table.get("max_repair_rounds", DEFAULT_MAX_REPAIR_ROUNDS),
+        "max_request_repeats": table.get("max_request_repeats", DEFAULT_MAX_REQUEST_REPEATS),
+        "max_verify_turns": table.get("max_verify_turns", DEFAULT_MAX_VERIFY_TURNS),
+        "compaction_trigger_tokens": table.get("compaction_trigger_tokens", DEFAULT_COMPACTION_TRIGGER_TOKENS),
+        "compaction_keep_recent_turns": table.get("compaction_keep_recent_turns", DEFAULT_COMPACTION_KEEP_RECENT_TURNS),
         "max_retries": table.get("max_retries", DEFAULT_MAX_RETRIES),
         "retry_backoff_seconds": table.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS),
         "max_retry_backoff_seconds": table.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),

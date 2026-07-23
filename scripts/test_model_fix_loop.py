@@ -16,11 +16,14 @@ from model_fix_loop import (
     build_format_overview_block,
     build_perl_reference_block,
     build_prompt,
+    build_reply_shape_manifest,
     build_review_prompt,
     critique_failed_attempt,
     cargo_build,
+    cargo_check,
     cargo_test_workspace,
     call_model,
+    compact_messages,
     detect_duplicate_tag_insertion,
     estimate_tokens,
     expand_gaps_to_tags,
@@ -41,12 +44,17 @@ from model_fix_loop import (
     load_recent_sweep_reviews,
     load_toml_config,
     make_single_tag_gap,
+    models_for_phase,
+    parse_request_range,
     refresh_worktree,
+    resolve_request,
     review_verdict,
+    RUST_ARCHITECTURE_CONSTRAINTS,
     run_loop,
     run_tag_loop,
     tag_key_for,
     tag_literal_for_gap,
+    TERMINAL_REMINDER,
     truncate_to_token_budget,
 )
 
@@ -84,15 +92,17 @@ class NormalizeModelConfigTests(unittest.TestCase):
             "thinking": False, "temperature": 0.7,
         })
         self.assertEqual(config["models"], [
-            {"name": "m1", "base_url": "u", "api_key": "k"},
-            {"name": "m2", "base_url": "u", "api_key": "k"},
+            {"name": "m1", "base_url": "u", "api_key": "k", "phase": None, "reasoning_effort": None},
+            {"name": "m2", "base_url": "u", "api_key": "k", "phase": None, "reasoning_effort": None},
         ])
         self.assertEqual(config["max_tokens"], 16)
         self.assertEqual(config["stream"], True)
 
     def test_string_model_entries_inherit_table_base_url_and_api_key(self):
         config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
-        self.assertEqual(config["models"], [{"name": "m", "base_url": "u", "api_key": "k"}])
+        self.assertEqual(config["models"], [
+            {"name": "m", "base_url": "u", "api_key": "k", "phase": None, "reasoning_effort": None},
+        ])
 
     def test_table_model_entries_can_override_base_url_and_api_key(self):
         config = _normalize_model_config({
@@ -103,8 +113,10 @@ class NormalizeModelConfigTests(unittest.TestCase):
             ],
         })
         self.assertEqual(config["models"], [
-            {"name": "shared-provider-model", "base_url": "u", "api_key": "k"},
-            {"name": "other-provider-model", "base_url": "https://other.example/v1", "api_key": "other-key"},
+            {"name": "shared-provider-model", "base_url": "u", "api_key": "k",
+             "phase": None, "reasoning_effort": None},
+            {"name": "other-provider-model", "base_url": "https://other.example/v1", "api_key": "other-key",
+             "phase": None, "reasoning_effort": None},
         ])
 
     def test_rejects_unrecognized_keys_on_a_models_entry_instead_of_silently_dropping_them(self):
@@ -119,6 +131,24 @@ class NormalizeModelConfigTests(unittest.TestCase):
             })
         self.assertIn("max_tokens", str(ctx.exception))
         self.assertIn("glm5.2-fast", str(ctx.exception))
+
+    def test_new_harness_knobs_have_defaults(self):
+        config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
+        self.assertEqual(config["max_request_repeats"], 3)
+        self.assertEqual(config["max_verify_turns"], 10)
+        self.assertEqual(config["compaction_trigger_tokens"], 12_000)
+        self.assertEqual(config["compaction_keep_recent_turns"], 4)
+
+    def test_new_harness_knobs_are_overridable(self):
+        config = _normalize_model_config({
+            "base_url": "u", "api_key": "k", "models": ["m"],
+            "max_request_repeats": 5, "max_verify_turns": 2,
+            "compaction_trigger_tokens": 6000, "compaction_keep_recent_turns": 8,
+        })
+        self.assertEqual(config["max_request_repeats"], 5)
+        self.assertEqual(config["max_verify_turns"], 2)
+        self.assertEqual(config["compaction_trigger_tokens"], 6000)
+        self.assertEqual(config["compaction_keep_recent_turns"], 8)
 
 
 class ExtractDiffTests(unittest.TestCase):
@@ -169,6 +199,59 @@ class TruncateToTokenBudgetTests(unittest.TestCase):
         text = "KEEP_THIS_PREFIX" + "z" * 100_000
         result = truncate_to_token_budget(text, max_tokens=10)
         self.assertTrue(result.startswith("KEEP_THIS_PREFIX"))
+
+
+class CompactMessagesTests(unittest.TestCase):
+    def _messages(self):
+        big = "x" * 8000   # ~2000 estimated tokens
+        return [
+            {"role": "user", "content": "initial prompt " + "p" * 8000},
+            {"role": "assistant", "content": "REQUEST: src/a.rs"},
+            {"role": "user", "content": "Contents of src/a.rs:\n" + big},
+            {"role": "assistant", "content": "REQUEST: src/b.rs"},
+            {"role": "user", "content": "Contents of src/b.rs:\n" + big},
+            {"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```"},
+            {"role": "user", "content": "That diff did not apply: whitespace\nPlease resend a corrected diff."},
+        ]
+
+    def test_below_trigger_returns_messages_unchanged(self):
+        messages = self._messages()
+        result = compact_messages(messages, trigger_tokens=10_000_000)
+        self.assertEqual(result, messages)
+
+    def test_above_trigger_stubs_old_large_user_turns_only(self):
+        messages = self._messages()
+        result = compact_messages(messages, trigger_tokens=100, keep_recent=2)
+        # message 0 (initial prompt) is never touched
+        self.assertEqual(result[0], messages[0])
+        # assistant turns are never touched
+        self.assertEqual(result[1], messages[1])
+        self.assertEqual(result[3], messages[3])
+        self.assertEqual(result[5], messages[5])
+        # old large served payloads are stubbed
+        self.assertIn("[earlier content elided for space:", result[2]["content"])
+        self.assertIn("Contents of src/a.rs:", result[2]["content"])  # first line kept
+        # the last keep_recent=2 messages are untouched
+        self.assertEqual(result[5], messages[5])
+        self.assertEqual(result[6], messages[6])
+
+    def test_small_user_turns_are_not_stubbed(self):
+        messages = self._messages()
+        result = compact_messages(messages, trigger_tokens=100, keep_recent=0)
+        # the small repair prompt (message 6) is under the elide floor
+        self.assertEqual(result[6], messages[6])
+
+    def test_compaction_is_idempotent(self):
+        messages = self._messages()
+        once = compact_messages(messages, trigger_tokens=100, keep_recent=2)
+        twice = compact_messages(once, trigger_tokens=100, keep_recent=2)
+        self.assertEqual(once, twice)
+
+    def test_original_list_is_not_mutated(self):
+        messages = self._messages()
+        snapshot = [dict(m) for m in messages]
+        compact_messages(messages, trigger_tokens=100, keep_recent=2)
+        self.assertEqual(messages, snapshot)
 
 
 class CallModelTests(unittest.TestCase):
@@ -994,6 +1077,112 @@ class BuildPromptTokenBudgetTests(unittest.TestCase):
         # the exact length includes the marker text's own overhead, so this checks
         # order-of-magnitude truncation happened rather than an exact byte count.
         self.assertLess(len(prompt), 1000)
+
+
+class BuildPromptOrderingTests(unittest.TestCase):
+    def test_static_sections_precede_gap_content(self):
+        prompt = build_prompt(make_gap(gap_count=2))
+        gap_pos = prompt.index("Missing entirely")
+        self.assertLess(prompt.index("CRITICAL RUST ARCHITECTURE CONSTRAINTS"), gap_pos)
+        self.assertLess(prompt.index("Lessons from mistakes"), gap_pos)
+        self.assertLess(prompt.index("exactly one of these four shapes"), gap_pos)
+
+    def test_volatile_history_comes_after_gap_content(self):
+        attempts = [{"diff": "--- a/x\n", "status": "failed", "reason": "build failed"}]
+        prompt = build_prompt(make_gap(gap_count=2), previous_attempts=attempts)
+        self.assertGreater(
+            prompt.index("Previous attempts on this exact tag"),
+            prompt.index("Missing entirely"),
+        )
+
+    def test_terminal_reminder_is_the_last_line(self):
+        prompt = build_prompt(make_gap(gap_count=2))
+        self.assertTrue(prompt.rstrip().endswith(TERMINAL_REMINDER.rstrip()))
+
+    def test_manifest_lists_all_four_shapes_and_range_syntax(self):
+        manifest = build_reply_shape_manifest(4096)
+        for needle in ("REQUEST:", "VERIFY", "PATCH 1/N", "Plan + diff",
+                       ":<start>-<end>", "roughly 4096 tokens", "ephemeral"):
+            self.assertIn(needle, manifest)
+
+
+class RustArchitectureConstraintsTests(unittest.TestCase):
+    def test_block_contains_the_six_core_directives(self):
+        for needle in (
+            "Box<dyn Any>",            # no dynamic-typing crutches
+            "regex",                   # no regex on binary
+            "self-referential",        # no self-referential IFD structs
+            "lookup_tag_name()",       # no inlined lookup tables
+            "global mutable state",    # no new globals
+            "unwrap()",                # no unwrap/panic on parsed data
+        ):
+            self.assertIn(needle, RUST_ARCHITECTURE_CONSTRAINTS)
+
+    def test_block_contains_endianness_and_builtin_map_bullets(self):
+        self.assertIn("function signatures", RUST_ARCHITECTURE_CONSTRAINTS)
+        self.assertIn("u32::from_be_bytes", RUST_ARCHITECTURE_CONSTRAINTS)
+        self.assertIn("u32::from_le_bytes", RUST_ARCHITECTURE_CONSTRAINTS)
+
+    def test_build_prompt_includes_the_constraints_block(self):
+        prompt = build_prompt(make_gap(gap_count=2))
+        self.assertIn("CRITICAL RUST ARCHITECTURE CONSTRAINTS", prompt)
+
+
+class ParseRequestRangeTests(unittest.TestCase):
+    def test_plain_path_has_no_range(self):
+        self.assertEqual(parse_request_range("src/parsers/x.rs"), ("src/parsers/x.rs", None, None))
+
+    def test_valid_range_is_parsed(self):
+        self.assertEqual(parse_request_range("src/parsers/x.rs:40-120"), ("src/parsers/x.rs", 40, 120))
+
+    def test_whitespace_is_stripped(self):
+        self.assertEqual(parse_request_range("  src/x.rs:1-5  "), ("src/x.rs", 1, 5))
+
+    def test_inverted_range_strips_suffix_and_falls_back_to_whole_file(self):
+        self.assertEqual(parse_request_range("src/x.rs:9-3"), ("src/x.rs", None, None))
+
+    def test_zero_start_strips_suffix_and_falls_back(self):
+        self.assertEqual(parse_request_range("src/x.rs:0-5"), ("src/x.rs", None, None))
+
+    def test_non_numeric_suffix_is_just_part_of_the_path(self):
+        self.assertEqual(parse_request_range("src/x.rs:a-b"), ("src/x.rs:a-b", None, None))
+
+
+class ResolveRequestRangeTests(unittest.TestCase):
+    def _make_repo(self, tmpdir):
+        repo = Path(tmpdir)
+        (repo / "src").mkdir()
+        (repo / "src" / "big.rs").write_text("\n".join(f"line{i}" for i in range(1, 101)))
+        return repo
+
+    def test_range_returns_numbered_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:5-7", repo, None)
+        self.assertIn("Lines 5-7 of src/big.rs", answer)
+        self.assertIn("5: line5", answer)
+        self.assertIn("7: line7", answer)
+        self.assertNotIn("line8", answer)
+
+    def test_range_end_is_clamped_to_file_length(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:98-500", repo, None)
+        self.assertIn("Lines 98-100 of src/big.rs", answer)
+        self.assertIn("100: line100", answer)
+
+    def test_range_start_past_eof_returns_guidance_not_content(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:500-600", repo, None)
+        self.assertIn("only 100 lines", answer)
+
+    def test_sample_files_ignore_ranges_and_hex_dump_whole_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            samples = Path(tmpdir)
+            (samples / "EXE.dylib").write_bytes(b"\xfe\xed\xfa\xcf1234")
+            answer = resolve_request("EXE.dylib:1-2", Path("/nonexistent"), samples)
+        self.assertIn("Hex dump of EXE.dylib", answer)
 
 
 class LoadRecentSweepReviewsTests(unittest.TestCase):
@@ -1988,6 +2177,376 @@ class AttemptBuildTests(unittest.TestCase):
         )
         self.assertFalse(built)
         self.assertIn("patch chunking exceeded safety limit", reason)
+
+    def test_third_identical_request_gets_pivot_nudge_instead_of_content(self):
+        served = []
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) <= 3:
+                return "REQUEST: src/parsers/jpeg/mod.rs"
+            # 4th call: after the pivot nudge, submit a diff.
+            self.assertIn("Pivot:", messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src" / "parsers" / "jpeg").mkdir(parents=True)
+            (repo / "src" / "parsers" / "jpeg" / "mod.rs").write_text("real content")
+            built, reason, diff, messages = attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=CONFIG,
+                repo_root=repo,
+            )
+        self.assertTrue(built)
+        # Turns 1 and 2 served content; turn 3 got the nudge, not content.
+        served_turns = [m for m in messages if m["role"] == "user" and "real content" in m["content"]]
+        nudge_turns = [m for m in messages if m["role"] == "user" and "Pivot:" in m["content"]]
+        self.assertEqual(len(served_turns), 2)
+        self.assertEqual(len(nudge_turns), 1)
+
+    def test_distinct_requests_do_not_trigger_the_pivot_nudge(self):
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) == 1:
+                return "REQUEST: src/a.rs"
+            if len(replies) == 2:
+                return "REQUEST: src/b.rs"
+            self.assertNotIn("Pivot:", messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
+
+    def test_max_request_repeats_is_configurable(self):
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) == 2:
+                self.assertIn("Pivot:", messages[-1]["content"])
+                return "```diff\n--- a/x\n+++ b/x\n```\n"
+            return "REQUEST: src/x.rs"
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=dict(CONFIG, max_request_repeats=1),
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
+
+    def test_conversation_is_compacted_when_over_the_trigger(self):
+        big_answer = "Contents of src/a.rs:\n" + "y" * 60_000
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) <= 2:
+                return f"REQUEST: src/a{len(replies)}.rs"
+            # By the 3rd call, the first served payload must be stubbed.
+            stub_turns = [m for m in messages if "[earlier content elided for space:" in m["content"]]
+            self.assertGreaterEqual(len(stub_turns), 1)
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "a1.rs").write_text("y" * 60_000)
+            (repo / "src" / "a2.rs").write_text("y" * 60_000)
+            built, reason, diff, messages = attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, compaction_trigger_tokens=5000, compaction_keep_recent_turns=1),
+                repo_root=repo,
+            )
+        self.assertTrue(built)
+
+
+class CargoCheckTests(unittest.TestCase):
+    @patch("model_fix_loop.subprocess.run")
+    def test_returns_success_and_combined_output(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="checked ok\n", stderr="warn\n")
+        ok, output = cargo_check(Path("/fake/repo"))
+        self.assertTrue(ok)
+        self.assertEqual(output, "checked ok\nwarn\n")
+        self.assertEqual(mock_run.call_args[0][0], ["cargo", "check", "--workspace"])
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_nonzero_exit_is_failure(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=101, stdout="", stderr="error[E0308]\n")
+        ok, output = cargo_check(Path("/fake/repo"))
+        self.assertFalse(ok)
+        self.assertIn("E0308", output)
+
+
+class AttemptBuildVerifyTests(unittest.TestCase):
+    def _run(self, fake_call_model, cargo_check_fn, config=None, git_apply_fn=None):
+        cleans = []
+        return attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=git_apply_fn or (lambda diff, root: (True, "ok")),
+            git_checkout_clean_fn=lambda root: cleans.append(1),
+            cargo_build_fn=lambda root: (True, ""),
+            config=config or CONFIG,
+            repo_root=Path("/fake/repo"),
+            cargo_check_fn=cargo_check_fn,
+        ), cleans
+
+    def test_verify_applies_checks_reverts_and_reports(self):
+        checks = []
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) == 1:
+                return "VERIFY\n```diff\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n```\n"
+            self.assertIn("cargo check FAILED", messages[-1]["content"])
+            self.assertIn("mismatched types", messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        def fake_check(root):
+            checks.append(1)
+            return False, "error[E0308]: mismatched types"
+
+        (built, reason, diff, messages), cleans = self._run(fake_call_model, fake_check)
+        self.assertTrue(built)
+        self.assertEqual(len(checks), 1)
+        self.assertGreaterEqual(len(cleans), 1)  # trial change was reverted
+
+    def test_verify_passing_check_reports_passed(self):
+        def fake_call_model(messages, *a):
+            if len(messages) == 1:
+                return "VERIFY\n```diff\n--- a/x\n+++ b/x\n```\n"
+            self.assertIn("cargo check PASSED", messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        (built, _, _, _), _ = self._run(fake_call_model, lambda root: (True, "clean"))
+        self.assertTrue(built)
+
+    def test_verify_never_consumes_a_diff_attempt(self):
+        # Two VERIFYs then two failing real diffs: the 2-diff-attempt
+        # budget must still allow both real diffs.
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) <= 2:
+                return "VERIFY\n```diff\n--- a/x\n+++ b/x\n```\n"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        (built, reason, _, _), _ = self._run(
+            lambda m, *a: fake_call_model(m, *a),
+            lambda root: (True, "ok"),
+        )
+        # 3rd call is a real diff that applies and builds -> success.
+        self.assertTrue(built)
+        self.assertEqual(len(replies), 3)
+
+    def test_verify_without_cargo_check_fn_gets_unavailable_message(self):
+        def fake_call_model(messages, *a):
+            if len(messages) == 1:
+                return "VERIFY\n```diff\n--- a/x\n+++ b/x\n```\n"
+            self.assertIn("VERIFY is unavailable", messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        (built, _, _, _), _ = self._run(fake_call_model, None)
+        self.assertTrue(built)
+
+    def test_verify_with_no_diff_block_consumes_a_turn_and_asks_again(self):
+        def fake_call_model(messages, *a):
+            if len(messages) == 1:
+                return "VERIFY\nI'll test changing the offset."
+            self.assertIn("no ```diff fenced block", messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        (built, _, _, _), _ = self._run(fake_call_model, lambda root: (True, "ok"))
+        self.assertTrue(built)
+
+    def test_verify_budget_exhaustion_demands_final_diff_then_fails_on_refusal(self):
+        result, _ = self._run(
+            lambda messages, *a: "VERIFY\n```diff\n--- a/x\n+++ b/x\n```\n",
+            lambda root: (True, "ok"),
+            config=dict(CONFIG, max_verify_turns=2),
+        )
+        built, reason, diff, messages = result
+        self.assertFalse(built)
+        self.assertIn("verify budget", reason)
+
+
+class ModelsForPhaseTests(unittest.TestCase):
+    TERRA = {"name": "gpt-5.6-terra", "base_url": "u", "api_key": "k", "phase": "explore", "reasoning_effort": "medium"}
+    SOL = {"name": "gpt-5.6-sol", "base_url": "u", "api_key": "k", "phase": "patch", "reasoning_effort": "max"}
+    UNTAGGED = {"name": "any", "base_url": "u", "api_key": "k"}
+
+    def test_filters_to_matching_phase(self):
+        pool = [self.TERRA, self.SOL]
+        self.assertEqual(models_for_phase(pool, "explore"), [self.TERRA])
+        self.assertEqual(models_for_phase(pool, "patch"), [self.SOL])
+
+    def test_untagged_entries_belong_to_every_phase(self):
+        pool = [self.TERRA, self.UNTAGGED]
+        self.assertEqual(models_for_phase(pool, "patch"), [self.UNTAGGED])
+        self.assertEqual(models_for_phase(pool, "explore"), [self.TERRA, self.UNTAGGED])
+
+    def test_empty_filter_falls_back_to_full_pool(self):
+        pool = [self.TERRA]
+        self.assertEqual(models_for_phase(pool, "patch"), [self.TERRA])
+
+
+class ModelSpecPhaseTests(unittest.TestCase):
+    def test_phase_and_reasoning_effort_are_accepted(self):
+        config = _normalize_model_config({
+            "base_url": "u", "api_key": "k",
+            "models": [{"name": "m", "phase": "explore", "reasoning_effort": "medium"}],
+        })
+        self.assertEqual(config["models"][0]["phase"], "explore")
+        self.assertEqual(config["models"][0]["reasoning_effort"], "medium")
+
+    def test_missing_phase_and_effort_default_to_none(self):
+        config = _normalize_model_config({
+            "base_url": "u", "api_key": "k", "models": ["bare-name"],
+        })
+        self.assertIsNone(config["models"][0].get("phase"))
+        self.assertIsNone(config["models"][0].get("reasoning_effort"))
+
+    def test_invalid_phase_raises_at_load(self):
+        with self.assertRaises(ValueError):
+            _normalize_model_config({
+                "base_url": "u", "api_key": "k",
+                "models": [{"name": "m", "phase": "turbo"}],
+            })
+
+    def test_unknown_key_still_raises(self):
+        with self.assertRaises(ValueError):
+            _normalize_model_config({
+                "base_url": "u", "api_key": "k",
+                "models": [{"name": "m", "max_tokens": 4096}],
+            })
+
+
+class AttemptBuildPhaseRoutingTests(unittest.TestCase):
+    TERRA = {"name": "gpt-5.6-terra", "base_url": "u", "api_key": "k", "phase": "explore", "reasoning_effort": "medium"}
+    SOL = {"name": "gpt-5.6-sol", "base_url": "u", "api_key": "k", "phase": "patch", "reasoning_effort": "max"}
+
+    def test_explore_then_patch_pools_across_a_repair(self):
+        pools_seen = []
+
+        def tracking_pick(models):
+            pools_seen.append([m["name"] for m in models])
+            return models[0]
+
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) == 1:
+                return "REQUEST: src/a.rs"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        apply_results = iter([(False, "does not apply"), (True, "ok")])
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: next(apply_results),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=dict(CONFIG, models=[self.TERRA, self.SOL]),
+            repo_root=Path("/fake/repo"),
+            pick_model_fn=tracking_pick,
+        )
+        self.assertTrue(built)
+        # Call 1: fresh attempt -> explore (terra). Call 2: after a served
+        # REQUEST answer -> still explore. Call 3: after an apply-failure
+        # repair prompt -> patch (sol).
+        self.assertEqual(pools_seen[0], ["gpt-5.6-terra"])
+        self.assertEqual(pools_seen[1], ["gpt-5.6-terra"])
+        self.assertEqual(pools_seen[2], ["gpt-5.6-sol"])
+
+    def test_reinvocation_with_existing_conversation_starts_in_patch_phase(self):
+        pools_seen = []
+
+        def tracking_pick(models):
+            pools_seen.append([m["name"] for m in models])
+            return models[0]
+
+        built, reason, diff, messages = attempt_build(
+            [
+                {"role": "user", "content": "fix format X"},
+                {"role": "assistant", "content": "```diff\nbad\n```"},
+                {"role": "user", "content": "That attempt failed (build_failed): ...\nPlease resend a corrected diff."},
+            ],
+            call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=dict(CONFIG, models=[self.TERRA, self.SOL]),
+            repo_root=Path("/fake/repo"),
+            pick_model_fn=tracking_pick,
+        )
+        self.assertTrue(built)
+        self.assertEqual(pools_seen[0], ["gpt-5.6-sol"])
+
+    def test_per_entry_reasoning_effort_reaches_the_call(self):
+        efforts_seen = []
+
+        def fake_call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort, *a):
+            efforts_seen.append(reasoning_effort)
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        built, *_ = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=dict(CONFIG, models=[self.TERRA]),
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
+        self.assertEqual(efforts_seen, ["medium"])
+
+
+class CritiqueUsesExploreTierTests(unittest.TestCase):
+    def test_critique_picks_from_the_explore_pool(self):
+        terra = {"name": "terra", "base_url": "u", "api_key": "k", "phase": "explore"}
+        sol = {"name": "sol", "base_url": "u", "api_key": "k", "phase": "patch"}
+        pools_seen = []
+
+        def tracking_pick(models):
+            pools_seen.append([m["name"] for m in models])
+            return models[0]
+
+        config = dict(CONFIG, models=[terra, sol])
+        critique = critique_failed_attempt(
+            make_gap(gap_count=1), "--- a/x\n", "build_failed", "error", config,
+            call_model_fn=lambda *a: "try a different offset",
+            pick_model_fn=tracking_pick,
+        )
+        self.assertEqual(critique, "try a different offset")
+        self.assertEqual(pools_seen, [["terra"]])
 
 
 class FixGapFailureTests(unittest.TestCase):
