@@ -666,14 +666,10 @@ mod tests {
         // exposes it as APP12:ImageSize.
         let data = b"[picture info]\r\nResolution=1280x960\r\n";
 
-        let metadata =
-            crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
-                .expect("valid Picture Info APP12 data should parse");
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
 
-        assert_eq!(
-            metadata.get_string("APP12:ImageSize"),
-            Some("1280x960")
-        );
+        assert_eq!(metadata.get_string("APP12:ImageSize"), Some("1280x960"));
     }
 
     #[test]
