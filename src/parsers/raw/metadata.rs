@@ -29,6 +29,17 @@ use crate::parsers::raw::{RawFormat, raf_parser};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use crate::tag_db::lookup_tag_name;
 
+/// Format TIFF/EP CFAPattern2 (tag 0x828E), whose components are unsigned
+/// bytes printed by ExifTool as a space-separated list.
+fn format_cfa_pattern2(bytes: &[u8], value_count: u32) -> String {
+    bytes
+        .iter()
+        .take(value_count as usize)
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Parse metadata from camera raw file
 ///
 /// This is the main entry point for raw format metadata extraction.
@@ -402,6 +413,26 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+                            // TIFF/EP tag 0x828E (CFAPattern2) is a plain
+                            // int8u array with no dimension header, unlike
+                            // EXIF tag 0xA302 (CFAPattern). The generic
+                            // decoder below has no BYTE-array case and falls
+                            // back to raw TagValue::Binary, so this still
+                            // needs its own formatting -- but the name comes
+                            // from the same lookup_tag_name(tag_id,
+                            // sub_ifd_name) every other tag in this loop
+                            // uses, for consistency.
+                            if tag_id == 0x828E {
+                                metadata.insert(
+                                    lookup_tag_name(tag_id, sub_ifd_name),
+                                    TagValue::new_string(format_cfa_pattern2(
+                                        raw_bytes.as_ref(),
+                                        value_count,
+                                    )),
+                                );
+                                continue;
+                            }
+
                             let tag_name = lookup_tag_name(tag_id, sub_ifd_name);
                             let tag_value = raw_bytes_to_simple_tag_value(
                                 raw_bytes.as_ref(),
@@ -554,6 +585,50 @@ mod panasonic_rw2_tests {
             metadata.contains_key("IFD0:BlackLevelBlue"),
             "PanasonicRaw tag 0x001E should use its canonical EXIF name"
         );
+    }
+}
+
+#[cfg(test)]
+mod nef_cfa_pattern2_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_tiff_ep_cfa_pattern2_from_nef_sub_ifd() {
+        // Minimal little-endian TIFF containing an IFD0 SubIFD pointer and a
+        // SubIFD with BYTE[4] tag 0x828E. This is the layout used by the Nikon
+        // NEF sample.
+        let mut data = vec![0u8; 44];
+        data[0..8].copy_from_slice(b"II\x2a\x00\x08\x00\x00\x00");
+
+        // IFD0 at offset 8: one SubIFDs (0x014A) entry pointing to offset 26.
+        data[8..10].copy_from_slice(&1u16.to_le_bytes());
+        data[10..12].copy_from_slice(&0x014Au16.to_le_bytes());
+        data[12..14].copy_from_slice(&4u16.to_le_bytes());
+        data[14..18].copy_from_slice(&1u32.to_le_bytes());
+        data[18..22].copy_from_slice(&26u32.to_le_bytes());
+        // Bytes 22..26 are the zero next-IFD offset.
+
+        // SubIFD at offset 26: CFAPattern2 = 2 1 1 0.
+        data[26..28].copy_from_slice(&1u16.to_le_bytes());
+        data[28..30].copy_from_slice(&0x828Eu16.to_le_bytes());
+        data[30..32].copy_from_slice(&1u16.to_le_bytes());
+        data[32..36].copy_from_slice(&4u32.to_le_bytes());
+        data[36..40].copy_from_slice(&[2, 1, 1, 0]);
+        // Bytes 40..44 are the zero next-IFD offset.
+
+        let metadata = parse_raw_metadata(&data, RawFormat::NikonNEF)
+            .expect("minimal NEF-compatible TIFF should parse");
+
+        assert!(
+            metadata.get("SubIFD0:CFAPattern2").is_some(),
+            "CFAPattern2 should be exposed under its physical SubIFD0 group, \
+             consistent with every other tag this loop names"
+        );
+        assert!(
+            metadata.get("SubIFD0:0x828E").is_none(),
+            "CFAPattern2 should not remain an unnamed SubIFD tag"
+        );
+        assert_eq!(format_cfa_pattern2(&[2, 1, 1, 0], 4), "2 1 1 0");
     }
 }
 
