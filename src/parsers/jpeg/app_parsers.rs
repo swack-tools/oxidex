@@ -661,15 +661,52 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_picture_info_image_size() {
-        // Picture Info names this source field Resolution, while ExifTool
-        // exposes it as APP12:ImageSize.
+    fn test_parse_picture_info_resolution() {
+        // ExifTool's APP12 Picture Info table exposes Resolution verbatim
+        // as its own tag (Image::ExifTool::APP12::PictureInfo has no
+        // PrintConv for it) -- it is not renamed to ImageSize.
         let data = b"[picture info]\r\nResolution=1280x960\r\n";
 
         let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
             .expect("valid Picture Info APP12 data should parse");
 
-        assert_eq!(metadata.get_string("APP12:ImageSize"), Some("1280x960"));
+        assert_eq!(metadata.get_string("APP12:Resolution"), Some("1280x960"));
+    }
+
+    #[test]
+    fn test_parse_picture_info_image_size() {
+        // ExifTool's ImageSize tag stores a dash-delimited width-height pair
+        // and its PrintConv (`$val=~tr/-/x/;$val`) converts every '-' to 'x'
+        // for display, distinct from the verbatim Resolution tag above.
+        let data = b"[picture info]\r\nImageSize=1280-1024\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:ImageSize"), Some("1280x1024"));
+    }
+
+    #[test]
+    fn test_parse_legacy_picture_info_resolution() {
+        // Identifier-less legacy Picture Info records (including Agfa SR84)
+        // are routed through the same key=value parser as the "[picture
+        // info]" format, so Resolution/ImageSize behave identically here.
+        let data = b"Type=SR84\r\nResolution=1280x960\r\nID=AGFA DIGITAL CAMERA\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid legacy Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:Resolution"), Some("1280x960"));
+    }
+
+    #[test]
+    fn test_parse_legacy_picture_info_image_size() {
+        let data = b"Type=SR84\r\nImageSize=1280-1024\r\nID=AGFA DIGITAL CAMERA\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid legacy Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:ImageSize"), Some("1280x1024"));
     }
 
     #[test]

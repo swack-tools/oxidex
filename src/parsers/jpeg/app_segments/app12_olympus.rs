@@ -293,17 +293,26 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:Fnumber".to_string(), tag_value.clone());
             }
 
-            // Picture Info stores the pixel dimensions in the Resolution
-            // field, but ExifTool exposes this field as APP12:ImageSize.
-            // Accept ImageSize directly as well for format variants which
-            // already use the normalized field name.
-            if key.eq_ignore_ascii_case("Resolution")
-                || key.eq_ignore_ascii_case("ImageSize")
-                || tag_name == "ImageSize"
-            {
+            // ExifTool's APP12 Picture Info table defines Resolution and
+            // ImageSize as two distinct tags (Image::ExifTool::APP12),
+            // not one renamed to the other. Resolution has no PrintConv
+            // and is exposed verbatim; identifier-less legacy records
+            // (including Agfa SR84) use this same field and code path.
+            if key.eq_ignore_ascii_case("Resolution") {
+                metadata.insert(
+                    "APP12:Resolution".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
+            // ImageSize stores a dash-delimited width-height pair (for
+            // example "1280-1024"); ExifTool's PrintConv translates every
+            // '-' to 'x' (`$val=~tr/-/x/;$val`) to produce the "1280x1024"
+            // display form.
+            if key.eq_ignore_ascii_case("ImageSize") {
                 metadata.insert(
                     "APP12:ImageSize".to_string(),
-                    TagValue::String(value.clone()),
+                    TagValue::String(value.replace('-', "x")),
                 );
             }
 
