@@ -286,6 +286,17 @@ fn extract_header_metadata(header: &ElfHeader, metadata: &mut MetadataMap) {
         TagValue::String(cpu_architecture.to_string()),
     );
 
+    // ExifTool exposes e_ident[EI_DATA] separately using non-hyphenated wording.
+    let cpu_byte_order = if header.is_little_endian {
+        "Little endian"
+    } else {
+        "Big endian"
+    };
+    metadata.insert(
+        "EXE:CPUByteOrder".to_string(),
+        TagValue::String(cpu_byte_order.to_string()),
+    );
+
     // Endianness
     let endian_str = header.endian_str().to_string();
     metadata.insert(
