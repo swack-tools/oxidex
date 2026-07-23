@@ -20,6 +20,19 @@ const PLATFORM_UNICODE: u16 = 0;
 const PLATFORM_MACINTOSH: u16 = 1;
 const PLATFORM_WINDOWS: u16 = 3;
 
+/// Macintosh Roman mappings for bytes 0x80 through 0xff.
+const MAC_ROMAN_HIGH_CHARS: [char; 128] = [
+    'Ä', 'Å', 'Ç', 'É', 'Ñ', 'Ö', 'Ü', 'á', 'à', 'â', 'ä', 'ã', 'å', 'ç', 'é', 'è',
+    'ê', 'ë', 'í', 'ì', 'î', 'ï', 'ñ', 'ó', 'ò', 'ô', 'ö', 'õ', 'ú', 'ù', 'û', 'ü',
+    '†', '°', '¢', '£', '§', '•', '¶', 'ß', '®', '©', '™', '´', '¨', '≠', 'Æ', 'Ø',
+    '∞', '±', '≤', '≥', '¥', 'µ', '∂', '∑', '∏', 'π', '∫', 'ª', 'º', 'Ω', 'æ', 'ø',
+    '¿', '¡', '¬', '√', 'ƒ', '≈', '∆', '«', '»', '…', '\u{00a0}', 'À', 'Ã', 'Õ', 'Œ',
+    'œ', '–', '—', '“', '”', '‘', '’', '÷', '◊', 'ÿ', 'Ÿ', '⁄', '€', '‹', '›', 'ﬁ',
+    'ﬂ', '‡', '·', '‚', '„', '‰', 'Â', 'Ê', 'Á', 'Ë', 'È', 'Í', 'Î', 'Ï', 'Ì', 'Ó',
+    'Ô', '\u{f8ff}', 'Ò', 'Ú', 'Û', 'Ù', 'ı', 'ˆ', '˜', '¯', '˘', '˙', '˚', '¸', '˝',
+    '˛', 'ˇ',
+];
+
 /// Name IDs for name table records
 const NAME_COPYRIGHT: u16 = 0;
 const NAME_FONT_FAMILY: u16 = 1;
@@ -142,6 +155,32 @@ impl TTFParser {
         Ok(records)
     }
 
+    /// Decodes a UTF-16BE name-table string.
+    fn decode_utf16be(data: &[u8]) -> Option<String> {
+        if !data.len().is_multiple_of(2) {
+            return None;
+        }
+
+        let utf16_chars: Vec<u16> = data
+            .chunks_exact(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .collect();
+        String::from_utf16(&utf16_chars).ok()
+    }
+
+    /// Decodes a Macintosh Roman name-table string.
+    fn decode_mac_roman(data: &[u8]) -> String {
+        data.iter()
+            .map(|&byte| {
+                if byte < 0x80 {
+                    char::from(byte)
+                } else {
+                    MAC_ROMAN_HIGH_CHARS[(byte - 0x80) as usize]
+                }
+            })
+            .collect()
+    }
+
     /// Extracts a string from the name table
     fn extract_name_string(
         reader: &dyn FileReader,
@@ -160,21 +199,14 @@ impl TTFParser {
 
         // Decode based on platform
         let decoded = match record.platform_id {
-            PLATFORM_WINDOWS => {
-                // Windows platform uses UTF-16BE
-                if !str_len.is_multiple_of(2) {
-                    return Ok(None);
-                }
-                let utf16_chars: Vec<u16> = str_data
-                    .chunks_exact(2)
-                    .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
-                    .collect();
-                String::from_utf16(&utf16_chars).ok()
+            // Unicode and Windows name records are encoded as UTF-16BE.
+            PLATFORM_UNICODE | PLATFORM_WINDOWS => Self::decode_utf16be(str_data),
+            // Encoding 0 on the Macintosh platform is Macintosh Roman.
+            PLATFORM_MACINTOSH if record.encoding_id == 0 => {
+                Some(Self::decode_mac_roman(str_data))
             }
-            PLATFORM_MACINTOSH | PLATFORM_UNICODE => {
-                // Mac Roman or UTF-8
-                String::from_utf8(str_data.to_vec()).ok()
-            }
+            // Preserve the existing UTF-8 fallback for other Macintosh encodings.
+            PLATFORM_MACINTOSH => String::from_utf8(str_data.to_vec()).ok(),
             _ => String::from_utf8(str_data.to_vec()).ok(),
         };
 
@@ -225,7 +257,13 @@ impl TTFParser {
                     Self::extract_name_string(reader, table, rec, string_offset)
                 && !value.is_empty()
             {
-                metadata.insert(key.to_string(), TagValue::String(value));
+                let tag_value = TagValue::String(value);
+                metadata.insert(key.to_string(), tag_value.clone());
+
+                // ExifTool reports name ID 0 in the Font group.
+                if *name_id == NAME_COPYRIGHT {
+                    metadata.insert("Font:Copyright".to_string(), tag_value);
+                }
             }
         }
 
@@ -505,6 +543,50 @@ mod tests {
         );
         assert!(metadata.contains_key("FontCreated"));
         assert!(metadata.contains_key("FontModified"));
+    }
+
+    #[test]
+    fn test_mac_roman_font_copyright() {
+        let copyright = b"\xa9 Apple Computer, Inc. 1991-1995";
+        let name_table_offset = 28u32;
+        let name_table_length = (6 + 12 + copyright.len()) as u32;
+
+        let mut data = Vec::new();
+
+        // SFNT header
+        data.extend_from_slice(b"true");
+        data.extend_from_slice(&1u16.to_be_bytes()); // numTables
+        data.extend_from_slice(&0u16.to_be_bytes()); // searchRange
+        data.extend_from_slice(&0u16.to_be_bytes()); // entrySelector
+        data.extend_from_slice(&0u16.to_be_bytes()); // rangeShift
+
+        // Name-table directory entry
+        data.extend_from_slice(b"name");
+        data.extend_from_slice(&0u32.to_be_bytes()); // checksum
+        data.extend_from_slice(&name_table_offset.to_be_bytes());
+        data.extend_from_slice(&name_table_length.to_be_bytes());
+
+        // Name-table header
+        data.extend_from_slice(&0u16.to_be_bytes()); // format
+        data.extend_from_slice(&1u16.to_be_bytes()); // count
+        data.extend_from_slice(&18u16.to_be_bytes()); // stringOffset
+
+        // Macintosh Roman copyright record
+        data.extend_from_slice(&PLATFORM_MACINTOSH.to_be_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes()); // Mac Roman encoding
+        data.extend_from_slice(&0u16.to_be_bytes()); // language
+        data.extend_from_slice(&NAME_COPYRIGHT.to_be_bytes());
+        data.extend_from_slice(&(copyright.len() as u16).to_be_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes()); // string offset
+        data.extend_from_slice(copyright);
+
+        let reader = TestReader::new(data);
+        let parser = TTFParser;
+        let metadata = parser.parse(&reader).unwrap();
+        let expected = TagValue::String("© Apple Computer, Inc. 1991-1995".to_string());
+
+        assert_eq!(metadata.get("Copyright"), Some(&expected));
+        assert_eq!(metadata.get("Font:Copyright"), Some(&expected));
     }
 
     #[test]
