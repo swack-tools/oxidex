@@ -24,9 +24,11 @@ from model_fix_loop import (
     extract_review_verdict,
     file_content_at_head,
     fix_gap,
+    format_sweep_review_history,
     git_apply,
     git_checkout_clean,
     git_commit,
+    load_recent_sweep_reviews,
     load_toml_config,
     make_single_tag_gap,
     refresh_worktree,
@@ -881,6 +883,93 @@ class BuildPromptTests(unittest.TestCase):
         self.assertIn("ExifTool's own Perl source", prompt)
         self.assertIn("CFAPattern2", prompt)
         self.assertIn("Format => 'int8u'", prompt)
+
+    def test_omits_sweep_review_section_when_log_path_not_given(self):
+        prompt = build_prompt(make_gap(gap_count=1))
+        self.assertNotIn("Recent sweep-review outcomes", prompt)
+
+    def test_includes_sweep_review_section_when_relevant_entries_exist(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "sweep-review-history.jsonl"
+            log_path.write_text(
+                json.dumps({
+                    "timestamp": "2026-07-23T10:00:00", "format": "NEF",
+                    "tag": "ExifIFD:CFAPattern", "verdict": "rejected",
+                    "reason": "hardcoded EXIF: prefix instead of using lookup_tag_name",
+                    "commit": "abc123",
+                }) + "\n"
+            )
+            gap = make_gap(gap_count=2)  # format NEF, per make_gap's own fixture
+            prompt = build_prompt(gap, sweep_review_log_path=log_path)
+        self.assertIn("Recent sweep-review outcomes", prompt)
+        self.assertIn("REJECTED ExifIFD:CFAPattern", prompt)
+        self.assertIn("hardcoded EXIF: prefix", prompt)
+
+    def test_omits_sweep_review_section_when_no_entries_for_this_format(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "sweep-review-history.jsonl"
+            log_path.write_text(
+                json.dumps({
+                    "timestamp": "2026-07-23T10:00:00", "format": "JPEG",
+                    "tag": "APP12:JPEG1", "verdict": "accepted", "reason": "matches ExifTool",
+                    "commit": None,
+                }) + "\n"
+            )
+            prompt = build_prompt(make_gap(gap_count=2), sweep_review_log_path=log_path)
+        self.assertNotIn("Recent sweep-review outcomes", prompt)
+
+
+class LoadRecentSweepReviewsTests(unittest.TestCase):
+    def test_missing_file_returns_empty_list(self):
+        self.assertEqual(
+            load_recent_sweep_reviews(Path("/nonexistent/path.jsonl"), "NEF"), []
+        )
+
+    def test_filters_by_format_and_orders_newest_first(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            entries = [
+                {"format": "NEF", "tag": "A", "verdict": "accepted", "reason": "r1"},
+                {"format": "JPEG", "tag": "B", "verdict": "accepted", "reason": "r2"},
+                {"format": "NEF", "tag": "C", "verdict": "rejected", "reason": "r3"},
+            ]
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(log_path, "NEF")
+        self.assertEqual([e["tag"] for e in result], ["C", "A"])
+
+    def test_caps_at_max_entries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            entries = [
+                {"format": "NEF", "tag": f"T{i}", "verdict": "accepted", "reason": "r"}
+                for i in range(10)
+            ]
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(log_path, "NEF", max_entries=3)
+        self.assertEqual(len(result), 3)
+        self.assertEqual([e["tag"] for e in result], ["T9", "T8", "T7"])
+
+    def test_skips_malformed_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            log_path.write_text(
+                "not json\n"
+                + json.dumps({"format": "NEF", "tag": "A", "verdict": "accepted", "reason": "r"})
+                + "\n"
+            )
+            result = load_recent_sweep_reviews(log_path, "NEF")
+        self.assertEqual(len(result), 1)
+
+
+class FormatSweepReviewHistoryTests(unittest.TestCase):
+    def test_empty_entries_returns_empty_string(self):
+        self.assertEqual(format_sweep_review_history([]), "")
+
+    def test_renders_verdict_tag_and_reason(self):
+        rendered = format_sweep_review_history([
+            {"format": "NEF", "tag": "ExifIFD:CFAPattern", "verdict": "rejected", "reason": "wrong name"},
+        ])
+        self.assertIn("REJECTED ExifIFD:CFAPattern: wrong name", rendered)
 
 
 # A minimal but realistic fixture mirroring Exif.pm's actual structure: one
