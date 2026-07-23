@@ -2071,6 +2071,82 @@ class AttemptBuildTests(unittest.TestCase):
         self.assertFalse(built)
         self.assertIn("patch chunking exceeded safety limit", reason)
 
+    def test_third_identical_request_gets_pivot_nudge_instead_of_content(self):
+        served = []
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) <= 3:
+                return "REQUEST: src/parsers/jpeg/mod.rs"
+            # 4th call: after the pivot nudge, submit a diff.
+            self.assertIn("Pivot:", messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src" / "parsers" / "jpeg").mkdir(parents=True)
+            (repo / "src" / "parsers" / "jpeg" / "mod.rs").write_text("real content")
+            built, reason, diff, messages = attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=CONFIG,
+                repo_root=repo,
+            )
+        self.assertTrue(built)
+        # Turns 1 and 2 served content; turn 3 got the nudge, not content.
+        served_turns = [m for m in messages if m["role"] == "user" and "real content" in m["content"]]
+        nudge_turns = [m for m in messages if m["role"] == "user" and "Pivot:" in m["content"]]
+        self.assertEqual(len(served_turns), 2)
+        self.assertEqual(len(nudge_turns), 1)
+
+    def test_distinct_requests_do_not_trigger_the_pivot_nudge(self):
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) == 1:
+                return "REQUEST: src/a.rs"
+            if len(replies) == 2:
+                return "REQUEST: src/b.rs"
+            self.assertNotIn("Pivot:", messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
+
+    def test_max_request_repeats_is_configurable(self):
+        replies = []
+
+        def fake_call_model(messages, *a):
+            replies.append(1)
+            if len(replies) == 2:
+                self.assertIn("Pivot:", messages[-1]["content"])
+                return "```diff\n--- a/x\n+++ b/x\n```\n"
+            return "REQUEST: src/x.rs"
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=dict(CONFIG, max_request_repeats=1),
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
+
 
 class FixGapFailureTests(unittest.TestCase):
     def test_fails_when_gap_count_does_not_decrease(self):

@@ -1416,6 +1416,7 @@ def critique_failed_attempt(gap, diff, failure_kind, failure_detail, config,
 
 REQUEST_RE = re.compile(r"^REQUEST:\s*(.+)$", re.IGNORECASE)
 DEFAULT_MAX_REQUEST_TURNS = 20  # investigation turns before a diff is still required
+DEFAULT_MAX_REQUEST_REPEATS = 3  # identical REQUESTs before a pivot nudge replaces the content
 DEFAULT_HEXDUMP_BYTES = 2048
 
 PATCH_HEADER_RE = re.compile(r"^PATCH\s+(\d+)\s*/\s*(\d+)\b", re.IGNORECASE)
@@ -1541,6 +1542,8 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     """
     max_request_turns = config.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS)
     request_turns_used = 0
+    max_request_repeats = config.get("max_request_repeats", DEFAULT_MAX_REQUEST_REPEATS)
+    request_counts = {}
     diff_attempts_used = 0
     nudged_to_stop_investigating = False
     patch_chunks = {}
@@ -1570,10 +1573,26 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
 
         request_match = REQUEST_RE.match(reply.strip())
         if request_match:
+            normalized = request_match.group(1).strip()
+            request_counts[normalized] = request_counts.get(normalized, 0) + 1
             if request_turns_used < max_request_turns:
                 request_turns_used += 1
-                answer = resolve_request(request_match.group(1), repo_root, samples_dir)
-                messages.append({"role": "user", "content": answer})
+                if request_counts[normalized] >= max_request_repeats:
+                    # Dead-end: the same path over and over. Re-serving
+                    # identical content burns budget without advancing
+                    # anything -- course-correct instead.
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"You've now requested {normalized!r} {request_counts[normalized]} times -- "
+                            "it was already provided in full and re-reading it will not change anything. "
+                            "Pivot: request a DIFFERENT file, narrow to a line range "
+                            "(REQUEST: path:START-END), or submit your best diff now."
+                        ),
+                    })
+                else:
+                    answer = resolve_request(request_match.group(1), repo_root, samples_dir)
+                    messages.append({"role": "user", "content": answer})
                 continue
             if not nudged_to_stop_investigating:
                 # Previously fell straight through to extract_diff on this
