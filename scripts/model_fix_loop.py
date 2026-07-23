@@ -14,7 +14,11 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           -- one is picked at random for every individual
                           model call (fixer attempt or reviewer verdict), so
                           a run rotates across the whole pool rather than
-                          pinning to one model.
+                          pinning to one model. Each entry may also set
+                          phase = "explore"|"patch" (which conversation
+                          turns it serves -- see models_for_phase) and
+                          reasoning_effort (per-model override of the
+                          table default).
     max_tokens           default 4096 (cap on the model's own reply length)
     max_prompt_tokens     default 4096 (worker only; hard cap on the built
                           prompt itself -- see estimate_tokens/
@@ -23,6 +27,15 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           model's own diff would exceed this in one reply,
                           the prompt tells it to split into "PATCH i/N"
                           chunks instead -- see attempt_build.)
+    max_request_repeats    default 3 (worker only; identical REQUESTs before
+                          a pivot nudge replaces the served content)
+    max_verify_turns       default 10 (worker only; VERIFY trial-compile
+                          turns per attempt -- see attempt_build)
+    compaction_trigger_tokens      default 12000; conversation size (est.
+                          tokens) beyond which stale served payloads are
+                          stubbed -- see compact_messages
+    compaction_keep_recent_turns   default 4; most-recent messages exempt
+                          from compaction
     reasoning_effort      default "max"
     max_prompt_tags       default 40 (worker only; per-attempt cap on
                           missing_tags/value_differences shown -- the rest
@@ -2491,6 +2504,10 @@ def _normalize_model_config(table):
         "timeout": table.get("timeout", 120),
         "max_request_turns": table.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS),
         "max_repair_rounds": table.get("max_repair_rounds", DEFAULT_MAX_REPAIR_ROUNDS),
+        "max_request_repeats": table.get("max_request_repeats", DEFAULT_MAX_REQUEST_REPEATS),
+        "max_verify_turns": table.get("max_verify_turns", DEFAULT_MAX_VERIFY_TURNS),
+        "compaction_trigger_tokens": table.get("compaction_trigger_tokens", DEFAULT_COMPACTION_TRIGGER_TOKENS),
+        "compaction_keep_recent_turns": table.get("compaction_keep_recent_turns", DEFAULT_COMPACTION_KEEP_RECENT_TURNS),
         "max_retries": table.get("max_retries", DEFAULT_MAX_RETRIES),
         "retry_backoff_seconds": table.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS),
         "max_retry_backoff_seconds": table.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),

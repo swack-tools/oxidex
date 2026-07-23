@@ -132,6 +132,24 @@ class NormalizeModelConfigTests(unittest.TestCase):
         self.assertIn("max_tokens", str(ctx.exception))
         self.assertIn("glm5.2-fast", str(ctx.exception))
 
+    def test_new_harness_knobs_have_defaults(self):
+        config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
+        self.assertEqual(config["max_request_repeats"], 3)
+        self.assertEqual(config["max_verify_turns"], 10)
+        self.assertEqual(config["compaction_trigger_tokens"], 12_000)
+        self.assertEqual(config["compaction_keep_recent_turns"], 4)
+
+    def test_new_harness_knobs_are_overridable(self):
+        config = _normalize_model_config({
+            "base_url": "u", "api_key": "k", "models": ["m"],
+            "max_request_repeats": 5, "max_verify_turns": 2,
+            "compaction_trigger_tokens": 6000, "compaction_keep_recent_turns": 8,
+        })
+        self.assertEqual(config["max_request_repeats"], 5)
+        self.assertEqual(config["max_verify_turns"], 2)
+        self.assertEqual(config["compaction_trigger_tokens"], 6000)
+        self.assertEqual(config["compaction_keep_recent_turns"], 8)
+
 
 class ExtractDiffTests(unittest.TestCase):
     def test_extracts_fenced_diff_block(self):
