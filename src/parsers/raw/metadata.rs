@@ -315,12 +315,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
 
                         let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
-                        // CFAPattern2 is stored as UNDEFINED data containing
-                        // two endian-dependent u16 dimensions followed by the
-                        // one-byte color values. ExifTool reports only the
-                        // color values, not the dimension header.
+                        // CFAPattern (0xA302) is stored as UNDEFINED data
+                        // containing two endian-dependent u16 dimensions
+                        // followed by the one-byte color values. ExifTool
+                        // reports only the color values, not the dimension
+                        // header.
                         let tag_value = if *tag_id == 0xA302 {
-                            decode_exif_cfa_pattern2(bytes, byte_order)
+                            decode_exif_cfa_pattern(bytes, byte_order)
                                 .map(TagValue::new_string)
                                 .unwrap_or_else(|| {
                                     raw_bytes_to_simple_tag_value(
@@ -458,12 +459,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     Ok(metadata)
 }
 
-/// Decode EXIF tag 0xA302 (CFAPattern2).
+/// Decode EXIF tag 0xA302 (CFAPattern).
 ///
 /// The first four bytes are the horizontal and vertical repeat dimensions,
 /// stored as two u16 values in TIFF byte order. They are followed by one u8
 /// color identifier for each cell in the pattern.
-fn decode_exif_cfa_pattern2(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+fn decode_exif_cfa_pattern(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
     if bytes.len() < 4 {
         return None;
     }
@@ -496,14 +497,14 @@ fn decode_exif_cfa_pattern2(bytes: &[u8], byte_order: ByteOrder) -> Option<Strin
 }
 
 #[cfg(test)]
-mod cfa_pattern2_tests {
+mod cfa_pattern_tests {
     use super::*;
 
     #[test]
     fn decodes_little_endian_cfa_pattern2() {
         let bytes = [2, 0, 2, 0, 2, 1, 1, 0];
         assert_eq!(
-            decode_exif_cfa_pattern2(&bytes, ByteOrder::LittleEndian).as_deref(),
+            decode_exif_cfa_pattern(&bytes, ByteOrder::LittleEndian).as_deref(),
             Some("2 1 1 0")
         );
     }
@@ -512,7 +513,7 @@ mod cfa_pattern2_tests {
     fn decodes_big_endian_cfa_pattern2() {
         let bytes = [0, 2, 0, 2, 2, 1, 1, 0];
         assert_eq!(
-            decode_exif_cfa_pattern2(&bytes, ByteOrder::BigEndian).as_deref(),
+            decode_exif_cfa_pattern(&bytes, ByteOrder::BigEndian).as_deref(),
             Some("2 1 1 0")
         );
     }
@@ -521,7 +522,7 @@ mod cfa_pattern2_tests {
     fn rejects_truncated_cfa_pattern2() {
         let bytes = [2, 0, 2, 0, 2];
         assert_eq!(
-            decode_exif_cfa_pattern2(&bytes, ByteOrder::LittleEndian),
+            decode_exif_cfa_pattern(&bytes, ByteOrder::LittleEndian),
             None
         );
     }
@@ -2040,6 +2041,18 @@ impl<'a> FileReader for SliceReader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cfa_pattern_0xa302_resolves_to_correct_tag_name() {
+        assert_eq!(
+            crate::tag_db::lookup_tag_name(0xA302, "ExifIFD"),
+            "ExifIFD:CFAPattern"
+        );
+        assert_eq!(
+            crate::tag_db::lookup_tag_name(0x828E, "ExifIFD"),
+            "ExifIFD:CFAPattern2"
+        );
+    }
 
     #[test]
     fn test_detect_byte_order_little_endian() {
