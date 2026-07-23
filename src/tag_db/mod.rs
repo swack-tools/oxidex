@@ -308,6 +308,13 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
         FormatFamily::EXIF
     };
 
+    // The EXIF specification reuses the name CFAPattern for both 0x828E and
+    // 0xA302. ExifTool disambiguates the latter as CFAPattern2. Preserve that
+    // canonical name independently of generated-table ordering.
+    if format_family == FormatFamily::EXIF && tag_id == 0xA302 {
+        return format!("{}:CFAPattern2", ifd_name);
+    }
+
     // Look up the tag in the appropriate format family
     if let Some(tag_name) = TAG_ID_TO_NAME_INDEX.get(&(tag_id, format_family)) {
         // Found the tag, now we need to replace the prefix with the correct IFD name

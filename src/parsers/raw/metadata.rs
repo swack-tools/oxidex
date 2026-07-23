@@ -305,12 +305,29 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
 
                         let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
-                        let tag_value = raw_bytes_to_simple_tag_value(
-                            bytes,
-                            *field_type,
-                            *value_count,
-                            byte_order,
-                        );
+                        // CFAPattern2 is stored as UNDEFINED data containing
+                        // two endian-dependent u16 dimensions followed by the
+                        // one-byte color values. ExifTool reports only the
+                        // color values, not the dimension header.
+                        let tag_value = if *tag_id == 0xA302 {
+                            decode_exif_cfa_pattern2(bytes, byte_order)
+                                .map(TagValue::new_string)
+                                .unwrap_or_else(|| {
+                                    raw_bytes_to_simple_tag_value(
+                                        bytes,
+                                        *field_type,
+                                        *value_count,
+                                        byte_order,
+                                    )
+                                })
+                        } else {
+                            raw_bytes_to_simple_tag_value(
+                                bytes,
+                                *field_type,
+                                *value_count,
+                                byte_order,
+                            )
+                        };
                         metadata.insert(tag_name, tag_value);
                     }
 
@@ -429,6 +446,75 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     }
 
     Ok(metadata)
+}
+
+/// Decode EXIF tag 0xA302 (CFAPattern2).
+///
+/// The first four bytes are the horizontal and vertical repeat dimensions,
+/// stored as two u16 values in TIFF byte order. They are followed by one u8
+/// color identifier for each cell in the pattern.
+fn decode_exif_cfa_pattern2(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    if bytes.len() < 4 {
+        return None;
+    }
+
+    let read_dimension = |offset: usize| {
+        let value = [bytes[offset], bytes[offset + 1]];
+        match byte_order {
+            ByteOrder::LittleEndian => u16::from_le_bytes(value),
+            ByteOrder::BigEndian => u16::from_be_bytes(value),
+        }
+    };
+
+    let horizontal_repeat = usize::from(read_dimension(0));
+    let vertical_repeat = usize::from(read_dimension(2));
+    if horizontal_repeat == 0 || vertical_repeat == 0 {
+        return None;
+    }
+
+    let pattern_len = horizontal_repeat.checked_mul(vertical_repeat)?;
+    let pattern_end = 4usize.checked_add(pattern_len)?;
+    let pattern = bytes.get(4..pattern_end)?;
+
+    Some(
+        pattern
+            .iter()
+            .map(u8::to_string)
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+#[cfg(test)]
+mod cfa_pattern2_tests {
+    use super::*;
+
+    #[test]
+    fn decodes_little_endian_cfa_pattern2() {
+        let bytes = [2, 0, 2, 0, 2, 1, 1, 0];
+        assert_eq!(
+            decode_exif_cfa_pattern2(&bytes, ByteOrder::LittleEndian).as_deref(),
+            Some("2 1 1 0")
+        );
+    }
+
+    #[test]
+    fn decodes_big_endian_cfa_pattern2() {
+        let bytes = [0, 2, 0, 2, 2, 1, 1, 0];
+        assert_eq!(
+            decode_exif_cfa_pattern2(&bytes, ByteOrder::BigEndian).as_deref(),
+            Some("2 1 1 0")
+        );
+    }
+
+    #[test]
+    fn rejects_truncated_cfa_pattern2() {
+        let bytes = [2, 0, 2, 0, 2];
+        assert_eq!(
+            decode_exif_cfa_pattern2(&bytes, ByteOrder::LittleEndian),
+            None
+        );
+    }
 }
 
 /// Extract DNG-specific tags from metadata
