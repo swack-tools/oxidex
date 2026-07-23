@@ -228,6 +228,17 @@ impl FormatParser for MachOParser {
         // Extract metadata
         let mut metadata = extract_macho_metadata(&info);
 
+        // Match ExifTool's CPUArchitecture tag, which describes the Mach-O
+        // object class rather than the specific CPU type.
+        if let Some(header) = &info.header {
+            metadata.insert(
+                "EXE:CPUArchitecture".to_string(),
+                TagValue::String(
+                    if header.is_64bit { "64 bit" } else { "32 bit" }.to_string(),
+                ),
+            );
+        }
+
         // Add file size
         metadata.insert(
             "EXE:FileSize".to_string(),
@@ -345,6 +356,10 @@ mod tests {
         // Check basic fields
         assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM64");
         assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
+        assert_eq!(
+            metadata.get_string("EXE:CPUArchitecture").unwrap(),
+            "64 bit"
+        );
         assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
         assert_eq!(metadata.get_integer("EXE:IsPIE").unwrap(), 1);
         assert_eq!(
