@@ -26,6 +26,20 @@ Worktrees and branches under /tmp/oxidex-parallel-tag-fix (or wherever
 so a killed run's in-progress work stays inspectable, or the wrapper can
 just be relaunched to pick its worktrees back up.
 
+Spec M2: also reaps squad_merge_loop.py merger daemons (one per squad,
+launched independently of the dispatcher/worker tree above) the exact
+same way as the dispatcher/worker patterns -- found by `pgrep -f`,
+signaled by individual PID (a merger daemon isn't necessarily its own
+process-group leader, same reasoning as the wrapper patterns: it may
+have been launched with a plain `nohup ... &`, so killpg-ing it risks an
+unrelated sibling job), escalated to SIGKILL on the same grace-period
+timeout. A merger's own lock file (`<home>/logs/knowledge/merger-
+<squad>.lock`, spec M2/K3) is left in place after a kill -- it carries no
+liveness signal of its own beyond the heartbeat_ts inside it, and the
+next `squad_merge_loop.py` invocation's own stale-heartbeat takeover
+(mirroring distill_lessons.py's lock, see squad_merge_loop.acquire_lock)
+already reclaims it; this script does not duplicate that logic.
+
 Usage:
     uv run scripts/stop_parallel_fix.py
     uv run scripts/stop_parallel_fix.py --dry-run
@@ -43,6 +57,10 @@ import time
 # with an unrelated process, even a generic bare "python3" one.
 WRAPPER_PATTERNS = ["parallel_tag_fix_loop.py", "parallel_model_fix_loop.py"]
 WORKER_PATTERN = "model_fix_loop.py"
+# Spec M2: one merger daemon process per squad, reaped the same way as
+# the dispatcher/wrapper patterns above (signaled by PID, not process
+# group -- see the module docstring).
+MERGER_PATTERN = "squad_merge_loop.py"
 
 
 def find_pids(pattern):
@@ -129,10 +147,18 @@ def main(argv=None, find_pids_fn=find_pids, command_line_fn=command_line, is_ali
     args = parser.parse_args(argv)
 
     wrapper_pids = sorted(set(pid for pattern in WRAPPER_PATTERNS for pid in find_pids_fn(pattern)))
-    worker_pids = [pid for pid in find_pids_fn(WORKER_PATTERN) if pid not in wrapper_pids]
+    merger_pids = sorted(set(find_pids_fn(MERGER_PATTERN)) - set(wrapper_pids))
+    worker_pids = [
+        pid for pid in find_pids_fn(WORKER_PATTERN)
+        if pid not in wrapper_pids and pid not in merger_pids
+    ]
+    # Signaled by individual PID, like the wrapper (a merger daemon isn't
+    # necessarily its own process-group leader -- see the module
+    # docstring), so it shares the wrapper's escalation branch below.
+    pid_scoped_pids = wrapper_pids + merger_pids
 
-    if not wrapper_pids and not worker_pids:
-        stdout.write("Nothing running -- no wrapper or worker process found.\n")
+    if not wrapper_pids and not merger_pids and not worker_pids:
+        stdout.write("Nothing running -- no wrapper, merger, or worker process found.\n")
         return 0
 
     verb = "Would signal" if args.dry_run else "Signaling"
@@ -146,6 +172,17 @@ def main(argv=None, find_pids_fn=find_pids, command_line_fn=command_line, is_ali
                 signal_pid_fn(pid, signal.SIGTERM)
     else:
         stdout.write("No wrapper process found (parallel_tag_fix_loop.py / parallel_model_fix_loop.py).\n")
+
+    if merger_pids:
+        stdout.write(
+            f"{verb} {len(merger_pids)} squad merger process(es) with SIGTERM (spec M2):\n"
+        )
+        for pid in merger_pids:
+            stdout.write(f"  pid {pid}: {command_line_fn(pid)[:100]}\n")
+            if not args.dry_run:
+                signal_pid_fn(pid, signal.SIGTERM)
+    else:
+        stdout.write("No squad merger process found (squad_merge_loop.py).\n")
 
     if worker_pids:
         stdout.write(
@@ -163,13 +200,13 @@ def main(argv=None, find_pids_fn=find_pids, command_line_fn=command_line, is_ali
         return 0
 
     stdout.write(f"Waiting up to {args.grace_period:g}s for a clean exit...\n")
-    still_alive = wait_until_dead(wrapper_pids + worker_pids, args.grace_period, is_alive_fn, sleep_fn, now_fn)
+    still_alive = wait_until_dead(pid_scoped_pids + worker_pids, args.grace_period, is_alive_fn, sleep_fn, now_fn)
 
     if still_alive:
         stdout.write(f"{len(still_alive)} process(es) ignored SIGTERM -- escalating to SIGKILL:\n")
         for pid in still_alive:
             stdout.write(f"  pid {pid}\n")
-            if pid in wrapper_pids:
+            if pid in pid_scoped_pids:
                 signal_pid_fn(pid, signal.SIGKILL)
             else:
                 signal_group_fn(pid, signal.SIGKILL)

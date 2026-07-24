@@ -401,7 +401,33 @@ def _branch_has_undiscardable_commits(repo_root, branch, base_ref):
         return True
 
 
-def create_worktree(repo_root, path, branch, base_ref, config_path=DEFAULT_CONFIG_PATH):
+def _branch_head_sha(repo_root, branch):
+    result = subprocess.run(  # nosec B603
+        ["git", "rev-parse", "--verify", "--quiet", branch],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _squad_status_resolved(squad_status_path, sha):
+    """True when `sha` is recorded consumed OR quarantined in a squad
+    merger's status file (spec M2/M5 consume handshake).
+
+    A missing file or a parse failure both read as "no entries yet" --
+    get-with-default, never raise: a corrupt/absent status file must
+    never be mistaken for a resolution, since that would defeat the
+    whole point of the guard this feeds (it must fail closed, not open).
+    """
+    try:
+        data = json.loads(Path(squad_status_path).read_text())
+    except (OSError, ValueError):
+        return False
+    heads = data.get("heads") if isinstance(data, dict) else None
+    return isinstance(heads, dict) and sha in heads
+
+
+def create_worktree(repo_root, path, branch, base_ref, config_path=DEFAULT_CONFIG_PATH,
+                    squad_status_path=None):
     """Create fmt's worktree, or -- if one from a prior failed attempt is
     still sitting at `path` (left in place for inspection, or surviving
     into the next --infinite round) -- reuse it in place after resetting it
@@ -423,6 +449,19 @@ def create_worktree(repo_root, path, branch, base_ref, config_path=DEFAULT_CONFI
     reachable from neither base_ref nor origin/main (a previous round's
     failed merge left them), the branch is kept as-is -- see
     _branch_has_undiscardable_commits.
+
+    squad_status_path (spec M2/M5 CONSUME HANDSHAKE): when given, adds a
+    SECOND, independent guard in front of the same `checkout -B` call --
+    the branch's current head sha must be recorded consumed OR
+    quarantined in that squad's status file (written by
+    squad_merge_loop.py) or the reset is skipped this round too (leaving
+    the branch as-is; the merger picks the commit up on its next poll).
+    None (the default) is exactly today's unguarded behavior, preserving
+    every existing caller and test unchanged -- this only gates formats a
+    caller has explicitly opted into squad-status tracking for (a
+    piloted format resolves its own squad-status path and passes it in;
+    an un-piloted format passes None, same as before this parameter
+    existed).
     """
     if path.is_dir():
         clean_worktree(path)
@@ -436,6 +475,27 @@ def create_worktree(repo_root, path, branch, base_ref, config_path=DEFAULT_CONFI
             print(
                 f"WARNING: {branch} still carries commits not on {base_ref!r}/origin/main -- "
                 "reusing it as-is instead of resetting (no-discard invariant)"
+            )
+            subprocess.run(  # nosec B603
+                ["git", "checkout", branch],
+                cwd=path, check=True, capture_output=True, text=True,
+            )
+        elif (
+            squad_status_path is not None
+            and _branch_exists(repo_root, branch)
+            and (head_sha := _branch_head_sha(repo_root, branch))
+            and not _squad_status_resolved(squad_status_path, head_sha)
+        ):
+            # Consume handshake (spec M2/M5): the squad merger hasn't
+            # recorded this exact head as consumed or quarantined yet --
+            # resetting now would race its next poll and silently drop a
+            # commit it hasn't looked at. Skip the reset this round; the
+            # branch is left exactly where it is (same as the no-discard
+            # branch above), and the merger's next poll picks it up.
+            print(
+                f"WARNING: {branch} head {head_sha} is not yet consumed/quarantined in "
+                f"{squad_status_path} -- skipping checkout -B this round (consume handshake, "
+                "spec M2/M5); the squad merger will pick it up on its next poll"
             )
             subprocess.run(  # nosec B603
                 ["git", "checkout", branch],
