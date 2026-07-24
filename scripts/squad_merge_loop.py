@@ -265,14 +265,27 @@ def ensure_staging_worktree(repo_root, staging_path, squad, origin_ref=ORIGIN_MA
     pattern: an existing directory is cleaned and checked out AS-IS
     (plain `checkout`, never `-B`/`branch -f`) -- squad/<squad> only ever
     advances via fast_forward_branch, never via a reset here. Returns the
-    branch name."""
+    branch name.
+
+    Recovery uses `git reset --hard HEAD`, not `checkout -- .`: a plain
+    `checkout -- .` only restores tracked files to their index content --
+    it does nothing about an UNMERGED index (a conflicted cherry-pick
+    whose own `--abort` never ran, e.g. this process was SIGTERM'd
+    mid-`subprocess.run` by the lock-takeover path or by
+    stop_parallel_fix.py's merger-pgid reaping). Left as `checkout -- .`,
+    every following poll's plain `checkout branch` call fails outright
+    ("needs merge") and the whole daemon dies uncaught, permanently,
+    until a human runs `git reset --hard`/`cherry-pick --abort` by hand.
+    `reset --hard HEAD` clears both the dirty worktree AND any in-progress
+    cherry-pick/merge/revert state in one shot, so this recovers on the
+    very next poll with no human involved."""
     staging_path = Path(staging_path)
     branch = staging_branch(squad)
     if not branch_exists(repo_root, branch):
         _git(["branch", branch, origin_ref], repo_root)
         log_fn(f"created {branch!r} from {origin_ref}")
     if staging_path.is_dir():
-        _git(["checkout", "--", "."], staging_path, check=False)
+        _git(["reset", "--hard", "HEAD"], staging_path, check=False)
         _git(["clean", "-fd"], staging_path, check=False)
         _git(["checkout", branch], staging_path)
     else:
@@ -683,6 +696,49 @@ def should_recut(repo_root, squad_branch, origin_ref=ORIGIN_MAIN,
     return (now_fn() - commit_ts) >= staleness_seconds
 
 
+def _commits_only_on(repo_root, ref, other_ref):
+    """Commit shas reachable from `ref` but not `other_ref`, oldest
+    first. Returns None (rather than []) when git can't answer at all --
+    callers must NOT treat that the same as "nothing found"."""
+    result = _git(["log", f"{other_ref}..{ref}", "--format=%H", "--reverse"], repo_root, check=False)
+    if result.returncode != 0:
+        return None
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def recut_lost_commits(repo_root, old_tip, origin_ref, new_tip):
+    """Commits squad/<squad>'s PRE-recut tip (`old_tip`) carried beyond
+    `origin_ref` whose patch-id survives NOWHERE in the rebuilt result --
+    neither `origin_ref` itself nor the freshly rebuilt `new_tip` (spec
+    M5's explicit no-discard invariant: "no ref reset may discard
+    commits not contained in origin/main ... or a squad staging
+    branch").
+
+    This is the ground-truth safety net for `recut_squad_branch`: it
+    inspects what the OLD squad/<squad> ref actually carried by walking
+    real git history, not just what squad-status happens to have a
+    "consumed" entry for -- so it catches a commit that landed on
+    squad/<squad> outside this merger's own pipeline (manual/bootstrap,
+    never recorded in squad-status at all) exactly the same way it
+    catches a recorded-consumed head whose re-cherry-pick genuinely
+    conflicted.
+
+    Returns None (never a silent "nothing lost") when git can't
+    enumerate the range at all -- the caller treats that identically to
+    a non-empty loss list (fail closed, never fail open on an
+    irreversible ref move)."""
+    if not old_tip:
+        return []
+    candidates = _commits_only_on(repo_root, old_tip, origin_ref)
+    if candidates is None:
+        return None
+    lost = []
+    for sha in candidates:
+        if is_patch_novel_against(repo_root, origin_ref, sha) and is_patch_novel_against(repo_root, new_tip, sha):
+            lost.append(sha)
+    return lost
+
+
 def recut_squad_branch(*, repo_root, staging_path, squad, squad_branch, home,
                         origin_ref=ORIGIN_MAIN, log_fn=print):
     """Re-cut squad/<squad> from origin_ref and re-cherry-pick only the
@@ -695,8 +751,23 @@ def recut_squad_branch(*, repo_root, staging_path, squad, squad_branch, home,
     per-commit loop -- invokable directly (--recut) or from poll_once's
     staleness check at the top of a cycle.
 
-    Returns {"kept": [...], "dropped": [...], "new_tip": sha}.
+    Before ever moving squad/<squad>'s ref, `recut_lost_commits` checks
+    the rebuilt result against what the OLD squad/<squad> tip actually
+    carried (spec M5's explicit no-discard invariant). If that check
+    finds -- or can't rule out -- a commit that would be permanently
+    discarded (a recorded-consumed head whose re-cherry-pick hit a
+    genuine conflict against the fresh base, or any commit that landed
+    on squad/<squad> outside this merger's own pipeline and so was never
+    recorded in squad-status at all), the WHOLE recut is aborted: the
+    ref is left exactly where it was -- still carrying that commit --
+    and nothing is silently dropped. A human has to look at it (the log
+    line says so); a later poll retries the recut from scratch once the
+    conflict is resolved by hand or origin_ref moves again.
+
+    Returns {"kept": [...], "dropped": [...], "new_tip": sha}, plus
+    {"aborted": True, "lost": [...]} when the safety net fired.
     """
+    old_tip = branch_head_sha(repo_root, squad_branch)
     status = load_squad_status(squad_status_file(home, squad))
     entries = [
         (sha, e) for sha, e in (status.get("heads") or {}).items()
@@ -725,6 +796,17 @@ def recut_squad_branch(*, repo_root, staging_path, squad, squad_branch, home,
                    f"onto fresh {origin_ref}: {message}")
 
     new_tip = head_sha(staging_path)
+
+    lost = recut_lost_commits(repo_root, old_tip, origin_ref, new_tip)
+    if lost is None or lost:
+        checkout_branch(staging_path, squad_branch)
+        reason = ("git could not enumerate what would be lost" if lost is None
+                  else f"{len(lost)} commit(s) would be permanently discarded: {lost}")
+        log_fn(f"recut {squad!r}: ABORTED (no-discard invariant, spec M5) -- {reason} -- "
+               f"leaving {squad_branch!r} untouched at its current tip {old_tip!r}; "
+               "resolve the conflict manually and retry the recut")
+        return {"kept": [], "dropped": [], "new_tip": old_tip, "aborted": True, "lost": lost or []}
+
     update = _git(["update-ref", f"refs/heads/{squad_branch}", new_tip], repo_root, check=False)
     if update.returncode != 0:
         log_fn(f"recut {squad!r}: could not update {squad_branch!r} to {new_tip}: {update.stderr.strip()}")
@@ -823,21 +905,31 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
             processed.append(result)
             heartbeat_fn()
 
+    # spec M2: "every batch_commits commits OR batch_seconds seconds ...
+    # whichever first" -- batch_check_due's seconds-elapsed arm must be
+    # evaluated every poll, independent of whether THIS poll consumed any
+    # commits (a squad that goes quiet -- all candidates quarantined, no
+    # worker branches with new commits -- must still get its periodic
+    # full-corpus safety check once batch_seconds has elapsed; gating the
+    # whole check behind "did this poll consume something" silently
+    # starves that cadence for as long as the squad stays quiet).
     consumed_with_work = sum(1 for r in processed if r["outcome"] == "consumed")
-    if consumed_with_work:
-        batch_state["commits_since"] = batch_state.get("commits_since", 0) + consumed_with_work
-        if batch_check_due(batch_state, batch_commits, batch_seconds, now_fn):
-            ok, problems, new_baselines = run_batch_check(
-                staging_path=staging_dir, squad=squad, formats=formats, cache_dir=cache_dir,
-                comparison_fn=comparison_fn, baselines=batch_state.get("baselines") or {},
-                log_fn=log_fn,
-            )
-            batch_state["blocked"] = not ok
-            batch_state["commits_since"] = 0
-            batch_state["last_batch_ts"] = now_fn()
-            batch_state["baselines"] = new_baselines
-            batch_result = {"ran": True, "ok": ok, "problems": problems}
-            heartbeat_fn()
+    batch_state["commits_since"] = batch_state.get("commits_since", 0) + consumed_with_work
+    state_changed = consumed_with_work > 0
+    if batch_check_due(batch_state, batch_commits, batch_seconds, now_fn):
+        ok, problems, new_baselines = run_batch_check(
+            staging_path=staging_dir, squad=squad, formats=formats, cache_dir=cache_dir,
+            comparison_fn=comparison_fn, baselines=batch_state.get("baselines") or {},
+            log_fn=log_fn,
+        )
+        batch_state["blocked"] = not ok
+        batch_state["commits_since"] = 0
+        batch_state["last_batch_ts"] = now_fn()
+        batch_state["baselines"] = new_baselines
+        batch_result = {"ran": True, "ok": ok, "problems": problems}
+        heartbeat_fn()
+        state_changed = True
+    if state_changed:
         save_batch_state(batch_path, batch_state)
 
     return {"branch": squad_branch_ref, "processed": processed,

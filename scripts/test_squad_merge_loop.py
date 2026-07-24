@@ -353,6 +353,39 @@ class EnsureStagingWorktreeTests(GitRepoTestCase):
         sml.ensure_staging_worktree(repo, staging, "nikon", origin_ref="main", log_fn=lambda *a: None)
         self.assertEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), extra)
 
+    def test_recovers_from_a_stuck_mid_cherry_pick_unmerged_index(self):
+        # Simulates a SIGTERM landing between a failed `git cherry-pick`
+        # and its own `--abort` call (e.g. the lock-takeover path or
+        # stop_parallel_fix.py's merger-pgid reaping killing the daemon
+        # mid-subprocess): the staging worktree is left with an UNMERGED
+        # index and CHERRY_PICK_HEAD still set. A plain `checkout -- .`
+        # cannot clean that up -- only `reset --hard` can -- so the next
+        # poll must recover on its own, not crash forever.
+        repo = self.make_repo()
+        self.commit_file(repo, "f.txt", "base\n", "seed f.txt")
+        git(repo, "branch", "squad/nikon")
+        staging = self.tmp / "staging-nikon"
+        git(repo, "worktree", "add", str(staging), "squad/nikon")
+        self.commit_file(staging, "f.txt", "squad change\n", "squad change")
+
+        # A conflicting commit from an unrelated lineage off the same base.
+        src = self.tmp / "src"
+        git(repo, "worktree", "add", str(src), "-b", "worker", "squad/nikon~1")
+        conflict_sha = self.commit_file(src, "f.txt", "conflicting change\n", "conflicting change")
+
+        conflict = git(staging, "cherry-pick", conflict_sha, check=False)
+        self.assertNotEqual(conflict.returncode, 0)  # conflict, deliberately left un-aborted
+        dirty = git(staging, "status", "--porcelain", check=False).stdout
+        self.assertIn("UU", dirty)  # unmerged index, confirming the simulated crash state
+
+        branch = sml.ensure_staging_worktree(repo, staging, "nikon", origin_ref="main", log_fn=lambda *a: None)
+
+        self.assertEqual(branch, "squad/nikon")
+        clean = git(staging, "status", "--porcelain", check=False)
+        self.assertEqual(clean.stdout.strip(), "")
+        current = git_out(staging, "rev-parse", "--abbrev-ref", "HEAD").strip()
+        self.assertEqual(current, "squad/nikon")
+
 
 # ---------------------------------------------------------------------------
 # process_commit: the full per-commit pipeline
@@ -678,6 +711,57 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
         state = sml.load_batch_state(sml.batch_state_path(home, "nikon"))
         self.assertFalse(state["blocked"])
 
+    def test_batch_seconds_trigger_fires_even_when_this_poll_consumes_nothing(self):
+        # spec M2: "every merger_batch_commits commits OR
+        # merger_batch_seconds seconds ... whichever first". A poll that
+        # consumes zero commits (no candidate worker branches, or every
+        # candidate got quarantined) must still run the periodic
+        # full-corpus check once batch_seconds has elapsed since the
+        # last one -- the seconds arm must not be starved by a quiet
+        # squad.
+        repo = self.make_repo()  # no worker branches at all -> zero candidates
+        home = self.tmp / "home"
+        sml.save_batch_state(
+            sml.batch_state_path(home, "nikon"),
+            {"blocked": False, "commits_since": 0, "last_batch_ts": 0, "baselines": {}},
+        )
+        batch_check_calls = []
+
+        def comparison_fn(staging, cache, fmt, suffix):
+            batch_check_calls.append(fmt)
+            return {"duplicate_emissions": [], "extra_in_oxidex": []}
+
+        result = sml.poll_once(
+            repo_root=repo, squad="nikon", home=home, staging_dir=self.tmp / "staging-nikon",
+            squads_toml_path=self._squads_toml(), cache_dir="/unused", origin_ref="main",
+            batch_commits=10, batch_seconds=900, now_fn=lambda: 10_000,  # well past due
+            comparison_fn=comparison_fn, check_recut=False, log_fn=lambda *a: None,
+        )
+
+        self.assertEqual(result["processed"], [])
+        self.assertIsNotNone(result["batch_check"])
+        self.assertTrue(result["batch_check"]["ran"])
+        self.assertTrue(result["batch_check"]["ok"])
+        state = sml.load_batch_state(sml.batch_state_path(home, "nikon"))
+        self.assertEqual(state["last_batch_ts"], 10_000)
+
+    def test_batch_check_not_due_yet_with_zero_commits_does_not_run(self):
+        repo = self.make_repo()
+        home = self.tmp / "home"
+        sml.save_batch_state(
+            sml.batch_state_path(home, "nikon"),
+            {"blocked": False, "commits_since": 0, "last_batch_ts": 9_500, "baselines": {}},
+        )
+        result = sml.poll_once(
+            repo_root=repo, squad="nikon", home=home, staging_dir=self.tmp / "staging-nikon",
+            squads_toml_path=self._squads_toml(), cache_dir="/unused", origin_ref="main",
+            batch_commits=10, batch_seconds=900, now_fn=lambda: 10_000,  # not yet due
+            check_recut=False, log_fn=lambda *a: None,
+        )
+        self.assertIsNone(result["batch_check"])
+        state = sml.load_batch_state(sml.batch_state_path(home, "nikon"))
+        self.assertEqual(state["last_batch_ts"], 9_500)  # untouched
+
 
 # ---------------------------------------------------------------------------
 # Squad branch re-cut
@@ -764,12 +848,25 @@ class RecutSquadBranchTests(GitRepoTestCase):
         symref = git(staging, "symbolic-ref", "-q", "HEAD", check=False)
         self.assertIn("squad/nikon", symref.stdout)
 
-    def test_recut_with_no_recorded_heads_just_resets_to_origin(self):
+    def test_recut_with_no_recorded_heads_but_untracked_commit_aborts_no_discard(self):
+        # spec M5's explicit no-discard invariant ("no ref reset may
+        # discard commits not contained in origin/main, an open sweep
+        # PR, or a squad staging branch") applies even to a commit that
+        # landed on squad/<squad> OUTSIDE this merger's own pipeline
+        # (bootstrap/manual cherry-pick) and so was never recorded in
+        # squad-status at all -- recut must not silently reset the
+        # branch out from under it.
         repo = self.make_repo()
         git(repo, "branch", "squad/nikon")
-        extra = self.commit_file(repo, "extra.rs", "x\n", "commit that should be dropped by recut")
+        # Commit on a throwaway side branch (never on main) so the patch
+        # is genuinely absent from origin_ref -- committing straight
+        # onto main here would make it trivially "come back for free"
+        # and defeat the point of the test.
+        git(repo, "checkout", "-q", "-b", "tmp-source")
+        extra = self.commit_file(repo, "extra.rs", "x\n", "untracked commit, never recorded in squad-status")
         git(repo, "checkout", "-q", "squad/nikon")
         git(repo, "cherry-pick", extra)
+        pre_tip = git_out(repo, "rev-parse", "squad/nikon").strip()
         git(repo, "checkout", "-q", "main")
         staging = self.tmp / "staging-nikon"
         git(repo, "worktree", "add", str(staging), "squad/nikon")
@@ -780,12 +877,54 @@ class RecutSquadBranchTests(GitRepoTestCase):
             home=home, origin_ref="main", log_fn=lambda *a: None,
         )
 
-        self.assertEqual(result["kept"], [])
-        self.assertEqual(result["dropped"], [])
-        self.assertEqual(
-            git_out(repo, "rev-parse", "squad/nikon").strip(),
-            git_out(repo, "rev-parse", "main").strip(),
+        self.assertTrue(result["aborted"])
+        self.assertEqual(len(result["lost"]), 1)
+        # squad/nikon is left EXACTLY where it was -- the untracked
+        # commit is still there, nothing was discarded.
+        self.assertEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), pre_tip)
+        symref = git(staging, "symbolic-ref", "-q", "HEAD", check=False)
+        self.assertIn("squad/nikon", symref.stdout)
+
+    def test_recut_aborts_rather_than_drop_a_consumed_head_on_genuine_conflict(self):
+        # A previously green-stamped (consumed) head that genuinely
+        # conflicts against the fresh origin_ref must NOT be silently
+        # dropped -- that would both violate the no-discard invariant
+        # and leave squad-status claiming "consumed" for a commit no
+        # longer reachable from squad/<squad> anywhere (which would also
+        # mislead the create_worktree consume handshake into treating
+        # the original worker-branch head as safe to discard).
+        repo = self.make_repo()
+        self.commit_file(repo, "f.txt", "base\n", "seed f.txt")
+        git(repo, "branch", "squad/nikon")
+        git(repo, "checkout", "-q", "squad/nikon")
+        squad_sha = self.commit_file(repo, "f.txt", "squad change\n", "worker fix")
+        git(repo, "checkout", "-q", "main")
+        # origin/main advances with a conflicting edit to the same line.
+        self.commit_file(repo, "f.txt", "origin advanced\n", "conflicting origin advance")
+
+        home = self.tmp / "home"
+        status_path = sml.squad_status_file(home, "nikon")
+        sml.record_head(status_path, "worker-sha-1", status="consumed", patch_id="p1",
+                        format_name="NEF", squad_sha=squad_sha, now_fn=lambda: 1)
+
+        staging = self.tmp / "staging-nikon"
+        git(repo, "worktree", "add", str(staging), "squad/nikon")
+
+        result = sml.recut_squad_branch(
+            repo_root=repo, staging_path=staging, squad="nikon", squad_branch="squad/nikon",
+            home=home, origin_ref="main", log_fn=lambda *a: None,
         )
+
+        self.assertTrue(result["aborted"])
+        self.assertEqual(result["lost"], [squad_sha])
+        # squad/nikon still carries the consumed commit -- untouched.
+        self.assertEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), squad_sha)
+        ahead = git_out(repo, "log", "main..squad/nikon", "--oneline").strip()
+        self.assertNotEqual(ahead, "")
+        # squad-status is unchanged; it still (correctly) points at a
+        # sha that is still actually present on squad/nikon.
+        status = sml.load_squad_status(status_path)
+        self.assertEqual(status["heads"]["worker-sha-1"]["squad_sha"], squad_sha)
 
 
 if __name__ == "__main__":
