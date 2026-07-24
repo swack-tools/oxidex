@@ -1,0 +1,19 @@
+#!/bin/sh
+# Delegation shim. This repo sets core.hooksPath=.githooks for its pre-commit
+# gate, which shadows the hooks git would otherwise run (a global core.hooksPath
+# or .git/hooks — e.g. git-lfs wrappers, indexers). Re-dispatch there.
+# Falling back to .git/hooks even when a global hooksPath is set is deliberate
+# (broader than native git, which consults exactly one location).
+hook="$(basename "$0")"
+global="$(git config --global --path core.hooksPath 2>/dev/null)"
+native="$(git rev-parse --git-common-dir)/hooks"
+if [ -n "$global" ] && [ -x "$global/$hook" ]; then
+    exec "$global/$hook" "$@"
+elif [ -n "$global" ] && [ -e "$global/$hook" ]; then
+    echo "warning: $global/$hook is not executable; skipping" >&2
+elif [ -x "$native/$hook" ]; then
+    exec "$native/$hook" "$@"
+elif [ -e "$native/$hook" ]; then
+    echo "warning: $native/$hook is not executable; skipping" >&2
+fi
+exit 0

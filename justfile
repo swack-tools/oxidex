@@ -322,10 +322,12 @@ ci-standard: fmt-check lint-release build-release test test-ffi-c
 pre-commit: fmt-check lint test
     @echo "Pre-commit checks passed!"
 
-# Install git hooks (points core.hooksPath at .githooks)
+# Install git hooks (absolute core.hooksPath so linked worktrees resolve the
+# shims too — a relative path silently disables all hooks in worktrees that
+# lack a .githooks checkout)
 install-hooks:
     @echo "Installing git hooks..."
-    git config core.hooksPath .githooks
+    git config core.hooksPath "$(cd "$(git rev-parse --git-common-dir)/.." && pwd)/.githooks"
     @echo "Git hooks installed! Pre-commit will run fmt-check, lint, and test."
     @echo "Skip with OXIDEX_SKIP_HOOKS=1; linked worktrees are exempt."
 
