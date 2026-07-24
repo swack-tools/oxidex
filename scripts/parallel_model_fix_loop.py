@@ -8,6 +8,20 @@ own git worktree with its own target/ dir (never shared -- CARGO_TARGET_DIR
 is explicitly stripped from each worker's environment), then merge
 completed work back sequentially once each worker finishes.
 
+Exactly one dispatcher runs per host: startup takes a process-lifetime
+flock on ~/.oxidex/logs/dispatcher.lock (a second instance fails fast --
+see acquire_dispatcher_lock) and then reaps any worker process groups a
+previous, dead dispatcher left behind (persisted in dispatcher-pgids.json;
+see reap_orphan_worker_pgids).
+
+Git hygiene (spec M5): local `main` is a MIRROR of origin/main -- each
+round starts by fast-forwarding it (ff-only; divergence is loudly skipped,
+never reset away), and round-end merges land on a dedicated local
+integration branch (model-fix-sweep-local) whenever the repo sits on main,
+so nothing ever merges into main itself. Every ref reset in this file is
+guarded by the no-discard invariant: no reset may discard commits not
+contained in origin/main or another live branch.
+
 Config: config.toml (see config.example.toml), same file model_fix_loop.py
 reads directly. Since config.toml is gitignored, `git worktree add` won't
 bring it into a freshly created worktree on its own, so each worker's
@@ -20,11 +34,14 @@ Usage:
 """
 import argparse
 import concurrent.futures
+import fcntl
+import json
 import os
 import shutil
 import signal
 import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -45,11 +62,155 @@ DEFAULT_MAX_PARALLEL = min(20, os.cpu_count() or 4)
 # not REPO_ROOT-relative -- see OXIDEX_HOME's docstring in find_tag_gaps.py.
 DEFAULT_LOG_DIR = OXIDEX_HOME / "logs" / "parallel-model-fix"
 
+# Dispatcher singleton: exactly one parallel_model_fix_loop.py per host.
+# Two concurrent dispatchers double-spawn same-format workers, double-merge
+# branches, and race each other's worktree resets (observed live: a
+# duplicate dispatcher quietly ran for hours). The flock on this file is
+# held for the whole process lifetime and vanishes with the process, so a
+# crashed dispatcher never leaves a stale lock behind.
+DISPATCHER_LOCK_PATH = OXIDEX_HOME / "logs" / "dispatcher.lock"
+
+# Where the dispatcher persists its spawned workers' process-group ids
+# (tempfile+os.replace, never torn). A dispatcher that dies without
+# cleaning up (SIGKILL, power loss) leaves its workers orphaned with
+# nothing tracking them -- the next dispatcher startup reads this file and
+# reaps whatever is still alive before spawning anything of its own.
+DISPATCHER_PGIDS_PATH = OXIDEX_HOME / "logs" / "dispatcher-pgids.json"
+
+# M5 "local main is a mirror": when the dispatcher repo sits on `main`,
+# round-end merges are retargeted onto this dedicated local integration
+# branch instead of merging into main (see ensure_integration_branch).
+SWEEP_LOCAL_BRANCH = "model-fix-sweep-local"
+
 # Every in-flight worker's process group, so an interrupted wrapper
 # (Ctrl-C, SIGTERM) can force-terminate all of them rather than leaving
 # cargo/rustc grandchildren running unsupervised.
 _active_pgids = set()
 _active_pgids_lock = threading.Lock()
+
+# Where _register_pgid/_unregister_pgid mirror _active_pgids to disk for
+# the next dispatcher's orphan reaper. None (imports, unit tests) disables
+# persistence entirely; main() points it at DISPATCHER_PGIDS_PATH (or its
+# injected test path) once the singleton lock is held.
+_pgids_persist_path = None
+
+# Serializes the snapshot+write pair in _persist_active_pgids. Up to
+# max_parallel worker threads register/unregister concurrently; if the
+# snapshot were taken under _active_pgids_lock but written OUTSIDE any
+# lock, two persists could complete their writes in the opposite order of
+# their snapshots and a stale snapshot would win -- e.g. an unregister's
+# empty snapshot overwriting a register's, erasing a live worker's pgid
+# from the very record the next dispatcher's orphan reaper depends on.
+# Deliberately a second lock (not _active_pgids_lock itself) so set
+# mutation stays cheap: registering a pgid never waits behind another
+# thread's file I/O, and _kill_all_active_workers (signal path) never
+# contends with a write in flight.
+_pgids_persist_lock = threading.Lock()
+
+
+def _set_pgids_persist_path(path):
+    global _pgids_persist_path
+    _pgids_persist_path = Path(path) if path else None
+
+
+def _write_pgids_file(path, pgids):
+    """Atomically persist a pgid list: NamedTemporaryFile in the same
+    directory, then os.replace -- a reader (the next dispatcher's orphan
+    reaper) can never observe a torn file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", dir=path.parent, prefix=path.name + ".", suffix=".tmp", delete=False,
+    ) as f:
+        json.dump({"pgids": sorted(pgids)}, f)
+        tmp_name = f.name
+    os.replace(tmp_name, path)
+
+
+def _persist_active_pgids():
+    if _pgids_persist_path is None:
+        return
+    # Snapshot AND write under one persist lock: because the snapshot is
+    # taken at write time (not at mutation time), whichever persist call
+    # writes last always wrote the then-current set -- a delayed thread
+    # can never clobber the file with an older view of _active_pgids.
+    with _pgids_persist_lock:
+        with _active_pgids_lock:
+            pgids = sorted(_active_pgids)
+        _write_pgids_file(_pgids_persist_path, pgids)
+
+
+def acquire_dispatcher_lock(lock_path=DISPATCHER_LOCK_PATH):
+    """Take the dispatcher singleton flock (O_CREAT via open mode "a+").
+
+    Returns the open lock file on success -- the caller must keep the
+    object alive for the whole process lifetime, since closing it (or
+    the process dying, however abruptly) is what releases the flock.
+    Returns None when another dispatcher already holds it: flock is
+    per-open-file-description, so even a second instance inside the same
+    process is correctly refused."""
+    lock_path = Path(lock_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_f = open(lock_path, "a+")
+    try:
+        fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock_f.close()
+        return None
+    try:
+        # Advisory only (the flock is the actual mutex): record who holds
+        # it so a human staring at the file can find the process.
+        lock_f.seek(0)
+        lock_f.truncate()
+        lock_f.write(f"{os.getpid()}\n")
+        lock_f.flush()
+    except OSError:
+        lock_f.close()
+        raise
+    return lock_f
+
+
+def reap_orphan_worker_pgids(pgids_path, kill_fn=os.killpg, alive_fn=None,
+                             sleep_fn=time.sleep, grace_seconds=5.0, log_fn=print):
+    """Startup pass, run only AFTER winning the dispatcher singleton
+    flock: any pgids persisted in pgids_path were spawned by a previous
+    dispatcher, and since the flock was free, no dispatcher is alive to
+    own them -- whatever still runs is an orphaned worker tree
+    (model_fix_loop.py plus cargo/rustc grandchildren) burning CPU and
+    governor budget unsupervised. SIGTERM each still-alive group, wait
+    up to grace_seconds, SIGKILL whatever ignored it, then clear the
+    file. A missing or corrupt file just means nothing to reap.
+
+    kill_fn/alive_fn/sleep_fn are injectable so tests exercise the
+    logic without a real killpg. Returns the pgids that were signaled.
+    """
+    if alive_fn is None:
+        alive_fn = _process_group_alive
+    pgids_path = Path(pgids_path)
+    try:
+        data = json.loads(pgids_path.read_text())
+        pgids = [int(p) for p in (data.get("pgids") or [])]
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError, TypeError):
+        log_fn(f"dispatcher pgid file {pgids_path} is unreadable -- clearing it, nothing to reap")
+        pgids = []
+    own_pgid = os.getpgrp()
+    leftovers = [p for p in pgids if p != own_pgid and alive_fn(p)]
+    for pgid in leftovers:
+        log_fn(f"reaping orphaned worker process group {pgid} (SIGTERM)")
+        kill_fn(pgid, signal.SIGTERM)
+    if leftovers:
+        waited = 0.0
+        while waited < grace_seconds and any(alive_fn(p) for p in leftovers):
+            sleep_fn(0.5)
+            waited += 0.5
+        for pgid in leftovers:
+            if alive_fn(pgid):
+                log_fn(f"orphaned worker process group {pgid} ignored SIGTERM -- escalating to SIGKILL")
+                kill_fn(pgid, signal.SIGKILL)
+    _write_pgids_file(pgids_path, [])
+    return leftovers
 
 
 def discover_formats(cache_dir):
@@ -83,12 +244,161 @@ def clean_worktree(path):
     subprocess.run(["git", "clean", "-fd"], cwd=path, check=True)  # nosec B603
 
 
+def _git(args, repo_root, check=False):
+    """One captured git invocation -- list-argv, no shell, cwd-scoped."""
+    return subprocess.run(  # nosec B603
+        ["git", *args], cwd=repo_root, capture_output=True, text=True, check=check,
+    )
+
+
+def fast_forward_local_main(repo_root, log_fn=print):
+    """Round-start M5 rule: local `main` is a MIRROR of origin/main.
+
+    Fast-forward it when that is a pure fast-forward, and otherwise
+    leave it completely alone: if local main carries commits origin/main
+    doesn't have (someone committed to it directly, or a legacy round
+    merged into it), log loudly and skip -- resetting away commits is
+    never this script's call to make (the no-discard invariant: no ref
+    reset may discard commits not contained in origin/main, an open
+    sweep PR branch, or a squad staging branch).
+
+    The fetch is best-effort; offline, the update runs against the
+    last-known origin/main, which is still a pure fast-forward or
+    nothing. Returns (updated, message).
+    """
+    fetch = _git(["fetch", "origin", "main"], repo_root)
+    if fetch.returncode != 0:
+        log_fn(
+            f"git fetch origin main failed ({fetch.stderr.strip()}) -- "
+            "checking local main against the last-known origin/main instead"
+        )
+    main_sha = _git(["rev-parse", "--verify", "--quiet", "refs/heads/main"], repo_root)
+    origin_sha = _git(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"], repo_root)
+    if main_sha.returncode != 0 or origin_sha.returncode != 0:
+        return False, "no local main and/or origin/main ref -- nothing to mirror"
+    if main_sha.stdout.strip() == origin_sha.stdout.strip():
+        return True, "local main already matches origin/main"
+    ancestor = _git(
+        ["merge-base", "--is-ancestor", "refs/heads/main", "refs/remotes/origin/main"], repo_root,
+    )
+    if ancestor.returncode != 0:
+        message = (
+            "local main has commits that are NOT on origin/main -- refusing to touch it "
+            "(no-discard invariant). Sweep or push those commits, then rerun."
+        )
+        log_fn(f"WARNING: {message}")
+        return False, message
+    current = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo_root, check=True).stdout.strip()
+    if current == "main":
+        result = _git(["merge", "--ff-only", "refs/remotes/origin/main"], repo_root)
+    else:
+        # branch -f on a ref that isn't checked out; the ancestor check
+        # above guarantees this is a pure fast-forward, discarding
+        # nothing.
+        result = _git(["branch", "-f", "main", "refs/remotes/origin/main"], repo_root)
+    if result.returncode != 0:
+        log_fn(f"fast-forward of local main failed: {result.stderr.strip()}")
+        return False, f"fast-forward failed: {result.stderr.strip()}"
+    return True, "fast-forwarded local main to origin/main"
+
+
+def ensure_integration_branch(repo_root, log_fn=print):
+    """The branch this round's worker merges land on, or None when no
+    integration target can be safely established this round.
+
+    M5: local `main` is a mirror of origin/main, never an integration
+    target -- merging worker branches into it makes it diverge
+    permanently, which then blocks its round-start fast-forward and (in
+    the old flow) invited a destructive reset to "fix" it. When the
+    dispatcher repo is checked out on main, integration is retargeted to
+    the dedicated SWEEP_LOCAL_BRANCH: cut from main's current tip if it
+    doesn't exist yet, and checked out AS-IS (plain checkout, never -B,
+    never a reset) if it does, so unswept merges from prior rounds
+    survive every restart. A repo already on any other branch keeps that
+    branch as the integration target, exactly as before.
+
+    The retarget can legitimately fail: once SWEEP_LOCAL_BRANCH has
+    diverged from main, a dirty dispatcher checkout (an operator's
+    uncommitted edits touching files the branches differ on) makes
+    `git checkout` refuse rather than clobber them -- correct, and not
+    this function's place to override. That failure must NOT propagate:
+    an --infinite dispatcher lives for weeks, and one un-checkoutable
+    round killing the whole loop is far worse than skipping the round.
+    Log loudly and return None; run_round treats None as "no safe
+    integration target, skip this round entirely" (dispatching workers
+    just to refuse to merge them would waste a full round of API budget).
+
+    Rollout notes (spec M5, Phase 0 -- operator-facing, land these
+    expectations with the rollout-ops pass):
+      * The dispatcher repo's checkout silently moves from main to
+        SWEEP_LOCAL_BRANCH at the first round after a restart; anyone
+        (human or tooling) working inside that checkout should expect
+        to find it on SWEEP_LOCAL_BRANCH, not main.
+      * Sweep tooling that used to look for integrated-but-unswept
+        commits on local main must look at SWEEP_LOCAL_BRANCH instead.
+      * Phase 0 cuts SWEEP_LOCAL_BRANCH once and never re-anchors it to
+        origin/main -- the integration base drifts behind origin/main
+        until the Phase 2+ merger re-cut rule (or a manual sweep +
+        branch delete) re-cuts it. The round-start mirror ff plus the
+        patch-id dup gate keep that drift from double-landing fixes.
+    """
+    current = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo_root, check=True).stdout.strip()
+    if current != "main":
+        return current
+    if not _branch_exists(repo_root, SWEEP_LOCAL_BRANCH):
+        created = _git(["branch", SWEEP_LOCAL_BRANCH, "main"], repo_root)
+        if created.returncode != 0:
+            log_fn(
+                f"WARNING: could not create {SWEEP_LOCAL_BRANCH!r} from main "
+                f"({created.stderr.strip()}) -- refusing to integrate on main (M5); "
+                "this round will be skipped"
+            )
+            return None
+    checkout = _git(["checkout", SWEEP_LOCAL_BRANCH], repo_root)
+    if checkout.returncode != 0:
+        log_fn(
+            f"WARNING: could not check out {SWEEP_LOCAL_BRANCH!r} "
+            f"({checkout.stderr.strip()}) -- likely uncommitted changes in the "
+            "dispatcher checkout conflicting with it. Refusing to integrate on "
+            "main (M5); this round will be skipped. Commit/stash those changes "
+            "to unblock the next round."
+        )
+        return None
+    log_fn(
+        f"local main is a mirror (M5) -- integrating this round on {SWEEP_LOCAL_BRANCH!r} instead"
+    )
+    return SWEEP_LOCAL_BRANCH
+
+
 def _branch_exists(repo_root, branch):
     result = subprocess.run(  # nosec B603
         ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
         cwd=repo_root, capture_output=True, text=True,
     )
     return result.returncode == 0
+
+
+def _branch_has_undiscardable_commits(repo_root, branch, base_ref):
+    """True when `branch` carries commits reachable from neither
+    base_ref nor origin/main -- exactly what a `checkout -B` reset would
+    discard for good (the no-discard invariant, M5). A failed round-end
+    merge deliberately leaves its worker branch in place; without this
+    check the next round's re-anchor silently threw those commits away.
+
+    Errs on the safe side: if git can't answer (bad ref, unreadable
+    output), the commits are treated as present and the reset refused.
+    """
+    exclude = [f"^{base_ref}"]
+    origin_main = _git(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"], repo_root)
+    if origin_main.returncode == 0:
+        exclude.append("^refs/remotes/origin/main")
+    result = _git(["rev-list", "--count", branch, *exclude], repo_root)
+    if result.returncode != 0:
+        return True
+    try:
+        return int(result.stdout.strip()) > 0
+    except (TypeError, ValueError):
+        return True
 
 
 def create_worktree(repo_root, path, branch, base_ref, config_path=DEFAULT_CONFIG_PATH):
@@ -107,13 +417,35 @@ def create_worktree(repo_root, path, branch, base_ref, config_path=DEFAULT_CONFI
     ("a branch named ... already exists") even though nothing is actually
     using it, so it's discarded here rather than treated as real state
     worth keeping.
+
+    The reuse path's `checkout -B` re-anchor is guarded by the
+    no-discard invariant (M5): if the branch still carries commits
+    reachable from neither base_ref nor origin/main (a previous round's
+    failed merge left them), the branch is kept as-is -- see
+    _branch_has_undiscardable_commits.
     """
     if path.is_dir():
         clean_worktree(path)
-        subprocess.run(  # nosec B603
-            ["git", "checkout", "-B", branch, base_ref],
-            cwd=path, check=True, capture_output=True, text=True,
-        )
+        if _branch_exists(repo_root, branch) and _branch_has_undiscardable_commits(repo_root, branch, base_ref):
+            # No-discard invariant (M5): `checkout -B` would reset this
+            # branch onto base_ref, permanently discarding commits a
+            # previous round left unmerged (a failed merge or timeout
+            # keeps the branch on purpose). Keep the branch exactly
+            # where it is -- this round's worker continues on top of it
+            # and the round-end merge gets another shot at consuming it.
+            print(
+                f"WARNING: {branch} still carries commits not on {base_ref!r}/origin/main -- "
+                "reusing it as-is instead of resetting (no-discard invariant)"
+            )
+            subprocess.run(  # nosec B603
+                ["git", "checkout", branch],
+                cwd=path, check=True, capture_output=True, text=True,
+            )
+        else:
+            subprocess.run(  # nosec B603
+                ["git", "checkout", "-B", branch, base_ref],
+                cwd=path, check=True, capture_output=True, text=True,
+            )
     else:
         if _branch_exists(repo_root, branch):
             subprocess.run(["git", "branch", "-D", branch], cwd=repo_root, check=True)  # nosec B603
@@ -173,9 +505,22 @@ def merge_branch(repo_root, branch, cargo_test_fn=None):
     the full test suite; if it regresses, roll back just this merge (never
     the commits before it). Returns (merged: bool, message: str).
 
+    The rollback obeys the no-discard invariant (M5): the pre-merge HEAD
+    is recorded up front, and the reset only runs when HEAD is exactly
+    the merge commit just created (its first parent is that recorded
+    sha) -- then the reset discards only that merge commit, whose entire
+    content stays reachable from `branch`, which this failure path
+    deliberately leaves in place. If HEAD is anything else (a hook or a
+    concurrent process moved it), resetting could destroy commits this
+    function never created, so it refuses and leaves the state for a
+    human.
+
     cargo_test_fn, if provided, overrides the real `cargo test --workspace`
     call for testing -- must return True/False like the real check would.
     """
+    pre_merge = subprocess.run(  # nosec B603
+        ["git", "rev-parse", "HEAD"], cwd=repo_root, capture_output=True, text=True, check=True,
+    ).stdout.strip()
     merge = subprocess.run(  # nosec B603
         ["git", "merge", "--no-ff", branch, "-m", f"merge: {branch}"],
         cwd=repo_root, capture_output=True, text=True,
@@ -186,8 +531,16 @@ def merge_branch(repo_root, branch, cargo_test_fn=None):
 
     tests_pass = cargo_test_fn() if cargo_test_fn else _real_cargo_test(repo_root)
     if not tests_pass:
-        subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=repo_root, check=True)  # nosec B603
-        return False, "cargo test --workspace regressed after merge, rolled back"
+        first_parent = subprocess.run(  # nosec B603
+            ["git", "rev-parse", "HEAD^1"], cwd=repo_root, capture_output=True, text=True,
+        )
+        if first_parent.returncode == 0 and first_parent.stdout.strip() == pre_merge:
+            subprocess.run(["git", "reset", "--hard", pre_merge], cwd=repo_root, check=True)  # nosec B603
+            return False, "cargo test --workspace regressed after merge, rolled back"
+        return False, (
+            "cargo test --workspace regressed after merge, but HEAD no longer looks like the "
+            "merge just created -- refusing to reset (no-discard invariant); resolve by hand"
+        )
 
     return True, "merged"
 
@@ -238,11 +591,16 @@ def _wait_for_process_group_exit(pgid, poll_interval=0.5, force_after=30, sleep_
 def _register_pgid(pgid):
     with _active_pgids_lock:
         _active_pgids.add(pgid)
+    # Persist outside the lock -- _persist_active_pgids re-takes it, and
+    # threading.Lock is not reentrant. Cross-thread write ordering is
+    # _pgids_persist_lock's job (see _persist_active_pgids).
+    _persist_active_pgids()
 
 
 def _unregister_pgid(pgid):
     with _active_pgids_lock:
         _active_pgids.discard(pgid)
+    _persist_active_pgids()
 
 
 def _kill_all_active_workers():
@@ -340,6 +698,22 @@ def run_round(args, config_path):
     --infinite mode use this only for logging, never to stop the loop,
     since a format that can't currently be fixed is expected, not fatal.
     """
+    # M5, before anything else this round: keep local main a faithful
+    # mirror of origin/main (ff-only, loud skip on divergence), and make
+    # sure the round's merges land on an integration branch, never on
+    # main itself.
+    _updated, ff_message = fast_forward_local_main(REPO_ROOT)
+    print(f"local main mirror: {ff_message}")
+    base_ref = ensure_integration_branch(REPO_ROOT)
+    if base_ref is None:
+        # No safe integration target (see ensure_integration_branch's
+        # docstring) -- skip the whole round rather than dispatch workers
+        # whose merges would have nowhere M5-legal to land. In --infinite
+        # mode the next round retries, so a dirty checkout stalls rounds
+        # until fixed instead of killing the dispatcher.
+        print("no usable integration branch this round -- skipping dispatch (see warning above)")
+        return False
+
     if args.formats:
         formats = [f.strip() for f in args.formats.split(",") if f.strip()]
     else:
@@ -349,11 +723,6 @@ def run_round(args, config_path):
     if not formats:
         print("No formats with gaps found.")
         return True
-
-    base_ref = subprocess.run(  # nosec B603
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-    ).stdout.strip()
 
     print(f"{len(formats)} formats to process, up to {args.max_parallel} in parallel, merging into {base_ref!r}")
 
@@ -427,7 +796,8 @@ def run_round(args, config_path):
     return not failed
 
 
-def main(argv=None, run_round_fn=run_round, sleep_fn=time.sleep):
+def main(argv=None, run_round_fn=run_round, sleep_fn=time.sleep,
+         lock_path=None, pgids_path=None, reap_fn=reap_orphan_worker_pgids):
     # The same buffering issue fixed for workers (PYTHONUNBUFFERED in
     # run_worker's env) also applies to this wrapper process itself when its
     # own stdout is redirected to a file (e.g. `nohup ... > out.log &`)
@@ -496,17 +866,45 @@ def main(argv=None, run_round_fn=run_round, sleep_fn=time.sleep):
         print(f"{config_path} not found -- see config.example.toml", file=sys.stderr)
         return 1
 
-    round_num = 0
-    last_round_ok = True
-    while True:
-        round_num += 1
-        if args.infinite:
-            print(f"\n{'=' * 20} round {round_num} {'=' * 20}")
-        last_round_ok = run_round_fn(args, config_path)
-        if not args.infinite:
-            return 0 if last_round_ok else 1
-        if args.round_delay:
-            sleep_fn(args.round_delay)
+    # Dispatcher singleton: fail fast and loudly if another instance
+    # already holds the flock. dispatcher_lock is deliberately kept in a
+    # local for the rest of main() -- the flock lives exactly as long as
+    # this open file object / this process does.
+    lock_path = Path(lock_path) if lock_path else DISPATCHER_LOCK_PATH
+    pgids_path = Path(pgids_path) if pgids_path else DISPATCHER_PGIDS_PATH
+    dispatcher_lock = acquire_dispatcher_lock(lock_path)
+    if dispatcher_lock is None:
+        print(
+            f"another dispatcher already holds {lock_path} -- refusing to start a second one "
+            "(two dispatchers double-spawn workers and race each other's merges; "
+            "use scripts/stop_parallel_fix.py to stop the running one first)",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Only the singleton holder gets here, so anything in the pgid file
+    # belongs to a dead dispatcher: reap it, then start persisting our
+    # own spawns to the same file for whoever has to reap us one day.
+    reap_fn(pgids_path)
+    _set_pgids_persist_path(pgids_path)
+
+    try:
+        round_num = 0
+        last_round_ok = True
+        while True:
+            round_num += 1
+            if args.infinite:
+                print(f"\n{'=' * 20} round {round_num} {'=' * 20}")
+            last_round_ok = run_round_fn(args, config_path)
+            if not args.infinite:
+                return 0 if last_round_ok else 1
+            if args.round_delay:
+                sleep_fn(args.round_delay)
+    finally:
+        # Dispatching is over either way (single round done, or the
+        # infinite loop is unwinding on an exception/interrupt) --
+        # release the singleton so the next dispatcher can start.
+        dispatcher_lock.close()
 
 
 if __name__ == "__main__":

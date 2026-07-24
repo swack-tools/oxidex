@@ -51,6 +51,12 @@ governor_cooldown_seconds = 30
 governor_max_cooldown_seconds = 300
 max_cluster_tags = 6
 use_sccache = true
+# claim_stale_seconds: a tag claim in the shared tag-state older than this
+# is treated as abandoned (owner dead) and re-claimable. Generous because a
+# live owner's heartbeat thread re-stamps its claim every heartbeat_seconds
+# while an attempt is in flight -- stale means dead, not slow.
+claim_stale_seconds = 7200
+heartbeat_seconds = 60
 max_retries = 1000
 retry_backoff_seconds = 2
 max_retry_backoff_seconds = 120

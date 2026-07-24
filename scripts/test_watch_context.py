@@ -19,6 +19,8 @@ from watch_context import (
     render_interactive_frame,
     render_overview,
     render_worker_detail,
+    request_path_for,
+    response_path_for,
     strip_ansi,
 )
 
@@ -27,6 +29,43 @@ FAKE_KEY_CODES = {
     "page_up": 5, "page_down": 6, "quit": 7, "toggle_phase": 8,
     "vim_up": 9, "vim_down": 10,
 }
+
+
+class ArtifactPathResolutionTests(unittest.TestCase):
+    """model_fix_loop.py names request/response artifacts
+    {ts}-{worker}-{phase}-... (worker-id isolation); files from before
+    that change are {ts}-{phase}-... -- the resolvers prefer the tagged
+    name on disk and fall back to the legacy one."""
+
+    def _entry(self):
+        return {"ts": "2026-07-24T10:00:00", "phase": "fixer", "worker": "NEF",
+                "model": "m", "status": "OK"}
+
+    def test_prefers_the_worker_tagged_file_when_present(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            req_log_dir = Path(tmpdir)
+            tagged = req_log_dir / "2026-07-24T10:00:00-NEF-fixer-request.json"
+            tagged.write_text("{}")
+            self.assertEqual(request_path_for(req_log_dir, self._entry()), tagged)
+
+    def test_falls_back_to_the_legacy_untagged_name(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            req_log_dir = Path(tmpdir)
+            self.assertEqual(
+                response_path_for(req_log_dir, self._entry()),
+                req_log_dir / "2026-07-24T10:00:00-fixer-response.txt",
+            )
+
+    def test_same_second_calls_from_two_workers_resolve_to_distinct_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            req_log_dir = Path(tmpdir)
+            for worker in ("NEF", "JPEG"):
+                (req_log_dir / f"2026-07-24T10:00:00-{worker}-fixer-request.json").write_text("{}")
+            nef = request_path_for(req_log_dir, self._entry())
+            jpeg = request_path_for(req_log_dir, dict(self._entry(), worker="JPEG"))
+            self.assertNotEqual(nef, jpeg)
+            self.assertIn("NEF", nef.name)
+            self.assertIn("JPEG", jpeg.name)
 
 
 class ParseManifestLineTests(unittest.TestCase):

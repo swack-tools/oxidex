@@ -1,6 +1,8 @@
 import json
+import multiprocessing
 import os
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
@@ -11,6 +13,9 @@ from model_fix_loop import (
     ARCHITECTURE_PRIMER,
     KNOWN_PITFALLS,
     _normalize_model_config,
+    _state_locked,
+    load_tag_state,
+    save_tag_state,
     attempt_build,
     build_exact_sample_block,
     build_failure_critique_prompt,
@@ -180,6 +185,19 @@ class NormalizeModelConfigTests(unittest.TestCase):
         self.assertEqual(config["max_cluster_tags"], 6)
         self.assertEqual(config["use_sccache"], True)
         self.assertEqual(config["governor_calls_per_minute"], 30)
+
+    def test_claim_knobs_have_defaults(self):
+        config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
+        self.assertEqual(config["claim_stale_seconds"], 7200)
+        self.assertEqual(config["heartbeat_seconds"], 60)
+
+    def test_claim_knobs_are_overridable(self):
+        config = _normalize_model_config({
+            "base_url": "u", "api_key": "k", "models": ["m"],
+            "claim_stale_seconds": 3600, "heartbeat_seconds": 30,
+        })
+        self.assertEqual(config["claim_stale_seconds"], 3600)
+        self.assertEqual(config["heartbeat_seconds"], 30)
 
 
 class ExtractDiffTests(unittest.TestCase):
@@ -3781,7 +3799,110 @@ class LoadLandedTagsTests(unittest.TestCase):
                              {"JPEG:APP12:MODE3", "PSD:EXIF:Compression"})
 
 
+class LoadSaveTagStateTests(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.path = Path(self._tmpdir.name) / "model-fix-tag-state.json"
+
+    def test_missing_file_is_an_empty_state(self):
+        self.assertEqual(load_tag_state(self.path), {})
+
+    def test_save_then_load_round_trips(self):
+        save_tag_state(self.path, {"NEF:EXIF:ISO": {"fails": 3, "blacklisted": False}})
+        self.assertEqual(load_tag_state(self.path), {"NEF:EXIF:ISO": {"fails": 3, "blacklisted": False}})
+
+    def test_save_leaves_no_temp_file_behind(self):
+        # tempfile+os.replace: the directory holds exactly the state
+        # file afterward, never an orphaned .tmp sibling a reader could
+        # trip over.
+        save_tag_state(self.path, {"a": {}})
+        save_tag_state(self.path, {"a": {}, "b": {}})
+        self.assertEqual([p.name for p in self.path.parent.iterdir()], [self.path.name])
+
+    def test_torn_file_raises_instead_of_returning_empty(self):
+        # The old permissive behavior (torn read -> {}) let the next
+        # save wipe every worker's entries. A torn read must now stop
+        # the run.
+        self.path.write_text('{"NEF:EXIF:ISO": {"fails"')
+        with self.assertRaises(ValueError):
+            load_tag_state(self.path)
+
+    def test_non_dict_json_raises(self):
+        self.path.write_text('["not", "a", "dict"]')
+        with self.assertRaises(ValueError):
+            load_tag_state(self.path)
+
+
+def _state_contender(state_path, worker_id, n_ops, results_path):
+    """Child-process body for StateLockedContentionTests -- module-level
+    so multiprocessing's spawn start method can import it by name. Each
+    of n_ops iterations does one full locked read-modify-write:
+    increment a shared counter and claim the first unclaimed slot."""
+    claimed = []
+    for _ in range(n_ops):
+        def mutate(state):
+            state["counter"] = state.get("counter", 0) + 1
+            for key in sorted(state["slots"]):
+                if state["slots"][key] is None:
+                    state["slots"][key] = worker_id
+                    claimed.append(key)
+                    break
+            return state, None
+
+        _state_locked(state_path, mutate)
+    Path(results_path).write_text(json.dumps(claimed))
+
+
+class StateLockedContentionTests(unittest.TestCase):
+    def test_two_processes_claiming_under_contention_lose_nothing(self):
+        # Two real processes hammer one state file through _state_locked.
+        # Without the flock this reliably loses updates (load/save pairs
+        # interleave); with it, every increment lands and every slot has
+        # exactly one owner.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = str(Path(tmpdir) / "state.json")
+            n_ops = 20
+            save_tag_state(state_path, {
+                "counter": 0,
+                "slots": {f"slot{i:02d}": None for i in range(2 * n_ops)},
+            })
+            ctx = multiprocessing.get_context("spawn")
+            results = {w: str(Path(tmpdir) / f"claims-{w}.json") for w in ("a", "b")}
+            procs = [
+                ctx.Process(target=_state_contender, args=(state_path, w, n_ops, results[w]))
+                for w in ("a", "b")
+            ]
+            for p in procs:
+                p.start()
+            for p in procs:
+                p.join(timeout=120)
+                self.assertEqual(p.exitcode, 0)
+
+            final = load_tag_state(state_path)
+            # No lost update: all 2*n_ops locked increments landed.
+            self.assertEqual(final["counter"], 2 * n_ops)
+            claims_a = set(json.loads(Path(results["a"]).read_text()))
+            claims_b = set(json.loads(Path(results["b"]).read_text()))
+            # Disjoint claims: no slot was handed to both processes.
+            self.assertEqual(claims_a & claims_b, set())
+            self.assertEqual(len(claims_a) + len(claims_b), 2 * n_ops)
+            # And the persisted state agrees with each claimant's record.
+            for key, owner in final["slots"].items():
+                self.assertIn(key, claims_a if owner == "a" else claims_b)
+
+
 class RunTagLoopTests(unittest.TestCase):
+    def setUp(self):
+        # run_tag_loop serializes every state access through a real
+        # flock on state_path's sibling .lock file even when
+        # load/save_state_fn are injected in-memory fakes -- so the
+        # state path must live somewhere a lock file can actually be
+        # created.
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.state_path = str(Path(self._tmpdir.name) / "state.json")
+
     def _state_io(self):
         store = {}
 
@@ -3803,7 +3924,7 @@ class RunTagLoopTests(unittest.TestCase):
     def test_stops_when_no_tags_remain(self):
         result = run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: [], fix_gap_fn=lambda *a: self.fail("should not fix"),
-            state_path="/fake/state.json",
+            state_path=self.state_path,
             load_state_fn=lambda p: {}, save_state_fn=lambda p, s: None,
         )
         self.assertEqual(result["rounds"], 1)
@@ -3820,7 +3941,7 @@ class RunTagLoopTests(unittest.TestCase):
         store, load, save = self._state_io()
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1,
         )
         # Exactly one tag attempted this round, not both -- one tag per
@@ -3840,7 +3961,7 @@ class RunTagLoopTests(unittest.TestCase):
         store, load, save = self._state_io()
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=2, max_fails=2,
         )
         self.assertEqual(attempts, ["NEF:EXIF:LensModel", "NEF:EXIF:LensModel"])
@@ -3864,7 +3985,7 @@ class RunTagLoopTests(unittest.TestCase):
         before = time.time()
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=2, max_fails=2, worker_id="3",
         )
         after = time.time()
@@ -3885,7 +4006,7 @@ class RunTagLoopTests(unittest.TestCase):
         store, load, save = self._state_io()
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=9,
         )
         # 9 failures on the same tag (LensModel picked every round, since
@@ -3907,7 +4028,7 @@ class RunTagLoopTests(unittest.TestCase):
         store, load, save = self._state_io()
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=3, max_fails=10,
         )
         # Round 1 sees no history yet; round 2 sees round 1's; round 3
@@ -3940,7 +4061,7 @@ class RunTagLoopTests(unittest.TestCase):
         store, load, save = self._state_io()
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1, max_fails=10,
         )
         attempts = store["NEF:EXIF:LensModel"]["attempts"]
@@ -3959,7 +4080,7 @@ class RunTagLoopTests(unittest.TestCase):
         store["NEF:EXIF:ISO"] = {"fails": 10, "blacklisted": True}
         result = run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=5, blacklist_full=True,
         )
         # Must stop immediately (round 1) rather than reset-and-continue.
@@ -3985,7 +4106,7 @@ class RunTagLoopTests(unittest.TestCase):
         store, load, save = self._state_io()
         result = run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=5, max_fails=10, max_distinct_tags=1,
         )
         # Only the first tag ever picked (NEF:EXIF:LensModel) gets
@@ -4012,7 +4133,7 @@ class RunTagLoopTests(unittest.TestCase):
 
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix_b,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1, worker_id="b",
         )
         # Worker "b" must pick the OTHER tag (ISO), not the one "a" holds.
@@ -4035,7 +4156,7 @@ class RunTagLoopTests(unittest.TestCase):
 
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1, worker_id="b", claim_stale_seconds=1800,
         )
         self.assertIn("NEF:EXIF:LensModel", attempts)
@@ -4052,7 +4173,7 @@ class RunTagLoopTests(unittest.TestCase):
         store["NEF:EXIF:LensModel"] = {"fails": 2, "blacklisted": True}
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1,
         )
         # LensModel is blacklisted -- must never be attempted; ISO (the
@@ -4072,7 +4193,7 @@ class RunTagLoopTests(unittest.TestCase):
         store["NEF:EXIF:ISO"] = {"fails": 2, "blacklisted": True}
         result = run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=2,
         )
         # Round 1: everything blacklisted -> reset (no attempt made).
@@ -4080,6 +4201,153 @@ class RunTagLoopTests(unittest.TestCase):
         # fresh attempt.
         self.assertEqual(result["cycles_reset"], 1)
         self.assertEqual(len(attempts), 1)
+
+    def test_exhaustion_reset_deletes_exactly_the_considered_keys(self):
+        # The reset is scoped to the explicit key list this worker
+        # considered at claim-filter time (its own format's tags) --
+        # entries belonging to other formats/workers in the same shared
+        # state file must survive untouched. The old `state = {}` wiped
+        # them all, including live claims.
+        gaps = [make_gap()]  # this worker considers NEF:EXIF:LensModel + NEF:EXIF:ISO
+
+        store, load, save = self._state_io()
+        store["NEF:EXIF:LensModel"] = {"fails": 2, "blacklisted": True}
+        store["NEF:EXIF:ISO"] = {"fails": 2, "blacklisted": True}
+        # Another format's blacklist entry and another worker's live
+        # claim, both sharing this state file:
+        store["XMP:XMP:Title"] = {"fails": 10, "blacklisted": True}
+        store["JPEG:APP12:Qualite"] = {
+            "fails": 0, "blacklisted": False, "attempts": [],
+            "claimed_by": "jpeg-worker", "claimed_at": time.time(),
+        }
+
+        result = run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps,
+            fix_gap_fn=lambda tg, c, previous_attempts=None: self.fail("nothing claimable this round"),
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
+            max_rounds=1,
+        )
+        self.assertEqual(result["cycles_reset"], 1)
+        self.assertNotIn("NEF:EXIF:LensModel", store)
+        self.assertNotIn("NEF:EXIF:ISO", store)
+        self.assertIn("XMP:XMP:Title", store)
+        self.assertIn("JPEG:APP12:Qualite", store)
+        self.assertEqual(store["JPEG:APP12:Qualite"]["claimed_by"], "jpeg-worker")
+
+    def test_torn_state_file_raises_instead_of_wiping(self):
+        # Acceptance criterion (spec Phase 0): a torn tag-state file must
+        # stop the loop, with the file left byte-for-byte intact -- never
+        # be silently treated as {} and then overwritten.
+        torn = '{"NEF:EXIF:LensModel": {"fails"'
+        Path(self.state_path).write_text(torn)
+        with self.assertRaises(ValueError):
+            run_tag_loop(
+                {"models": ["x"]}, find_gaps_fn=lambda: [make_gap()],
+                fix_gap_fn=lambda tg, c, previous_attempts=None: {"status": "failed", "reason": "n"},
+                state_path=self.state_path,  # default (real) load/save fns
+                max_rounds=1,
+            )
+        self.assertEqual(Path(self.state_path).read_text(), torn)
+
+    def test_heartbeat_keeps_a_slow_claim_alive_past_the_stale_threshold(self):
+        # Fake clock: the claim is stamped at t=1000, then the attempt
+        # "runs" long enough that the clock reads t=3000 -- 2000 fake
+        # seconds, past claim_stale_seconds=1800, so without a heartbeat
+        # any other worker would treat the claim as abandoned. The
+        # heartbeat thread (real thread, tiny real cadence, fake
+        # timestamps) re-stamps claimed_at with the advanced clock, so
+        # the claim reads fresh for as long as the attempt lives.
+        clock = [1000.0]
+        observed = {}
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            clock[0] = 3000.0
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                entry = load_tag_state(self.state_path).get(tag_gap["tag_key"]) or {}
+                if entry.get("claimed_at") == 3000.0:
+                    observed.update(entry)
+                    break
+                time.sleep(0.005)
+            return {"status": "failed", "reason": "nope"}
+
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: [make_gap()], fix_gap_fn=fake_fix,
+            state_path=self.state_path,  # default (real) load/save fns
+            max_rounds=1, worker_id="w1", claim_stale_seconds=1800,
+            heartbeat_seconds=0.01, time_fn=lambda: clock[0],
+        )
+        self.assertEqual(observed.get("claimed_by"), "w1")
+        self.assertEqual(observed.get("claimed_at"), 3000.0)
+        # The staleness math another worker would run mid-attempt: the
+        # original stamp (t=1000) would read abandoned; the heartbeat's
+        # re-stamp does not.
+        self.assertGreaterEqual(3000.0 - 1000.0, 1800)  # un-heartbeated claim would be stale
+        self.assertLess(3000.0 - observed["claimed_at"], 1800)  # heartbeated claim is fresh
+
+    def test_heartbeat_thread_stops_when_the_attempt_ends(self):
+        # After run_tag_loop returns, no claim-heartbeat thread may
+        # still be running (threading.Event stop + join).
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: [make_gap()],
+            fix_gap_fn=lambda tg, c, previous_attempts=None: {"status": "failed", "reason": "n"},
+            state_path=self.state_path,
+            max_rounds=1, worker_id="w1", heartbeat_seconds=0.01,
+        )
+        self.assertFalse(
+            [t.name for t in threading.enumerate() if t.name.startswith("claim-heartbeat-")]
+        )
+
+    def test_heartbeat_survives_a_transient_touch_failure(self):
+        # A heartbeat touch can legitimately raise mid-attempt --
+        # load_tag_state's raise-on-torn-read while a pre-flock worker
+        # is still writing the file non-atomically (the mixed-version
+        # rollout window), or ENOSPC/EACCES on save. One such raise must
+        # not kill the daemon thread for the rest of a multi-hour
+        # attempt (silently reverting to the stale-claim/double-claim
+        # behavior the heartbeat exists to prevent): the loop logs via
+        # log_fn and beats again. Proven end-to-end here: the FIRST
+        # touch from the heartbeat thread raises, and the attempt then
+        # observes a re-stamp at the advanced clock -- a beat that can
+        # only have come from the thread surviving its failure.
+        clock = [1000.0]
+        heartbeat_failed = threading.Event()
+        logged = []
+        observed = {}
+
+        def flaky_load(path):
+            # Only the heartbeat thread's loads fail (once); the main
+            # loop's claim/record path must stay healthy throughout.
+            if (threading.current_thread().name.startswith("claim-heartbeat-")
+                    and not heartbeat_failed.is_set()):
+                heartbeat_failed.set()
+                raise ValueError("synthetic torn tag-state read")
+            return load_tag_state(path)
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            clock[0] = 3000.0
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                if heartbeat_failed.is_set():
+                    entry = load_tag_state(self.state_path).get(tag_gap["tag_key"]) or {}
+                    if entry.get("claimed_at") == 3000.0:
+                        observed.update(entry)
+                        break
+                time.sleep(0.005)
+            return {"status": "failed", "reason": "nope"}
+
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: [make_gap()], fix_gap_fn=fake_fix,
+            state_path=self.state_path, load_state_fn=flaky_load, log_fn=logged.append,
+            max_rounds=1, worker_id="w1", claim_stale_seconds=1800,
+            heartbeat_seconds=0.01, time_fn=lambda: clock[0],
+        )
+        self.assertTrue(heartbeat_failed.is_set())
+        self.assertEqual(observed.get("claimed_by"), "w1")
+        # The post-failure beat landed: the claim reads fresh at t=3000
+        # even though one touch blew up along the way.
+        self.assertEqual(observed.get("claimed_at"), 3000.0)
+        self.assertTrue(any("heartbeat touch failed" in line for line in logged))
 
     def test_fixed_tag_clears_its_state_entry(self):
         gaps = [make_gap()]
@@ -4091,7 +4359,7 @@ class RunTagLoopTests(unittest.TestCase):
         store["NEF:EXIF:LensModel"] = {"fails": 1, "blacklisted": False}
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1,
         )
         self.assertNotIn("NEF:EXIF:LensModel", store)
@@ -4105,12 +4373,12 @@ class RunTagLoopTests(unittest.TestCase):
 
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json",
+            state_path=self.state_path,
             load_state_fn=lambda p: {},
             save_state_fn=lambda p, s: written.append((p, dict(s))),
             max_rounds=1,
         )
-        self.assertEqual(written[-1][0], "/fake/state.json")
+        self.assertEqual(written[-1][0], Path(self.state_path))
         self.assertIn("NEF:EXIF:LensModel", written[-1][1])
 
     def test_calls_git_checkout_clean_only_when_a_tag_gets_blacklisted(self):
@@ -4123,7 +4391,7 @@ class RunTagLoopTests(unittest.TestCase):
         store, load, save = self._state_io()
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             git_checkout_clean_fn=lambda root: clean_calls.append(root),
             repo_root=Path("/fake/repo"),
             max_rounds=1, max_fails=2,
@@ -4133,7 +4401,7 @@ class RunTagLoopTests(unittest.TestCase):
 
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             git_checkout_clean_fn=lambda root: clean_calls.append(root),
             repo_root=Path("/fake/repo"),
             max_rounds=1, max_fails=2,
@@ -4157,7 +4425,7 @@ class RunTagLoopTests(unittest.TestCase):
         store, load, save = self._state_io()
         result = run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1, max_fails=1,
         )
         self.assertEqual(len(result["skipped"]), 1)
@@ -4186,7 +4454,7 @@ class RunTagLoopTests(unittest.TestCase):
             landed.write_text("2026-07-23T17:00:00 NEF:EXIF:LensModel\n")
             run_tag_loop(
                 {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-                state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+                state_path=self.state_path, load_state_fn=load, save_state_fn=save,
                 max_rounds=1, log_fn=logged.append, landed_tags_path=landed,
             )
         # fix_gap_fn only ever sees the OTHER tag -- the landed one is
@@ -4209,7 +4477,7 @@ class RunTagLoopTests(unittest.TestCase):
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps,
             fix_gap_fn=lambda tg, c, previous_attempts=None: {"status": "failed", "reason": "nope"},
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=3, refresh_worktree_fn=fake_refresh,
         )
         self.assertEqual(len(refresh_calls), 3)
@@ -4222,7 +4490,7 @@ class RunTagLoopTests(unittest.TestCase):
         result = run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps,
             fix_gap_fn=lambda tg, c, previous_attempts=None: {"status": "failed", "reason": "nope"},
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1,
         )
         self.assertEqual(result["rounds"], 1)
@@ -4235,7 +4503,7 @@ class RunTagLoopTests(unittest.TestCase):
         result = run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps,
             fix_gap_fn=lambda tg, c, previous_attempts=None: {"status": "failed", "reason": "nope"},
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1, refresh_worktree_fn=lambda: (False, "not possible to fast-forward"),
             log_fn=logged.append,
         )
@@ -4268,7 +4536,7 @@ class RunTagLoopTests(unittest.TestCase):
         store, load, save = self._state_io()
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=self._cluster_gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1, max_cluster_tags=6,
         )
         self.assertEqual(sorted(seen[0]),
@@ -4281,7 +4549,7 @@ class RunTagLoopTests(unittest.TestCase):
         store, load, save = self._state_io()
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=self._cluster_gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1, max_cluster_tags=6,
         )
         for key in ("JPEG:APP12:MODE3", "JPEG:APP12:MODE4", "JPEG:APP12:MODE5"):
@@ -4294,7 +4562,7 @@ class RunTagLoopTests(unittest.TestCase):
         store, load, save = self._state_io()
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=self._cluster_gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1, max_cluster_tags=6,
         )
         self.assertEqual(store["JPEG:APP12:MODE3"]["fails"], 1)
@@ -4313,7 +4581,7 @@ class RunTagLoopTests(unittest.TestCase):
         store, load, save = self._state_io()
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=self._cluster_gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1,
         )
         self.assertNotIn("cluster_members", seen[0])
@@ -4327,6 +4595,7 @@ class RunTagLoopInfraFailureTests(unittest.TestCase):
     rate-limit storm blacklists every active tag and litters each tag's
     prompt-visible history with junk 429 entries."""
 
+    setUp = RunTagLoopTests.setUp
     _state_io = RunTagLoopTests._state_io
 
     def test_pure_infra_failure_does_not_increment_fails_or_blacklist(self):
@@ -4342,7 +4611,7 @@ class RunTagLoopInfraFailureTests(unittest.TestCase):
         store, load, save = self._state_io()
         result = run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=4, max_fails=2,
         )
         # 4 pure-infra rounds against max_fails=2 would have blacklisted
@@ -4375,7 +4644,7 @@ class RunTagLoopInfraFailureTests(unittest.TestCase):
         store, load, save = self._state_io()
         run_tag_loop(
             {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
-            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
             max_rounds=1, max_fails=10,
         )
         # The real build failure still costs a fail, but only the round

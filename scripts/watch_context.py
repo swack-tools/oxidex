@@ -151,12 +151,27 @@ def latest_calls_per_worker(entries):
     return result
 
 
+def _artifact_path_for(req_log_dir, entry, kind):
+    """Resolve one call's request/response artifact. Files are named
+    {ts}-{worker}-{phase}-... so same-second calls from different
+    workers can't overwrite each other; files written before that
+    change used {ts}-{phase}-..., so fall back to the legacy name when
+    the worker-tagged one isn't on disk (or the entry predates worker=
+    manifest tagging)."""
+    worker = entry.get("worker")
+    if worker:
+        tagged = req_log_dir / f"{entry['ts']}-{worker}-{entry['phase']}-{kind}"
+        if tagged.exists():
+            return tagged
+    return req_log_dir / f"{entry['ts']}-{entry['phase']}-{kind}"
+
+
 def request_path_for(req_log_dir, entry):
-    return req_log_dir / f"{entry['ts']}-{entry['phase']}-request.json"
+    return _artifact_path_for(req_log_dir, entry, "request.json")
 
 
 def response_path_for(req_log_dir, entry):
-    return req_log_dir / f"{entry['ts']}-{entry['phase']}-response.txt"
+    return _artifact_path_for(req_log_dir, entry, "response.txt")
 
 
 def load_request_messages(req_log_dir, entry):
