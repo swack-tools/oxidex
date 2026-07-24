@@ -50,6 +50,7 @@ const KNOWN_TAGS: &[&str] = &[
     "ExposureBias",
     "FNumber",
     "Flash",
+    "LightS",
     "Macro",
     "Zoom",
     "Resolution",
@@ -77,6 +78,13 @@ const KNOWN_TAGS: &[&str] = &[
     "EXP2",
     "EXP3",
     "JPEG1",
+    "MODE1",
+    "MODE2",
+    "MODE3",
+    "MODE4",
+    "MODE5",
+    "MODE6",
+    "MTR2",
     "FCS1",
     "FCS2",
     "FCS3",
@@ -352,6 +360,17 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:ColorMode".to_string(), app12_value);
             }
 
+            // ExifTool exposes the Olympus LightS diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("LightS") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:LightS".to_string(), app12_value);
+            }
+
             // ExifTool exposes these Olympus diagnostic fields in the APP12
             // group rather than as an Olympus maker-note tag.
             if key.eq_ignore_ascii_case("CAM4") || key.eq_ignore_ascii_case("CAM6") {
@@ -390,6 +409,17 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:EXP1".to_string(), app12_value);
             }
 
+            // ExifTool exposes the Olympus MTR2 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("MTR2") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:MTR2".to_string(), app12_value);
+            }
+
             // ExifTool exposes the Olympus EXP2 diagnostic field in the
             // APP12 group using its original name.
             if key.eq_ignore_ascii_case("EXP2") {
@@ -421,6 +451,20 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:JPEG1".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus MODE1..MODE6 diagnostic fields in
+            // the APP12 group using their original names.
+            let mode_upper = key.to_ascii_uppercase();
+            if matches!(
+                mode_upper.as_str(),
+                "MODE1" | "MODE2" | "MODE3" | "MODE4" | "MODE5" | "MODE6"
+            ) {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert(format!("APP12:{}", mode_upper), app12_value);
             }
 
             // ExifTool exposes the Olympus IMbb diagnostic field in the
@@ -564,6 +608,19 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:ContTake".to_string(), app12_value);
+            }
+
+            // MTR1 is an Olympus Picture Info diagnostic field. ExifTool
+            // exposes it in the JPEG APP12 group using its original name.
+            // Keep unexpected non-numeric values rather than dropping a
+            // malformed or vendor-specific record.
+            if key.eq_ignore_ascii_case("MTR1") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:MTR1".to_string(), app12_value);
             }
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
@@ -784,6 +841,15 @@ mod camera_type_tests {
     }
 
     #[test]
+    fn test_olympus_mtr1_diagnostic_value() {
+        let metadata =
+            parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nMTR1=504\r\n")
+                .expect("Olympus Picture Info should parse");
+
+        assert_eq!(metadata.get_integer("APP12:MTR1"), Some(504));
+    }
+
+    #[test]
     fn test_olympus_cam1_diagnostic_value() {
         let metadata = parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nCAM1=59\r\n")
             .expect("Olympus Picture Info should parse");
@@ -820,6 +886,32 @@ mod camera_type_tests {
                 .expect("Olympus Picture Info should parse");
 
         assert_eq!(metadata.get_integer("APP12:ColorMode"), Some(1));
+    }
+
+    #[test]
+    fn test_olympus_lights_app12_tag() {
+        let metadata =
+            parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0[picture info]\r\nLightS=1\r\n")
+                .expect("Olympus Picture Info should parse");
+
+        assert_eq!(metadata.get_integer("APP12:LightS"), Some(1));
+    }
+
+    #[test]
+    fn test_olympus_mode3_through_mode6_app12_tags() {
+        // MODE1/MODE2 were already exposed under the APP12 group; MODE3..MODE6
+        // (seen in OlympusD620L.jpg) previously only got the generic Olympus:
+        // prefix. ExifTool reports all six under the APP12/PictureInfo group.
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS OPTICAL CO.,LTD.\0[picture info]\r\n\
+              MODE3=0\r\nMODE4=0\r\nMODE5=1\r\nMODE6=1\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        assert_eq!(metadata.get_integer("APP12:MODE3"), Some(0));
+        assert_eq!(metadata.get_integer("APP12:MODE4"), Some(0));
+        assert_eq!(metadata.get_integer("APP12:MODE5"), Some(1));
+        assert_eq!(metadata.get_integer("APP12:MODE6"), Some(1));
     }
 
     #[test]

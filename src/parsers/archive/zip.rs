@@ -8,7 +8,11 @@ use zip::ZipArchive;
 const ZIP_SIGNATURE: &[u8] = b"PK";
 const ZIP_LOCAL_FILE_HEADER_SIGNATURE: &[u8] = b"PK\x03\x04";
 const ZIP_LOCAL_FILE_HEADER_PREFIX_SIZE: usize = 8;
+const ZIP_LOCAL_FILE_COMPRESSION_OFFSET: usize = 8;
+const ZIP_LOCAL_FILE_COMPRESSION_FIELD_END: usize = ZIP_LOCAL_FILE_COMPRESSION_OFFSET + 2;
 const ZIP_LOCAL_FILE_BIT_FLAG_OFFSET: usize = 6;
+const ZIP_LOCAL_FILE_CRC_OFFSET: usize = 14;
+const ZIP_LOCAL_FILE_CRC_FIELD_END: usize = ZIP_LOCAL_FILE_CRC_OFFSET + 4;
 
 /// Parser for ZIP archive files
 ///
@@ -36,6 +40,48 @@ impl ZipParser {
         Ok(Some(u16::from_le_bytes([
             header[ZIP_LOCAL_FILE_BIT_FLAG_OFFSET],
             header[ZIP_LOCAL_FILE_BIT_FLAG_OFFSET + 1],
+        ])))
+    }
+
+    /// Reads the compression method from the first local file header.
+    ///
+    /// ZIP stores this value as a little-endian 16-bit integer at offset 8
+    /// from the start of a local file header.
+    fn read_first_local_file_compression(reader: &dyn FileReader) -> Result<Option<u16>> {
+        if reader.size() < ZIP_LOCAL_FILE_COMPRESSION_FIELD_END as u64 {
+            return Ok(None);
+        }
+
+        let header = reader.read(0, ZIP_LOCAL_FILE_COMPRESSION_FIELD_END)?;
+        if !header.starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+            return Ok(None);
+        }
+
+        Ok(Some(u16::from_le_bytes([
+            header[ZIP_LOCAL_FILE_COMPRESSION_OFFSET],
+            header[ZIP_LOCAL_FILE_COMPRESSION_OFFSET + 1],
+        ])))
+    }
+
+    /// Reads the CRC-32 value from the first local file header.
+    ///
+    /// ZIP stores this value as a little-endian 32-bit integer at offset 14
+    /// from the start of the local file header.
+    fn read_first_local_file_crc(reader: &dyn FileReader) -> Result<Option<u32>> {
+        if reader.size() < ZIP_LOCAL_FILE_CRC_FIELD_END as u64 {
+            return Ok(None);
+        }
+
+        let header = reader.read(0, ZIP_LOCAL_FILE_CRC_FIELD_END)?;
+        if !header.starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+            return Ok(None);
+        }
+
+        Ok(Some(u32::from_le_bytes([
+            header[ZIP_LOCAL_FILE_CRC_OFFSET],
+            header[ZIP_LOCAL_FILE_CRC_OFFSET + 1],
+            header[ZIP_LOCAL_FILE_CRC_OFFSET + 2],
+            header[ZIP_LOCAL_FILE_CRC_OFFSET + 3],
         ])))
     }
 
@@ -106,6 +152,27 @@ impl FormatParser for ZipParser {
             metadata.insert(
                 "ZIP:ZipBitFlag".to_string(),
                 TagValue::new_integer(bit_flag as i64),
+            );
+        }
+
+        if let Some(compression) = Self::read_first_local_file_compression(reader)? {
+            let compression = match compression {
+                0 => "None",
+                8 => "Deflated",
+                12 => "BZIP2",
+                93 => "Zstandard",
+                _ => "Unknown",
+            };
+            metadata.insert(
+                "ZIP:ZipCompression".to_string(),
+                TagValue::new_string(compression.to_string()),
+            );
+        }
+
+        if let Some(zip_crc) = Self::read_first_local_file_crc(reader)? {
+            metadata.insert(
+                "ZIP:ZipCRC".to_string(),
+                TagValue::new_string(format!("0x{:08x}", zip_crc)),
             );
         }
 
@@ -485,6 +552,63 @@ mod tests {
         assert_eq!(
             ZipParser::read_first_local_file_bit_flag(&reader).unwrap(),
             Some(0x1234)
+        );
+    }
+
+    #[test]
+    fn test_zip_compression_extraction() {
+        // Local file header with the "stored" compression method.
+        let data = [
+            0x50, 0x4b, 0x03, 0x04, // Local file header signature
+            0x0a, 0x00, // Version needed
+            0x00, 0x00, // General-purpose bit flag
+            0x00, 0x00, // Compression method (stored)
+        ];
+        let reader = BufferedReader::from_bytes(&data);
+
+        assert_eq!(
+            ZipParser::read_first_local_file_compression(&reader).unwrap(),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn test_zip_crc_extraction() {
+        let data = [
+            0x50, 0x4b, 0x03, 0x04, // Local file header signature
+            0x0a, 0x00, // Version needed
+            0x00, 0x00, // General-purpose bit flag
+            0x00, 0x00, // Compression method
+            0xd7, 0x4e, // Modification time
+            0x1c, 0x39, // Modification date
+            0x1a, 0x46, 0x17, 0x6e, // CRC-32
+        ];
+        let reader = BufferedReader::from_bytes(&data);
+
+        assert_eq!(
+            ZipParser::read_first_local_file_crc(&reader).unwrap(),
+            Some(0x6e17461a)
+        );
+    }
+
+    #[test]
+    fn test_zip_crc_metadata_format() {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = ZipWriter::new(&mut buffer);
+            zip.start_file("test.txt", SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(b"ExifTool test file\n").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let data = buffer.into_inner();
+        let reader = BufferedReader::from_bytes(&data);
+        let metadata = ZipParser.parse(&reader).unwrap();
+
+        assert_eq!(
+            metadata.get("ZIP:ZipCRC"),
+            Some(&TagValue::new_string("0x6e17461a".to_string()))
         );
     }
 

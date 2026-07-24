@@ -851,6 +851,36 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_olympus_app12_mode1() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nMODE1=0\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:MODE1"),
+            Some(0),
+            "MODE1 should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_mode2() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nMODE2=0\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:MODE2"),
+            Some(0),
+            "MODE2 should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
     fn test_parse_olympus_app12_imrb() {
         // Diagnostic data from OlympusD620L.jpg.
         let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMrb=32721\r\n";
