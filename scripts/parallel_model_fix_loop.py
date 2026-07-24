@@ -146,6 +146,28 @@ def commits_on_branch(repo_root, base_ref, branch):
     return [line for line in result.stdout.splitlines() if line]
 
 
+def novel_commits(repo_root, base_ref, branch):
+    """SHAs on `branch` whose *changes* are not already present in base_ref
+    by patch-id -- i.e. genuinely new work, oldest first.
+
+    commits_on_branch lists every commit not reachable from base_ref by SHA,
+    which counts a "dirty dup" as new: a worker re-derives a fix that another
+    format's sweep already landed in base_ref while this worker's worktree
+    sat on an older base, so the diff is identical but the commit hash (new
+    parent) differs. `git cherry` compares by patch-id instead -- a hash of
+    the normalized diff, blind to line numbers and parent -- and prints
+    "+ <sha>" for commits with no equivalent upstream, "- <sha>" for those
+    whose patch already exists in base_ref. Keeping only the "+" lines yields
+    exactly the commits worth merging; an all-"-" branch contributes nothing
+    and must be dropped rather than merged as a redundant no-op.
+    """
+    result = subprocess.run(  # nosec B603
+        ["git", "cherry", base_ref, branch],
+        cwd=repo_root, capture_output=True, text=True, check=True,
+    )
+    return [line[2:] for line in result.stdout.splitlines() if line.startswith("+ ")]
+
+
 def merge_branch(repo_root, branch, cargo_test_fn=None):
     """Merge branch into repo_root's current branch. On merge success, run
     the full test suite; if it regresses, roll back just this merge (never
@@ -356,7 +378,7 @@ def run_round(args, config_path):
             print(f"[{fmt}] {result['status']}{extra}")
 
     print("\nMerging completed worker branches...")
-    merged, failed, empty = [], [], []
+    merged, failed, empty, dup = [], [], [], []
     for fmt in formats:
         result = results[fmt]
         if result["status"] != "worker_done":
@@ -366,6 +388,20 @@ def run_round(args, config_path):
         commits = commits_on_branch(REPO_ROOT, base_ref, result["branch"])
         if not commits:
             empty.append(fmt)
+            remove_worktree(REPO_ROOT, result["worktree"])
+            delete_branch(REPO_ROOT, result["branch"])
+            continue
+
+        # Patch-id gate: if every commit's change is already in base_ref (a
+        # "dirty dup" -- the worker re-derived a fix another format's sweep
+        # already landed while this worktree sat on an older base), the branch
+        # adds no new diff. Merging it would only pile on redundant no-op
+        # commits, so drop it here just like an empty branch. This is the
+        # airtight guard against dup pollution regardless of how stale the
+        # worker's base was; re-anchoring worktrees to fresh main only narrows
+        # the window, it can't close it once a sweep lands mid-run.
+        if not novel_commits(REPO_ROOT, base_ref, result["branch"]):
+            dup.append(fmt)
             remove_worktree(REPO_ROOT, result["worktree"])
             delete_branch(REPO_ROOT, result["branch"])
             continue
@@ -383,6 +419,7 @@ def run_round(args, config_path):
     for fmt, count in merged:
         print(f"  {fmt}: {count} commits")
     print(f"empty:   {len(empty)} formats (no commits, worktree cleaned up)")
+    print(f"dup:     {len(dup)} formats (only already-merged changes by patch-id, skipped)")
     print(f"failed:  {len(failed)} formats" + (" (worktree left for inspection)" if failed else ""))
     for fmt, reason in failed:
         print(f"  {fmt}: {reason}")
