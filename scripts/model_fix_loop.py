@@ -2652,7 +2652,13 @@ def load_landed_tags(path):
     accepted-verdict append) -- workers skip these instead of re-deriving
     a fix that's already merged (observed live: the ZIP worker reproduced
     the identical ZipCRC diff a full round after the sweep landed it).
-    Missing/corrupt file = empty set; each line is "<iso-ts> <tag_key>"."""
+    Missing/corrupt file = empty set; each line is "<iso-ts> <tag_key>".
+
+    Spec M5 tombstones: a "<iso-ts> REVERTED <tag_key>" line (appended by
+    log_sweep_review.py --revert) REMOVES the tag from the landed set so
+    a reverted fix's tag re-enters the worker pool instead of being
+    suppressed forever. Lines replay in file order, so a re-land after a
+    revert puts the tag back in the skip set."""
     try:
         text = Path(path).read_text()
     except OSError:
@@ -2660,8 +2666,13 @@ def load_landed_tags(path):
     landed = set()
     for line in text.splitlines():
         parts = line.strip().split(None, 1)
-        if len(parts) == 2:
-            landed.add(parts[1])
+        if len(parts) != 2:
+            continue
+        rest = parts[1]
+        if rest.startswith("REVERTED "):
+            landed.discard(rest[len("REVERTED "):].strip())
+        else:
+            landed.add(rest)
     return landed
 
 
