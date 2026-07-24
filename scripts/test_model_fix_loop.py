@@ -26,6 +26,7 @@ from model_fix_loop import (
     call_model,
     extract_cache_usage,
     compact_messages,
+    DEFAULT_GOVERNOR_BURST,
     detect_duplicate_tag_insertion,
     estimate_tokens,
     expand_gaps_to_tags,
@@ -154,6 +155,13 @@ class NormalizeModelConfigTests(unittest.TestCase):
         self.assertEqual(config["max_verify_turns"], 2)
         self.assertEqual(config["compaction_trigger_tokens"], 6000)
         self.assertEqual(config["compaction_keep_recent_turns"], 8)
+
+    def test_governor_knobs_have_defaults(self):
+        config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
+        self.assertEqual(config["governor_calls_per_minute"], 30)
+        self.assertEqual(config["governor_burst"], 5)
+        self.assertEqual(config["governor_cooldown_seconds"], 30)
+        self.assertEqual(config["governor_max_cooldown_seconds"], 300)
 
 
 class ExtractDiffTests(unittest.TestCase):
@@ -593,6 +601,45 @@ class CallModelRetryTests(unittest.TestCase):
                 max_tokens=100, reasoning_effort="max",
                 max_retries=-1, sleep_fn=lambda s: None,
             )
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_429_is_retried(self, mock_urlopen):
+        ok_body = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
+        ok_cm = MagicMock()
+        ok_cm.read.return_value = ok_body
+        ok_response = MagicMock()
+        ok_response.__enter__.return_value = ok_cm
+        mock_urlopen.side_effect = [self._http_error(429), ok_response]
+        reply = call_model(
+            [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "max",
+            sleep_fn=lambda s: None,
+        )
+        self.assertEqual(reply, "hi")
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_governor_is_acquired_per_attempt_and_reported(self, mock_urlopen):
+        ok_body = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
+        ok_cm = MagicMock()
+        ok_cm.read.return_value = ok_body
+        ok_response = MagicMock()
+        ok_response.__enter__.return_value = ok_cm
+        mock_urlopen.side_effect = [self._http_error(429), ok_response]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gov = Path(tmpdir) / "gov.json"
+            # cooldown_seconds=0: the 429 must still be REPORTED (streak
+            # increments, then the success resets it) without creating a
+            # real-wall-clock cooldown this test would have to sit out --
+            # cooldown waiting itself is covered by RateGovernorTests with
+            # injected clocks.
+            call_model(
+                [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "max",
+                sleep_fn=lambda s: None, governor_path=gov,
+                governor_cooldown_seconds=0, governor_max_cooldown_seconds=0,
+            )
+            state = json.loads(gov.read_text())
+        # limited once (the 429) then reset by the success
+        self.assertEqual(state["consecutive_limited"], 0)
+        self.assertLess(state["tokens"], DEFAULT_GOVERNOR_BURST)  # slots were spent
 
 
 class CallModelStreamingTests(unittest.TestCase):

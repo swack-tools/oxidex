@@ -244,7 +244,10 @@ def compact_messages(messages, trigger_tokens=DEFAULT_COMPACTION_TRIGGER_TOKENS,
     return compacted
 
 
-DEFAULT_RETRYABLE_HTTP_STATUSES = {500, 502, 503, 504}
+# 429 is retryable now that the governor paces retries fleet-wide (see
+# governor_acquire/governor_report) instead of each process backing off
+# independently against the shared account limit.
+DEFAULT_RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 DEFAULT_MAX_RETRIES = 1000
 DEFAULT_RETRY_BACKOFF_SECONDS = 2
 DEFAULT_MAX_RETRY_BACKOFF_SECONDS = 120  # cap growth -- 2**1000 would otherwise be absurd
@@ -309,14 +312,17 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
                 temperature=0, timeout=120, max_retries=DEFAULT_MAX_RETRIES,
                 retry_backoff_seconds=DEFAULT_RETRY_BACKOFF_SECONDS,
                 max_retry_backoff_seconds=DEFAULT_MAX_RETRY_BACKOFF_SECONDS, sleep_fn=time.sleep,
-                log_fn=None, usage_fn=None, prompt_cache="auto"):
+                log_fn=None, usage_fn=None, prompt_cache="auto",
+                governor_path=None, governor_calls_per_minute=None, governor_burst=None,
+                governor_cooldown_seconds=None, governor_max_cooldown_seconds=None):
     """POST a chat-completions request, retrying on transient upstream
     failures, and return the assistant's reply text.
 
     Retries (with exponential backoff -- retry_backoff_seconds, *2, *4, ...,
     capped at max_retry_backoff_seconds so a large max_retries doesn't
-    imply an absurd wait -- up to max_retries times) on: a 5xx HTTPError
-    (500/502/503/504 -- server-side, not this request's fault, confirmed
+    imply an absurd wait -- up to max_retries times) on: a retryable
+    HTTPError (429/500/502/503/504 -- rate limiting or server-side, not
+    this request's fault, confirmed
     to occur in bursts across otherwise-unrelated concurrent workers), a
     connection-level URLError (DNS resolution failure, refused connection,
     TLS handshake failure, or a stalled read -- no HTTP response was ever
@@ -326,12 +332,24 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
     comes back completely empty (a provider occasionally returns "200 OK"
     with zero content -- not a legitimate model answer, indistinguishable
     from a dropped/truncated response, and retrying is cheap compared to
-    burning a whole fix attempt on it). A non-5xx HTTPError (4xx: bad
-    request, auth, etc.) fails immediately -- retrying an actual
-    client-side problem just wastes time and can mask a real config
-    issue. max_retries is high (not unlimited) specifically to ride out a
-    long transient outage rather than give up and blacklist a tag over
-    infrastructure, not the tag itself, being the problem.
+    burning a whole fix attempt on it). A non-retryable HTTPError (4xx
+    other than 429: bad request, auth, etc.) fails immediately --
+    retrying an actual client-side problem just wastes time and can mask
+    a real config issue. max_retries is high (not unlimited) specifically
+    to ride out a long transient outage rather than give up and blacklist
+    a tag over infrastructure, not the tag itself, being the problem.
+
+    governor_path (None disables, keeping every old caller byte-identical
+    in behavior) points at the cross-process rate-governor state file (see
+    governor_acquire/governor_report): every attempt first acquires one
+    governor slot (waiting out the shared token bucket and any fleet-wide
+    cooldown, reusing this call's sleep_fn), and every outcome is reported
+    back -- limited=True for a retryable HTTPError (429/5xx, which
+    sets/extends the GLOBAL cooldown so one limited worker pauses the
+    whole fleet), limited=False for a success or a connection-level
+    URLError (infrastructure being unreachable is not rate limiting). The
+    governor_* knobs default to None, resolved to the DEFAULT_GOVERNOR_*
+    values at call time (they are defined later in this module).
 
     When stream is True, the response arrives as OpenAI-compatible SSE
     ("data: {...}" lines terminated by "data: [DONE]") -- each chunk's
@@ -358,6 +376,22 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
     however long that takes, which looks indistinguishable from "stuck"
     to anything tailing the log or a dashboard reading it.
     """
+    # The DEFAULT_GOVERNOR_* constants live after the Task-1 governor
+    # section below this function; resolving them here at call time (not
+    # in the def-time defaults) avoids a NameError at import.
+    governor_calls_per_minute = (
+        DEFAULT_GOVERNOR_CALLS_PER_MINUTE if governor_calls_per_minute is None
+        else governor_calls_per_minute
+    )
+    governor_burst = DEFAULT_GOVERNOR_BURST if governor_burst is None else governor_burst
+    governor_cooldown_seconds = (
+        DEFAULT_GOVERNOR_COOLDOWN_SECONDS if governor_cooldown_seconds is None
+        else governor_cooldown_seconds
+    )
+    governor_max_cooldown_seconds = (
+        DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS if governor_max_cooldown_seconds is None
+        else governor_max_cooldown_seconds
+    )
     last_error = None
     for attempt in range(max_retries + 1):
         if attempt > 0:
@@ -368,12 +402,17 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
                     f"waiting {delay}s"
                 )
             sleep_fn(delay)
+        governor_acquire(governor_path, governor_calls_per_minute, governor_burst,
+                         sleep_fn=sleep_fn)
         try:
             reply, usage = _call_model_once(
                 messages, base_url, api_key, model, max_tokens, reasoning_effort,
                 stream, thinking, temperature, timeout, prompt_cache,
             )
         except urllib.error.HTTPError as e:
+            governor_report(governor_path, limited=(e.code in DEFAULT_RETRYABLE_HTTP_STATUSES),
+                            cooldown_seconds=governor_cooldown_seconds,
+                            max_cooldown_seconds=governor_max_cooldown_seconds)
             if e.code not in DEFAULT_RETRYABLE_HTTP_STATUSES:
                 raise
             last_error = e
@@ -390,6 +429,10 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
             # attempts and got it blacklisted without the model ever
             # actually being asked -- see urlopen error "nodename nor
             # servname provided" in a real run's attempt history.
+            # Connection failures aren't rate limiting: limited=False.
+            governor_report(governor_path, limited=False,
+                            cooldown_seconds=governor_cooldown_seconds,
+                            max_cooldown_seconds=governor_max_cooldown_seconds)
             last_error = e
             continue
         if not reply:
@@ -397,6 +440,9 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
             continue
         if usage_fn is not None:
             usage_fn(usage)
+        governor_report(governor_path, limited=False,
+                        cooldown_seconds=governor_cooldown_seconds,
+                        max_cooldown_seconds=governor_max_cooldown_seconds)
         return reply
     # last_error is only None if max_retries < 0 (range(max_retries + 1) never
     # iterates) -- guard against `raise None`, which would raise a confusing
@@ -2728,6 +2774,10 @@ def _normalize_model_config(table):
         "max_retries": table.get("max_retries", DEFAULT_MAX_RETRIES),
         "retry_backoff_seconds": table.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS),
         "max_retry_backoff_seconds": table.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),
+        "governor_calls_per_minute": table.get("governor_calls_per_minute", DEFAULT_GOVERNOR_CALLS_PER_MINUTE),
+        "governor_burst": table.get("governor_burst", DEFAULT_GOVERNOR_BURST),
+        "governor_cooldown_seconds": table.get("governor_cooldown_seconds", DEFAULT_GOVERNOR_COOLDOWN_SECONDS),
+        "governor_max_cooldown_seconds": table.get("governor_max_cooldown_seconds", DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS),
     }
 
 
@@ -2967,6 +3017,14 @@ def main(argv=None):
                     max_retries, retry_backoff_seconds, max_retry_backoff_seconds,
                     log_fn=log_retry, usage_fn=capture_usage,
                     prompt_cache=config.get("prompt_cache", "auto"),
+                    # The governor is account-global, so worker-vs-reviewer
+                    # knob differences don't matter -- every phase shares the
+                    # worker config's knobs and the one state file.
+                    governor_path=DEFAULT_GOVERNOR_PATH,
+                    governor_calls_per_minute=config["governor_calls_per_minute"],
+                    governor_burst=config["governor_burst"],
+                    governor_cooldown_seconds=config["governor_cooldown_seconds"],
+                    governor_max_cooldown_seconds=config["governor_max_cooldown_seconds"],
                 )
             except Exception as e:
                 elapsed = time.time() - t0
