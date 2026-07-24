@@ -325,13 +325,22 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         _ => lookup_raw_tag_name(canonical_tag_id, ifd_name, format),
                     };
                     let tag_value = if format == RawFormat::AdobeDNG {
-                        format_dng_integer_array(*tag_id, bytes, *field_type, *value_count, byte_order)
-                            .map(TagValue::new_string)
-                            .unwrap_or_else(|| {
-                                raw_bytes_to_simple_tag_value(
-                                    bytes, *field_type, *value_count, byte_order,
-                                )
-                            })
+                        format_dng_integer_array(
+                            *tag_id,
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        )
+                        .map(TagValue::new_string)
+                        .unwrap_or_else(|| {
+                            raw_bytes_to_simple_tag_value(
+                                bytes,
+                                *field_type,
+                                *value_count,
+                                byte_order,
+                            )
+                        })
                     } else {
                         raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
                     };
@@ -482,11 +491,19 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 .map(TagValue::new_string)
                                 .unwrap_or_else(|| {
                                     raw_bytes_to_simple_tag_value(
-                                        bytes, field_type, value_count, byte_order,
+                                        bytes,
+                                        field_type,
+                                        value_count,
+                                        byte_order,
                                     )
                                 })
                             } else {
-                                raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order)
+                                raw_bytes_to_simple_tag_value(
+                                    bytes,
+                                    field_type,
+                                    value_count,
+                                    byte_order,
+                                )
                             };
                             metadata.insert(tag_name, tag_value);
                         }
@@ -669,22 +686,14 @@ mod dng_integer_array_tests {
     #[test]
     fn formats_little_endian_dng_integer_arrays() {
         assert_eq!(
-            format_dng_integer_array(
-                0xC619,
-                &[1, 0, 1, 0],
-                3,
-                2,
-                ByteOrder::LittleEndian,
-            )
-            .as_deref(),
+            format_dng_integer_array(0xC619, &[1, 0, 1, 0], 3, 2, ByteOrder::LittleEndian,)
+                .as_deref(),
             Some("1 1")
         );
         assert_eq!(
             format_dng_integer_array(
                 0xC68D,
-                &[
-                    14, 0, 0, 0, 42, 0, 0, 0, 24, 9, 0, 0, 188, 13, 0, 0,
-                ],
+                &[14, 0, 0, 0, 42, 0, 0, 0, 24, 9, 0, 0, 188, 13, 0, 0,],
                 4,
                 4,
                 ByteOrder::LittleEndian,
@@ -701,13 +710,7 @@ mod dng_integer_array_tests {
             None
         );
         assert_eq!(
-            format_dng_integer_array(
-                0xC68D,
-                &[14, 0, 0, 0],
-                4,
-                4,
-                ByteOrder::LittleEndian,
-            ),
+            format_dng_integer_array(0xC68D, &[14, 0, 0, 0], 4, 4, ByteOrder::LittleEndian,),
             None
         );
     }
