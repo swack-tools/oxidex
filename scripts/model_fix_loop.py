@@ -657,10 +657,17 @@ def cargo_env():
     across worktrees instead of every worker cold-compiling the same ~60
     crates independently. A no-op (falls back to the plain environment,
     i.e. cargo's normal incremental cache only) when sccache isn't on PATH,
-    so this never breaks an environment that doesn't have it.
+    so this never breaks an environment that doesn't have it. Respects an
+    explicit RUSTC_WRAPPER already in the environment, and can be disabled
+    outright with OXIDEX_USE_SCCACHE=0 (main() sets that env var from
+    config.toml's use_sccache knob).
     """
     env = dict(os.environ)
-    if shutil.which("sccache"):
+    if (
+        os.environ.get("OXIDEX_USE_SCCACHE") != "0"
+        and "RUSTC_WRAPPER" not in env
+        and shutil.which("sccache")
+    ):
         env["RUSTC_WRAPPER"] = "sccache"
     return env
 
@@ -796,6 +803,19 @@ def cargo_test_workspace(repo_root):
     regressed" with no detail to act on."""
     result = subprocess.run(  # nosec B603
         ["cargo", "test", "--workspace"],
+        capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
+    )
+    return result.returncode == 0, result.stdout + result.stderr
+
+
+def cargo_test_targeted(repo_root, filter_str):
+    """Fast first-line test gate: only lib tests whose names match
+    filter_str (the format lowercased -- best-effort, zero matches is a
+    pass, which cargo already treats as success). The full workspace
+    suite still gates every commit; this just stops candidates that are
+    about to die at review from paying the full-suite price first."""
+    result = subprocess.run(  # nosec B603
+        ["cargo", "test", "--lib", filter_str],
         capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
     )
     return result.returncode == 0, result.stdout + result.stderr
@@ -2158,6 +2178,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             git_apply_fn=git_apply,
             git_checkout_clean_fn=git_checkout_clean, git_commit_fn=git_commit,
             cargo_build_fn=cargo_build, cargo_test_workspace_fn=cargo_test_workspace,
+            cargo_test_targeted_fn=cargo_test_targeted,
             cargo_check_fn=cargo_check,
             attempt_build_fn=attempt_build, review_fn=review_verdict,
             critique_fn=critique_failed_attempt,
@@ -2211,6 +2232,12 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     in tests despite config["models"] holding multiple entries.
 
     cargo_check_fn is threaded to attempt_build_fn for the VERIFY protocol.
+
+    cargo_test_targeted_fn(repo_root, filter_str) -> (success, output) is
+    the cheap first-line test gate (cargo test --lib <format lowercased>)
+    run right after the gap-count gate; the full workspace suite via
+    cargo_test_workspace_fn only runs once a candidate has survived
+    review, immediately before the commit.
 
     log_fn(str) is called with a one-line status update at every decision
     point (build result, gap delta, review verdict, commit) -- defaults to
@@ -2352,16 +2379,11 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
                 return outcome
             continue
 
-        tests_passed, test_output = cargo_test_workspace_fn(repo_root)
-        if not tests_passed:
+        t_ok, t_out = cargo_test_targeted_fn(repo_root, fmt.lower())
+        if not t_ok:
             git_checkout_clean_fn(repo_root)
-            # Failure detail (which assertion, panic message) is usually
-            # near the end, right before the "test result: FAILED" summary
-            # -- the full output can run to thousands of lines for a
-            # 2000+-test workspace run, so only the tail is kept.
-            tail = test_output[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]
-            reason = f"cargo test --workspace regressed:\n{tail}"
-            log_fn(f"[{fmt}] cargo test --workspace regressed, reverting")
+            reason = f"targeted tests ({fmt.lower()}) regressed:\n{t_out[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            log_fn(f"[{fmt}] targeted tests regressed, reverting")
             outcome = critique_and_continue("test_regressed", reason, round_index)
             if outcome:
                 return outcome
@@ -2378,6 +2400,20 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             gap, diff, review_config, call_model_fn=review_call_model_fn, pick_model_fn=pick_model_fn,
         )
         if approved:
+            tests_passed, test_output = cargo_test_workspace_fn(repo_root)
+            if not tests_passed:
+                git_checkout_clean_fn(repo_root)
+                # Failure detail (which assertion, panic message) is usually
+                # near the end, right before the "test result: FAILED" summary
+                # -- the full output can run to thousands of lines for a
+                # 2000+-test workspace run, so only the tail is kept.
+                tail = test_output[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]
+                reason = f"cargo test --workspace regressed:\n{tail}"
+                log_fn(f"[{fmt}] cargo test --workspace regressed, reverting")
+                outcome = critique_and_continue("test_regressed", reason, round_index)
+                if outcome:
+                    return outcome
+                continue
             closed = gap["gap_count"] - remaining
             git_commit_fn(
                 f"fix({fmt.lower()}): wire {closed} missing tags "
@@ -2968,6 +3004,7 @@ def _normalize_model_config(table):
         "governor_cooldown_seconds": table.get("governor_cooldown_seconds", DEFAULT_GOVERNOR_COOLDOWN_SECONDS),
         "governor_max_cooldown_seconds": table.get("governor_max_cooldown_seconds", DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS),
         "max_cluster_tags": table.get("max_cluster_tags", DEFAULT_MAX_CLUSTER_TAGS),
+        "use_sccache": table.get("use_sccache", True),
     }
 
 
@@ -3104,6 +3141,10 @@ def main(argv=None):
                 file=sys.stderr,
             )
             return 1
+
+    # Before the first cargo subprocess: let config.toml's use_sccache knob
+    # (worker table, default on) reach cargo_env's OXIDEX_USE_SCCACHE gate.
+    os.environ["OXIDEX_USE_SCCACHE"] = "1" if config.get("use_sccache", True) else "0"
 
     def find_gaps_fn():
         if args.only_format:

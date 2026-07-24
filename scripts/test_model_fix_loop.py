@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -22,6 +23,8 @@ from model_fix_loop import (
     critique_failed_attempt,
     cargo_build,
     cargo_check,
+    cargo_env,
+    cargo_test_targeted,
     cargo_test_workspace,
     apply_prompt_cache_markers,
     call_model,
@@ -1047,6 +1050,32 @@ class CargoTestWorkspaceTests(unittest.TestCase):
         self.assertIn("thread panicked", output)
 
 
+class CargoTestTargetedTests(unittest.TestCase):
+    @patch("model_fix_loop.subprocess.run")
+    def test_runs_lib_tests_with_the_filter(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
+        ok, output = cargo_test_targeted(Path("/fake"), "app12")
+        self.assertTrue(ok)
+        self.assertEqual(mock_run.call_args[0][0], ["cargo", "test", "--lib", "app12"])
+
+
+class CargoEnvSccacheTests(unittest.TestCase):
+    @patch("model_fix_loop.shutil.which")
+    def test_sets_wrapper_when_available_and_enabled(self, mock_which):
+        mock_which.return_value = "/opt/homebrew/bin/sccache"
+        with patch.dict(os.environ, {"OXIDEX_USE_SCCACHE": "1"}, clear=False):
+            os.environ.pop("RUSTC_WRAPPER", None)
+            env = cargo_env()
+        self.assertEqual(env.get("RUSTC_WRAPPER"), "sccache")
+
+    @patch("model_fix_loop.shutil.which")
+    def test_disabled_by_env_flag(self, mock_which):
+        mock_which.return_value = "/opt/homebrew/bin/sccache"
+        with patch.dict(os.environ, {"OXIDEX_USE_SCCACHE": "0"}, clear=False):
+            env = cargo_env()
+        self.assertNotEqual(env.get("RUSTC_WRAPPER"), "sccache")
+
+
 def make_gap(gap_count=2):
     return {
         "format": "NEF",
@@ -2022,6 +2051,7 @@ class FixGapHappyPathTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: commit_calls.append(msg),
             cargo_build_fn=lambda root: (True, ""),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             review_fn=lambda g, diff, config, **kwargs: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -2817,13 +2847,71 @@ class FixGapFailureTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: self.fail("should not commit"),
             cargo_build_fn=lambda root: (True, ""),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (False, "test output"),
+            review_fn=lambda g, diff, config, **kwargs: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
         self.assertEqual(result["status"], "failed")
         self.assertIn("cargo test --workspace regressed", result["reason"])
         self.assertIn("test output", result["reason"])
+
+
+class FixGapTestOrderingTests(unittest.TestCase):
+    def test_targeted_runs_before_review_full_suite_only_before_commit(self):
+        order = []
+        result = fix_gap(
+            make_gap(gap_count=1), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            recheck_fn=lambda fmt: 0,
+            cargo_test_targeted_fn=lambda root, f: (order.append("targeted"), (True, ""))[1],
+            cargo_test_workspace_fn=lambda root: (order.append("full"), (True, ""))[1],
+            review_fn=lambda *a, **k: (order.append("review"), (True, ""))[1],
+            git_commit_fn=lambda msg, root: order.append("commit"),
+            git_checkout_clean_fn=lambda root: None,
+            detect_duplicate_fn=lambda *a: False,
+            log_fn=lambda s: None,
+        )
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(order, ["targeted", "review", "full", "commit"])
+
+    def test_targeted_failure_is_a_test_regressed_round_without_full_suite(self):
+        full_runs = []
+        result = fix_gap(
+            make_gap(gap_count=1), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            recheck_fn=lambda fmt: 0,
+            cargo_test_targeted_fn=lambda root, f: (False, "targeted boom"),
+            cargo_test_workspace_fn=lambda root: (full_runs.append(1), (True, ""))[1],
+            git_checkout_clean_fn=lambda root: None,
+            critique_fn=lambda *a, **k: "critique",
+            log_fn=lambda s: None,
+            max_repair_rounds=1,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("targeted boom", result["reason"])
+        self.assertEqual(full_runs, [])
+
+    def test_full_suite_failure_before_commit_reverts_and_fails_the_round(self):
+        commits = []
+        result = fix_gap(
+            make_gap(gap_count=1), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            recheck_fn=lambda fmt: 0,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (False, "full boom"),
+            review_fn=lambda *a, **k: (True, ""),
+            git_commit_fn=lambda msg, root: commits.append(1),
+            git_checkout_clean_fn=lambda root: None,
+            detect_duplicate_fn=lambda *a: False,
+            critique_fn=lambda *a, **k: "critique",
+            log_fn=lambda s: None,
+            max_repair_rounds=1,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("full boom", result["reason"])
+        self.assertEqual(commits, [])
 
 
 class FixGapCritiqueTests(unittest.TestCase):
@@ -2839,7 +2927,9 @@ class FixGapCritiqueTests(unittest.TestCase):
             gap, CONFIG,
             attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
             critique_fn=lambda g, diff, fk, reason, cfg, **kwargs: critique_reasons.append(reason) or "critique",
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (False, "thread 'x' panicked: assertion failed"),
+            review_fn=lambda g, diff, config, **kwargs: (True, ""),
             git_checkout_clean_fn=lambda root: None,
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -2872,6 +2962,7 @@ class FixGapCritiqueTests(unittest.TestCase):
             review_fn=lambda g, diff, config, **kwargs: (True, ""),
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -2902,6 +2993,7 @@ class FixGapCritiqueTests(unittest.TestCase):
             review_fn=lambda g, diff, config, **kwargs: (True, ""),
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -2936,6 +3028,7 @@ class FixGapCritiqueTests(unittest.TestCase):
             critique_fn=lambda *a, **kwargs: critique_calls.append(1),
             detect_duplicate_fn=lambda diff, tag, root: True,
             git_checkout_clean_fn=lambda root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -2992,6 +3085,7 @@ class FixGapReviewTests(unittest.TestCase):
             review_fn=fake_review,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: commit_calls.append(msg),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3016,6 +3110,7 @@ class FixGapReviewTests(unittest.TestCase):
             review_fn=lambda g, diff, config, **kwargs: (False, "hardcodes the sample value"),
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: self.fail("should not commit"),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3045,6 +3140,7 @@ class FixGapReviewTests(unittest.TestCase):
             attempt_build_fn=fake_attempt_build,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3081,6 +3177,7 @@ class FixGapReviewTests(unittest.TestCase):
             attempt_build_fn=fake_attempt_build,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3111,6 +3208,7 @@ class FixGapReviewTests(unittest.TestCase):
             attempt_build_fn=fake_attempt_build,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3139,6 +3237,7 @@ class FixGapReviewTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
             cargo_build_fn=lambda root: (True, ""),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3170,6 +3269,7 @@ class FixGapReviewTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
             cargo_build_fn=lambda root: (True, ""),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3198,6 +3298,7 @@ class FixGapReviewTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
             cargo_build_fn=lambda root: (True, ""),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3232,6 +3333,7 @@ class FixGapReviewTests(unittest.TestCase):
             review_config=review_config,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3265,6 +3367,7 @@ class FixGapReviewTests(unittest.TestCase):
             review_fn=fake_review,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3293,6 +3396,7 @@ class FixGapDuplicateDetectionTests(unittest.TestCase):
             detect_duplicate_fn=lambda diff, tag_literal, repo_root: True,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: self.fail("must not commit a detected duplicate"),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3313,6 +3417,7 @@ class FixGapDuplicateDetectionTests(unittest.TestCase):
             detect_duplicate_fn=lambda diff, tag_literal, repo_root: False,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: commit_calls.append(msg),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3335,6 +3440,7 @@ class FixGapDuplicateDetectionTests(unittest.TestCase):
             detect_duplicate_fn=lambda diff, tag_literal, repo_root: detect_calls.append(tag_literal) or False,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
