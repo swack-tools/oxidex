@@ -29,6 +29,28 @@ use crate::parsers::raw::{RawFormat, raf_parser};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use crate::tag_db::lookup_tag_name;
 
+/// Resolve TIFF/EP DNG tags using ExifTool's EXIF group.
+///
+/// DNG stores these tags in a RAW SubIFD, but ExifTool assigns them to its
+/// EXIF group rather than exposing the physical SubIFD directory name.
+fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String {
+    if format == RawFormat::AdobeDNG
+        && matches!(
+            tag_id,
+            0xC619 // BlackLevelRepeatDim
+                | 0xC61A // BlackLevel
+                | 0xC62D // BayerGreenSplit
+                | 0xC632 // AntiAliasStrength
+                | 0xC65C // BestQualityScale
+                | 0xC68D // ActiveArea
+        )
+    {
+        lookup_tag_name(tag_id, "EXIF")
+    } else {
+        lookup_tag_name(tag_id, ifd_name)
+    }
+}
+
 /// Format TIFF/EP CFAPattern2 (tag 0x828E), whose components are unsigned
 /// bytes printed by ExifTool as a space-separated list.
 fn format_cfa_pattern2(bytes: &[u8], value_count: u32) -> String {
@@ -300,10 +322,28 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         (RawFormat::PanasonicRW2, 0, 0x001E) => {
                             format!("{}:BlackLevelBlue", ifd_name)
                         }
-                        _ => lookup_tag_name(canonical_tag_id, ifd_name),
+                        _ => lookup_raw_tag_name(canonical_tag_id, ifd_name, format),
                     };
-                    let tag_value =
-                        raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order);
+                    let tag_value = if format == RawFormat::AdobeDNG {
+                        format_dng_integer_array(
+                            *tag_id,
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        )
+                        .map(TagValue::new_string)
+                        .unwrap_or_else(|| {
+                            raw_bytes_to_simple_tag_value(
+                                bytes,
+                                *field_type,
+                                *value_count,
+                                byte_order,
+                            )
+                        })
+                    } else {
+                        raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
+                    };
                     metadata.insert(tag_name, tag_value);
                 }
 
@@ -438,13 +478,33 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 continue;
                             }
 
-                            let tag_name = lookup_tag_name(tag_id, sub_ifd_name);
-                            let tag_value = raw_bytes_to_simple_tag_value(
-                                raw_bytes.as_ref(),
-                                field_type,
-                                value_count,
-                                byte_order,
-                            );
+                            let tag_name = lookup_raw_tag_name(tag_id, sub_ifd_name, format);
+                            let bytes = raw_bytes.as_ref();
+                            let tag_value = if format == RawFormat::AdobeDNG {
+                                format_dng_integer_array(
+                                    tag_id,
+                                    bytes,
+                                    field_type,
+                                    value_count,
+                                    byte_order,
+                                )
+                                .map(TagValue::new_string)
+                                .unwrap_or_else(|| {
+                                    raw_bytes_to_simple_tag_value(
+                                        bytes,
+                                        field_type,
+                                        value_count,
+                                        byte_order,
+                                    )
+                                })
+                            } else {
+                                raw_bytes_to_simple_tag_value(
+                                    bytes,
+                                    field_type,
+                                    value_count,
+                                    byte_order,
+                                )
+                            };
                             metadata.insert(tag_name, tag_value);
                         }
                     }
@@ -493,6 +553,61 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     }
 
     Ok(metadata)
+}
+
+/// Format DNG integer-array tags whose ExifTool default output preserves all
+/// components as a space-separated list.
+///
+/// The generic TIFF value conversion intentionally reduces SHORT and LONG
+/// values to one scalar. These two DNG tags have meaningful fixed-size arrays,
+/// so validate their declared TIFF type and complete byte payload before
+/// formatting them.
+fn format_dng_integer_array(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    let component_size = match tag_id {
+        0xC619 if field_type == 3 => 2, // BlackLevelRepeatDim: SHORT[2]
+        0xC68D if field_type == 4 => 4, // ActiveArea: LONG[4]
+        _ => return None,
+    };
+
+    let value_count = usize::try_from(value_count).ok()?;
+    let byte_len = value_count.checked_mul(component_size)?;
+    let values = bytes.get(..byte_len)?;
+
+    let formatted = match component_size {
+        2 => values
+            .chunks_exact(2)
+            .map(|chunk| {
+                let value = match byte_order {
+                    ByteOrder::LittleEndian => u16::from_le_bytes([chunk[0], chunk[1]]),
+                    ByteOrder::BigEndian => u16::from_be_bytes([chunk[0], chunk[1]]),
+                };
+                value.to_string()
+            })
+            .collect::<Vec<_>>(),
+        4 => values
+            .chunks_exact(4)
+            .map(|chunk| {
+                let value = match byte_order {
+                    ByteOrder::LittleEndian => {
+                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                    }
+                    ByteOrder::BigEndian => {
+                        u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                    }
+                };
+                value.to_string()
+            })
+            .collect::<Vec<_>>(),
+        _ => return None,
+    };
+
+    Some(formatted.join(" "))
 }
 
 /// Decode EXIF tag 0xA302 (CFAPattern).
@@ -559,6 +674,51 @@ mod cfa_pattern_tests {
         let bytes = [2, 0, 2, 0, 2];
         assert_eq!(
             decode_exif_cfa_pattern(&bytes, ByteOrder::LittleEndian),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
+mod dng_integer_array_tests {
+    use super::*;
+
+    #[test]
+    fn formats_little_endian_dng_integer_arrays() {
+        assert_eq!(
+            format_dng_integer_array(0xC619, &[1, 0, 1, 0], 3, 2, ByteOrder::LittleEndian,)
+                .as_deref(),
+            Some("1 1")
+        );
+        assert_eq!(
+            format_dng_integer_array(
+                0xC68D,
+                &[14, 0, 0, 0, 42, 0, 0, 0, 24, 9, 0, 0, 188, 13, 0, 0,],
+                4,
+                4,
+                ByteOrder::LittleEndian,
+            )
+            .as_deref(),
+            Some("14 42 2328 3516")
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_type_or_truncated_dng_integer_array() {
+        assert_eq!(
+            format_dng_integer_array(0xC619, &[1, 0, 1, 0], 4, 2, ByteOrder::LittleEndian),
+            None
+        );
+        assert_eq!(
+            format_dng_integer_array(0xC68D, &[14, 0, 0, 0], 4, 4, ByteOrder::LittleEndian,),
+            None
+        );
+    }
+
+    #[test]
+    fn ignores_unrelated_dng_array_tags() {
+        assert_eq!(
+            format_dng_integer_array(0xC61A, &[1, 0], 3, 1, ByteOrder::LittleEndian),
             None
         );
     }
