@@ -20,9 +20,14 @@ const PLATFORM_UNICODE: u16 = 0;
 const PLATFORM_MACINTOSH: u16 = 1;
 const PLATFORM_WINDOWS: u16 = 3;
 
-/// Platform-specific language IDs for Hebrew name records
+/// Platform-specific language IDs for localized name records.
+const LANGUAGE_DANISH_MACINTOSH: u16 = 7;
+const LANGUAGE_GERMAN_MACINTOSH: u16 = 2;
 const LANGUAGE_HEBREW_MACINTOSH: u16 = 10;
+const LANGUAGE_DANISH_WINDOWS: u16 = 0x0406;
+const LANGUAGE_GERMAN_WINDOWS: u16 = 0x0407;
 const LANGUAGE_HEBREW_WINDOWS: u16 = 0x040d;
+const LANGUAGE_ENGLISH_WINDOWS: u16 = 0x0409;
 
 /// Name IDs for name table records
 const NAME_COPYRIGHT: u16 = 0;
@@ -213,6 +218,41 @@ impl TTFParser {
         Ok(decoded)
     }
 
+    /// Returns the ExifTool language suffix for supported localized name records.
+    fn language_suffix(record: &NameRecord) -> Option<&'static str> {
+        match (record.platform_id, record.language_id) {
+            (PLATFORM_MACINTOSH, LANGUAGE_DANISH_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_DANISH_WINDOWS) => Some("da"),
+            (PLATFORM_MACINTOSH, LANGUAGE_GERMAN_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_GERMAN_WINDOWS) => Some("de"),
+            (PLATFORM_MACINTOSH, LANGUAGE_HEBREW_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_HEBREW_WINDOWS) => Some("he"),
+            _ => None,
+        }
+    }
+
+    /// Whether this record is the default English-language form of a name.
+    fn is_default_language(record: &NameRecord) -> bool {
+        match record.platform_id {
+            PLATFORM_WINDOWS => record.language_id == LANGUAGE_ENGLISH_WINDOWS,
+            PLATFORM_MACINTOSH | PLATFORM_UNICODE => record.language_id == 0,
+            _ => false,
+        }
+    }
+
+    /// Sort records by default language, then preferred platform.
+    fn name_record_priority(record: &NameRecord) -> (u8, u8) {
+        (
+            u8::from(!Self::is_default_language(record)),
+            match record.platform_id {
+                PLATFORM_WINDOWS => 0,
+                PLATFORM_UNICODE => 1,
+                PLATFORM_MACINTOSH => 2,
+                _ => 3,
+            },
+        )
+    }
+
     /// Extracts metadata from name table
     fn extract_name_metadata(reader: &dyn FileReader, table: &TableEntry) -> Result<MetadataMap> {
         let mut metadata = MetadataMap::new();
@@ -245,12 +285,7 @@ impl TTFParser {
             let record = records
                 .iter()
                 .filter(|r| r.name_id == *name_id)
-                .min_by_key(|r| match r.platform_id {
-                    PLATFORM_WINDOWS => 0,
-                    PLATFORM_UNICODE => 1,
-                    PLATFORM_MACINTOSH => 2,
-                    _ => 3,
-                });
+                .min_by_key(|record| Self::name_record_priority(record));
 
             if let Some(rec) = record
                 && let Ok(Some(value)) =
@@ -262,28 +297,37 @@ impl TTFParser {
 
                 // ExifTool reports these name-table values in the shared
                 // Font group as well.
-                if *name_id == NAME_COPYRIGHT {
-                    metadata.insert("Font:Copyright".to_string(), tag_value);
-                } else if *name_id == NAME_FONT_FAMILY {
-                    metadata.insert("Font:FontFamily".to_string(), tag_value);
+                let font_key = match *name_id {
+                    NAME_COPYRIGHT => Some("Font:Copyright"),
+                    NAME_FONT_FAMILY => Some("Font:FontFamily"),
+                    NAME_FULL_FONT_NAME => Some("Font:FontName"),
+                    NAME_FONT_SUBFAMILY => Some("Font:FontSubfamily"),
+                    _ => None,
+                };
+                if let Some(font_key) = font_key {
+                    metadata.insert(font_key.to_string(), tag_value);
                 }
             }
         }
 
-        // Preserve the localized Hebrew copyright record. The language ID
-        // namespace depends on the name record's platform.
-        for record in records.iter().filter(|record| {
-            record.name_id == NAME_COPYRIGHT
-                && ((record.platform_id == PLATFORM_MACINTOSH
-                    && record.language_id == LANGUAGE_HEBREW_MACINTOSH)
-                    || (record.platform_id == PLATFORM_WINDOWS
-                        && record.language_id == LANGUAGE_HEBREW_WINDOWS))
-        }) {
+        // ExifTool exposes localized name table records with a language suffix.
+        for record in &records {
+            let base_key = match record.name_id {
+                NAME_FONT_FAMILY => Some("Font:FontFamily"),
+                NAME_FULL_FONT_NAME => Some("Font:FontName"),
+                NAME_FONT_SUBFAMILY => Some("Font:FontSubfamily"),
+                _ => None,
+            };
+            let Some(base_key) = base_key else {
+                continue;
+            };
+            let Some(language) = Self::language_suffix(record) else {
+                continue;
+            };
             if let Some(value) = Self::extract_name_string(reader, table, record, string_offset)?
                 && !value.is_empty()
             {
-                metadata.insert("Font:Copyright-he".to_string(), TagValue::String(value));
-                break;
+                metadata.insert(format!("{base_key}-{language}"), TagValue::String(value));
             }
         }
 
