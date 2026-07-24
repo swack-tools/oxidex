@@ -40,6 +40,7 @@ import json
 import os
 import re
 import shutil
+import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
 import time
 import tomllib
@@ -106,6 +107,11 @@ LOG_TIMESTAMP_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\]")
 # logs/tags-found.log's one line per fix (see model_fix_loop.py's
 # log_tag_found): "<iso-ts> worker=<id> tag=<key> gaps_closed=<n>".
 TAGS_FOUND_LINE_RE = re.compile(r"^(\S+) worker=(\S+) tag=(\S+) gaps_closed=(\d+)")
+
+# Commit subjects that count as landed tag fixes on the "Landed (git):"
+# line: tag-fix commits use conventional feat:/fix(fmt): subjects;
+# docs/style/merge commits must not count.
+LANDED_SUBJECT_RE = re.compile(r"^(feat|fix)[(:!]")
 
 # The wrapper's own (never-truncated, append-only) stdout -- see
 # parallel_tag_fix_loop.py's spawn_worker/pass-2 cleanup prints. Unlike a
@@ -391,6 +397,70 @@ def found_stats(entries, now):
         "total": total, "last_hour": last_hour, "last_24h": last_24h,
         "last_at": last_at, "last_tag": last_tag, "last_worker": last_worker,
     }
+
+
+def git_landed_log(repo_root):
+    """Raw `git log` output (one "%ct<TAB>%s" line per commit) for
+    non-merge commits touching src/ in the last 24h. Exists because a
+    SWEEP session lands tag fixes straight on the branch without ever
+    appending to the workers' tags-found.log -- git history is the only
+    place those fixes are visible, and without this the dashboard reads
+    "0 last hour" while fixes are actually landing. Returns "" on any
+    failure (missing git binary, repo_root not a repo or not even a
+    directory): the dashboard must never crash over a stat line.
+    """
+    try:
+        result = subprocess.run(  # nosec B603 -- fixed argv, no untrusted input
+            ["git", "log", "--no-merges", "--since=24 hours",
+             "--format=%ct%x09%s", "--", "src/"],
+            capture_output=True, text=True, cwd=repo_root,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout
+
+
+def parse_landed_log(text):
+    """[(epoch_int, subject_str), ...] from git_landed_log's output,
+    keeping only lines shaped "<digits>\\t<subject>" whose subject
+    matches LANDED_SUBJECT_RE -- feat:/fix( tag-fix commits, not
+    docs/style/merge noise. Skips anything else outright: git itself
+    won't emit malformed lines, but this parser follows
+    parse_tags_found_log's rule of never crashing over one bad line.
+    """
+    out = []
+    for line in text.splitlines():
+        epoch_str, sep, subject = line.partition("\t")
+        if not sep or not epoch_str.isdigit():
+            continue
+        if LANDED_SUBJECT_RE.match(subject):
+            out.append((int(epoch_str), subject))
+    return out
+
+
+def landed_stats(entries, now):
+    """{"last_hour", "last_24h", "last_at", "last_subject"} from
+    parse_landed_log's entries -- the same hour/24h windows as
+    found_stats, so the "Landed (git):" line reads directly against the
+    "Tags found:" line above it. last_at is the max epoch (git log's own
+    ordering isn't relied on -- cheap safety, mirroring found_stats),
+    paired with that commit's subject; both None when nothing landed.
+    """
+    last_hour = last_24h = 0
+    last_at = None
+    last_subject = None
+    for epoch, subject in entries:
+        if last_at is None or epoch > last_at:
+            last_at, last_subject = epoch, subject
+        age = now - epoch
+        if age <= 3600:
+            last_hour += 1
+        if age <= 86400:
+            last_24h += 1
+    return {"last_hour": last_hour, "last_24h": last_24h,
+            "last_at": last_at, "last_subject": last_subject}
 
 
 def parse_wrapper_log(path):
@@ -701,7 +771,7 @@ def _box_line(text, width, color=BRIGHT_WHITE):
 
 def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrapper_log_path,
                       format_progress, max_tag_fails, now, term_width=100, worktree_dir=None,
-                      manifest_path=None, mode="tag"):
+                      manifest_path=None, mode="tag", landed=None):
     """The full dashboard: header, aggregate found/blacklist stats, a
     colored progress bar per known format, then one detail row per
     worker/format (status, current round/tag, when it launched onto that
@@ -715,7 +785,15 @@ def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrappe
     format-name ids (<FORMAT>.log) -- see discover_worker_ids, which
     picks it automatically from whatever's actually in log_dir. Every
     other per-mode difference (log path, worktree subdirectory name)
-    flows from this one flag."""
+    flows from this one flag.
+
+    landed is landed_stats' dict (or None to omit the line): git-sourced
+    landed-fix counts, rendered directly under "Tags found:" so fixes a
+    SWEEP session committed straight to the branch -- bypassing
+    tags-found.log entirely -- still show up. Computed by the caller
+    rather than here because this function otherwise only reads
+    log/state files, never runs git (see the module docstring's safety
+    promise)."""
     width = max(60, term_width)
     state = load_tag_state(tag_state_path)
     bl_stats = blacklist_stats(state, now)
@@ -742,6 +820,18 @@ def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrappe
         f"{DIM}|{RESET}  {GREEN}{fnd_stats['last_24h']}{RESET} last 24h  "
         f"{DIM}|{RESET}  last: {CYAN}{last_found_str}{RESET}"
     )
+    if landed is not None:
+        last_landed_str = "never"
+        if landed["last_at"] is not None:
+            last_landed_str = (
+                f"{format_relative(now - landed['last_at'])} "
+                f"({landed['last_subject'][:60]})"
+            )
+        lines.append(
+            f"  {BOLD}Landed (git):{RESET} {BRIGHT_GREEN}{landed['last_hour']}{RESET} last hour  "
+            f"{DIM}|{RESET}  {GREEN}{landed['last_24h']}{RESET} last 24h  "
+            f"{DIM}|{RESET}  last: {CYAN}{last_landed_str}{RESET}"
+        )
     lines.append(
         f"  {BOLD}Blacklisted:{RESET} {BRIGHT_RED}{bl_stats['total']}{RESET} total  "
         f"{DIM}|{RESET}  {YELLOW}{bl_stats['last_hour']}{RESET} last hour  "
@@ -943,11 +1033,19 @@ def main(argv=None, sleep_fn=time.sleep, stdout=sys.stdout, now_fn=time.time):
             worktree_dir = args.worktree_dir or DEFAULT_WORKTREE_DIR_BY_MODE[mode]
             term_width = shutil.get_terminal_size(fallback=(100, 24)).columns
             format_progress = discover_format_progress(args.tagcmp_dir, args.repo_root)
+            now = now_fn()
+            # Recomputed every redraw, not cached: a SWEEP session can land a
+            # commit between any two frames, and this line exists precisely to
+            # surface those (they never touch tags-found.log).
+            landed = (
+                landed_stats(parse_landed_log(git_landed_log(args.repo_root)), now)
+                if args.repo_root else None
+            )
             stdout.write("\x1b[2J\x1b[H")  # clear screen, cursor home
             stdout.write(render_dashboard(
                 log_dir, worker_ids, tags_found_log, tag_state_path, wrapper_log_path,
-                format_progress, args.max_tag_fails, now_fn(), term_width, worktree_dir,
-                manifest_path, mode,
+                format_progress, args.max_tag_fails, now, term_width, worktree_dir,
+                manifest_path, mode, landed=landed,
             ) + "\n")
             stdout.flush()
             sleep_fn(args.interval)

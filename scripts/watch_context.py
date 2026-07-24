@@ -124,16 +124,30 @@ def load_manifest_entries(manifest_path):
 
 
 def latest_calls_per_worker(entries):
-    """entries (file order) -> {worker: {"fixer": entry_or_None, "reviewer": entry_or_None}},
-    each the most recent entry of that phase for that worker (any status --
-    OK, RETRY, or ERROR, since an in-flight RETRY is itself useful "what's
-    happening right now" context, not just completed calls)."""
+    """entries (file order) -> {worker: {"fixer": entry_or_None, "reviewer": entry_or_None,
+    "fixer_content": ..., "reviewer_content": ...}}.
+
+    "{phase}" is the most recent entry of that phase for that worker (any
+    status -- OK, RETRY, or ERROR, since an in-flight RETRY is itself
+    useful "what's happening right now" context, not just completed
+    calls). "{phase}_content" is the most recent NON-RETRY entry: RETRY
+    manifest lines carry their own retry-event timestamp, which never
+    matches a request/response file on disk (those are named for the
+    original call's timestamp), so during a long retry storm the latest
+    entry has status but no viewable content -- the _content entry is
+    what render_worker_detail falls back to so the dashboard keeps
+    showing the conversation instead of "request file missing"."""
     result = {}
     for entry in entries:
         worker = entry["worker"]
         phase = entry["phase"]
-        result.setdefault(worker, {"fixer": None, "reviewer": None})
+        result.setdefault(worker, {
+            "fixer": None, "reviewer": None,
+            "fixer_content": None, "reviewer_content": None,
+        })
         result[worker][phase] = entry
+        if entry["status"] != "RETRY":
+            result[worker][f"{phase}_content"] = entry
     return result
 
 
@@ -237,16 +251,33 @@ def render_worker_detail(worker, calls, req_log_dir, phase, term_width, now_fn=t
         "",
     ]
 
+    content_entry = entry
     messages = load_request_messages(req_log_dir, entry)
     if messages is None:
-        lines.append(f"{RED}Request file missing or unreadable: {request_path_for(req_log_dir, entry)}{RESET}")
+        # A RETRY entry's timestamp is the retry event, not the original
+        # call -- no file exists under that name. Fall back to the last
+        # completed call so a retry storm doesn't blank the whole view.
+        fallback = calls.get(f"{phase}_content") if calls else None
+        if fallback is not None and fallback["ts"] != entry["ts"]:
+            fallback_messages = load_request_messages(req_log_dir, fallback)
+            if fallback_messages is not None:
+                content_entry = fallback
+                messages = fallback_messages
+                lines.append(
+                    f"{YELLOW}Current call is {entry['status']} (no content under its own "
+                    f"timestamp) -- showing the last completed {phase} call, "
+                    f"{format_elapsed_ago(content_entry['ts'], now_fn=now_fn)}:{RESET}"
+                )
+                lines.append("")
+    if messages is None:
+        lines.append(f"{RED}Request file missing or unreadable: {request_path_for(req_log_dir, content_entry)}{RESET}")
     else:
         lines.append(f"{BOLD}=== SENT ({len(messages)} message(s)) ==={RESET}")
         for i, msg in enumerate(messages):
             lines.append(render_message(msg, i, term_width))
             lines.append("")
 
-    response = load_response_text(req_log_dir, entry)
+    response = load_response_text(req_log_dir, content_entry)
     lines.append(f"{BOLD}=== RECEIVED ==={RESET}")
     if response is None:
         lines.append(f"{DIM}(no response yet -- last call status is {entry['status']}){RESET}")

@@ -19,7 +19,18 @@ api_key = "your-api-key-here"
 max_tokens = 4096
 max_prompt_tokens = 4096
 reasoning_effort = "low"
+# stream = true is the default; the reply (and, when the provider sends a
+# final usage chunk via stream_options.include_usage, its cache/token
+# accounting) is reassembled exactly as a non-streamed call would return.
 stream = true
+# prompt_cache: "auto" (default) sends plain messages and relies on the
+# provider's automatic prefix caching -- build_prompt orders sections
+# static-first so that prefix is maximal. "explicit" additionally wraps the
+# static prefix in an Anthropic-style cache_control breakpoint (only helps
+# providers that accept it; opt-in since it changes the request shape).
+# "off" disables both. Either way, cached-token counts the provider reports
+# are logged to manifest.log as cached_tokens=<hit>/<total>.
+prompt_cache = "auto"
 thinking = false
 temperature = 0.7
 max_prompt_tags = 40

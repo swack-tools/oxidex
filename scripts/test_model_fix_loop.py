@@ -22,7 +22,9 @@ from model_fix_loop import (
     cargo_build,
     cargo_check,
     cargo_test_workspace,
+    apply_prompt_cache_markers,
     call_model,
+    extract_cache_usage,
     compact_messages,
     detect_duplicate_tag_insertion,
     estimate_tokens,
@@ -81,7 +83,8 @@ class NormalizeModelConfigTests(unittest.TestCase):
         config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
         self.assertEqual(config["max_tokens"], 4096)
         self.assertEqual(config["reasoning_effort"], "max")
-        self.assertEqual(config["stream"], False)
+        self.assertEqual(config["stream"], True)  # streaming on by default
+        self.assertEqual(config["prompt_cache"], "auto")
         self.assertEqual(config["thinking"], True)
         self.assertEqual(config["temperature"], 0)
 
@@ -280,6 +283,128 @@ class CallModelTests(unittest.TestCase):
         self.assertEqual(body["messages"], [{"role": "user", "content": "fix it"}])
         self.assertEqual(body["max_tokens"], 4096)
         self.assertEqual(body["reasoning_effort"], "max")
+
+
+class ExtractCacheUsageTests(unittest.TestCase):
+    def test_openai_shape(self):
+        usage = {"prompt_tokens": 5000, "prompt_tokens_details": {"cached_tokens": 4000}}
+        self.assertEqual(extract_cache_usage(usage), (4000, 5000))
+
+    def test_anthropic_shape(self):
+        usage = {"input_tokens": 5000, "cache_read_input_tokens": 4000}
+        self.assertEqual(extract_cache_usage(usage), (4000, 5000))
+
+    def test_openai_zero_cache_hits_is_reported_not_dropped(self):
+        usage = {"prompt_tokens": 5000, "prompt_tokens_details": {"cached_tokens": 0}}
+        self.assertEqual(extract_cache_usage(usage), (0, 5000))
+
+    def test_none_when_no_cache_info(self):
+        self.assertIsNone(extract_cache_usage(None))
+        self.assertIsNone(extract_cache_usage({}))
+        self.assertIsNone(extract_cache_usage({"prompt_tokens": 5000}))  # no details/cache field
+
+
+class ApplyPromptCacheMarkersTests(unittest.TestCase):
+    def test_explicit_wraps_first_message_in_cache_control_block(self):
+        messages = [{"role": "user", "content": "big static prompt"},
+                    {"role": "assistant", "content": "reply"}]
+        out = apply_prompt_cache_markers(messages, "explicit")
+        self.assertEqual(out[0]["content"], [
+            {"type": "text", "text": "big static prompt", "cache_control": {"type": "ephemeral"}}
+        ])
+        self.assertEqual(out[1], {"role": "assistant", "content": "reply"})  # rest untouched
+
+    def test_explicit_does_not_mutate_input(self):
+        messages = [{"role": "user", "content": "X"}]
+        apply_prompt_cache_markers(messages, "explicit")
+        self.assertEqual(messages, [{"role": "user", "content": "X"}])  # original unchanged
+
+    def test_auto_and_off_are_identity(self):
+        messages = [{"role": "user", "content": "X"}]
+        self.assertEqual(apply_prompt_cache_markers(messages, "auto"), messages)
+        self.assertEqual(apply_prompt_cache_markers(messages, "off"), messages)
+
+    def test_explicit_leaves_non_string_content_alone(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "X"}]}]
+        self.assertEqual(apply_prompt_cache_markers(messages, "explicit"), messages)
+
+    def test_explicit_handles_empty_messages(self):
+        self.assertEqual(apply_prompt_cache_markers([], "explicit"), [])
+
+
+class CallModelCachingTests(unittest.TestCase):
+    def _mock_json_response(self, mock_urlopen, payload):
+        mock_cm = MagicMock()
+        mock_cm.read.return_value = json.dumps(payload).encode()
+        mock_urlopen.return_value.__enter__.return_value = mock_cm
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_usage_fn_receives_usage_object(self, mock_urlopen):
+        usage = {"prompt_tokens": 100, "prompt_tokens_details": {"cached_tokens": 80}}
+        self._mock_json_response(mock_urlopen, {
+            "choices": [{"message": {"content": "diff"}}], "usage": usage,
+        })
+        captured = []
+        result = call_model(
+            [{"role": "user", "content": "fix it"}], base_url="https://api.test/v1", api_key="k",
+            model="m", max_tokens=10, reasoning_effort="max",
+            usage_fn=captured.append,
+        )
+        self.assertEqual(result, "diff")
+        self.assertEqual(captured, [usage])
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_usage_fn_receives_none_when_provider_omits_usage(self, mock_urlopen):
+        self._mock_json_response(mock_urlopen, {"choices": [{"message": {"content": "diff"}}]})
+        captured = []
+        call_model(
+            [{"role": "user", "content": "x"}], base_url="https://api.test/v1", api_key="k",
+            model="m", max_tokens=10, reasoning_effort="max", usage_fn=captured.append,
+        )
+        self.assertEqual(captured, [None])
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_explicit_prompt_cache_sends_cache_control_block(self, mock_urlopen):
+        self._mock_json_response(mock_urlopen, {"choices": [{"message": {"content": "d"}}]})
+        call_model(
+            [{"role": "user", "content": "static prefix"}], base_url="https://api.test/v1", api_key="k",
+            model="m", max_tokens=10, reasoning_effort="max", prompt_cache="explicit",
+        )
+        body = json.loads(mock_urlopen.call_args[0][0].data)
+        self.assertEqual(body["messages"][0]["content"][0]["cache_control"], {"type": "ephemeral"})
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_auto_prompt_cache_sends_plain_string_content(self, mock_urlopen):
+        self._mock_json_response(mock_urlopen, {"choices": [{"message": {"content": "d"}}]})
+        call_model(
+            [{"role": "user", "content": "static prefix"}], base_url="https://api.test/v1", api_key="k",
+            model="m", max_tokens=10, reasoning_effort="max", prompt_cache="auto",
+        )
+        body = json.loads(mock_urlopen.call_args[0][0].data)
+        self.assertEqual(body["messages"][0]["content"], "static prefix")
+        self.assertNotIn("stream_options", body)  # non-streaming
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_streaming_adds_stream_options_and_captures_usage(self, mock_urlopen):
+        usage = {"prompt_tokens": 200, "prompt_tokens_details": {"cached_tokens": 150}}
+        lines = [
+            b'data: {"choices": [{"delta": {"content": "hello "}}]}\n',
+            b'data: {"choices": [{"delta": {"content": "world"}}]}\n',
+            (b'data: {"choices": [], "usage": ' + json.dumps(usage).encode() + b'}\n'),
+            b'data: [DONE]\n',
+        ]
+        mock_cm = MagicMock()
+        mock_cm.__iter__.return_value = iter(lines)
+        mock_urlopen.return_value.__enter__.return_value = mock_cm
+        captured = []
+        result = call_model(
+            [{"role": "user", "content": "x"}], base_url="https://api.test/v1", api_key="k", model="m",
+            max_tokens=10, reasoning_effort="max", stream=True, usage_fn=captured.append,
+        )
+        self.assertEqual(result, "hello world")
+        self.assertEqual(captured, [usage])
+        body = json.loads(mock_urlopen.call_args[0][0].data)
+        self.assertEqual(body["stream_options"], {"include_usage": True})
 
 
 class CallModelRetryTests(unittest.TestCase):
@@ -2709,6 +2834,30 @@ class FixGapCritiqueTests(unittest.TestCase):
         self.assertEqual(result["status"], "duplicate")
         self.assertEqual(critique_calls, [])
 
+    def test_infra_failure_skips_the_critique_model_call(self):
+        # Critiquing a rate-limit error wastes a model call that will
+        # usually itself be rate-limited, and produces no signal about
+        # the tag or the diff -- fix_gap must use the reason itself as
+        # the critique instead of calling critique_fn.
+        gap = make_gap(gap_count=2)
+        critique_calls = []
+        infra_reason = "model call failed: HTTP Error 429: Too Many Requests"
+
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (False, infra_reason, None, messages),
+            critique_fn=lambda *a, **kwargs: critique_calls.append(1) or "should never be used",
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root: self.fail("should not commit"),
+            repo_root=Path("/fake/repo"),
+            max_repair_rounds=2,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(critique_calls, [])
+        self.assertEqual(len(result["rounds"]), 2)
+        for r in result["rounds"]:
+            self.assertEqual(r["critique"], infra_reason)
+
 
 class FixGapReviewTests(unittest.TestCase):
     def test_retries_once_when_review_rejects_then_approves(self):
@@ -3690,6 +3839,74 @@ class RunTagLoopTests(unittest.TestCase):
         )
         self.assertEqual(result["rounds"], 1)
         self.assertTrue(any("refresh skipped" in line for line in logged))
+
+
+class RunTagLoopInfraFailureTests(unittest.TestCase):
+    """An infrastructure failure (attempt_build's "model call failed:"
+    reason -- rate limit, network, provider error) says nothing about
+    the tag or the diff, so it must not be charged against the tag's
+    fail budget or persisted into its attempt history -- otherwise a
+    rate-limit storm blacklists every active tag and litters each tag's
+    prompt-visible history with junk 429 entries."""
+
+    _state_io = RunTagLoopTests._state_io
+
+    def test_pure_infra_failure_does_not_increment_fails_or_blacklist(self):
+        gaps = [make_gap()]
+        infra_reason = "model call failed: HTTP Error 429: Too Many Requests"
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            return {
+                "status": "failed", "reason": infra_reason, "diff": None,
+                "rounds": [{"diff": None, "reason": infra_reason, "critique": None}],
+            }
+
+        store, load, save = self._state_io()
+        result = run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=4, max_fails=2,
+        )
+        # 4 pure-infra rounds against max_fails=2 would have blacklisted
+        # twice over if they counted -- the tag must come out untouched.
+        entry = store.get("NEF:EXIF:LensModel", {})
+        self.assertEqual(entry.get("fails", 0), 0)
+        self.assertFalse(entry.get("blacklisted", False))
+        self.assertEqual(entry.get("attempts", []), [])
+        # Still reported in this run's summary -- just not charged.
+        self.assertEqual(len(result["failed"]), 4)
+
+    def test_mixed_result_counts_fail_but_drops_infra_rounds_from_attempts(self):
+        gaps = [make_gap()]
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            if tag_gap["tag_key"] == "NEF:EXIF:LensModel":
+                return {
+                    "status": "failed", "reason": "cargo build failed: error[E0308]",
+                    "diff": "diff-real",
+                    "rounds": [
+                        {"diff": None,
+                         "reason": "model call failed: HTTP Error 429: Too Many Requests",
+                         "critique": None},
+                        {"diff": "diff-real", "reason": "cargo build failed: error[E0308]",
+                         "critique": "type mismatch"},
+                    ],
+                }
+            return {"status": "fixed", "gaps_closed": 1}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1, max_fails=10,
+        )
+        # The real build failure still costs a fail, but only the round
+        # with real signal is persisted -- the 429 noise is dropped.
+        entry = store["NEF:EXIF:LensModel"]
+        self.assertEqual(entry["fails"], 1)
+        self.assertEqual(len(entry["attempts"]), 1)
+        self.assertEqual(entry["attempts"][0]["reason"], "cargo build failed: error[E0308]")
+        self.assertEqual(entry["attempts"][0]["critique"], "type mismatch")
 
 
 if __name__ == "__main__":
