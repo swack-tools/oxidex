@@ -604,9 +604,6 @@ mod tests {
 
         let tag_name = lookup_ifd1_tag_name(0x0201);
         assert!(tag_name.ends_with(":ThumbnailOffset"));
-        assert_eq!(
-            metadata.get(&tag_name),
-            Some(&TagValue::Integer(390))
-        );
+        assert_eq!(metadata.get(&tag_name), Some(&TagValue::Integer(390)));
     }
 }

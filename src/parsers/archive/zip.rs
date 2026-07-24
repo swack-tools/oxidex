@@ -44,8 +44,7 @@ impl ZipParser {
         let required_version = u16::from_le_bytes([header[4], header[5]]);
         let modify_time = u16::from_le_bytes([header[10], header[11]]);
         let modify_date = u16::from_le_bytes([header[12], header[13]]);
-        let compressed_size =
-            u32::from_le_bytes([header[18], header[19], header[20], header[21]]);
+        let compressed_size = u32::from_le_bytes([header[18], header[19], header[20], header[21]]);
         let uncompressed_size =
             u32::from_le_bytes([header[22], header[23], header[24], header[25]]);
         let file_name_length = u16::from_le_bytes([header[26], header[27]]) as usize;

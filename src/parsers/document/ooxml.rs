@@ -112,8 +112,14 @@ impl FormatParser for DocxParser {
         if let Some((compression, filename, modify_date, required_version, uncompressed_size)) =
             zip_local_header_tags
         {
-            metadata.insert("ZIP:ZipCompression".to_string(), TagValue::new_string(compression));
-            metadata.insert("ZIP:ZipFileName".to_string(), TagValue::new_string(filename));
+            metadata.insert(
+                "ZIP:ZipCompression".to_string(),
+                TagValue::new_string(compression),
+            );
+            metadata.insert(
+                "ZIP:ZipFileName".to_string(),
+                TagValue::new_string(filename),
+            );
             metadata.insert(
                 "ZIP:ZipModifyDate".to_string(),
                 TagValue::new_string(modify_date),
