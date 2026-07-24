@@ -1,8 +1,10 @@
 import json
 import os
 import signal
+import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
@@ -17,18 +19,96 @@ from parallel_model_fix_loop import (
     _unregister_pgid,
     _wait_for_process_group_exit,
     acquire_dispatcher_lock,
+    allocate_squad_slots,
     branch_name,
+    clear_held_by_foundation,
     commits_on_branch,
     create_worktree,
+    discover_worktree_candidates,
     ensure_integration_branch,
+    ensure_squad_staging_branch,
     fast_forward_local_main,
+    is_worktree_stale_and_resolved,
+    janitor_reset_stale_worktrees,
     main,
     merge_branch,
     novel_commits,
+    process_format,
+    process_squad_worker,
+    prune_model_fix_requests,
     reap_orphan_worker_pgids,
+    reset_stale_worktree,
+    rotate_dashboard_log,
+    run_janitor,
     run_round,
+    run_squad_round,
+    squad_branch_name,
+    squad_from_branch,
+    squad_open_gaps_from_attribution,
+    squad_worker_formats,
+    squad_worktree_path,
+    staging_branch_or_origin,
     worktree_path,
 )
+
+GIT_ENV_OVERRIDES = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+
+
+def git(repo, *args, input_text=None, check=True):
+    return subprocess.run(
+        ["git", *args], cwd=repo, input=input_text, capture_output=True, text=True, check=check,
+    )
+
+
+def git_out(repo, *args, input_text=None):
+    return git(repo, *args, input_text=input_text).stdout
+
+
+class GitRepoTestCase(unittest.TestCase):
+    """Real throwaway tempdir git repos -- matches
+    test_squad_merge_loop.py's own GitRepoTestCase exactly (masking
+    GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM so a host with commit.gpgsign or
+    a custom core.hooksPath configured globally can't hang/misbehave a
+    hermetic commit)."""
+
+    def setUp(self):
+        patcher = patch.dict(os.environ, GIT_ENV_OVERRIDES)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+
+    def make_repo(self, name="repo"):
+        repo = self.tmp / name
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "fleet@example.com")
+        git(repo, "config", "user.name", "Fleet Test")
+        git(repo, "config", "commit.gpgsign", "false")
+        (repo / "README.md").write_text("base\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "base commit")
+        return repo
+
+    def commit_file(self, repo, rel_path, content, message, when=None):
+        """Commit rel_path=content, optionally backdating both author
+        and committer dates (when: epoch seconds) -- lets
+        is_worktree_stale_and_resolved's staleness check be exercised
+        deterministically without a real 3-day wait."""
+        path = repo / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        git(repo, "add", "-A")
+        env = dict(os.environ)
+        if when is not None:
+            stamp = f"@{int(when)} +0000"
+            env["GIT_AUTHOR_DATE"] = stamp
+            env["GIT_COMMITTER_DATE"] = stamp
+        subprocess.run(
+            ["git", "commit", "-q", "-m", message], cwd=repo, env=env, check=True,
+        )
+        return git_out(repo, "rev-parse", "HEAD").strip()
 
 
 class MainInfiniteLoopTests(unittest.TestCase):
@@ -1032,6 +1112,836 @@ class RunRoundIntegrationTargetTests(unittest.TestCase):
         self.assertFalse(ok)
         mock_discover.assert_not_called()
         mock_process.assert_not_called()
+
+
+class RunRoundJanitorGatingTests(unittest.TestCase):
+    """run_round's own --squad-mode help text promises "Default: off
+    (run_round, today's per-format behavior, unaffected)" -- the
+    currently-running per-format fleet uses exactly this legacy path, so
+    the M5 janitor must NOT run here unless an operator explicitly opts
+    in via --enable-janitor (run_squad_round, a new entrypoint, always
+    runs it -- see RunSquadRoundTests's mock_janitor.assert_called_once
+    assertions elsewhere in this file)."""
+
+    def _args(self, tmp, **overrides):
+        base = dict(
+            formats="JPEG", cache_dir="/unused", max_parallel=1,
+            worktree_dir=str(tmp / "wt"), log_dir=str(tmp / "log"), timeout=None,
+        )
+        base.update(overrides)
+        return SimpleNamespace(**base)
+
+    @patch("parallel_model_fix_loop._run_janitor_safely")
+    @patch("parallel_model_fix_loop.process_format")
+    @patch("parallel_model_fix_loop.ensure_integration_branch", return_value="model-fix-sweep-local")
+    @patch("parallel_model_fix_loop.fast_forward_local_main", return_value=(True, "ok"))
+    def test_janitor_not_called_by_default(self, mock_ff, mock_ensure, mock_process, mock_janitor):
+        mock_process.return_value = ("JPEG", {"status": "timeout"})
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = self._args(Path(tmpdir))
+            run_round(args, Path("/fake/config.toml"))
+        mock_janitor.assert_not_called()
+
+    @patch("parallel_model_fix_loop._run_janitor_safely")
+    @patch("parallel_model_fix_loop.process_format")
+    @patch("parallel_model_fix_loop.ensure_integration_branch", return_value="model-fix-sweep-local")
+    @patch("parallel_model_fix_loop.fast_forward_local_main", return_value=(True, "ok"))
+    def test_janitor_called_when_explicitly_enabled(self, mock_ff, mock_ensure, mock_process, mock_janitor):
+        mock_process.return_value = ("JPEG", {"status": "timeout"})
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = self._args(Path(tmpdir), enable_janitor=True)
+            run_round(args, Path("/fake/config.toml"))
+        mock_janitor.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# allocate_squad_slots (spec S2 slot-allocation formula)
+# ---------------------------------------------------------------------------
+
+class AllocateSquadSlotsTests(unittest.TestCase):
+    # The S2 census snapshot, verbatim from the spec table.
+    CENSUS = {
+        "canon": 917, "nikon": 613, "sony-minolta": 518, "xmp": 382,
+        "exif-core": 284, "olympus": 231, "pentax-samsung": 215,
+        "panasonic-leica": 183, "mobile": 185, "thermal": 158,
+        "sigma-c2pa": 167, "ps-docs": 138, "standards-appn": 135, "tail": 221,
+    }
+
+    def test_spec_worked_example_total_slots_20(self):
+        # spec S2's own worked example: xmp's raw rounding gives it 2
+        # (Sigma=21), but it has the lowest gaps-per-slot of the
+        # multi-slot squads and yields its extra slot back.
+        result = allocate_squad_slots(self.CENSUS, 20)
+        self.assertEqual(
+            result,
+            {
+                "canon": 4, "nikon": 3, "sony-minolta": 2, "xmp": 1,
+                "exif-core": 1, "olympus": 1, "pentax-samsung": 1,
+                "panasonic-leica": 1, "mobile": 1, "thermal": 1,
+                "sigma-c2pa": 1, "ps-docs": 1, "standards-appn": 1, "tail": 1,
+            },
+        )
+        self.assertEqual(sum(result.values()), 20)
+
+    def test_spec_worked_example_lanes_50(self):
+        result = allocate_squad_slots(self.CENSUS, 50)
+        self.assertEqual(
+            result,
+            {
+                "canon": 11, "nikon": 7, "sony-minolta": 6, "xmp": 4,
+                "exif-core": 3, "olympus": 3, "tail": 3,
+                "pentax-samsung": 2, "panasonic-leica": 2, "mobile": 2,
+                "thermal": 2, "sigma-c2pa": 2, "ps-docs": 2, "standards-appn": 1,
+            },
+        )
+        self.assertEqual(sum(result.values()), 50)
+
+    def test_sum_equals_total_slots_whenever_slots_cover_every_active_squad(self):
+        for total in (14, 15, 20, 27, 50, 73, 100):
+            result = allocate_squad_slots(self.CENSUS, total)
+            self.assertEqual(sum(result.values()), total, f"total_slots={total}")
+
+    def test_every_squad_with_open_gaps_gets_at_least_one_slot(self):
+        result = allocate_squad_slots(self.CENSUS, 20)
+        for squad in self.CENSUS:
+            self.assertGreaterEqual(result[squad], 1)
+
+    def test_zero_open_gaps_squad_is_excluded_entirely_not_given_a_floor(self):
+        gaps = dict(self.CENSUS)
+        gaps["empty-squad"] = 0
+        result = allocate_squad_slots(gaps, 20)
+        self.assertNotIn("empty-squad", result)
+
+    def test_negative_open_gaps_squad_is_also_excluded(self):
+        gaps = {"a": 100, "b": -5}
+        result = allocate_squad_slots(gaps, 10)
+        self.assertNotIn("b", result)
+        self.assertEqual(result, {"a": 10})
+
+    def test_no_active_squads_returns_empty(self):
+        self.assertEqual(allocate_squad_slots({}, 20), {})
+        self.assertEqual(allocate_squad_slots({"a": 0, "b": 0}, 20), {})
+
+    def test_non_positive_total_slots_returns_empty(self):
+        self.assertEqual(allocate_squad_slots(self.CENSUS, 0), {})
+        self.assertEqual(allocate_squad_slots(self.CENSUS, -1), {})
+
+    def test_fairness_higher_open_gaps_never_gets_fewer_slots(self):
+        # Property: after reconciliation, a squad with strictly more open
+        # gaps than another never ends up with fewer slots than it.
+        distributions = [
+            self.CENSUS,
+            {"a": 1000, "b": 500, "c": 10, "d": 1},
+            {"a": 50, "b": 49, "c": 1},
+            {"a": 7, "b": 7, "c": 7, "d": 7, "e": 7},
+        ]
+        for gaps in distributions:
+            for total in (len(gaps), len(gaps) + 3, 20, 50):
+                result = allocate_squad_slots(gaps, total)
+                for s1, g1 in gaps.items():
+                    if g1 <= 0:
+                        continue
+                    for s2, g2 in gaps.items():
+                        if g2 <= 0:
+                            continue
+                        if g1 > g2:
+                            self.assertGreaterEqual(
+                                result[s1], result[s2],
+                                f"total={total} gaps={gaps}: {s1}({g1}) should not get "
+                                f"fewer slots than {s2}({g2})",
+                            )
+
+    def test_fewer_slots_than_active_squads_leaves_floor_overshoot_rather_than_zeroing_one_out(self):
+        # 3 squads, only 2 total_slots: max(1,.) floor can't be reconciled
+        # away without giving a squad with open gaps zero slots, which
+        # spec S2 forbids -- every squad keeps its floor of 1, so the sum
+        # legitimately exceeds total_slots here.
+        result = allocate_squad_slots({"a": 100, "b": 50, "c": 1}, 2)
+        self.assertEqual(result, {"a": 1, "b": 1, "c": 1})
+
+
+# ---------------------------------------------------------------------------
+# Squad naming helpers
+# ---------------------------------------------------------------------------
+
+class SquadNamingTests(unittest.TestCase):
+    def test_squad_worktree_path(self):
+        self.assertEqual(
+            squad_worktree_path(Path("/base"), "canon", 2), Path("/base/model-fix-canon-2"),
+        )
+
+    def test_squad_branch_name(self):
+        self.assertEqual(squad_branch_name("sony-minolta", 3), "model-fix-parallel-sony-minolta-3")
+
+    def test_squad_from_branch_extracts_squad_and_slot(self):
+        self.assertEqual(squad_from_branch("model-fix-parallel-canon-2"), "canon")
+        self.assertEqual(squad_from_branch("model-fix-parallel-sony-minolta-11"), "sony-minolta")
+
+    def test_squad_from_branch_none_for_legacy_per_format_branch(self):
+        self.assertIsNone(squad_from_branch("model-fix-parallel-jpeg"))
+        self.assertIsNone(squad_from_branch("model-fix-parallel-cr2"))
+
+    def test_staging_branch_or_origin(self):
+        self.assertEqual(staging_branch_or_origin("model-fix-parallel-canon-1"), "squad/canon")
+        self.assertEqual(staging_branch_or_origin("model-fix-parallel-jpeg", "origin/main"), "origin/main")
+
+
+# ---------------------------------------------------------------------------
+# squad_open_gaps_from_attribution / squad_worker_formats
+# ---------------------------------------------------------------------------
+
+class SquadOpenGapsFromAttributionTests(unittest.TestCase):
+    def test_extracts_open_gaps_per_squad(self):
+        attribution = {"squads": {"canon": {"open_gaps": 10}, "nikon": {"open_gaps": 0}}}
+        self.assertEqual(squad_open_gaps_from_attribution(attribution), {"canon": 10, "nikon": 0})
+
+    def test_none_attribution_is_empty(self):
+        self.assertEqual(squad_open_gaps_from_attribution(None), {})
+
+    def test_missing_squads_key_is_empty(self):
+        self.assertEqual(squad_open_gaps_from_attribution({}), {})
+
+
+class SquadWorkerFormatsTests(unittest.TestCase):
+    def _squads_toml(self, tmp):
+        path = tmp / "squads.toml"
+        path.write_text(
+            '[squads.canon]\nmodules = ["Canon"]\nformats = ["JPEG", "CR2"]\nownership_globs = []\n'
+        )
+        return path
+
+    def test_prefers_live_attribution_formats(self):
+        attribution = {"squads": {"canon": {"formats": ["JPEG", "DNG"]}}}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            formats = squad_worker_formats("canon", attribution, self._squads_toml(Path(tmpdir)))
+        self.assertEqual(formats, ["JPEG", "DNG"])
+
+    def test_falls_back_to_squads_toml_when_attribution_has_nothing(self):
+        attribution = {"squads": {"canon": {"formats": []}}}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            formats = squad_worker_formats("canon", attribution, self._squads_toml(Path(tmpdir)))
+        self.assertEqual(formats, ["JPEG", "CR2"])
+
+    def test_none_attribution_falls_back_to_squads_toml(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            formats = squad_worker_formats("canon", None, self._squads_toml(Path(tmpdir)))
+        self.assertEqual(formats, ["JPEG", "CR2"])
+
+    def test_unknown_squad_in_squads_toml_returns_empty_not_raise(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            formats = squad_worker_formats("nonexistent-squad", None, self._squads_toml(Path(tmpdir)))
+        self.assertEqual(formats, [])
+
+
+# ---------------------------------------------------------------------------
+# process_squad_worker / process_format consume-handshake wiring
+# ---------------------------------------------------------------------------
+
+class ConsumeHandshakeWiringTests(unittest.TestCase):
+    """Spec item 3: squad mode passes squad_status_path through to
+    create_worktree; legacy per-format mode continues to pass None
+    (unaffected -- create_worktree's default parameter)."""
+
+    @patch("parallel_model_fix_loop.run_worker", return_value=0)
+    @patch("parallel_model_fix_loop.create_worktree")
+    def test_legacy_process_format_passes_no_squad_status_path(self, mock_create, mock_run_worker):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            fmt, result = process_format(
+                "JPEG", tmp, "main", tmp / "wt", tmp / "log", "/cache", None, config_path=tmp / "no-config",
+            )
+        self.assertEqual(fmt, "JPEG")
+        self.assertEqual(result["status"], "worker_done")
+        _args, kwargs = mock_create.call_args
+        self.assertIsNone(kwargs.get("squad_status_path"))
+        # legacy worker identity is still the format itself
+        mock_run_worker.assert_called_once()
+        self.assertNotIn("worker_id", mock_run_worker.call_args.kwargs)
+
+    @patch("parallel_model_fix_loop.run_worker", return_value=0)
+    @patch("parallel_model_fix_loop.create_worktree")
+    def test_squad_mode_process_squad_worker_passes_squad_status_path(self, mock_create, mock_run_worker):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            status_path = tmp / "squad-status" / "canon.json"
+            worker_id, result = process_squad_worker(
+                "canon", 2, "JPEG", tmp, "squad/canon", tmp / "wt", tmp / "log", "/cache", None,
+                config_path=tmp / "no-config", squad_status_path=status_path,
+            )
+        self.assertEqual(worker_id, "canon-2")
+        self.assertEqual(result["status"], "worker_done")
+        self.assertEqual(result["squad"], "canon")
+        self.assertEqual(result["format"], "JPEG")
+        _args, kwargs = mock_create.call_args
+        self.assertEqual(kwargs.get("squad_status_path"), status_path)
+        # worker identity is the SLOT, not the format it's cycling through
+        mock_run_worker.assert_called_once()
+        self.assertEqual(mock_run_worker.call_args.kwargs.get("worker_id"), "canon-2")
+        self.assertEqual(mock_run_worker.call_args.args[0], "JPEG")
+
+    @patch("parallel_model_fix_loop.create_worktree", side_effect=subprocess.CalledProcessError(1, ["git"], stderr="boom"))
+    def test_worktree_failure_is_reported_not_raised(self, mock_create):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            worker_id, result = process_squad_worker(
+                "canon", 1, "JPEG", tmp, "squad/canon", tmp / "wt", tmp / "log", "/cache", None,
+            )
+        self.assertEqual(worker_id, "canon-1")
+        self.assertEqual(result["status"], "worktree_failed")
+
+
+# ---------------------------------------------------------------------------
+# run_squad_round dispatch
+# ---------------------------------------------------------------------------
+
+class RunSquadRoundTests(unittest.TestCase):
+    def _args(self, tmp, **overrides):
+        base = dict(
+            max_parallel=3, cache_dir="/unused",
+            worktree_dir=str(tmp / "wt"), log_dir=str(tmp / "log"), timeout=None,
+            squads_toml=str(parallel_model_fix_loop.DEFAULT_SQUADS_TOML), home=str(tmp / "home"),
+            gap_attribution_path=str(tmp / "gap-attribution.json"),
+        )
+        base.update(overrides)
+        return SimpleNamespace(**base)
+
+    @patch("parallel_model_fix_loop._run_janitor_safely")
+    @patch("parallel_model_fix_loop.process_squad_worker")
+    @patch("parallel_model_fix_loop.fast_forward_local_main", return_value=(True, "ok"))
+    def test_allocates_slots_and_dispatches_with_round_robin_formats(
+        self, mock_ff, mock_process, mock_janitor,
+    ):
+        mock_process.side_effect = lambda squad, n, fmt, *a, **kw: (
+            f"{squad}-{n}",
+            {"status": "worker_done", "returncode": 0, "worktree": Path("/w"),
+             "branch": "b", "log": Path("/l"), "squad": squad, "format": fmt},
+        )
+        attribution = {
+            "squads": {
+                "canon": {"open_gaps": 10, "formats": ["JPEG", "CR2"]},
+                "nikon": {"open_gaps": 5, "formats": ["NEF"]},
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = self._args(Path(tmpdir))
+            ok = run_squad_round(
+                args, Path("/fake/config.toml"),
+                build_attribution_fn=lambda cache_dir: attribution,
+                ensure_staging_branch_fn=lambda repo_root, squad, home, log_fn: f"squad/{squad}",
+            )
+        self.assertTrue(ok)
+        calls = {(c.args[0], c.args[1]): c.args[2] for c in mock_process.call_args_list}
+        # canon: round(3*10/15)=2 slots, nikon: round(3*5/15)=1 slot
+        self.assertEqual(sorted(calls), [("canon", 1), ("canon", 2), ("nikon", 1)])
+        self.assertEqual(calls[("canon", 1)], "JPEG")
+        self.assertEqual(calls[("canon", 2)], "CR2")
+        self.assertEqual(calls[("nikon", 1)], "NEF")
+        mock_janitor.assert_called_once()
+
+    @patch("parallel_model_fix_loop._run_janitor_safely")
+    @patch("parallel_model_fix_loop.process_squad_worker")
+    @patch("parallel_model_fix_loop.fast_forward_local_main", return_value=(True, "ok"))
+    def test_base_ref_comes_from_ensure_staging_branch_fn(self, mock_ff, mock_process, mock_janitor):
+        mock_process.side_effect = lambda squad, n, fmt, *a, **kw: (
+            f"{squad}-{n}",
+            {"status": "worker_done", "returncode": 0, "worktree": Path("/w"),
+             "branch": "b", "log": Path("/l"), "squad": squad, "format": fmt},
+        )
+        attribution = {"squads": {"canon": {"open_gaps": 1, "formats": ["JPEG"]}}}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = self._args(Path(tmpdir), max_parallel=1)
+            run_squad_round(
+                args, Path("/fake/config.toml"),
+                build_attribution_fn=lambda cache_dir: attribution,
+                ensure_staging_branch_fn=lambda repo_root, squad, home, log_fn: "squad/canon-STAGED",
+            )
+        base_ref_used = mock_process.call_args.args[4]
+        self.assertEqual(base_ref_used, "squad/canon-STAGED")
+
+    @patch("parallel_model_fix_loop._run_janitor_safely")
+    @patch("parallel_model_fix_loop.process_squad_worker")
+    @patch("parallel_model_fix_loop.fast_forward_local_main", return_value=(True, "ok"))
+    def test_squad_status_path_wired_per_squad(self, mock_ff, mock_process, mock_janitor):
+        mock_process.side_effect = lambda squad, n, fmt, *a, **kw: (
+            f"{squad}-{n}",
+            {"status": "worker_done", "returncode": 0, "worktree": Path("/w"),
+             "branch": "b", "log": Path("/l"), "squad": squad, "format": fmt},
+        )
+        attribution = {"squads": {"canon": {"open_gaps": 1, "formats": ["JPEG"]}}}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            args = self._args(Path(tmpdir), max_parallel=1, home=str(home))
+            run_squad_round(
+                args, Path("/fake/config.toml"),
+                build_attribution_fn=lambda cache_dir: attribution,
+                ensure_staging_branch_fn=lambda repo_root, squad, home, log_fn: "squad/canon",
+            )
+        squad_status_path = mock_process.call_args.kwargs["squad_status_path"]
+        self.assertEqual(squad_status_path, home / "logs" / "squad-status" / "canon.json")
+
+    @patch("parallel_model_fix_loop._run_janitor_safely")
+    @patch("parallel_model_fix_loop.fast_forward_local_main", return_value=(True, "ok"))
+    def test_no_open_gaps_anywhere_is_success_with_no_dispatch(self, mock_ff, mock_janitor):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = self._args(Path(tmpdir))
+            ok = run_squad_round(
+                args, Path("/fake/config.toml"),
+                build_attribution_fn=lambda cache_dir: {"squads": {}},
+                ensure_staging_branch_fn=lambda *a: "squad/unused",
+            )
+        self.assertTrue(ok)
+
+    @patch("parallel_model_fix_loop._run_janitor_safely")
+    @patch("parallel_model_fix_loop.fast_forward_local_main", return_value=(True, "ok"))
+    def test_attribution_regeneration_failure_is_reported_as_failure(self, mock_ff, mock_janitor):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = self._args(Path(tmpdir))
+            ok = run_squad_round(
+                args, Path("/fake/config.toml"),
+                build_attribution_fn=lambda cache_dir: None,
+                ensure_staging_branch_fn=lambda *a: "squad/unused",
+            )
+        self.assertFalse(ok)
+
+    @patch("parallel_model_fix_loop._run_janitor_safely")
+    @patch("parallel_model_fix_loop.process_squad_worker")
+    @patch("parallel_model_fix_loop.fast_forward_local_main", return_value=(True, "ok"))
+    def test_worktree_failed_worker_makes_the_round_report_failure(self, mock_ff, mock_process, mock_janitor):
+        mock_process.return_value = ("canon-1", {"status": "worktree_failed", "error": "boom"})
+        attribution = {"squads": {"canon": {"open_gaps": 1, "formats": ["JPEG"]}}}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = self._args(Path(tmpdir), max_parallel=1)
+            ok = run_squad_round(
+                args, Path("/fake/config.toml"),
+                build_attribution_fn=lambda cache_dir: attribution,
+                ensure_staging_branch_fn=lambda *a: "squad/canon",
+            )
+        self.assertFalse(ok)
+
+
+# ---------------------------------------------------------------------------
+# ensure_squad_staging_branch (real git; reuses squad_merge_loop machinery)
+# ---------------------------------------------------------------------------
+
+class EnsureSquadStagingBranchTests(GitRepoTestCase):
+    def test_creates_squad_branch_from_origin_ref_when_missing(self):
+        repo = self.make_repo()
+        home = self.tmp / "home"
+        branch = ensure_squad_staging_branch(repo, "canon", home, log_fn=lambda *a: None, origin_ref="main")
+        self.assertEqual(branch, "squad/canon")
+        result = git(repo, "rev-parse", "--verify", "--quiet", "refs/heads/squad/canon", check=False)
+        self.assertEqual(result.returncode, 0)
+
+    def test_does_not_touch_an_existing_staging_worktree(self):
+        # ensure_squad_staging_branch must NEVER reset/clean the squad's
+        # own merger staging worktree -- that worktree is
+        # squad_merge_loop.py's private working area, checked out into
+        # and cherry-picked in on its own ~120s poll cadence with no
+        # lock coordination with the dispatcher at all. Simulate a
+        # merger mid-poll (an uncommitted, untracked marker file sitting
+        # in the staging worktree) and confirm a dispatcher round
+        # calling this function leaves it completely alone.
+        import squad_merge_loop as sml
+        repo = self.make_repo()
+        home = self.tmp / "home"
+        staging = sml.default_staging_dir(home, "canon")
+        sml.ensure_staging_worktree(repo, staging, "canon", origin_ref="main", log_fn=lambda *a: None)
+        marker = staging / "IN_PROGRESS_MARKER"
+        marker.write_text("merger mid-poll\n")
+
+        branch = ensure_squad_staging_branch(repo, "canon", home, log_fn=lambda *a: None, origin_ref="main")
+
+        self.assertEqual(branch, "squad/canon")
+        self.assertTrue(marker.exists())
+        self.assertEqual(marker.read_text(), "merger mid-poll\n")
+
+
+# ---------------------------------------------------------------------------
+# Janitor (spec M5)
+# ---------------------------------------------------------------------------
+
+class DiscoverWorktreeCandidatesTests(GitRepoTestCase):
+    def test_finds_worktrees_under_base_paired_with_their_branch(self):
+        repo = self.make_repo()
+        base = self.tmp / "parallel-fix"
+        base.mkdir()
+        wt = base / "model-fix-canon-1"
+        git(repo, "worktree", "add", "-b", "model-fix-parallel-canon-1", str(wt), "main")
+
+        candidates = discover_worktree_candidates(base, repo)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["branch"], "model-fix-parallel-canon-1")
+        self.assertEqual(Path(candidates[0]["path"]).resolve(), wt.resolve())
+
+    def test_excludes_worktrees_outside_base(self):
+        repo = self.make_repo()
+        base = self.tmp / "parallel-fix"
+        base.mkdir()
+        outside = self.tmp / "elsewhere" / "model-fix-canon-1"
+        git(repo, "worktree", "add", "-b", "model-fix-parallel-canon-1", str(outside), "main")
+
+        candidates = discover_worktree_candidates(base, repo)
+
+        self.assertEqual(candidates, [])
+
+    def test_empty_base_returns_empty(self):
+        repo = self.make_repo()
+        base = self.tmp / "parallel-fix"
+        base.mkdir()
+        self.assertEqual(discover_worktree_candidates(base, repo), [])
+
+
+class IsWorktreeStaleAndResolvedTests(GitRepoTestCase):
+    OLD = 1_000_000  # epoch seconds, far in the past -- always ">3 days ago"
+
+    def _branch_from(self, repo, branch, base="main"):
+        git(repo, "branch", branch, base)
+
+    def _old_shared_base(self, repo):
+        """Backdate the commit both `main` and the worker branch will
+        share as their merge-base -- staleness is measured from the
+        MERGE-BASE's commit date, not from whichever per-branch commit
+        happens to carry a `when=`, so the shared ancestor itself must
+        be old for any of these fixtures to actually exercise the
+        ">3 days" arm instead of always seeing a merge-base created at
+        real "now" by make_repo()."""
+        self.commit_file(repo, "shared.txt", "shared", "old shared base", when=self.OLD)
+
+    def test_false_when_too_young(self):
+        repo = self.make_repo()
+        self._branch_from(repo, "model-fix-parallel-canon-1")
+        git(repo, "checkout", "-q", "model-fix-parallel-canon-1")
+        self.commit_file(repo, "x.txt", "1", "unresolved")
+        git(repo, "checkout", "-q", "main")
+
+        self.assertFalse(is_worktree_stale_and_resolved(
+            repo_root=repo, branch="model-fix-parallel-canon-1", origin_ref="main",
+            now_fn=lambda: time.time(),
+        ))
+
+    def test_false_when_stale_but_carries_an_unresolved_commit(self):
+        repo = self.make_repo()
+        self._old_shared_base(repo)
+        self._branch_from(repo, "model-fix-parallel-canon-1")
+        git(repo, "checkout", "-q", "model-fix-parallel-canon-1")
+        self.commit_file(repo, "x.txt", "1", "unresolved")
+        git(repo, "checkout", "-q", "main")
+
+        self.assertFalse(is_worktree_stale_and_resolved(
+            repo_root=repo, branch="model-fix-parallel-canon-1", origin_ref="main",
+            staleness_seconds=10, now_fn=time.time,
+        ))
+
+    def test_true_when_stale_and_commit_already_landed_on_origin_by_patch_id(self):
+        repo = self.make_repo()
+        self._old_shared_base(repo)
+        self._branch_from(repo, "model-fix-parallel-canon-1")
+        git(repo, "checkout", "-q", "model-fix-parallel-canon-1")
+        self.commit_file(repo, "x.txt", "1", "same change")
+        git(repo, "checkout", "-q", "main")
+        # The identical change lands on "origin/main" (main, in this
+        # test's stand-in) via its own independent commit -- same
+        # patch-id, different sha.
+        self.commit_file(repo, "x.txt", "1", "same change landed on main")
+
+        self.assertTrue(is_worktree_stale_and_resolved(
+            repo_root=repo, branch="model-fix-parallel-canon-1", origin_ref="main",
+            staleness_seconds=10, now_fn=time.time,
+        ))
+
+    def test_true_when_stale_and_commit_recorded_in_squad_status(self):
+        repo = self.make_repo()
+        self._old_shared_base(repo)
+        self._branch_from(repo, "model-fix-parallel-canon-1")
+        git(repo, "checkout", "-q", "model-fix-parallel-canon-1")
+        sha = self.commit_file(repo, "x.txt", "1", "quarantined elsewhere")
+        git(repo, "checkout", "-q", "main")
+
+        self.assertTrue(is_worktree_stale_and_resolved(
+            repo_root=repo, branch="model-fix-parallel-canon-1", origin_ref="main",
+            squad_status={"heads": {sha: {"status": "quarantined"}}},
+            staleness_seconds=10, now_fn=time.time,
+        ))
+
+    def test_true_when_stale_and_commit_patch_id_in_quarantine_ledger(self):
+        repo = self.make_repo()
+        self._old_shared_base(repo)
+        self._branch_from(repo, "model-fix-parallel-canon-1")
+        git(repo, "checkout", "-q", "model-fix-parallel-canon-1")
+        sha = self.commit_file(repo, "x.txt", "1", "quarantined change")
+        git(repo, "checkout", "-q", "main")
+        import squad_merge_loop as sml
+        patch_id = sml.compute_patch_id_for_sha(repo, sha)
+
+        self.assertTrue(is_worktree_stale_and_resolved(
+            repo_root=repo, branch="model-fix-parallel-canon-1", origin_ref="main",
+            quarantine_entries={patch_id: {"reason": "bad"}},
+            staleness_seconds=10, now_fn=time.time,
+        ))
+
+    def test_no_commits_at_all_is_trivially_resolved(self):
+        repo = self.make_repo()
+        self._branch_from(repo, "model-fix-parallel-canon-1")
+        self.assertTrue(is_worktree_stale_and_resolved(
+            repo_root=repo, branch="model-fix-parallel-canon-1", origin_ref="main",
+            staleness_seconds=10, now_fn=lambda: time.time() + 10_000_000,
+        ))
+
+    def test_nonexistent_branch_is_false(self):
+        repo = self.make_repo()
+        self.assertFalse(is_worktree_stale_and_resolved(
+            repo_root=repo, branch="does-not-exist", origin_ref="main",
+        ))
+
+
+class ResetStaleWorktreeAndJanitorResetTests(GitRepoTestCase):
+    def test_reset_stale_worktree_checks_out_base_ref(self):
+        repo = self.make_repo()
+        git(repo, "branch", "model-fix-parallel-canon-1", "main")
+        wt = self.tmp / "wt"
+        git(repo, "worktree", "add", str(wt), "model-fix-parallel-canon-1")
+        (wt / "untracked.txt").write_text("junk")
+
+        logged = []
+        reset_stale_worktree(repo, wt, "model-fix-parallel-canon-1", "main", log_fn=logged.append)
+
+        self.assertFalse((wt / "untracked.txt").exists())
+        self.assertTrue(any("reset" in line for line in logged))
+
+    def test_janitor_reset_stale_worktrees_only_touches_eligible_entries(self):
+        repo = self.make_repo()
+        home = self.tmp / "home"
+        # Backdate the commit `main` and both worker branches share as
+        # their merge-base -- see IsWorktreeStaleAndResolvedTests's own
+        # _old_shared_base for why this (not the per-branch commits)
+        # is what staleness is actually measured from.
+        self.commit_file(repo, "shared.txt", "shared", "old shared base", when=1_000_000)
+
+        # Squad worktree: stale, fully resolved (recorded consumed).
+        git(repo, "branch", "model-fix-parallel-canon-1", "main")
+        git(repo, "checkout", "-q", "model-fix-parallel-canon-1")
+        resolved_sha = self.commit_file(repo, "canon.txt", "1", "resolved fix")
+        git(repo, "checkout", "-q", "main")
+        status_path = home / "logs" / "squad-status" / "canon.json"
+        status_path.parent.mkdir(parents=True)
+        status_path.write_text(json.dumps({"heads": {resolved_sha: {"status": "consumed"}}}))
+        git(repo, "branch", "squad/canon", "main")
+
+        # Squad worktree: stale but carries an unresolved commit -- must
+        # never be touched.
+        git(repo, "branch", "model-fix-parallel-nikon-1", "main")
+        git(repo, "checkout", "-q", "model-fix-parallel-nikon-1")
+        self.commit_file(repo, "nikon.txt", "1", "unresolved fix")
+        git(repo, "checkout", "-q", "main")
+
+        candidates = [
+            {"path": repo, "branch": "model-fix-parallel-canon-1"},
+            {"path": repo, "branch": "model-fix-parallel-nikon-1"},
+        ]
+        reset_calls = []
+
+        def fake_reset(repo_root, path, branch, base_ref, log_fn=print):
+            reset_calls.append((branch, base_ref))
+
+        result = janitor_reset_stale_worktrees(
+            repo_root=repo, worktree_candidates=candidates, home=home, origin_ref="main",
+            staleness_seconds=10, now_fn=time.time, reset_fn=fake_reset,
+        )
+
+        self.assertEqual(reset_calls, [("model-fix-parallel-canon-1", "squad/canon")])
+        self.assertEqual(len(result), 1)
+
+
+class ClearHeldByFoundationTests(GitRepoTestCase):
+    def test_clears_when_foundation_sha_is_on_origin_ref(self):
+        repo = self.make_repo()
+        landed_sha = self.commit_file(repo, "f.txt", "1", "foundation landed")
+        state_path = self.tmp / "tag-state.json"
+        state_path.write_text(json.dumps({
+            "JPEG:Foo": {"held_by_foundation": {"job": "cr3-quicktime", "sha": landed_sha}},
+        }))
+
+        cleared = clear_held_by_foundation(state_path, repo, origin_ref="main")
+
+        self.assertEqual(cleared, ["JPEG:Foo"])
+        state = json.loads(state_path.read_text())
+        self.assertNotIn("held_by_foundation", state["JPEG:Foo"])
+
+    def test_leaves_flag_when_foundation_sha_is_not_on_origin_ref(self):
+        repo = self.make_repo()
+        git(repo, "branch", "other", "main")
+        git(repo, "checkout", "-q", "other")
+        pending_sha = self.commit_file(repo, "g.txt", "1", "foundation not yet landed")
+        git(repo, "checkout", "-q", "main")
+        state_path = self.tmp / "tag-state.json"
+        state_path.write_text(json.dumps({
+            "JPEG:Bar": {"held_by_foundation": {"job": "flir-fff", "sha": pending_sha}},
+        }))
+
+        cleared = clear_held_by_foundation(state_path, repo, origin_ref="main")
+
+        self.assertEqual(cleared, [])
+        state = json.loads(state_path.read_text())
+        self.assertEqual(state["JPEG:Bar"]["held_by_foundation"]["sha"], pending_sha)
+
+    def test_no_op_when_nothing_is_held(self):
+        repo = self.make_repo()
+        state_path = self.tmp / "tag-state.json"
+        state_path.write_text(json.dumps({"JPEG:Baz": {"fails": 0, "blacklisted": False}}))
+
+        cleared = clear_held_by_foundation(state_path, repo, origin_ref="main")
+
+        self.assertEqual(cleared, [])
+
+
+class RotateDashboardLogTests(unittest.TestCase):
+    def test_rotates_when_over_threshold(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "dashboard.log"
+            path.write_bytes(b"x" * 100)
+            rotated = rotate_dashboard_log(path, max_bytes=50)
+            self.assertTrue(rotated)
+            # copytruncate, NOT rename: the live path must still exist
+            # (now empty) so a long-running writer's already-open fd
+            # keeps appending to IT, not to a renamed file it can never
+            # see again -- see the docstring.
+            self.assertTrue(path.exists())
+            self.assertEqual(path.stat().st_size, 0)
+            self.assertEqual(path.with_name("dashboard.log.1").read_bytes(), b"x" * 100)
+
+    def test_writer_fd_stays_valid_across_rotation(self):
+        # The whole point of copytruncate over rename: a process holding
+        # dashboard.log open (redirected stdout, one fd for its entire
+        # life, no reopen hook) must keep writing to the LIVE path after
+        # rotation, never to the renamed .1 file.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "dashboard.log"
+            path.write_bytes(b"x" * 100)
+            writer = open(path, "ab")
+            try:
+                rotate_dashboard_log(path, max_bytes=50)
+                writer.write(b"written-after-rotation\n")
+                writer.flush()
+            finally:
+                writer.close()
+            self.assertIn(b"written-after-rotation", path.read_bytes())
+            self.assertNotIn(b"written-after-rotation", path.with_name("dashboard.log.1").read_bytes())
+
+    def test_no_op_under_threshold(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "dashboard.log"
+            path.write_bytes(b"x" * 10)
+            rotated = rotate_dashboard_log(path, max_bytes=50)
+            self.assertFalse(rotated)
+            self.assertTrue(path.exists())
+
+    def test_no_op_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "dashboard.log"
+            self.assertFalse(rotate_dashboard_log(path, max_bytes=50))
+
+
+class PruneModelFixRequestsTests(unittest.TestCase):
+    def test_prunes_only_entries_older_than_max_age(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            old = d / "old-request.json"
+            new = d / "new-request.json"
+            old.write_text("{}")
+            new.write_text("{}")
+            old_time = time.time() - (20 * 24 * 3600)
+            os.utime(old, (old_time, old_time))
+
+            pruned = prune_model_fix_requests(d, max_age_seconds=14 * 24 * 3600)
+
+            self.assertEqual(pruned, [old])
+            self.assertFalse(old.exists())
+            self.assertTrue(new.exists())
+
+    def test_never_prunes_keep_names(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            manifest = d / "manifest.log"
+            manifest.write_text("x")
+            old_time = time.time() - (30 * 24 * 3600)
+            os.utime(manifest, (old_time, old_time))
+
+            pruned = prune_model_fix_requests(d, max_age_seconds=14 * 24 * 3600)
+
+            self.assertEqual(pruned, [])
+            self.assertTrue(manifest.exists())
+
+    def test_missing_directory_is_a_no_op(self):
+        self.assertEqual(prune_model_fix_requests("/does/not/exist"), [])
+
+
+class RunJanitorTests(unittest.TestCase):
+    @patch("parallel_model_fix_loop.prune_model_fix_requests")
+    @patch("parallel_model_fix_loop.rotate_dashboard_log")
+    @patch("parallel_model_fix_loop.clear_held_by_foundation")
+    @patch("parallel_model_fix_loop.janitor_reset_stale_worktrees")
+    @patch("parallel_model_fix_loop.discover_worktree_candidates")
+    def test_wires_every_sub_action_and_reports_a_summary(
+        self, mock_discover, mock_reset, mock_clear, mock_rotate, mock_prune,
+    ):
+        mock_discover.return_value = [{"path": Path("/wt"), "branch": "b"}]
+        mock_reset.return_value = [(Path("/wt"), "b")]
+        mock_clear.return_value = ["JPEG:Foo"]
+        mock_rotate.return_value = True
+        mock_prune.return_value = [Path("/old.json")]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_janitor(
+                repo_root=Path(tmpdir), home=Path(tmpdir) / "home",
+                worktree_base=Path(tmpdir) / "wt-base",
+            )
+
+        self.assertEqual(result, {
+            "worktrees_reset": [(Path("/wt"), "b")],
+            "held_by_foundation_cleared": ["JPEG:Foo"],
+            "dashboard_rotated": True,
+            "requests_pruned": [Path("/old.json")],
+        })
+        mock_discover.assert_called_once()
+        mock_reset.assert_called_once()
+        mock_clear.assert_called_once()
+        mock_rotate.assert_called_once()
+        mock_prune.assert_called_once()
+
+    def test_every_sub_action_no_ops_safely_when_nothing_qualifies(self):
+        # No injected fakes at all: real (but harmless, since everything
+        # is empty/missing) sub-actions against a fresh tempdir.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            result = run_janitor(
+                repo_root=tmp, home=tmp / "home", worktree_base=tmp / "wt-base",
+                tag_state_path=tmp / "tag-state.json", dashboard_log_path=tmp / "dashboard.log",
+                requests_dir=tmp / "model-fix-requests",
+            )
+        self.assertEqual(result["worktrees_reset"], [])
+        self.assertEqual(result["held_by_foundation_cleared"], [])
+        self.assertFalse(result["dashboard_rotated"])
+        self.assertEqual(result["requests_pruned"], [])
+
+
+class RunJanitorSafelyTests(unittest.TestCase):
+    def test_swallows_and_logs_a_raising_janitor_fn(self):
+        logged = []
+
+        def boom(**kwargs):
+            raise RuntimeError("kaboom")
+
+        parallel_model_fix_loop._run_janitor_safely(janitor_fn=boom, janitor_kwargs={}, log_fn=logged.append)
+
+        self.assertTrue(any("kaboom" in line for line in logged))
+
+    def test_calls_through_with_kwargs_on_success(self):
+        calls = []
+        parallel_model_fix_loop._run_janitor_safely(
+            janitor_fn=lambda **kw: calls.append(kw), janitor_kwargs={"a": 1}, log_fn=lambda *a: None,
+        )
+        self.assertEqual(calls, [{"a": 1}])
 
 
 if __name__ == "__main__":
