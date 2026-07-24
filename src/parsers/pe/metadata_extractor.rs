@@ -10,6 +10,10 @@ use crate::parsers::pe::structures::{
     OptionalHeaderNT, OptionalHeaderStandard, VsFixedFileInfo, machine_types, subsystem_types,
 };
 
+// VS_FIXEDFILEINFO values with ExifTool-specific display names.
+const VOS_WINDOWS32: u32 = 0x0000_0004;
+const VFT_APP: u32 = 0x0000_0001;
+
 /// Extract metadata from DOS header
 pub fn extract_dos_metadata(header: &DosHeader, metadata: &mut MetadataMap) {
     metadata.insert(
@@ -26,7 +30,7 @@ pub fn extract_dos_metadata(header: &DosHeader, metadata: &mut MetadataMap) {
 pub fn extract_coff_metadata(header: &CoffHeader, metadata: &mut MetadataMap) {
     // Machine type
     let machine_name = match header.machine {
-        machine_types::IMAGE_FILE_MACHINE_I386 => "Intel 386",
+        machine_types::IMAGE_FILE_MACHINE_I386 => "Intel 386 or later, and compatibles",
         machine_types::IMAGE_FILE_MACHINE_AMD64 => "x64 (AMD64)",
         machine_types::IMAGE_FILE_MACHINE_ARM => "ARM",
         machine_types::IMAGE_FILE_MACHINE_ARM64 => "ARM64",
@@ -92,7 +96,7 @@ pub fn extract_coff_metadata(header: &CoffHeader, metadata: &mut MetadataMap) {
         (0x0008, "No symbols"),
         (0x0020, "Large address aware"),
         (0x0100, "32-bit"),
-        (0x0200, "Bytes reversed lo"),
+        (0x0200, "No debug"),
         (0x1000, "System file"),
         (0x2000, "DLL"),
         (0x4000, "Bytes reversed hi"),
@@ -353,13 +357,21 @@ pub fn extract_version_info_metadata(
         );
     }
 
-    metadata.insert(
-        "EXE:FileOS".to_string(),
-        TagValue::String(fixed_info.file_os_string().to_string()),
-    );
+    let file_os = if fixed_info.file_os == VOS_WINDOWS32 {
+        "Win32".to_string()
+    } else {
+        fixed_info.file_os_string().to_string()
+    };
+    metadata.insert("EXE:FileOS".to_string(), TagValue::String(file_os));
+
+    let object_file_type = if fixed_info.file_type == VFT_APP {
+        "Executable application".to_string()
+    } else {
+        fixed_info.file_type_string().to_string()
+    };
     metadata.insert(
         "EXE:ObjectFileType".to_string(),
-        TagValue::String(fixed_info.file_type_string().to_string()),
+        TagValue::String(object_file_type),
     );
     metadata.insert(
         "EXE:FileSubtype".to_string(),
@@ -370,6 +382,16 @@ pub fn extract_version_info_metadata(
     for (key, value) in strings {
         let tag_name = format!("EXE:{}", key);
         metadata.insert(tag_name, TagValue::String(value.clone()));
+
+        // Windows names this VERSION_INFO field "OriginalFilename", while
+        // ExifTool exposes the canonical tag as "OriginalFileName". Keep the
+        // raw-key tag for API compatibility and add the canonical alias.
+        if key.as_str() == "OriginalFilename" {
+            metadata.insert(
+                "EXE:OriginalFileName".to_string(),
+                TagValue::String(value.clone()),
+            );
+        }
     }
 }
 
