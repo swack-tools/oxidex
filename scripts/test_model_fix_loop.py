@@ -1338,6 +1338,17 @@ class RustArchitectureConstraintsTests(unittest.TestCase):
         self.assertIn("u32::from_be_bytes", RUST_ARCHITECTURE_CONSTRAINTS)
         self.assertIn("u32::from_le_bytes", RUST_ARCHITECTURE_CONSTRAINTS)
 
+    def test_constraints_block_is_the_very_first_content_in_the_prompt(self):
+        # Position zero: byte-stable constraints lead every fixer prompt --
+        # maximal prompt-cache prefix, and the guardrails can never be
+        # truncated away (truncate_to_token_budget keeps the head).
+        prompt = build_prompt(make_gap(gap_count=2))
+        self.assertTrue(prompt.startswith("CRITICAL RUST ARCHITECTURE CONSTRAINTS"))
+
+    def test_constraints_are_numbered_with_caps_labels(self):
+        for label in ("STATE:", "TYPES:", "BYTES:", "TREES:", "BLOAT:", "ERRORS:", "PERL MAP:"):
+            self.assertIn(label, RUST_ARCHITECTURE_CONSTRAINTS)
+
     def test_build_prompt_includes_the_constraints_block(self):
         prompt = build_prompt(make_gap(gap_count=2))
         self.assertIn("CRITICAL RUST ARCHITECTURE CONSTRAINTS", prompt)

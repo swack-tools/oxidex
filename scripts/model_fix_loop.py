@@ -1324,15 +1324,14 @@ def build_format_overview_block(lib_dir, perl_reference_block):
 
 
 RUST_ARCHITECTURE_CONSTRAINTS = """
-CRITICAL RUST ARCHITECTURE CONSTRAINTS (porting ExifTool's Perl to Rust -- do not write "Perl in Rust"):
-- No dynamic-typing crutches. Do not introduce Box<dyn Any>, serde_json::Value, or a new ad hoc HashMap<String, X> as a stand-in for Perl's autovivified hashes -- use this codebase's own TagValue enum and MetadataMap (see src/core/), which already exist for exactly this.
-- No regex crate for binary/byte-level parsing. This is a memory-mapped/byte-slice format; slice &[u8] directly (or use nom/winnow if the surrounding file already does) rather than treating binary data as UTF-8 text a regex can search.
-- No self-referential structs for IFD/directory trees (a struct holding a reference to its own parent or child). Store an absolute byte offset (usize) or index instead, exactly like ExifTool's own IFD-offset-based traversal.
-- Do not inline a large hardcoded lookup table (e.g. a full MakerNote-style tag dictionary) directly into a diff. If a tag needs a name/ID lookup, wire it through this codebase's existing tag database (oxidex-tags-*, lookup_tag_name()) instead of hand-writing a new static table.
-- No new global mutable state (a `static mut`, or a bare `static` with interior mutability introduced just for this fix). Thread whatever context (byte order, base offset) is needed as an explicit parameter, matching how neighboring functions in the file already do it.
-- No unwrap()/expect()/panic!() on data derived from the file being parsed. A real-world file can be corrupt or unexpected; propagate errors via this codebase's Result<T, ExifToolError> (see src/error/) so a single malformed tag can't crash the whole parse.
-- Endianness travels through function signatures -- an explicit byte-order parameter or the file's existing endian-aware reader type -- never through globals or implicit state (ExifTool's own Perl mutates a global byte order; do not mirror that).
-- Common Perl-builtin translations: unpack("N",...) -> u32::from_be_bytes, unpack("V",...) -> u32::from_le_bytes, unpack("n",...)/unpack("v",...) -> u16::from_be_bytes/u16::from_le_bytes, substr($v, off, len) -> a bounds-checked slice &v[off..off + len].
+CRITICAL RUST ARCHITECTURE CONSTRAINTS (you are porting ExifTool's Perl to Rust -- do NOT write "Perl in Rust"):
+1. STATE: No new global mutable state (no `static mut`, no interior-mutability statics). Thread endianness/base-offset context as explicit function parameters through the function signatures, or the file's existing endian-aware reader -- exactly like neighboring functions do (ExifTool's own Perl mutates a global byte order; never mirror that).
+2. TYPES: No dynamic-typing crutches -- no Box<dyn Any>, no serde_json::Value, no new ad hoc HashMap<String, X> mimicking Perl's autovivified hashes. Use this codebase's strictly-typed TagValue enum into MetadataMap (src/core/), which exist for exactly this.
+3. BYTES: Parse binary by slicing &[u8] through the existing FileReader/reader helpers (or nom/winnow where the surrounding file already uses them) -- never the regex crate on bytes, and never refactor a whole parser onto new lifetimes for a one-tag fix.
+4. TREES: No self-referential structs for IFD/directory trees. Store absolute byte offsets (usize) or indices, matching ExifTool's own offset-based traversal.
+5. BLOAT: Never inline a massive lookup table into a diff. Wire names/IDs through the existing tag database (oxidex-tags-*, lookup_tag_name()); if a huge dictionary is genuinely required, stub it `// TODO: codegen dictionary` and implement only the parsing logic.
+6. ERRORS: No unwrap()/expect()/panic!() on data derived from the parsed file -- propagate Result<T, ExifToolError> (src/error/) so one malformed tag can't kill the parse.
+7. PERL MAP: unpack("N",...) -> u32::from_be_bytes, unpack("V",...) -> u32::from_le_bytes, unpack("n"/"v") -> u16::from_be_bytes/u16::from_le_bytes, substr($v, off, len) -> a bounds-checked slice &v[off..off + len].
 """.strip()
 
 
@@ -1681,8 +1680,8 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
 
     manifest = build_reply_shape_manifest(max_prompt_tokens)
     prompt = (
-        f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
         f"{RUST_ARCHITECTURE_CONSTRAINTS}\n\n"
+        f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
         f"{KNOWN_PITFALLS}\n\n"
         f"{manifest}\n\n"
         f"Missing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
