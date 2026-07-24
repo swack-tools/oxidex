@@ -39,8 +39,12 @@ timeout = 600
 max_request_turns = 20
 max_request_repeats = 3
 max_verify_turns = 10
-compaction_trigger_tokens = 12000
-compaction_keep_recent_turns = 4
+compaction_trigger_tokens = 150000
+compaction_keep_recent_turns = 10
+# compaction_min_elide_tokens: once compaction triggers, only served user
+# payloads whose own estimated size exceeds this floor are stubbed (default
+# 3000); smaller turns are left intact.
+compaction_min_elide_tokens = 3000
 governor_calls_per_minute = 30
 governor_burst = 5
 governor_cooldown_seconds = 30

@@ -36,6 +36,9 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           stubbed -- see compact_messages
     compaction_keep_recent_turns   default 4; most-recent messages exempt
                           from compaction
+    compaction_min_elide_tokens    default 3000; a served user payload is
+                          only stubbed when its own estimated tokens
+                          exceed this floor -- smaller turns are left intact
     reasoning_effort      default "max"
     max_prompt_tags       default 40 (worker only; per-attempt cap on
                           missing_tags/value_differences shown -- the rest
@@ -227,23 +230,24 @@ def truncate_to_token_budget(text, max_tokens=DEFAULT_MAX_PROMPT_TOKENS):
 
 DEFAULT_COMPACTION_TRIGGER_TOKENS = 12_000
 DEFAULT_COMPACTION_KEEP_RECENT_TURNS = 4
-DEFAULT_COMPACTION_MIN_ELIDE_TOKENS = 1000
+DEFAULT_COMPACTION_MIN_ELIDE_TOKENS = 3000
 _COMPACTION_STUB_PREFIX = "[earlier content elided for space:"
 
 
 def compact_messages(messages, trigger_tokens=DEFAULT_COMPACTION_TRIGGER_TOKENS,
-                     keep_recent=DEFAULT_COMPACTION_KEEP_RECENT_TURNS):
+                     keep_recent=DEFAULT_COMPACTION_KEEP_RECENT_TURNS,
+                     min_elide_tokens=DEFAULT_COMPACTION_MIN_ELIDE_TOKENS):
     """Shrink a long conversation by stubbing out stale served payloads.
 
     Once the whole conversation's estimated tokens exceed trigger_tokens,
     older USER turns carrying large served content (REQUEST answers,
-    VERIFY outputs -- anything over DEFAULT_COMPACTION_MIN_ELIDE_TOKENS)
-    are replaced with a one-line stub naming what was elided and how to
-    get it back. Never touched: message 0 (the initial prompt), the last
-    keep_recent messages, and every assistant message (the model's own
-    diffs/PATCH chunks must survive verbatim for chunk reassembly and
-    repair context). Pure -- returns a new list; idempotent -- stubs are
-    recognized and skipped on a second pass.
+    VERIFY outputs -- anything over min_elide_tokens) are replaced with a
+    one-line stub naming what was elided and how to get it back. Never
+    touched: message 0 (the initial prompt), the last keep_recent
+    messages, and every assistant message (the model's own diffs/PATCH
+    chunks must survive verbatim for chunk reassembly and repair context).
+    Pure -- returns a new list; idempotent -- stubs are recognized and
+    skipped on a second pass.
     """
     total = sum(estimate_tokens(m["content"]) for m in messages)
     if total <= trigger_tokens:
@@ -257,7 +261,7 @@ def compact_messages(messages, trigger_tokens=DEFAULT_COMPACTION_TRIGGER_TOKENS,
         content = msg["content"]
         if content.startswith(_COMPACTION_STUB_PREFIX):
             continue
-        if estimate_tokens(content) <= DEFAULT_COMPACTION_MIN_ELIDE_TOKENS:
+        if estimate_tokens(content) <= min_elide_tokens:
             continue
         first_line = content.split("\n", 1)[0][:120]
         compacted[i] = {
@@ -1983,6 +1987,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
             messages,
             trigger_tokens=config.get("compaction_trigger_tokens", DEFAULT_COMPACTION_TRIGGER_TOKENS),
             keep_recent=config.get("compaction_keep_recent_turns", DEFAULT_COMPACTION_KEEP_RECENT_TURNS),
+            min_elide_tokens=config.get("compaction_min_elide_tokens", DEFAULT_COMPACTION_MIN_ELIDE_TOKENS),
         )
         model_spec = pick_model_fn(models_for_phase(config["models"], current_phase))
         try:
@@ -3056,6 +3061,7 @@ def _normalize_model_config(table):
         "max_verify_turns": table.get("max_verify_turns", DEFAULT_MAX_VERIFY_TURNS),
         "compaction_trigger_tokens": table.get("compaction_trigger_tokens", DEFAULT_COMPACTION_TRIGGER_TOKENS),
         "compaction_keep_recent_turns": table.get("compaction_keep_recent_turns", DEFAULT_COMPACTION_KEEP_RECENT_TURNS),
+        "compaction_min_elide_tokens": table.get("compaction_min_elide_tokens", DEFAULT_COMPACTION_MIN_ELIDE_TOKENS),
         "max_retries": table.get("max_retries", DEFAULT_MAX_RETRIES),
         "retry_backoff_seconds": table.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS),
         "max_retry_backoff_seconds": table.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),

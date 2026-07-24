@@ -153,17 +153,20 @@ class NormalizeModelConfigTests(unittest.TestCase):
         self.assertEqual(config["max_verify_turns"], 10)
         self.assertEqual(config["compaction_trigger_tokens"], 12_000)
         self.assertEqual(config["compaction_keep_recent_turns"], 4)
+        self.assertEqual(config["compaction_min_elide_tokens"], 3000)
 
     def test_new_harness_knobs_are_overridable(self):
         config = _normalize_model_config({
             "base_url": "u", "api_key": "k", "models": ["m"],
             "max_request_repeats": 5, "max_verify_turns": 2,
             "compaction_trigger_tokens": 6000, "compaction_keep_recent_turns": 8,
+            "compaction_min_elide_tokens": 500,
         })
         self.assertEqual(config["max_request_repeats"], 5)
         self.assertEqual(config["max_verify_turns"], 2)
         self.assertEqual(config["compaction_trigger_tokens"], 6000)
         self.assertEqual(config["compaction_keep_recent_turns"], 8)
+        self.assertEqual(config["compaction_min_elide_tokens"], 500)
 
     def test_governor_knobs_have_defaults(self):
         config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
@@ -249,7 +252,10 @@ class CompactMessagesTests(unittest.TestCase):
 
     def test_above_trigger_stubs_old_large_user_turns_only(self):
         messages = self._messages()
-        result = compact_messages(messages, trigger_tokens=100, keep_recent=2)
+        # Pin the elide floor below the ~2000-token fixture payloads so this
+        # exercises the stubbing mechanic independent of the default floor.
+        result = compact_messages(messages, trigger_tokens=100, keep_recent=2,
+                                  min_elide_tokens=1000)
         # message 0 (initial prompt) is never touched
         self.assertEqual(result[0], messages[0])
         # assistant turns are never touched
@@ -280,6 +286,17 @@ class CompactMessagesTests(unittest.TestCase):
         snapshot = [dict(m) for m in messages]
         compact_messages(messages, trigger_tokens=100, keep_recent=2)
         self.assertEqual(messages, snapshot)
+
+    def test_min_elide_tokens_sets_the_elide_floor(self):
+        messages = self._messages()
+        # The served payloads (messages 2 and 4) are ~2000 estimated tokens
+        # each. A floor below that stubs them; a floor above leaves them intact.
+        low_floor = compact_messages(messages, trigger_tokens=100, keep_recent=2,
+                                     min_elide_tokens=1000)
+        self.assertIn("[earlier content elided for space:", low_floor[2]["content"])
+        high_floor = compact_messages(messages, trigger_tokens=100, keep_recent=2,
+                                      min_elide_tokens=3000)
+        self.assertEqual(high_floor[2], messages[2])
 
 
 class CallModelTests(unittest.TestCase):
