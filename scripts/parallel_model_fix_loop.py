@@ -157,12 +157,16 @@ def acquire_dispatcher_lock(lock_path=DISPATCHER_LOCK_PATH):
     except OSError:
         lock_f.close()
         return None
-    # Advisory only (the flock is the actual mutex): record who holds it
-    # so a human staring at the file can find the process.
-    lock_f.seek(0)
-    lock_f.truncate()
-    lock_f.write(f"{os.getpid()}\n")
-    lock_f.flush()
+    try:
+        # Advisory only (the flock is the actual mutex): record who holds
+        # it so a human staring at the file can find the process.
+        lock_f.seek(0)
+        lock_f.truncate()
+        lock_f.write(f"{os.getpid()}\n")
+        lock_f.flush()
+    except OSError:
+        lock_f.close()
+        raise
     return lock_f
 
 
