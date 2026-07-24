@@ -177,6 +177,69 @@ class CandidateDiscoveryTests(GitRepoTestCase):
         self.assertEqual(sml.candidate_worker_branches(repo, self._squads_toml(), "nikon"), [])
 
 
+class SquadSlotBranchDiscoveryTests(GitRepoTestCase):
+    """Squad-mode dispatch (spec S2) creates model-fix-parallel-<squad>-<n>
+    branches -- a DIFFERENT naming scheme from candidate_worker_branches's
+    legacy per-format branches. Without squad_slot_branches, a squad's
+    merger would never discover these at all (the Phase 3 squad pipeline
+    disconnected end-to-end from its own claimed consumer)."""
+
+    def test_finds_slot_branches_for_this_squad_only(self):
+        repo = self.make_repo()
+        git(repo, "branch", "model-fix-parallel-canon-1")
+        git(repo, "branch", "model-fix-parallel-canon-2")
+        git(repo, "branch", "model-fix-parallel-nikon-1")
+        branches = sml.squad_slot_branches(repo, "canon")
+        self.assertEqual(
+            sorted(branches), ["model-fix-parallel-canon-1", "model-fix-parallel-canon-2"],
+        )
+
+    def test_no_slot_branches_when_none_exist(self):
+        repo = self.make_repo()
+        self.assertEqual(sml.squad_slot_branches(repo, "canon"), [])
+
+    def test_does_not_match_a_legacy_per_format_branch(self):
+        repo = self.make_repo()
+        git(repo, "branch", "model-fix-parallel-canon")  # legacy: no "-<n>" slot suffix
+        self.assertEqual(sml.squad_slot_branches(repo, "canon"), [])
+
+
+class CommitFormatTrailerTests(GitRepoTestCase):
+    def test_reads_the_format_trailer(self):
+        repo = self.make_repo()
+        sha = self.commit_file(repo, "a.rs", "1\n", "fix a\n\nFormat: JPEG\nTag: MakerNotes:Foo\n")
+        self.assertEqual(sml.commit_format_trailer(repo, sha), "JPEG")
+
+    def test_missing_trailer_is_none(self):
+        repo = self.make_repo()
+        sha = self.commit_file(repo, "a.rs", "1\n", "fix a, no trailers here")
+        self.assertIsNone(sml.commit_format_trailer(repo, sha))
+
+
+class EnsureSquadBranchTests(GitRepoTestCase):
+    def test_creates_branch_from_origin_ref_when_missing(self):
+        repo = self.make_repo()
+        branch = sml.ensure_squad_branch(repo, "canon", origin_ref="main", log_fn=lambda *a: None)
+        self.assertEqual(branch, "squad/canon")
+        self.assertTrue(sml.branch_exists(repo, "squad/canon"))
+
+    def test_does_not_create_a_worktree(self):
+        repo = self.make_repo()
+        sml.ensure_squad_branch(repo, "canon", origin_ref="main", log_fn=lambda *a: None)
+        result = git(repo, "worktree", "list", "--porcelain")
+        # Only the main checkout's own worktree entry should exist --
+        # ensure_squad_branch must never call `git worktree add`.
+        self.assertEqual(result.stdout.count("worktree "), 1)
+
+    def test_does_not_recreate_an_existing_branch(self):
+        repo = self.make_repo()
+        git(repo, "branch", "squad/canon", "main")
+        sha_before = git_out(repo, "rev-parse", "squad/canon").strip()
+        self.commit_file(repo, "new.txt", "1", "advance main")
+        sml.ensure_squad_branch(repo, "canon", origin_ref="main", log_fn=lambda *a: None)
+        self.assertEqual(git_out(repo, "rev-parse", "squad/canon").strip(), sha_before)
+
+
 # ---------------------------------------------------------------------------
 # Patch-id novelty + candidate commit filtering
 # ---------------------------------------------------------------------------
@@ -761,6 +824,74 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
         self.assertIsNone(result["batch_check"])
         state = sml.load_batch_state(sml.batch_state_path(home, "nikon"))
         self.assertEqual(state["last_batch_ts"], 9_500)  # untouched
+
+
+class PollOnceSquadSlotBranchIntegrationTests(GitRepoTestCase):
+    """Squad-mode dispatch (spec S2) creates model-fix-parallel-<squad>-<n>
+    branches, not the legacy model-fix-parallel-<fmt> naming
+    candidate_worker_branches looks for -- poll_once must ALSO discover
+    and consume these (squad_slot_branches), deriving each candidate
+    commit's format from its own Format: trailer since a slot has no
+    single fixed format the way a legacy branch does."""
+
+    def _squads_toml(self):
+        path = self.tmp / "squads.toml"
+        path.write_text('[squads.canon]\nformats = ["JPEG", "CR2"]\n')
+        return path
+
+    def test_consumes_a_squad_slot_branch_commit_using_its_format_trailer(self):
+        repo = self.make_repo()
+        git(repo, "branch", "squad/canon")
+        git(repo, "checkout", "-q", "-b", "model-fix-parallel-canon-1")
+        sha = self.commit_file(
+            repo, "src/canon.rs", "fixed\n",
+            "fix(canon): wire tag\n\nFormat: JPEG\nTag: MakerNotes:Foo\n",
+        )
+        git(repo, "checkout", "-q", "main")
+        home = self.tmp / "home"
+
+        result = sml.poll_once(
+            repo_root=repo, squad="canon", home=home, staging_dir=self.tmp / "staging-canon",
+            squads_toml_path=self._squads_toml(), cache_dir="/unused", origin_ref="main",
+            batch_commits=10, batch_seconds=900, now_fn=lambda: 1,
+            validate_fn=lambda sha, repo, **kw: {"ok": True, "flags": [], "patch_id": "p1"},
+            cargo_test_targeted_fn=lambda *a: (True, ""),
+            comparison_fn=lambda *a: {"duplicate_emissions": [], "extra_in_oxidex": []},
+            check_recut=False, log_fn=lambda *a: None,
+        )
+
+        self.assertEqual(len(result["processed"]), 1)
+        self.assertEqual(result["processed"][0]["outcome"], "consumed")
+        status = sml.load_squad_status(sml.squad_status_file(home, "canon"))
+        self.assertEqual(status["heads"][sha]["format"], "JPEG")
+
+    def test_legacy_and_slot_branches_are_both_consumed_in_one_poll(self):
+        repo = self.make_repo()
+        git(repo, "branch", "squad/canon")
+
+        git(repo, "checkout", "-q", "-b", "model-fix-parallel-cr2")
+        legacy_sha = self.commit_file(repo, "src/cr2.rs", "fixed\n", "fix(cr2): wire tag")
+        git(repo, "checkout", "-q", "main")
+
+        git(repo, "checkout", "-q", "-b", "model-fix-parallel-canon-1")
+        slot_sha = self.commit_file(
+            repo, "src/canon.rs", "fixed\n", "fix(canon): wire tag\n\nFormat: JPEG\nTag: MakerNotes:Foo\n",
+        )
+        git(repo, "checkout", "-q", "main")
+        home = self.tmp / "home"
+
+        result = sml.poll_once(
+            repo_root=repo, squad="canon", home=home, staging_dir=self.tmp / "staging-canon",
+            squads_toml_path=self._squads_toml(), cache_dir="/unused", origin_ref="main",
+            batch_commits=10, batch_seconds=900, now_fn=lambda: 1,
+            validate_fn=lambda sha, repo, **kw: {"ok": True, "flags": [], "patch_id": "p1"},
+            cargo_test_targeted_fn=lambda *a: (True, ""),
+            comparison_fn=lambda *a: {"duplicate_emissions": [], "extra_in_oxidex": []},
+            check_recut=False, log_fn=lambda *a: None,
+        )
+
+        consumed_shas = {r["sha"] for r in result["processed"] if r["outcome"] == "consumed"}
+        self.assertEqual(consumed_shas, {legacy_sha, slot_sha})
 
 
 # ---------------------------------------------------------------------------

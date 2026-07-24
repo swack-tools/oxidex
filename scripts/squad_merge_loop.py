@@ -17,7 +17,11 @@ Lifecycle per poll (``poll_once``):
 2. Find candidate worker branches: squads.toml's ``formats`` list for
    this squad, run through ``parallel_model_fix_loop.branch_name``,
    keeping the ones that currently exist in the repo
-   (``candidate_worker_branches``).
+   (``candidate_worker_branches``) -- UNIONED with any squad-mode slot
+   branches (spec S2: ``model-fix-parallel-<squad>-<n>``) currently
+   present (``squad_slot_branches``), whose per-commit format comes from
+   the commit's own ``Format:`` trailer rather than a static per-branch
+   mapping (``commit_format_trailer``).
 3. Per candidate branch, find commits ahead of ``squad/<squad>`` (oldest
    first) not already recorded ``consumed``/``quarantined`` in this
    squad's status file (``candidate_commits``).
@@ -97,6 +101,7 @@ from parallel_model_fix_loop import branch_name as worker_branch_name
 from parallel_model_fix_loop import novel_commits
 from model_fix_loop import cargo_test_targeted as _real_cargo_test_targeted
 from model_fix_loop import new_oxidex_only_keys
+import validate_fix_commit
 from validate_fix_commit import validate_commit as _real_validate_commit
 from distill_lessons import (
     STALE_HEARTBEAT_SECONDS,
@@ -257,6 +262,26 @@ def compute_patch_id_for_sha(repo_root, sha):
     return parts[0] if parts else ""
 
 
+def ensure_squad_branch(repo_root, squad, origin_ref=ORIGIN_MAIN, log_fn=print):
+    """Create squad/<squad> from origin_ref if it doesn't already exist
+    -- just the branch-existence half of ensure_staging_worktree's
+    bootstrap, factored out so a caller that only ever needs the REF to
+    exist (never the staging WORKTREE's checked-out state) doesn't have
+    to touch the merger's own staging worktree as a side effect.
+    parallel_model_fix_loop.ensure_squad_staging_branch is exactly that
+    caller: the dispatcher only needs squad/<squad> to exist so a squad
+    worker's create_worktree can check it out as a base ref -- it must
+    never reset/clean the staging worktree the squad's OWN merger daemon
+    may be concurrently mid-cherry-pick/mid-test inside of, on its own
+    ~120s poll cadence, with no lock coordination between the two
+    processes. Returns the branch name."""
+    branch = staging_branch(squad)
+    if not branch_exists(repo_root, branch):
+        _git(["branch", branch, origin_ref], repo_root)
+        log_fn(f"created {branch!r} from {origin_ref}")
+    return branch
+
+
 def ensure_staging_worktree(repo_root, staging_path, squad, origin_ref=ORIGIN_MAIN, log_fn=print):
     """Make sure squad/<squad> exists (cut from origin_ref if not) and
     the staging worktree at `staging_path` exists, checked out on it.
@@ -278,12 +303,16 @@ def ensure_staging_worktree(repo_root, staging_path, squad, origin_ref=ORIGIN_MA
     until a human runs `git reset --hard`/`cherry-pick --abort` by hand.
     `reset --hard HEAD` clears both the dirty worktree AND any in-progress
     cherry-pick/merge/revert state in one shot, so this recovers on the
-    very next poll with no human involved."""
+    very next poll with no human involved.
+
+    ONLY this merger's own poll cycle (and its --recut bootstrap) may
+    ever call this: it resets/cleans the staging worktree unconditionally,
+    which would corrupt a concurrent in-flight cherry-pick/test if any
+    other process called it against the same staging_path. A caller that
+    only needs squad/<squad> to EXIST (never the worktree) must use
+    ensure_squad_branch instead."""
     staging_path = Path(staging_path)
-    branch = staging_branch(squad)
-    if not branch_exists(repo_root, branch):
-        _git(["branch", branch, origin_ref], repo_root)
-        log_fn(f"created {branch!r} from {origin_ref}")
+    branch = ensure_squad_branch(repo_root, squad, origin_ref=origin_ref, log_fn=log_fn)
     if staging_path.is_dir():
         _git(["reset", "--hard", "HEAD"], staging_path, check=False)
         _git(["clean", "-fd"], staging_path, check=False)
@@ -300,14 +329,71 @@ def ensure_staging_worktree(repo_root, staging_path, squad, origin_ref=ORIGIN_MA
 
 def candidate_worker_branches(repo_root, squads_toml_path, squad):
     """(format, branch) pairs for every format squads.toml lists under
-    `squad` whose worker branch currently exists in the repo (spec M2
-    step (a))."""
+    `squad` whose LEGACY per-format worker branch currently exists in
+    the repo (spec M2 step (a); parallel_model_fix_loop.branch_name's
+    one-branch-per-format naming, from run_round/process_format).
+
+    Squad-mode dispatch (spec S2, run_squad_round/process_squad_worker)
+    creates DIFFERENT branches -- model-fix-parallel-<squad>-<n>, one per
+    allocated slot -- which this function deliberately does not look for
+    (a slot's format cycles round to round, so there is no static
+    per-branch format to pair it with the way there is here); see
+    squad_slot_branches / commit_format_trailer for that discovery path,
+    consulted alongside this one in poll_once."""
     out = []
     for fmt in squad_formats(squads_toml_path, squad):
         branch = worker_branch_name(fmt)
         if branch_exists(repo_root, branch):
             out.append((fmt, branch))
     return out
+
+
+def squad_slot_branches(repo_root, squad):
+    """Squad-mode worker branches (spec S2 worker identity:
+    model-fix-parallel-<squad>-<n>, one per allocated slot) currently
+    present in the repo -- discovered by git ref pattern rather than a
+    static squads.toml list, since a squad's slot COUNT varies round to
+    round with allocate_squad_slots and a single slot's FORMAT can also
+    change round to round (squad_worker_formats round-robins a slot
+    through the squad's formats). These branches carry no single fixed
+    format the way a legacy candidate_worker_branches branch does, so a
+    candidate commit's format comes from its own `Format:` trailer
+    instead (see commit_format_trailer) -- not from this function.
+
+    Together with candidate_worker_branches, this is the full set of
+    branches a squad's merger must consume (poll_once processes both);
+    without it, every squad-mode worker's commits would sit unconsumed
+    forever, since candidate_worker_branches only ever matches the
+    legacy per-format naming."""
+    result = _git(
+        ["for-each-ref", "--format=%(refname:short)", f"refs/heads/model-fix-parallel-{squad}-*"],
+        repo_root, check=False,
+    )
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def commit_format_trailer(repo_root, sha):
+    """The commit's own `Format:` trailer (spec M1) -- the format ground
+    truth for a squad-slot worker-branch commit, whose slot may cycle
+    through several of the squad's formats round to round (unlike a
+    legacy per-format branch, which is exactly one format for its whole
+    life, known statically). Reuses validate_fix_commit's own
+    commit_message/parse_trailers (`git interpret-trailers --parse`) --
+    the exact same trailer parser validate_fix_commit.py and
+    overlord_sweep.py already use -- rather than a second hand-rolled
+    reader. Returns None when the commit carries no such trailer (an
+    absent Format: trailer is itself flagged by
+    validate_fix_commit.check_trailers as missing-trailer:Format, so
+    this only ever surfaces as a quarantine, never a crash from a
+    downstream fmt.lower() on None)."""
+    def run(args, repo, input_text=None):
+        result = _git(args, repo, check=False, input_text=input_text)
+        return result.returncode, result.stdout, result.stderr
+
+    message = validate_fix_commit.commit_message(sha, repo_root, run)
+    trailers = validate_fix_commit.parse_trailers(message, repo_root, run)
+    values = [v for v in trailers.get("Format", []) if v]
+    return values[0] if values else None
 
 
 def candidate_commits(repo_root, worker_branch, squad_branch, status):
@@ -855,7 +941,13 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
     status_path = squad_status_file(home, squad)
     quarantine_entries = load_quarantine(quarantine_ledger_path(home))
     branches = candidate_worker_branches(repo_root, squads_toml_path, squad)
-    formats = sorted({fmt for fmt, _ in branches})
+    slot_branches = squad_slot_branches(repo_root, squad)
+    # Union with squads.toml's own advisory list (not just formats seen on
+    # currently-existing branches): the batch full-corpus check must cover
+    # every format this squad owns even in a round where every worker
+    # branch happens to be squad-mode (no legacy per-format branch exists
+    # at all to derive a format from).
+    formats = sorted(set(squad_formats(squads_toml_path, squad)) | {fmt for fmt, _ in branches})
 
     batch_path = batch_state_path(home, squad)
     batch_state = load_batch_state(batch_path)
@@ -894,6 +986,28 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
             continue
         novel = union_novel_shas(repo_root, worker_branch, origin_ref, squad_branch_ref)
         for sha in shas:
+            result = process_commit(
+                repo_root=repo_root, staging_path=staging_dir, squad=squad,
+                squad_branch=squad_branch_ref, sha=sha, fmt=fmt, is_novel=(sha in novel),
+                quarantine_entries=quarantine_entries, cache_dir=cache_dir, home=home,
+                validate_fn=validate_fn, cargo_test_targeted_fn=cargo_test_targeted_fn,
+                comparison_fn=comparison_fn, sweep_review_log_path=sweep_review_log_path,
+                validate_kwargs=validate_kwargs, now_fn=now_fn, log_fn=log_fn,
+            )
+            processed.append(result)
+            heartbeat_fn()
+
+    # Squad-mode worker branches (spec S2): unlike a legacy branch, a
+    # slot has no single fixed format -- it cycles round to round -- so
+    # each candidate commit's format comes from its own Format: trailer.
+    for worker_branch in slot_branches:
+        status = load_squad_status(status_path)
+        shas = candidate_commits(repo_root, worker_branch, squad_branch_ref, status)
+        if not shas:
+            continue
+        novel = union_novel_shas(repo_root, worker_branch, origin_ref, squad_branch_ref)
+        for sha in shas:
+            fmt = commit_format_trailer(repo_root, sha) or "UNKNOWN"
             result = process_commit(
                 repo_root=repo_root, staging_path=staging_dir, squad=squad,
                 squad_branch=squad_branch_ref, sha=sha, fmt=fmt, is_novel=(sha in novel),

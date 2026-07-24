@@ -37,6 +37,7 @@ import concurrent.futures
 import fcntl
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
@@ -47,7 +48,7 @@ import time
 from pathlib import Path
 
 from find_tag_gaps import OXIDEX_HOME, REPO_ROOT, group_gaps_by_format, load_comparison_report, run_full_comparison
-from model_fix_loop import DEFAULT_CONFIG_PATH
+from model_fix_loop import DEFAULT_CONFIG_PATH, DEFAULT_TAG_STATE_PATH, _state_locked
 
 # Each worker runs a full `cargo test --workspace` before committing --
 # running more of those concurrently than there are cores just makes them
@@ -81,6 +82,13 @@ DISPATCHER_PGIDS_PATH = OXIDEX_HOME / "logs" / "dispatcher-pgids.json"
 # round-end merges are retargeted onto this dedicated local integration
 # branch instead of merging into main (see ensure_integration_branch).
 SWEEP_LOCAL_BRANCH = "model-fix-sweep-local"
+
+# Squad-mode (spec S2/S5) defaults. Deliberately separate constants from
+# the legacy per-format ones above -- --squad-mode is a new, opt-in
+# entrypoint (run_squad_round) alongside run_round, not a replacement.
+SCRIPTS_DIR = Path(__file__).resolve().parent
+DEFAULT_SQUADS_TOML = SCRIPTS_DIR / "squads.toml"
+DEFAULT_GAP_ATTRIBUTION_PATH = OXIDEX_HOME / "logs" / "gap-attribution.json"
 
 # Every in-flight worker's process group, so an interrupted wrapper
 # (Ctrl-C, SIGTERM) can force-terminate all of them rather than leaving
@@ -227,6 +235,81 @@ def worktree_path(base_dir, fmt):
 
 def branch_name(fmt):
     return f"model-fix-parallel-{fmt.lower()}"
+
+
+# ---------------------------------------------------------------------------
+# Squad-mode: slot allocation (spec S2)
+# ---------------------------------------------------------------------------
+
+def allocate_squad_slots(squad_open_gaps, total_slots):
+    """The spec S2 slot-allocation formula, implemented exactly:
+
+        slots_i = max(1, round(total_slots * open_gaps_i / sum(open_gaps)))
+
+    followed by a reconciliation pass (the max(1, .) floor overshoots the
+    moment there are more squads than total_slots can give two-plus slots
+    to, which is every round on this host's 14 squads): while
+    sum(slots) > total_slots, decrement the squad with the LOWEST
+    gaps-per-slot among those currently holding more than 1 slot (it is
+    the squad "wasting" the most slack per slot); while sum(slots) <
+    total_slots, increment the squad with the HIGHEST gaps-per-slot (the
+    most under-served squad gets the extra capacity first).
+
+    A squad with open_gaps <= 0 is excluded entirely, BEFORE the floor
+    is ever applied -- max(1, .) is a floor for squads that have work,
+    never a slot handed to genuinely empty work (mirrors
+    discover_formats already dropping formats with zero gaps today).
+
+    Pure function: no I/O, no clock, no subprocess -- squad_open_gaps is
+    ordinarily {squad: open_gaps} straight from gap-attribution.json's
+    "squads" summary (attribute_gaps.py), but this takes a plain dict so
+    it is trivially unit-testable against the spec's worked census
+    example without needing a real attribution run.
+
+    Returns {squad: slot_count} for every squad with open_gaps > 0. The
+    values sum to exactly total_slots whenever total_slots >= the
+    number of active squads (the case every worked example in the spec
+    covers); with fewer slots than active squads the floor overshoot
+    cannot be reconciled away (every squad is already pinned at its
+    floor of 1) and the returned total exceeds total_slots -- a
+    dispatcher that ever sees that case is asking for fewer slots than
+    it has squads with work, which is its own signal to raise
+    total_slots, not something this function can silently paper over by
+    dropping a squad's only slot to zero.
+    """
+    active = {squad: gaps for squad, gaps in squad_open_gaps.items() if gaps and gaps > 0}
+    if not active or total_slots <= 0:
+        return {}
+
+    total_gaps = sum(active.values())
+    slots = {squad: max(1, round(total_slots * gaps / total_gaps)) for squad, gaps in active.items()}
+
+    def gaps_per_slot(squad):
+        return active[squad] / slots[squad]
+
+    while sum(slots.values()) > total_slots:
+        decrementable = [squad for squad in slots if slots[squad] > 1]
+        if not decrementable:
+            # Every squad is already at its floor of 1 -- cannot
+            # reconcile further without taking a squad with open gaps
+            # down to zero, which spec S2 forbids outright.
+            break
+        victim = min(decrementable, key=lambda squad: (gaps_per_slot(squad), squad))
+        slots[victim] -= 1
+
+    while sum(slots.values()) < total_slots:
+        beneficiary = max(slots, key=lambda squad: (gaps_per_slot(squad), squad))
+        slots[beneficiary] += 1
+
+    return slots
+
+
+def squad_worktree_path(base_dir, squad, n):
+    return base_dir / f"model-fix-{squad}-{n}"
+
+
+def squad_branch_name(squad, n):
+    return f"model-fix-parallel-{squad}-{n}"
 
 
 # List-argv only throughout this file, no shell=True -- repo_root/path are
@@ -678,9 +761,21 @@ def _handle_shutdown_signal(signum, frame):
     sys.exit(1)
 
 
-def run_worker(fmt, worktree, cache_dir, log_path, timeout=None):
+def run_worker(fmt, worktree, cache_dir, log_path, timeout=None, worker_id=None):
     """Run model_fix_loop.py --only-format <fmt> inside worktree, logging
     combined stdout/stderr to log_path. Returns the process's exit code.
+
+    worker_id defaults to fmt -- today's per-format legacy identity,
+    unchanged. Squad-mode callers (process_squad_worker) pass an
+    explicit "<squad>-<n>" SLOT identity instead (spec S2 "worker
+    identity at >1 worker per squad"): the worker id flows into the
+    claim record, /tmp/tagcmp-* suffix, prompt-log filename, and every
+    model-fix-diffs//model-fix-requests filename, so it must name the
+    SLOT that stays stable across rounds, not whichever format that
+    slot happens to be round-robining through this particular
+    invocation (see squad_worker_formats) -- two different formats
+    sharing one worker_id would otherwise silently share (and overwrite
+    each other's) every one of those artifacts.
 
     Launched in its own process group (POSIX) so this function can
     positively confirm -- and if needed, force-terminate -- the worker's
@@ -688,6 +783,7 @@ def run_worker(fmt, worktree, cache_dir, log_path, timeout=None):
     child. See _wait_for_process_group_exit for why that distinction
     matters.
     """
+    worker_label = worker_id if worker_id is not None else fmt
     env = dict(os.environ)
     env.pop("CARGO_TARGET_DIR", None)  # each worktree gets its own default target/, never shared
     env["EXIFTOOL_CACHE_DIR"] = str(cache_dir)
@@ -704,7 +800,7 @@ def run_worker(fmt, worktree, cache_dir, log_path, timeout=None):
             # a single OXIDEX_HOME-fixed location every format's worker
             # shares, so without a distinct id per format, watch_parallel_fix.py
             # couldn't attribute a shared manifest.log line back to this fmt.
-            ["uv", "run", "scripts/model_fix_loop.py", "--only-format", fmt, "--worker-id", fmt],
+            ["uv", "run", "scripts/model_fix_loop.py", "--only-format", fmt, "--worker-id", worker_label],
             cwd=worktree, env=env, stdout=log_file, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
@@ -749,6 +845,644 @@ def process_format(fmt, repo_root, base_ref, worktree_base, log_base, cache_dir,
         "status": "worker_done", "returncode": returncode,
         "worktree": path, "branch": branch, "log": log_path,
     }
+
+
+# ---------------------------------------------------------------------------
+# Squad-mode dispatch (spec S2/S5) -- alongside, not instead of, run_round
+# ---------------------------------------------------------------------------
+
+def _sml():
+    """Lazy import of squad_merge_loop.py.
+
+    squad_merge_loop imports `branch_name`/`novel_commits` from THIS
+    module at ITS OWN top level (so it can reuse them rather than
+    duplicate them) -- importing squad_merge_loop back at this module's
+    top level would make the two modules circularly import each other.
+    Deferring the import to call time sidesteps that entirely: by the
+    time any squad-mode function actually runs, both modules are always
+    fully initialized regardless of which one was imported first.
+    """
+    import squad_merge_loop
+    return squad_merge_loop
+
+
+def ensure_squad_staging_branch(repo_root, squad, home, log_fn=print, origin_ref=None):
+    """Make sure squad/<squad> exists, cut from origin/main if this is
+    the first time this squad has ever been dispatched (spec S5: squad
+    workers branch from THEIR SQUAD's staging branch, never local main).
+
+    Reuses squad_merge_loop.ensure_squad_branch (just the "create the
+    branch from origin/main if missing" half of the merger's own
+    ensure_staging_worktree bootstrap) rather than re-implementing that
+    creation logic a second time here. Deliberately does NOT call
+    ensure_staging_worktree: that function also resets/cleans the
+    STAGING WORKTREE as a side effect, and that worktree is the squad's
+    own merger daemon's private working area (squad_merge_loop.poll_once
+    checks it out, cherry-picks, and runs targeted tests there on its
+    own ~120s cadence, all under merger-<squad>.lock). This function
+    runs from every squad-mode dispatch round with no lock coordination
+    with that merger at all, so touching the worktree here would race a
+    concurrent in-flight cherry-pick/test and could corrupt it. All the
+    dispatcher actually needs is the branch NAME (squad/<squad>) to hand
+    to a squad worker's create_worktree as its base ref -- never the
+    worktree's checked-out state -- so only ensure_squad_branch's
+    branch-existence check runs; `home` is accepted for call-signature
+    symmetry with the previous version and every existing call site, but
+    is no longer consulted (no staging worktree path is ever built here).
+
+    origin_ref=None (the default) lets squad_merge_loop's own default
+    ("origin/main") apply -- only tests, which have no real "origin"
+    remote in their throwaway repos, ever pass an explicit local-branch
+    stand-in.
+
+    Returns the branch name ("squad/<squad>").
+    """
+    sml = _sml()
+    kwargs = {"origin_ref": origin_ref} if origin_ref is not None else {}
+    return sml.ensure_squad_branch(repo_root, squad, log_fn=log_fn, **kwargs)
+
+
+def load_gap_attribution(path):
+    """Read gap-attribution.json (attribute_gaps.py's own tempfile +
+    os.replace output) -- a missing file or a parse failure both read
+    as "nothing attributed yet" (None), never raise: production always
+    regenerates this fresh before consulting it (see
+    real_build_attribution), so an empty read here only shows up if
+    that regeneration itself already failed and logged why."""
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def real_build_attribution(cache_dir, squads_toml_path, out_path, perl_lib=None, repo_root=REPO_ROOT):
+    """Production attribution regeneration (spec S1: "Regenerated by the
+    dispatcher once per round after its full comparison"). Runs a fresh
+    full-corpus comparison, hands the report to attribute_gaps.py's own
+    library functions (build_tag_index/load_squads/build_attribution),
+    and writes gap-attribution.json atomically -- exactly what a
+    standalone `uv run scripts/attribute_gaps.py` does, minus the extra
+    process. Needs a real exiftool Perl lib and a real tag-comparison
+    build, so no hermetic test calls this directly -- every test injects
+    build_attribution_fn instead (same discipline as squad_merge_loop's
+    validate_fn/comparison_fn injection points).
+    """
+    import attribute_gaps
+    report_path = run_full_comparison(cache_dir, repo_root=repo_root)
+    report = load_comparison_report(report_path)
+    perl_lib_dir = Path(perl_lib) if perl_lib else attribute_gaps.default_perl_lib()
+    index, modules = attribute_gaps.build_tag_index(perl_lib_dir)
+    module_to_squad, squad_names = attribute_gaps.load_squads(squads_toml_path)
+    attribution = attribute_gaps.build_attribution(report, index, modules, module_to_squad, squad_names)
+    attribute_gaps.write_atomic(out_path, attribution)
+    return attribution
+
+
+def squad_open_gaps_from_attribution(attribution):
+    """{squad: open_gaps} straight from gap-attribution.json's "squads"
+    summary -- allocate_squad_slots's own input shape. Missing/None
+    attribution reads as "no squad has any open gaps" (empty dict), not
+    an error -- the caller (run_squad_round) treats an empty allocation
+    as "nothing to dispatch this round", exactly like discover_formats
+    returning no formats today."""
+    squads = (attribution or {}).get("squads") or {}
+    return {name: agg.get("open_gaps", 0) for name, agg in squads.items()}
+
+
+def squad_worker_formats(squad, attribution, squads_toml_path):
+    """Formats this squad's worker slots round-robin through this round
+    (spec S3: model_fix_loop.py supports only one format per process
+    invocation, and a squad may own several -- cycling slot n through
+    formats[(n-1) % len(formats)] is the stated interim behavior until
+    model_fix_loop.py itself grows multi-format support).
+
+    Prefers the LIVE per-round formats attribute_gaps.py just derived
+    for this squad (attribution["squads"][squad]["formats"]) -- a squad
+    only ever gets slots when its open_gaps > 0, so this should
+    ordinarily be non-empty -- falling back to squads.toml's advisory
+    "formats" list (squad_merge_loop.squad_formats) when attribution has
+    nothing recorded for this squad yet. Empty means "nothing to
+    dispatch this squad this round" -- the caller skips it rather than
+    spawning a worker with no format to work.
+    """
+    squads = (attribution or {}).get("squads") or {}
+    live = squads.get(squad, {}).get("formats") or []
+    if live:
+        return list(live)
+    try:
+        return _sml().squad_formats(squads_toml_path, squad)
+    except (OSError, ValueError):
+        return []
+
+
+def process_squad_worker(squad, n, fmt, repo_root, base_ref, worktree_base, log_base, cache_dir, timeout,
+                          config_path=DEFAULT_CONFIG_PATH, squad_status_path=None):
+    """Create this squad SLOT's worktree/branch, run its worker against
+    `fmt` (this invocation's slice of the squad's round-robin format
+    list -- see squad_worker_formats), report what happened. Mirrors
+    process_format exactly, with the two squad-mode differences spec
+    S2/S5 call for: worker identity is the SLOT ("<squad>-<n>"), stable
+    across whichever format it cycles through, not the format itself;
+    and create_worktree is wired with squad_status_path so the consume
+    handshake (spec M2/M5) guards this slot's `checkout -B` reset --
+    legacy per-format mode (process_format) never passes this. Never
+    raises -- failures are reported in the returned dict's status.
+    """
+    worker_id = f"{squad}-{n}"
+    path = squad_worktree_path(worktree_base, squad, n)
+    branch = squad_branch_name(squad, n)
+    log_path = log_base / f"{worker_id}.log"
+
+    try:
+        create_worktree(repo_root, path, branch, base_ref, config_path=config_path,
+                        squad_status_path=squad_status_path)
+    except subprocess.CalledProcessError as e:
+        return worker_id, {"status": "worktree_failed", "error": e.stderr, "squad": squad, "format": fmt}
+
+    try:
+        returncode = run_worker(fmt, path, cache_dir, log_path, timeout=timeout, worker_id=worker_id)
+    except subprocess.TimeoutExpired:
+        return worker_id, {
+            "status": "timeout", "worktree": path, "branch": branch, "log": log_path,
+            "squad": squad, "format": fmt,
+        }
+
+    return worker_id, {
+        "status": "worker_done", "returncode": returncode,
+        "worktree": path, "branch": branch, "log": log_path, "squad": squad, "format": fmt,
+    }
+
+
+def run_squad_round(args, config_path, build_attribution_fn=None, ensure_staging_branch_fn=None):
+    """One squad-mode dispatch round (spec S2/S5): allocate this round's
+    total_slots (args.max_parallel) across squads by live open-gap share
+    (allocate_squad_slots), spawn one per-slot worker per squad branched
+    from THAT SQUAD's own staging branch (squad/<squad> -- never local
+    main), and report what happened.
+
+    Unlike run_round, there is no merge phase here: consuming a squad
+    worker's commits is squad_merge_loop.py's job (a separate per-squad
+    daemon process polling independently, spec M2) -- this function's
+    only job past dispatch is making sure every worktree it resets goes
+    through the consume handshake (squad_status_path, spec M2/M5) so a
+    not-yet-consumed commit is never silently reset away. run_round
+    (legacy per-format mode) is completely unchanged by any of this --
+    it never passes squad_status_path and keeps doing its own
+    round-end merge exactly as before.
+
+    build_attribution_fn(cache_dir) -> attribution dict, default
+    real_build_attribution (a real corpus comparison + exiftool Perl
+    lib scan). ensure_staging_branch_fn(repo_root, squad, home, log_fn)
+    -> branch name, default ensure_squad_staging_branch. Both are
+    injectable for hermetic tests, same discipline as every other
+    side-effectful entry point in this fleet.
+
+    Returns True iff no worktree_failed/timeout occurred across every
+    dispatched worker -- an allocation with nothing to dispatch (no
+    squad currently has open gaps, or attribution regeneration produced
+    nothing) is reported and treated as success, mirroring run_round's
+    "no formats with gaps" case.
+    """
+    build_attribution_fn = build_attribution_fn or (
+        lambda cache_dir: real_build_attribution(cache_dir, args.squads_toml, args.gap_attribution_path)
+    )
+    ensure_staging_branch_fn = ensure_staging_branch_fn or ensure_squad_staging_branch
+
+    # M5, same as run_round: keep local main a faithful mirror of
+    # origin/main before anything else this round. Squad-mode workers
+    # never branch from local main (they branch from squad/<squad>), but
+    # the fast-forward is still the round's one shared "make sure the
+    # dispatcher's own checkout reflects reality" step.
+    _updated, ff_message = fast_forward_local_main(REPO_ROOT)
+    print(f"local main mirror: {ff_message}")
+
+    home = Path(args.home)
+    attribution = build_attribution_fn(args.cache_dir)
+    if attribution is None:
+        print("squad round: attribution regeneration produced nothing -- skipping dispatch this round")
+        return False
+
+    squad_gaps = squad_open_gaps_from_attribution(attribution)
+    allocation = allocate_squad_slots(squad_gaps, args.max_parallel)
+    if not allocation:
+        print("squad round: no squad currently has open gaps -- nothing to dispatch")
+        return True
+
+    print(
+        f"squad slot allocation (total_slots={args.max_parallel}): "
+        + ", ".join(f"{squad}={n}" for squad, n in sorted(allocation.items()))
+    )
+
+    worktree_base = Path(args.worktree_dir)
+    worktree_base.mkdir(parents=True, exist_ok=True)
+    log_base = Path(args.log_dir)
+    log_base.mkdir(parents=True, exist_ok=True)
+
+    jobs = []  # (squad, n, fmt, base_ref, squad_status_path)
+    for squad in sorted(allocation):
+        formats = squad_worker_formats(squad, attribution, args.squads_toml)
+        if not formats:
+            print(f"[{squad}] allocated {allocation[squad]} slot(s) but has no attributed "
+                  "format to work -- skipping this round")
+            continue
+        base_ref = ensure_staging_branch_fn(REPO_ROOT, squad, home, print)
+        squad_status_path = _sml().squad_status_file(home, squad)
+        for n in range(1, allocation[squad] + 1):
+            fmt = formats[(n - 1) % len(formats)]
+            jobs.append((squad, n, fmt, base_ref, squad_status_path))
+
+    if not jobs:
+        print("squad round: every allocated squad had no dispatchable format -- nothing to dispatch")
+        return True
+
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
+        futures = {
+            pool.submit(
+                process_squad_worker, squad, n, fmt, REPO_ROOT, base_ref, worktree_base, log_base,
+                args.cache_dir, args.timeout, config_path=config_path, squad_status_path=squad_status_path,
+            ): f"{squad}-{n}"
+            for squad, n, fmt, base_ref, squad_status_path in jobs
+        }
+        for future in concurrent.futures.as_completed(futures):
+            worker_id, result = future.result()
+            results[worker_id] = result
+            extra = f" (exit {result['returncode']})" if "returncode" in result else ""
+            print(f"[{worker_id}] {result['status']}{extra} "
+                  f"(squad={result.get('squad')} format={result.get('format')})")
+
+    failed = [(worker_id, r["status"]) for worker_id, r in results.items() if r["status"] != "worker_done"]
+    print(f"\nsquad round done: {len(results) - len(failed)}/{len(results)} worker(s) finished cleanly")
+    for worker_id, status in failed:
+        print(f"  {worker_id}: {status}")
+    print("(no merge phase in squad mode -- squad_merge_loop.py's per-squad mergers consume these branches)")
+
+    _run_janitor_safely(janitor_kwargs={"repo_root": REPO_ROOT, "home": home, "worktree_base": worktree_base})
+
+    return not failed
+
+
+# ---------------------------------------------------------------------------
+# Janitor (spec M5 "dispatcher round step") -- shared by run_round and
+# run_squad_round
+# ---------------------------------------------------------------------------
+
+ORIGIN_MAIN_REF = "origin/main"
+
+# Same ">3 days" figure squad_merge_loop.py's own re-cut trigger uses
+# absent a more specific number in the spec.
+JANITOR_WORKTREE_STALENESS_SECONDS = 3 * 24 * 3600
+
+DEFAULT_DASHBOARD_LOG_PATH = OXIDEX_HOME / "logs" / "dashboard.log"
+DEFAULT_DASHBOARD_LOG_ROTATE_BYTES = 50 * 1024 * 1024
+
+DEFAULT_MODEL_FIX_REQUESTS_DIR = OXIDEX_HOME / "logs" / "model-fix-requests"
+DEFAULT_MODEL_FIX_REQUESTS_MAX_AGE_SECONDS = 14 * 24 * 3600
+
+_SQUAD_BRANCH_RE = re.compile(r"^model-fix-parallel-(?P<squad>.+)-(?P<n>\d+)$")
+
+
+def squad_from_branch(branch):
+    """Squad name from a squad-mode worker branch
+    ("model-fix-parallel-canon-2" -> "canon"), or None for a legacy
+    per-format branch ("model-fix-parallel-jpeg" -- format names in
+    this fleet never end in a "-<digits>" slot suffix, so this never
+    misfires on one)."""
+    m = _SQUAD_BRANCH_RE.match(branch)
+    return m.group("squad") if m else None
+
+
+def staging_branch_or_origin(branch, origin_ref=ORIGIN_MAIN_REF):
+    """The ref a stale, fully-resolved worktree should be reset onto:
+    its squad's own staging branch for a squad-mode worker branch (spec
+    S5: squad workers branch from squad/<squad>, never local main/
+    origin), origin_ref for a legacy per-format branch."""
+    squad = squad_from_branch(branch)
+    return f"squad/{squad}" if squad else origin_ref
+
+
+def discover_worktree_candidates(worktree_base, repo_root=REPO_ROOT):
+    """Every git worktree currently registered (`git worktree list
+    --porcelain`, not a directory scan -- so a leftover directory git no
+    longer tracks, or vice versa, is never treated as live) whose path
+    lives under worktree_base, paired with the branch it's checked out
+    on. Both legacy (model-fix-<fmt>) and squad-mode
+    (model-fix-<squad>-<n>) worktrees are created under the same
+    --worktree-dir, so one scan covers both dispatch modes. A detached
+    worktree (no branch line) is skipped -- the janitor only ever
+    resets a branch-tracked worker worktree.
+
+    Returns [{"path": Path, "branch": str}, ...].
+    """
+    result = subprocess.run(  # nosec B603
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return []
+    entries = []
+    current = {}
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            if current:
+                entries.append(current)
+            current = {"path": Path(line[len("worktree "):])}
+        elif line.startswith("branch "):
+            ref = line[len("branch "):]
+            current["branch"] = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+    if current:
+        entries.append(current)
+
+    worktree_base = Path(worktree_base).resolve()
+    out = []
+    for entry in entries:
+        path, branch = entry.get("path"), entry.get("branch")
+        if not path or not branch:
+            continue
+        try:
+            path.resolve().relative_to(worktree_base)
+        except (ValueError, OSError):
+            continue
+        out.append({"path": path, "branch": branch})
+    return out
+
+
+def is_worktree_stale_and_resolved(*, repo_root, branch, origin_ref=ORIGIN_MAIN_REF, squad_status=None,
+                                    quarantine_entries=None, staleness_seconds=JANITOR_WORKTREE_STALENESS_SECONDS,
+                                    now_fn=time.time):
+    """spec M5 janitor bullet 1's eligibility check: True iff `branch`'s
+    merge-base with origin_ref is older than staleness_seconds AND every
+    commit it carries beyond origin_ref is accounted for -- already
+    landed on origin_ref by patch-id (novel_commits/is_patch_novel_against
+    say so), recorded in its squad's squad-status heads dict (any status
+    -- consumed or quarantined, both mean "the merger has already looked
+    at this"), or present in the quarantine ledger by patch-id.
+
+    A branch carrying even ONE commit that fails all three checks is
+    NOT eligible -- this fails closed on every ambiguous case (no branch,
+    no merge-base, unparseable commit date, "too young") by returning
+    False, exactly like _branch_has_undiscardable_commits errs on the
+    side of refusing a reset elsewhere in this module.
+    """
+    if not _branch_exists(repo_root, branch):
+        return False
+    merge_base = _git(["merge-base", branch, origin_ref], repo_root)
+    if merge_base.returncode != 0:
+        return False
+    base_sha = merge_base.stdout.strip()
+    if not base_sha:
+        return False
+    committed = _git(["log", "-1", "--format=%ct", base_sha], repo_root)
+    if committed.returncode != 0 or not committed.stdout.strip():
+        return False
+    try:
+        commit_ts = int(committed.stdout.strip())
+    except ValueError:
+        return False
+    if (now_fn() - commit_ts) < staleness_seconds:
+        return False
+
+    shas_result = _git(["log", f"{origin_ref}..{branch}", "--format=%H"], repo_root)
+    if shas_result.returncode != 0:
+        return False
+    shas = [line for line in shas_result.stdout.splitlines() if line]
+
+    quarantine_entries = quarantine_entries or {}
+    squad_heads = (squad_status or {}).get("heads") or {}
+    sml = _sml()
+    for sha in shas:
+        landed = not sml.is_patch_novel_against(repo_root, origin_ref, sha)
+        if landed or sha in squad_heads:
+            continue
+        patch_id = sml.compute_patch_id_for_sha(repo_root, sha)
+        if patch_id in quarantine_entries:
+            continue
+        return False
+    return True
+
+
+def reset_stale_worktree(repo_root, path, branch, base_ref, log_fn=print):
+    """Actually perform the reset: discard uncommitted state (never
+    touches gitignored paths, so the worktree's own target/ build cache
+    survives -- same as clean_worktree everywhere else), then `checkout
+    -B branch base_ref`. Only ever called after
+    is_worktree_stale_and_resolved has confirmed every commit the
+    branch carries is landed/consumed/quarantined, so nothing this call
+    discards is unswept work."""
+    clean_worktree(path)
+    subprocess.run(["git", "checkout", "-B", branch, base_ref], cwd=path, check=True)  # nosec B603
+    log_fn(f"janitor: reset stale, fully-resolved worktree {path} ({branch} -> {base_ref})")
+
+
+def janitor_reset_stale_worktrees(*, repo_root, worktree_candidates, home, origin_ref=ORIGIN_MAIN_REF,
+                                  base_ref_for=staging_branch_or_origin,
+                                  staleness_seconds=JANITOR_WORKTREE_STALENESS_SECONDS,
+                                  now_fn=time.time, log_fn=print, reset_fn=reset_stale_worktree):
+    """spec M5 janitor bullet 1: auto-reset any worktree whose
+    merge-base with origin_ref is >staleness_seconds old AND whose
+    commits are all consumed-or-quarantined (per its squad's
+    squad-status, or the global quarantine ledger) -- never touches a
+    worktree carrying even one unresolved commit. Retires
+    model-fix-gif-class time bombs without destroying unswept work.
+
+    Returns the list of (path, branch) pairs actually reset.
+    """
+    sml = _sml()
+    quarantine_entries = sml.load_quarantine(sml.quarantine_ledger_path(home))
+    squad_status_cache = {}
+    reset = []
+    for entry in worktree_candidates:
+        path, branch = entry["path"], entry["branch"]
+        squad = squad_from_branch(branch)
+        squad_status = None
+        if squad is not None:
+            if squad not in squad_status_cache:
+                squad_status_cache[squad] = sml.load_squad_status(sml.squad_status_file(home, squad))
+            squad_status = squad_status_cache[squad]
+        if is_worktree_stale_and_resolved(
+            repo_root=repo_root, branch=branch, origin_ref=origin_ref, squad_status=squad_status,
+            quarantine_entries=quarantine_entries, staleness_seconds=staleness_seconds, now_fn=now_fn,
+        ):
+            reset_fn(repo_root, path, branch, base_ref_for(branch, origin_ref), log_fn=log_fn)
+            reset.append((path, branch))
+    return reset
+
+
+def clear_held_by_foundation(tag_state_path, repo_root, origin_ref=ORIGIN_MAIN_REF, is_ancestor_fn=None,
+                             log_fn=print):
+    """spec M5 janitor bullet 2 / S3 T4: clear a tag-state entry's
+    held_by_foundation flag once its recorded foundation commit has
+    landed on origin_ref.
+
+    held_by_foundation is a MINIMAL new tag-state field this change
+    introduces: {"job": <foundation job name>, "sha": <foundation
+    commit sha>} on any tag-state entry (see model_fix_loop.py's
+    load_tag_state/save_tag_state). The T4 FOUNDATION-UNLOCK job that
+    WRITES this field is out of scope here (Phase 4 work) -- this is
+    only the clearing half, and it is a safe no-op on every entry today
+    (nothing sets the field yet).
+
+    is_ancestor_fn(sha) -> bool, default `git merge-base --is-ancestor
+    sha origin_ref` in repo_root -- injectable so tests don't need a
+    real origin/main history. Goes through model_fix_loop._state_locked
+    (the same flock'd read-modify-write every other tag-state mutation
+    in the fleet uses), so this can run safely alongside a live worker
+    claiming/updating the same file. Returns the list of cleared tag_keys.
+    """
+    if is_ancestor_fn is None:
+        def is_ancestor_fn(sha):
+            result = _git(["merge-base", "--is-ancestor", sha, origin_ref], repo_root)
+            return result.returncode == 0
+
+    def mutate(state):
+        cleared = []
+        for tag_key, entry in state.items():
+            if not isinstance(entry, dict):
+                continue
+            held = entry.get("held_by_foundation")
+            if not isinstance(held, dict):
+                continue
+            sha = held.get("sha")
+            if sha and is_ancestor_fn(sha):
+                entry.pop("held_by_foundation", None)
+                cleared.append(tag_key)
+        return state, cleared
+
+    cleared = _state_locked(tag_state_path, mutate)
+    for tag_key in cleared:
+        log_fn(f"janitor: cleared held_by_foundation on {tag_key!r} (foundation commit landed on {origin_ref})")
+    return cleared
+
+
+def rotate_dashboard_log(path=DEFAULT_DASHBOARD_LOG_PATH, max_bytes=DEFAULT_DASHBOARD_LOG_ROTATE_BYTES,
+                         log_fn=print):
+    """spec M5 janitor bullet 3: single rotation (never logrotate-style
+    N-deep) once `path` exceeds max_bytes -- copytruncate, NOT rename.
+
+    dashboard.log (186 MB today) is a long-running dispatcher's
+    redirected stdout: one fd held open for the process's entire life,
+    with no SIGHUP/reopen hook of any kind. A plain rename
+    (`os.replace(path, path + ".1")`) only moves the DIRECTORY ENTRY --
+    the writer's already-open fd still points at the same inode, which
+    now lives at the renamed path, so it keeps appending there forever.
+    dashboard.log itself would stay empty from that point on (nothing
+    ever writes to the fresh inode a later `open()` would create), while
+    ".1" grows unbounded and is never itself re-rotated -- silently and
+    permanently defeating the whole point of periodic rotation after
+    the very first rotation of this process's lifetime.
+
+    Copying the current bytes to "<name>.1" (clobbering any previous
+    one, same single-rotation semantics as before) and then truncating
+    `path` IN PLACE (same inode, same fd) keeps the writer's fd valid
+    and pointed at the live, now-empty path, so growth resumes being
+    bounded by this same check on every later janitor pass. A small
+    window between the copy and the truncate can drop a few bytes the
+    writer appends mid-rotation -- the standard, accepted copytruncate
+    tradeoff (see `logrotate --copytruncate`), and enormously better
+    than losing rotation altogether. A missing file or one under the
+    threshold is a safe no-op. Returns True iff a rotation happened."""
+    path = Path(path)
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return False
+    if size <= max_bytes:
+        return False
+    rotated = path.with_name(path.name + ".1")
+    shutil.copyfile(path, rotated)
+    with open(path, "r+b") as f:
+        f.truncate(0)
+    log_fn(f"janitor: rotated {path} ({size} bytes) -> {rotated} (copytruncate -- writer fd stays valid)")
+    return True
+
+
+def prune_model_fix_requests(dir_path, max_age_seconds=DEFAULT_MODEL_FIX_REQUESTS_MAX_AGE_SECONDS,
+                             now_fn=time.time, log_fn=print, keep_names=("manifest.log", "cache-stats.log")):
+    """spec M5 janitor bullet 4: delete files under `dir_path`
+    (model_fix_loop.py's req_log_dir -- per-call request/response
+    artifacts) whose mtime is older than max_age_seconds. keep_names are
+    never pruned regardless of age (the running manifest/cache-stats
+    logs -- only dashboard.log gets rotation per spec, these just keep
+    growing and are out of scope here). Missing directory is a safe
+    no-op. Returns the list of pruned paths."""
+    dir_path = Path(dir_path)
+    if not dir_path.is_dir():
+        return []
+    cutoff = now_fn() - max_age_seconds
+    pruned = []
+    for entry in sorted(dir_path.iterdir()):
+        if not entry.is_file() or entry.name in keep_names:
+            continue
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        if mtime < cutoff:
+            entry.unlink()
+            pruned.append(entry)
+    if pruned:
+        log_fn(f"janitor: pruned {len(pruned)} stale model-fix-requests/ entries (older than "
+               f"{max_age_seconds}s)")
+    return pruned
+
+
+def run_janitor(*, repo_root=REPO_ROOT, home=None, worktree_base=None, tag_state_path=None,
+               dashboard_log_path=None, requests_dir=None, origin_ref=ORIGIN_MAIN_REF,
+               worktree_staleness_seconds=JANITOR_WORKTREE_STALENESS_SECONDS,
+               requests_max_age_seconds=DEFAULT_MODEL_FIX_REQUESTS_MAX_AGE_SECONDS,
+               dashboard_max_bytes=DEFAULT_DASHBOARD_LOG_ROTATE_BYTES,
+               now_fn=time.time, log_fn=print):
+    """spec M5 janitor: the dispatcher round step, callable from both
+    run_round (legacy per-format) and run_squad_round (spec S2/S5) --
+    neither mode needs anything special from it, since every sub-action
+    here is scoped generically by worktree/branch naming
+    (squad_from_branch) and OXIDEX_HOME-relative paths common to both.
+
+    Each of the four sub-actions is fully independent and individually
+    safe to no-op when nothing qualifies (no stale-and-resolved
+    worktrees, no held_by_foundation entries yet, a small dashboard.log,
+    an empty/missing requests dir) -- one sub-action never blocks
+    another.
+
+    Returns {"worktrees_reset": [...], "held_by_foundation_cleared": [...],
+    "dashboard_rotated": bool, "requests_pruned": [...]}.
+    """
+    home = Path(home) if home else OXIDEX_HOME
+    worktree_base = Path(worktree_base) if worktree_base else (OXIDEX_HOME / "worktrees" / "parallel-fix")
+    tag_state_path = Path(tag_state_path) if tag_state_path else DEFAULT_TAG_STATE_PATH
+    dashboard_log_path = Path(dashboard_log_path) if dashboard_log_path else DEFAULT_DASHBOARD_LOG_PATH
+    requests_dir = Path(requests_dir) if requests_dir else DEFAULT_MODEL_FIX_REQUESTS_DIR
+
+    worktree_candidates = discover_worktree_candidates(worktree_base, repo_root)
+    reset = janitor_reset_stale_worktrees(
+        repo_root=repo_root, worktree_candidates=worktree_candidates, home=home, origin_ref=origin_ref,
+        staleness_seconds=worktree_staleness_seconds, now_fn=now_fn, log_fn=log_fn,
+    )
+    cleared = clear_held_by_foundation(tag_state_path, repo_root, origin_ref=origin_ref, log_fn=log_fn)
+    rotated = rotate_dashboard_log(dashboard_log_path, max_bytes=dashboard_max_bytes, log_fn=log_fn)
+    pruned = prune_model_fix_requests(requests_dir, max_age_seconds=requests_max_age_seconds,
+                                      now_fn=now_fn, log_fn=log_fn)
+
+    return {
+        "worktrees_reset": reset,
+        "held_by_foundation_cleared": cleared,
+        "dashboard_rotated": rotated,
+        "requests_pruned": pruned,
+    }
+
+
+def _run_janitor_safely(janitor_fn=run_janitor, janitor_kwargs=None, log_fn=print):
+    """run_janitor, wrapped so a housekeeping hiccup NEVER sinks a
+    dispatch round's own result -- the round already did its real work
+    (dispatch workers, and for run_round, merge) by the time this runs;
+    janitor failures are logged and swallowed, exactly like every other
+    best-effort background-maintenance call in this fleet (e.g.
+    _write_fix_gap_lesson in model_fix_loop.py)."""
+    try:
+        janitor_fn(**(janitor_kwargs or {}))
+    except Exception as e:  # noqa: BLE001 -- deliberately broad, see docstring
+        log_fn(f"janitor: round-step housekeeping raised {e!r} -- continuing "
+               "(this round's own result is unaffected)")
 
 
 def run_round(args, config_path):
@@ -853,10 +1587,30 @@ def run_round(args, config_path):
     for fmt, reason in failed:
         print(f"  {fmt}: {reason}")
 
+    # spec M5 frames the janitor as a generic "dispatcher round step",
+    # but this PR's own --squad-mode flag help text promises "Default:
+    # off (run_round, today's per-format behavior, unaffected)" -- the
+    # CURRENTLY RUNNING per-format fleet uses exactly this legacy path,
+    # so wiring the janitor in here unconditionally would make that
+    # promise false the moment this code lands and the live dispatcher
+    # is next restarted (auto-resetting worktrees, rotating a
+    # dashboard.log already past its threshold, pruning
+    # model-fix-requests/ -- none of that today). --enable-janitor keeps
+    # run_round's behavior byte-for-byte unchanged by default; an
+    # operator opts in explicitly once ready, same rollout discipline as
+    # --squad-mode itself. run_squad_round (a new, not-yet-live
+    # entrypoint) always runs it -- there is no existing behavior for it
+    # to change.
+    if getattr(args, "enable_janitor", False):
+        _run_janitor_safely(janitor_kwargs={
+            "repo_root": REPO_ROOT, "home": Path(getattr(args, "home", None) or OXIDEX_HOME),
+            "worktree_base": worktree_base,
+        })
+
     return not failed
 
 
-def main(argv=None, run_round_fn=run_round, sleep_fn=time.sleep,
+def main(argv=None, run_round_fn=run_round, run_squad_round_fn=run_squad_round, sleep_fn=time.sleep,
          lock_path=None, pgids_path=None, reap_fn=reap_orphan_worker_pgids):
     # The same buffering issue fixed for workers (PYTHONUNBUFFERED in
     # run_worker's env) also applies to this wrapper process itself when its
@@ -919,6 +1673,37 @@ def main(argv=None, run_round_fn=run_round, sleep_fn=time.sleep,
              "reboot and excluded from Time Machine, so a run's worker logs are the one thing "
              "that survives to explain what happened after the fact.",
     )
+    parser.add_argument(
+        "--enable-janitor", action="store_true",
+        help="spec M5 janitor round-step (worktree auto-reset, held_by_foundation clearing, "
+             "dashboard.log rotation, model-fix-requests/ pruning) in LEGACY per-format mode "
+             "(run_round). Default: off, so run_round's behavior is byte-for-byte unchanged by "
+             "this flag's mere existence -- the currently-running per-format fleet is unaffected "
+             "until an operator opts in here. --squad-mode's run_squad_round always runs the "
+             "janitor regardless of this flag (a new entrypoint, nothing to leave unaffected).",
+    )
+    parser.add_argument(
+        "--squad-mode", action="store_true",
+        help="Spec Phase 3 cutover: dispatch per-SQUAD worker slots (run_squad_round) instead of "
+             "one worker per format (run_round). Squads own ExifTool modules -- and therefore "
+             "every container format those modules serve -- and workers branch from their "
+             "squad's own staging branch (squad/<squad>, created by squad_merge_loop.py), never "
+             "from local main. Default: off (run_round, today's per-format behavior, unaffected).",
+    )
+    parser.add_argument(
+        "--squads-toml", default=str(DEFAULT_SQUADS_TOML),
+        help="Squad manifest (spec S2); only consulted in --squad-mode.",
+    )
+    parser.add_argument(
+        "--home", default=str(OXIDEX_HOME),
+        help="OXIDEX_HOME override for squad-status/staging-worktree paths; only consulted in "
+             "--squad-mode (legacy per-format mode is unaffected by this flag).",
+    )
+    parser.add_argument(
+        "--gap-attribution-path", default=str(DEFAULT_GAP_ATTRIBUTION_PATH),
+        help="Where the per-round gap-attribution.json regeneration is written/read; only "
+             "consulted in --squad-mode.",
+    )
     args = parser.parse_args(argv)
 
     config_path = Path(args.config)
@@ -948,6 +1733,8 @@ def main(argv=None, run_round_fn=run_round, sleep_fn=time.sleep,
     reap_fn(pgids_path)
     _set_pgids_persist_path(pgids_path)
 
+    dispatch_fn = run_squad_round_fn if args.squad_mode else run_round_fn
+
     try:
         round_num = 0
         last_round_ok = True
@@ -955,7 +1742,7 @@ def main(argv=None, run_round_fn=run_round, sleep_fn=time.sleep,
             round_num += 1
             if args.infinite:
                 print(f"\n{'=' * 20} round {round_num} {'=' * 20}")
-            last_round_ok = run_round_fn(args, config_path)
+            last_round_ok = dispatch_fn(args, config_path)
             if not args.infinite:
                 return 0 if last_round_ok else 1
             if args.round_delay:
