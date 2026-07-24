@@ -1,9 +1,20 @@
 import json
+import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from find_tag_gaps import group_gaps_by_format, locate_parser_files, run_full_comparison, run_format_comparison
+import find_tag_gaps
+from find_tag_gaps import (
+    build_semaphore,
+    ensure_tag_comparison_built,
+    group_gaps_by_format,
+    locate_parser_files,
+    run_full_comparison,
+    run_format_comparison,
+)
 
 FIXTURE = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "comparison_report_sample.json"
 
@@ -67,7 +78,7 @@ class RunFormatComparisonTests(unittest.TestCase):
     def test_invokes_tag_comparison_with_format_flag(self, mock_run, mock_ensure):
         mock_run.return_value = MagicMock(returncode=0)
         result = run_format_comparison("NEF", "/tmp/fake-cache", repo_root=Path("/fake/repo"))  # nosec B108
-        mock_ensure.assert_called_once_with(Path("/fake/repo"))
+        mock_ensure.assert_called_once_with(Path("/fake/repo"), semaphore_path=None, semaphore_max_holders=5)
         args, kwargs = mock_run.call_args
         self.assertIn("--format", args[0])
         self.assertIn("NEF", args[0])
@@ -107,6 +118,206 @@ class RunFormatComparisonTests(unittest.TestCase):
         self.assertNotEqual(result_1, result_2)
         self.assertIn("/tmp/tagcmp-JPEG-JPEG-1-md", argv_1)  # nosec B108
         self.assertIn("/tmp/tagcmp-JPEG-JPEG-2-md", argv_2)  # nosec B108
+
+
+class BuildSemaphoreTests(unittest.TestCase):
+    """Spec section 5's build semaphore -- a cross-process flock-based
+    counting semaphore (N holders max), the simpler twin of
+    model_fix_loop.py's _governor_locked (no token bucket, just a
+    holder-count ceiling with per-holder heartbeats for stale-holder
+    recovery)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.path = Path(self.tmpdir.name) / "build-semaphore.json"
+
+    def test_path_none_is_a_noop(self):
+        entered = []
+        with build_semaphore(None):
+            entered.append(1)
+        self.assertEqual(entered, [1])
+
+    def test_single_holder_acquires_and_releases(self):
+        with build_semaphore(self.path, max_holders=2):
+            state = json.loads(self.path.read_text())
+            self.assertEqual(len(state["holders"]), 1)
+        state = json.loads(self.path.read_text())
+        self.assertEqual(state["holders"], {})
+
+    def test_third_holder_blocks_until_a_slot_frees(self):
+        # Pre-seed two live holders (simulating two already-running
+        # cargo builds) so a third caller must wait.
+        now = time.time()
+        self.path.write_text(json.dumps({
+            "holders": {
+                "h1": {"pid": 1, "heartbeat": now},
+                "h2": {"pid": 2, "heartbeat": now},
+            },
+        }))
+        waited = []
+
+        def fake_sleep(seconds):
+            waited.append(seconds)
+            # Free up "h1"'s slot on the first sleep so the loop can
+            # proceed rather than spinning forever in the test.
+            state = json.loads(self.path.read_text())
+            state["holders"].pop("h1", None)
+            self.path.write_text(json.dumps(state))
+
+        entered = []
+        with build_semaphore(self.path, max_holders=2, sleep_fn=fake_sleep,
+                             holder_id="h3", poll_seconds=0):
+            entered.append(1)
+        self.assertEqual(entered, [1])
+        self.assertGreaterEqual(len(waited), 1)
+
+    def test_releases_the_slot_even_when_the_body_raises(self):
+        with self.assertRaises(ValueError):
+            with build_semaphore(self.path, max_holders=1, holder_id="h1"):
+                raise ValueError("boom")
+        state = json.loads(self.path.read_text())
+        self.assertNotIn("h1", state["holders"])
+
+    def test_stale_holder_is_evicted_and_reused(self):
+        stale_time = time.time() - 10_000  # long past any reasonable stale_seconds
+        self.path.write_text(json.dumps({"holders": {"h1": {"pid": 1, "heartbeat": stale_time}}}))
+        entered = []
+        with build_semaphore(self.path, max_holders=1, stale_seconds=900, holder_id="h2"):
+            entered.append(1)
+        self.assertEqual(entered, [1])
+
+    def test_renewing_the_same_holder_id_never_blocks_itself(self):
+        # A nested/re-entrant call with the SAME holder_id (e.g. a
+        # heartbeat-style renewal) must not deadlock against its own
+        # already-held slot.
+        with build_semaphore(self.path, max_holders=1, holder_id="h1"):
+            with build_semaphore(self.path, max_holders=1, holder_id="h1"):
+                pass  # must not block
+
+    def test_heartbeat_keeps_a_slow_held_slot_alive_past_the_stale_threshold(self):
+        # Fake clock: the slot is stamped at t=1000, then the protected
+        # call "runs" long enough that the clock reads t=3000 -- 2000
+        # fake seconds, past stale_seconds=900, so without a heartbeat
+        # any concurrent waiter's _try_acquire_build_slot check would
+        # treat this holder as dead and steal its slot. The heartbeat
+        # thread (real thread, tiny real cadence, fake timestamps)
+        # re-stamps the holder's heartbeat with the advanced clock, so
+        # it reads fresh for as long as the slot is held.
+        clock = [1000.0]
+        observed = {}
+
+        def slow_body():
+            clock[0] = 3000.0
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                state = json.loads(self.path.read_text())
+                entry = state["holders"].get("h1") or {}
+                if entry.get("heartbeat") == 3000.0:
+                    observed.update(entry)
+                    break
+                time.sleep(0.005)
+
+        with build_semaphore(
+            self.path, max_holders=1, stale_seconds=900, holder_id="h1",
+            heartbeat_seconds=0.01, now_fn=lambda: clock[0],
+        ):
+            slow_body()
+
+        self.assertEqual(observed.get("heartbeat"), 3000.0)
+        # The staleness math a concurrent waiter would run mid-build: the
+        # original stamp (t=1000) would read abandoned; the heartbeat's
+        # re-stamp does not.
+        self.assertGreaterEqual(3000.0 - 1000.0, 900)  # un-heartbeated holder would be stale
+        self.assertLess(3000.0 - observed["heartbeat"], 900)  # heartbeated holder is fresh
+
+    def test_heartbeat_thread_stops_when_the_slot_is_released(self):
+        # After build_semaphore's `with` block exits, no
+        # build-semaphore-heartbeat-* thread may still be running
+        # (threading.Event stop + join, mirroring model_fix_loop.py's
+        # own claim-heartbeat thread lifecycle).
+        with build_semaphore(self.path, max_holders=1, holder_id="h1", heartbeat_seconds=0.01):
+            pass
+        self.assertFalse(
+            [t.name for t in threading.enumerate() if t.name.startswith("build-semaphore-heartbeat-")]
+        )
+
+    def test_heartbeat_disabled_when_heartbeat_seconds_is_falsy(self):
+        with build_semaphore(self.path, max_holders=1, holder_id="h1", heartbeat_seconds=0):
+            self.assertFalse(
+                [t.name for t in threading.enumerate() if t.name.startswith("build-semaphore-heartbeat-")]
+            )
+
+    def test_heartbeat_survives_a_transient_touch_failure(self):
+        # A heartbeat touch can legitimately raise mid-build (ENOSPC/
+        # EACCES, a torn read racing another holder's write). One such
+        # raise must not kill the daemon thread for the rest of a
+        # long-running build: proven end-to-end here by making the
+        # FIRST heartbeat touch raise, then observing a later re-stamp
+        # at the advanced clock -- a beat that can only have come from
+        # the thread surviving its failure.
+        clock = [1000.0]
+        touch_failed = threading.Event()
+        observed = {}
+        real_try_acquire = find_tag_gaps._try_acquire_build_slot
+
+        def flaky_try_acquire(*args, **kwargs):
+            if (threading.current_thread().name.startswith("build-semaphore-heartbeat-")
+                    and not touch_failed.is_set()):
+                touch_failed.set()
+                raise ValueError("synthetic transient touch failure")
+            return real_try_acquire(*args, **kwargs)
+
+        def slow_body():
+            clock[0] = 3000.0
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                if touch_failed.is_set():
+                    state = json.loads(self.path.read_text())
+                    entry = state["holders"].get("h1") or {}
+                    if entry.get("heartbeat") == 3000.0:
+                        observed.update(entry)
+                        break
+                time.sleep(0.005)
+
+        with patch("find_tag_gaps._try_acquire_build_slot", side_effect=flaky_try_acquire):
+            with build_semaphore(
+                self.path, max_holders=1, stale_seconds=900, holder_id="h1",
+                heartbeat_seconds=0.01, now_fn=lambda: clock[0],
+            ):
+                slow_body()
+
+        self.assertTrue(touch_failed.is_set())
+        self.assertEqual(observed.get("heartbeat"), 3000.0)
+
+
+class EnsureTagComparisonBuiltSemaphoreTests(unittest.TestCase):
+    @patch("find_tag_gaps.subprocess.run")
+    def test_default_semaphore_path_none_never_touches_a_lock_file(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        # No semaphore_path given -- must not create any lock file, and
+        # must not raise even though no real filesystem location for a
+        # semaphore was ever specified.
+        ensure_tag_comparison_built(repo_root=Path("/fake/repo"))
+        mock_run.assert_called_once()
+
+    @patch("find_tag_gaps.subprocess.run")
+    def test_semaphore_path_given_wraps_the_build_in_a_held_slot(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sem_path = Path(tmpdir) / "sem.json"
+            observed_holders_during_build = {}
+
+            def fake_run(*args, **kwargs):
+                observed_holders_during_build["holders"] = json.loads(sem_path.read_text())["holders"]
+                return MagicMock(returncode=0)
+
+            mock_run.side_effect = fake_run
+            ensure_tag_comparison_built(
+                repo_root=Path("/fake/repo"), semaphore_path=sem_path, semaphore_max_holders=1,
+            )
+            self.assertEqual(len(observed_holders_during_build["holders"]), 1)
+            # Released after the call.
+            self.assertEqual(json.loads(sem_path.read_text())["holders"], {})
 
 
 if __name__ == "__main__":

@@ -185,8 +185,11 @@ import urllib.request
 from pathlib import Path
 
 from find_tag_gaps import (
+    DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS,
+    DEFAULT_BUILD_SEMAPHORE_PATH,
     OXIDEX_HOME,
     REPO_ROOT,
+    build_semaphore,
     group_gaps_by_format,
     load_comparison_report,
     run_format_comparison,
@@ -978,7 +981,7 @@ def governor_report(path, limited, cooldown_seconds=DEFAULT_GOVERNOR_COOLDOWN_SE
     _governor_locked(path, mutate, now_fn)
 
 
-def cargo_build(repo_root):
+def cargo_build(repo_root, semaphore_path=None, semaphore_max_holders=DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS):
     """Build the oxidex binary to verify a candidate diff compiles.
 
     Uses the "fixloop" profile (see Cargo.toml) rather than --release --
@@ -987,50 +990,67 @@ def cargo_build(repo_root):
     every single verification build.
 
     Returns (success, stderr).
+
+    semaphore_path (spec section 5's build semaphore -- see
+    find_tag_gaps.build_semaphore), if given, gates this build behind
+    the shared cross-process cargo-build/test slot limit. None (the
+    default) keeps this call ungated -- every existing caller/test is
+    unaffected unless it opts in.
     """
-    result = subprocess.run(  # nosec B603
-        ["cargo", "build", "--profile", "fixloop", "--bin", "oxidex"],
-        capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
-    )
+    with build_semaphore(semaphore_path, semaphore_max_holders):
+        result = subprocess.run(  # nosec B603
+            ["cargo", "build", "--profile", "fixloop", "--bin", "oxidex"],
+            capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
+        )
     return result.returncode == 0, result.stderr
 
 
-def cargo_check(repo_root):
+def cargo_check(repo_root, semaphore_path=None, semaphore_max_holders=DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS):
     """Fast compile-only check (no codegen, no tests) for VERIFY trial
     diffs -- see attempt_build. Returns (success, output), stdout+stderr
     combined (cargo check's errors go to stderr, but warnings/summaries
-    can land on stdout)."""
-    result = subprocess.run(  # nosec B603
-        ["cargo", "check", "--workspace"],
-        capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
-    )
+    can land on stdout).
+
+    semaphore_path/semaphore_max_holders: see cargo_build."""
+    with build_semaphore(semaphore_path, semaphore_max_holders):
+        result = subprocess.run(  # nosec B603
+            ["cargo", "check", "--workspace"],
+            capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
+        )
     return result.returncode == 0, result.stdout + result.stderr
 
 
-def cargo_test_workspace(repo_root):
+def cargo_test_workspace(repo_root, semaphore_path=None, semaphore_max_holders=DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS):
     """Run the full workspace test suite. Returns (success, output) --
     output is stdout+stderr combined (cargo test's failure detail --
     which assertion failed, panic message, etc. -- goes to stdout, not
     stderr, unlike cargo build's compiler errors), so a caller can feed
     the actual failure back to the model instead of just "tests
-    regressed" with no detail to act on."""
-    result = subprocess.run(  # nosec B603
-        ["cargo", "test", "--workspace"],
-        capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
-    )
+    regressed" with no detail to act on.
+
+    semaphore_path/semaphore_max_holders: see cargo_build."""
+    with build_semaphore(semaphore_path, semaphore_max_holders):
+        result = subprocess.run(  # nosec B603
+            ["cargo", "test", "--workspace"],
+            capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
+        )
     return result.returncode == 0, result.stdout + result.stderr
 
 
-def cargo_test_targeted(repo_root, filter_str):
+def cargo_test_targeted(repo_root, filter_str, semaphore_path=None,
+                         semaphore_max_holders=DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS):
     """Fast first-line test gate: only lib tests whose names match
     filter_str (the format lowercased -- best-effort, zero matches is a
     pass, which cargo already treats as success). The full workspace
     suite still gates every commit; this just stops candidates that are
-    about to die at review from paying the full-suite price first."""
-    result = subprocess.run(  # nosec B603
-        ["cargo", "test", "--lib", filter_str],
-        capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
-    )
+    about to die at review from paying the full-suite price first.
+
+    semaphore_path/semaphore_max_holders: see cargo_build."""
+    with build_semaphore(semaphore_path, semaphore_max_holders):
+        result = subprocess.run(  # nosec B603
+            ["cargo", "test", "--lib", filter_str],
+            capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
+        )
     return result.returncode == 0, result.stdout + result.stderr
 
 
@@ -1391,6 +1411,201 @@ def build_neighbor_precedent_block(gap, repo_root, git_runner_fn=None):
         "(historical commit -- pattern-match this, including adding an equivalent test):\n"
         f"{patch}"
     )
+
+
+# ---------------------------------------------------------------------------
+# T3 TABLE-PORT: full %table source extraction (spec S3)
+# ---------------------------------------------------------------------------
+#
+# extract_perl_tag_snippet (above) shows ONE tag's own hash entry embedded
+# inside a table -- the right amount of context for a single-tag fix.
+# A table PORT needs the fixer to see the table's COMPLETE membership at
+# once, in ExifTool's own declaration order, so it can port the whole
+# thing in one pass rather than reverse-engineering membership tag by
+# tag. extract_perl_table_source below is that: the full source span of
+# one `%Image::ExifTool::<table_name> = ( ... );` declaration.
+
+DEFAULT_MAX_TABLE_SOURCE_CHARS = 12_000
+
+
+def _perl_nesting_delta(line):
+    """Net paren/brace nesting change contributed by one ExifTool Perl
+    source line, with quoted strings and trailing comments crudely
+    stripped first so a `PrintConv => 'sprintf("%d (#%x)")'` line doesn't
+    corrupt the count. Line-based and heuristic by design -- ExifTool's
+    source is consistently formatted, and (like attribute_gaps.py's own
+    near-identical _nesting_delta, which this deliberately duplicates
+    rather than imports -- attribute_gaps.py is a standalone CLI script,
+    not a library this module should take a dependency on for one small
+    helper) a few-percent noise rate here is an accepted tradeoff, not a
+    correctness requirement: the table-port acceptance gate
+    (evaluate_table_port_gate) is what actually verifies correctness,
+    this only has to find "roughly the right span of source text to show
+    the fixer"."""
+    stripped = re.sub(r"'(?:[^'\\]|\\.)*'", "''", line)
+    stripped = re.sub(r'"(?:[^"\\]|\\.)*"', '""', stripped)
+    hash_idx = stripped.find("#")
+    if hash_idx != -1:
+        stripped = stripped[:hash_idx]
+    return stripped.count("(") + stripped.count("{") - stripped.count(")") - stripped.count("}")
+
+
+def extract_perl_table_source(table_name, lib_dir, max_chars=DEFAULT_MAX_TABLE_SOURCE_CHARS):
+    """The COMPLETE source of one ExifTool `%table` declaration -- spec
+    S3: "the full Perl table source (not the per-tag snippet
+    extract_perl_tag_snippet gives today)".
+
+    table_name is the table's name as it appears after
+    "Image::ExifTool::" in the source, e.g. "Canon::CameraSettings" or
+    "XMP::exif" -- NOT including the leading "%Image::ExifTool::" or a
+    trailing " = (". Finds the `%Image::ExifTool::<table_name> = (`
+    header line, then walks forward counting paren/brace nesting
+    (_perl_nesting_delta) until it returns to zero -- tolerant of a
+    table spanning many lines and nested hashes/arrays, unlike a fixed
+    lookahead window.
+
+    The natural first-guess file (table_name's own leading module
+    segment + ".pm", e.g. "Canon::CameraSettings" -> Canon.pm) is tried
+    first; every other *.pm/*.pl under lib_dir is tried as a fallback
+    (some tables are declared in a shared file -- Exif.pm alone holds
+    several IFD tables under other modules' logical namespaces).
+
+    Returns None if lib_dir is unavailable or no file defines this
+    table; the caller (attempt_table_port) treats that as "show no
+    table-source section" rather than failing the job outright, exactly
+    like extract_perl_tag_snippet's own None contract.
+    """
+    if lib_dir is None:
+        return None
+    lib_dir = Path(lib_dir)
+    header_re = re.compile(r"^%Image::ExifTool::" + re.escape(table_name) + r"\s*=\s*\(")
+    module_guess = table_name.split("::", 1)[0] + ".pm"
+    guess_path = lib_dir / module_guess
+    all_paths = sorted(list(lib_dir.glob("*.pm")) + list(lib_dir.glob("*.pl")))
+    ordered_paths = ([guess_path] if guess_path in all_paths else []) + [
+        p for p in all_paths if p != guess_path
+    ]
+
+    for pm_path in ordered_paths:
+        try:
+            lines = pm_path.read_text(errors="ignore").splitlines()
+        except OSError:
+            continue
+        start_idx = next((i for i, line in enumerate(lines) if header_re.match(line)), None)
+        if start_idx is None:
+            continue
+
+        depth = _perl_nesting_delta(lines[start_idx])
+        end_idx = len(lines) - 1
+        for i in range(start_idx + 1, len(lines)):
+            depth += _perl_nesting_delta(lines[i])
+            if depth <= 0:
+                end_idx = i
+                break
+
+        snippet = "\n".join(lines[start_idx:end_idx + 1])
+        truncated = len(snippet) > max_chars
+        if truncated:
+            snippet = snippet[:max_chars] + "\n... (truncated)"
+        header = f"--- {pm_path.name}, table Image::ExifTool::{table_name} ---"
+        return f"{header}\n```perl\n{snippet}\n```"
+    return None
+
+
+# oxidex-tags-* holds the GENERATED tag name/id database (build.rs
+# codegen), not per-module Rust source easily read as text from Python --
+# resolving its build-time output would mean either running `cargo build`
+# just to inspect it, or reverse-engineering build.rs's own codegen
+# inputs. The MakerNotes registries under
+# src/parsers/tiff/makernotes/registries/<module>.rs (spec S3's own
+# example: canon.rs's CAMERA_SETTINGS_SCHEMA) are checked-in, already
+# human-curated Rust source -- readable directly as text, with each
+# array-index entry naming its id and tag name side by side
+# (`ArrayIndexDef::with_i16_decoder(1, "MacroMode", &MACRO_MODE)`,
+# `ArrayIndexDef::raw(2, "SelfTimer")`), which is exactly the "id -> name
+# skeleton" shape spec S3 wants -- so this reads THAT as the acceptable
+# equivalent the spec explicitly allows ("if reading the generated YAML
+# directly is impractical in this scope, reading the equivalent generated
+# Rust registry source ... is an acceptable equivalent -- pick whichever
+# is actually readable from Python and document the choice"). Documented
+# choice: Rust registry source, not the generated YAML.
+REGISTRIES_RELATIVE_DIR = Path("src") / "parsers" / "tiff" / "makernotes" / "registries"
+
+_RUST_SCHEMA_VAR_RE = re.compile(r"^\s*static\s+(\w+)\s*:\s*ArraySchema\s*=\s*ArraySchema\s*\{")
+
+
+def build_table_port_registry_skeleton(module, table_name, repo_root,
+                                        registries_dir=REGISTRIES_RELATIVE_DIR,
+                                        max_chars=DEFAULT_MAX_TABLE_SOURCE_CHARS):
+    """Spec S3 (ii): the oxidex-side id->name SKELETON for a table port,
+    labelled unambiguously as scaffolding only -- structure, never value
+    ground truth (that's what the Perl source from
+    extract_perl_table_source is for).
+
+    module is the ExifTool module name (attribute_gaps.py's "module" key,
+    e.g. "Canon") -- looked up as <registries_dir>/<module.lower()>.rs.
+    table_name (ExifTool's table name, e.g. "CameraSettings" -- the part
+    after the last "::") is matched, case-insensitively and
+    punctuation-stripped, against each `static <NAME>_SCHEMA: ArraySchema`
+    block's own variable name or `name: "..."` field, so
+    "CameraSettings" matches CAMERA_SETTINGS_SCHEMA's `name:
+    "CameraSettings"` line.
+
+    Returns None (never fatal) if repo_root/registries_dir/module.rs
+    doesn't exist, or no schema block in it matches table_name -- the
+    caller shows no skeleton section rather than failing the job, same
+    contract as every other build_prompt-style optional block in this
+    module.
+    """
+    if not module:
+        return None
+    short_table = table_name.split("::")[-1] if table_name else ""
+    normalized_target = re.sub(r"[^a-z0-9]", "", short_table.lower())
+    if not normalized_target:
+        return None
+
+    rs_path = Path(repo_root) / registries_dir / f"{module.lower()}.rs"
+    try:
+        lines = rs_path.read_text(errors="ignore").splitlines()
+    except OSError:
+        return None
+
+    for i, line in enumerate(lines):
+        match = _RUST_SCHEMA_VAR_RE.match(line)
+        if not match:
+            continue
+        var_name = match.group(1)
+        # Scan forward for this block's own `name: "..."` field and its
+        # closing `};` (top-level struct literal -- braces at this
+        # block's own nesting only, tracked the same way
+        # _perl_nesting_delta tracks Perl's).
+        depth = _perl_nesting_delta(line)
+        block_lines = [line]
+        name_field = None
+        end_idx = i
+        for j in range(i + 1, len(lines)):
+            block_lines.append(lines[j])
+            name_field_match = re.search(r'name\s*:\s*"([^"]+)"', lines[j])
+            if name_field_match and name_field is None:
+                name_field = name_field_match.group(1)
+            depth += _perl_nesting_delta(lines[j])
+            if depth <= 0:
+                end_idx = j
+                break
+        normalized_var = re.sub(r"[^a-z0-9]", "", var_name.lower())
+        normalized_name_field = re.sub(r"[^a-z0-9]", "", (name_field or "").lower())
+        if normalized_target in (normalized_var, normalized_name_field):
+            snippet = "\n".join(lines[i:end_idx + 1])
+            truncated = len(snippet) > max_chars
+            if truncated:
+                snippet = snippet[:max_chars] + "\n... (truncated)"
+            return (
+                f"--- {registries_dir / f'{module.lower()}.rs'}, {var_name} "
+                "(SCAFFOLDING ONLY -- structure/id-to-name skeleton, NOT value ground truth; "
+                "the Perl source above is the ground truth) ---\n"
+                f"```rust\n{snippet}\n```"
+            )
+    return None
 
 
 PERL_MODULE_HEADER_RE = re.compile(r"^--- (\S+\.pm)(?:, table (\S+))?", re.MULTILINE)
@@ -2670,6 +2885,13 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
 DEFAULT_MAX_REPAIR_ROUNDS = 5
 DEFAULT_MAX_TEST_OUTPUT_CHARS = 3000
 
+# Spec S3 [table_job] defaults: T3 TABLE-PORT / T4 FOUNDATION-UNLOCK jobs
+# are scoped to a whole %table/module rather than one tag, so they get a
+# bigger prompt budget and more repair rounds than a per-tag fix (see
+# normalize_table_job_config).
+DEFAULT_TABLE_JOB_MAX_PROMPT_TOKENS = 16384
+DEFAULT_TABLE_JOB_MAX_REPAIR_ROUNDS = 8
+
 # attempt_build's exception path is the single producer of this prefix
 # (its `return False, f"model call failed: {e}", ...`); fix_gap and
 # run_tag_loop both key off it to recognize infrastructure
@@ -3474,6 +3696,93 @@ def new_oxidex_only_keys(pre_report, post_report):
     return sorted(keys(post_report) - keys(pre_report))
 
 
+DEFAULT_TABLE_PORT_THRESHOLD = 0.8
+
+
+def evaluate_table_port_gate(pre_report, post_report, table_members, threshold=DEFAULT_TABLE_PORT_THRESHOLD):
+    """T3 TABLE-PORT's THREE-CLAUSE acceptance gate (spec S3: "the
+    critiqued two-clause gate shipped wrong values"). Pure function of
+    two per-format comparison dicts (the same missing_tags/
+    value_differences shape group_gaps_by_format/tag_still_open already
+    use) and the table's member list (tag_key strings, "family:name"), so
+    one call answers all three clauses -- and their interaction -- at
+    once; there is no separate "close enough" check a caller could
+    mistake for sufficient on its own.
+
+    (a) At least `threshold` (default 80%) of table_members close EXACT
+        in post_report: present in neither its missing_tags nor its
+        value_differences.
+    (b) Zero regressions: a member that was EXACT in pre_report must
+        still be exact in post_report. Scoping choice: checked only
+        across table_members, not the whole format -- the broader
+        full-corpus regression concern is the targeted/workspace test
+        gates and the M3 double-emission check the caller
+        (attempt_table_port) already runs around this gate, so this
+        function stays a pure, table-scoped check. A member that was
+        already missing/wrong BEFORE the attempt moving to "wrong" is
+        NOT a regression (nothing that was working broke) -- it's caught
+        by clause (c) instead.
+    (c) Zero members present-but-wrong: every post_report member found in
+        value_differences is collected into `must_remove` -- spec S3's
+        contract is that each of these must be commented out of the
+        emission (a `// TODO(tag_key)` marker) before the commit lands,
+        never shipped wrong. ANY non-empty must_remove fails the gate on
+        its own, regardless of (a)/(b) -- there is no close-enough
+        exception for a wrong value.
+
+    Returns (passed: bool, reason: str, must_remove: list[str]).
+    must_remove is always returned (even when passed, i.e. always []) so
+    a caller can log/act on it uniformly either way.
+    """
+    def status_of(report, member):
+        wrong_keys = {d.get("tag_key") for d in (report or {}).get("value_differences") or []}
+        missing_keys = {
+            f"{m.get('family')}:{m.get('name')}" for m in (report or {}).get("missing_tags") or []
+        }
+        if member in wrong_keys:
+            return "wrong"
+        if member in missing_keys:
+            return "missing"
+        return "exact"
+
+    total = len(table_members)
+    post_status = {m: status_of(post_report, m) for m in table_members}
+    pre_status = {m: status_of(pre_report, m) for m in table_members}
+
+    exact_count = sum(1 for s in post_status.values() if s == "exact")
+    ratio = (exact_count / total) if total else 0.0
+
+    regressions = [
+        m for m in table_members
+        if pre_status.get(m) == "exact" and post_status.get(m) != "exact"
+    ]
+    must_remove = [m for m in table_members if post_status.get(m) == "wrong"]
+
+    reasons = []
+    if total == 0:
+        reasons.append("no table members given")
+    elif ratio < threshold:
+        reasons.append(
+            f"only {exact_count}/{total} members exact ({ratio:.0%} < {threshold:.0%} threshold, clause a)"
+        )
+    if regressions:
+        reasons.append(
+            f"{len(regressions)} previously-exact member(s) regressed (clause b): {', '.join(regressions)}"
+        )
+    if must_remove:
+        reasons.append(
+            f"{len(must_remove)} member(s) present-but-wrong, must be removed/commented before commit "
+            f"(clause c): {', '.join(must_remove)}"
+        )
+
+    passed = not reasons
+    reason = (
+        "; ".join(reasons) if reasons
+        else f"{exact_count}/{total} members exact ({ratio:.0%}), zero regressions, zero present-but-wrong"
+    )
+    return passed, reason, must_remove
+
+
 def make_single_tag_gap(tag_gap):
     """Build a synthetic single-tag "gap" dict with the same shape fix_gap/
     build_prompt already expect (format/missing_tags/value_differences/
@@ -3651,6 +3960,870 @@ DEFAULT_HEARTBEAT_SECONDS = 60
 DEFAULT_MAX_TAGS_PER_PROCESS = 1
 
 
+# ---------------------------------------------------------------------------
+# Spec S4 item 5: canonical claim keys with cross-tier exclusion
+# ---------------------------------------------------------------------------
+#
+# Claims in the shared tag-state have historically keyed purely by tag
+# (T1/T2's own tag_key). T3 TABLE-PORT and T4 FOUNDATION-UNLOCK introduce
+# two more claim shapes that must never silently double-work the same
+# underlying ExifTool source: a table port in flight on %Canon::
+# CameraSettings must exclude a T1 worker from independently wiring one of
+# that table's member tags, and vice versa; a foundation job in flight on
+# module FLIR must exclude any T1/T3 claim on that module's tags/tables
+# while it's live. Every synthetic non-tag claim (a T3 table-port or T4
+# foundation-job claim) is stored in the SAME tag-state dict, under a key
+# that can never collide with a real "FMT:family:name" tag_key -- see
+# TABLE_JOB_CLAIM_PREFIX/FOUNDATION_JOB_CLAIM_PREFIX below -- so
+# claim_conflicts, gather_live_claims, and the ordinary tag-claim path all
+# share one flock'd file and one _state_locked critical section, exactly
+# as spec S4 item 5 requires ("checked inside the same mutate_fn").
+
+#: Synthetic tag-state keys for T3/T4 claims -- deliberately containing a
+#: literal "::" separator no real "FMT:family:name" tag_key can produce
+#: (family/name/format tokens never contain "::" in any live gap), so a
+#: synthetic key can never collide with, or be mistaken for, a real one.
+TABLE_JOB_CLAIM_PREFIX = "__table_job::"
+FOUNDATION_JOB_CLAIM_PREFIX = "__foundation_job::"
+
+
+def table_job_claim_key(table_name):
+    return f"{TABLE_JOB_CLAIM_PREFIX}{table_name}"
+
+
+def foundation_job_claim_key(module_name):
+    return f"{FOUNDATION_JOB_CLAIM_PREFIX}{module_name}"
+
+
+#: Mirrors attribute_gaps.py's own UNKNOWN_MODULE constant (not imported
+#: from there -- attribute_gaps.py is a standalone CLI script, and the
+#: two modules don't otherwise share a dependency edge).
+UNKNOWN_ATTRIBUTION_MODULE = "unknown"
+
+
+def resolve_canonical_table(tag_key, attribution=None):
+    """Spec S4 item 5: the canonical (module, canonical_table) for a T1/T2
+    tag claim, resolved via the gap-attribution index (S1's
+    gap-attribution.json / attribute_gaps.build_attribution) when
+    available -- purely ADVISORY, never required. attribution is that
+    document's already-parsed dict ({"tags": {"<FMT>:<family>:<name>":
+    {"module", "table", ...}, ...}, ...}) or None.
+
+    tag_key here is exactly run_tag_loop's own "FMT:family:name" /
+    "FMT:tag_key" string (see tag_key_for) -- which is byte-identical to
+    gap-attribution.json's own tag keys (attribute_gaps.py's
+    `f"{fmt}:{family}:{name}"`), so no reformatting is needed to look one
+    up in the other.
+
+    Returns (module, canonical_table) or (None, None) when attribution is
+    absent, the key isn't in it, or its module is the "unknown" bucket
+    (spec S1: accepted advisory noise, never confident enough to exclude
+    a real claim on). canonical_table is None when the table field is
+    blank even though the module resolved (a real, if table-less,
+    module match) -- module-level T4 exclusion can still apply even
+    without a table-level T3 exclusion.
+    """
+    if not attribution:
+        return None, None
+    entry = (attribution.get("tags") or {}).get(tag_key)
+    if not entry:
+        return None, None
+    module = entry.get("module")
+    if not module or module == UNKNOWN_ATTRIBUTION_MODULE:
+        return None, None
+    table = entry.get("table") or ""
+    canonical_table = f"{module}::{table}" if table else None
+    return module, canonical_table
+
+
+def claim_conflicts(existing_claims, new_claim):
+    """Pure predicate (spec S4 item 5): does new_claim conflict with any
+    entry in existing_claims? Both new_claim and every entry of
+    existing_claims are dicts shaped:
+
+        {"tier": "T1"|"T2"|"T3"|"T4", "tag_key": str or None,
+         "canonical_table": str or None, "canonical_module": str or None}
+
+    Truth table (every combination spec S4 item 5 calls out):
+      - T1/T2 vs T1/T2, SAME tag_key -> conflict (pre-existing single-tag
+        claim behavior -- kept here too so the whole cross-tier picture
+        lives in one place, not regressed).
+      - T1/T2 vs T1/T2, different tag_key -> no conflict, even when both
+        happen to share a canonical_table (ordinary same-table T1
+        grinding on different sibling tags is exactly normal, not
+        excluded).
+      - T1/T2 vs T3, or T3 vs T3, SAME canonical_table -> conflict (a
+        table port in flight excludes per-tag work on its own members,
+        and excludes a second concurrent port of the same table).
+      - T1/T2 vs T3 / T3 vs T3, canonical_table absent on either side, or
+        different -> no conflict (advisory attribution couldn't resolve
+        a confident shared table, or they're genuinely different
+        tables).
+      - T4 vs ANYTHING (including another T4), SAME canonical_module ->
+        conflict (a foundation job claims by module, per spec S3/S4 --
+        excludes T1/T2/T3 claims on that module's tags/tables, and a
+        second concurrent foundation job on the same module).
+      - Different canonical_table / canonical_module (or either side
+        None) -> no conflict.
+
+    A tier not given defaults to "T1" (every pre-Phase-4 caller's claims
+    are implicitly T1/T2 tag claims).
+    """
+    new_tier = new_claim.get("tier") or "T1"
+    for existing in existing_claims:
+        existing_tier = existing.get("tier") or "T1"
+
+        if new_tier in ("T1", "T2") and existing_tier in ("T1", "T2"):
+            if new_claim.get("tag_key") and new_claim.get("tag_key") == existing.get("tag_key"):
+                return True
+            continue
+
+        if new_tier == "T4" or existing_tier == "T4":
+            new_module = new_claim.get("canonical_module")
+            existing_module = existing.get("canonical_module")
+            if new_module and new_module == existing_module:
+                return True
+            continue
+
+        # Every remaining combination involves T3 on at least one side
+        # (T1/T2 vs T3, or T3 vs T3) -- table-scoped exclusion.
+        new_table = new_claim.get("canonical_table")
+        existing_table = existing.get("canonical_table")
+        if new_table and new_table == existing_table:
+            return True
+
+    return False
+
+
+def gather_live_claims(state, time_fn=time.time, claim_stale_seconds=DEFAULT_CLAIM_STALE_SECONDS,
+                        exclude_key=None):
+    """Every currently-live (claimed, not stale) entry in the shared
+    tag-state, rendered as claim_conflicts-shaped dicts -- covers ordinary
+    T1/T2 tag entries AND synthetic T3/T4 job entries (see
+    table_job_claim_key/foundation_job_claim_key) uniformly, since both
+    live in the same state dict under the same "claimed_by"/"claimed_at"
+    convention. exclude_key, if given, omits that one key (typically the
+    entry being claimed/renewed itself)."""
+    now = time_fn()
+    claims = []
+    for key, entry in state.items():
+        if key == exclude_key or not isinstance(entry, dict):
+            continue
+        claimed_by = entry.get("claimed_by")
+        if not claimed_by:
+            continue
+        claimed_at = entry.get("claimed_at", 0)
+        if now - claimed_at >= claim_stale_seconds:
+            continue
+        tier = entry.get("tier") or "T1"
+        claims.append({
+            "tier": tier,
+            "tag_key": key if tier in ("T1", "T2") else None,
+            "canonical_table": entry.get("canonical_table"),
+            "canonical_module": entry.get("canonical_module"),
+        })
+    return claims
+
+
+def claim_table_job(state_path, table_name, module, worker_id,
+                     claim_stale_seconds=DEFAULT_CLAIM_STALE_SECONDS, time_fn=time.time):
+    """Claim a T3 TABLE-PORT job's synthetic tag-state entry (spec S4
+    item 5), refusing (returns False) if a live claim anywhere in the
+    shared state conflicts (claim_conflicts) -- a live T1/T2 claim on one
+    of this table's own members, a live T3 claim already porting the
+    same table, or a live T4 claim on the same module. Renewing an
+    already-held claim (same worker_id) always succeeds and just
+    refreshes claimed_at. Runs inside ONE _state_locked critical section,
+    exactly like every other claim in this fleet."""
+    key = table_job_claim_key(table_name)
+    canonical_table = f"{module}::{table_name.split('::')[-1]}" if module and table_name else None
+
+    def mutate(state):
+        existing = state.get(key)
+        if isinstance(existing, dict) and existing.get("claimed_by") == worker_id:
+            existing["claimed_at"] = time_fn()
+            return state, True
+        candidate = {"tier": "T3", "tag_key": None, "canonical_table": canonical_table, "canonical_module": module}
+        live = gather_live_claims(state, time_fn, claim_stale_seconds, exclude_key=key)
+        if claim_conflicts(live, candidate):
+            return state, False
+        state[key] = {
+            "tier": "T3", "claimed_by": worker_id, "claimed_at": time_fn(),
+            "canonical_table": canonical_table, "canonical_module": module,
+            "table_name": table_name, "fails": 0, "blacklisted": False, "attempts": [],
+        }
+        return state, True
+
+    return _state_locked(state_path, mutate)
+
+
+def release_table_job_claim(state_path, table_name):
+    """Release (but do not delete -- keeps fails/attempts history) a T3
+    job claim's claimed_by/claimed_at, same convention run_tag_loop's own
+    `record` step uses for an ordinary tag claim."""
+    key = table_job_claim_key(table_name)
+
+    def mutate(state):
+        entry = state.get(key)
+        if isinstance(entry, dict):
+            entry.pop("claimed_by", None)
+            entry.pop("claimed_at", None)
+        return state, None
+
+    _state_locked(state_path, mutate)
+
+
+def claim_foundation_job(state_path, job, worker_id,
+                          claim_stale_seconds=DEFAULT_CLAIM_STALE_SECONDS, time_fn=time.time):
+    """Claim a T4 FOUNDATION-UNLOCK job's synthetic tag-state entry (spec
+    S4 item 5) -- claims by MODULE (job["target_module"]), refusing if a
+    live T1/T2/T3 claim anywhere shares that module, or another T4 claim
+    is already live on it. Same renew/refuse/lock-scoping contract as
+    claim_table_job."""
+    module = job.get("target_module")
+    key = foundation_job_claim_key(module or job["name"])
+
+    def mutate(state):
+        existing = state.get(key)
+        if isinstance(existing, dict) and existing.get("claimed_by") == worker_id:
+            existing["claimed_at"] = time_fn()
+            return state, True
+        candidate = {"tier": "T4", "tag_key": None, "canonical_table": None, "canonical_module": module}
+        live = gather_live_claims(state, time_fn, claim_stale_seconds, exclude_key=key)
+        if claim_conflicts(live, candidate):
+            return state, False
+        state[key] = {
+            "tier": "T4", "claimed_by": worker_id, "claimed_at": time_fn(),
+            "canonical_module": module, "job_name": job["name"],
+            "fails": 0, "blacklisted": False, "attempts": [],
+        }
+        return state, True
+
+    return _state_locked(state_path, mutate)
+
+
+def release_foundation_job_claim(state_path, job):
+    module = job.get("target_module")
+    key = foundation_job_claim_key(module or job["name"])
+
+    def mutate(state):
+        entry = state.get(key)
+        if isinstance(entry, dict):
+            entry.pop("claimed_by", None)
+            entry.pop("claimed_at", None)
+        return state, None
+
+    _state_locked(state_path, mutate)
+
+
+# =============================================================================
+# T4 FOUNDATION-UNLOCK / T3 TABLE-PORT job mechanics (spec S3)
+# =============================================================================
+#
+# Both tiers are fix_gap-like attempts scoped to a table/module rather than
+# one tag: they reuse fix_gap's own core loop shape (attempt_build_fn for
+# the build/repair conversation, review_fn for genuineness, cargo_test_*_fn
+# for the test gates) and the same Perl-reference/neighbor-precedent prompt
+# machinery build_prompt already uses -- see _foundation_job_pseudo_gap/
+# _table_port_pseudo_gap, which synthesize a gap-shaped dict purely so
+# build_perl_reference_block/build_neighbor_precedent_block can be called
+# unmodified.
+
+DEFAULT_FOUNDATION_JOBS_PATH = Path(__file__).resolve().parent / "foundation_jobs.toml"
+_REQUIRED_FOUNDATION_JOB_FIELDS = ("name", "description", "target_formats", "target_module", "estimated_gaps")
+
+
+def load_foundation_jobs(path=DEFAULT_FOUNDATION_JOBS_PATH):
+    """Parse scripts/foundation_jobs.toml (spec S3's 7 human-curated T4
+    seeds) into a list of plain dicts, one per `[[jobs]]` entry, each with
+    "status" defaulted to "pending" when the TOML omits it.
+
+    Pure data load -- validates only that every required field
+    (name/description/target_formats/target_module/estimated_gaps) is
+    present; the TOML file itself is the source of truth (hand-curated,
+    checked in), not something this loader should second-guess the
+    content of."""
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+    jobs = []
+    for entry in data.get("jobs") or []:
+        missing = [field for field in _REQUIRED_FOUNDATION_JOB_FIELDS if field not in entry]
+        if missing:
+            raise ValueError(
+                f"foundation job {entry.get('name', '?')!r} in {path} is missing required "
+                f"field(s): {missing}"
+            )
+        job = dict(entry)
+        job.setdefault("status", "pending")
+        jobs.append(job)
+    return jobs
+
+
+def _foundation_job_pseudo_gap(job):
+    """A gap-shaped dict (format/missing_tags/value_differences/
+    parser_files/gap_count), synthesized from one foundation-job spec
+    purely so the existing per-tag Perl-reference/neighbor-precedent
+    machinery (build_perl_reference_block/build_neighbor_precedent_block)
+    can be reused as-is for a job that targets a whole module/dispatch
+    path rather than one tag -- spec S3 item 2(a): "reuse ... do not
+    reimplement".
+
+    job.get("tag_hints") -- an OPTIONAL list of {"name", "tag_id"} dicts a
+    job entry MAY carry -- seeds missing_tags when given; the 7 checked-in
+    seeds in foundation_jobs.toml don't carry this (they're dispatch/
+    parser-scoped fixes with no single representative tag), so both
+    downstream blocks simply come back empty for them -- the same
+    "no match found" degradation these functions already handle for an
+    ordinary per-tag gap, not a new failure mode."""
+    formats = job.get("target_formats") or []
+    module = job.get("target_module") or ""
+    return {
+        "format": formats[0] if formats else (module or job.get("name", "?")),
+        "missing_tags": [
+            {"name": h.get("name"), "tag_id": h.get("tag_id"), "family": module}
+            for h in (job.get("tag_hints") or [])
+        ],
+        "value_differences": [],
+        "parser_files": job.get("parser_files") or [],
+        "gap_count": job.get("estimated_gaps") or 0,
+    }
+
+
+def build_foundation_job_prompt(job, perl_lib_dir=None, neighbor_precedent_block="",
+                                 max_prompt_tokens=DEFAULT_TABLE_JOB_MAX_PROMPT_TOKENS):
+    """T4 FOUNDATION-UNLOCK prompt (spec S3 item 2(a)). A foundation job
+    targets a whole table/module dispatch path -- e.g. "CR3 QuickTime-box
+    -> Canon CMT dispatch" -- rather than one tag, so there is no
+    missing_tags/value_differences list to show the way build_prompt does
+    for an ordinary gap; the job's own curated name/description/
+    target_formats/target_module/estimated_gaps (see load_foundation_jobs)
+    IS the spec instead. Reuses build_perl_reference_block/
+    build_neighbor_precedent_block via _foundation_job_pseudo_gap."""
+    gap = _foundation_job_pseudo_gap(job)
+    perl_block = build_perl_reference_block(gap, perl_lib_dir) if perl_lib_dir else ""
+    manifest = build_reply_shape_manifest(max_prompt_tokens)
+    targets = ", ".join(job.get("target_formats") or [job.get("target_module") or "?"])
+    sections = [
+        ("intro", (
+            f"{RUST_ARCHITECTURE_CONSTRAINTS}\n\n"
+            "You are landing a T4 FOUNDATION-UNLOCK job in the oxidex Rust codebase: a "
+            "table/module-scoped dispatch or parser fix that unlocks MANY downstream "
+            "per-tag gaps at once, not a single tag.\n\n"
+            f"Job: {job['name']}\n"
+            f"Target format(s): {targets}\n"
+            f"ExifTool module unlocked: {job.get('target_module') or '?'}\n"
+            f"Estimated gaps this unlocks (advisory, from the gap census): {job.get('estimated_gaps', '?')}\n\n"
+            f"Description:\n{job['description'].strip()}\n\n"
+            f"{KNOWN_PITFALLS}\n\n{manifest}\n\n"
+        )),
+        ("perl_block", perl_block),
+        ("neighbor", neighbor_precedent_block),
+        ("tail", (
+            "\n\nThis is dispatch/parser plumbing, not per-tag value wiring -- land the "
+            "walker/dispatch logic and wire it to EXISTING tag-parsing code wherever "
+            "possible (see the pitfalls above); do not reimplement a manufacturer's tag "
+            "table from scratch if a working parser for it already exists elsewhere in "
+            f"this codebase.\n\n{TERMINAL_REMINDER}"
+        )),
+    ]
+    budgets = {"perl_block": 0, "neighbor": 0}
+    return assemble_prompt_sections(sections, budgets, max_prompt_tokens)
+
+
+def resolve_foundation_job_tag_keys(job, tag_state, attribution=None):
+    """Best-effort (spec S3): which tag_keys in the shared tag-state does
+    landing `job` plausibly unlock? Confident match only -- "err toward
+    not tagging rather than mis-tagging" (spec).
+
+    Two independent, either-sufficient signals:
+      1. The tag-state entry's OWN canonical_module (stamped at claim
+         time by spec S4 item 5's resolution -- see run_tag_loop's
+         claim() closure) equals job["target_module"].
+      2. attribution (gap-attribution.json), if given: resolve_canonical_table
+         on the tag_key itself resolves to job["target_module"].
+
+    Synthetic T3/T4 job-claim keys (table_job_claim_key/
+    foundation_job_claim_key) are never matched -- they aren't real tags.
+    Returns a sorted list; empty is a valid, expected outcome when
+    nothing confidently matches (e.g. no worker has ever touched a tag
+    under this module, or attribution is unavailable)."""
+    target_module = job.get("target_module")
+    if not target_module:
+        return []
+
+    def is_real_tag_key(key):
+        return not (key.startswith(TABLE_JOB_CLAIM_PREFIX) or key.startswith(FOUNDATION_JOB_CLAIM_PREFIX))
+
+    matched = set()
+    for tag_key, entry in (tag_state or {}).items():
+        if not is_real_tag_key(tag_key) or not isinstance(entry, dict):
+            continue
+        if entry.get("canonical_module") == target_module:
+            matched.add(tag_key)
+        elif attribution:
+            module, _ = resolve_canonical_table(tag_key, attribution)
+            if module == target_module:
+                matched.add(tag_key)
+    return sorted(matched)
+
+
+def mark_held_by_foundation(state_path, job, commit_sha, attribution=None,
+                            load_state_fn=load_tag_state, save_state_fn=save_tag_state):
+    """Spec S3 T4: stamp held_by_foundation={"job": <name>, "sha": <sha>}
+    (the EXACT minimal shape parallel_model_fix_loop.clear_held_by_foundation,
+    Phase 3, already knows how to clear once <sha> reaches origin/main)
+    onto every tag_key resolve_foundation_job_tag_keys confidently matches
+    to this job's module -- resolved FRESH inside the same locked
+    read-modify-write (not a separately-read snapshot passed in), so
+    there's no read-then-mark race window against a concurrent claim on
+    this exact module.
+
+    A tag_key not currently present in tag-state is simply skipped -- this
+    never CREATES a placeholder entry (a foundation job landing doesn't
+    itself discover new gaps; the next find_gaps_fn round does that).
+    Returns the list of tag_keys actually stamped."""
+    def mutate(state):
+        matching = resolve_foundation_job_tag_keys(job, state, attribution)
+        stamped = []
+        for tag_key in matching:
+            entry = state.get(tag_key)
+            if not isinstance(entry, dict):
+                continue
+            entry["held_by_foundation"] = {"job": job["name"], "sha": commit_sha}
+            stamped.append(tag_key)
+        return state, stamped
+
+    return _state_locked(state_path, mutate, load_state_fn, save_state_fn)
+
+
+def attempt_foundation_job(job, repo_root, config, *, call_model_fn=call_model,
+                           review_call_model_fn=None, critique_call_model_fn=None,
+                           review_config=None,
+                           git_apply_fn=git_apply, git_checkout_clean_fn=git_checkout_clean,
+                           git_commit_fn=git_commit, cargo_build_fn=cargo_build,
+                           cargo_test_workspace_fn=cargo_test_workspace,
+                           cargo_test_targeted_fn=cargo_test_targeted, cargo_check_fn=cargo_check,
+                           attempt_build_fn=attempt_build, review_fn=review_verdict,
+                           critique_fn=critique_failed_attempt, pick_model_fn=random.choice,
+                           log_fn=print, perl_lib_dir=None, worker_label=None,
+                           neighbor_precedent_block="", table_job_config=None,
+                           state_path=None, attribution=None, git_rev_parse_fn=None):
+    """T4 FOUNDATION-UNLOCK: attempt ONE foundation job end to end (spec
+    S3 item 2) -- a fix_gap-like attempt (build/repair conversation via
+    attempt_build_fn, genuineness review via review_fn, targeted +
+    workspace test gates) scoped to a table/module dispatch path rather
+    than one tag, using build_foundation_job_prompt instead of
+    build_prompt.
+
+    table_job_config, if given, is the parsed `[table_job]` section (see
+    normalize_table_job_config) -- max_prompt_tokens/max_repair_rounds;
+    defaults (DEFAULT_TABLE_JOB_MAX_PROMPT_TOKENS/
+    DEFAULT_TABLE_JOB_MAX_REPAIR_ROUNDS) otherwise. The model pool is
+    narrowed to phase="table" (spec: "strongest configured model") via
+    models_for_phase before any attempt_build_fn call -- attempt_build_fn
+    itself is used completely unmodified; only the config handed to it
+    differs from an ordinary per-tag fix_gap call.
+
+    Unlike attempt_table_port's three-clause acceptance gate (there is no
+    well-defined "table membership" for a dispatch/parser-plumbing job),
+    the acceptance bar here is simply: builds, passes the targeted +
+    workspace test suites, and the reviewer approves -- exactly fix_gap's
+    own bar minus its per-tag gap-count recheck (which has no foundation-
+    job analogue).
+
+    On landing a commit: if state_path is given, mark_held_by_foundation
+    stamps held_by_foundation on every tag_key resolve_foundation_job_tag_keys
+    confidently matches (best-effort, see that function's own contract);
+    None (the default) skips this -- a caller not tracking tag-state
+    (e.g. a dry-run/manual invocation) is unaffected.
+
+    Returns a result dict: {"job": name, "status": "fixed"|"failed",
+    "rounds": [...], plus "commit_sha"/"held_tags" on success or
+    "reason" on failure} -- deliberately NOT fix_gap's own {"format": ...}
+    shape (there is no single format this job "is").
+    """
+    review_config = review_config or config
+    table_job_config = table_job_config or normalize_table_job_config({})
+    job_config = dict(config)
+    job_config["models"] = models_for_phase(config["models"], "table")
+    job_config["max_prompt_tokens"] = table_job_config.get(
+        "max_prompt_tokens", DEFAULT_TABLE_JOB_MAX_PROMPT_TOKENS)
+    max_repair_rounds = table_job_config.get("max_repair_rounds", DEFAULT_TABLE_JOB_MAX_REPAIR_ROUNDS)
+    git_rev_parse_fn = git_rev_parse_fn or (lambda rr: _run_git(["rev-parse", "HEAD"], rr).strip())
+
+    pseudo_gap = _foundation_job_pseudo_gap(job)
+    messages = [{"role": "user", "content": build_foundation_job_prompt(
+        job, perl_lib_dir=perl_lib_dir, neighbor_precedent_block=neighbor_precedent_block,
+        max_prompt_tokens=job_config["max_prompt_tokens"],
+    )}]
+
+    rounds = []
+    diff = None
+    targeted_filter = (job.get("target_formats") or [job.get("target_module") or job["name"]])[0].lower()
+
+    def critique_and_continue(failure_kind, reason, round_index):
+        if reason.startswith(INFRA_FAILURE_PREFIX):
+            critique = reason
+        else:
+            critique = critique_fn(
+                pseudo_gap, diff, failure_kind, reason, job_config,
+                call_model_fn=critique_call_model_fn or call_model_fn, pick_model_fn=pick_model_fn,
+            )
+        rounds.append({"diff": diff, "reason": reason, "critique": critique})
+        if round_index == max_repair_rounds - 1:
+            return {"job": job["name"], "status": "failed", "reason": reason, "diff": diff, "rounds": rounds}
+        messages.append({
+            "role": "user",
+            "content": (
+                f"That attempt failed ({failure_kind}): {reason}\n\n"
+                f"Reviewer critique: {critique}\n\nPlease resend a corrected diff."
+            ),
+        })
+        return None
+
+    for round_index in range(max_repair_rounds):
+        built, reason, diff, messages = attempt_build_fn(
+            messages, call_model_fn=call_model_fn, git_apply_fn=git_apply_fn,
+            git_checkout_clean_fn=git_checkout_clean_fn, cargo_build_fn=cargo_build_fn,
+            config=job_config, repo_root=repo_root, pick_model_fn=pick_model_fn,
+            cargo_check_fn=cargo_check_fn,
+        )
+        if not built:
+            log_fn(f"[foundation:{job['name']}] build failed: {reason}")
+            outcome = critique_and_continue("build_failed", reason, round_index)
+            if outcome:
+                return outcome
+            continue
+
+        t_ok, t_out = cargo_test_targeted_fn(repo_root, targeted_filter)
+        if not t_ok:
+            git_checkout_clean_fn(repo_root)
+            reason = f"targeted tests ({targeted_filter}) regressed:\n{t_out[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            log_fn(f"[foundation:{job['name']}] targeted tests regressed, reverting")
+            outcome = critique_and_continue("test_regressed", reason, round_index)
+            if outcome:
+                return outcome
+            continue
+
+        approved, review_reason = review_fn(
+            pseudo_gap, diff, review_config, call_model_fn=review_call_model_fn or call_model_fn,
+            pick_model_fn=pick_model_fn,
+        )
+        if not approved:
+            log_fn(f"[foundation:{job['name']}] review REJECTED: {review_reason}")
+            git_checkout_clean_fn(repo_root)
+            rounds.append({"diff": diff, "reason": f"rejected by review: {review_reason}", "critique": review_reason})
+            if round_index == max_repair_rounds - 1:
+                return {
+                    "job": job["name"], "status": "failed",
+                    "reason": f"rejected by review: {review_reason}", "diff": diff, "rounds": rounds,
+                }
+            messages.append({
+                "role": "user",
+                "content": f"A reviewer rejected this fix: {review_reason}\nPlease resend a corrected diff.",
+            })
+            continue
+
+        tests_passed, test_output = cargo_test_workspace_fn(repo_root)
+        if not tests_passed:
+            git_checkout_clean_fn(repo_root)
+            reason = f"cargo test --workspace regressed:\n{test_output[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            log_fn(f"[foundation:{job['name']}] cargo test --workspace regressed, reverting")
+            outcome = critique_and_continue("test_regressed", reason, round_index)
+            if outcome:
+                return outcome
+            continue
+
+        trailers = {
+            "Format": ",".join(job.get("target_formats") or []),
+            "Job": job["name"],
+            "Worker": worker_label,
+        }
+        git_commit_fn(
+            f"feat({(job.get('target_module') or job['name']).lower()}): foundation-unlock {job['name']}",
+            repo_root, trailers=trailers,
+        )
+        commit_sha = git_rev_parse_fn(repo_root)
+        log_fn(f"[foundation:{job['name']}] FOUNDATION LANDED (commit {commit_sha[:12] if commit_sha else '?'})")
+
+        held_tags = []
+        if state_path is not None and commit_sha:
+            held_tags = mark_held_by_foundation(state_path, job, commit_sha, attribution)
+
+        return {
+            "job": job["name"], "status": "fixed", "commit_sha": commit_sha,
+            "held_tags": held_tags, "rounds": rounds,
+        }
+
+    return {"job": job["name"], "status": "failed", "reason": "exhausted repair rounds", "diff": diff, "rounds": rounds}
+
+
+def _table_port_pseudo_gap(table_name, module, repo_root, table_members=None):
+    """A gap-shaped dict for a T3 TABLE-PORT job, mirroring
+    _foundation_job_pseudo_gap -- reuses build_neighbor_precedent_block's
+    registry-file precedent lookup. parser_files points at the module's
+    own registries/<module>.rs (spec S3 item 3(iii): "registry precedent
+    ... scoped to the target registry file").
+
+    table_members (the table's own "family:name" tag_key membership --
+    same shape evaluate_table_port_gate consumes), when given, seeds
+    missing_tags -- exactly like _foundation_job_pseudo_gap's own
+    tag_hints seeding. Without this, missing_tags/value_differences would
+    stay permanently empty (there IS no per-tag gap here; this is a
+    whole-table port), which leaves find_implemented_sibling's `families`
+    search set empty by construction -- its `for family in
+    sorted(families)` loop would then never execute and the sibling
+    search would never run at all, regardless of what the registry file
+    actually contains. own (derived from these same missing_tags) then
+    excludes every member of THIS table, so the search only ever
+    surfaces a DIFFERENT, already-implemented same-family tag as
+    precedent, never one of the table's own (not-yet-ported) members."""
+    short_table = table_name.split("::")[-1] if table_name else table_name
+    registry_rel = str(REGISTRIES_RELATIVE_DIR / f"{(module or '').lower()}.rs")
+    missing_tags = []
+    for tag_key in (table_members or []):
+        family, sep, name = tag_key.partition(":")
+        if sep:
+            missing_tags.append({"family": family, "name": name})
+    return {
+        "format": module or table_name or "?",
+        "missing_tags": missing_tags,
+        "value_differences": [],
+        "parser_files": [registry_rel],
+        "gap_count": 0,
+        "_short_table": short_table,
+    }
+
+
+def build_table_port_prompt(table_name, module, perl_table_source, registry_skeleton,
+                            neighbor_precedent_block="",
+                            max_prompt_tokens=DEFAULT_TABLE_JOB_MAX_PROMPT_TOKENS):
+    """T3 TABLE-PORT prompt (spec S3 item 3): the FULL Perl table source
+    (extract_perl_table_source -- ground truth), the oxidex-side
+    id-to-name skeleton (build_table_port_registry_skeleton --
+    SCAFFOLDING ONLY, labelled unambiguously as such and never as value
+    ground truth), and registry precedent (neighbor_precedent_block,
+    pre-rendered by the caller -- see attempt_table_port)."""
+    manifest = build_reply_shape_manifest(max_prompt_tokens)
+    perl_section = (
+        f"\n\nExifTool's own COMPLETE table source (ground truth -- port this table's "
+        f"full membership, not a guess at it):\n\n{perl_table_source}"
+        if perl_table_source else "\n\n(ExifTool table source unavailable -- work from the description below.)"
+    )
+    skeleton_section = (
+        f"\n\noxidex's existing id-to-name registry for this table -- SCAFFOLDING ONLY, "
+        "STRUCTURE, NOT VALUE GROUND TRUTH (the Perl table above is the ground truth; this "
+        f"just shows the shape oxidex code already expects):\n\n{registry_skeleton}"
+        if registry_skeleton else ""
+    )
+    sections = [
+        ("intro", (
+            f"{RUST_ARCHITECTURE_CONSTRAINTS}\n\n"
+            "You are performing a T3 TABLE-PORT in the oxidex Rust codebase: port an "
+            f"ENTIRE ExifTool %table -- Image::ExifTool::{table_name} (module {module}) -- "
+            "not a single tag.\n\n"
+            "ACCEPTANCE IS STRICT: (a) at least 80% of this table's members must close with "
+            "EXACT values, not just be present; (b) zero regressions of previously-matching "
+            "tags; (c) ZERO members may be present-but-wrong -- any member you cannot make "
+            "exact must be REMOVED from emission (commented out, with a `// TODO(tag_key)` "
+            "marker naming the tag) before your diff is final. A member that is simply "
+            "absent is fine; a member that is emitted with a WRONG value is never "
+            "acceptable and will fail review even if most other members are correct.\n\n"
+            f"{KNOWN_PITFALLS}\n\n{manifest}\n\n"
+        )),
+        ("perl_table", perl_section),
+        ("skeleton", skeleton_section),
+        ("neighbor", neighbor_precedent_block),
+        ("tail", f"\n\n{TERMINAL_REMINDER}"),
+    ]
+    budgets = {"neighbor": 0, "skeleton": 0, "perl_table": DEFAULT_PARSER_FLOOR_TOKENS}
+    return assemble_prompt_sections(sections, budgets, max_prompt_tokens)
+
+
+def attempt_table_port(table_name, module, repo_root, config, *, call_model_fn=call_model,
+                       review_call_model_fn=None, critique_call_model_fn=None, review_config=None,
+                       git_apply_fn=git_apply, git_checkout_clean_fn=git_checkout_clean,
+                       git_commit_fn=git_commit, cargo_build_fn=cargo_build,
+                       cargo_test_workspace_fn=cargo_test_workspace,
+                       cargo_test_targeted_fn=cargo_test_targeted, cargo_check_fn=cargo_check,
+                       attempt_build_fn=attempt_build, review_fn=review_verdict,
+                       critique_fn=critique_failed_attempt, pick_model_fn=random.choice,
+                       log_fn=print, perl_lib_dir=None, worker_label=None,
+                       table_job_config=None, table_members=None, format_name=None,
+                       pre_report=None, recheck_fn=None, threshold=DEFAULT_TABLE_PORT_THRESHOLD,
+                       max_repair_rounds=None):
+    """T3 TABLE-PORT: attempt to port ONE ExifTool %table end to end
+    (spec S3 item 3) -- one job, one commit, exactly like fix_gap's own
+    "one job, one commit, one process exit" invariant (S5), but scoped
+    to every member of `table_name` rather than one tag.
+
+    table_name is the table's name after "Image::ExifTool::" (e.g.
+    "Canon::CameraSettings"); module is its owning ExifTool module (e.g.
+    "Canon", used for the registry-skeleton lookup and the commit's
+    Table:/Job-style trailers).
+
+    table_members must be given: the list of tag_key strings ("family:name")
+    this table's membership comprises (typically resolved via
+    gap-attribution.json's per-tag "table" field, or a hand-curated list
+    for a pilot table) -- required by evaluate_table_port_gate, which is
+    the sole acceptance authority here (see below); an empty list always
+    fails clause (a) (see that function's own "no table members given"
+    handling) rather than silently skipping the gate.
+
+    pre_report/recheck_fn implement spec M3's pre/post comparison pattern
+    exactly like fix_gap's own recheck_baseline/recheck_fn: pre_report is
+    the per-format comparison dict BEFORE this attempt; recheck_fn(format_name)
+    is called after each round's build to get a FRESH one. Both are fed to
+    evaluate_table_port_gate (not a simple gap-count check) -- the THREE-CLAUSE
+    gate is the acceptance authority, not "did the count go down".
+
+    On a round whose gate fails ONLY on clause (c) (must_remove non-empty,
+    clauses a/b otherwise fine), the critique explicitly names the
+    present-but-wrong members and instructs the fixer to comment them out
+    with a `// TODO(tag_key)` marker -- exactly spec S3's own remediation
+    -- rather than a generic "try again".
+    """
+    review_config = review_config or config
+    table_job_config = table_job_config or normalize_table_job_config({})
+    job_config = dict(config)
+    job_config["models"] = models_for_phase(config["models"], "table")
+    job_config["max_prompt_tokens"] = table_job_config.get(
+        "max_prompt_tokens", DEFAULT_TABLE_JOB_MAX_PROMPT_TOKENS)
+    max_repair_rounds = max_repair_rounds or table_job_config.get(
+        "max_repair_rounds", DEFAULT_TABLE_JOB_MAX_REPAIR_ROUNDS)
+    table_members = table_members or []
+    format_name = format_name or module
+
+    perl_table_source = extract_perl_table_source(table_name, perl_lib_dir) if perl_lib_dir else None
+    registry_skeleton = build_table_port_registry_skeleton(module, table_name, repo_root)
+    pseudo_gap = _table_port_pseudo_gap(table_name, module, repo_root, table_members=table_members)
+    neighbor_precedent_block = build_neighbor_precedent_block(pseudo_gap, repo_root)
+
+    messages = [{"role": "user", "content": build_table_port_prompt(
+        table_name, module, perl_table_source, registry_skeleton,
+        neighbor_precedent_block=neighbor_precedent_block,
+        max_prompt_tokens=job_config["max_prompt_tokens"],
+    )}]
+
+    rounds = []
+    diff = None
+    targeted_filter = (format_name or table_name).lower()
+
+    def critique_and_continue(failure_kind, reason, round_index):
+        if reason.startswith(INFRA_FAILURE_PREFIX):
+            critique = reason
+        else:
+            critique = critique_fn(
+                pseudo_gap, diff, failure_kind, reason, job_config,
+                call_model_fn=critique_call_model_fn or call_model_fn, pick_model_fn=pick_model_fn,
+            )
+        rounds.append({"diff": diff, "reason": reason, "critique": critique})
+        if round_index == max_repair_rounds - 1:
+            return {
+                "table": table_name, "module": module, "status": "failed",
+                "reason": reason, "diff": diff, "rounds": rounds,
+            }
+        messages.append({
+            "role": "user",
+            "content": (
+                f"That attempt failed ({failure_kind}): {reason}\n\n"
+                f"Reviewer critique: {critique}\n\nPlease resend a corrected diff."
+            ),
+        })
+        return None
+
+    for round_index in range(max_repair_rounds):
+        built, reason, diff, messages = attempt_build_fn(
+            messages, call_model_fn=call_model_fn, git_apply_fn=git_apply_fn,
+            git_checkout_clean_fn=git_checkout_clean_fn, cargo_build_fn=cargo_build_fn,
+            config=job_config, repo_root=repo_root, pick_model_fn=pick_model_fn,
+            cargo_check_fn=cargo_check_fn,
+        )
+        if not built:
+            log_fn(f"[table-port:{table_name}] build failed: {reason}")
+            outcome = critique_and_continue("build_failed", reason, round_index)
+            if outcome:
+                return outcome
+            continue
+
+        t_ok, t_out = cargo_test_targeted_fn(repo_root, targeted_filter)
+        if not t_ok:
+            git_checkout_clean_fn(repo_root)
+            reason = f"targeted tests ({targeted_filter}) regressed:\n{t_out[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            log_fn(f"[table-port:{table_name}] targeted tests regressed, reverting")
+            outcome = critique_and_continue("test_regressed", reason, round_index)
+            if outcome:
+                return outcome
+            continue
+
+        post_report = recheck_fn(format_name) if recheck_fn else None
+        gate_passed, gate_reason, must_remove = evaluate_table_port_gate(
+            pre_report, post_report, table_members, threshold=threshold,
+        )
+        if not gate_passed:
+            git_checkout_clean_fn(repo_root)
+            log_fn(f"[table-port:{table_name}] acceptance gate failed: {gate_reason}")
+            remove_note = (
+                f" Specifically: comment out (with a `// TODO({', '.join(must_remove)})` style "
+                "marker per tag) every present-but-wrong member listed above -- never ship a "
+                "wrong value." if must_remove else ""
+            )
+            outcome = critique_and_continue("gap_not_closed", gate_reason + remove_note, round_index)
+            if outcome:
+                return outcome
+            continue
+
+        approved, review_reason = review_fn(
+            pseudo_gap, diff, review_config, call_model_fn=review_call_model_fn or call_model_fn,
+            pick_model_fn=pick_model_fn,
+        )
+        if not approved:
+            log_fn(f"[table-port:{table_name}] review REJECTED: {review_reason}")
+            git_checkout_clean_fn(repo_root)
+            rounds.append({"diff": diff, "reason": f"rejected by review: {review_reason}", "critique": review_reason})
+            if round_index == max_repair_rounds - 1:
+                return {
+                    "table": table_name, "module": module, "status": "failed",
+                    "reason": f"rejected by review: {review_reason}", "diff": diff, "rounds": rounds,
+                }
+            messages.append({
+                "role": "user",
+                "content": f"A reviewer rejected this fix: {review_reason}\nPlease resend a corrected diff.",
+            })
+            continue
+
+        tests_passed, test_output = cargo_test_workspace_fn(repo_root)
+        if not tests_passed:
+            git_checkout_clean_fn(repo_root)
+            reason = f"cargo test --workspace regressed:\n{test_output[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            log_fn(f"[table-port:{table_name}] cargo test --workspace regressed, reverting")
+            outcome = critique_and_continue("test_regressed", reason, round_index)
+            if outcome:
+                return outcome
+            continue
+
+        trailers = {
+            "Format": format_name, "Table": table_name, "Worker": worker_label,
+            "Verified": gate_reason,
+        }
+        git_commit_fn(
+            f"feat({(module or table_name).lower()}): table-port {table_name}",
+            repo_root, trailers=trailers,
+        )
+        log_fn(f"[table-port:{table_name}] LANDED ({gate_reason})")
+        return {
+            "table": table_name, "module": module, "status": "fixed",
+            "gate_reason": gate_reason, "rounds": rounds,
+        }
+
+    return {
+        "table": table_name, "module": module, "status": "failed",
+        "reason": "exhausted repair rounds", "diff": diff, "rounds": rounds,
+    }
+
+
+
+
 def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
                   git_checkout_clean_fn=None, repo_root=None, log_fn=print,
                   load_state_fn=load_tag_state, save_state_fn=save_tag_state,
@@ -3658,7 +4831,8 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
                   worker_id=None, claim_stale_seconds=DEFAULT_CLAIM_STALE_SECONDS,
                   max_distinct_tags=None,
                   refresh_worktree_fn=None, max_cluster_tags=1, landed_tags_path=None,
-                  heartbeat_seconds=DEFAULT_HEARTBEAT_SECONDS, time_fn=time.time):
+                  heartbeat_seconds=DEFAULT_HEARTBEAT_SECONDS, time_fn=time.time,
+                  attribution=None):
     """Loop-until-everything-found driver, blacklisting individual TAGS
     (never a whole format) after max_fails failed attempts each. State
     persists to disk at state_path, so the blacklist -- and each tag's
@@ -3751,6 +4925,19 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
     grinding on it, and this one would never find out. None (the
     default) skips this entirely -- standalone/non-parallel runs have no
     shared branch to refresh against.
+
+    attribution, if given, is the parsed gap-attribution.json document
+    (spec S1/attribute_gaps.build_attribution's own output shape) used to
+    resolve each candidate tag's canonical (module, table) -- spec S4
+    item 5's cross-tier claim exclusion: a T1/T2 tag claim on a table
+    with a live T3 TABLE-PORT claim (or on a module with a live T4
+    FOUNDATION-UNLOCK claim) is excluded from `active` exactly like a
+    same-tag claim by another worker already is, via claim_conflicts
+    checked inside this SAME locked claim() closure -- no second lock
+    acquisition. None (the default) skips resolution entirely
+    (resolve_canonical_table already treats a missing attribution as
+    "can't resolve, don't exclude"), so every existing caller keeps its
+    exact prior behavior -- this is advisory and strictly additive.
     """
     fixed, failed, skipped = [], [], []
     cycles_reset = 0
@@ -3801,12 +4988,34 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             must share the lock with the all-blacklisted check it
             depends on -- checked-then-reset across two lock
             acquisitions would race a concurrent claimant."""
+            def resolve_for(tg):
+                return resolve_canonical_table(tg["tag_key"], attribution)
+
+            def conflicts_with_live_jobs(tg):
+                # Spec S4 item 5: exclude a T1/T2 candidate whose
+                # canonical table/module has a live T3/T4 job claim on
+                # it (see claim_conflicts) -- resolved best-effort via
+                # `attribution`; a candidate whose module can't be
+                # resolved (attribution absent, or the "unknown" bucket)
+                # is never excluded on this basis, per
+                # resolve_canonical_table's own contract.
+                module, table = resolve_for(tg)
+                if module is None:
+                    return False
+                candidate = {
+                    "tier": "T1", "tag_key": tg["tag_key"],
+                    "canonical_table": table, "canonical_module": module,
+                }
+                live = gather_live_claims(state, time_fn, claim_stale_seconds, exclude_key=tg["tag_key"])
+                return claim_conflicts(live, candidate)
+
             active = [
                 tg for tg in tag_gaps
                 if not state.get(tg["tag_key"], {}).get("blacklisted")
                 and not is_claimed_by_someone_else(state.get(tg["tag_key"], {}))
                 and (max_distinct_tags is None or len(seen_tag_keys) < max_distinct_tags
                      or tg["tag_key"] in seen_tag_keys)
+                and not conflicts_with_live_jobs(tg)
             ]
 
             landed_hits = [tg["tag_key"] for tg in active if tg["tag_key"] in landed]
@@ -3844,6 +5053,24 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
                     m_entry = state.setdefault(m["tag_key"], {"fails": 0, "blacklisted": False, "attempts": []})
                     m_entry["claimed_by"] = worker_id
                     m_entry["claimed_at"] = time_fn()
+                    m_entry["tier"] = "T2"
+                    m_module, m_table = resolve_for(m)
+                    if m_module is not None:
+                        m_entry["canonical_module"] = m_module
+                    if m_table is not None:
+                        m_entry["canonical_table"] = m_table
+            # Spec S4 item 5 / KPI (spec §5's calls-per-landed-tag): tier
+            # is "T2" for a clustered sibling-family claim, "T1"
+            # otherwise -- also lets a future T3/T4 claim (see
+            # gather_live_claims/claim_conflicts) recognize this entry's
+            # kind, and lets watch_parallel_fix.py's tier KPI attribute
+            # a landed tag correctly.
+            entry["tier"] = "T2" if members else "T1"
+            leader_module, leader_table = resolve_for(tag_gap)
+            if leader_module is not None:
+                entry["canonical_module"] = leader_module
+            if leader_table is not None:
+                entry["canonical_table"] = leader_table
             if members:
                 tag_gap = dict(tag_gap, cluster_members=members)
             return state, ("claimed", landed_hits, tag_gap, list(entry.get("attempts", [])))
@@ -4066,14 +5293,28 @@ def load_toml_config(path):
 
 
 _KNOWN_MODEL_SPEC_KEYS = {"name", "base_url", "api_key", "phase", "reasoning_effort"}
-_VALID_MODEL_PHASES = {"explore", "patch"}
+# "table" (spec S3): a model tagged phase="table" is reserved for T3
+# TABLE-PORT / T4 FOUNDATION-UNLOCK jobs -- "the strongest configured
+# model" per the spec, kept out of the ordinary per-tag explore/patch
+# rotation so a table/foundation job (which the spec budgets far more
+# tokens/repair-rounds for) always gets the pool's best model rather than
+# whichever one pick_model_fn happens to land on.
+_VALID_MODEL_PHASES = {"explore", "patch", "table"}
 
 
 def models_for_phase(models, phase):
     """Filter a model pool to entries tagged for `phase` -- untagged
     entries (phase absent/None) are eligible for every phase. Falls back
     to the full pool when the filter would be empty, so a config with no
-    phase tags behaves exactly as before this feature existed."""
+    phase tags behaves exactly as before this feature existed.
+
+    phase="table" (spec S3) selects the model(s) reserved for T3/T4 job
+    prompts -- see attempt_table_port/attempt_foundation_job, which build
+    their own job-scoped config via
+    dict(config, models=models_for_phase(config["models"], "table"))
+    before delegating to the ordinary attempt_build_fn (whose ITS OWN
+    internal explore/patch phase selection then operates over that
+    already-narrowed pool)."""
     matching = [m for m in models if m.get("phase") in (None, phase)]
     return matching or models
 
@@ -4167,6 +5408,32 @@ def _normalize_model_config(table):
         "learning_budget_tokens": table.get("learning_budget_tokens", DEFAULT_LEARNING_BUDGET_TOKENS),
         "parser_floor_tokens": table.get("parser_floor_tokens", DEFAULT_PARSER_FLOOR_TOKENS),
         "lessons_tail_kb": table.get("lessons_tail_kb", DEFAULT_LESSONS_TAIL_KB),
+        # Spec section 5: cross-process cargo build/test slot ceiling (see
+        # find_tag_gaps.build_semaphore) -- max concurrent cargo
+        # build/check/test invocations across every worker+merger sharing
+        # this host, so a full round of workers all rechecking gaps at
+        # once can't oversubscribe the host's cores by linking
+        # concurrently.
+        "build_semaphore": table.get("build_semaphore", DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS),
+    }
+
+
+def normalize_table_job_config(toml_data):
+    """Spec S3's `[table_job]` table (T3 TABLE-PORT / T4 FOUNDATION-UNLOCK
+    knobs) -- a sibling of [worker]/[reviewer], not nested inside either,
+    since a table/foundation job's prompt budget and repair-round ceiling
+    are independent of the per-tag fixer's own knobs. Missing section (the
+    common case today -- these tiers are opt-in) falls back to the spec's
+    own defaults entirely, so a config.toml with no [table_job] table at
+    all behaves exactly as if one were present with every default value."""
+    section = toml_data.get("table_job") or {}
+    return {
+        "max_prompt_tokens": section.get("max_prompt_tokens", DEFAULT_TABLE_JOB_MAX_PROMPT_TOKENS),
+        "max_repair_rounds": section.get("max_repair_rounds", DEFAULT_TABLE_JOB_MAX_REPAIR_ROUNDS),
+        # "model" per spec S3 -- strongest configured model -- is resolved
+        # via models_for_phase(pool, "table") at call time (see
+        # attempt_table_port/attempt_foundation_job), not stored here;
+        # this table only carries the two numeric knobs.
     }
 
 
@@ -4257,6 +5524,16 @@ def main(argv=None):
              "(accepted/rejected, with reasons) -- read back into the prompt for this gap's "
              f"format if present. Default: {OXIDEX_HOME / 'logs' / 'sweep-review-history.jsonl'}",
     )
+    parser.add_argument(
+        "--gap-attribution", default=str(OXIDEX_HOME / "logs" / "gap-attribution.json"),
+        help="scripts/attribute_gaps.py's gap-attribution.json (spec S1) -- read once at "
+             "startup (best-effort; missing/corrupt is treated as 'unavailable', same as every "
+             "other optional advisory input here) and used ONLY for spec S4 item 5's cross-tier "
+             "claim exclusion (resolve_canonical_table) -- a T1/T2 tag claim is refused when its "
+             "table has a live T3 TABLE-PORT claim, and vice versa. Purely advisory: omitting "
+             f"or losing this file never blocks an ordinary claim. Default: "
+             f"{OXIDEX_HOME / 'logs' / 'gap-attribution.json'}",
+    )
     args = parser.parse_args(argv)
 
     config_path = Path(args.config)
@@ -4302,6 +5579,28 @@ def main(argv=None):
     # (worker table, default on) reach cargo_env's OXIDEX_USE_SCCACHE gate.
     os.environ["OXIDEX_USE_SCCACHE"] = "1" if config.get("use_sccache", True) else "0"
 
+    # Spec section 5 build semaphore: every real cargo build/check/test
+    # call site in this run shares the one cross-process slot ceiling
+    # (config["build_semaphore"], default DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS)
+    # -- partials so fix_gap's own default (semaphore disabled) is only
+    # ever hit by callers/tests that don't thread these through.
+    cargo_build_fn = functools.partial(
+        cargo_build, semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH,
+        semaphore_max_holders=config["build_semaphore"],
+    )
+    cargo_check_fn = functools.partial(
+        cargo_check, semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH,
+        semaphore_max_holders=config["build_semaphore"],
+    )
+    cargo_test_workspace_fn = functools.partial(
+        cargo_test_workspace, semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH,
+        semaphore_max_holders=config["build_semaphore"],
+    )
+    cargo_test_targeted_fn = functools.partial(
+        cargo_test_targeted, semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH,
+        semaphore_max_holders=config["build_semaphore"],
+    )
+
     # This process's identity in every shared artifact: manifest.log lines,
     # request/response/diff filenames, the per-worker prompt log, and the
     # /tmp/tagcmp-* comparison outputs (out_suffix below). Standalone runs
@@ -4315,7 +5614,11 @@ def main(argv=None):
             # run_format_comparison. The shared fixed /tmp path used to
             # let two same-format workers overwrite each other's report
             # mid-recheck and corrupt tag_still_open verdicts.
-            report_path = run_format_comparison(args.only_format, args.cache_dir, out_suffix=worker_label)
+            report_path = run_format_comparison(
+                args.only_format, args.cache_dir, out_suffix=worker_label,
+                semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH,
+                semaphore_max_holders=config["build_semaphore"],
+            )
         else:
             report_path = run_full_comparison(args.cache_dir)
         gaps = group_gaps_by_format(load_comparison_report(report_path))
@@ -4361,7 +5664,7 @@ def main(argv=None):
     req_manifest_path = req_log_dir / "manifest.log"
     cache_stats_path = req_log_dir / "cache-stats.log"
 
-    def make_logging_call_model(phase):
+    def make_logging_call_model(phase, tier="T1"):
         """Build a call_model_fn wrapper tagged with phase ("fixer" or
         "reviewer") in every manifest.log line it writes. fix_gap used to
         thread one shared closure into both attempt_build and review_fn,
@@ -4376,6 +5679,16 @@ def main(argv=None):
         process (not a per-worktree path), so without this tag there'd be
         no way to tell whose call a given manifest.log line was after the
         fact -- see watch_parallel_fix.py's entries_for_worker.
+
+        tier (spec section 5's KPI: "calls-per-landed-tag per tier"),
+        default "T1" -- the ordinary per-tag path this main() wires
+        below always uses the default; run_foundation_job_once/
+        run_table_job_once (T4/T3) build their own instances of this
+        closure with tier="T4"/"T3" so their manifest.log lines are
+        distinguishable from ordinary per-tag calls without disturbing
+        every pre-Phase-4/5 line, which never carried this token at all
+        (watch_parallel_fix.py's tier-aware parser defaults an absent
+        token to "T1", so every existing line stays valid).
         """
         def logging_call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
                                 stream=False, thinking=True, temperature=0, timeout=120,
@@ -4410,7 +5723,7 @@ def main(argv=None):
                 with req_manifest_path.open("a") as f:
                     f.write(
                         f"{time.strftime('%Y-%m-%dT%H:%M:%S')} phase={phase} worker={worker_label} "
-                        f"model={model} RETRY {msg}\n"
+                        f"tier={tier} model={model} RETRY {msg}\n"
                     )
 
             captured_usage = {}
@@ -4438,7 +5751,7 @@ def main(argv=None):
                 elapsed = time.time() - t0
                 with req_manifest_path.open("a") as f:
                     f.write(
-                        f"{ts} phase={phase} worker={worker_label} model={model} "
+                        f"{ts} phase={phase} worker={worker_label} tier={tier} model={model} "
                         f"prompt_chars={prompt_chars} elapsed={elapsed:.1f}s ERROR={e}\n"
                     )
                 raise
@@ -4447,7 +5760,7 @@ def main(argv=None):
             reply_path.write_text(reply)
             with req_manifest_path.open("a") as f:
                 f.write(
-                    f"{ts} phase={phase} worker={worker_label} model={model} "
+                    f"{ts} phase={phase} worker={worker_label} tier={tier} model={model} "
                     f"prompt_chars={prompt_chars} elapsed={elapsed:.1f}s reply_chars={len(reply)} OK\n"
                 )
             # Cache accounting goes to a separate cache-stats.log rather than
@@ -4485,10 +5798,18 @@ def main(argv=None):
         by whom, and when), not just each worker's own private log.
         Appends are small single lines (well under PIPE_BUF), so this is
         safe without extra locking even with multiple concurrent writers.
+
+        tier=T2 for a clustered sibling-family landing, T1 otherwise --
+        mirrors run_tag_loop's own claim-time tier stamp (spec section 5's
+        KPI: watch_parallel_fix.py's tier_kpi_stats reads this field via
+        parse_tags_found_log_tiered; a missing tier= token -- every
+        pre-Phase-4/5 line -- defaults to "T1" there, so this is purely
+        additive).
         """
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         gaps_closed = result.get("gaps_closed", "?")
-        line = f"{ts} worker={worker_label} tag={tag_gap['tag_key']} gaps_closed={gaps_closed}\n"
+        tier = "T2" if tag_gap.get("cluster_members") else "T1"
+        line = f"{ts} worker={worker_label} tag={tag_gap['tag_key']} gaps_closed={gaps_closed} tier={tier}\n"
         with tags_found_log_path.open("a") as f:
             f.write(line)
         total = sum(1 for _ in tags_found_log_path.open())
@@ -4508,10 +5829,22 @@ def main(argv=None):
     # (GLOBAL-PITFALLS.md, knowledge/modules/*.md, logs/lessons.jsonl) --
     # the same fixed, worktree-independent home every other shared store
     # in this module already uses (rate-governor.json, landed-tags.log).
-    # Module/table attribution isn't wired until Phase 2, so every call
-    # below passes module_name=None/table_name=None (format-name
-    # fallback keys, per K3).
+    # build_prompt's own module_name/table_name (K3 playbook selection,
+    # M1 Table: trailer) still pass None below -- per-call module/table
+    # resolution for THOSE call sites isn't wired; only run_tag_loop's
+    # claim-time S4-item-5 cross-tier check (below) reads attribution.
     knowledge_home = OXIDEX_HOME
+
+    # Spec S4 item 5: best-effort, read ONCE at startup (not re-read every
+    # round -- attribution drifts slowly relative to a single process's
+    # lifetime, and this is advisory only; see resolve_canonical_table's
+    # own "never required" contract). None on a missing/corrupt file --
+    # run_tag_loop's claim() closure then simply never excludes anything
+    # on this basis, identical to every run before this feature existed.
+    try:
+        gap_attribution = json.loads(Path(args.gap_attribution).read_text())
+    except (OSError, json.JSONDecodeError):
+        gap_attribution = None
 
     def real_fix_tag(tag_gap, cfg, previous_attempts=None):
         fmt = tag_gap["format"]
@@ -4523,8 +5856,16 @@ def main(argv=None):
             again, by recheck() itself post-attempt each round ("read
             the tagcmp JSON before applying the diff" per spec M3).
             out_suffix keeps this out from under every other same-format
-            process's feet -- see find_gaps_fn above."""
-            path = run_format_comparison(fmt, args.cache_dir, out_suffix=worker_label)
+            process's feet -- see find_gaps_fn above. Threads the same
+            build semaphore through as find_gaps_fn/cargo_*_fn above --
+            this fires on every repair round's pre/post recheck, so it's
+            exactly the high-frequency cargo invocation section 5's
+            semaphore exists to gate."""
+            path = run_format_comparison(
+                fmt, args.cache_dir, out_suffix=worker_label,
+                semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH,
+                semaphore_max_holders=config["build_semaphore"],
+            )
             regrouped = group_gaps_by_format(load_comparison_report(path))
             return next((g for g in regrouped if g["format"] == fmt), None)
 
@@ -4602,6 +5943,8 @@ def main(argv=None):
             max_repair_rounds=cfg.get("max_repair_rounds", DEFAULT_MAX_REPAIR_ROUNDS),
             knowledge_home=knowledge_home, module_name=None, table_name=None,
             worker_label=worker_label,
+            cargo_build_fn=cargo_build_fn, cargo_check_fn=cargo_check_fn,
+            cargo_test_workspace_fn=cargo_test_workspace_fn, cargo_test_targeted_fn=cargo_test_targeted_fn,
         )
         if result["status"] == "fixed":
             log_tag_found(tag_gap, result)
@@ -4624,6 +5967,7 @@ def main(argv=None):
         landed_tags_path=DEFAULT_LANDED_TAGS_PATH,
         claim_stale_seconds=config["claim_stale_seconds"],
         heartbeat_seconds=config["heartbeat_seconds"],
+        attribution=gap_attribution,
     )
     print(f"stopped after {summary['rounds']} rounds")
     print(f"  fixed:   {len(summary['fixed'])} tags")

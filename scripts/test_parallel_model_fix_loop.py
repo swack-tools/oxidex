@@ -10,6 +10,8 @@ from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
+from model_fix_loop import attempt_foundation_job, git_commit, load_tag_state, save_tag_state
+
 import parallel_model_fix_loop
 from parallel_model_fix_loop import (
     _kill_all_active_workers,
@@ -1793,6 +1795,81 @@ class ClearHeldByFoundationTests(GitRepoTestCase):
         cleared = clear_held_by_foundation(state_path, repo, origin_ref="main")
 
         self.assertEqual(cleared, [])
+
+
+CONFIG = {
+    "base_url": "u", "api_key": "k", "models": [{"name": "glm-5.2", "base_url": "u", "api_key": "k"}],
+    "max_tokens": 4096, "reasoning_effort": "max",
+}
+
+
+class AttemptFoundationJobHeldByFoundationIntegrationTests(GitRepoTestCase):
+    """Spec S3 item 2 / M5 janitor interop: a foundation-job-set
+    held_by_foundation flag must get cleared once its commit sha reaches
+    origin/main -- attempt_foundation_job (model_fix_loop.py, Phase 4/5)
+    writes the flag; clear_held_by_foundation (parallel_model_fix_loop.py,
+    Phase 3, already landed) clears it. End to end, against a real git
+    tempdir repo (no mocked git plumbing) -- proves the two Phase 3/4/5
+    pieces actually interoperate, not just that each unit-tests green in
+    isolation."""
+
+    def test_foundation_job_set_flag_is_cleared_once_its_commit_lands_on_origin_main(self):
+        repo = self.make_repo()
+        state_path = self.tmp / "tag-state.json"
+        save_tag_state(state_path, {
+            "JPEG:FLIR:Temp": {"fails": 0, "blacklisted": False, "canonical_module": "FLIR"},
+            "JPEG:Canon:Other": {"fails": 0, "blacklisted": False, "canonical_module": "Canon"},
+        })
+
+        def fake_attempt_build(messages, *, git_apply_fn, repo_root, **kwargs):
+            # A real file change, staged for the REAL git_commit_fn below
+            # to actually commit -- proves a real sha, not a fake string.
+            (Path(repo_root) / "flir_fff.rs").write_text("// FFF record walker\n")
+            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        job = {
+            "name": "flir-fff-record-parser",
+            "description": "Port the FLIR FFF record walker.",
+            "target_formats": ["JPEG"],
+            "target_module": "FLIR",
+            "estimated_gaps": 90,
+            "status": "pending",
+        }
+
+        result = attempt_foundation_job(
+            job, repo, CONFIG,
+            attempt_build_fn=fake_attempt_build,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            review_fn=lambda g, diff, config, **kw: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=git_commit,  # the REAL git_commit -- an actual commit lands
+            log_fn=lambda *a: None,
+            state_path=state_path,
+        )
+
+        self.assertEqual(result["status"], "fixed")
+        commit_sha = result["commit_sha"]
+        self.assertTrue(commit_sha)
+        self.assertEqual(result["held_tags"], ["JPEG:FLIR:Temp"])
+
+        state = load_tag_state(state_path)
+        self.assertEqual(
+            state["JPEG:FLIR:Temp"]["held_by_foundation"], {"job": job["name"], "sha": commit_sha},
+        )
+        self.assertNotIn("held_by_foundation", state["JPEG:Canon:Other"])
+
+        # The commit already sits on "main" in this tempdir repo (git_commit
+        # committed directly onto whatever branch was checked out) --
+        # standing in for "reached origin/main". The Phase 3 janitor's own
+        # clear_held_by_foundation must now clear the flag.
+        cleared = clear_held_by_foundation(state_path, repo, origin_ref="main")
+        self.assertEqual(cleared, ["JPEG:FLIR:Temp"])
+        state = load_tag_state(state_path)
+        self.assertNotIn("held_by_foundation", state["JPEG:FLIR:Temp"])
+        # Unrelated entries are untouched throughout.
+        self.assertNotIn("held_by_foundation", state["JPEG:Canon:Other"])
 
 
 class RotateDashboardLogTests(unittest.TestCase):

@@ -107,6 +107,9 @@ LOG_TIMESTAMP_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\]")
 # logs/tags-found.log's one line per fix (see model_fix_loop.py's
 # log_tag_found): "<iso-ts> worker=<id> tag=<key> gaps_closed=<n>".
 TAGS_FOUND_LINE_RE = re.compile(r"^(\S+) worker=(\S+) tag=(\S+) gaps_closed=(\d+)")
+# Same line, additionally capturing an OPTIONAL trailing `tier=<T1..T4>`
+# token (spec section 5's KPI, Phase 4/5) -- see parse_tags_found_log_tiered.
+TAGS_FOUND_LINE_TIERED_RE = re.compile(r"^(\S+) worker=(\S+) tag=(\S+) gaps_closed=(\d+)(?: tier=(\S+))?")
 
 # Commit subjects that count as landed tag fixes on the "Landed (git):"
 # line: tag-fix commits use conventional feat:/fix(fmt): subjects;
@@ -131,8 +134,27 @@ TAGCMP_FILENAME_RE = re.compile(r"^tagcmp-.+\.json$")
 # phase- and worker-tagged (see model_fix_loop.py's make_logging_call_model).
 # RETRY lines use a different shape entirely and are intentionally not
 # matched by this -- see parse_manifest_log.
+#
+# phase must include "critique" alongside "fixer"/"reviewer":
+# make_logging_call_model("critique") (model_fix_loop.py) writes
+# phase=critique lines in this exact same shape for every failed-attempt
+# critique call (critique_failed_attempt, used by fix_gap/
+# attempt_table_port/attempt_foundation_job alike) -- tier_kpi_stats'
+# calls-per-landed-tag KPI explicitly promises to count "fixer AND
+# reviewer AND critique phases alike"; a narrower alternation here would
+# silently make every phase=critique line invisible to that count (and
+# to parse_manifest_log/request_stats' own fixer/reviewer latency
+# stats), regardless of how many of them a real multi-round attempt logs.
+#
+# `tier=<T1|T2|T3|T4>` (spec section 5's KPI, Phase 4/5) is OPTIONAL in
+# this pattern: every manifest.log line written before this feature
+# existed has no such token at all, and must keep parsing exactly as
+# before -- see parse_manifest_log (which ignores the tier group
+# entirely, unaffected) vs parse_manifest_log_tiered (which reads it,
+# defaulting a missing token to "T1").
 MANIFEST_ENTRY_RE = re.compile(
-    r"^(?P<ts>\S+) phase=(?P<phase>fixer|reviewer) worker=(?P<worker>\S+) model=(?P<model>\S+) "
+    r"^(?P<ts>\S+) phase=(?P<phase>fixer|reviewer|critique) worker=(?P<worker>\S+)"
+    r"(?: tier=(?P<tier>\S+))? model=(?P<model>\S+) "
     r"prompt_chars=(?P<prompt_chars>\d+) elapsed=(?P<elapsed>[\d.]+)s "
     r"(?:reply_chars=\d+ )?(?P<rest>OK|ERROR=.*)$"
 )
@@ -370,6 +392,30 @@ def parse_tags_found_log(path):
     return out
 
 
+def parse_tags_found_log_tiered(path):
+    """parse_tags_found_log's twin, additionally capturing the `tier=`
+    token Phase 4/5's log_tag_found writes (default "T1" when absent, so
+    every pre-Phase-4/5 tags-found.log line -- which never carried this
+    token -- still parses exactly like parse_tags_found_log's own
+    unaffected reading of the same file).
+
+    [(timestamp_str, worker_id_str, tag_key, gaps_closed_int, tier), ...]
+    in file order."""
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return []
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = TAGS_FOUND_LINE_TIERED_RE.match(line)
+        if m:
+            out.append((m.group(1), m.group(2), m.group(3), int(m.group(4)), m.group(5) or "T1"))
+    return out
+
+
 def found_stats(entries, now):
     """{"total", "last_hour", "last_24h", "last_at", "last_tag", "last_worker"}
     from parse_tags_found_log's entries. last_at/last_tag/last_worker are
@@ -397,6 +443,55 @@ def found_stats(entries, now):
         "total": total, "last_hour": last_hour, "last_24h": last_24h,
         "last_at": last_at, "last_tag": last_tag, "last_worker": last_worker,
     }
+
+
+#: Every tier this KPI knows about -- T1/T2 (per-tag, already
+#: distinguished at claim time -- see model_fix_loop.py's run_tag_loop),
+#: T3 (table-port), T4 (foundation-unlock). Absent/unrecognized tiers
+#: still aggregate fine (tier_kpi_stats keys off whatever it actually
+#: sees); this is just the canonical display order.
+KNOWN_KPI_TIERS = ("T1", "T2", "T3", "T4")
+
+
+def tier_kpi_stats(manifest_entries_tiered, tags_found_entries_tiered):
+    """Spec section 5's KPI: calls-per-landed-tag per tier.
+
+    manifest_entries_tiered/tags_found_entries_tiered are
+    parse_manifest_log_tiered's/parse_tags_found_log_tiered's own output
+    shapes. "Calls" counts every SUCCESSFUL (OK, not ERROR) manifest.log
+    line for that tier, fixer AND reviewer AND critique phases alike --
+    matching the spec's own ~37-calls/tag T1 baseline and ~5-10-calls/tag
+    T3 target, both of which count a tag's whole multi-call attempt arc,
+    not just fixer turns. "Landed" counts tags-found.log entries (one per
+    tag actually landed) for that tier.
+
+    Returns {tier: {"calls": int, "landed": int, "calls_per_landed_tag":
+    float or None}}, keyed by every tier seen in EITHER input (so a tier
+    with calls but zero landings still shows up, e.g. mid-flight T3 work
+    that hasn't closed anything yet) -- calls_per_landed_tag is None when
+    landed is 0 (division by zero is meaningless, not 0 -- "no signal
+    yet", not "infinitely efficient")."""
+    calls_by_tier = {}
+    for _ts, _phase, _elapsed, ok, _worker, tier in manifest_entries_tiered:
+        if not ok:
+            continue
+        calls_by_tier[tier] = calls_by_tier.get(tier, 0) + 1
+
+    landed_by_tier = {}
+    for _ts, _worker, _tag, _closed, tier in tags_found_entries_tiered:
+        landed_by_tier[tier] = landed_by_tier.get(tier, 0) + 1
+
+    tiers = sorted(set(calls_by_tier) | set(landed_by_tier),
+                   key=lambda t: (t not in KNOWN_KPI_TIERS, KNOWN_KPI_TIERS.index(t) if t in KNOWN_KPI_TIERS else 0, t))
+    result = {}
+    for tier in tiers:
+        calls = calls_by_tier.get(tier, 0)
+        landed = landed_by_tier.get(tier, 0)
+        result[tier] = {
+            "calls": calls, "landed": landed,
+            "calls_per_landed_tag": (calls / landed) if landed else None,
+        }
+    return result
 
 
 def git_landed_log(repo_root):
@@ -593,6 +688,34 @@ def parse_manifest_log(path):
             entries.append((
                 m.group("ts"), m.group("phase"), float(m.group("elapsed")),
                 m.group("rest") == "OK", m.group("worker"),
+            ))
+    return entries
+
+
+def parse_manifest_log_tiered(path):
+    """parse_manifest_log's twin, additionally capturing the `tier=`
+    token Phase 4/5 call sites add (see model_fix_loop.py's
+    make_logging_call_model) -- tier defaults to "T1" for every
+    pre-Phase-4/5 line, which never carried this token at all, so every
+    existing manifest.log line stays parseable exactly like
+    parse_manifest_log's own unaffected reading of the same file. A
+    separate function (rather than changing parse_manifest_log's own
+    tuple shape) keeps every existing caller of parse_manifest_log/
+    entries_for_worker/request_stats untouched.
+
+    [(timestamp_str, phase, elapsed_seconds, ok, worker, tier), ...] in
+    file order."""
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return []
+    entries = []
+    for line in text.splitlines():
+        m = MANIFEST_ENTRY_RE.match(line)
+        if m:
+            entries.append((
+                m.group("ts"), m.group("phase"), float(m.group("elapsed")),
+                m.group("rest") == "OK", m.group("worker"), m.group("tier") or "T1",
             ))
     return entries
 
@@ -854,6 +977,24 @@ def render_dashboard(log_dir, worker_ids, tags_found_log, tag_state_path, wrappe
             f"{DIM}|{RESET}  reviewer {_format_latency_stats(agg_stats['reviewer'], BLUE)}  "
             f"{DIM}|{RESET}  last: {CYAN}{last_str}{RESET}"
         )
+        # Spec section 5 KPI: calls-per-landed-tag per tier -- "the only
+        # 4-8x lever available today" per the spec's own throughput
+        # identity. all_entries already carries the tier field (see
+        # parse_manifest_log_tiered); tags-found.log's tiered twin is
+        # read fresh here too (a second small file, cheap).
+        manifest_tiered = parse_manifest_log_tiered(manifest_path)
+        found_tiered = parse_tags_found_log_tiered(tags_found_log)
+        kpi = tier_kpi_stats(manifest_tiered, found_tiered)
+        if kpi:
+            kpi_parts = []
+            for tier, stats in kpi.items():
+                cplt = stats["calls_per_landed_tag"]
+                cplt_str = f"{cplt:.1f}" if cplt is not None else "-"
+                kpi_parts.append(
+                    f"{tier} {BOLD}{cplt_str}{RESET}{DIM}/tag{RESET} "
+                    f"{DIM}({stats['calls']} calls, {stats['landed']} landed){RESET}"
+                )
+            lines.append(f"  {BOLD}Calls/landed-tag:{RESET} " + f"  {DIM}|{RESET}  ".join(kpi_parts))
     lines.append("")
 
     lines.append(f"  {BOLD}{BRIGHT_CYAN}FORMAT PROGRESS{RESET}")

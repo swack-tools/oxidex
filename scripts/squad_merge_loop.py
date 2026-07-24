@@ -99,6 +99,7 @@ from find_tag_gaps import (
 )
 from parallel_model_fix_loop import branch_name as worker_branch_name
 from parallel_model_fix_loop import novel_commits
+from find_tag_gaps import DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS, DEFAULT_BUILD_SEMAPHORE_PATH
 from model_fix_loop import cargo_test_targeted as _real_cargo_test_targeted
 from model_fix_loop import new_oxidex_only_keys
 import validate_fix_commit
@@ -560,18 +561,39 @@ def record_head(path, sha, *, status, patch_id, format_name, work_done=True,
 # Comparison / test wiring (production defaults; injectable for tests)
 # ---------------------------------------------------------------------------
 
-def real_format_match(repo_root, cache_dir, fmt, out_suffix):
+def real_format_match(repo_root, cache_dir, fmt, out_suffix,
+                       semaphore_max_holders=DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS):
     """One fresh single-format comparison, scoped by out_suffix so
     concurrent processes (workers, other squads' mergers, the sweep)
     never clobber each other's /tmp/tagcmp-<FMT>-<suffix> report (spec
-    S1). Mirrors model_fix_loop.py's real_fix_tag.current_match()."""
-    path = run_format_comparison(fmt, cache_dir, repo_root=repo_root, out_suffix=out_suffix)
+    S1). Mirrors model_fix_loop.py's real_fix_tag.current_match().
+
+    Spec section 5 build semaphore: this re-runs ensure_tag_comparison_built
+    (a full `cargo build --profile fixloop --bin tag-comparison`) on every
+    per-commit pre/post check and every batch full-corpus recheck -- shares
+    the same cross-process slot ceiling every worker's cargo build/test
+    call goes through (mirrors real_cargo_test_targeted's own
+    semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH wiring just below)."""
+    path = run_format_comparison(
+        fmt, cache_dir, repo_root=repo_root, out_suffix=out_suffix,
+        semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH, semaphore_max_holders=semaphore_max_holders,
+    )
     regrouped = group_gaps_by_format(load_comparison_report(path))
     return next((g for g in regrouped if g["format"] == fmt), None)
 
 
-def real_cargo_test_targeted(repo_root, filter_str):
-    return _real_cargo_test_targeted(repo_root, filter_str)
+def real_cargo_test_targeted(repo_root, filter_str, semaphore_max_holders=DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS):
+    """Spec section 5: the merger's own targeted-test call site shares
+    the same cross-process build semaphore every worker's cargo
+    build/test call goes through (model_fix_loop.cargo_test_targeted's
+    own semaphore_path/semaphore_max_holders params) -- a merger
+    cherry-picking and test-gating several commits per poll is itself
+    a cargo-build-heavy process, and must count against the same host
+    core-oversubscription ceiling as the workers it's validating behind."""
+    return _real_cargo_test_targeted(
+        repo_root, filter_str,
+        semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH, semaphore_max_holders=semaphore_max_holders,
+    )
 
 
 def real_validate_commit(sha, repo, **kwargs):
