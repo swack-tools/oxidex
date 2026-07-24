@@ -425,9 +425,114 @@ pub fn parse_rar_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
     let parser = RARParser;
-    parser
+    let mut metadata = parser
         .parse(reader)
-        .map_err(|e| format!("RAR parse error: {}", e))
+        .map_err(|e| format!("RAR parse error: {}", e))?;
+
+    if let Some(compressed_size) =
+        rar5_compressed_size(reader).map_err(|e| format!("RAR parse error: {}", e))?
+    {
+        metadata.insert(
+            "ZIP:CompressedSize".to_string(),
+            TagValue::Integer(compressed_size),
+        );
+    }
+
+    Ok(metadata)
+}
+
+/// Extracts the packed-data size from the first RAR5 file block.
+fn rar5_compressed_size(reader: &dyn FileReader) -> Result<Option<i64>> {
+    const HEADER_FLAG_EXTRA_AREA: u64 = 0x0001;
+    const HEADER_FLAG_DATA_AREA: u64 = 0x0002;
+    const MAX_BLOCKS: usize = 10_000;
+
+    let file_size = reader.size();
+    if file_size < 8 {
+        return Ok(None);
+    }
+
+    let signature = reader.read(0, 8)?;
+    if signature != b"Rar!\x1a\x07\x01\x00" {
+        return Ok(None);
+    }
+
+    let mut offset = 8u64;
+    for _ in 0..MAX_BLOCKS {
+        if offset >= file_size {
+            break;
+        }
+
+        let remaining = file_size - offset;
+        let prefix_len = remaining.min(64) as usize;
+        if prefix_len < 6 {
+            break;
+        }
+        let block = reader.read(offset, prefix_len)?;
+
+        let (_, size_offset) = match RARParser::read_rar5_u32(block, 0) {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+        let (header_size, header_offset) = match RARParser::read_rar5_vint(block, size_offset) {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+        if header_size == 0 {
+            break;
+        }
+
+        let header_prefix_size = match u64::try_from(header_offset) {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+        let block_header_size = match header_prefix_size.checked_add(header_size) {
+            Some(value) if value <= remaining => value,
+            _ => break,
+        };
+
+        let (header_type, flags_offset) = match RARParser::read_rar5_vint(block, header_offset) {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+        let (header_flags, mut field_offset) = match RARParser::read_rar5_vint(block, flags_offset)
+        {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+
+        if header_flags & HEADER_FLAG_EXTRA_AREA != 0 {
+            let (_, next_offset) = match RARParser::read_rar5_vint(block, field_offset) {
+                Ok(value) => value,
+                Err(_) => break,
+            };
+            field_offset = next_offset;
+        }
+
+        let data_size = if header_flags & HEADER_FLAG_DATA_AREA != 0 {
+            match RARParser::read_rar5_vint(block, field_offset) {
+                Ok((value, _)) => value,
+                Err(_) => break,
+            }
+        } else {
+            0
+        };
+
+        if header_type == RAR5_HEADER_FILE {
+            return Ok(i64::try_from(data_size).ok());
+        }
+
+        // The declared header size already includes the extra area.
+        offset = match offset
+            .checked_add(block_header_size)
+            .and_then(|value| value.checked_add(data_size))
+        {
+            Some(value) if value > offset && value <= file_size => value,
+            _ => break,
+        };
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]
