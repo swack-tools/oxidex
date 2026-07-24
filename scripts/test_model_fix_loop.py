@@ -3798,6 +3798,34 @@ class LoadLandedTagsTests(unittest.TestCase):
             self.assertEqual(load_landed_tags(p),
                              {"JPEG:APP12:MODE3", "PSD:EXIF:Compression"})
 
+    def test_reverted_tombstone_removes_tag_from_landed_set(self):
+        # Spec M5: log_sweep_review.py --revert appends a
+        # "<ts> REVERTED <tag_key>" tombstone; the reverted tag must
+        # re-enter the worker pool, not stay suppressed forever (and the
+        # tombstone line itself must never become a junk landed key).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir) / "landed.log"
+            p.write_text(
+                "2026-07-23T17:00:00 JPEG:MakerNotes:AELButton\n"
+                "2026-07-23T17:05:00 PSD:EXIF:Compression\n"
+                "2026-07-24T09:00:00 REVERTED JPEG:MakerNotes:AELButton\n")
+            self.assertEqual(load_landed_tags(p), {"PSD:EXIF:Compression"})
+
+    def test_reland_after_revert_rejoins_skip_set_in_file_order(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir) / "landed.log"
+            p.write_text(
+                "2026-07-23T17:00:00 JPEG:APP12:MODE3\n"
+                "2026-07-24T09:00:00 REVERTED JPEG:APP12:MODE3\n"
+                "2026-07-24T11:00:00 JPEG:APP12:MODE3\n")
+            self.assertEqual(load_landed_tags(p), {"JPEG:APP12:MODE3"})
+
+    def test_tombstone_for_never_landed_tag_is_harmless(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir) / "landed.log"
+            p.write_text("2026-07-24T09:00:00 REVERTED NEF:EXIF:NeverLanded\n")
+            self.assertEqual(load_landed_tags(p), set())
+
 
 class LoadSaveTagStateTests(unittest.TestCase):
     def setUp(self):
