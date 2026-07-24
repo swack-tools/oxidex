@@ -224,14 +224,30 @@ class LessonLineTests(unittest.TestCase):
         parsed = json.loads(raw)
         self.assertTrue(parsed["reason"].startswith("xxx"))
 
-    def test_hard_clamp_when_reason_cannot_absorb_overflow(self):
-        # Overflow lives in evidence, not reason: the best-effort shrink
-        # can't help, so the hard byte clamp applies. Readers skip the
-        # malformed line -- the contract is bounded size, not validity.
+    def test_best_effort_shrink_also_covers_an_oversized_evidence_blob(self):
+        # append_lesson_line now delegates to distill_lessons'
+        # encode_lesson_line (the canonical K1 owner), whose best-effort
+        # shrink covers BOTH evidence and reason -- strictly more capable
+        # than this script's old reason-only shrink, so an oversized
+        # evidence blob no longer needs the hard clamp to fit.
         from log_sweep_review import LESSON_LINE_MAX_BYTES, append_lesson_line
         with tempfile.TemporaryDirectory() as tmpdir:
             raw = append_lesson_line(
                 tmpdir, self._event(reason="short", evidence={"blob": "y" * 5000}))
+        self.assertLessEqual(len(raw), LESSON_LINE_MAX_BYTES)
+        self.assertTrue(raw.endswith(b"\n"))
+        parsed = json.loads(raw)
+        self.assertEqual(parsed["reason"], "short")
+
+    def test_hard_clamp_when_no_shrinkable_field_can_absorb_overflow(self):
+        # Overflow lives in tag_key, a field the shrink loop does not
+        # touch (only evidence/reason): neither can help, so the hard
+        # byte clamp still applies. Readers skip the malformed line --
+        # the contract is bounded size, not validity.
+        from log_sweep_review import LESSON_LINE_MAX_BYTES, append_lesson_line
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw = append_lesson_line(
+                tmpdir, self._event(reason="short", tag_key="T" * 5000))
         self.assertEqual(len(raw), LESSON_LINE_MAX_BYTES)
         self.assertTrue(raw.endswith(b"\n"))
 

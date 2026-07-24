@@ -126,6 +126,11 @@ def group_gaps_by_format(report, repo_root=REPO_ROOT):
             "value_differences": diffs,
             "gap_count": gap_count,
             "parser_files": locate_parser_files(fmt, repo_root),
+            # Spec M3: threaded straight from the Rust ComparisonReport so
+            # tag_still_open's duplicate_emission check and
+            # new_oxidex_only_keys (model_fix_loop.py) can see them.
+            "duplicate_emissions": comp.get("duplicate_emissions") or [],
+            "extra_in_oxidex": comp.get("extra_in_oxidex") or [],
         })
     gaps.sort(key=lambda g: g["gap_count"], reverse=True)
     return gaps
