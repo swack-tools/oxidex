@@ -29,6 +29,28 @@ use crate::parsers::raw::{RawFormat, raf_parser};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use crate::tag_db::lookup_tag_name;
 
+/// Resolve TIFF/EP DNG tags using ExifTool's EXIF group.
+///
+/// DNG stores these tags in a RAW SubIFD, but ExifTool assigns them to its
+/// EXIF group rather than exposing the physical SubIFD directory name.
+fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String {
+    if format == RawFormat::AdobeDNG
+        && matches!(
+            tag_id,
+            0xC619 // BlackLevelRepeatDim
+                | 0xC61A // BlackLevel
+                | 0xC62D // BayerGreenSplit
+                | 0xC632 // AntiAliasStrength
+                | 0xC65C // BestQualityScale
+                | 0xC68D // ActiveArea
+        )
+    {
+        lookup_tag_name(tag_id, "EXIF")
+    } else {
+        lookup_tag_name(tag_id, ifd_name)
+    }
+}
+
 /// Format TIFF/EP CFAPattern2 (tag 0x828E), whose components are unsigned
 /// bytes printed by ExifTool as a space-separated list.
 fn format_cfa_pattern2(bytes: &[u8], value_count: u32) -> String {
@@ -300,7 +322,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         (RawFormat::PanasonicRW2, 0, 0x001E) => {
                             format!("{}:BlackLevelBlue", ifd_name)
                         }
-                        _ => lookup_tag_name(canonical_tag_id, ifd_name),
+                        _ => lookup_raw_tag_name(canonical_tag_id, ifd_name, format),
                     };
                     let tag_value =
                         raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order);
@@ -438,7 +460,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 continue;
                             }
 
-                            let tag_name = lookup_tag_name(tag_id, sub_ifd_name);
+                            let tag_name = lookup_raw_tag_name(tag_id, sub_ifd_name, format);
                             let tag_value = raw_bytes_to_simple_tag_value(
                                 raw_bytes.as_ref(),
                                 field_type,
