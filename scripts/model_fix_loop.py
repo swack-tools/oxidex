@@ -42,9 +42,20 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           resurface in later rounds automatically)
     max_prompt_file_bytes default 60000 (worker only; per-attempt cap on
                           total parser-file source bytes included)
-    stream                default false; requests the response as
+    stream                default true; requests the response as
                           OpenAI-compatible SSE and reassembles it into the
-                          same full-string reply either way
+                          same full-string reply either way. When streaming,
+                          stream_options.include_usage is set so the provider
+                          still returns token/cache accounting in a final
+                          usage-only chunk.
+    prompt_cache          default "auto"; "auto" relies on the provider's
+                          automatic prefix caching (build_prompt orders
+                          sections static-first to maximise the stable
+                          prefix), "explicit" additionally wraps that prefix
+                          in an Anthropic-style cache_control breakpoint
+                          (opt-in -- only helps providers that accept it),
+                          "off" disables both. Cached-token counts the
+                          provider reports are written to cache-stats.log.
     thinking               default true; false sends
                           "thinking": {"type": "disabled"} in the request
                           body. True omits the field entirely (the API's own
@@ -238,11 +249,66 @@ DEFAULT_RETRY_BACKOFF_SECONDS = 2
 DEFAULT_MAX_RETRY_BACKOFF_SECONDS = 120  # cap growth -- 2**1000 would otherwise be absurd
 
 
+def extract_cache_usage(usage):
+    """Pull (cached_input_tokens, total_input_tokens) out of a response's
+    `usage` object, tolerating both the OpenAI shape
+    (prompt_tokens_details.cached_tokens / prompt_tokens) and the
+    Anthropic shape (cache_read_input_tokens / input_tokens).
+
+    Returns None when usage is absent or reports neither -- callers treat
+    that as "no cache information available" (log nothing), distinct from
+    "(0, N): the provider reported a genuine cache miss". A provider that
+    simply doesn't surface cache stats therefore isn't misrecorded as a
+    0%-hit-rate call.
+    """
+    if not isinstance(usage, dict):
+        return None
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict) and "cached_tokens" in details:
+        return int(details.get("cached_tokens") or 0), int(usage.get("prompt_tokens") or 0)
+    if "cache_read_input_tokens" in usage:
+        return int(usage.get("cache_read_input_tokens") or 0), int(usage.get("input_tokens") or 0)
+    return None
+
+
+def apply_prompt_cache_markers(messages, mode):
+    """Return a messages list annotated for prompt caching per `mode`,
+    without ever mutating the input.
+
+    "explicit": wrap the first user message's content in a single
+    Anthropic-style cache_control text block ("ephemeral"), marking the
+    large, byte-stable initial prompt (build_prompt orders it static-first
+    -- see build_prompt/build_reply_shape_manifest) as one cache
+    breakpoint. That first message is identical across a fix_gap's repair
+    rounds and largely stable across tags, so it is the single
+    highest-value breakpoint. Only providers that accept the block-content
+    form plus cache_control benefit; on any other provider this changes
+    the request shape, which is exactly why it is opt-in rather than the
+    default.
+
+    Anything else ("auto"/"off"): return messages unchanged (plain-string
+    content) and rely on the provider's own automatic prefix caching --
+    the safe default, since it cannot alter the request into a shape an
+    OpenAI-compatible endpoint might reject.
+    """
+    if mode != "explicit" or not messages:
+        return messages
+    first = messages[0]
+    content = first.get("content")
+    if not isinstance(content, str):
+        return messages  # already block form (or unexpected) -- leave as-is
+    rewritten = dict(first)
+    rewritten["content"] = [
+        {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+    ]
+    return [rewritten, *messages[1:]]
+
+
 def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream=False, thinking=True,
                 temperature=0, timeout=120, max_retries=DEFAULT_MAX_RETRIES,
                 retry_backoff_seconds=DEFAULT_RETRY_BACKOFF_SECONDS,
                 max_retry_backoff_seconds=DEFAULT_MAX_RETRY_BACKOFF_SECONDS, sleep_fn=time.sleep,
-                log_fn=None):
+                log_fn=None, usage_fn=None, prompt_cache="auto"):
     """POST a chat-completions request, retrying on transient upstream
     failures, and return the assistant's reply text.
 
@@ -302,9 +368,9 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
                 )
             sleep_fn(delay)
         try:
-            reply = _call_model_once(
+            reply, usage = _call_model_once(
                 messages, base_url, api_key, model, max_tokens, reasoning_effort,
-                stream, thinking, temperature, timeout,
+                stream, thinking, temperature, timeout, prompt_cache,
             )
         except urllib.error.HTTPError as e:
             if e.code not in DEFAULT_RETRYABLE_HTTP_STATUSES:
@@ -328,6 +394,8 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
         if not reply:
             last_error = last_error or RuntimeError("model returned an empty reply")
             continue
+        if usage_fn is not None:
+            usage_fn(usage)
         return reply
     # last_error is only None if max_retries < 0 (range(max_retries + 1) never
     # iterates) -- guard against `raise None`, which would raise a confusing
@@ -336,16 +404,22 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
 
 
 def _call_model_once(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream, thinking,
-                      temperature, timeout):
+                      temperature, timeout, prompt_cache="auto"):
     url = base_url.rstrip("/") + "/chat/completions"
     payload = {
         "model": model,
-        "messages": messages,
+        "messages": apply_prompt_cache_markers(messages, prompt_cache),
         "temperature": temperature,
         "max_tokens": max_tokens,
         "reasoning_effort": reasoning_effort,
         "stream": stream,
     }
+    if stream:
+        # Without this, OpenAI-compatible providers omit the usage object
+        # from a streamed response entirely -- so cache accounting (and
+        # token counts) would only ever work for non-streamed calls. The
+        # usage arrives in a final choices-empty chunk, captured below.
+        payload["stream_options"] = {"include_usage": True}
     if not thinking:
         payload["thinking"] = {"type": "disabled"}
     body = json.dumps(payload).encode()
@@ -367,10 +441,11 @@ def _call_model_once(messages, base_url, api_key, model, max_tokens, reasoning_e
     # REVIEW_BASE_URL), never network- or attacker-controlled input.
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
         if not stream:
-            payload = json.loads(resp.read())
-            return payload["choices"][0]["message"]["content"]
+            response = json.loads(resp.read())
+            return response["choices"][0]["message"]["content"], response.get("usage")
 
         chunks = []
+        usage = None
         for raw_line in resp:
             line = raw_line.decode("utf-8").strip()
             if not line.startswith("data:"):
@@ -379,13 +454,18 @@ def _call_model_once(messages, base_url, api_key, model, max_tokens, reasoning_e
             if data == "[DONE]":
                 break
             event = json.loads(data)
+            # Providers that support it stream a final usage-only chunk
+            # (OpenAI's stream_options.include_usage); capture it whenever
+            # present so cache accounting works for streamed calls too.
+            if event.get("usage"):
+                usage = event["usage"]
             choices = event.get("choices") or []
             if not choices:
                 continue  # e.g. the final usage-only chunk
             content = (choices[0].get("delta") or {}).get("content")
             if content:
                 chunks.append(content)
-        return "".join(chunks)
+        return "".join(chunks), usage
 
 
 def git_apply(diff_text, repo_root):
@@ -2540,7 +2620,8 @@ def _normalize_model_config(table):
         "reasoning_effort": table.get("reasoning_effort", "max"),
         "max_prompt_tags": table.get("max_prompt_tags", DEFAULT_MAX_PROMPT_TAGS),
         "max_prompt_file_bytes": table.get("max_prompt_file_bytes", DEFAULT_MAX_PROMPT_FILE_BYTES),
-        "stream": table.get("stream", False),
+        "stream": table.get("stream", True),
+        "prompt_cache": table.get("prompt_cache", "auto"),
         "thinking": table.get("thinking", True),
         "temperature": table.get("temperature", 0),
         "timeout": table.get("timeout", 120),
@@ -2731,6 +2812,7 @@ def main(argv=None):
     req_log_dir = OXIDEX_HOME / "logs" / "model-fix-requests"
     req_log_dir.mkdir(parents=True, exist_ok=True)
     req_manifest_path = req_log_dir / "manifest.log"
+    cache_stats_path = req_log_dir / "cache-stats.log"
     worker_label = args.worker_id or "1"
 
     def make_logging_call_model(phase):
@@ -2779,12 +2861,18 @@ def main(argv=None):
                         f"model={model} RETRY {msg}\n"
                     )
 
+            captured_usage = {}
+
+            def capture_usage(usage):
+                captured_usage["usage"] = usage
+
             try:
                 reply = call_model(
                     messages, base_url, api_key, model, max_tokens, reasoning_effort,
                     stream, thinking, temperature, timeout,
                     max_retries, retry_backoff_seconds, max_retry_backoff_seconds,
-                    log_fn=log_retry,
+                    log_fn=log_retry, usage_fn=capture_usage,
+                    prompt_cache=config.get("prompt_cache", "auto"),
                 )
             except Exception as e:
                 elapsed = time.time() - t0
@@ -2802,6 +2890,19 @@ def main(argv=None):
                     f"{ts} phase={phase} worker={worker_label} model={model} "
                     f"prompt_chars={prompt_chars} elapsed={elapsed:.1f}s reply_chars={len(reply)} OK\n"
                 )
+            # Cache accounting goes to a separate cache-stats.log rather than
+            # the manifest line, so the (dashboard-parsed) manifest format
+            # stays byte-stable. One line per call the provider actually
+            # reported usage for (see extract_cache_usage): a provider that
+            # doesn't surface cache stats simply logs nothing here.
+            cache_usage = extract_cache_usage(captured_usage.get("usage"))
+            if cache_usage is not None:
+                cached, total = cache_usage
+                with cache_stats_path.open("a") as f:
+                    f.write(
+                        f"{ts} phase={phase} worker={worker_label} model={model} "
+                        f"cached={cached} total={total}\n"
+                    )
             return reply
 
         return logging_call_model

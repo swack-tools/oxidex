@@ -22,7 +22,9 @@ from model_fix_loop import (
     cargo_build,
     cargo_check,
     cargo_test_workspace,
+    apply_prompt_cache_markers,
     call_model,
+    extract_cache_usage,
     compact_messages,
     detect_duplicate_tag_insertion,
     estimate_tokens,
@@ -81,7 +83,8 @@ class NormalizeModelConfigTests(unittest.TestCase):
         config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
         self.assertEqual(config["max_tokens"], 4096)
         self.assertEqual(config["reasoning_effort"], "max")
-        self.assertEqual(config["stream"], False)
+        self.assertEqual(config["stream"], True)  # streaming on by default
+        self.assertEqual(config["prompt_cache"], "auto")
         self.assertEqual(config["thinking"], True)
         self.assertEqual(config["temperature"], 0)
 
@@ -280,6 +283,128 @@ class CallModelTests(unittest.TestCase):
         self.assertEqual(body["messages"], [{"role": "user", "content": "fix it"}])
         self.assertEqual(body["max_tokens"], 4096)
         self.assertEqual(body["reasoning_effort"], "max")
+
+
+class ExtractCacheUsageTests(unittest.TestCase):
+    def test_openai_shape(self):
+        usage = {"prompt_tokens": 5000, "prompt_tokens_details": {"cached_tokens": 4000}}
+        self.assertEqual(extract_cache_usage(usage), (4000, 5000))
+
+    def test_anthropic_shape(self):
+        usage = {"input_tokens": 5000, "cache_read_input_tokens": 4000}
+        self.assertEqual(extract_cache_usage(usage), (4000, 5000))
+
+    def test_openai_zero_cache_hits_is_reported_not_dropped(self):
+        usage = {"prompt_tokens": 5000, "prompt_tokens_details": {"cached_tokens": 0}}
+        self.assertEqual(extract_cache_usage(usage), (0, 5000))
+
+    def test_none_when_no_cache_info(self):
+        self.assertIsNone(extract_cache_usage(None))
+        self.assertIsNone(extract_cache_usage({}))
+        self.assertIsNone(extract_cache_usage({"prompt_tokens": 5000}))  # no details/cache field
+
+
+class ApplyPromptCacheMarkersTests(unittest.TestCase):
+    def test_explicit_wraps_first_message_in_cache_control_block(self):
+        messages = [{"role": "user", "content": "big static prompt"},
+                    {"role": "assistant", "content": "reply"}]
+        out = apply_prompt_cache_markers(messages, "explicit")
+        self.assertEqual(out[0]["content"], [
+            {"type": "text", "text": "big static prompt", "cache_control": {"type": "ephemeral"}}
+        ])
+        self.assertEqual(out[1], {"role": "assistant", "content": "reply"})  # rest untouched
+
+    def test_explicit_does_not_mutate_input(self):
+        messages = [{"role": "user", "content": "X"}]
+        apply_prompt_cache_markers(messages, "explicit")
+        self.assertEqual(messages, [{"role": "user", "content": "X"}])  # original unchanged
+
+    def test_auto_and_off_are_identity(self):
+        messages = [{"role": "user", "content": "X"}]
+        self.assertEqual(apply_prompt_cache_markers(messages, "auto"), messages)
+        self.assertEqual(apply_prompt_cache_markers(messages, "off"), messages)
+
+    def test_explicit_leaves_non_string_content_alone(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "X"}]}]
+        self.assertEqual(apply_prompt_cache_markers(messages, "explicit"), messages)
+
+    def test_explicit_handles_empty_messages(self):
+        self.assertEqual(apply_prompt_cache_markers([], "explicit"), [])
+
+
+class CallModelCachingTests(unittest.TestCase):
+    def _mock_json_response(self, mock_urlopen, payload):
+        mock_cm = MagicMock()
+        mock_cm.read.return_value = json.dumps(payload).encode()
+        mock_urlopen.return_value.__enter__.return_value = mock_cm
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_usage_fn_receives_usage_object(self, mock_urlopen):
+        usage = {"prompt_tokens": 100, "prompt_tokens_details": {"cached_tokens": 80}}
+        self._mock_json_response(mock_urlopen, {
+            "choices": [{"message": {"content": "diff"}}], "usage": usage,
+        })
+        captured = []
+        result = call_model(
+            [{"role": "user", "content": "fix it"}], base_url="https://api.test/v1", api_key="k",
+            model="m", max_tokens=10, reasoning_effort="max",
+            usage_fn=captured.append,
+        )
+        self.assertEqual(result, "diff")
+        self.assertEqual(captured, [usage])
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_usage_fn_receives_none_when_provider_omits_usage(self, mock_urlopen):
+        self._mock_json_response(mock_urlopen, {"choices": [{"message": {"content": "diff"}}]})
+        captured = []
+        call_model(
+            [{"role": "user", "content": "x"}], base_url="https://api.test/v1", api_key="k",
+            model="m", max_tokens=10, reasoning_effort="max", usage_fn=captured.append,
+        )
+        self.assertEqual(captured, [None])
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_explicit_prompt_cache_sends_cache_control_block(self, mock_urlopen):
+        self._mock_json_response(mock_urlopen, {"choices": [{"message": {"content": "d"}}]})
+        call_model(
+            [{"role": "user", "content": "static prefix"}], base_url="https://api.test/v1", api_key="k",
+            model="m", max_tokens=10, reasoning_effort="max", prompt_cache="explicit",
+        )
+        body = json.loads(mock_urlopen.call_args[0][0].data)
+        self.assertEqual(body["messages"][0]["content"][0]["cache_control"], {"type": "ephemeral"})
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_auto_prompt_cache_sends_plain_string_content(self, mock_urlopen):
+        self._mock_json_response(mock_urlopen, {"choices": [{"message": {"content": "d"}}]})
+        call_model(
+            [{"role": "user", "content": "static prefix"}], base_url="https://api.test/v1", api_key="k",
+            model="m", max_tokens=10, reasoning_effort="max", prompt_cache="auto",
+        )
+        body = json.loads(mock_urlopen.call_args[0][0].data)
+        self.assertEqual(body["messages"][0]["content"], "static prefix")
+        self.assertNotIn("stream_options", body)  # non-streaming
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_streaming_adds_stream_options_and_captures_usage(self, mock_urlopen):
+        usage = {"prompt_tokens": 200, "prompt_tokens_details": {"cached_tokens": 150}}
+        lines = [
+            b'data: {"choices": [{"delta": {"content": "hello "}}]}\n',
+            b'data: {"choices": [{"delta": {"content": "world"}}]}\n',
+            (b'data: {"choices": [], "usage": ' + json.dumps(usage).encode() + b'}\n'),
+            b'data: [DONE]\n',
+        ]
+        mock_cm = MagicMock()
+        mock_cm.__iter__.return_value = iter(lines)
+        mock_urlopen.return_value.__enter__.return_value = mock_cm
+        captured = []
+        result = call_model(
+            [{"role": "user", "content": "x"}], base_url="https://api.test/v1", api_key="k", model="m",
+            max_tokens=10, reasoning_effort="max", stream=True, usage_fn=captured.append,
+        )
+        self.assertEqual(result, "hello world")
+        self.assertEqual(captured, [usage])
+        body = json.loads(mock_urlopen.call_args[0][0].data)
+        self.assertEqual(body["stream_options"], {"include_usage": True})
 
 
 class CallModelRetryTests(unittest.TestCase):
