@@ -412,7 +412,7 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
                 "qt  " => "Apple QuickTime (.MOV/QT)",
                 "mp4 " => "MP4 Base Media v1 [IS0 14496-12:2003]",
                 // HEIF/HEIC brands
-                "mif1" => "High Efficiency Image Format still image (.HEIC)",
+                "mif1" => "High Efficiency Image Format still image (.HEIF)",
                 "msf1" => "High Efficiency Image Format sequence (.HEICS)",
                 "heic" => "High Efficiency Image Coding (.HEIC)",
                 "heix" => "High Efficiency Image Coding (.HEIC)",
@@ -2740,15 +2740,24 @@ fn extract_heif_hevc_config(children: &[Atom], metadata: &mut MetadataMap) {
             // general_profile_compatibility_flags (4 bytes)
             let compat_flags =
                 u32::from_be_bytes([hvcc_data[2], hvcc_data[3], hvcc_data[4], hvcc_data[5]]);
-            let mut compat_profiles = Vec::new();
-            if compat_flags & (1 << 31) != 0 {
-                compat_profiles.push("Main");
-            }
-            if compat_flags & (1 << 30) != 0 {
-                compat_profiles.push("Main 10");
-            }
-            if compat_flags & (1 << 29) != 0 {
-                compat_profiles.push("Main Still Picture");
+            let mut compat_profiles = Vec::with_capacity(12);
+            for (bit, profile) in [
+                (29, "Main 10"),
+                (30, "Main"),
+                (31, "No Profile"),
+                (28, "Main Still Picture"),
+                (27, "Format Range Extensions"),
+                (26, "High Throughput"),
+                (25, "Multiview Main"),
+                (24, "Scalable Main"),
+                (23, "3D Main"),
+                (22, "Screen Content Coding Extensions"),
+                (21, "Scalable Format Range Extensions"),
+                (20, "High Throughput Screen Content Coding Extensions"),
+            ] {
+                if compat_flags & (1u32 << bit) != 0 {
+                    compat_profiles.push(profile);
+                }
             }
             if !compat_profiles.is_empty() {
                 metadata.insert(

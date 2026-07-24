@@ -1,5 +1,6 @@
 import io
 import json
+import re
 import tempfile
 import time
 import unittest
@@ -20,11 +21,14 @@ from watch_parallel_fix import (
     find_active_log_dir,
     format_relative,
     found_stats,
+    git_landed_log,
+    landed_stats,
     load_tag_state,
     load_worker_model_config,
     main,
     parse_current_round_start,
     parse_current_tag_progress,
+    parse_landed_log,
     parse_manifest_log,
     parse_tags_found_log,
     parse_timestamp,
@@ -292,6 +296,77 @@ class FoundStatsTests(unittest.TestCase):
         self.assertEqual(stats["total"], 3)
         self.assertEqual(stats["last_hour"], 1)
         self.assertEqual(stats["last_24h"], 2)
+
+
+class GitLandedLogTests(unittest.TestCase):
+    def test_unusable_repo_root_is_empty_string_not_a_crash(self):
+        self.assertEqual(git_landed_log("/nonexistent/repo/root"), "")
+
+
+class ParseLandedLogTests(unittest.TestCase):
+    def test_empty_text(self):
+        self.assertEqual(parse_landed_log(""), [])
+
+    def test_parses_feat_and_fix_subjects_with_epochs(self):
+        text = (
+            "1753200000\tfeat: extract Canon CR3 Artist from the CMT1 box\n"
+            "1753200100\tfix(jpeg): APP12 MODE3-6 value decoding\n"
+            "1753200200\tfeat!: breaking tag rename\n"
+        )
+        self.assertEqual(parse_landed_log(text), [
+            (1753200000, "feat: extract Canon CR3 Artist from the CMT1 box"),
+            (1753200100, "fix(jpeg): APP12 MODE3-6 value decoding"),
+            (1753200200, "feat!: breaking tag rename"),
+        ])
+
+    def test_skips_docs_merge_and_style_subjects(self):
+        text = (
+            "1753200000\tdocs: update coverage matrix\n"
+            "1753200100\tmerge: sweep/parallel-fix-tags-2026-07-23\n"
+            "1753200200\tstyle: cargo fmt\n"
+        )
+        self.assertEqual(parse_landed_log(text), [])
+
+    def test_skips_malformed_lines(self):
+        text = (
+            "not-an-epoch\tfeat: legit-looking subject\n"
+            "1753200000 feat: no tab separator\n"
+            "\n"
+            "1753200100\tfeat: kept\n"
+        )
+        self.assertEqual(parse_landed_log(text), [(1753200100, "feat: kept")])
+
+
+class LandedStatsTests(unittest.TestCase):
+    def test_empty(self):
+        stats = landed_stats([], now=1000.0)
+        self.assertEqual(stats["last_hour"], 0)
+        self.assertEqual(stats["last_24h"], 0)
+        self.assertIsNone(stats["last_at"])
+        self.assertIsNone(stats["last_subject"])
+
+    def test_window_counts_straddle_the_hour_and_24h_boundaries(self):
+        now = 1_000_000.0
+        entries = [
+            (int(now) - 60, "feat: one minute ago"),        # within the hour
+            (int(now) - 3600, "fix: exactly an hour ago"),  # inclusive boundary
+            (int(now) - 5400, "feat: 1.5 hours ago"),       # 24h window only
+            (int(now) - 86400, "fix: exactly a day ago"),   # inclusive boundary
+            (int(now) - 90000, "feat: older than a day"),   # outside both
+        ]
+        stats = landed_stats(entries, now)
+        self.assertEqual(stats["last_hour"], 2)
+        self.assertEqual(stats["last_24h"], 4)
+
+    def test_last_is_the_max_epoch_not_list_order(self):
+        now = 1_000_000.0
+        entries = [
+            (int(now) - 30, "feat: the actual latest"),
+            (int(now) - 60, "fix: listed after but older"),
+        ]
+        stats = landed_stats(entries, now)
+        self.assertEqual(stats["last_at"], int(now) - 30)
+        self.assertEqual(stats["last_subject"], "feat: the actual latest")
 
 
 class ParseWrapperLogTests(unittest.TestCase):
@@ -675,6 +750,52 @@ class RenderDashboardTests(unittest.TestCase):
             self.assertIn("gpt-5.6-sol", output)
             self.assertIn("Requests:", output)
             self.assertNotIn("worker-JPEG", output)  # format-mode row label has no "worker-" prefix
+
+
+class RenderDashboardLandedTests(unittest.TestCase):
+    @staticmethod
+    def _plain(output):
+        return re.sub(r"\x1b\[[0-9;]*m", "", output)
+
+    def _render(self, tmp, landed):
+        return render_dashboard(
+            tmp, [], tmp / "tags-found.log", tmp / "state.json", tmp / "wrapper.log",
+            format_progress={}, max_tag_fails=10, now=1_000_000.0, landed=landed,
+        )
+
+    def test_landed_none_omits_the_line(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = self._render(Path(tmpdir), None)
+            self.assertNotIn("Landed (git):", output)
+
+    def test_populated_landed_renders_counts_and_truncated_subject(self):
+        long_subject = "feat: " + "x" * 100
+        landed = {
+            "last_hour": 3, "last_24h": 7,
+            "last_at": 1_000_000.0 - 120, "last_subject": long_subject,
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plain = self._plain(self._render(Path(tmpdir), landed))
+            self.assertIn("Landed (git): 3 last hour", plain)
+            self.assertIn("7 last 24h", plain)
+            self.assertIn("2m ago", plain)
+            self.assertIn(long_subject[:60], plain)
+            self.assertNotIn(long_subject[:61], plain)
+            # Renders directly under the Tags found: line, same section.
+            plain_lines = plain.splitlines()
+            tags_idx = next(
+                i for i, line in enumerate(plain_lines) if line.startswith("  Tags found:")
+            )
+            self.assertTrue(plain_lines[tags_idx + 1].startswith("  Landed (git):"))
+
+    def test_never_when_last_at_is_none(self):
+        landed = {"last_hour": 0, "last_24h": 0, "last_at": None, "last_subject": None}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plain = self._plain(self._render(Path(tmpdir), landed))
+            landed_line = next(
+                line for line in plain.splitlines() if "Landed (git):" in line
+            )
+            self.assertIn("never", landed_line)
 
 
 class LoadTagStateTests(unittest.TestCase):

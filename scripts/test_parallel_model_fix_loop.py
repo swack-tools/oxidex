@@ -17,6 +17,7 @@ from parallel_model_fix_loop import (
     create_worktree,
     main,
     merge_branch,
+    novel_commits,
     worktree_path,
 )
 
@@ -257,6 +258,38 @@ class CommitsOnBranchTests(unittest.TestCase):
         mock_run.return_value = MagicMock(returncode=0, stdout="")
         commits = commits_on_branch(Path("/fake/repo"), "main", "model-fix-parallel-nef")
         self.assertEqual(commits, [])
+
+
+class NovelCommitsTests(unittest.TestCase):
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_invokes_git_cherry_against_base(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        novel_commits(Path("/fake/repo"), "main", "model-fix-parallel-nef")
+        args, kwargs = mock_run.call_args
+        self.assertEqual(args[0], ["git", "cherry", "main", "model-fix-parallel-nef"])
+        self.assertEqual(kwargs["cwd"], Path("/fake/repo"))
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_keeps_only_plus_marked_shas(self, mock_run):
+        # "+" == no patch-equivalent upstream (novel); "-" == already in base
+        # by patch-id (a dirty dup). Only the "+" shas should survive.
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="+ aaa111\n- bbb222\n+ ccc333\n"
+        )
+        novel = novel_commits(Path("/fake/repo"), "main", "model-fix-parallel-nef")
+        self.assertEqual(novel, ["aaa111", "ccc333"])
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_empty_when_every_commit_is_a_patch_dup(self, mock_run):
+        # A worker that only re-derived already-swept fixes: git cherry marks
+        # every commit "-", so nothing is novel and the merge gate drops it.
+        mock_run.return_value = MagicMock(returncode=0, stdout="- bbb222\n- ddd444\n")
+        self.assertEqual(novel_commits(Path("/fake/repo"), "main", "b"), [])
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_empty_when_no_commits_at_all(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        self.assertEqual(novel_commits(Path("/fake/repo"), "main", "b"), [])
 
 
 class MergeBranchTests(unittest.TestCase):

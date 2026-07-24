@@ -279,6 +279,24 @@ fn extract_header_metadata(header: &ElfHeader, metadata: &mut MetadataMap) {
         TagValue::String(header.class_str().to_string()),
     );
 
+    // CPU architecture bitness (using ExifTool's wording)
+    let cpu_architecture = if header.is_64bit { "64 bit" } else { "32 bit" };
+    metadata.insert(
+        "EXE:CPUArchitecture".to_string(),
+        TagValue::String(cpu_architecture.to_string()),
+    );
+
+    // ExifTool exposes e_ident[EI_DATA] separately using non-hyphenated wording.
+    let cpu_byte_order = if header.is_little_endian {
+        "Little endian"
+    } else {
+        "Big endian"
+    };
+    metadata.insert(
+        "EXE:CPUByteOrder".to_string(),
+        TagValue::String(cpu_byte_order.to_string()),
+    );
+
     // Endianness
     let endian_str = header.endian_str().to_string();
     metadata.insert(
