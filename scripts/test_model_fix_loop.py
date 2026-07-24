@@ -12,14 +12,38 @@ from pathlib import Path
 from model_fix_loop import (
     ARCHITECTURE_PRIMER,
     KNOWN_PITFALLS,
+    DEFAULT_TABLE_JOB_MAX_PROMPT_TOKENS,
+    DEFAULT_TABLE_JOB_MAX_REPAIR_ROUNDS,
+    FOUNDATION_JOB_CLAIM_PREFIX,
+    TABLE_JOB_CLAIM_PREFIX,
     _dedupe_machine_entries,
     _entry_is_human,
     _is_rejection_entry,
     _normalize_model_config,
     _select_tier,
     _state_locked,
+    attempt_foundation_job,
+    attempt_table_port,
+    build_foundation_job_prompt,
+    build_table_port_prompt,
+    build_table_port_registry_skeleton,
+    claim_conflicts,
+    claim_foundation_job,
+    claim_table_job,
+    evaluate_table_port_gate,
+    extract_perl_table_source,
+    foundation_job_claim_key,
+    gather_live_claims,
+    load_foundation_jobs,
     load_tag_state,
+    mark_held_by_foundation,
+    normalize_table_job_config,
+    release_foundation_job_claim,
+    release_table_job_claim,
+    resolve_canonical_table,
+    resolve_foundation_job_tag_keys,
     save_tag_state,
+    table_job_claim_key,
     attempt_build,
     build_exact_sample_block,
     build_failure_critique_prompt,
@@ -253,6 +277,16 @@ class NormalizeModelConfigTests(unittest.TestCase):
         })
         self.assertEqual(config["claim_stale_seconds"], 3600)
         self.assertEqual(config["heartbeat_seconds"], 30)
+
+    def test_build_semaphore_has_a_default(self):
+        config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
+        self.assertEqual(config["build_semaphore"], 5)
+
+    def test_build_semaphore_is_overridable(self):
+        config = _normalize_model_config({
+            "base_url": "u", "api_key": "k", "models": ["m"], "build_semaphore": 10,
+        })
+        self.assertEqual(config["build_semaphore"], 10)
 
     def test_section6_k5_knobs_have_defaults(self):
         config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
@@ -1366,6 +1400,38 @@ class CargoTestTargetedTests(unittest.TestCase):
         ok, output = cargo_test_targeted(Path("/fake"), "app12")
         self.assertTrue(ok)
         self.assertEqual(mock_run.call_args[0][0], ["cargo", "test", "--lib", "app12"])
+
+
+class CargoBuildSemaphoreWiringTests(unittest.TestCase):
+    """Spec section 5: every cargo build/check/test call site here is
+    wrapped in the shared build_semaphore, opt-in via semaphore_path
+    (None -- the default -- keeps every existing caller ungated, exactly
+    as before this feature existed)."""
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_default_semaphore_path_none_is_ungated(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        # Must not touch any lock file -- no semaphore_path given.
+        cargo_build(Path("/fake/repo"))
+        cargo_check(Path("/fake/repo"))
+        cargo_test_workspace(Path("/fake/repo"))
+        cargo_test_targeted(Path("/fake/repo"), "jpeg")
+        self.assertEqual(mock_run.call_count, 4)
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_semaphore_path_given_holds_a_slot_during_the_call(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sem_path = Path(tmpdir) / "sem.json"
+            observed = {}
+
+            def fake_run(*args, **kwargs):
+                observed["holders"] = json.loads(sem_path.read_text())["holders"]
+                return MagicMock(returncode=0, stdout="", stderr="")
+
+            mock_run.side_effect = fake_run
+            cargo_test_targeted(Path("/fake/repo"), "jpeg", semaphore_path=sem_path, semaphore_max_holders=1)
+            self.assertEqual(len(observed["holders"]), 1)
+            self.assertEqual(json.loads(sem_path.read_text())["holders"], {})
 
 
 class CargoEnvSccacheTests(unittest.TestCase):
@@ -3390,6 +3456,12 @@ class ModelsForPhaseTests(unittest.TestCase):
         pool = [self.TERRA]
         self.assertEqual(models_for_phase(pool, "patch"), [self.TERRA])
 
+    def test_table_phase_spec_s3_strongest_model(self):
+        strongest = {"name": "strongest", "base_url": "u", "api_key": "k", "phase": "table",
+                    "reasoning_effort": "max"}
+        pool = [self.TERRA, self.SOL, strongest]
+        self.assertEqual(models_for_phase(pool, "table"), [strongest])
+
 
 class ModelSpecPhaseTests(unittest.TestCase):
     def test_phase_and_reasoning_effort_are_accepted(self):
@@ -3399,6 +3471,13 @@ class ModelSpecPhaseTests(unittest.TestCase):
         })
         self.assertEqual(config["models"][0]["phase"], "explore")
         self.assertEqual(config["models"][0]["reasoning_effort"], "medium")
+
+    def test_table_phase_is_accepted(self):
+        config = _normalize_model_config({
+            "base_url": "u", "api_key": "k",
+            "models": [{"name": "m", "phase": "table"}],
+        })
+        self.assertEqual(config["models"][0]["phase"], "table")
 
     def test_missing_phase_and_effort_default_to_none(self):
         config = _normalize_model_config({
@@ -5890,6 +5969,770 @@ class RateGovernorTests(unittest.TestCase):
                          jitter_fn=lambda: 0.5)  # must not raise
         governor_report(self.path, limited=False, now_fn=lambda: 1000.0)
         json.loads(self.path.read_text())  # now valid again
+
+
+# =============================================================================
+# Phase 4/5: T3 TABLE-PORT / T4 FOUNDATION-UNLOCK job tiers, cross-tier claim
+# exclusion, build semaphore -- spec S3, S4 item 5, section 5.
+# =============================================================================
+
+FOUNDATION_JOBS_TOML_PATH = Path(__file__).resolve().parent / "foundation_jobs.toml"
+
+
+class LoadFoundationJobsTests(unittest.TestCase):
+    def test_the_checked_in_seed_file_parses_to_exactly_seven_jobs(self):
+        jobs = load_foundation_jobs(FOUNDATION_JOBS_TOML_PATH)
+        self.assertEqual(len(jobs), 7)
+
+    def test_every_job_has_the_required_fields(self):
+        jobs = load_foundation_jobs(FOUNDATION_JOBS_TOML_PATH)
+        for job in jobs:
+            for field in ("name", "description", "target_formats", "target_module", "estimated_gaps", "status"):
+                self.assertIn(field, job, f"job {job.get('name')!r} missing {field!r}")
+            self.assertIsInstance(job["target_formats"], list)
+            self.assertTrue(job["target_formats"])
+            self.assertIsInstance(job["estimated_gaps"], int)
+
+    def test_status_defaults_to_pending(self):
+        jobs = load_foundation_jobs(FOUNDATION_JOBS_TOML_PATH)
+        for job in jobs:
+            self.assertEqual(job["status"], "pending")
+
+    def test_names_are_unique(self):
+        jobs = load_foundation_jobs(FOUNDATION_JOBS_TOML_PATH)
+        names = [j["name"] for j in jobs]
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_missing_required_field_raises(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "foundation_jobs.toml"
+            path.write_text('[[jobs]]\nname = "x"\ndescription = "d"\n')
+            with self.assertRaises(ValueError):
+                load_foundation_jobs(path)
+
+
+PERL_TABLE_SOURCE_FIXTURE = """package Image::ExifTool::Canon;
+
+%Image::ExifTool::Canon::CameraSettings = (
+    %binaryDataAttrs,
+    FORMAT => 'int16s',
+    FIRST_ENTRY => 1,
+    GROUPS => { 0 => 'MakerNotes', 2 => 'Camera' },
+    1 => {
+        Name => 'MacroMode',
+        PrintConv => {
+            1 => 'Macro',
+            2 => 'Normal',
+        },
+    },
+    2 => { Name => 'SelfTimer' },
+);
+
+%Image::ExifTool::Canon::ShotInfo = (
+    GROUPS => { 0 => 'MakerNotes', 2 => 'Camera' },
+    1 => { Name => 'AutoISO' },
+);
+"""
+
+
+class ExtractPerlTableSourceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.lib_dir = Path(self.tmpdir.name)
+        (self.lib_dir / "Canon.pm").write_text(PERL_TABLE_SOURCE_FIXTURE)
+
+    def test_returns_none_when_lib_dir_is_none(self):
+        self.assertIsNone(extract_perl_table_source("Canon::CameraSettings", None))
+
+    def test_returns_none_when_table_not_found(self):
+        self.assertIsNone(extract_perl_table_source("Canon::NoSuchTable", self.lib_dir))
+
+    def test_extracts_the_complete_table_not_just_one_tag(self):
+        source = extract_perl_table_source("Canon::CameraSettings", self.lib_dir)
+        self.assertIsNotNone(source)
+        self.assertIn("MacroMode", source)
+        self.assertIn("SelfTimer", source)
+        # Must not bleed into the NEXT table's own members.
+        self.assertNotIn("AutoISO", source)
+        # Nested hash (PrintConv) must be included, not truncated at the
+        # first inner "}".
+        self.assertIn("'Normal'", source)
+
+    def test_stops_at_the_tables_own_closing_paren(self):
+        source = extract_perl_table_source("Canon::ShotInfo", self.lib_dir)
+        self.assertIn("AutoISO", source)
+        self.assertNotIn("MacroMode", source)
+
+    def test_truncates_when_over_max_chars(self):
+        source = extract_perl_table_source("Canon::CameraSettings", self.lib_dir, max_chars=20)
+        self.assertIn("truncated", source)
+
+
+RUST_REGISTRY_FIXTURE = """//! Canon tag registry with array schemas
+
+static CAMERA_SETTINGS_SCHEMA: ArraySchema = ArraySchema {
+    name: "CameraSettings",
+    indices: &[
+        ArrayIndexDef::with_i16_decoder(1, "MacroMode", &MACRO_MODE),
+        ArrayIndexDef::raw(2, "SelfTimer"),
+    ],
+};
+
+static SHOT_INFO_SCHEMA: ArraySchema = ArraySchema {
+    name: "ShotInfo",
+    indices: &[
+        ArrayIndexDef::raw(1, "AutoISO"),
+    ],
+};
+"""
+
+
+class BuildTablePortRegistrySkeletonTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.repo_root = Path(self.tmpdir.name)
+        registries_dir = self.repo_root / "src" / "parsers" / "tiff" / "makernotes" / "registries"
+        registries_dir.mkdir(parents=True)
+        (registries_dir / "canon.rs").write_text(RUST_REGISTRY_FIXTURE)
+
+    def test_matches_by_table_name_field(self):
+        skeleton = build_table_port_registry_skeleton("Canon", "Canon::CameraSettings", self.repo_root)
+        self.assertIsNotNone(skeleton)
+        self.assertIn("CAMERA_SETTINGS_SCHEMA", skeleton)
+        self.assertIn("MacroMode", skeleton)
+        self.assertNotIn("AutoISO", skeleton)
+
+    def test_labels_itself_scaffolding_only(self):
+        skeleton = build_table_port_registry_skeleton("Canon", "Canon::CameraSettings", self.repo_root)
+        self.assertIn("SCAFFOLDING ONLY", skeleton)
+
+    def test_short_table_name_without_module_prefix_also_matches(self):
+        skeleton = build_table_port_registry_skeleton("Canon", "ShotInfo", self.repo_root)
+        self.assertIsNotNone(skeleton)
+        self.assertIn("AutoISO", skeleton)
+
+    def test_returns_none_when_module_file_missing(self):
+        self.assertIsNone(build_table_port_registry_skeleton("Nikon", "Nikon::ShotInfo", self.repo_root))
+
+    def test_returns_none_when_no_module_given(self):
+        self.assertIsNone(build_table_port_registry_skeleton(None, "Canon::CameraSettings", self.repo_root))
+
+    def test_returns_none_when_no_schema_matches(self):
+        self.assertIsNone(build_table_port_registry_skeleton("Canon", "Canon::NoSuchTable", self.repo_root))
+
+
+class EvaluateTablePortGateTests(unittest.TestCase):
+    """Spec S3's three-clause gate -- clause (a) exact-ratio threshold,
+    (b) zero regressions of previously-exact members, (c) zero
+    present-but-wrong members -- and their interaction."""
+
+    MEMBERS = ["Canon:A", "Canon:B", "Canon:C", "Canon:D", "Canon:E"]
+
+    def _report(self, missing=(), wrong=()):
+        return {
+            "missing_tags": [{"family": "Canon", "name": n.split(":")[1]} for n in missing],
+            "value_differences": [{"tag_key": n} for n in wrong],
+        }
+
+    def test_all_exact_passes(self):
+        pre = self._report(missing=self.MEMBERS)
+        post = self._report()
+        passed, reason, must_remove = evaluate_table_port_gate(pre, post, self.MEMBERS)
+        self.assertTrue(passed)
+        self.assertEqual(must_remove, [])
+        self.assertIn("5/5", reason)
+
+    def test_exactly_at_threshold_passes(self):
+        pre = self._report(missing=self.MEMBERS)
+        post = self._report(missing=["Canon:E"])  # 4/5 = 0.8
+        passed, reason, must_remove = evaluate_table_port_gate(pre, post, self.MEMBERS, threshold=0.8)
+        self.assertTrue(passed)
+
+    def test_one_below_threshold_fails_clause_a(self):
+        pre = self._report(missing=self.MEMBERS)
+        post = self._report(missing=["Canon:D", "Canon:E"])  # 3/5 = 0.6
+        passed, reason, must_remove = evaluate_table_port_gate(pre, post, self.MEMBERS, threshold=0.8)
+        self.assertFalse(passed)
+        self.assertIn("clause a", reason)
+        self.assertEqual(must_remove, [])
+
+    def test_regression_of_a_previously_exact_member_fails_clause_b(self):
+        pre = self._report()  # everything exact pre-attempt
+        post = self._report(missing=["Canon:A"])
+        passed, reason, must_remove = evaluate_table_port_gate(pre, post, self.MEMBERS)
+        self.assertFalse(passed)
+        self.assertIn("clause b", reason)
+        self.assertIn("Canon:A", reason)
+        self.assertEqual(must_remove, [])
+
+    def test_member_newly_wrong_that_was_previously_missing_is_not_a_regression(self):
+        """Spec's own called-out edge case: a member that goes
+        missing -> wrong is caught by clause (c), NOT flagged as a
+        clause-(b) regression (it was never matching to begin with)."""
+        pre = self._report(missing=self.MEMBERS)
+        post = self._report(wrong=["Canon:A"])
+        passed, reason, must_remove = evaluate_table_port_gate(pre, post, self.MEMBERS)
+        self.assertFalse(passed)
+        self.assertNotIn("clause b", reason)
+        self.assertIn("clause c", reason)
+        self.assertEqual(must_remove, ["Canon:A"])
+
+    def test_present_but_wrong_fails_clause_c_even_with_high_ratio(self):
+        pre = self._report(missing=self.MEMBERS)
+        post = self._report(wrong=["Canon:E"])  # 4/5 exact, but one is wrong not missing
+        passed, reason, must_remove = evaluate_table_port_gate(pre, post, self.MEMBERS, threshold=0.5)
+        self.assertFalse(passed)
+        self.assertIn("clause c", reason)
+        self.assertEqual(must_remove, ["Canon:E"])
+
+    def test_member_that_regressed_and_is_present_but_wrong_trips_both_clauses(self):
+        pre = self._report()  # all exact pre
+        post = self._report(wrong=["Canon:A"])
+        passed, reason, must_remove = evaluate_table_port_gate(pre, post, self.MEMBERS)
+        self.assertFalse(passed)
+        self.assertIn("clause b", reason)
+        self.assertIn("clause c", reason)
+        self.assertEqual(must_remove, ["Canon:A"])
+
+    def test_no_table_members_given_fails(self):
+        passed, reason, must_remove = evaluate_table_port_gate({}, {}, [])
+        self.assertFalse(passed)
+        self.assertIn("no table members", reason)
+
+
+class ResolveCanonicalTableTests(unittest.TestCase):
+    def test_none_attribution_resolves_to_none(self):
+        self.assertEqual(resolve_canonical_table("JPEG:MakerNotes:Foo", None), (None, None))
+
+    def test_missing_key_resolves_to_none(self):
+        attribution = {"tags": {}}
+        self.assertEqual(resolve_canonical_table("JPEG:MakerNotes:Foo", attribution), (None, None))
+
+    def test_unknown_module_resolves_to_none(self):
+        attribution = {"tags": {"JPEG:MakerNotes:Foo": {"module": "unknown", "table": ""}}}
+        self.assertEqual(resolve_canonical_table("JPEG:MakerNotes:Foo", attribution), (None, None))
+
+    def test_resolves_module_and_table(self):
+        attribution = {"tags": {"JPEG:MakerNotes:Foo": {"module": "Canon", "table": "CameraSettings"}}}
+        module, table = resolve_canonical_table("JPEG:MakerNotes:Foo", attribution)
+        self.assertEqual(module, "Canon")
+        self.assertEqual(table, "Canon::CameraSettings")
+
+    def test_resolves_module_with_blank_table(self):
+        attribution = {"tags": {"JPEG:MakerNotes:Foo": {"module": "Canon", "table": ""}}}
+        module, table = resolve_canonical_table("JPEG:MakerNotes:Foo", attribution)
+        self.assertEqual(module, "Canon")
+        self.assertIsNone(table)
+
+
+class ClaimConflictsTests(unittest.TestCase):
+    """Spec S4 item 5's cross-tier exclusion truth table."""
+
+    def _claim(self, tier, tag_key=None, table=None, module=None):
+        return {"tier": tier, "tag_key": tag_key, "canonical_table": table, "canonical_module": module}
+
+    def test_t1_vs_t1_same_tag_conflicts(self):
+        existing = [self._claim("T1", tag_key="JPEG:EXIF:ISO")]
+        new = self._claim("T1", tag_key="JPEG:EXIF:ISO")
+        self.assertTrue(claim_conflicts(existing, new))
+
+    def test_t1_vs_t1_different_tag_same_table_does_not_conflict(self):
+        existing = [self._claim("T1", tag_key="JPEG:EXIF:ISO", table="Canon::X")]
+        new = self._claim("T1", tag_key="JPEG:EXIF:Other", table="Canon::X")
+        self.assertFalse(claim_conflicts(existing, new))
+
+    def test_t1_vs_t3_same_table_conflicts(self):
+        existing = [self._claim("T3", table="Canon::X", module="Canon")]
+        new = self._claim("T1", tag_key="JPEG:EXIF:ISO", table="Canon::X")
+        self.assertTrue(claim_conflicts(existing, new))
+
+    def test_t3_vs_t1_same_table_conflicts(self):
+        existing = [self._claim("T1", tag_key="JPEG:EXIF:ISO", table="Canon::X")]
+        new = self._claim("T3", table="Canon::X", module="Canon")
+        self.assertTrue(claim_conflicts(existing, new))
+
+    def test_t3_vs_t3_same_table_conflicts(self):
+        existing = [self._claim("T3", table="Canon::X", module="Canon")]
+        new = self._claim("T3", table="Canon::X", module="Canon")
+        self.assertTrue(claim_conflicts(existing, new))
+
+    def test_t1_vs_t3_different_tables_does_not_conflict(self):
+        existing = [self._claim("T3", table="Canon::Y", module="Canon")]
+        new = self._claim("T1", tag_key="JPEG:EXIF:ISO", table="Canon::X")
+        self.assertFalse(claim_conflicts(existing, new))
+
+    def test_t4_vs_t1_same_module_conflicts(self):
+        existing = [self._claim("T4", module="FLIR")]
+        new = self._claim("T1", tag_key="JPEG:FLIR:Foo", module="FLIR")
+        self.assertTrue(claim_conflicts(existing, new))
+
+    def test_t4_vs_t3_same_module_conflicts(self):
+        existing = [self._claim("T4", module="FLIR")]
+        new = self._claim("T3", table="FLIR::Records", module="FLIR")
+        self.assertTrue(claim_conflicts(existing, new))
+
+    def test_t4_vs_t4_same_module_conflicts(self):
+        existing = [self._claim("T4", module="FLIR")]
+        new = self._claim("T4", module="FLIR")
+        self.assertTrue(claim_conflicts(existing, new))
+
+    def test_t4_vs_anything_different_module_does_not_conflict(self):
+        existing = [self._claim("T4", module="FLIR")]
+        new = self._claim("T1", tag_key="JPEG:Canon:Foo", module="Canon")
+        self.assertFalse(claim_conflicts(existing, new))
+
+    def test_no_existing_claims_never_conflicts(self):
+        self.assertFalse(claim_conflicts([], self._claim("T3", table="Canon::X", module="Canon")))
+
+    def test_default_tier_is_t1(self):
+        existing = [{"tag_key": "JPEG:EXIF:ISO", "canonical_table": None, "canonical_module": None}]
+        new = {"tag_key": "JPEG:EXIF:ISO", "canonical_table": None, "canonical_module": None}
+        self.assertTrue(claim_conflicts(existing, new))
+
+
+class GatherLiveClaimsTests(unittest.TestCase):
+    def test_stale_claim_is_excluded(self):
+        state = {
+            "JPEG:A:B": {"claimed_by": "w1", "claimed_at": 0, "tier": "T1"},
+        }
+        claims = gather_live_claims(state, time_fn=lambda: 10000, claim_stale_seconds=7200)
+        self.assertEqual(claims, [])
+
+    def test_live_claim_is_included_with_shape(self):
+        state = {
+            "JPEG:A:B": {
+                "claimed_by": "w1", "claimed_at": 100, "tier": "T3",
+                "canonical_table": "Canon::X", "canonical_module": "Canon",
+            },
+        }
+        claims = gather_live_claims(state, time_fn=lambda: 200, claim_stale_seconds=7200)
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0]["tier"], "T3")
+        self.assertIsNone(claims[0]["tag_key"])  # T3 claims aren't tag_key-shaped
+        self.assertEqual(claims[0]["canonical_table"], "Canon::X")
+
+    def test_unclaimed_entry_is_excluded(self):
+        state = {"JPEG:A:B": {"fails": 1, "blacklisted": False}}
+        self.assertEqual(gather_live_claims(state, time_fn=lambda: 200), [])
+
+    def test_exclude_key_omits_that_entry(self):
+        state = {"JPEG:A:B": {"claimed_by": "w1", "claimed_at": 100}}
+        claims = gather_live_claims(state, time_fn=lambda: 200, exclude_key="JPEG:A:B")
+        self.assertEqual(claims, [])
+
+    def test_default_tier_is_t1_and_tag_key_shaped(self):
+        state = {"JPEG:A:B": {"claimed_by": "w1", "claimed_at": 100}}
+        claims = gather_live_claims(state, time_fn=lambda: 200)
+        self.assertEqual(claims[0]["tier"], "T1")
+        self.assertEqual(claims[0]["tag_key"], "JPEG:A:B")
+
+
+class ClaimTableAndFoundationJobTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.state_path = Path(self.tmpdir.name) / "state.json"
+
+    def test_claims_table_job_when_uncontended(self):
+        ok = claim_table_job(self.state_path, "Canon::CameraSettings", "Canon", "w1")
+        self.assertTrue(ok)
+        state = load_tag_state(self.state_path)
+        key = table_job_claim_key("Canon::CameraSettings")
+        self.assertEqual(state[key]["claimed_by"], "w1")
+        self.assertEqual(state[key]["tier"], "T3")
+
+    def test_renewing_own_table_job_claim_succeeds(self):
+        claim_table_job(self.state_path, "Canon::CameraSettings", "Canon", "w1")
+        ok = claim_table_job(self.state_path, "Canon::CameraSettings", "Canon", "w1")
+        self.assertTrue(ok)
+
+    def test_refuses_table_job_when_t1_claim_live_on_same_table(self):
+        key = table_job_claim_key("dummy")
+        state = {
+            "JPEG:Canon:Foo": {
+                "claimed_by": "w2", "claimed_at": time.time(), "tier": "T1",
+                "canonical_table": "Canon::CameraSettings", "canonical_module": "Canon",
+            },
+        }
+        save_tag_state(self.state_path, state)
+        ok = claim_table_job(self.state_path, "Canon::CameraSettings", "Canon", "w1")
+        self.assertFalse(ok)
+
+    def test_release_table_job_claim_clears_claimed_by(self):
+        claim_table_job(self.state_path, "Canon::CameraSettings", "Canon", "w1")
+        release_table_job_claim(self.state_path, "Canon::CameraSettings")
+        state = load_tag_state(self.state_path)
+        key = table_job_claim_key("Canon::CameraSettings")
+        self.assertNotIn("claimed_by", state[key])
+
+    def test_claims_foundation_job_when_uncontended(self):
+        job = {"name": "flir-fff", "target_module": "FLIR"}
+        ok = claim_foundation_job(self.state_path, job, "w1")
+        self.assertTrue(ok)
+        state = load_tag_state(self.state_path)
+        key = foundation_job_claim_key("FLIR")
+        self.assertEqual(state[key]["tier"], "T4")
+
+    def test_refuses_foundation_job_when_t3_claim_live_on_same_module(self):
+        claim_table_job(self.state_path, "FLIR::Records", "FLIR", "w2")
+        job = {"name": "flir-fff", "target_module": "FLIR"}
+        ok = claim_foundation_job(self.state_path, job, "w1")
+        self.assertFalse(ok)
+
+    def test_release_foundation_job_claim_clears_claimed_by(self):
+        job = {"name": "flir-fff", "target_module": "FLIR"}
+        claim_foundation_job(self.state_path, job, "w1")
+        release_foundation_job_claim(self.state_path, job)
+        state = load_tag_state(self.state_path)
+        key = foundation_job_claim_key("FLIR")
+        self.assertNotIn("claimed_by", state[key])
+
+
+class RunTagLoopCrossTierExclusionTests(unittest.TestCase):
+    """Spec S4 item 5, wired into run_tag_loop's own claim() closure: a
+    T1 tag claim on a table with a live T3 claim must be excluded."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.state_path = str(Path(self.tmpdir.name) / "state.json")
+
+    def test_t1_candidate_excluded_when_its_table_has_a_live_t3_claim(self):
+        # Pre-seed a live T3 table-port claim on Canon::CameraSettings.
+        save_tag_state(self.state_path, {
+            table_job_claim_key("Canon::CameraSettings"): {
+                "tier": "T3", "claimed_by": "merger-1", "claimed_at": time.time(),
+                "canonical_table": "Canon::CameraSettings", "canonical_module": "Canon",
+            },
+        })
+        attribution = {
+            "tags": {
+                "JPEG:MakerNotes:Foo": {"module": "Canon", "table": "CameraSettings"},
+            },
+        }
+        gaps = [{
+            "format": "JPEG",
+            "missing_tags": [{"family": "MakerNotes", "name": "Foo", "value": "1", "source_file": None}],
+            "value_differences": [], "gap_count": 1, "parser_files": [],
+        }]
+
+        result = run_tag_loop(
+            {}, find_gaps_fn=lambda: gaps, fix_gap_fn=lambda *a: self.fail("must not attempt an excluded tag"),
+            state_path=self.state_path, max_rounds=1, worker_id="w1", attribution=attribution,
+        )
+        # Nothing else claimable this round -> "wait", not an attempt.
+        self.assertEqual(result["fixed"], [])
+        self.assertEqual(result["failed"], [])
+
+    def test_t1_candidate_not_excluded_without_attribution(self):
+        """Backward compatibility: attribution=None (the default) must
+        never newly exclude anything -- the whole feature is advisory
+        and additive."""
+        save_tag_state(self.state_path, {
+            table_job_claim_key("Canon::CameraSettings"): {
+                "tier": "T3", "claimed_by": "merger-1", "claimed_at": time.time(),
+                "canonical_table": "Canon::CameraSettings", "canonical_module": "Canon",
+            },
+        })
+        gaps = [{
+            "format": "JPEG",
+            "missing_tags": [{"family": "MakerNotes", "name": "Foo", "value": "1", "source_file": None}],
+            "value_differences": [], "gap_count": 1, "parser_files": [],
+        }]
+
+        result = run_tag_loop(
+            {}, find_gaps_fn=lambda: gaps,
+            fix_gap_fn=lambda tag_gap, cfg, prev: {"status": "fixed", "gaps_closed": 1},
+            state_path=self.state_path, max_rounds=1, worker_id="w1",
+        )
+        self.assertEqual(len(result["fixed"]), 1)
+
+    def test_claim_stamps_tier_and_canonical_fields(self):
+        attribution = {
+            "tags": {
+                "JPEG:MakerNotes:Foo": {"module": "Canon", "table": "CameraSettings"},
+            },
+        }
+        gaps = [{
+            "format": "JPEG",
+            "missing_tags": [{"family": "MakerNotes", "name": "Foo", "value": "1", "source_file": None}],
+            "value_differences": [], "gap_count": 1, "parser_files": [],
+        }]
+        captured = {}
+
+        def fix_gap_fn(tag_gap, cfg, prev):
+            captured["state"] = load_tag_state(self.state_path)
+            return {"status": "fixed", "gaps_closed": 1}
+
+        run_tag_loop(
+            {}, find_gaps_fn=lambda: gaps, fix_gap_fn=fix_gap_fn,
+            state_path=self.state_path, max_rounds=1, worker_id="w1", attribution=attribution,
+        )
+        entry = captured["state"]["JPEG:MakerNotes:Foo"]
+        self.assertEqual(entry["tier"], "T1")
+        self.assertEqual(entry["canonical_module"], "Canon")
+        self.assertEqual(entry["canonical_table"], "Canon::CameraSettings")
+
+
+def make_foundation_job(**overrides):
+    job = {
+        "name": "flir-fff-record-parser",
+        "description": "Port the FLIR FFF record walker.",
+        "target_formats": ["JPEG"],
+        "target_module": "FLIR",
+        "estimated_gaps": 90,
+        "status": "pending",
+    }
+    job.update(overrides)
+    return job
+
+
+class BuildFoundationJobPromptTests(unittest.TestCase):
+    def test_includes_job_identity_and_description(self):
+        job = make_foundation_job()
+        prompt = build_foundation_job_prompt(job)
+        self.assertIn("flir-fff-record-parser", prompt)
+        self.assertIn("FLIR", prompt)
+        self.assertIn("Port the FLIR FFF record walker.", prompt)
+        self.assertIn("T4 FOUNDATION-UNLOCK", prompt)
+
+
+class AttemptFoundationJobTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+
+    def _fake_attempt_build(self, messages, **kwargs):
+        messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+        return True, None, "--- a/x\n+++ b/x\n", messages
+
+    def test_lands_a_commit_on_the_happy_path(self):
+        job = make_foundation_job()
+        commit_calls = []
+        result = attempt_foundation_job(
+            job, Path("/fake/repo"), CONFIG,
+            attempt_build_fn=self._fake_attempt_build,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            review_fn=lambda g, diff, config, **kw: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **kw: commit_calls.append(msg),
+            git_rev_parse_fn=lambda root: "abc123",
+            log_fn=lambda *a: None,
+        )
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(result["commit_sha"], "abc123")
+        self.assertEqual(len(commit_calls), 1)
+
+    def test_build_failure_retries_then_fails(self):
+        job = make_foundation_job()
+
+        def always_fails(messages, **kwargs):
+            return False, "compile error", None, messages
+
+        result = attempt_foundation_job(
+            job, Path("/fake/repo"), CONFIG,
+            attempt_build_fn=always_fails,
+            critique_fn=lambda *a, **kw: "try a different approach",
+            git_checkout_clean_fn=lambda root: None,
+            log_fn=lambda *a: None,
+            table_job_config={"max_prompt_tokens": 16384, "max_repair_rounds": 2},
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(len(result["rounds"]), 2)
+
+    def test_marks_held_by_foundation_on_matching_tags(self):
+        state_path = Path(self.tmpdir.name) / "state.json"
+        save_tag_state(state_path, {
+            "JPEG:FLIR:Temp": {"fails": 0, "blacklisted": False, "canonical_module": "FLIR"},
+            "JPEG:Canon:Other": {"fails": 0, "blacklisted": False, "canonical_module": "Canon"},
+        })
+        job = make_foundation_job()
+        result = attempt_foundation_job(
+            job, Path("/fake/repo"), CONFIG,
+            attempt_build_fn=self._fake_attempt_build,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            review_fn=lambda g, diff, config, **kw: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **kw: None,
+            git_rev_parse_fn=lambda root: "deadbeef",
+            log_fn=lambda *a: None,
+            state_path=state_path,
+        )
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(result["held_tags"], ["JPEG:FLIR:Temp"])
+        state = load_tag_state(state_path)
+        self.assertEqual(state["JPEG:FLIR:Temp"]["held_by_foundation"], {"job": job["name"], "sha": "deadbeef"})
+        self.assertNotIn("held_by_foundation", state["JPEG:Canon:Other"])
+
+    def test_review_rejection_retries_then_fails(self):
+        job = make_foundation_job()
+        result = attempt_foundation_job(
+            job, Path("/fake/repo"), CONFIG,
+            attempt_build_fn=self._fake_attempt_build,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            review_fn=lambda g, diff, config, **kw: (False, "hardcodes a sample value"),
+            critique_fn=lambda *a, **kw: "be more general",
+            git_checkout_clean_fn=lambda root: None,
+            log_fn=lambda *a: None,
+            table_job_config={"max_prompt_tokens": 16384, "max_repair_rounds": 1},
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("rejected by review", result["reason"])
+
+
+class ResolveFoundationJobTagKeysTests(unittest.TestCase):
+    def test_matches_by_stamped_canonical_module(self):
+        job = make_foundation_job(target_module="FLIR")
+        state = {
+            "JPEG:FLIR:Temp": {"canonical_module": "FLIR"},
+            "JPEG:Canon:Other": {"canonical_module": "Canon"},
+        }
+        self.assertEqual(resolve_foundation_job_tag_keys(job, state), ["JPEG:FLIR:Temp"])
+
+    def test_matches_via_attribution_when_state_has_no_canonical_module(self):
+        job = make_foundation_job(target_module="FLIR")
+        state = {"JPEG:FLIR:Temp": {"fails": 0}}
+        attribution = {"tags": {"JPEG:FLIR:Temp": {"module": "FLIR", "table": ""}}}
+        self.assertEqual(resolve_foundation_job_tag_keys(job, state, attribution), ["JPEG:FLIR:Temp"])
+
+    def test_never_matches_synthetic_job_claim_keys(self):
+        job = make_foundation_job(target_module="FLIR")
+        state = {
+            table_job_claim_key("FLIR::Records"): {"canonical_module": "FLIR"},
+            foundation_job_claim_key("FLIR"): {"canonical_module": "FLIR"},
+        }
+        self.assertEqual(resolve_foundation_job_tag_keys(job, state), [])
+
+    def test_no_target_module_returns_empty(self):
+        job = make_foundation_job(target_module=None)
+        self.assertEqual(resolve_foundation_job_tag_keys(job, {"x": {"canonical_module": None}}), [])
+
+
+class MarkHeldByFoundationTests(unittest.TestCase):
+    def test_stamps_matching_entries_only(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "state.json"
+            save_tag_state(state_path, {
+                "JPEG:FLIR:Temp": {"canonical_module": "FLIR"},
+                "JPEG:Canon:Other": {"canonical_module": "Canon"},
+            })
+            job = make_foundation_job(target_module="FLIR")
+            stamped = mark_held_by_foundation(state_path, job, "sha123")
+            self.assertEqual(stamped, ["JPEG:FLIR:Temp"])
+            state = load_tag_state(state_path)
+            self.assertEqual(state["JPEG:FLIR:Temp"]["held_by_foundation"], {"job": job["name"], "sha": "sha123"})
+
+    def test_skips_tag_keys_not_present_in_state(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "state.json"
+            save_tag_state(state_path, {})
+            job = make_foundation_job(target_module="FLIR")
+            stamped = mark_held_by_foundation(state_path, job, "sha123")
+            self.assertEqual(stamped, [])
+
+
+class BuildTablePortPromptTests(unittest.TestCase):
+    def test_includes_three_clause_language_and_table_identity(self):
+        prompt = build_table_port_prompt("Canon::CameraSettings", "Canon", "PERL SOURCE HERE", "SKELETON HERE")
+        self.assertIn("Canon::CameraSettings", prompt)
+        self.assertIn("T3 TABLE-PORT", prompt)
+        self.assertIn("PERL SOURCE HERE", prompt)
+        self.assertIn("SKELETON HERE", prompt)
+        self.assertIn("80%", prompt)
+
+    def test_handles_missing_perl_source_gracefully(self):
+        prompt = build_table_port_prompt("Canon::CameraSettings", "Canon", None, None)
+        self.assertIn("unavailable", prompt)
+
+
+class AttemptTablePortTests(unittest.TestCase):
+    def _fake_attempt_build(self, messages, **kwargs):
+        messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+        return True, None, "--- a/x\n+++ b/x\n", messages
+
+    def test_lands_a_commit_when_gate_passes(self):
+        members = ["Canon:A", "Canon:B", "Canon:C", "Canon:D", "Canon:E"]
+        pre_report = {
+            "missing_tags": [{"family": "Canon", "name": n.split(":")[1]} for n in members],
+            "value_differences": [],
+        }
+        post_report = {"missing_tags": [], "value_differences": []}
+        commit_calls = []
+
+        result = attempt_table_port(
+            "Canon::CameraSettings", "Canon", Path("/fake/repo"), CONFIG,
+            attempt_build_fn=self._fake_attempt_build,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            review_fn=lambda g, diff, config, **kw: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **kw: commit_calls.append((msg, kw.get("trailers"))),
+            log_fn=lambda *a: None,
+            table_members=members, pre_report=pre_report,
+            recheck_fn=lambda fmt: post_report,
+        )
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(len(commit_calls), 1)
+        _, trailers = commit_calls[0]
+        self.assertEqual(trailers["Table"], "Canon::CameraSettings")
+
+    def test_gate_failure_retries_with_must_remove_guidance_then_fails(self):
+        members = ["Canon:A", "Canon:B"]
+        pre_report = {"missing_tags": [{"family": "Canon", "name": "A"}, {"family": "Canon", "name": "B"}],
+                     "value_differences": []}
+        post_report_wrong = {"missing_tags": [], "value_differences": [{"tag_key": "Canon:A"}]}
+        critiques = []
+
+        result = attempt_table_port(
+            "Canon::CameraSettings", "Canon", Path("/fake/repo"), CONFIG,
+            attempt_build_fn=self._fake_attempt_build,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            critique_fn=lambda gap, diff, kind, detail, cfg, **kw: (critiques.append(detail), "fix it")[1],
+            git_checkout_clean_fn=lambda root: None,
+            log_fn=lambda *a: None,
+            table_members=members, pre_report=pre_report,
+            recheck_fn=lambda fmt: post_report_wrong,
+            table_job_config={"max_prompt_tokens": 16384, "max_repair_rounds": 1},
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("Canon:A" in c for c in critiques))
+
+    def test_review_rejection_after_gate_pass_still_fails_without_commit(self):
+        members = ["Canon:A"]
+        pre_report = {"missing_tags": [{"family": "Canon", "name": "A"}], "value_differences": []}
+        post_report = {"missing_tags": [], "value_differences": []}
+
+        result = attempt_table_port(
+            "Canon::CameraSettings", "Canon", Path("/fake/repo"), CONFIG,
+            attempt_build_fn=self._fake_attempt_build,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            review_fn=lambda g, diff, config, **kw: (False, "hardcodes a value"),
+            critique_fn=lambda *a, **kw: None,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **kw: self.fail("should not commit"),
+            log_fn=lambda *a: None,
+            table_members=members, pre_report=pre_report,
+            recheck_fn=lambda fmt: post_report,
+            table_job_config={"max_prompt_tokens": 16384, "max_repair_rounds": 1},
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("rejected by review", result["reason"])
+
+
+class NormalizeTableJobConfigTests(unittest.TestCase):
+    def test_defaults_when_section_absent(self):
+        cfg = normalize_table_job_config({})
+        self.assertEqual(cfg["max_prompt_tokens"], DEFAULT_TABLE_JOB_MAX_PROMPT_TOKENS)
+        self.assertEqual(cfg["max_repair_rounds"], DEFAULT_TABLE_JOB_MAX_REPAIR_ROUNDS)
+
+    def test_reads_explicit_section(self):
+        cfg = normalize_table_job_config({"table_job": {"max_prompt_tokens": 8192, "max_repair_rounds": 3}})
+        self.assertEqual(cfg["max_prompt_tokens"], 8192)
+        self.assertEqual(cfg["max_repair_rounds"], 3)
 
 
 if __name__ == "__main__":

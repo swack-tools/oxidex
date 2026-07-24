@@ -30,7 +30,9 @@ from watch_parallel_fix import (
     parse_current_tag_progress,
     parse_landed_log,
     parse_manifest_log,
+    parse_manifest_log_tiered,
     parse_tags_found_log,
+    parse_tags_found_log_tiered,
     parse_timestamp,
     parse_worker_log_status,
     parse_wrapper_log,
@@ -39,6 +41,7 @@ from watch_parallel_fix import (
     render_progress_bar,
     request_stats,
     tag_iteration,
+    tier_kpi_stats,
     worker_log_path,
     worker_worktree_name,
 )
@@ -266,6 +269,27 @@ class ParseTagsFoundLogTests(unittest.TestCase):
             self.assertEqual(len(entries), 2)
             self.assertEqual(entries[0], ("2026-07-20T19:00:00", "1", "JPEG:EXIF:LensModel", 1))
             self.assertEqual(entries[1], ("2026-07-20T19:05:00", "3", "JPEG:APP12:CAM1", 2))
+
+
+class ParseTagsFoundLogTieredTests(unittest.TestCase):
+    def test_missing_file_is_empty(self):
+        self.assertEqual(parse_tags_found_log_tiered(Path("/nonexistent/tags-found.log")), [])
+
+    def test_line_without_tier_defaults_to_t1(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tags-found.log"
+            path.write_text("2026-07-20T19:00:00 worker=1 tag=JPEG:EXIF:LensModel gaps_closed=1\n")
+            entries = parse_tags_found_log_tiered(path)
+            self.assertEqual(entries, [("2026-07-20T19:00:00", "1", "JPEG:EXIF:LensModel", 1, "T1")])
+
+    def test_line_with_tier_is_captured(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tags-found.log"
+            path.write_text(
+                "2026-07-20T19:00:00 worker=1 tag=JPEG:FLIR:Temp gaps_closed=1 tier=T4\n"
+            )
+            entries = parse_tags_found_log_tiered(path)
+            self.assertEqual(entries, [("2026-07-20T19:00:00", "1", "JPEG:FLIR:Temp", 1, "T4")])
 
 
 class FoundStatsTests(unittest.TestCase):
@@ -888,6 +912,89 @@ class ParseManifestLogTests(unittest.TestCase):
             self.assertEqual(entries[0], ("2026-07-21T10:00:00", "fixer", 12.3, True, "1"))
             self.assertEqual(entries[1], ("2026-07-21T10:06:00", "reviewer", 1.5, True, "2"))
             self.assertEqual(entries[2], ("2026-07-21T10:10:00", "fixer", 45.0, False, "JPEG"))
+
+
+class ParseManifestLogTieredTests(unittest.TestCase):
+    def test_missing_file_is_empty(self):
+        self.assertEqual(parse_manifest_log_tiered(Path("/nonexistent/manifest.log")), [])
+
+    def test_line_without_tier_token_defaults_to_t1(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "manifest.log"
+            path.write_text(
+                "2026-07-21T10:00:00 phase=fixer worker=1 model=gpt-5.6-sol prompt_chars=1200 "
+                "elapsed=12.3s reply_chars=500 OK\n"
+            )
+            entries = parse_manifest_log_tiered(path)
+            self.assertEqual(entries, [("2026-07-21T10:00:00", "fixer", 12.3, True, "1", "T1")])
+
+    def test_line_with_tier_token_is_captured(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "manifest.log"
+            path.write_text(
+                "2026-07-21T10:00:00 phase=fixer worker=1 tier=T4 model=gpt-5.6-sol prompt_chars=1200 "
+                "elapsed=12.3s reply_chars=500 OK\n"
+                "2026-07-21T10:05:00 phase=reviewer worker=1 tier=T3 model=gpt-5.6-sol prompt_chars=200 "
+                "elapsed=2.0s reply_chars=10 OK\n"
+            )
+            entries = parse_manifest_log_tiered(path)
+            self.assertEqual(entries[0], ("2026-07-21T10:00:00", "fixer", 12.3, True, "1", "T4"))
+            self.assertEqual(entries[1], ("2026-07-21T10:05:00", "reviewer", 2.0, True, "1", "T3"))
+
+    def test_error_line_with_tier_token_is_captured(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "manifest.log"
+            path.write_text(
+                "2026-07-21T10:10:00 phase=fixer worker=1 tier=T3 model=gpt-5.6-sol prompt_chars=900 "
+                "elapsed=45.0s ERROR=<urlopen error DNS failure>\n"
+            )
+            entries = parse_manifest_log_tiered(path)
+            self.assertEqual(entries, [("2026-07-21T10:10:00", "fixer", 45.0, False, "1", "T3")])
+
+
+class TierKpiStatsTests(unittest.TestCase):
+    def test_empty_inputs_yield_empty_stats(self):
+        self.assertEqual(tier_kpi_stats([], []), {})
+
+    def test_computes_calls_per_landed_tag_per_tier(self):
+        manifest = [
+            ("t1", "fixer", 1.0, True, "w1", "T1"),
+            ("t2", "reviewer", 1.0, True, "w1", "T1"),
+            ("t3", "fixer", 1.0, True, "w2", "T3"),
+            ("t4", "reviewer", 1.0, True, "w2", "T3"),
+        ]
+        found = [
+            ("t5", "w1", "JPEG:A", 1, "T1"),
+            ("t6", "w2", "Canon:CameraSettings", 5, "T3"),
+        ]
+        stats = tier_kpi_stats(manifest, found)
+        self.assertEqual(stats["T1"], {"calls": 2, "landed": 1, "calls_per_landed_tag": 2.0})
+        self.assertEqual(stats["T3"], {"calls": 2, "landed": 1, "calls_per_landed_tag": 2.0})
+
+    def test_failed_calls_are_not_counted(self):
+        manifest = [
+            ("t1", "fixer", 1.0, False, "w1", "T1"),
+            ("t2", "fixer", 1.0, True, "w1", "T1"),
+        ]
+        found = [("t3", "w1", "JPEG:A", 1, "T1")]
+        stats = tier_kpi_stats(manifest, found)
+        self.assertEqual(stats["T1"]["calls"], 1)
+
+    def test_zero_landed_tags_reports_none_not_zero_division(self):
+        manifest = [("t1", "fixer", 1.0, True, "w1", "T4")]
+        stats = tier_kpi_stats(manifest, [])
+        self.assertIsNone(stats["T4"]["calls_per_landed_tag"])
+        self.assertEqual(stats["T4"]["calls"], 1)
+        self.assertEqual(stats["T4"]["landed"], 0)
+
+    def test_tiers_appear_in_canonical_order(self):
+        manifest = [
+            ("t1", "fixer", 1.0, True, "w1", "T4"),
+            ("t2", "fixer", 1.0, True, "w1", "T1"),
+            ("t3", "fixer", 1.0, True, "w1", "T3"),
+        ]
+        stats = tier_kpi_stats(manifest, [])
+        self.assertEqual(list(stats.keys()), ["T1", "T3", "T4"])
 
 
 class EntriesForWorkerTests(unittest.TestCase):

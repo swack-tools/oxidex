@@ -99,6 +99,7 @@ from find_tag_gaps import (
 )
 from parallel_model_fix_loop import branch_name as worker_branch_name
 from parallel_model_fix_loop import novel_commits
+from find_tag_gaps import DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS, DEFAULT_BUILD_SEMAPHORE_PATH
 from model_fix_loop import cargo_test_targeted as _real_cargo_test_targeted
 from model_fix_loop import new_oxidex_only_keys
 import validate_fix_commit
@@ -570,8 +571,18 @@ def real_format_match(repo_root, cache_dir, fmt, out_suffix):
     return next((g for g in regrouped if g["format"] == fmt), None)
 
 
-def real_cargo_test_targeted(repo_root, filter_str):
-    return _real_cargo_test_targeted(repo_root, filter_str)
+def real_cargo_test_targeted(repo_root, filter_str, semaphore_max_holders=DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS):
+    """Spec section 5: the merger's own targeted-test call site shares
+    the same cross-process build semaphore every worker's cargo
+    build/test call goes through (model_fix_loop.cargo_test_targeted's
+    own semaphore_path/semaphore_max_holders params) -- a merger
+    cherry-picking and test-gating several commits per poll is itself
+    a cargo-build-heavy process, and must count against the same host
+    core-oversubscription ceiling as the workers it's validating behind."""
+    return _real_cargo_test_targeted(
+        repo_root, filter_str,
+        semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH, semaphore_max_holders=semaphore_max_holders,
+    )
 
 
 def real_validate_commit(sha, repo, **kwargs):

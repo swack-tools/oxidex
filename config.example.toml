@@ -64,6 +64,14 @@ heartbeat_seconds = 60
 max_retries = 1000
 retry_backoff_seconds = 2
 max_retry_backoff_seconds = 120
+# build_semaphore: spec section 5's cross-process cargo build/test slot
+# ceiling (find_tag_gaps.build_semaphore) -- the max number of concurrent
+# cargo build/check/test invocations across every worker+merger sharing
+# this host, so a full round of workers all rechecking gaps at once can't
+# oversubscribe the host's cores by linking concurrently. 5 is the spec's
+# own default for a 10-core host; raise only with measured disk/CPU
+# headroom (see scripts/check_scale_gate.py).
+build_semaphore = 5
 
 # --- Phase 1 knowledge layer / section 6 knobs (spec K1-K5) ---------------
 # learning_budget_tokens: flat, reserved token budget for build_prompt's
@@ -141,3 +149,17 @@ api_key = "your-fireworks-api-key-here"
 [parallel]
 workers = 4
 max_tags_per_process = 1
+
+# Optional: spec S3's T3 TABLE-PORT / T4 FOUNDATION-UNLOCK job knobs --
+# scripts/model_fix_loop.py's attempt_table_port/attempt_foundation_job.
+# Omit entirely to use the spec's own defaults (16384 / 8). These tiers
+# are opt-in (no job runs unless explicitly dispatched); this table only
+# tunes them when they do.
+[table_job]
+max_prompt_tokens = 16384
+max_repair_rounds = 8
+# model: the strongest configured model, per spec S3 -- tag the
+# strongest [[worker.models]]/[[reviewer.models]] entry(ies) with
+# phase = "table" (alongside the existing "explore"/"patch" tags) rather
+# than repeating a model name here; attempt_table_port/
+# attempt_foundation_job select via models_for_phase(pool, "table").
