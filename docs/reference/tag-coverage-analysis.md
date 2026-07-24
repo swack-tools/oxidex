@@ -3,7 +3,7 @@
 This document details OxiDex's coverage of ExifTool's tag database and analyzes parser implementation status.
 
 ::: info Auto-Generated
-This document is automatically updated on each push to `main`. Last updated: **2026-07-23**
+This document is automatically updated on each push to `main`. Last updated: **2026-07-24**
 :::
 
 ## Summary
@@ -88,32 +88,32 @@ MakerNote parsers for 39+ camera manufacturers are **fully implemented and conne
 | Opus | 100% | ✅ Complete |
 | OGG | 100% | ✅ Complete |
 | WAV | 100% | ✅ Complete |
-| BMP | 90% | ✅ Good |
-| GIF | 90% | ✅ Good |
-| WebP | 90% | ✅ Good |
-| ZIP | 90% | ✅ Good |
-| TTF | 90% | ✅ Good |
-| OTF | 90% | ✅ Good |
-| PE | 90% | ✅ Good |
+| ICC | 90% | ✅ Good |
 | TIFF | 90% | ✅ Good |
 | EXIF | 90% | ✅ Good |
+| TTF | 90% | ✅ Good |
+| OTF | 90% | ✅ Good |
+| SPECIALIZED | 90% | ✅ Good |
 | MKV | 90% | ✅ Good |
 | AVI | 90% | ✅ Good |
 | RIFF | 90% | ✅ Good |
+| PE | 90% | ✅ Good |
 | QuickTime | 90% | ✅ Good |
 | MP4 | 90% | ✅ Good |
 | MOV | 90% | ✅ Good |
-| ICC | 90% | ✅ Good |
-| SPECIALIZED | 90% | ✅ Good |
+| ZIP | 90% | ✅ Good |
+| BMP | 90% | ✅ Good |
+| GIF | 90% | ✅ Good |
+| WebP | 90% | ✅ Good |
 | Mach-O | 75% | ✅ Good |
+| TEXT | 75% | ✅ Good |
 | DNG | 75% | ✅ Good |
 | CR2 | 75% | ✅ Good |
 | NEF | 75% | ✅ Good |
-| PDF | 75% | ✅ Good |
 | ELF | 75% | ✅ Good |
+| PDF | 75% | ✅ Good |
 | DOCX | 75% | ✅ Good |
 | XLSX | 75% | ✅ Good |
-| TEXT | 75% | ✅ Good |
 | JPEG | 60% | ✅ Good |
 | PNG | 60% | ✅ Good |
 | IPTC | 60% | ✅ Good |
