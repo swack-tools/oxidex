@@ -119,7 +119,10 @@ impl GZParser {
         if flags & FNAME != 0
             && let Some(filename) = Self::read_null_terminated_string(reader, offset)?
         {
-            metadata.insert("OriginalFileName".to_string(), TagValue::String(filename.0));
+            metadata.insert(
+                "ZIP:ArchivedFileName".to_string(),
+                TagValue::String(filename.0),
+            );
             offset = filename.1;
         }
 
