@@ -84,6 +84,7 @@ const KNOWN_TAGS: &[&str] = &[
     "MODE4",
     "MODE5",
     "MODE6",
+    "MTR2",
     "FCS1",
     "FCS2",
     "FCS3",
@@ -406,6 +407,17 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:EXP1".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus MTR2 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("MTR2") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:MTR2".to_string(), app12_value);
             }
 
             // ExifTool exposes the Olympus EXP2 diagnostic field in the
