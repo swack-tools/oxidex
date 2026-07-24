@@ -561,12 +561,23 @@ def record_head(path, sha, *, status, patch_id, format_name, work_done=True,
 # Comparison / test wiring (production defaults; injectable for tests)
 # ---------------------------------------------------------------------------
 
-def real_format_match(repo_root, cache_dir, fmt, out_suffix):
+def real_format_match(repo_root, cache_dir, fmt, out_suffix,
+                       semaphore_max_holders=DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS):
     """One fresh single-format comparison, scoped by out_suffix so
     concurrent processes (workers, other squads' mergers, the sweep)
     never clobber each other's /tmp/tagcmp-<FMT>-<suffix> report (spec
-    S1). Mirrors model_fix_loop.py's real_fix_tag.current_match()."""
-    path = run_format_comparison(fmt, cache_dir, repo_root=repo_root, out_suffix=out_suffix)
+    S1). Mirrors model_fix_loop.py's real_fix_tag.current_match().
+
+    Spec section 5 build semaphore: this re-runs ensure_tag_comparison_built
+    (a full `cargo build --profile fixloop --bin tag-comparison`) on every
+    per-commit pre/post check and every batch full-corpus recheck -- shares
+    the same cross-process slot ceiling every worker's cargo build/test
+    call goes through (mirrors real_cargo_test_targeted's own
+    semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH wiring just below)."""
+    path = run_format_comparison(
+        fmt, cache_dir, repo_root=repo_root, out_suffix=out_suffix,
+        semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH, semaphore_max_holders=semaphore_max_holders,
+    )
     regrouped = group_gaps_by_format(load_comparison_report(path))
     return next((g for g in regrouped if g["format"] == fmt), None)
 

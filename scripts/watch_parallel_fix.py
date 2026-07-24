@@ -135,6 +135,17 @@ TAGCMP_FILENAME_RE = re.compile(r"^tagcmp-.+\.json$")
 # RETRY lines use a different shape entirely and are intentionally not
 # matched by this -- see parse_manifest_log.
 #
+# phase must include "critique" alongside "fixer"/"reviewer":
+# make_logging_call_model("critique") (model_fix_loop.py) writes
+# phase=critique lines in this exact same shape for every failed-attempt
+# critique call (critique_failed_attempt, used by fix_gap/
+# attempt_table_port/attempt_foundation_job alike) -- tier_kpi_stats'
+# calls-per-landed-tag KPI explicitly promises to count "fixer AND
+# reviewer AND critique phases alike"; a narrower alternation here would
+# silently make every phase=critique line invisible to that count (and
+# to parse_manifest_log/request_stats' own fixer/reviewer latency
+# stats), regardless of how many of them a real multi-round attempt logs.
+#
 # `tier=<T1|T2|T3|T4>` (spec section 5's KPI, Phase 4/5) is OPTIONAL in
 # this pattern: every manifest.log line written before this feature
 # existed has no such token at all, and must keep parsing exactly as
@@ -142,7 +153,7 @@ TAGCMP_FILENAME_RE = re.compile(r"^tagcmp-.+\.json$")
 # entirely, unaffected) vs parse_manifest_log_tiered (which reads it,
 # defaulting a missing token to "T1").
 MANIFEST_ENTRY_RE = re.compile(
-    r"^(?P<ts>\S+) phase=(?P<phase>fixer|reviewer) worker=(?P<worker>\S+)"
+    r"^(?P<ts>\S+) phase=(?P<phase>fixer|reviewer|critique) worker=(?P<worker>\S+)"
     r"(?: tier=(?P<tier>\S+))? model=(?P<model>\S+) "
     r"prompt_chars=(?P<prompt_chars>\d+) elapsed=(?P<elapsed>[\d.]+)s "
     r"(?:reply_chars=\d+ )?(?P<rest>OK|ERROR=.*)$"

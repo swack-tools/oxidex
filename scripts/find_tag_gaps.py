@@ -64,6 +64,13 @@ OXIDEX_HOME = Path(os.environ.get("OXIDEX_HOME", str(Path.home() / ".oxidex")))
 DEFAULT_BUILD_SEMAPHORE_PATH = OXIDEX_HOME / "logs" / "build-semaphore.json"
 DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS = 5
 DEFAULT_BUILD_SEMAPHORE_STALE_SECONDS = 900  # a cargo build hung 15+ min is presumed a dead holder
+# Cadence at which a held slot's heartbeat is re-stamped WHILE the
+# protected build/test call is still in flight -- same value as
+# model_fix_loop.py's own DEFAULT_HEARTBEAT_SECONDS (the tag-claim
+# heartbeat this is meant to have parity with), and a healthy margin
+# under DEFAULT_BUILD_SEMAPHORE_STALE_SECONDS (15 beats before a live
+# holder could ever be mistaken for stale).
+DEFAULT_BUILD_SEMAPHORE_HEARTBEAT_SECONDS = 60
 
 
 def _semaphore_locked(path, mutate_fn):
@@ -132,7 +139,8 @@ def _release_build_slot(path, holder_id):
 @contextlib.contextmanager
 def build_semaphore(path=None, max_holders=DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS,
                      stale_seconds=DEFAULT_BUILD_SEMAPHORE_STALE_SECONDS, poll_seconds=2.0,
-                     now_fn=time.time, sleep_fn=time.sleep, holder_id=None):
+                     now_fn=time.time, sleep_fn=time.sleep, holder_id=None,
+                     heartbeat_seconds=DEFAULT_BUILD_SEMAPHORE_HEARTBEAT_SECONDS):
     """Block until one of at most max_holders concurrent cargo build/test
     slots is free, yield, then release on the way out (success or
     exception alike -- a `finally`, never leaking a held slot).
@@ -148,6 +156,20 @@ def build_semaphore(path=None, max_holders=DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS,
     holder_id defaults to "<pid>-<thread-ident>", unique enough that two
     threads in the same process (or two processes) never collide on one
     slot identity.
+
+    heartbeat_seconds (0/None disables): a background daemon thread
+    re-stamps this holder's heartbeat every heartbeat_seconds WHILE the
+    protected build/test call is in flight -- without this, a single
+    call that runs longer than stale_seconds (e.g. a slow `cargo test
+    --workspace` under contention from the very other capped builds this
+    semaphore exists to bound) would itself look stale to any concurrent
+    waiter's _try_acquire_build_slot check, letting that waiter acquire a
+    slot that is, in fact, still actively held -- oversubscribing builds
+    beyond max_holders even though nothing crashed. This is the same
+    fix shape as model_fix_loop.py's own tag-claim heartbeat (a
+    stop-event-driven daemon thread touching the shared state on a
+    cadence, joined before this slot is released) -- the parity this
+    module's own design comment above already claims.
     """
     if path is None:
         yield
@@ -155,9 +177,43 @@ def build_semaphore(path=None, max_holders=DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS,
     slot_id = holder_id or f"{os.getpid()}-{threading.get_ident()}"
     while not _try_acquire_build_slot(path, max_holders, stale_seconds, now_fn, slot_id):
         sleep_fn(poll_seconds)
+
+    stop_heartbeat = threading.Event()
+
+    def heartbeat_loop():
+        # Event.wait doubles as the sleep: it returns True the moment
+        # the protected call ends and the event is set, so this thread
+        # never outlives the call by more than one (fast, local) state
+        # touch -- mirrors model_fix_loop.py's own heartbeat_loop.
+        while not stop_heartbeat.wait(heartbeat_seconds):
+            try:
+                _try_acquire_build_slot(path, max_holders, stale_seconds, now_fn, slot_id)
+            except Exception:
+                # A transient touch failure (ENOSPC/EACCES, a torn read
+                # racing another holder's write, ...) must not kill this
+                # thread or the protected build/test call -- an unhandled
+                # raise here would otherwise die silently via threading's
+                # default excepthook (stderr only) while the build keeps
+                # running for however long it takes, reverting to exactly
+                # the stale-holder-eviction-of-a-live-holder failure this
+                # heartbeat exists to prevent. It just risks this one beat
+                # being missed; the next one (or the eventual release)
+                # still runs.
+                pass
+
+    heartbeat_thread = None
+    if heartbeat_seconds:
+        heartbeat_thread = threading.Thread(
+            target=heartbeat_loop, name=f"build-semaphore-heartbeat-{slot_id}", daemon=True,
+        )
+        heartbeat_thread.start()
+
     try:
         yield
     finally:
+        stop_heartbeat.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join()
         _release_build_slot(path, slot_id)
 
 

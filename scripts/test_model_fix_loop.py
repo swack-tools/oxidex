@@ -22,6 +22,7 @@ from model_fix_loop import (
     _normalize_model_config,
     _select_tier,
     _state_locked,
+    _table_port_pseudo_gap,
     attempt_foundation_job,
     attempt_table_port,
     build_foundation_job_prompt,
@@ -6633,6 +6634,64 @@ class MarkHeldByFoundationTests(unittest.TestCase):
             job = make_foundation_job(target_module="FLIR")
             stamped = mark_held_by_foundation(state_path, job, "sha123")
             self.assertEqual(stamped, [])
+
+
+class TablePortPseudoGapTests(unittest.TestCase):
+    """_table_port_pseudo_gap must actually populate a non-empty
+    missing_tags set from table_members -- without it,
+    find_implemented_sibling's `families` search set is empty by
+    construction and its whole search loop never executes, regardless of
+    what the target registry file contains (see find_implemented_sibling/
+    build_neighbor_precedent_block)."""
+
+    def test_no_table_members_keeps_missing_tags_empty(self):
+        gap = _table_port_pseudo_gap("Canon::CameraSettings", "Canon", ".")
+        self.assertEqual(gap["missing_tags"], [])
+        self.assertEqual(gap["value_differences"], [])
+
+    def test_table_members_populate_missing_tags_family_and_name(self):
+        gap = _table_port_pseudo_gap(
+            "Canon::CameraSettings", "Canon", ".",
+            table_members=["Canon:MacroMode", "Canon:FlashMode"],
+        )
+        self.assertEqual(
+            gap["missing_tags"],
+            [{"family": "Canon", "name": "MacroMode"}, {"family": "Canon", "name": "FlashMode"}],
+        )
+
+    def test_malformed_member_without_colon_is_skipped(self):
+        gap = _table_port_pseudo_gap("Canon::CameraSettings", "Canon", ".", table_members=["NoColonHere"])
+        self.assertEqual(gap["missing_tags"], [])
+
+    def test_sibling_search_actually_runs_given_table_members(self):
+        # End-to-end: with table_members threaded through, a sibling
+        # literal actually already present in the registry file (for a
+        # DIFFERENT tag of the same family) is found -- proving the
+        # search space is no longer unconditionally empty.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            registries_dir = repo_root / "src" / "parsers" / "tiff" / "makernotes" / "registries"
+            registries_dir.mkdir(parents=True)
+            (registries_dir / "canon.rs").write_text('metadata.insert("Canon:ColorMode".to_string(), v);')
+            gap = _table_port_pseudo_gap(
+                "Canon::CameraSettings", "Canon", repo_root,
+                table_members=["Canon:MacroMode"],
+            )
+            self.assertEqual(find_implemented_sibling(gap, repo_root), "Canon:ColorMode")
+
+    def test_without_table_members_sibling_search_never_runs_even_with_a_match_present(self):
+        # The regression this whole test class guards against: before
+        # table_members was threaded through, missing_tags was always
+        # [], so `families` was always empty and this returned None
+        # unconditionally -- even with a matching sibling literal sitting
+        # right there in the registry file.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            registries_dir = repo_root / "src" / "parsers" / "tiff" / "makernotes" / "registries"
+            registries_dir.mkdir(parents=True)
+            (registries_dir / "canon.rs").write_text('metadata.insert("Canon:ColorMode".to_string(), v);')
+            gap = _table_port_pseudo_gap("Canon::CameraSettings", "Canon", repo_root)
+            self.assertIsNone(find_implemented_sibling(gap, repo_root))
 
 
 class BuildTablePortPromptTests(unittest.TestCase):

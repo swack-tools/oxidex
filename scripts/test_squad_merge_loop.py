@@ -1058,5 +1058,44 @@ class RecutSquadBranchTests(GitRepoTestCase):
         self.assertEqual(status["heads"]["worker-sha-1"]["squad_sha"], squad_sha)
 
 
+class RealFormatMatchTests(unittest.TestCase):
+    """Spec section 5 build semaphore: real_format_match re-runs
+    ensure_tag_comparison_built (a full `cargo build --profile fixloop
+    --bin tag-comparison`) on every per-commit pre/post check and every
+    batch full-corpus recheck -- it must share the same cross-process
+    slot ceiling every worker's own cargo build/test call goes through
+    (mirrors real_cargo_test_targeted's own semaphore wiring), not run
+    ungated."""
+
+    @patch("squad_merge_loop.run_format_comparison")
+    @patch("squad_merge_loop.group_gaps_by_format")
+    @patch("squad_merge_loop.load_comparison_report")
+    def test_threads_the_default_build_semaphore_path_through(
+        self, mock_load_report, mock_group, mock_run_format_comparison,
+    ):
+        mock_group.return_value = []
+        sml.real_format_match(Path("/fake/repo"), "/tmp/fake-cache", "JPEG", "suffix-1")  # nosec B108
+        mock_run_format_comparison.assert_called_once_with(
+            "JPEG", "/tmp/fake-cache", repo_root=Path("/fake/repo"), out_suffix="suffix-1",  # nosec B108
+            semaphore_path=sml.DEFAULT_BUILD_SEMAPHORE_PATH,
+            semaphore_max_holders=sml.DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS,
+        )
+
+    @patch("squad_merge_loop.run_format_comparison")
+    @patch("squad_merge_loop.group_gaps_by_format")
+    @patch("squad_merge_loop.load_comparison_report")
+    def test_semaphore_max_holders_is_overridable(
+        self, mock_load_report, mock_group, mock_run_format_comparison,
+    ):
+        mock_group.return_value = []
+        sml.real_format_match(
+            Path("/fake/repo"), "/tmp/fake-cache", "JPEG", "suffix-1",  # nosec B108
+            semaphore_max_holders=2,
+        )
+        _, kwargs = mock_run_format_comparison.call_args
+        self.assertEqual(kwargs["semaphore_max_holders"], 2)
+        self.assertEqual(kwargs["semaphore_path"], sml.DEFAULT_BUILD_SEMAPHORE_PATH)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4558,17 +4558,36 @@ def attempt_foundation_job(job, repo_root, config, *, call_model_fn=call_model,
     return {"job": job["name"], "status": "failed", "reason": "exhausted repair rounds", "diff": diff, "rounds": rounds}
 
 
-def _table_port_pseudo_gap(table_name, module, repo_root):
+def _table_port_pseudo_gap(table_name, module, repo_root, table_members=None):
     """A gap-shaped dict for a T3 TABLE-PORT job, mirroring
     _foundation_job_pseudo_gap -- reuses build_neighbor_precedent_block's
     registry-file precedent lookup. parser_files points at the module's
     own registries/<module>.rs (spec S3 item 3(iii): "registry precedent
-    ... scoped to the target registry file")."""
+    ... scoped to the target registry file").
+
+    table_members (the table's own "family:name" tag_key membership --
+    same shape evaluate_table_port_gate consumes), when given, seeds
+    missing_tags -- exactly like _foundation_job_pseudo_gap's own
+    tag_hints seeding. Without this, missing_tags/value_differences would
+    stay permanently empty (there IS no per-tag gap here; this is a
+    whole-table port), which leaves find_implemented_sibling's `families`
+    search set empty by construction -- its `for family in
+    sorted(families)` loop would then never execute and the sibling
+    search would never run at all, regardless of what the registry file
+    actually contains. own (derived from these same missing_tags) then
+    excludes every member of THIS table, so the search only ever
+    surfaces a DIFFERENT, already-implemented same-family tag as
+    precedent, never one of the table's own (not-yet-ported) members."""
     short_table = table_name.split("::")[-1] if table_name else table_name
     registry_rel = str(REGISTRIES_RELATIVE_DIR / f"{(module or '').lower()}.rs")
+    missing_tags = []
+    for tag_key in (table_members or []):
+        family, sep, name = tag_key.partition(":")
+        if sep:
+            missing_tags.append({"family": family, "name": name})
     return {
         "format": module or table_name or "?",
-        "missing_tags": [],
+        "missing_tags": missing_tags,
         "value_differences": [],
         "parser_files": [registry_rel],
         "gap_count": 0,
@@ -4677,7 +4696,7 @@ def attempt_table_port(table_name, module, repo_root, config, *, call_model_fn=c
 
     perl_table_source = extract_perl_table_source(table_name, perl_lib_dir) if perl_lib_dir else None
     registry_skeleton = build_table_port_registry_skeleton(module, table_name, repo_root)
-    pseudo_gap = _table_port_pseudo_gap(table_name, module, repo_root)
+    pseudo_gap = _table_port_pseudo_gap(table_name, module, repo_root, table_members=table_members)
     neighbor_precedent_block = build_neighbor_precedent_block(pseudo_gap, repo_root)
 
     messages = [{"role": "user", "content": build_table_port_prompt(
@@ -5595,7 +5614,11 @@ def main(argv=None):
             # run_format_comparison. The shared fixed /tmp path used to
             # let two same-format workers overwrite each other's report
             # mid-recheck and corrupt tag_still_open verdicts.
-            report_path = run_format_comparison(args.only_format, args.cache_dir, out_suffix=worker_label)
+            report_path = run_format_comparison(
+                args.only_format, args.cache_dir, out_suffix=worker_label,
+                semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH,
+                semaphore_max_holders=config["build_semaphore"],
+            )
         else:
             report_path = run_full_comparison(args.cache_dir)
         gaps = group_gaps_by_format(load_comparison_report(report_path))
@@ -5833,8 +5856,16 @@ def main(argv=None):
             again, by recheck() itself post-attempt each round ("read
             the tagcmp JSON before applying the diff" per spec M3).
             out_suffix keeps this out from under every other same-format
-            process's feet -- see find_gaps_fn above."""
-            path = run_format_comparison(fmt, args.cache_dir, out_suffix=worker_label)
+            process's feet -- see find_gaps_fn above. Threads the same
+            build semaphore through as find_gaps_fn/cargo_*_fn above --
+            this fires on every repair round's pre/post recheck, so it's
+            exactly the high-frequency cargo invocation section 5's
+            semaphore exists to gate."""
+            path = run_format_comparison(
+                fmt, args.cache_dir, out_suffix=worker_label,
+                semaphore_path=DEFAULT_BUILD_SEMAPHORE_PATH,
+                semaphore_max_holders=config["build_semaphore"],
+            )
             regrouped = group_gaps_by_format(load_comparison_report(path))
             return next((g for g in regrouped if g["format"] == fmt), None)
 

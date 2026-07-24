@@ -913,6 +913,20 @@ class ParseManifestLogTests(unittest.TestCase):
             self.assertEqual(entries[1], ("2026-07-21T10:06:00", "reviewer", 1.5, True, "2"))
             self.assertEqual(entries[2], ("2026-07-21T10:10:00", "fixer", 45.0, False, "JPEG"))
 
+    def test_critique_phase_lines_are_parsed_too(self):
+        # make_logging_call_model("critique") (model_fix_loop.py) writes
+        # phase=critique lines in this exact shape for every failed-attempt
+        # critique call -- these must be parsed like fixer/reviewer, not
+        # silently dropped (see MANIFEST_ENTRY_RE's phase alternation).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "manifest.log"
+            path.write_text(
+                "2026-07-21T10:00:00 phase=critique worker=1 model=gpt-5.6-sol prompt_chars=1200 "
+                "elapsed=12.3s reply_chars=500 OK\n"
+            )
+            entries = parse_manifest_log(path)
+            self.assertEqual(entries, [("2026-07-21T10:00:00", "critique", 12.3, True, "1")])
+
 
 class ParseManifestLogTieredTests(unittest.TestCase):
     def test_missing_file_is_empty(self):
@@ -950,6 +964,21 @@ class ParseManifestLogTieredTests(unittest.TestCase):
             )
             entries = parse_manifest_log_tiered(path)
             self.assertEqual(entries, [("2026-07-21T10:10:00", "fixer", 45.0, False, "1", "T3")])
+
+    def test_critique_phase_lines_are_captured_with_their_tier(self):
+        # Same defect this guards against as ParseManifestLogTests'
+        # equivalent test: a critique-phase repair round (fix_gap/
+        # attempt_table_port/attempt_foundation_job's own
+        # critique_failed_attempt) must not be invisible to the tiered
+        # parser tier_kpi_stats' KPI depends on.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "manifest.log"
+            path.write_text(
+                "2026-07-21T10:00:00 phase=critique worker=1 tier=T3 model=gpt-5.6-sol prompt_chars=1200 "
+                "elapsed=12.3s reply_chars=500 OK\n"
+            )
+            entries = parse_manifest_log_tiered(path)
+            self.assertEqual(entries, [("2026-07-21T10:00:00", "critique", 12.3, True, "1", "T3")])
 
 
 class TierKpiStatsTests(unittest.TestCase):
@@ -995,6 +1024,37 @@ class TierKpiStatsTests(unittest.TestCase):
         ]
         stats = tier_kpi_stats(manifest, [])
         self.assertEqual(list(stats.keys()), ["T1", "T3", "T4"])
+
+    def test_critique_calls_count_toward_calls_per_landed_tag(self):
+        manifest = [
+            ("t1", "fixer", 1.0, True, "w1", "T3"),
+            ("t2", "critique", 1.0, True, "w1", "T3"),
+            ("t3", "critique", 1.0, True, "w1", "T3"),
+        ]
+        found = [("t4", "w1", "Canon:CameraSettings", 5, "T3")]
+        stats = tier_kpi_stats(manifest, found)
+        self.assertEqual(stats["T3"], {"calls": 3, "landed": 1, "calls_per_landed_tag": 3.0})
+
+    def test_critique_phase_lines_survive_the_real_manifest_regex_round_trip(self):
+        # End-to-end: a real manifest.log with fixer, reviewer, AND
+        # critique lines, parsed by the REAL parse_manifest_log_tiered
+        # (not hand-built tuples) -- proves the docstring's "fixer AND
+        # reviewer AND critique phases alike" claim actually holds
+        # against MANIFEST_ENTRY_RE, not just against tier_kpi_stats'
+        # own aggregation logic.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "manifest.log"
+            path.write_text(
+                "2026-07-21T10:00:00 phase=fixer worker=1 tier=T3 model=m prompt_chars=1 "
+                "elapsed=1.0s reply_chars=1 OK\n"
+                "2026-07-21T10:01:00 phase=reviewer worker=1 tier=T3 model=m prompt_chars=1 "
+                "elapsed=1.0s reply_chars=1 OK\n"
+                "2026-07-21T10:02:00 phase=critique worker=1 tier=T3 model=m prompt_chars=1 "
+                "elapsed=1.0s reply_chars=1 OK\n"
+            )
+            manifest = parse_manifest_log_tiered(path)
+            stats = tier_kpi_stats(manifest, [("t1", "w1", "Canon:CameraSettings", 1, "T3")])
+            self.assertEqual(stats["T3"], {"calls": 3, "landed": 1, "calls_per_landed_tag": 3.0})
 
 
 class EntriesForWorkerTests(unittest.TestCase):

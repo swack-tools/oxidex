@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+import find_tag_gaps
 from find_tag_gaps import (
     build_semaphore,
     ensure_tag_comparison_built,
@@ -193,6 +194,101 @@ class BuildSemaphoreTests(unittest.TestCase):
         with build_semaphore(self.path, max_holders=1, holder_id="h1"):
             with build_semaphore(self.path, max_holders=1, holder_id="h1"):
                 pass  # must not block
+
+    def test_heartbeat_keeps_a_slow_held_slot_alive_past_the_stale_threshold(self):
+        # Fake clock: the slot is stamped at t=1000, then the protected
+        # call "runs" long enough that the clock reads t=3000 -- 2000
+        # fake seconds, past stale_seconds=900, so without a heartbeat
+        # any concurrent waiter's _try_acquire_build_slot check would
+        # treat this holder as dead and steal its slot. The heartbeat
+        # thread (real thread, tiny real cadence, fake timestamps)
+        # re-stamps the holder's heartbeat with the advanced clock, so
+        # it reads fresh for as long as the slot is held.
+        clock = [1000.0]
+        observed = {}
+
+        def slow_body():
+            clock[0] = 3000.0
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                state = json.loads(self.path.read_text())
+                entry = state["holders"].get("h1") or {}
+                if entry.get("heartbeat") == 3000.0:
+                    observed.update(entry)
+                    break
+                time.sleep(0.005)
+
+        with build_semaphore(
+            self.path, max_holders=1, stale_seconds=900, holder_id="h1",
+            heartbeat_seconds=0.01, now_fn=lambda: clock[0],
+        ):
+            slow_body()
+
+        self.assertEqual(observed.get("heartbeat"), 3000.0)
+        # The staleness math a concurrent waiter would run mid-build: the
+        # original stamp (t=1000) would read abandoned; the heartbeat's
+        # re-stamp does not.
+        self.assertGreaterEqual(3000.0 - 1000.0, 900)  # un-heartbeated holder would be stale
+        self.assertLess(3000.0 - observed["heartbeat"], 900)  # heartbeated holder is fresh
+
+    def test_heartbeat_thread_stops_when_the_slot_is_released(self):
+        # After build_semaphore's `with` block exits, no
+        # build-semaphore-heartbeat-* thread may still be running
+        # (threading.Event stop + join, mirroring model_fix_loop.py's
+        # own claim-heartbeat thread lifecycle).
+        with build_semaphore(self.path, max_holders=1, holder_id="h1", heartbeat_seconds=0.01):
+            pass
+        self.assertFalse(
+            [t.name for t in threading.enumerate() if t.name.startswith("build-semaphore-heartbeat-")]
+        )
+
+    def test_heartbeat_disabled_when_heartbeat_seconds_is_falsy(self):
+        with build_semaphore(self.path, max_holders=1, holder_id="h1", heartbeat_seconds=0):
+            self.assertFalse(
+                [t.name for t in threading.enumerate() if t.name.startswith("build-semaphore-heartbeat-")]
+            )
+
+    def test_heartbeat_survives_a_transient_touch_failure(self):
+        # A heartbeat touch can legitimately raise mid-build (ENOSPC/
+        # EACCES, a torn read racing another holder's write). One such
+        # raise must not kill the daemon thread for the rest of a
+        # long-running build: proven end-to-end here by making the
+        # FIRST heartbeat touch raise, then observing a later re-stamp
+        # at the advanced clock -- a beat that can only have come from
+        # the thread surviving its failure.
+        clock = [1000.0]
+        touch_failed = threading.Event()
+        observed = {}
+        real_try_acquire = find_tag_gaps._try_acquire_build_slot
+
+        def flaky_try_acquire(*args, **kwargs):
+            if (threading.current_thread().name.startswith("build-semaphore-heartbeat-")
+                    and not touch_failed.is_set()):
+                touch_failed.set()
+                raise ValueError("synthetic transient touch failure")
+            return real_try_acquire(*args, **kwargs)
+
+        def slow_body():
+            clock[0] = 3000.0
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                if touch_failed.is_set():
+                    state = json.loads(self.path.read_text())
+                    entry = state["holders"].get("h1") or {}
+                    if entry.get("heartbeat") == 3000.0:
+                        observed.update(entry)
+                        break
+                time.sleep(0.005)
+
+        with patch("find_tag_gaps._try_acquire_build_slot", side_effect=flaky_try_acquire):
+            with build_semaphore(
+                self.path, max_holders=1, stale_seconds=900, holder_id="h1",
+                heartbeat_seconds=0.01, now_fn=lambda: clock[0],
+            ):
+                slow_body()
+
+        self.assertTrue(touch_failed.is_set())
+        self.assertEqual(observed.get("heartbeat"), 3000.0)
 
 
 class EnsureTagComparisonBuiltSemaphoreTests(unittest.TestCase):
