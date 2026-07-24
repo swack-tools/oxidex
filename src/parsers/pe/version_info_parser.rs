@@ -162,6 +162,7 @@ fn parse_string_table(data: &[u8]) -> Option<HashMap<String, String>> {
     let lang_id = read_wide_string(&data[6..])?;
 
     let language_code = language_code_from_string_table_key(&lang_id);
+    let character_set = character_set_from_string_table_key(&lang_id);
     // Skip header (6 bytes) + language ID string (including null terminator)
     let mut offset = 6 + (lang_id.len() + 1) * 2; // +1 for null terminator
     offset = (offset + 3) & !3;
@@ -188,6 +189,10 @@ fn parse_string_table(data: &[u8]) -> Option<HashMap<String, String>> {
         strings.insert("LanguageCode".to_string(), language_code.to_string());
     }
 
+    if let Some(character_set) = character_set {
+        strings.insert("CharacterSet".to_string(), character_set.to_string());
+    }
+
     Some(strings)
 }
 
@@ -195,6 +200,13 @@ fn language_code_from_string_table_key(key: &str) -> Option<&'static str> {
     let language_id = u16::from_str_radix(key.get(..4)?, 16).ok()?;
     match language_id {
         0x0409 => Some("English (U.S.)"),
+        _ => None,
+    }
+}
+
+fn character_set_from_string_table_key(key: &str) -> Option<&'static str> {
+    match u16::from_str_radix(key.get(4..8)?, 16).ok()? {
+        0x04b0 => Some("Unicode"),
         _ => None,
     }
 }
@@ -286,5 +298,11 @@ mod tests {
         );
         assert_eq!(language_code_from_string_table_key("invalid"), None);
         assert_eq!(language_code_from_string_table_key("040"), None);
+
+        assert_eq!(
+            character_set_from_string_table_key("040904B0"),
+            Some("Unicode")
+        );
+        assert_eq!(character_set_from_string_table_key("04090000"), None);
     }
 }
