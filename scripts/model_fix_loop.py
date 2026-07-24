@@ -2194,7 +2194,13 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     fmt = gap["format"]
     messages = [{"role": "user", "content": build_prompt(
         gap, repo_root=repo_root,
-        max_tags=config["max_prompt_tags"],
+        # A clustered gap (see make_cluster_gap) must show EVERY member
+        # tag, even when max_prompt_tags is 1 -- the whole point of the
+        # cluster is one conversation covering the sibling family.
+        max_tags=(
+            (len(gap["missing_tags"]) + len(gap["value_differences"]))
+            if gap.get("clustered") else config["max_prompt_tags"]
+        ),
         max_file_bytes=config["max_prompt_file_bytes"],
         samples_dir=samples_dir,
         perl_lib_dir=perl_lib_dir,
@@ -2450,6 +2456,40 @@ def make_single_tag_gap(tag_gap):
     }
 
 
+DEFAULT_MAX_CLUSTER_TAGS = 6
+
+
+def cluster_key(tag_gap):
+    """Which tags belong in one conversation: same format, same family
+    (middle component of the tag key -- EXIF, APP12, ZIP, ...), same
+    parser files. Sibling tags in one table are usually one generalized
+    branch away from each other (BlackLevelRed/Green/Blue, MODE1..6,
+    ZipCRC/ZipCompressedSize all were), so investigating them separately
+    re-pays the whole context cost per tag."""
+    parts = tag_gap["tag_key"].split(":")
+    family = parts[1] if len(parts) >= 3 else ""
+    return (tag_gap["format"], family, tuple(tag_gap.get("parser_files") or ()))
+
+
+def make_cluster_gap(leader):
+    """make_single_tag_gap generalized to a leader plus its
+    cluster_members: one gap dict whose tag lists union every member,
+    gap_count == member count (so fix_gap's decrease check means "at
+    least one of these closed"), and "clustered": True (so build_prompt
+    shows every member even when max_prompt_tags is 1)."""
+    members = [leader] + list(leader.get("cluster_members") or [])
+    missing = [m["entry"] for m in members if m["kind"] == "missing"]
+    diffs = [m["entry"] for m in members if m["kind"] == "diff"]
+    return {
+        "format": leader["format"],
+        "missing_tags": missing,
+        "value_differences": diffs,
+        "gap_count": len(members),
+        "parser_files": leader["parser_files"],
+        "clustered": True,
+    }
+
+
 def load_tag_state(path):
     """Load the persistent per-tag blacklist/fail-count state. A missing or
     corrupt file just means "nothing blacklisted yet" -- this is advisory,
@@ -2480,7 +2520,7 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
                   load_state_fn=load_tag_state, save_state_fn=save_tag_state,
                   max_rounds=None, max_fails=DEFAULT_MAX_TAG_FAILS, blacklist_full=False,
                   worker_id=None, claim_stale_seconds=1800, max_distinct_tags=None,
-                  refresh_worktree_fn=None):
+                  refresh_worktree_fn=None, max_cluster_tags=1):
     """Loop-until-everything-found driver, blacklisting individual TAGS
     (never a whole format) after max_fails failed attempts each. State
     persists to disk at state_path, so the blacklist -- and each tag's
@@ -2524,6 +2564,15 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
     picking up a brand-new one -- useful to bound one worker's share of a
     shared tag pool in a parallel run (see [parallel].max_tags_per_process
     in config.toml).
+
+    max_cluster_tags, when > 1, lets the selected tag pull up to
+    max_cluster_tags - 1 additional still-active sibling tags (same
+    cluster_key: format, family, parser files) into one fix conversation
+    as its "cluster_members". Members are claimed alongside the leader; a
+    fixed/duplicate outcome clears every member's state entry, while a
+    failure charges only the leader's fail budget and simply releases the
+    members' claims. The default of 1 preserves the original
+    one-tag-per-conversation behavior exactly.
 
     refresh_worktree_fn(), if given, is called at the start of every
     round before find_gaps_fn() -- see main()'s wiring to the real
@@ -2603,6 +2652,24 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
         entry["claimed_at"] = time.time()
         save_state_fn(state_path, state)
 
+        if max_cluster_tags > 1:
+            leader_key = cluster_key(tag_gap)
+            members = []
+            for cand in active[1:]:
+                if len(members) >= max_cluster_tags - 1:
+                    break
+                if cluster_key(cand) == leader_key:
+                    members.append(cand)
+            for m in members:
+                m_entry = state.setdefault(m["tag_key"], {"fails": 0, "blacklisted": False, "attempts": []})
+                m_entry["claimed_by"] = worker_id
+                m_entry["claimed_at"] = time.time()
+                seen_tag_keys.add(m["tag_key"])
+            if members:
+                tag_gap = dict(tag_gap, cluster_members=members)
+                save_state_fn(state_path, state)
+                log_fn(f"clustered {len(members)} sibling tag(s) with {tag_gap['tag_key']}")
+
         # One line per round naming both the round number and the tag --
         # the single source watch_parallel_fix.py's dashboard reads to
         # show "what iteration is this worker on, and on what tag" without
@@ -2623,6 +2690,8 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
         if result["status"] == "fixed":
             fixed.append({"tag_key": tag_gap["tag_key"], **result})
             state.pop(tag_gap["tag_key"], None)
+            for m in tag_gap.get("cluster_members") or []:
+                state.pop(m["tag_key"], None)
             log_fn(f"[{tag_gap['tag_key']}] FIXED")
         elif result["status"] == "duplicate":
             # Already fixed elsewhere (see fix_gap's detect_duplicate_fn)
@@ -2633,9 +2702,20 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             # would, and move on to a different tag next round.
             skipped.append({"tag_key": tag_gap["tag_key"], **result})
             state.pop(tag_gap["tag_key"], None)
+            for m in tag_gap.get("cluster_members") or []:
+                state.pop(m["tag_key"], None)
             log_fn(f"[{tag_gap['tag_key']}] SKIPPED (already fixed elsewhere)")
         else:
             failed.append({"tag_key": tag_gap["tag_key"], **result})
+            # A cluster failure charges only the leader -- members are
+            # simply released (claims dropped) so they stay eligible,
+            # individually or under a future leader, without inheriting
+            # a fail count for an attempt that was the leader's.
+            for m in tag_gap.get("cluster_members") or []:
+                me = state.get(m["tag_key"])
+                if me:
+                    me.pop("claimed_by", None)
+                    me.pop("claimed_at", None)
             rounds_list = result.get("rounds") or [
                 {"diff": result.get("diff"), "reason": result.get("reason", "unknown"), "critique": None}
             ]
@@ -2811,6 +2891,7 @@ def _normalize_model_config(table):
         "governor_burst": table.get("governor_burst", DEFAULT_GOVERNOR_BURST),
         "governor_cooldown_seconds": table.get("governor_cooldown_seconds", DEFAULT_GOVERNOR_COOLDOWN_SECONDS),
         "governor_max_cooldown_seconds": table.get("governor_max_cooldown_seconds", DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS),
+        "max_cluster_tags": table.get("max_cluster_tags", DEFAULT_MAX_CLUSTER_TAGS),
     }
 
 
@@ -3141,16 +3222,18 @@ def main(argv=None):
             path = run_format_comparison(fmt, args.cache_dir)
             regrouped = group_gaps_by_format(load_comparison_report(path))
             match = next((g for g in regrouped if g["format"] == fmt), None)
-            open_state = tag_still_open(match, tag_gap)
-            if open_state and open_state[0] == "value_differs":
-                return 1, (
-                    f"target tag is present but its value is wrong -- "
-                    f'expected (exiftool): "{open_state[1]}" / got (oxidex): "{open_state[2]}". '
-                    "Fix the value, do not just emit the tag."
-                )
-            return 1 if open_state else 0
+            targets = [tag_gap] + list(tag_gap.get("cluster_members") or [])
+            open_count, detail = 0, None
+            for t in targets:
+                st = tag_still_open(match, t)
+                if st:
+                    open_count += 1
+                    if st[0] == "value_differs" and detail is None:
+                        detail = (f'{t["tag_key"]}: present but wrong -- expected (exiftool): '
+                                  f'"{st[1]}" / got (oxidex): "{st[2]}". Fix the value.')
+            return (open_count, detail) if detail else open_count
 
-        single_gap = make_single_tag_gap(tag_gap)
+        single_gap = make_cluster_gap(tag_gap)
         # Log the exact prompt this round is about to send -- to the
         # screen and to a per-worker file -- before the call goes out, so
         # "what is it sending" is visible immediately rather than only
@@ -3158,7 +3241,11 @@ def main(argv=None):
         # dump.
         prompt_preview = build_prompt(
             single_gap, repo_root=REPO_ROOT,
-            max_tags=cfg["max_prompt_tags"], max_file_bytes=cfg["max_prompt_file_bytes"],
+            # Mirror fix_gap's clustered max_tags so the preview shows
+            # exactly what the model will actually receive.
+            max_tags=(single_gap["gap_count"] if single_gap.get("clustered")
+                      else cfg["max_prompt_tags"]),
+            max_file_bytes=cfg["max_prompt_file_bytes"],
             samples_dir=Path(args.cache_dir) / "combined-samples",
             previous_attempts=previous_attempts,
             perl_lib_dir=perl_lib_dir,
@@ -3214,6 +3301,7 @@ def main(argv=None):
         log_fn=timestamped_log, max_fails=args.max_tag_fails,
         blacklist_full=args.blacklist_full, worker_id=args.worker_id,
         max_distinct_tags=max_tags_per_process, refresh_worktree_fn=refresh_worktree_fn,
+        max_cluster_tags=config["max_cluster_tags"],
     )
     print(f"stopped after {summary['rounds']} rounds")
     print(f"  fixed:   {len(summary['fixed'])} tags")

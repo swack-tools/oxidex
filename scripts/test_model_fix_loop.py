@@ -25,6 +25,7 @@ from model_fix_loop import (
     apply_prompt_cache_markers,
     call_model,
     extract_cache_usage,
+    cluster_key,
     compact_messages,
     DEFAULT_GOVERNOR_BURST,
     detect_duplicate_tag_insertion,
@@ -48,6 +49,7 @@ from model_fix_loop import (
     governor_report,
     load_recent_sweep_reviews,
     load_toml_config,
+    make_cluster_gap,
     make_single_tag_gap,
     models_for_phase,
     parse_request_range,
@@ -3459,6 +3461,42 @@ class MakeSingleTagGapTests(unittest.TestCase):
         self.assertEqual(gap["gap_count"], 1)
 
 
+class ClusterKeyTests(unittest.TestCase):
+    def test_family_is_the_middle_component(self):
+        tg = {"format": "RW2", "tag_key": "RW2:EXIF:BlackLevelRed", "parser_files": ["a.rs"]}
+        self.assertEqual(cluster_key(tg), ("RW2", "EXIF", ("a.rs",)))
+
+    def test_different_parser_files_do_not_cluster(self):
+        a = {"format": "F", "tag_key": "F:X:A", "parser_files": ["a.rs"]}
+        b = {"format": "F", "tag_key": "F:X:B", "parser_files": ["b.rs"]}
+        self.assertNotEqual(cluster_key(a), cluster_key(b))
+
+
+class MakeClusterGapTests(unittest.TestCase):
+    def _tg(self, name, kind="missing"):
+        if kind == "missing":
+            entry = {"family": "APP12", "name": name, "value": "1", "tag_id": None, "source_file": None}
+        else:
+            entry = {"tag_key": f"APP12:{name}", "exiftool_value": "1", "oxidex_value": "0", "source_file": None}
+        return {"format": "JPEG", "tag_key": f"JPEG:APP12:{name}", "kind": kind,
+                "entry": entry, "parser_files": ["j.rs"]}
+
+    def test_leader_without_members_matches_single_tag_gap(self):
+        leader = self._tg("MODE3")
+        gap = make_cluster_gap(leader)
+        self.assertEqual(gap["gap_count"], 1)
+        self.assertTrue(gap["clustered"])
+        self.assertEqual(len(gap["missing_tags"]), 1)
+
+    def test_members_are_unioned_across_kinds(self):
+        leader = self._tg("MODE3")
+        leader["cluster_members"] = [self._tg("MODE4"), self._tg("MODE5", kind="diff")]
+        gap = make_cluster_gap(leader)
+        self.assertEqual(gap["gap_count"], 3)
+        self.assertEqual(len(gap["missing_tags"]), 2)
+        self.assertEqual(len(gap["value_differences"]), 1)
+
+
 class TagStillOpenTests(unittest.TestCase):
     MISSING_GAP = {"format": "XMP", "kind": "missing", "tag_key": "XMP:XMP:ArtworkTitle",
                    "entry": {"family": "XMP", "name": "ArtworkTitle", "value": "test",
@@ -3962,6 +4000,82 @@ class RunTagLoopTests(unittest.TestCase):
         )
         self.assertEqual(result["rounds"], 1)
         self.assertTrue(any("refresh skipped" in line for line in logged))
+
+    def _cluster_gaps(self):
+        # Three same-family siblings plus one outsider, all in one
+        # format-level gap so every tag shares parser_files (the third
+        # cluster_key component); COM:Other differs in family, so it
+        # must never ride along with the APP12 cluster.
+        def entry(family, name):
+            return {"family": family, "name": name, "value": "1", "tag_id": None, "source_file": None}
+        return [{
+            "format": "JPEG",
+            "missing_tags": [entry("APP12", "MODE3"), entry("APP12", "MODE4"),
+                             entry("APP12", "MODE5"), entry("COM", "Other")],
+            "value_differences": [],
+            "gap_count": 4,
+            "parser_files": ["j.rs"],
+        }]
+
+    def test_clusters_siblings_onto_the_leader(self):
+        seen = []
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            seen.append([m["tag_key"] for m in [tag_gap] + tag_gap.get("cluster_members", [])])
+            return {"status": "fixed", "gaps_closed": 1, "rounds": []}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=self._cluster_gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1, max_cluster_tags=6,
+        )
+        self.assertEqual(sorted(seen[0]),
+                         ["JPEG:APP12:MODE3", "JPEG:APP12:MODE4", "JPEG:APP12:MODE5"])
+
+    def test_fixed_clears_state_for_every_member(self):
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            return {"status": "fixed", "gaps_closed": 1, "rounds": []}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=self._cluster_gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1, max_cluster_tags=6,
+        )
+        for key in ("JPEG:APP12:MODE3", "JPEG:APP12:MODE4", "JPEG:APP12:MODE5"):
+            self.assertNotIn(key, store)
+
+    def test_failure_charges_only_the_leader(self):
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            return {"status": "failed", "reason": "nope"}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=self._cluster_gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1, max_cluster_tags=6,
+        )
+        self.assertEqual(store["JPEG:APP12:MODE3"]["fails"], 1)
+        for key in ("JPEG:APP12:MODE4", "JPEG:APP12:MODE5"):
+            self.assertEqual(store[key].get("fails", 0), 0)
+            self.assertNotIn("claimed_by", store[key])
+            self.assertNotIn("claimed_at", store[key])
+
+    def test_max_cluster_tags_1_disables_clustering(self):
+        seen = []
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            seen.append(tag_gap)
+            return {"status": "fixed", "gaps_closed": 1, "rounds": []}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=self._cluster_gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1,
+        )
+        self.assertNotIn("cluster_members", seen[0])
 
 
 class RunTagLoopInfraFailureTests(unittest.TestCase):
