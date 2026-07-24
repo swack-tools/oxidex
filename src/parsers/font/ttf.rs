@@ -260,9 +260,12 @@ impl TTFParser {
                 let tag_value = TagValue::String(value);
                 metadata.insert(key.to_string(), tag_value.clone());
 
-                // ExifTool reports name ID 0 in the shared Font group.
+                // ExifTool reports these name-table values in the shared
+                // Font group as well.
                 if *name_id == NAME_COPYRIGHT {
                     metadata.insert("Font:Copyright".to_string(), tag_value);
+                } else if *name_id == NAME_FONT_FAMILY {
+                    metadata.insert("Font:FontFamily".to_string(), tag_value);
                 }
             }
         }
@@ -556,6 +559,10 @@ mod tests {
         );
         assert_eq!(
             metadata.get("FontFamily"),
+            Some(&TagValue::String("Test".to_string()))
+        );
+        assert_eq!(
+            metadata.get("Font:FontFamily"),
             Some(&TagValue::String("Test".to_string()))
         );
         assert!(metadata.contains_key("FontCreated"));
