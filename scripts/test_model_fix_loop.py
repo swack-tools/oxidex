@@ -12,7 +12,11 @@ from pathlib import Path
 from model_fix_loop import (
     ARCHITECTURE_PRIMER,
     KNOWN_PITFALLS,
+    _dedupe_machine_entries,
+    _entry_is_human,
+    _is_rejection_entry,
     _normalize_model_config,
+    _select_tier,
     _state_locked,
     load_tag_state,
     save_tag_state,
@@ -41,7 +45,6 @@ from model_fix_loop import (
     estimate_tokens,
     expand_gaps_to_tags,
     extract_diff,
-    append_format_memory_note,
     extract_perl_table_notes,
     extract_perl_tag_snippet,
     extract_review_verdict,
@@ -49,8 +52,8 @@ from model_fix_loop import (
     find_implemented_sibling,
     fix_gap,
     format_previous_attempts,
-    load_format_memory,
-    summarize_format_memory,
+    load_global_pitfalls,
+    load_module_playbook,
     format_sweep_review_history,
     git_apply,
     git_checkout_clean,
@@ -63,6 +66,7 @@ from model_fix_loop import (
     make_cluster_gap,
     make_single_tag_gap,
     models_for_phase,
+    new_oxidex_only_keys,
     parse_request_range,
     refresh_worktree,
     resolve_request,
@@ -93,6 +97,57 @@ class LoadTomlConfigTests(unittest.TestCase):
 
     def test_missing_file_returns_none(self):
         self.assertIsNone(load_toml_config(Path("/nonexistent/path/config.toml")))
+
+
+class AppendLessonWrapperTests(unittest.TestCase):
+    """Spec K1 item 1: model_fix_loop.append_lesson is a thin wrapper
+    delegating to distill_lessons.append_lesson (the canonical K1 owner),
+    a sibling import exactly like find_tag_gaps."""
+
+    def _event(self):
+        import distill_lessons
+        return distill_lessons.make_lesson(
+            ts=1_784_800_000, worker="w1", format_name="JPEG", module="Canon.pm",
+            event="wrong_value", reason="PrintConv must match Perl byte-for-byte",
+        )
+
+    def test_home_dir_resolves_to_logs_lessons_jsonl(self):
+        from model_fix_loop import append_lesson
+        with tempfile.TemporaryDirectory() as tmpdir:
+            append_lesson(tmpdir, self._event())
+            path = Path(tmpdir) / "logs" / "lessons.jsonl"
+            lines = path.read_text().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(json.loads(lines[0])["event"], "wrong_value")
+
+    def test_full_lessons_path_is_used_as_is(self):
+        from model_fix_loop import append_lesson
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "some" / "dir" / "lessons.jsonl"
+            append_lesson(path, self._event())
+            lines = path.read_text().splitlines()
+        self.assertEqual(len(lines), 1)
+
+    def test_appends_do_not_clobber(self):
+        from model_fix_loop import append_lesson
+        with tempfile.TemporaryDirectory() as tmpdir:
+            append_lesson(tmpdir, self._event())
+            append_lesson(tmpdir, self._event())
+            path = Path(tmpdir) / "logs" / "lessons.jsonl"
+            self.assertEqual(len(path.read_text().splitlines()), 2)
+
+    def test_fingerprints_match_distill_lessons_directly(self):
+        # Byte-identical fingerprints across every K1 writer -- the
+        # whole point of the canonical-owner refactor (item 1).
+        import distill_lessons
+        from model_fix_loop import append_lesson
+        with tempfile.TemporaryDirectory() as tmpdir:
+            event = self._event()
+            append_lesson(tmpdir, event)
+        self.assertEqual(
+            event["fingerprint_generic"],
+            distill_lessons.fingerprint_generic("wrong_value", "", event["reason"]),
+        )
 
 
 class NormalizeModelConfigTests(unittest.TestCase):
@@ -199,6 +254,28 @@ class NormalizeModelConfigTests(unittest.TestCase):
         self.assertEqual(config["claim_stale_seconds"], 3600)
         self.assertEqual(config["heartbeat_seconds"], 30)
 
+    def test_section6_k5_knobs_have_defaults(self):
+        config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
+        self.assertEqual(config["reviewer_max_prompt_tokens"], 8192)
+        self.assertEqual(config["learning_budget_tokens"], 1200)
+        self.assertEqual(config["parser_floor_tokens"], 2000)
+        self.assertEqual(config["lessons_tail_kb"], 256)
+
+    def test_section6_k5_knobs_are_overridable(self):
+        config = _normalize_model_config({
+            "base_url": "u", "api_key": "k", "models": ["m"],
+            "reviewer_max_prompt_tokens": 4096, "learning_budget_tokens": 600,
+            "parser_floor_tokens": 1000, "lessons_tail_kb": 64,
+        })
+        self.assertEqual(config["reviewer_max_prompt_tokens"], 4096)
+        self.assertEqual(config["learning_budget_tokens"], 600)
+        self.assertEqual(config["parser_floor_tokens"], 1000)
+        self.assertEqual(config["lessons_tail_kb"], 64)
+
+    def test_default_max_prompt_tokens_is_8192(self):
+        config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
+        self.assertEqual(config["max_prompt_tokens"], 8192)
+
 
 class ExtractDiffTests(unittest.TestCase):
     def test_extracts_fenced_diff_block(self):
@@ -248,6 +325,65 @@ class TruncateToTokenBudgetTests(unittest.TestCase):
         text = "KEEP_THIS_PREFIX" + "z" * 100_000
         result = truncate_to_token_budget(text, max_tokens=10)
         self.assertTrue(result.startswith("KEEP_THIS_PREFIX"))
+
+
+class AssemblePromptSectionsTests(unittest.TestCase):
+    """Section 6: assemble_prompt_sections's own property-style checks --
+    total <= cap, parser floor honored, learning block present at 8192
+    with a 60 KB parser section (spec Testing section, verbatim)."""
+
+    def test_no_shrink_when_already_under_budget(self):
+        from model_fix_loop import assemble_prompt_sections
+        sections = [("a", "short"), ("b", "also short")]
+        result = assemble_prompt_sections(sections, {"a": 0}, max_tokens=1000)
+        self.assertEqual(result, "shortalso short")
+
+    def test_60kb_parser_section_at_8192_leaves_learning_block_present(self):
+        from model_fix_loop import assemble_prompt_sections, estimate_tokens
+        parser_text = "x" * 60_000
+        learning_text = "LEARNING-MARKER: distilled lessons go here"
+        sections = [
+            ("intro", "short static intro"),
+            ("attempts", ""),
+            ("samples", ""),
+            ("neighbor", ""),
+            ("perl_block", ""),
+            ("parser_files", parser_text),
+            ("learning", learning_text),
+            ("tail", "tail text"),
+        ]
+        budgets = {
+            "attempts": 0, "samples": 0, "neighbor": 0, "perl_block": 0,
+            "parser_files": 2000,
+        }
+        result = assemble_prompt_sections(sections, budgets, max_tokens=8192)
+        self.assertLessEqual(estimate_tokens(result), 8192 + 10)  # small rounding slack
+        self.assertIn("LEARNING-MARKER", result)  # never dropped
+
+    def test_parser_floor_is_never_crossed(self):
+        from model_fix_loop import assemble_prompt_sections, estimate_tokens
+        sections = [("parser_files", "y" * 100_000)]
+        result = assemble_prompt_sections(sections, {"parser_files": 500}, max_tokens=1)
+        self.assertGreaterEqual(estimate_tokens(result), 500)
+
+    def test_priority_order_shrinks_earlier_sections_first(self):
+        from model_fix_loop import assemble_prompt_sections
+        sections = [("first", "a" * 4000), ("second", "b" * 4000)]
+        # Total ~2000 tokens; cap 1200 forces ~800 tokens of shrinkage.
+        # "first" is listed before "second" in budgets, so it absorbs the
+        # overflow first -- "second" (listed later) survives untouched as
+        # long as "first" alone can absorb the whole deficit.
+        result = assemble_prompt_sections(
+            sections, {"first": 0, "second": 0}, max_tokens=1200,
+        )
+        self.assertLess(result.count("a"), 4000)  # first was shrunk
+        self.assertIn("b" * 4000, result)  # second untouched
+
+    def test_sections_not_in_budgets_are_never_shrunk(self):
+        from model_fix_loop import assemble_prompt_sections
+        sections = [("protected", "p" * 100_000), ("elastic", "e" * 100_000)]
+        result = assemble_prompt_sections(sections, {"elastic": 0}, max_tokens=10)
+        self.assertIn("p" * 100_000, result)  # untouched even though huge
 
 
 class CompactMessagesTests(unittest.TestCase):
@@ -906,6 +1042,137 @@ class GitCommitTests(unittest.TestCase):
         self.assertIn(["git", "add", "-A"], calls)
         self.assertIn(["git", "commit", "-m", "fix(nef): wire tags"], calls)
 
+    @patch("model_fix_loop.subprocess.run")
+    def test_no_trailers_matches_legacy_call_exactly(self, mock_run):
+        # trailers=None (the default) must produce byte-identical argv to
+        # every pre-M1 caller -- no extra -m block at all.
+        git_commit("fix(nef): wire tags", Path("/fake/repo"), trailers=None)
+        commit_calls = [c.args[0] for c in mock_run.call_args_list if c.args[0][1] == "commit"]
+        self.assertEqual(commit_calls, [["git", "commit", "-m", "fix(nef): wire tags"]])
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_trailers_appended_as_one_extra_dash_m_block(self, mock_run):
+        git_commit(
+            "fix(nef): wire tags", Path("/fake/repo"),
+            trailers=[("Format", "NEF"), ("Tag", "EXIF:LensModel"), ("Tag", "EXIF:ISO")],
+        )
+        commit_call = next(c.args[0] for c in mock_run.call_args_list if c.args[0][1] == "commit")
+        self.assertEqual(commit_call[:4], ["git", "commit", "-m", "fix(nef): wire tags"])
+        self.assertEqual(commit_call[4], "-m")
+        trailer_block = commit_call[5]
+        self.assertEqual(
+            trailer_block.splitlines(),
+            ["Format: NEF", "Tag: EXIF:LensModel", "Tag: EXIF:ISO"],
+        )
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_falsy_trailer_values_are_omitted(self, mock_run):
+        git_commit(
+            "fix(nef): wire tags", Path("/fake/repo"),
+            trailers=[("Format", "NEF"), ("Table", None), ("Perl-Ref", "")],
+        )
+        commit_call = next(c.args[0] for c in mock_run.call_args_list if c.args[0][1] == "commit")
+        self.assertEqual(commit_call, ["git", "commit", "-m", "fix(nef): wire tags", "-m", "Format: NEF"])
+
+    def test_dict_trailers_also_work(self):
+        with patch("model_fix_loop.subprocess.run") as mock_run:
+            git_commit("fix(nef): wire tags", Path("/fake/repo"), trailers={"Format": "NEF"})
+        commit_call = next(c.args[0] for c in mock_run.call_args_list if c.args[0][1] == "commit")
+        self.assertIn("Format: NEF", commit_call[5])
+
+
+class SanitizeTrailerValueTests(unittest.TestCase):
+    def test_collapses_newlines_and_whitespace(self):
+        from model_fix_loop import sanitize_trailer_value
+        self.assertEqual(sanitize_trailer_value("a\nb   c\t d"), "a b c d")
+
+    def test_truncates_to_max_chars(self):
+        from model_fix_loop import sanitize_trailer_value
+        value = sanitize_trailer_value("x" * 300, max_chars=200)
+        self.assertEqual(len(value), 200)
+        self.assertTrue(value.endswith("…"))
+
+
+class GitCommitTrailerRoundTripTests(unittest.TestCase):
+    """Spec M1: a real git tempdir repo proves git_commit's trailer
+    output is exactly what validate_fix_commit.py's parser expects --
+    the 'integration-style test in a git tempdir proving the round-trip'
+    the spec's Testing section asks for."""
+
+    def _make_repo(self, tmpdir):
+        import subprocess as sp
+        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+        repo = Path(tmpdir) / "repo"
+        repo.mkdir()
+
+        def git(*args, input_text=None):
+            return sp.run(
+                ["git", *args], cwd=repo, input=input_text, capture_output=True,
+                text=True, check=True, env=env,
+            ).stdout
+
+        git("init", "-q")
+        git("config", "user.email", "fleet@example.com")
+        git("config", "user.name", "Fleet Test")
+        git("config", "commit.gpgsign", "false")
+        (repo / "README.md").write_text("base\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "base commit")
+        return repo, git
+
+    def test_round_trips_through_validate_fix_commit(self):
+        import tempfile as tf
+        from validate_fix_commit import parse_trailers, validate_commit
+
+        with tf.TemporaryDirectory() as tmpdir:
+            repo, git = self._make_repo(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "canon.rs").write_text("pub fn noop() {}\n")
+            git_commit(
+                "fix(jpeg): wire AELButton", repo,
+                trailers=[
+                    ("Format", "JPEG"),
+                    ("Tag", "MakerNotes:AELButton"),
+                    ("Sample", "/samples/canon1.jpg"),
+                    ("Exiftool-Value", "On"),
+                    ("Oxidex-Value", "On"),
+                    ("Perl-Ref", "Canon.pm"),
+                    ("Verified", "recheck-pass gaps=1->0"),
+                    ("Worker", "canon-1"),
+                    ("Table", "Canon::CameraSettings"),
+                ],
+            )
+            sha = git("rev-parse", "HEAD").strip()
+            message = git("show", "-s", "--format=%B", sha)
+            trailers = parse_trailers(message, repo)
+            result = validate_commit(sha, repo)
+
+        self.assertEqual(trailers["Format"], ["JPEG"])
+        self.assertEqual(trailers["Tag"], ["MakerNotes:AELButton"])
+        self.assertEqual(trailers["Worker"], ["canon-1"])
+        self.assertEqual(trailers["Table"], ["Canon::CameraSettings"])
+        self.assertEqual(result["checks"]["trailers"], "pass")
+        self.assertTrue(result["ok"])
+
+    def test_review_unverifiable_trailer_round_trips(self):
+        import tempfile as tf
+        from validate_fix_commit import parse_trailers
+
+        with tf.TemporaryDirectory() as tmpdir:
+            repo, git = self._make_repo(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "canon.rs").write_text("pub fn noop() {}\n")
+            git_commit(
+                "fix(jpeg): wire AELButton", repo,
+                trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:AELButton"),
+                          ("Verified", "recheck-pass gaps=1->0"),
+                          ("Review-Unverifiable", "UNVERIFIABLE:C1")],
+            )
+            sha = git("rev-parse", "HEAD").strip()
+            message = git("show", "-s", "--format=%B", sha)
+            trailers = parse_trailers(message, repo)
+        self.assertEqual(trailers["Review-Unverifiable"], ["UNVERIFIABLE:C1"])
+
 
 class RefreshWorktreeTests(unittest.TestCase):
     @patch("model_fix_loop.subprocess.run")
@@ -1311,7 +1578,12 @@ class BuildPromptTokenBudgetTests(unittest.TestCase):
         prompt = build_prompt(gap)
         self.assertLessEqual(estimate_tokens(prompt), 4096)
 
-    def test_a_tiny_token_budget_truncates_the_prompt(self):
+    def test_a_tiny_token_budget_shrinks_the_huge_parser_file_to_its_floor(self):
+        # Section 6: graduated per-section truncation replaced plain
+        # head-keeping -- a budget far below the huge parser-file
+        # section's own size still only ever shrinks it down to (never
+        # below) parser_floor_tokens, rather than blindly chopping the
+        # whole assembled prompt at some byte offset.
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             (tmp / "big.rs").write_text("x" * 100_000)
@@ -1321,12 +1593,33 @@ class BuildPromptTokenBudgetTests(unittest.TestCase):
             }
             prompt = build_prompt(
                 gap, repo_root=tmp, max_tags=40, max_file_bytes=200_000, max_prompt_tokens=50,
+                parser_floor_tokens=200,
             )
-        self.assertIn("truncated to fit the ~50-token budget", prompt)
-        # Far short of what the untruncated prompt (100,000-char file alone) would be --
-        # the exact length includes the marker text's own overhead, so this checks
-        # order-of-magnitude truncation happened rather than an exact byte count.
-        self.assertLess(len(prompt), 1000)
+        # Far short of the untruncated prompt (100,000-char file alone) --
+        # the exact length includes the static architecture/manifest text
+        # this loop's own default cap doesn't shrink, so this checks
+        # order-of-magnitude truncation happened, not an exact byte count.
+        self.assertLess(len(prompt), 10_000)
+        # But never below the floor -- big.rs's own marker still shows,
+        # proving the parser section wasn't squeezed to nothing.
+        self.assertIn("big.rs", prompt)
+
+    def test_parser_floor_is_never_crossed_even_far_under_budget(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            (tmp / "big.rs").write_text("x" * 100_000)
+            gap = {
+                "format": "JPEG", "missing_tags": [], "value_differences": [],
+                "gap_count": 0, "parser_files": ["big.rs"],
+            }
+            prompt = build_prompt(
+                gap, repo_root=tmp, max_tags=40, max_file_bytes=200_000,
+                max_prompt_tokens=1, parser_floor_tokens=200,
+            )
+        # Even a 1-token budget (impossible to honor given the static
+        # constraints/manifest text alone) leaves the parser section at
+        # least at its floor -- never squeezed to zero.
+        self.assertGreaterEqual(estimate_tokens(prompt), 200)
 
 
 class BuildPromptOrderingTests(unittest.TestCase):
@@ -1542,6 +1835,100 @@ class LoadRecentSweepReviewsTests(unittest.TestCase):
             result = load_recent_sweep_reviews(log_path, "NEF")
         self.assertEqual(len(result), 1)
 
+    # -- Spec K4 two-tier selection: cross-format rejections tier --
+
+    def test_cross_format_rejections_are_included_and_tagged(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            entries = [
+                {"format": "JPEG", "tag": "A", "verdict": "rejected", "reason": "wrong table"},
+            ]
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(log_path, "NEF")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["format"], "JPEG")
+        self.assertEqual(result[0]["_sweep_review_tier"], "other_format")
+
+    def test_cross_format_non_rejections_are_excluded(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            entries = [
+                {"format": "JPEG", "tag": "A", "verdict": "accepted", "reason": "fine"},
+            ]
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(log_path, "NEF")
+        self.assertEqual(result, [])
+
+    def test_cross_format_recognizes_verdict_class_rejections_without_legacy_verdict(self):
+        # No legacy "verdict" field at all -- only verdict_class -- to
+        # isolate _is_rejection_entry's verdict_class branch from its
+        # legacy-verdict branch.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            entries = [
+                {"format": "JPEG", "tag": "A",
+                 "verdict_class": "human_rejected", "reason": "human said no"},
+                {"format": "PNG", "tag": "B",
+                 "verdict_class": "machine_rejected", "reason": "recheck failed"},
+                {"format": "TIFF", "tag": "C",
+                 "verdict_class": "machine_accepted", "reason": "shipped"},
+            ]
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(log_path, "NEF")
+        self.assertEqual({e["tag"] for e in result}, {"A", "B"})
+
+    def test_cross_format_tier_capped_by_max_other_format_entries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            entries = [
+                {"format": "JPEG", "tag": f"T{i}", "verdict": "rejected", "reason": f"r{i}",
+                 "patch_id": f"p{i}"}
+                for i in range(10)
+            ]
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(
+                log_path, "NEF", max_entries=4, max_other_format_entries=2
+            )
+        self.assertEqual(len(result), 2)
+        self.assertEqual([e["tag"] for e in result], ["T9", "T8"])
+
+    def test_same_format_and_cross_format_tiers_are_independent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            entries = (
+                [{"format": "NEF", "tag": f"S{i}", "verdict": "accepted", "reason": "r",
+                  "patch_id": f"s{i}"} for i in range(6)]
+                + [{"format": "JPEG", "tag": f"X{i}", "verdict": "rejected", "reason": "r",
+                    "patch_id": f"x{i}"} for i in range(6)]
+            )
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(
+                log_path, "NEF", max_entries=2, max_other_format_entries=3
+            )
+        same = [e for e in result if e.get("_sweep_review_tier") != "other_format"]
+        other = [e for e in result if e.get("_sweep_review_tier") == "other_format"]
+        self.assertEqual(len(same), 2)
+        self.assertEqual(len(other), 3)
+
+    def test_human_verdicts_preferred_over_machine_within_a_tier(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            # Append order (oldest first): human1 is the OLDEST entry,
+            # machine1/machine2 are newer. A plain recency cutoff at
+            # max_entries=1 would pick machine2; human preference must
+            # override that and pick human1 instead.
+            entries = [
+                {"format": "NEF", "tag": "human1", "verdict": "rejected",
+                 "verdict_class": "human_rejected", "reason": "human reason"},
+                {"format": "NEF", "tag": "machine1", "verdict": "accepted",
+                 "verdict_class": "machine_accepted", "reason": "r", "patch_id": "m1"},
+                {"format": "NEF", "tag": "machine2", "verdict": "accepted",
+                 "verdict_class": "machine_accepted", "reason": "r2", "patch_id": "m2"},
+            ]
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(log_path, "NEF", max_entries=1)
+        self.assertEqual([e["tag"] for e in result], ["human1"])
+
 
 class FormatSweepReviewHistoryTests(unittest.TestCase):
     def test_empty_entries_returns_empty_string(self):
@@ -1552,6 +1939,148 @@ class FormatSweepReviewHistoryTests(unittest.TestCase):
             {"format": "NEF", "tag": "ExifIFD:CFAPattern", "verdict": "rejected", "reason": "wrong name"},
         ])
         self.assertIn("REJECTED ExifIFD:CFAPattern: wrong name", rendered)
+
+    def test_same_format_entries_render_under_original_heading_without_format_prefix(self):
+        rendered = format_sweep_review_history([
+            {"format": "NEF", "tag": "A", "verdict": "accepted", "reason": "r1"},
+        ])
+        self.assertIn("Recent sweep-review outcomes for this format", rendered)
+        self.assertIn("ACCEPTED A: r1", rendered)
+        self.assertNotIn("NEF:A", rendered)
+
+    def test_cross_format_entries_render_under_their_own_subheader_with_format_prefix(self):
+        rendered = format_sweep_review_history([
+            {"format": "JPEG", "tag": "B", "verdict": "rejected", "reason": "r2",
+             "_sweep_review_tier": "other_format"},
+        ])
+        self.assertIn("Rejections from other formats (the mistakes generalize):", rendered)
+        self.assertIn("REJECTED JPEG:B: r2", rendered)
+        # No same-format entries -- that heading must not appear.
+        self.assertNotIn("Recent sweep-review outcomes for this format", rendered)
+
+    def test_combines_both_sections_when_both_tiers_present(self):
+        rendered = format_sweep_review_history([
+            {"format": "NEF", "tag": "A", "verdict": "accepted", "reason": "r1"},
+            {"format": "JPEG", "tag": "B", "verdict": "rejected", "reason": "r2",
+             "_sweep_review_tier": "other_format"},
+        ])
+        self.assertIn("Recent sweep-review outcomes for this format", rendered)
+        self.assertIn("Rejections from other formats (the mistakes generalize):", rendered)
+        self.assertIn("ACCEPTED A: r1", rendered)
+        self.assertIn("REJECTED JPEG:B: r2", rendered)
+
+
+class IsRejectionEntryTests(unittest.TestCase):
+    def test_legacy_verdict_rejected_is_a_rejection(self):
+        self.assertTrue(_is_rejection_entry({"verdict": "rejected"}))
+
+    def test_legacy_verdict_accepted_is_not_a_rejection(self):
+        self.assertFalse(_is_rejection_entry({"verdict": "accepted"}))
+
+    def test_verdict_class_human_rejected_is_a_rejection(self):
+        self.assertTrue(_is_rejection_entry({"verdict_class": "human_rejected"}))
+
+    def test_verdict_class_machine_rejected_is_a_rejection(self):
+        self.assertTrue(_is_rejection_entry({"verdict_class": "machine_rejected"}))
+
+    def test_verdict_class_machine_accepted_is_not_a_rejection(self):
+        self.assertFalse(_is_rejection_entry({"verdict_class": "machine_accepted"}))
+
+    def test_empty_entry_is_not_a_rejection(self):
+        self.assertFalse(_is_rejection_entry({}))
+
+
+class EntryIsHumanTests(unittest.TestCase):
+    def test_missing_verdict_class_counts_as_human_legacy_entry(self):
+        self.assertTrue(_entry_is_human({"verdict": "accepted"}))
+
+    def test_human_accepted_is_human(self):
+        self.assertTrue(_entry_is_human({"verdict_class": "human_accepted"}))
+
+    def test_human_rejected_is_human(self):
+        self.assertTrue(_entry_is_human({"verdict_class": "human_rejected"}))
+
+    def test_machine_accepted_is_not_human(self):
+        self.assertFalse(_entry_is_human({"verdict_class": "machine_accepted"}))
+
+    def test_machine_rejected_is_not_human(self):
+        self.assertFalse(_entry_is_human({"verdict_class": "machine_rejected"}))
+
+
+class DedupeMachineEntriesTests(unittest.TestCase):
+    def test_drops_machine_entry_sharing_patch_id_and_reason(self):
+        entries = [
+            {"verdict_class": "machine_rejected", "patch_id": "p1", "reason": "same"},
+            {"verdict_class": "machine_rejected", "patch_id": "p1", "reason": "same"},
+        ]
+        out = _dedupe_machine_entries(entries)
+        self.assertEqual(len(out), 1)
+
+    def test_keeps_machine_entries_with_different_reason(self):
+        entries = [
+            {"verdict_class": "machine_rejected", "patch_id": "p1", "reason": "a"},
+            {"verdict_class": "machine_rejected", "patch_id": "p1", "reason": "b"},
+        ]
+        out = _dedupe_machine_entries(entries)
+        self.assertEqual(len(out), 2)
+
+    def test_human_entries_are_never_deduped_even_with_identical_identity(self):
+        entries = [
+            {"verdict_class": "human_rejected", "patch_id": "p1", "reason": "same"},
+            {"verdict_class": "human_rejected", "patch_id": "p1", "reason": "same"},
+        ]
+        out = _dedupe_machine_entries(entries)
+        self.assertEqual(len(out), 2)
+
+    def test_machine_entries_missing_patch_id_or_reason_are_kept(self):
+        entries = [
+            {"verdict_class": "machine_rejected", "reason": "same"},
+            {"verdict_class": "machine_rejected", "reason": "same"},
+        ]
+        out = _dedupe_machine_entries(entries)
+        self.assertEqual(len(out), 2)
+
+
+class SelectTierTests(unittest.TestCase):
+    def test_empty_entries_returns_empty(self):
+        self.assertEqual(_select_tier([], 4), [])
+
+    def test_under_cap_keeps_everything_in_original_order(self):
+        entries = [
+            {"verdict_class": "machine_accepted", "tag": "a"},
+            {"verdict_class": "human_rejected", "tag": "b"},
+        ]
+        self.assertEqual([e["tag"] for e in _select_tier(entries, 4)], ["a", "b"])
+
+    def test_human_entries_preferred_over_machine_when_over_cap(self):
+        # newest-first input; only 1 slot -- the (older) human entry must
+        # still win over the (newer) machine entry.
+        entries = [
+            {"verdict_class": "machine_accepted", "tag": "newer_machine"},
+            {"verdict_class": "human_rejected", "tag": "older_human"},
+        ]
+        self.assertEqual(_select_tier(entries, 1)[0]["tag"], "older_human")
+
+    def test_remaining_slots_filled_by_machine_when_not_enough_humans(self):
+        entries = [
+            {"verdict_class": "machine_accepted", "tag": "m1"},
+            {"verdict_class": "machine_accepted", "tag": "m2"},
+            {"verdict_class": "human_rejected", "tag": "h1"},
+        ]
+        selected = _select_tier(entries, 2)
+        self.assertEqual(len(selected), 2)
+        self.assertIn("h1", [e["tag"] for e in selected])
+
+    def test_selection_restored_to_newest_first_order(self):
+        # Two humans (newer, older) and cap=2: both kept, but must come
+        # back out newest-first, not human-then-machine-grouped.
+        entries = [
+            {"verdict_class": "human_rejected", "tag": "newer_human"},
+            {"verdict_class": "machine_accepted", "tag": "middle_machine"},
+            {"verdict_class": "human_rejected", "tag": "older_human"},
+        ]
+        selected = _select_tier(entries, 2)
+        self.assertEqual([e["tag"] for e in selected], ["newer_human", "older_human"])
 
 
 # A minimal but realistic fixture mirroring Exif.pm's actual structure: one
@@ -1856,113 +2385,105 @@ class ExtractReviewVerdictTests(unittest.TestCase):
         self.assertIn("unparseable review verdict", reason)
 
 
-class FormatMemoryTests(unittest.TestCase):
-    def test_load_missing_returns_empty_string(self):
+class LoadGlobalPitfallsTests(unittest.TestCase):
+    """Spec K2: fresh read of <home>/logs/knowledge/GLOBAL-PITFALLS.md,
+    falling back to the KNOWN_PITFALLS constant when missing/empty --
+    tests stay hermetic by always pointing `home` at a tempdir."""
+
+    def test_falls_back_to_known_pitfalls_when_missing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            self.assertEqual(load_format_memory(Path(tmpdir), "NEF"), "")
+            self.assertEqual(load_global_pitfalls(home=Path(tmpdir)), KNOWN_PITFALLS)
 
-    def test_append_then_load_round_trips(self):
+    def test_falls_back_to_known_pitfalls_when_file_is_blank(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            memory_dir = Path(tmpdir)
-            append_format_memory_note(memory_dir, "NEF", "Tried BlackLevelBlue, rejected.", now_fn=lambda: 1_700_000_000)
-            text = load_format_memory(memory_dir, "NEF")
-        self.assertIn("Tried BlackLevelBlue, rejected.", text)
+            home = Path(tmpdir)
+            path = home / "logs" / "knowledge" / "GLOBAL-PITFALLS.md"
+            path.parent.mkdir(parents=True)
+            path.write_text("   \n")
+            self.assertEqual(load_global_pitfalls(home=home), KNOWN_PITFALLS)
 
-    def test_append_accumulates_across_calls(self):
+    def test_reads_seeded_content_instead_of_the_constant(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            memory_dir = Path(tmpdir)
-            append_format_memory_note(memory_dir, "NEF", "First note.")
-            append_format_memory_note(memory_dir, "NEF", "Second note.")
-            text = load_format_memory(memory_dir, "NEF")
-        self.assertIn("First note.", text)
-        self.assertIn("Second note.", text)
+            home = Path(tmpdir)
+            path = home / "logs" / "knowledge" / "GLOBAL-PITFALLS.md"
+            path.parent.mkdir(parents=True)
+            path.write_text("- [seed] never paraphrase a PrintConv string\n")
+            text = load_global_pitfalls(home=home)
+        self.assertIn("never paraphrase a PrintConv string", text)
+        self.assertNotEqual(text, KNOWN_PITFALLS)
 
-    def test_notes_for_different_formats_dont_mix(self):
+
+class LoadModulePlaybookTests(unittest.TestCase):
+    """Spec K3: <knowledge_home>/logs/knowledge/modules/<module>.md,
+    written only by scripts/distill_lessons.py; workers only read."""
+
+    def test_empty_when_no_knowledge_home(self):
+        self.assertEqual(load_module_playbook(None, "Canon"), "")
+
+    def test_empty_when_no_module_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            memory_dir = Path(tmpdir)
-            append_format_memory_note(memory_dir, "NEF", "NEF-specific note.")
-            append_format_memory_note(memory_dir, "JPEG", "JPEG-specific note.")
-            nef_text = load_format_memory(memory_dir, "NEF")
-        self.assertIn("NEF-specific note.", nef_text)
-        self.assertNotIn("JPEG-specific note.", nef_text)
+            self.assertEqual(load_module_playbook(Path(tmpdir), None), "")
 
-    def test_summarize_no_op_when_under_threshold(self):
+    def test_empty_when_file_missing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            memory_dir = Path(tmpdir)
-            append_format_memory_note(memory_dir, "NEF", "short")
-            called = []
-            did_summarize = summarize_format_memory(
-                memory_dir, "NEF", CONFIG,
-                call_model_fn=lambda *a, **k: called.append(1),
-                max_chars=1000,
-            )
-        self.assertFalse(did_summarize)
-        self.assertEqual(called, [])
+            self.assertEqual(load_module_playbook(Path(tmpdir), "Canon"), "")
 
-    def test_summarize_condenses_when_over_threshold(self):
+    def test_reads_the_module_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            memory_dir = Path(tmpdir)
-            for i in range(20):
-                append_format_memory_note(memory_dir, "NEF", f"note number {i} with some padding text here")
-            before = load_format_memory(memory_dir, "NEF")
-            did_summarize = summarize_format_memory(
-                memory_dir, "NEF", CONFIG,
-                call_model_fn=lambda messages, *a, **k: "- Condensed: use IFD0: prefix for RAW tags.",
-                max_chars=200,
-            )
-            after = load_format_memory(memory_dir, "NEF")
-        self.assertTrue(did_summarize)
-        self.assertLess(len(after), len(before))
-        self.assertIn("Condensed: use IFD0: prefix", after)
-
-    def test_summarize_leaves_memory_untouched_on_call_failure(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            memory_dir = Path(tmpdir)
-            for i in range(20):
-                append_format_memory_note(memory_dir, "NEF", f"note number {i} with some padding text here")
-            before = load_format_memory(memory_dir, "NEF")
-
-            def raising(*a, **k):
-                raise TimeoutError("timed out")
-
-            did_summarize = summarize_format_memory(
-                memory_dir, "NEF", CONFIG, call_model_fn=raising, max_chars=200,
-            )
-            after = load_format_memory(memory_dir, "NEF")
-        self.assertFalse(did_summarize)
-        self.assertEqual(before, after)
-
-    def test_summarize_leaves_memory_untouched_on_empty_reply(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            memory_dir = Path(tmpdir)
-            for i in range(20):
-                append_format_memory_note(memory_dir, "NEF", f"note number {i} with some padding text here")
-            before = load_format_memory(memory_dir, "NEF")
-            did_summarize = summarize_format_memory(
-                memory_dir, "NEF", CONFIG, call_model_fn=lambda *a, **k: "   ", max_chars=200,
-            )
-            after = load_format_memory(memory_dir, "NEF")
-        self.assertFalse(did_summarize)
-        self.assertEqual(before, after)
+            home = Path(tmpdir)
+            modules_dir = home / "logs" / "knowledge" / "modules"
+            modules_dir.mkdir(parents=True)
+            (modules_dir / "Canon.md").write_text("- wrong_value x3: match Perl byte-for-byte")
+            text = load_module_playbook(home, "Canon")
+        self.assertIn("match Perl byte-for-byte", text)
 
 
-class BuildPromptFormatMemoryTests(unittest.TestCase):
-    def test_omitted_when_dir_not_given(self):
+class BuildPromptKnowledgeLayerTests(unittest.TestCase):
+    """Spec K2/K3 wired into build_prompt: knowledge_home is None-gated
+    exactly like every other optional source (perl_lib_dir,
+    sweep_review_log_path) -- hermetic by default, never touching real
+    ~/.oxidex unless a caller explicitly opts in."""
+
+    def test_default_still_embeds_the_known_pitfalls_constant(self):
+        # No knowledge_home given: build_prompt must never read the real
+        # OXIDEX_HOME on a plain call -- this IS the hermeticity gate.
         prompt = build_prompt(make_gap(gap_count=1))
-        self.assertNotIn("Accumulated notes from previous rounds", prompt)
+        self.assertIn(KNOWN_PITFALLS, prompt)
 
-    def test_included_when_present(self):
+    def test_knowledge_home_swaps_in_the_curated_pitfalls_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            memory_dir = Path(tmpdir)
-            append_format_memory_note(memory_dir, "NEF", "Watch out for hardcoded prefixes.")
-            prompt = build_prompt(make_gap(gap_count=1), format_memory_dir=memory_dir)
-        self.assertIn("Accumulated notes from previous rounds", prompt)
-        self.assertIn("Watch out for hardcoded prefixes.", prompt)
+            home = Path(tmpdir)
+            path = home / "logs" / "knowledge" / "GLOBAL-PITFALLS.md"
+            path.parent.mkdir(parents=True)
+            path.write_text("- [seed] curated pitfall marker XYZ\n")
+            prompt = build_prompt(make_gap(gap_count=1), knowledge_home=home)
+        self.assertIn("curated pitfall marker XYZ", prompt)
+        self.assertNotIn(KNOWN_PITFALLS, prompt)
 
-    def test_omitted_when_dir_given_but_empty(self):
+    def test_module_playbook_omitted_without_knowledge_home(self):
+        prompt = build_prompt(make_gap(gap_count=1), module_name="Nikon")
+        self.assertNotIn("Module playbook", prompt)
+
+    def test_module_playbook_included_when_present(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            prompt = build_prompt(make_gap(gap_count=1), format_memory_dir=Path(tmpdir))
-        self.assertNotIn("Accumulated notes from previous rounds", prompt)
+            home = Path(tmpdir)
+            modules_dir = home / "logs" / "knowledge" / "modules"
+            modules_dir.mkdir(parents=True)
+            (modules_dir / "Nikon.md").write_text("- wrong_value x3: PrintConv byte match")
+            prompt = build_prompt(make_gap(gap_count=1), knowledge_home=home, module_name="Nikon")
+        self.assertIn("Module playbook", prompt)
+        self.assertIn("PrintConv byte match", prompt)
+
+    def test_module_name_falls_back_to_the_format_name(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            modules_dir = home / "logs" / "knowledge" / "modules"
+            modules_dir.mkdir(parents=True)
+            # make_gap()'s format is "NEF" -- no module_name given, so the
+            # format-name fallback key must be used (K3).
+            (modules_dir / "NEF.md").write_text("- structural x2: fallback-key playbook")
+            prompt = build_prompt(make_gap(gap_count=1), knowledge_home=home)
+        self.assertIn("fallback-key playbook", prompt)
 
 
 class FormatPreviousAttemptsTests(unittest.TestCase):
@@ -2086,7 +2607,146 @@ class ReviewVerdictTests(unittest.TestCase):
         self.assertEqual(picks, [model_specs])
 
 
-class FixGapHappyPathTests(unittest.TestCase):
+class ParseChecklistIdTests(unittest.TestCase):
+    def test_finds_leading_checklist_token(self):
+        from model_fix_loop import parse_checklist_id
+        self.assertEqual(parse_checklist_id("C2 PrintConv paraphrased"), "C2")
+
+    def test_finds_checklist_token_anywhere_in_text(self):
+        from model_fix_loop import parse_checklist_id
+        self.assertEqual(parse_checklist_id("hardcodes value, see C5 above"), "C5")
+
+    def test_none_when_absent(self):
+        from model_fix_loop import parse_checklist_id
+        self.assertIsNone(parse_checklist_id("no checklist id here"))
+        self.assertIsNone(parse_checklist_id(None))
+
+
+class ExtractReviewVerdictFullTests(unittest.TestCase):
+    def test_approve(self):
+        from model_fix_loop import extract_review_verdict_full
+        self.assertEqual(extract_review_verdict_full("APPROVE"), ("approve", ""))
+
+    def test_reject_with_checklist_id(self):
+        from model_fix_loop import extract_review_verdict_full
+        verdict, reason = extract_review_verdict_full("REJECT: C2 paraphrased PrintConv")
+        self.assertEqual(verdict, "reject")
+        self.assertEqual(reason, "C2 paraphrased PrintConv")
+
+    def test_unverifiable_with_checklist_id(self):
+        from model_fix_loop import extract_review_verdict_full
+        verdict, reason = extract_review_verdict_full(
+            "UNVERIFIABLE: C1 the Perl table wasn't shown in the prompt")
+        self.assertEqual(verdict, "unverifiable")
+        self.assertEqual(reason, "C1 the Perl table wasn't shown in the prompt")
+
+    def test_unparseable_defaults_to_reject(self):
+        from model_fix_loop import extract_review_verdict_full
+        verdict, reason = extract_review_verdict_full("uh, maybe?")
+        self.assertEqual(verdict, "reject")
+        self.assertIn("unparseable review verdict", reason)
+
+    def test_extract_review_verdict_delegates_and_folds_unverifiable_to_not_approved(self):
+        # The preserved two-tuple contract can't represent a third state,
+        # so UNVERIFIABLE degrades to "not approved" here -- callers that
+        # need the nuance use review_verdict/extract_review_verdict_full.
+        approved, reason = extract_review_verdict("UNVERIFIABLE: C1 missing evidence")
+        self.assertFalse(approved)
+
+
+class ReviewVerdictUnverifiableTests(unittest.TestCase):
+    def test_unverifiable_reply_is_approved_with_prefixed_reason(self):
+        gap = make_gap(gap_count=2)
+        approved, reason = review_verdict(
+            gap, "--- a/x\n+++ b/x\n",
+            {"base_url": "u", "api_key": "k", "models": [{"name": "m", "base_url": "u", "api_key": "k"}],
+             "max_tokens": 4096, "reasoning_effort": "max"},
+            call_model_fn=lambda messages, *a: "UNVERIFIABLE: C1 Perl table not shown",
+        )
+        self.assertTrue(approved)
+        self.assertTrue(reason.startswith("UNVERIFIABLE:"))
+        self.assertIn("C1", reason)
+
+    def test_evidence_kwargs_reach_build_review_prompt(self):
+        gap = make_gap(gap_count=2)
+        seen_prompts = []
+
+        def tracking_call_model_fn(messages, *a):
+            seen_prompts.append(messages[0]["content"])
+            return "APPROVE"
+
+        review_verdict(
+            gap, "--- a/x\n+++ b/x\n",
+            {"base_url": "u", "api_key": "k", "models": [{"name": "m", "base_url": "u", "api_key": "k"}],
+             "max_tokens": 4096, "reasoning_effort": "max"},
+            call_model_fn=tracking_call_model_fn,
+            perl_block="\n\nPERL-MARKER", live_evidence="EVIDENCE-MARKER",
+            emission_scan="SCAN-MARKER",
+        )
+        self.assertIn("PERL-MARKER", seen_prompts[0])
+        self.assertIn("EVIDENCE-MARKER", seen_prompts[0])
+        self.assertIn("SCAN-MARKER", seen_prompts[0])
+
+
+class BuildReviewPromptChecklistTests(unittest.TestCase):
+    def test_includes_c1_through_c5_and_unverifiable_reply_shape(self):
+        gap = make_gap(gap_count=2)
+        prompt = build_review_prompt(gap, "--- a/x\n+++ b/x\n")
+        for needle in ("C1", "C2", "C3", "C4", "C5", "UNVERIFIABLE:"):
+            self.assertIn(needle, prompt)
+
+    def test_evidence_sections_included_when_given(self):
+        gap = make_gap(gap_count=2)
+        prompt = build_review_prompt(
+            gap, "--- a/x\n+++ b/x\n",
+            perl_block="\n\nPERL-BLOCK-MARKER",
+            live_evidence="exiftool=1 oxidex=2",
+            emission_scan="src/parsers/x.rs:10:foo",
+        )
+        self.assertIn("PERL-BLOCK-MARKER", prompt)
+        self.assertIn("exiftool=1 oxidex=2", prompt)
+        self.assertIn("src/parsers/x.rs:10:foo", prompt)
+
+
+class HermeticFixGapTestCase(unittest.TestCase):
+    """Shared base for every TestCase below that calls fix_gap.
+
+    fix_gap defaults extract_evidence_fn/scan_fn to
+    default_extract_live_evidence/default_emission_scan (spec K5's real
+    subprocess-backed implementations -- they shell out to exiftool, rg,
+    and `git show HEAD:<path>` against repo_root) whenever a caller
+    doesn't pass its own. Most fix_gap tests below exercise the
+    post-build review path without ever wiring a fake for either
+    parameter, which means they'd otherwise silently inherit those real,
+    non-hermetic defaults against whatever repo_root resolves to --
+    violating the house rule (hermetic Python tests: no network/cargo/
+    real ~/.oxidex; injectable fns). Patching the two names on
+    model_fix_loop's own module object (not this test module's imported
+    copy) is what actually intercepts them: fix_gap's `extract_evidence_fn
+    or default_extract_live_evidence` is a bare-name lookup resolved via
+    fix_gap's own __globals__ (model_fix_loop's module dict) at call
+    time, not a reference captured at def-time. A test that passes its
+    own extract_evidence_fn/scan_fn is unaffected -- fix_gap only falls
+    back to the (now-patched) module default when the caller's argument
+    is falsy."""
+
+    def setUp(self):
+        super().setUp()
+        evidence_patcher = patch(
+            "model_fix_loop.default_extract_live_evidence",
+            lambda repo_root, sample_path, tag_keys: "",
+        )
+        scan_patcher = patch(
+            "model_fix_loop.default_emission_scan",
+            lambda repo_root, parser_files, tag_keys, diff_text=None: "",
+        )
+        evidence_patcher.start()
+        scan_patcher.start()
+        self.addCleanup(evidence_patcher.stop)
+        self.addCleanup(scan_patcher.stop)
+
+
+class FixGapHappyPathTests(HermeticFixGapTestCase):
     def test_commits_when_build_and_tests_pass_and_gaps_shrink(self):
         gap = make_gap(gap_count=2)
         model_calls = []
@@ -2102,7 +2762,7 @@ class FixGapHappyPathTests(unittest.TestCase):
             call_model_fn=lambda messages, *a: (model_calls.append(1), "```diff\n--- a/x\n+++ b/x\n```\n")[1],
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: commit_calls.append(msg),
+            git_commit_fn=lambda msg, root, **_kw: commit_calls.append(msg),
             cargo_build_fn=lambda root: (True, ""),
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
@@ -2864,7 +3524,7 @@ class CritiqueUsesExploreTierTests(unittest.TestCase):
         self.assertEqual(pools_seen, [["terra"]])
 
 
-class FixGapFailureTests(unittest.TestCase):
+class FixGapFailureTests(HermeticFixGapTestCase):
     def test_fails_when_gap_count_does_not_decrease(self):
         gap = make_gap(gap_count=2)
         result = fix_gap(
@@ -2877,7 +3537,7 @@ class FixGapFailureTests(unittest.TestCase):
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: self.fail("should not commit"),
+            git_commit_fn=lambda msg, root, **_kw: self.fail("should not commit"),
             cargo_build_fn=lambda root: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 2,
@@ -2898,7 +3558,7 @@ class FixGapFailureTests(unittest.TestCase):
             call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: self.fail("should not commit"),
+            git_commit_fn=lambda msg, root, **_kw: self.fail("should not commit"),
             cargo_build_fn=lambda root: (True, ""),
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (False, "test output"),
@@ -2911,7 +3571,7 @@ class FixGapFailureTests(unittest.TestCase):
         self.assertIn("test output", result["reason"])
 
 
-class FixGapTestOrderingTests(unittest.TestCase):
+class FixGapTestOrderingTests(HermeticFixGapTestCase):
     def test_targeted_runs_before_review_full_suite_only_before_commit(self):
         order = []
         result = fix_gap(
@@ -2921,7 +3581,7 @@ class FixGapTestOrderingTests(unittest.TestCase):
             cargo_test_targeted_fn=lambda root, f: (order.append("targeted"), (True, ""))[1],
             cargo_test_workspace_fn=lambda root: (order.append("full"), (True, ""))[1],
             review_fn=lambda *a, **k: (order.append("review"), (True, ""))[1],
-            git_commit_fn=lambda msg, root: order.append("commit"),
+            git_commit_fn=lambda msg, root, **_kw: order.append("commit"),
             git_checkout_clean_fn=lambda root: None,
             detect_duplicate_fn=lambda *a: False,
             log_fn=lambda s: None,
@@ -2955,7 +3615,7 @@ class FixGapTestOrderingTests(unittest.TestCase):
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (False, "full boom"),
             review_fn=lambda *a, **k: (True, ""),
-            git_commit_fn=lambda msg, root: commits.append(1),
+            git_commit_fn=lambda msg, root, **_kw: commits.append(1),
             git_checkout_clean_fn=lambda root: None,
             detect_duplicate_fn=lambda *a: False,
             critique_fn=lambda *a, **k: "critique",
@@ -2967,7 +3627,7 @@ class FixGapTestOrderingTests(unittest.TestCase):
         self.assertEqual(commits, [])
 
 
-class FixGapCritiqueTests(unittest.TestCase):
+class FixGapCritiqueTests(HermeticFixGapTestCase):
     """Every non-fixed round -- not just a review rejection -- now gets a
     critique and a chance to retry, up to max_repair_rounds. See fix_gap's
     critique_and_continue helper."""
@@ -3014,7 +3674,7 @@ class FixGapCritiqueTests(unittest.TestCase):
             critique_fn=fake_critique,
             review_fn=lambda g, diff, config, **kwargs: (True, ""),
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -3045,7 +3705,7 @@ class FixGapCritiqueTests(unittest.TestCase):
             critique_fn=lambda g, diff, fk, reason, cfg, **kwargs: "root cause: X, try Y instead",
             review_fn=lambda g, diff, config, **kwargs: (True, ""),
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -3064,7 +3724,7 @@ class FixGapCritiqueTests(unittest.TestCase):
             attempt_build_fn=lambda messages, **kwargs: (False, "always broken", None, messages),
             critique_fn=lambda g, diff, fk, reason, cfg, **kwargs: f"critique: {reason}",
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: self.fail("should not commit"),
+            git_commit_fn=lambda msg, root, **_kw: self.fail("should not commit"),
             repo_root=Path("/fake/repo"),
             max_repair_rounds=3,
         )
@@ -3103,7 +3763,7 @@ class FixGapCritiqueTests(unittest.TestCase):
             attempt_build_fn=lambda messages, **kwargs: (False, infra_reason, None, messages),
             critique_fn=lambda *a, **kwargs: critique_calls.append(1) or "should never be used",
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: self.fail("should not commit"),
+            git_commit_fn=lambda msg, root, **_kw: self.fail("should not commit"),
             repo_root=Path("/fake/repo"),
             max_repair_rounds=2,
         )
@@ -3114,7 +3774,7 @@ class FixGapCritiqueTests(unittest.TestCase):
             self.assertEqual(r["critique"], infra_reason)
 
 
-class FixGapReviewTests(unittest.TestCase):
+class FixGapReviewTests(HermeticFixGapTestCase):
     def test_retries_once_when_review_rejects_then_approves(self):
         gap = make_gap(gap_count=2)
         review_calls = []
@@ -3137,7 +3797,7 @@ class FixGapReviewTests(unittest.TestCase):
             attempt_build_fn=fake_attempt_build,
             review_fn=fake_review,
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: commit_calls.append(msg),
+            git_commit_fn=lambda msg, root, **_kw: commit_calls.append(msg),
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -3162,7 +3822,7 @@ class FixGapReviewTests(unittest.TestCase):
             attempt_build_fn=fake_attempt_build,
             review_fn=lambda g, diff, config, **kwargs: (False, "hardcodes the sample value"),
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: self.fail("should not commit"),
+            git_commit_fn=lambda msg, root, **_kw: self.fail("should not commit"),
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -3192,7 +3852,7 @@ class FixGapReviewTests(unittest.TestCase):
             call_model_fn=tracking_call_model_fn,
             attempt_build_fn=fake_attempt_build,
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -3229,7 +3889,7 @@ class FixGapReviewTests(unittest.TestCase):
             call_model_fn=fixer_call_model_fn, review_call_model_fn=reviewer_call_model_fn,
             attempt_build_fn=fake_attempt_build,
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -3260,7 +3920,7 @@ class FixGapReviewTests(unittest.TestCase):
             call_model_fn=tracking_call_model_fn,
             attempt_build_fn=fake_attempt_build,
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -3288,7 +3948,7 @@ class FixGapReviewTests(unittest.TestCase):
             call_model_fn=tracking_call_model_fn,
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
             cargo_build_fn=lambda root: (True, ""),
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
@@ -3320,7 +3980,7 @@ class FixGapReviewTests(unittest.TestCase):
             call_model_fn=tracking_call_model_fn,
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
             cargo_build_fn=lambda root: (True, ""),
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
@@ -3349,7 +4009,7 @@ class FixGapReviewTests(unittest.TestCase):
             call_model_fn=tracking_call_model_fn,
             git_apply_fn=lambda diff, root: (True, "ok"),
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
             cargo_build_fn=lambda root: (True, ""),
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
@@ -3385,7 +4045,7 @@ class FixGapReviewTests(unittest.TestCase):
             review_fn=fake_review,
             review_config=review_config,
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -3419,7 +4079,7 @@ class FixGapReviewTests(unittest.TestCase):
             attempt_build_fn=fake_attempt_build,
             review_fn=fake_review,
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -3430,7 +4090,7 @@ class FixGapReviewTests(unittest.TestCase):
         self.assertEqual(seen_review_config[0], CONFIG)
 
 
-class FixGapDuplicateDetectionTests(unittest.TestCase):
+class FixGapDuplicateDetectionTests(HermeticFixGapTestCase):
     def _fake_attempt_build(self, messages, **kwargs):
         messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
         return True, None, "--- a/x\n+++ b/x\n", messages
@@ -3448,7 +4108,7 @@ class FixGapDuplicateDetectionTests(unittest.TestCase):
             review_fn=lambda *a, **kw: review_calls.append(1) or (True, ""),
             detect_duplicate_fn=lambda diff, tag_literal, repo_root: True,
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: self.fail("must not commit a detected duplicate"),
+            git_commit_fn=lambda msg, root, **_kw: self.fail("must not commit a detected duplicate"),
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -3469,7 +4129,7 @@ class FixGapDuplicateDetectionTests(unittest.TestCase):
             review_fn=lambda *a, **kw: (True, ""),
             detect_duplicate_fn=lambda diff, tag_literal, repo_root: False,
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: commit_calls.append(msg),
+            git_commit_fn=lambda msg, root, **_kw: commit_calls.append(msg),
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -3492,7 +4152,7 @@ class FixGapDuplicateDetectionTests(unittest.TestCase):
             review_fn=lambda *a, **kw: (True, ""),
             detect_duplicate_fn=lambda diff, tag_literal, repo_root: detect_calls.append(tag_literal) or False,
             git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
             cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -3501,6 +4161,424 @@ class FixGapDuplicateDetectionTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "fixed")
         self.assertEqual(detect_calls, [])
+
+
+def _read_lessons(home):
+    path = Path(home) / "logs" / "lessons.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+class FixGapK1LessonTests(HermeticFixGapTestCase):
+    """Spec K1 writers: fix_gap best-effort appends a lesson event at
+    every decision point. knowledge_home=None (every OTHER test in this
+    file) is a documented no-op -- these tests opt in with a tempdir."""
+
+    def test_build_failure_writes_build_failed_and_critique_events(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fix_gap(
+                make_gap(gap_count=2), CONFIG,
+                attempt_build_fn=lambda messages, **kwargs: (False, "compile error", None, messages),
+                critique_fn=lambda *a, **k: "root cause: X",
+                git_checkout_clean_fn=lambda root: None,
+                repo_root=Path("/fake/repo"), max_repair_rounds=1,
+                knowledge_home=tmpdir, worker_label="w1",
+            )
+            events = [e["event"] for e in _read_lessons(tmpdir)]
+        self.assertIn("build_failed", events)
+        self.assertIn("critique", events)
+
+    def test_infra_failure_writes_infra_event_not_critique(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fix_gap(
+                make_gap(gap_count=2), CONFIG,
+                attempt_build_fn=lambda messages, **kwargs: (
+                    False, "model call failed: HTTP Error 429", None, messages),
+                git_checkout_clean_fn=lambda root: None,
+                repo_root=Path("/fake/repo"), max_repair_rounds=1,
+                knowledge_home=tmpdir, worker_label="w1",
+            )
+            events = [e["event"] for e in _read_lessons(tmpdir)]
+        self.assertIn("build_failed", events)
+        self.assertIn("infra", events)
+        self.assertNotIn("critique", events)
+
+    def test_test_regression_writes_test_regressed_event(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fix_gap(
+                make_gap(gap_count=1), CONFIG,
+                attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+                recheck_fn=lambda fmt: 0,
+                cargo_test_targeted_fn=lambda root, f: (False, "boom"),
+                git_checkout_clean_fn=lambda root: None,
+                critique_fn=lambda *a, **k: "critique",
+                max_repair_rounds=1,
+                knowledge_home=tmpdir, worker_label="w1",
+            )
+            events = [e["event"] for e in _read_lessons(tmpdir)]
+        self.assertIn("test_regressed", events)
+
+    def test_duplicate_writes_duplicate_event(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gap = make_single_tag_gap_dict(source_file=None)
+            fix_gap(
+                gap, CONFIG,
+                attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+                detect_duplicate_fn=lambda *a: True,
+                git_checkout_clean_fn=lambda root: None,
+                cargo_test_targeted_fn=lambda root, f: (True, ""),
+                recheck_fn=lambda fmt: 0,
+                knowledge_home=tmpdir, worker_label="w1",
+            )
+            events = _read_lessons(tmpdir)
+        self.assertEqual([e["event"] for e in events], ["duplicate"])
+
+    def test_review_rejection_writes_review_rejected_with_checklist_id(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fix_gap(
+                make_gap(gap_count=2), CONFIG,
+                attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+                review_fn=lambda *a, **k: (False, "C2 paraphrased PrintConv"),
+                cargo_test_targeted_fn=lambda root, f: (True, ""),
+                git_checkout_clean_fn=lambda root: None,
+                recheck_fn=lambda fmt: 0,
+                max_repair_rounds=1,
+                knowledge_home=tmpdir, worker_label="w1",
+            )
+            events = [e for e in _read_lessons(tmpdir) if e["event"] == "review_rejected"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["checklist_id"], "C2")
+
+    def test_fixed_writes_fixed_event(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fix_gap(
+                make_gap(gap_count=2), CONFIG,
+                attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+                review_fn=lambda *a, **k: (True, ""),
+                cargo_test_targeted_fn=lambda root, f: (True, ""),
+                cargo_test_workspace_fn=lambda root: (True, ""),
+                git_checkout_clean_fn=lambda root: None,
+                git_commit_fn=lambda msg, root, **kw: None,
+                recheck_fn=lambda fmt: 0,
+                knowledge_home=tmpdir, worker_label="w1",
+            )
+            events = [e["event"] for e in _read_lessons(tmpdir)]
+        self.assertEqual(events, ["fixed"])
+
+    def test_lesson_write_failure_never_breaks_the_loop(self):
+        # knowledge_home pointing at something unwritable (a file, not a
+        # dir) must not raise out of fix_gap -- best-effort, per spec.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad_home = Path(tmpdir) / "not_a_dir"
+            bad_home.write_text("occupied")
+            result = fix_gap(
+                make_gap(gap_count=2), CONFIG,
+                attempt_build_fn=lambda messages, **kwargs: (False, "boom", None, messages),
+                git_checkout_clean_fn=lambda root: None,
+                repo_root=Path("/fake/repo"), max_repair_rounds=1,
+                knowledge_home=bad_home, worker_label="w1",
+            )
+        self.assertEqual(result["status"], "failed")
+
+
+class FixGapM3MultisetTests(HermeticFixGapTestCase):
+    """Spec M3: fix_gap's recheck path classifies wrong_value/structural
+    via tag_still_open when recheck_fn supplies a post-attempt
+    comparison dict (the 3rd tuple element), and fails the attempt when
+    new_oxidex_only_keys detects a newly-introduced oxidex-only tag."""
+
+    def test_wrong_value_classification_from_post_match(self):
+        gap = make_single_tag_gap_dict(source_file=None)  # APP0:OcadRevision
+        post_match = {
+            "missing_tags": [],
+            "value_differences": [
+                {"tag_key": "APP0:OcadRevision", "exiftool_value": "1", "oxidex_value": "2"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fix_gap(
+                gap, CONFIG,
+                attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+                recheck_fn=lambda fmt: (1, None, post_match),
+                git_checkout_clean_fn=lambda root: None,
+                critique_fn=lambda *a, **k: "critique",
+                max_repair_rounds=1,
+                knowledge_home=tmpdir, worker_label="w1",
+            )
+            events = [e for e in _read_lessons(tmpdir) if e["event"] == "wrong_value"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["evidence"], {"exiftool_value": "1", "oxidex_value": "2"})
+
+    def test_duplicate_emission_classification_is_structural(self):
+        gap = make_single_tag_gap_dict(source_file=None)
+        post_match = {"missing_tags": [], "value_differences": [],
+                      "duplicate_emissions": ["APP0:OcadRevision"]}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fix_gap(
+                gap, CONFIG,
+                attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+                recheck_fn=lambda fmt: (1, None, post_match),
+                git_checkout_clean_fn=lambda root: None,
+                critique_fn=lambda *a, **k: "critique",
+                max_repair_rounds=1,
+                knowledge_home=tmpdir, worker_label="w1",
+            )
+            events = [e["event"] for e in _read_lessons(tmpdir)
+                      if e["event"] in ("structural", "wrong_value", "gap_not_closed")]
+        self.assertEqual(events, ["structural"])
+
+    def test_legacy_2tuple_recheck_still_falls_back_to_gap_not_closed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fix_gap(
+                make_gap(gap_count=1), CONFIG,
+                attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+                recheck_fn=lambda fmt: (1, "some detail"),
+                git_checkout_clean_fn=lambda root: None,
+                critique_fn=lambda *a, **k: "critique",
+                max_repair_rounds=1,
+                knowledge_home=tmpdir, worker_label="w1",
+            )
+            events = [e["event"] for e in _read_lessons(tmpdir)
+                      if e["event"] in ("gap_not_closed", "wrong_value", "structural")]
+        self.assertEqual(events, ["gap_not_closed"])
+
+    def test_new_oxidex_only_tag_fails_the_attempt_and_logs_structural(self):
+        gap = make_gap(gap_count=1)
+        pre = {"extra_in_oxidex": []}
+        post = {"missing_tags": [], "value_differences": [],
+                "extra_in_oxidex": [{"family": "EXIF", "name": "Bogus"}]}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = fix_gap(
+                gap, CONFIG,
+                attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+                recheck_fn=lambda fmt: (0, None, post),
+                recheck_baseline=pre,
+                git_checkout_clean_fn=lambda root: None,
+                critique_fn=lambda *a, **k: "critique",
+                max_repair_rounds=1,
+                knowledge_home=tmpdir, worker_label="w1",
+            )
+            events = [e for e in _read_lessons(tmpdir) if e["event"] == "structural"]
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("EXIF:Bogus", result["reason"])
+        self.assertEqual(len(events), 1)
+
+    def test_recheck_baseline_none_skips_the_new_oxidex_only_gate(self):
+        # Even though post's extra_in_oxidex carries a tag, no
+        # recheck_baseline means the gate simply isn't evaluated --
+        # existing callers that never pass recheck_baseline (every other
+        # test in this file) are unaffected.
+        gap = make_gap(gap_count=1)
+        post = {"missing_tags": [], "value_differences": [],
+                "extra_in_oxidex": [{"family": "EXIF", "name": "Bogus"}]}
+        result = fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            recheck_fn=lambda fmt: (0, None, post),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            review_fn=lambda *a, **k: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **kw: None,
+        )
+        self.assertEqual(result["status"], "fixed")
+
+
+class FixGapK5EvidenceTests(HermeticFixGapTestCase):
+    """Spec K5: fix_gap threads perl_block/live_evidence/emission_scan
+    into review_fn, folds UNVERIFIABLE into review_flags/trailers on
+    C1/C2 only, and degrades evidence functions to "" on failure."""
+
+    def test_evidence_fns_are_threaded_to_review_fn(self):
+        gap = make_gap(gap_count=2)  # has source_file "a.nef"
+        seen = {}
+
+        def fake_extract_evidence(repo_root, sample_path, tag_keys):
+            seen["sample_path"] = sample_path
+            seen["tag_keys"] = list(tag_keys)
+            return "EVIDENCE-TEXT"
+
+        def fake_scan(repo_root, parser_files, tag_keys, diff_text):
+            seen["scan_diff"] = diff_text
+            return "SCAN-TEXT"
+
+        def fake_review(g, diff, config, **kwargs):
+            seen["perl_block"] = kwargs.get("perl_block")
+            seen["live_evidence"] = kwargs.get("live_evidence")
+            seen["emission_scan"] = kwargs.get("emission_scan")
+            return True, ""
+
+        fix_gap(
+            gap, CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            review_fn=fake_review,
+            extract_evidence_fn=fake_extract_evidence, scan_fn=fake_scan,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **kw: None,
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertEqual(seen["sample_path"], "a.nef")
+        self.assertIn("EXIF:LensModel", seen["tag_keys"])
+        self.assertEqual(seen["live_evidence"], "EVIDENCE-TEXT")
+        self.assertEqual(seen["emission_scan"], "SCAN-TEXT")
+        self.assertEqual(seen["scan_diff"], "--- a/x\n+++ b/x\n")
+
+    def test_evidence_fn_exception_degrades_to_empty_string(self):
+        def raising_evidence(*a, **k):
+            raise TimeoutError("boom")
+
+        seen = {}
+
+        def fake_review(g, diff, config, **kwargs):
+            seen["live_evidence"] = kwargs.get("live_evidence")
+            return True, ""
+
+        fix_gap(
+            make_gap(gap_count=2), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            review_fn=fake_review,
+            extract_evidence_fn=raising_evidence,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **kw: None,
+            recheck_fn=lambda fmt: 0,
+        )
+        self.assertEqual(seen["live_evidence"], "")
+
+    def test_unverifiable_c1_sets_review_flags_and_trailer(self):
+        commits = []
+
+        def fake_git_commit(msg, root, trailers=None):
+            commits.append(trailers)
+
+        result = fix_gap(
+            make_gap(gap_count=2), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            review_fn=lambda *a, **k: (True, "UNVERIFIABLE: C1 perl table not shown"),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=fake_git_commit,
+            recheck_fn=lambda fmt: 0,
+        )
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(result["review_flags"], ["UNVERIFIABLE:C1"])
+        trailer_dict = dict(commits[0])
+        self.assertEqual(trailer_dict["Review-Unverifiable"], "UNVERIFIABLE:C1")
+
+    def test_unverifiable_c3_does_not_set_review_flags(self):
+        result = fix_gap(
+            make_gap(gap_count=2), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            review_fn=lambda *a, **k: (True, "UNVERIFIABLE: C3 emission scan inconclusive"),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **kw: None,
+            recheck_fn=lambda fmt: 0,
+        )
+        self.assertEqual(result["status"], "fixed")
+        self.assertNotIn("review_flags", result)
+
+    def test_unverifiable_without_checklist_id_still_routes_to_human_queue(self):
+        # A reviewer reply can say UNVERIFIABLE without a parseable
+        # C1-C5 token (a plausible model formatting slip -- the prompt
+        # requires one, but nothing enforces it). parse_checklist_id
+        # returns None for this, and fix_gap must fail safe: unknown
+        # severity still escalates to the human queue rather than
+        # silently landing with no Review-Unverifiable trailer at all.
+        commits = []
+
+        def fake_git_commit(msg, root, trailers=None):
+            commits.append(trailers)
+
+        result = fix_gap(
+            make_gap(gap_count=2), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            review_fn=lambda *a, **k: (
+                True, "UNVERIFIABLE: the perl table didn't fit the prompt"),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=fake_git_commit,
+            recheck_fn=lambda fmt: 0,
+        )
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(result["review_flags"], ["UNVERIFIABLE:UNKNOWN"])
+        trailer_dict = dict(commits[0])
+        self.assertEqual(trailer_dict["Review-Unverifiable"], "UNVERIFIABLE:UNKNOWN")
+
+    def test_unverifiable_with_no_reason_at_all_still_routes_to_human_queue(self):
+        # extract_review_verdict_full's own "no checklist id given"
+        # fallback text (for a bare "UNVERIFIABLE" with nothing after
+        # the colon) must also escalate, not just a reply with prose but
+        # no Cn.
+        result = fix_gap(
+            make_gap(gap_count=2), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            review_fn=lambda *a, **k: (True, "UNVERIFIABLE: unverifiable, no checklist id given"),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **kw: None,
+            recheck_fn=lambda fmt: 0,
+        )
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(result["review_flags"], ["UNVERIFIABLE:UNKNOWN"])
+
+
+class DefaultExtractLiveEvidenceTests(unittest.TestCase):
+    def test_returns_empty_when_no_sample_path(self):
+        from model_fix_loop import default_extract_live_evidence
+        self.assertEqual(default_extract_live_evidence(Path("/fake"), None, ["EXIF:Make"]), "")
+
+    def test_returns_empty_when_no_binary_built(self):
+        from model_fix_loop import default_extract_live_evidence
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.assertEqual(
+                default_extract_live_evidence(Path(tmpdir), "sample.jpg", ["EXIF:Make"]), "")
+
+    @patch("model_fix_loop.shutil.which", return_value="/usr/bin/exiftool")
+    @patch("model_fix_loop.subprocess.run")
+    def test_renders_matched_tag_values(self, mock_run, mock_which):
+        from model_fix_loop import default_extract_live_evidence
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            binary_dir = repo / "target" / "debug"
+            binary_dir.mkdir(parents=True)
+            (binary_dir / "oxidex").write_text("#!/bin/sh\n")
+            mock_run.return_value = MagicMock(stdout='[{"EXIF:Make": "Canon"}]')
+            result = default_extract_live_evidence(repo, "sample.jpg", ["EXIF:Make"])
+        self.assertIn("EXIF:Make", result)
+        self.assertIn("Canon", result)
+
+
+class DefaultEmissionScanTests(unittest.TestCase):
+    def test_empty_when_no_tag_keys(self):
+        from model_fix_loop import default_emission_scan
+        self.assertEqual(default_emission_scan(Path("/fake"), ["src/x.rs"], []), "")
+
+    def test_empty_when_no_parser_files_and_no_diff(self):
+        from model_fix_loop import default_emission_scan
+        self.assertEqual(default_emission_scan(Path("/fake"), [], ["EXIF:Make"]), "")
+
+    def test_diff_pre_post_counts_included(self):
+        from model_fix_loop import default_emission_scan
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text(
+                'insert("EXIF:Make", v); insert("EXIF:Make", v2);'
+            )
+            diff = "+++ b/src/x.rs\n"
+            result = default_emission_scan(repo, [], ["EXIF:Make"], diff_text=diff)
+        self.assertIn("pre=", result)
+        self.assertIn("post=", result)
 
 
 class RunLoopTests(unittest.TestCase):
@@ -3755,8 +4833,61 @@ class TagStillOpenTests(unittest.TestCase):
         self.assertIsNone(tag_still_open(match, self.MISSING_GAP))
         self.assertIsNone(tag_still_open(match, self.DIFF_GAP))
 
+    def test_duplicate_emission_is_still_open_even_though_otherwise_closed(self):
+        # Spec M3: a tag emitted twice for the same sample file must
+        # never pass recheck, even though it's absent from BOTH
+        # missing_tags and value_differences (a HashMap-backed
+        # MetadataMap can only hold one value per key, so it "looks"
+        # closed by the old two-list check alone).
+        match = {"missing_tags": [], "value_differences": [],
+                 "duplicate_emissions": ["XMP:ArtworkTitle"]}
+        self.assertEqual(tag_still_open(match, self.MISSING_GAP), ("duplicate_emission",))
 
-class FixGapRecheckDetailTests(unittest.TestCase):
+    def test_duplicate_emission_for_diff_kind_gap(self):
+        match = {"missing_tags": [], "value_differences": [],
+                 "duplicate_emissions": ["EXIF:ISO"]}
+        self.assertEqual(tag_still_open(match, self.DIFF_GAP), ("duplicate_emission",))
+
+    def test_duplicate_emissions_of_unrelated_tags_dont_affect_verdict(self):
+        match = {"missing_tags": [], "value_differences": [],
+                 "duplicate_emissions": ["EXIF:SomeOtherTag"]}
+        self.assertIsNone(tag_still_open(match, self.MISSING_GAP))
+
+
+class NewOxidexOnlyKeysTests(unittest.TestCase):
+    """Spec M3: sorted extra_in_oxidex keys present post but not pre --
+    the recheck path's structural double-emission gate (a fix that
+    introduces a NEW oxidex-only tag as a side effect)."""
+
+    def test_no_new_keys_when_extra_in_oxidex_unchanged(self):
+        pre = {"extra_in_oxidex": [{"family": "EXIF", "name": "A"}]}
+        post = {"extra_in_oxidex": [{"family": "EXIF", "name": "A"}]}
+        self.assertEqual(new_oxidex_only_keys(pre, post), [])
+
+    def test_new_key_detected(self):
+        pre = {"extra_in_oxidex": []}
+        post = {"extra_in_oxidex": [{"family": "EXIF", "name": "Bogus"}]}
+        self.assertEqual(new_oxidex_only_keys(pre, post), ["EXIF:Bogus"])
+
+    def test_multiple_new_keys_sorted(self):
+        pre = {"extra_in_oxidex": []}
+        post = {"extra_in_oxidex": [
+            {"family": "MakerNotes", "name": "Z"}, {"family": "EXIF", "name": "A"},
+        ]}
+        self.assertEqual(new_oxidex_only_keys(pre, post), ["EXIF:A", "MakerNotes:Z"])
+
+    def test_a_key_removed_is_not_reported_as_new(self):
+        pre = {"extra_in_oxidex": [{"family": "EXIF", "name": "A"}]}
+        post = {"extra_in_oxidex": []}
+        self.assertEqual(new_oxidex_only_keys(pre, post), [])
+
+    def test_missing_reports_are_treated_as_empty(self):
+        self.assertEqual(new_oxidex_only_keys(None, None), [])
+        self.assertEqual(new_oxidex_only_keys({}, {"extra_in_oxidex": [{"family": "A", "name": "B"}]}),
+                         ["A:B"])
+
+
+class FixGapRecheckDetailTests(HermeticFixGapTestCase):
     def test_tuple_recheck_detail_becomes_the_failure_reason(self):
         result = fix_gap(
             make_gap(gap_count=1), CONFIG,

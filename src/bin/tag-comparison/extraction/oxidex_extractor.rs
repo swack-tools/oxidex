@@ -21,7 +21,7 @@ use oxidex::core::value_formatter::{
 };
 use oxidex::parsers::tiff::tiff_enums::tiff_enum_to_string;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -91,17 +91,39 @@ impl OxiDexExtractor {
             return Ok(cached);
         }
 
-        // Extract tags from each file
-        let mut all_tags: HashMap<String, (TagInfo, usize)> = HashMap::new();
+        // Extract tags from each file. `all_tags` keeps ONE canonical
+        // TagInfo per format-wide key (first file it's seen in wins,
+        // matching the pre-existing cross-file reduction other report
+        // fields -- matched/missing/extra_in_oxidex/value_differences --
+        // depend on), now additionally stamped with `source_file` (spec
+        // M3). `duplicate_evidence` is a small side channel: whenever
+        // `flatten_metadata` reports that a SINGLE file emitted the same
+        // displayed key more than once (a registry/dynamic-name emitter
+        // collision -- the exact bug class M3 targets, and one the
+        // literal-string diff backstop can't see), two clones tagged with
+        // that file's source_file are appended here so
+        // `ComparisonEngine::compare`'s per-(source_file, key) count > 1
+        // check actually has something to find. Without this, every
+        // format-wide key collapses to at most one TagInfo before
+        // `compare()` runs and `duplicate_emissions` is always `[]`.
+        let mut all_tags: HashMap<String, TagInfo> = HashMap::new();
+        let mut duplicate_evidence: Vec<TagInfo> = Vec::new();
 
         for file_path in &files {
             match self.extract_tags_from_file(file_path) {
-                Ok(file_tags) => {
+                Ok((file_tags, duplicate_keys)) => {
+                    let source_file = file_path.display().to_string();
                     for tag_info in file_tags {
+                        let key = format!("{}:{}", tag_info.family, tag_info.name);
+                        if duplicate_keys.contains(&key) {
+                            duplicate_evidence
+                                .push(tag_info.clone().with_source_file(source_file.clone()));
+                            duplicate_evidence
+                                .push(tag_info.clone().with_source_file(source_file.clone()));
+                        }
                         all_tags
-                            .entry(format!("{}:{}", tag_info.family, tag_info.name))
-                            .and_modify(|(_info, count)| *count += 1)
-                            .or_insert((tag_info.clone(), 1));
+                            .entry(key)
+                            .or_insert_with(|| tag_info.with_source_file(source_file.clone()));
                     }
                 }
                 Err(e) => {
@@ -114,10 +136,8 @@ impl OxiDexExtractor {
             }
         }
 
-        let mut tags: Vec<TagInfo> = all_tags
-            .into_values()
-            .map(|(tag_info, _count)| tag_info)
-            .collect();
+        let mut tags: Vec<TagInfo> = all_tags.into_values().collect();
+        tags.extend(duplicate_evidence);
 
         tags.sort_by_key(|a| a.key());
 
@@ -230,10 +250,14 @@ impl OxiDexExtractor {
     /// formatting before flattening into TagInfo structures. The formatting ensures
     /// that GPS references, binary values, enums, and numeric precision match
     /// ExifTool's output format for accurate comparison.
+    ///
+    /// Returns the flattened tags plus the set of displayed `family:name`
+    /// keys that `flatten_metadata` found more than one raw source for
+    /// within this single file (spec M3 duplicate-emission evidence).
     fn extract_tags_from_file(
         &self,
         file_path: &Path,
-    ) -> Result<Vec<TagInfo>, Box<dyn std::error::Error>> {
+    ) -> Result<(Vec<TagInfo>, HashSet<String>), Box<dyn std::error::Error>> {
         // Step 1: Read raw metadata from the file
         let raw_metadata = oxidex::core::operations::read_metadata(file_path)?;
 
@@ -249,8 +273,8 @@ impl OxiDexExtractor {
             .map(|e| e.to_uppercase());
 
         // Step 4: Flatten the formatted metadata into TagInfo structures
-        let tags = self.flatten_metadata(&formatted_metadata, format.as_deref());
-        Ok(tags)
+        let (tags, duplicate_keys) = self.flatten_metadata(&formatted_metadata, format.as_deref());
+        Ok((tags, duplicate_keys))
     }
 
     /// Format a tag value to match ExifTool's output format
@@ -797,12 +821,24 @@ impl OxiDexExtractor {
     }
 
     /// Flatten MetadataMap into TagInfo vector
+    ///
+    /// Returns the flattened tags plus the set of displayed `family:name`
+    /// keys that had more than one DIFFERENT raw `metadata` key normalize
+    /// down to them (spec M3: a registry/dynamic-name emitter computing
+    /// the same conceptual tag twice via two different raw paths, where
+    /// the second write silently clobbers the first in `tag_map` below).
+    /// `metadata` itself is already a `HashMap`, so a literal repeated raw
+    /// key is structurally impossible here -- this only catches
+    /// post-normalization collisions between genuinely distinct raw keys,
+    /// which is exactly the class the literal-string diff backstop
+    /// (`detect_duplicate_tag_insertion`) is blind to.
     fn flatten_metadata(
         &self,
         metadata: &oxidex::core::MetadataMap,
         format: Option<&str>,
-    ) -> Vec<TagInfo> {
+    ) -> (Vec<TagInfo>, HashSet<String>) {
         let mut tag_map: HashMap<String, String> = HashMap::new();
+        let mut duplicate_keys: HashSet<String> = HashSet::new();
 
         for (key, value) in metadata.iter() {
             // Check if original family should be skipped (pseudo-tags)
@@ -847,12 +883,18 @@ impl OxiDexExtractor {
                     }
                     _ => continue,
                 };
+                if tag_map.contains_key(&normalized_key) {
+                    duplicate_keys.insert(normalized_key.clone());
+                }
                 tag_map.insert(normalized_key, formatted);
                 continue;
             }
 
             // Format the value
             let value_str = self.format_value(&normalized_key, &name, value);
+            if tag_map.contains_key(&normalized_key) {
+                duplicate_keys.insert(normalized_key.clone());
+            }
             tag_map.insert(normalized_key, value_str);
         }
 
@@ -877,7 +919,7 @@ impl OxiDexExtractor {
             .collect();
 
         tags.sort_by_key(|a| a.key());
-        tags
+        (tags, duplicate_keys)
     }
 
     /// Find files by extension recursively throughout the samples directory
@@ -1011,8 +1053,9 @@ mod tests {
     fn test_flatten_metadata_empty() {
         let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
         let metadata = oxidex::core::MetadataMap::new();
-        let tags = extractor.flatten_metadata(&metadata, None);
+        let (tags, duplicate_keys) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 0);
+        assert!(duplicate_keys.is_empty());
     }
 
     #[test]
@@ -1020,8 +1063,50 @@ mod tests {
         let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
         let mut metadata = oxidex::core::MetadataMap::new();
         metadata.insert("Canon:FileNumber".to_string(), TagValue::Integer(7669483));
-        let tags = extractor.flatten_metadata(&metadata, None);
+        let (tags, duplicate_keys) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].value, "117-1771");
+        assert!(duplicate_keys.is_empty());
+    }
+
+    /// Spec M3: two DIFFERENT raw keys that normalize to the same
+    /// displayed `family:name` must be reported as a duplicate, even
+    /// though `MetadataMap` itself (a `HashMap`) makes a literal repeated
+    /// raw key structurally impossible.
+    #[test]
+    fn test_flatten_metadata_detects_normalization_collision() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        let mut metadata = oxidex::core::MetadataMap::new();
+        // Two distinct raw keys ExifTool-family-normalization collapses
+        // onto the same "MakerNotes:Sharpness" displayed key.
+        metadata.insert(
+            "Canon:Sharpness".to_string(),
+            TagValue::String("Normal".to_string()),
+        );
+        metadata.insert(
+            "Nikon:Sharpness".to_string(),
+            TagValue::String("Hard".to_string()),
+        );
+        let (tags, duplicate_keys) = extractor.flatten_metadata(&metadata, None);
+        assert_eq!(tags.len(), 1);
+        assert!(duplicate_keys.contains("MakerNotes:Sharpness"));
+    }
+
+    /// Two unrelated tags that don't collide must never be flagged.
+    #[test]
+    fn test_flatten_metadata_no_false_positive_duplicates() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        let mut metadata = oxidex::core::MetadataMap::new();
+        metadata.insert(
+            "EXIF:Make".to_string(),
+            TagValue::String("Canon".to_string()),
+        );
+        metadata.insert(
+            "EXIF:Model".to_string(),
+            TagValue::String("EOS 5D".to_string()),
+        );
+        let (tags, duplicate_keys) = extractor.flatten_metadata(&metadata, None);
+        assert_eq!(tags.len(), 2);
+        assert!(duplicate_keys.is_empty());
     }
 }

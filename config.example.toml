@@ -17,7 +17,11 @@
 base_url = "https://pass.wafer.ai/v1"
 api_key = "your-api-key-here"
 max_tokens = 4096
-max_prompt_tokens = 4096
+# max_prompt_tokens: section 6 raised the default 4096 -> 8192 (not the
+# critiqued 12288 -- TPM economics), paired with graduated per-section
+# truncation (assemble_prompt_sections) so the extra room reaches the
+# learning block instead of just more parser-file text.
+max_prompt_tokens = 8192
 reasoning_effort = "low"
 # stream = true is the default; the reply (and, when the provider sends a
 # final usage chunk via stream_options.include_usage, its cache/token
@@ -61,6 +65,21 @@ max_retries = 1000
 retry_backoff_seconds = 2
 max_retry_backoff_seconds = 120
 
+# --- Phase 1 knowledge layer / section 6 knobs (spec K1-K5) ---------------
+# learning_budget_tokens: flat, reserved token budget for build_prompt's
+# learning block (GLOBAL-PITFALLS.md excerpt + module playbook + sweep
+# reviews + lessons tail) -- never squeezed further by the graduated
+# per-section truncation, and never dropped entirely.
+learning_budget_tokens = 1200
+# parser_floor_tokens: the parser-files section is elastic under overflow
+# but never shrinks below this -- "elastic with a floor", never squeezed
+# to zero (the inverted-starvation critique this resolves).
+parser_floor_tokens = 2000
+# lessons_tail_kb: how far back build_prompt seeks into the tail of
+# logs/lessons.jsonl (bounded, no full scan of a ledger that only grows)
+# when rendering the learning block's "recent lessons" entries.
+lessons_tail_kb = 256
+
 # Tiered routing: explore-phase turns (investigation, REQUEST/VERIFY
 # round-trips) use the cheap fast model; patch-phase turns (final diffs,
 # repairs, retries) use the strongest model. Omit "phase" on an entry to
@@ -97,6 +116,11 @@ timeout = 600
 max_retries = 1000
 retry_backoff_seconds = 2
 max_retry_backoff_seconds = 120
+# reviewer_max_prompt_tokens: independent of the fixer's max_prompt_tokens
+# -- the reviewer prompt now carries the Perl reference, live post-fix
+# evidence, and a scoped emission scan (spec K5) alongside the C1-C5
+# checklist, so it gets its own generous budget.
+reviewer_max_prompt_tokens = 8192
 
 [[reviewer.models]]
 name = "glm5.2-fast"

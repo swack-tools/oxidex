@@ -73,14 +73,19 @@ import sys
 import time
 from pathlib import Path
 
-# The ONE canonical K1 normalize+fingerprint implementation lives in
-# distill_lessons.py (its norm_reason folds digit/hex runs and date
-# stamps so "index 42" and "index 43" cluster). Every ledger writer must
-# produce byte-identical fingerprints or the distiller accumulates
-# fingerprint dialects and the K2/K3 promotion rule (>=3 occurrences
+# distill_lessons.py is the ONE canonical K1 owner: the event schema
+# constants, normalization, fingerprint_scoped/fingerprint_generic, and
+# the O_APPEND/2000-byte-clamp append helper all live there (its
+# norm_reason folds digit/hex runs and date stamps so "index 42" and
+# "index 43" cluster). Every ledger writer must produce byte-identical
+# fingerprints -- and byte-identical clamp behavior -- or the distiller
+# accumulates dialects and the K2/K3 promotion rule (>=3 occurrences
 # across >=2 modules) silently undercounts -- so this script delegates
-# instead of keeping its own copy.
+# instead of keeping its own copies.
 from distill_lessons import (
+    EVENT_ENUM as _EVENT_ENUM,
+    LESSON_LINE_MAX_BYTES,  # noqa: F401 -- re-exported for callers/tests
+    append_lesson as _dl_append_lesson,
     fingerprint_generic as _fingerprint_generic,
     fingerprint_scoped as _fingerprint_scoped,
     norm_reason as _norm_reason,
@@ -115,13 +120,10 @@ LEGACY_VERDICT = {
 
 # --- Spec K1: lessons.jsonl event ledger --------------------------------------
 
-# The full K1 event enum -- kept here (not just the subset this script
-# emits) so append_lesson_line can validate any caller's event.
-LESSON_EVENTS = frozenset({
-    "build_failed", "gap_not_closed", "wrong_value", "test_regressed",
-    "duplicate", "review_rejected", "critique", "fixed", "machine_accepted",
-    "human_accepted", "human_rejected", "structural", "infra",
-})
+# The full K1 event enum, delegated from distill_lessons.py (the
+# canonical owner) -- kept as its own name here (not just the subset this
+# script emits) so build_lesson_event can validate any caller's event.
+LESSON_EVENTS = frozenset(_EVENT_ENUM)
 
 # --lesson mirrors the verdict into the closest K1 event. The enum has no
 # machine_rejected or reverted member: a machine rejection is by definition
@@ -137,8 +139,9 @@ LESSON_EVENT_FOR_VERDICT = {
 
 # K1 atomicity contract: one os.write per line, clamped to this many bytes
 # (including the trailing newline). Readers skip malformed lines, so even
-# a pathological hard clamp only ever loses that one event.
-LESSON_LINE_MAX_BYTES = 2000
+# a pathological hard clamp only ever loses that one event. Re-exported
+# from distill_lessons.py (the canonical owner) rather than redefined, so
+# the two scripts can never drift apart on the actual clamp size.
 
 
 def resolve_verdict_class(verdict):
@@ -212,54 +215,19 @@ def build_lesson_event(event, reason, format_name=None, tag_key=None, worker=Non
     }
 
 
-def _clamp_lesson_line(event_dict):
-    """Serialize event_dict to one newline-terminated JSON line of at most
-    LESSON_LINE_MAX_BYTES bytes.
-
-    Best effort first: an oversized line almost always means an oversized
-    free-text reason, so the reason is truncated (on a UTF-8-safe boundary)
-    until the line fits and stays valid JSON. Only if that still cannot fit
-    (enormous evidence blob, say) does the hard byte clamp kick in -- which
-    may leave the line malformed, and that is fine by contract: K1 readers
-    skip malformed lines rather than degrading to {}."""
-    raw = (json.dumps(event_dict, separators=(",", ":")) + "\n").encode("utf-8")
-    reason = event_dict.get("reason")
-    if len(raw) > LESSON_LINE_MAX_BYTES and isinstance(reason, str):
-        trimmed = dict(event_dict)
-        reason_bytes = reason.encode("utf-8")
-        keep = max(0, len(reason_bytes) - (len(raw) - LESSON_LINE_MAX_BYTES))
-        while True:
-            trimmed["reason"] = reason_bytes[:keep].decode("utf-8", "ignore")
-            raw = (json.dumps(trimmed, separators=(",", ":")) + "\n").encode("utf-8")
-            if len(raw) <= LESSON_LINE_MAX_BYTES or keep == 0:
-                break
-            # json escaping (\uXXXX etc.) can inflate past the byte estimate;
-            # shave the remaining overflow and re-dump. keep strictly
-            # decreases, so this terminates.
-            keep = max(0, keep - (len(raw) - LESSON_LINE_MAX_BYTES))
-    if len(raw) > LESSON_LINE_MAX_BYTES:
-        raw = raw[: LESSON_LINE_MAX_BYTES - 1] + b"\n"
-    return raw
-
-
 def append_lesson_line(home, event_dict):
     """Append one event to <home>/logs/lessons.jsonl per the K1 atomicity
-    contract: open with os.open(O_APPEND|O_CREAT|O_WRONLY), then exactly ONE
-    os.write of one newline-terminated line clamped to 2000 bytes.
+    contract -- a thin wrapper around distill_lessons.append_lesson (the
+    canonical owner of the O_APPEND/2000-byte-clamp append helper):
+    os.open(O_APPEND|O_CREAT|O_WRONLY), then exactly ONE os.write of one
+    newline-terminated line clamped to LESSON_LINE_MAX_BYTES.
 
     O_APPEND makes each single write land atomically at the tail even with
     the whole fleet appending concurrently (this is stricter than the
     PIPE_BUF hand-wave: one syscall, one line, bounded size). The file is
     never rotated or rewritten. Returns the exact bytes written."""
     path = Path(home) / "logs" / "lessons.jsonl"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    raw = _clamp_lesson_line(event_dict)
-    fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
-    try:
-        os.write(fd, raw)
-    finally:
-        os.close(fd)
-    return raw
+    return _dl_append_lesson(path, event_dict)
 
 
 def append_sweep_review(log_path, format_name, tag, verdict, reason, commit=None, now_fn=time.time,

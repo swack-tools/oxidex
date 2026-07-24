@@ -80,6 +80,11 @@ pub struct FormatComparison {
     pub value_differences: Vec<ValueDifference>,
     /// Tags that were present in baseline but now missing (regressions)
     pub regressions: Vec<String>,
+    /// Tag keys ("family:name") the oxidex side emits more than once for
+    /// the SAME sample file (spec M3 double-emission gate). Defaults to
+    /// empty for any report serialized before this field existed.
+    #[serde(default)]
+    pub duplicate_emissions: Vec<String>,
     /// Coverage percentage (matched / total_exiftool)
     pub coverage_percentage: f64,
     /// Total number of tags in ExifTool for this format
@@ -99,6 +104,7 @@ impl FormatComparison {
             extra_in_oxidex: Vec::new(),
             value_differences: Vec::new(),
             regressions: Vec::new(),
+            duplicate_emissions: Vec::new(),
             coverage_percentage: 0.0,
             total_exiftool_tags: 0,
             timestamp: chrono::Utc::now().to_rfc3339(),
@@ -392,6 +398,37 @@ mod tests {
         let deserialized: FormatComparison = serde_json::from_str(&json).unwrap();
         assert_eq!(comp.format, deserialized.format);
         assert_eq!(comp.matched_tags, deserialized.matched_tags);
+    }
+
+    #[test]
+    fn test_duplicate_emissions_defaults_empty_and_serializes() {
+        let mut comp = FormatComparison::new("JPEG".to_string(), 5);
+        assert!(comp.duplicate_emissions.is_empty());
+
+        comp.duplicate_emissions = vec!["MakerNotes:AELButton".to_string()];
+        let json = serde_json::to_string(&comp).unwrap();
+        let deserialized: FormatComparison = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.duplicate_emissions, comp.duplicate_emissions);
+    }
+
+    #[test]
+    fn test_duplicate_emissions_defaults_when_absent_from_json() {
+        // Spec M3: #[serde(default)] -- a report serialized before this
+        // field existed must still deserialize.
+        let json = r#"{
+            "format": "JPEG",
+            "files_tested": 1,
+            "matched_tags": [],
+            "missing_in_oxidex": [],
+            "extra_in_oxidex": [],
+            "value_differences": [],
+            "regressions": [],
+            "coverage_percentage": 0.0,
+            "total_exiftool_tags": 0,
+            "timestamp": "2026-07-24T00:00:00Z"
+        }"#;
+        let deserialized: FormatComparison = serde_json::from_str(json).unwrap();
+        assert!(deserialized.duplicate_emissions.is_empty());
     }
 
     #[test]

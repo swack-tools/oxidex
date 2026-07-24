@@ -20,13 +20,34 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           reasoning_effort (per-model override of the
                           table default).
     max_tokens           default 4096 (cap on the model's own reply length)
-    max_prompt_tokens     default 4096 (worker only; hard cap on the built
+    max_prompt_tokens     default 8192 (worker only; hard cap on the built
                           prompt itself -- see estimate_tokens/
-                          truncate_to_token_budget -- a ~4 chars/token
-                          estimate, no real tokenizer dependency. If the
-                          model's own diff would exceed this in one reply,
-                          the prompt tells it to split into "PATCH i/N"
-                          chunks instead -- see attempt_build.)
+                          assemble_prompt_sections -- a ~4 chars/token
+                          estimate, no real tokenizer dependency. Overflow
+                          is shed via graduated per-section truncation
+                          (attempts, then samples, then neighbor precedent,
+                          then perl_block, then parser files down to
+                          parser_floor_tokens), not plain head-keeping. If
+                          the model's own diff would exceed this in one
+                          reply, the prompt tells it to split into
+                          "PATCH i/N" chunks instead -- see attempt_build.)
+    reviewer_max_prompt_tokens default 8192 (reviewer only; independent cap
+                          on build_review_prompt's own prompt, which now
+                          carries the Perl reference, live post-fix
+                          evidence, and a scoped emission scan alongside
+                          the C1-C5 checklist -- see review_verdict)
+    learning_budget_tokens default 1200 (worker only; flat, reserved token
+                          budget for the learning block -- GLOBAL-PITFALLS.md
+                          excerpt + module playbook + sweep reviews +
+                          lessons tail -- never squeezed further and never
+                          dropped entirely, see build_prompt)
+    parser_floor_tokens    default 2000 (worker only; the parser-files
+                          section never shrinks below this even under the
+                          worst prompt overflow -- "elastic with a floor")
+    lessons_tail_kb        default 256 (worker only; how far back
+                          build_prompt seeks into the tail of
+                          logs/lessons.jsonl -- bounded, no full scan of a
+                          ledger that only grows -- see read_lessons_tail)
     max_request_repeats    default 3 (worker only; identical REQUESTs before
                           a pivot nudge replaces the served content)
     max_verify_turns       default 10 (worker only; VERIFY trial-compile
@@ -172,6 +193,39 @@ from find_tag_gaps import (
     run_full_comparison,
 )
 
+# distill_lessons.py is the canonical K1 owner: the event schema/enum,
+# reason normalization, fingerprint_scoped/fingerprint_generic, and the
+# O_APPEND/2000-byte-clamp append helper. This module is a WRITER (see K1
+# call sites in critique_and_continue/fix_gap below) -- it delegates
+# rather than keeping its own copy, exactly like log_sweep_review.py does.
+from distill_lessons import (
+    append_lesson as _dl_append_lesson,
+    make_lesson as make_lesson_event,
+)
+
+# --- K1 lessons ledger (writer side; see distill_lessons.py for the ---------
+# --- canonical schema/fingerprint/append contract) --------------------------
+
+def append_lesson(home_or_path, event):
+    """Thin K1 wrapper delegating to distill_lessons.append_lesson (the
+    canonical owner of the event schema, fingerprints, and the
+    O_APPEND/2000-byte-clamp write contract) -- a sibling import exactly
+    like find_tag_gaps above.
+
+    home_or_path may be an OXIDEX_HOME-style directory (the usual case:
+    "<home>/logs/lessons.jsonl" is resolved for you) or an already-full
+    path ending in "lessons.jsonl" -- tests and callers that already have
+    the exact ledger path don't have to fight a home-relative convention.
+
+    Every call site in this module wraps this in try/except OSError: a
+    lesson-append failure is best-effort observability and must NEVER
+    break the fixer loop (K1 writers, item 2 of the Phase-1 spec)."""
+    path = Path(home_or_path)
+    if path.name != "lessons.jsonl":
+        path = path / "logs" / "lessons.jsonl"
+    return _dl_append_lesson(path, event)
+
+
 DIFF_BLOCK_RE = re.compile(r"```diff[ \t]*\r?\n(.*?)```", re.DOTALL)
 
 
@@ -216,7 +270,12 @@ def estimate_tokens(text):
     return max(1, len(text) // 4)
 
 
-DEFAULT_MAX_PROMPT_TOKENS = 4096
+#: Section 6: raised from 4096 -- not the critiqued 12288 (TPM economics)
+#: -- alongside graduated per-section truncation (assemble_prompt_sections)
+#: replacing plain head-keeping, so the extra room actually reaches the
+#: learning block instead of just extending how much parser-file text
+#: survives.
+DEFAULT_MAX_PROMPT_TOKENS = 8192
 
 
 def truncate_to_token_budget(text, max_tokens=DEFAULT_MAX_PROMPT_TOKENS):
@@ -238,6 +297,88 @@ def truncate_to_token_budget(text, max_tokens=DEFAULT_MAX_PROMPT_TOKENS):
         + f"\n\n...(prompt truncated to fit the ~{max_tokens}-token budget; "
         "ask for specific files via REQUEST: if you need something that got cut)"
     )
+
+
+#: Section 6: the learning block (pitfalls excerpt + module playbook +
+#: sweep reviews + lessons tail) gets this many tokens reserved -- always
+#: applied as a flat cap (see build_prompt), independent of whatever else
+#: is squeezing the rest of the prompt, and never squeezed further than
+#: this by assemble_prompt_sections's own overflow pass (it isn't one of
+#: the five ranked-priority elastic sections).
+DEFAULT_LEARNING_BUDGET_TOKENS = 1200
+
+#: Section 6: the parser-files section never shrinks below this even
+#: under the worst overflow -- "elastic with a floor", never squeezed to
+#: zero (the inverted-starvation critique this resolves: a huge attempts
+#: history must not be able to crowd out the actual source code).
+DEFAULT_PARSER_FLOOR_TOKENS = 2000
+
+
+def _clamp_section_tokens(text, max_tokens):
+    """Plain char-truncate (see estimate_tokens's ~4-chars/token rule),
+    no marker appended -- used only for the internal graduated section
+    shrink in assemble_prompt_sections, which must guarantee a tight
+    total-tokens bound; the public truncate_to_token_budget's marker text
+    is itself extra tokens on top of its own budget, which would defeat
+    that guarantee if used here instead."""
+    return text[: max(0, max_tokens) * 4]
+
+
+def assemble_prompt_sections(sections, budgets, max_tokens):
+    """Section 6: graduated per-section truncation, replacing plain
+    head-keeping (see truncate_to_token_budget, still used standalone
+    elsewhere) so overflow is shed from the LEAST essential sections
+    first instead of blindly chopping off everything after some byte
+    offset -- which used to delete exactly the learning sections (sweep
+    reviews, memory, attempts) that live near the tail.
+
+    sections: ordered [(name, text), ...] covering the ENTIRE prompt, in
+    final render order (unlisted-in-budgets sections -- architecture
+    constraints, the gap list, Perl NOTES, the learning block, etc --
+    are never touched here; their own caps, if any, already applied by
+    the caller, e.g. build_prompt's max_tags/learning_budget_tokens).
+
+    budgets: {name: floor_tokens} for the elastic sections eligible to
+    be shrunk, in PRIORITY order (dict iteration order = shrink order:
+    the first key absorbs overflow first) -- e.g. build_prompt passes
+    attempts before samples before neighbor before perl_block before
+    parser_files, with parser_files's floor set to parser_floor_tokens
+    (never squeezed below that no matter how much overflow remains).
+
+    Algorithm: if the assembled total already fits max_tokens, return it
+    unchanged (no section is ever shrunk when there's no pressure to).
+    Otherwise walk `budgets` in order; each section not yet at its own
+    floor absorbs as much of the remaining overflow as it can without
+    going below its floor, and the loop stops the moment overflow reaches
+    zero or every listed section is at its floor (remaining overflow, if
+    any, is left in the assembled prompt -- floors are a hard guarantee,
+    never a target to blow past).
+
+    Returns the assembled prompt string (sections joined in `sections`'
+    order, i.e. the exact order given -- callers already handle their
+    own inter-section separators inside each section's text)."""
+    texts = dict(sections)
+    order = [name for name, _ in sections]
+
+    def total_tokens():
+        return sum(estimate_tokens(texts[name]) for name in order)
+
+    overflow = total_tokens() - max_tokens
+    if overflow <= 0:
+        return "".join(texts[name] for name in order)
+
+    for name, floor in budgets.items():
+        if overflow <= 0:
+            break
+        current_text = texts.get(name, "")
+        current = estimate_tokens(current_text)
+        if current <= floor:
+            continue
+        shrink_to = max(floor, current - overflow)
+        texts[name] = _clamp_section_tokens(current_text, shrink_to)
+        overflow -= current - estimate_tokens(texts[name])
+
+    return "".join(texts[name] for name in order)
 
 
 DEFAULT_COMPACTION_TRIGGER_TOKENS = 12_000
@@ -586,9 +727,39 @@ def git_checkout_clean(repo_root):
     subprocess.run(["git", "clean", "-fd"], cwd=repo_root, check=True)  # nosec B603
 
 
-def git_commit(message, repo_root):
+def sanitize_trailer_value(value, max_chars=200):
+    """M1: a trailer value must be a single line and bounded -- collapse
+    every whitespace run (newlines included) to a single space, then
+    hard-truncate. Shared by git_commit's own trailer rendering and any
+    caller building trailer values ahead of time (e.g. fix_gap's
+    Exiftool-Value/Oxidex-Value from live evidence)."""
+    text = " ".join(str(value).split())
+    return text if len(text) <= max_chars else text[: max_chars - 1] + "…"
+
+
+def git_commit(message, repo_root, trailers=None):
+    """Commit staged changes with `message`; trailers=None matches every
+    existing caller's behavior exactly.
+
+    trailers (spec M1), when given, is an ordered sequence of (key,
+    value) pairs -- a plain dict also works for callers with no repeated
+    keys, but a list-of-pairs is what lets a cluster commit carry
+    multiple `Tag:` trailers, one per member. Each value is sanitized
+    (see sanitize_trailer_value) and rendered as one "Key: value" line;
+    every trailer line is appended as ONE extra `-m` block (git's own
+    "-m block is a paragraph" convention), so `git interpret-trailers
+    --parse` -- validate_fix_commit.py's parser, log_sweep_review.py's
+    M6 auto-entries -- sees exactly the fleet's evidence-trailer
+    contract. A key whose value is None or "" is skipped (an omittable
+    trailer like Perl-Ref/Table, per spec M1's "else omit")."""
     subprocess.run(["git", "add", "-A"], cwd=repo_root, check=True)  # nosec B603
-    subprocess.run(["git", "commit", "-m", message], cwd=repo_root, check=True)  # nosec B603
+    argv = ["git", "commit", "-m", message]
+    if trailers:
+        items = trailers.items() if isinstance(trailers, dict) else trailers
+        lines = [f"{key}: {sanitize_trailer_value(value)}" for key, value in items if value]
+        if lines:
+            argv += ["-m", "\n".join(lines)]
+    subprocess.run(argv, cwd=repo_root, check=True)  # nosec B603
 
 
 def refresh_worktree(repo_root, base_ref):
@@ -1382,111 +1553,141 @@ TERMINAL_REMINDER = (
 )
 
 
-DEFAULT_MAX_FORMAT_MEMORY_CHARS = 4000
+# --- K2/K3: shared knowledge layer (replaces per-worker format-memory) ------
+#
+# Spec K1 retires append_format_memory_note/summarize_format_memory/
+# build_format_memory_summary_prompt entirely: a worker's learning now
+# becomes a lesson event (see append_lesson/the fix_gap writers below)
+# instead of a private note appended to a file the distiller elsewhere
+# rewrites (that was the distiller-vs-appender lost-update race). The
+# distiller (scripts/distill_lessons.py) is the ONLY writer of both files
+# read below; every build_prompt call here is read-only.
 
-
-def format_memory_path(memory_dir, format_name):
-    return Path(memory_dir) / f"{format_name}.md"
-
-
-def load_format_memory(memory_dir, format_name):
-    """Current rolling memory for this format -- a running, periodically
-    condensed log of what previous rounds learned (see
-    append_format_memory_note/summarize_format_memory). "" if none yet."""
+def load_global_pitfalls(home=OXIDEX_HOME):
+    """K2: fresh read of <home>/logs/knowledge/GLOBAL-PITFALLS.md at every
+    build_prompt call (see build_prompt's knowledge_home docstring for the
+    hermetic-by-default None-omits gate). Curated only by the distiller or
+    a human, always via tempfile+os.replace (see
+    distill_lessons.update_global_pitfalls) -- reading it here is fine even
+    mid-write, since a reader only ever sees a complete old or complete new
+    file. Missing/unreadable/empty falls back to the KNOWN_PITFALLS
+    constant, so a fresh rollout (or a hermetic test pointed at an empty
+    tempdir) behaves exactly like the pre-K2 hardcoded-constant loop."""
+    path = Path(home) / "logs" / "knowledge" / "GLOBAL-PITFALLS.md"
     try:
-        return format_memory_path(memory_dir, format_name).read_text()
+        text = path.read_text().strip()
+    except OSError:
+        return KNOWN_PITFALLS
+    return text or KNOWN_PITFALLS
+
+
+def load_module_playbook(knowledge_home, module_key):
+    """K3: <knowledge_home>/logs/knowledge/modules/<module_key>.md --
+    written ONLY by scripts/distill_lessons.py (workers only ever read, at
+    build_prompt time, replacing load_format_memory). "" when missing/
+    unreadable/no knowledge_home/no module_key, same "section omitted"
+    contract as every other optional build_prompt source."""
+    if not knowledge_home or not module_key:
+        return ""
+    path = Path(knowledge_home) / "logs" / "knowledge" / "modules" / f"{module_key}.md"
+    try:
+        return path.read_text().strip()
     except OSError:
         return ""
 
 
-def append_format_memory_note(memory_dir, format_name, note, now_fn=time.time):
-    """Append one dated learning to this format's rolling memory file --
-    called once per round (see main()'s real_fix_tag), regardless of
-    outcome, so the memory captures the whole arc of work on a format
-    over time, not just this session's sweep-review verdicts (that's
-    load_recent_sweep_reviews' job -- a *human* reviewer's judgment on
-    specific merged/rejected commits; this is the loop's own ongoing
-    account of what it tried)."""
-    path = format_memory_path(memory_dir, format_name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    ts = time.strftime("%Y-%m-%d", time.localtime(now_fn()))
-    with path.open("a") as f:
-        f.write(f"- [{ts}] {note}\n")
+# K4: 4 per tier (same-format + up to 4 cross-format rejections) -- "all 29
+# verdicts fit in a prompt" per the spec's own sizing rationale.
+DEFAULT_MAX_SWEEP_REVIEW_ENTRIES = 4
 
 
-def build_format_memory_summary_prompt(format_name, memory_text):
-    return (
-        f"Below is a running log of what a fixer has learned across many rounds working on "
-        f"ExifTool tag-coverage gaps for format \"{format_name}\". It's grown too large to keep "
-        "showing in full every round. Condense it into a shorter bullet list of the most "
-        "important, still-relevant lessons -- naming conventions that worked or didn't, tags "
-        "that turned out tricky and why, decoder logic that was reused vs. reinvented, anything "
-        "a future round should know before starting. Drop anything superseded, resolved, or no "
-        "longer useful. Respond with ONLY the condensed bullet list, no preamble or "
-        f"explanation.\n\n{memory_text}"
-    )
+#: K4 verdict spellings (legacy binary + K4 verdict_class) that count as a
+#: rejection -- the only class allowed to generalize across formats.
+_REJECTED_VERDICTS = {"rejected", "human_rejected", "machine_rejected"}
+_HUMAN_VERDICT_CLASSES = {"human_accepted", "human_rejected"}
 
 
-def summarize_format_memory(memory_dir, format_name, config,
-                             call_model_fn=call_model, pick_model_fn=random.choice,
-                             max_chars=DEFAULT_MAX_FORMAT_MEMORY_CHARS):
-    """If this format's memory has grown past max_chars, condense it via
-    a model call and overwrite the file with the shorter version so it
-    stays a manageable size indefinitely rather than growing without
-    bound round after round. Returns True iff it actually summarized.
-
-    Never raises and never destroys existing memory on failure -- a
-    summarization call is best-effort background maintenance; if it
-    fails for any reason (network, malformed reply), the existing
-    (long but still usable) memory is left exactly as it was rather
-    than being replaced with something broken or losing it entirely.
-    """
-    current = load_format_memory(memory_dir, format_name)
-    if len(current) <= max_chars:
-        return False
-    try:
-        model_spec = pick_model_fn(models_for_phase(config["models"], "explore"))
-        prompt = build_format_memory_summary_prompt(format_name, current)
-        reply = call_model_fn(
-            [{"role": "user", "content": prompt}],
-            model_spec["base_url"], model_spec["api_key"], model_spec["name"],
-            config["max_tokens"], model_spec.get("reasoning_effort") or config["reasoning_effort"],
-            config.get("stream", False), config.get("thinking", True),
-            config.get("temperature", 0), config.get("timeout", 120),
-            config.get("max_retries", DEFAULT_MAX_RETRIES),
-            config.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS),
-            config.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),
-        ).strip()
-    except Exception:
-        return False
-    if not reply:
-        return False
-    format_memory_path(memory_dir, format_name).write_text(reply + "\n")
-    return True
+def _is_rejection_entry(entry):
+    return (entry.get("verdict") in _REJECTED_VERDICTS
+            or entry.get("verdict_class") in _REJECTED_VERDICTS)
 
 
-DEFAULT_MAX_SWEEP_REVIEW_ENTRIES = 6
+def _entry_is_human(entry):
+    """K4: 'prompt selection always prefers human entries over machine
+    ones'. A pre-K4 entry (no verdict_class at all) was always hand-typed
+    by a human reviewer, so it counts as human here too."""
+    verdict_class = entry.get("verdict_class")
+    return not verdict_class or verdict_class in _HUMAN_VERDICT_CLASSES
 
 
-def load_recent_sweep_reviews(log_path, format_name, max_entries=DEFAULT_MAX_SWEEP_REVIEW_ENTRIES):
-    """Read scripts/log_sweep_review.py's JSONL log and return the most
-    recent entries for format_name, newest first, capped at max_entries.
+def _dedupe_machine_entries(entries):
+    """Drop a machine entry sharing (patch_id, reason) with one already
+    kept (spec K4: 'deduped ... so a re-polled failure cannot flood the
+    window and evict human verdicts'). Human entries are never deduped by
+    identity -- distinct human judgment calls are never redundant."""
+    seen = set()
+    out = []
+    for entry in entries:
+        if not _entry_is_human(entry) and entry.get("patch_id") and entry.get("reason"):
+            key = (entry["patch_id"], entry["reason"])
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(entry)
+    return out
+
+
+def _select_tier(entries, cap):
+    """Human-preferred, newest-first selection within one K4 tier.
+    `entries` must already be newest-first. Every human entry is kept
+    ahead of machine ones (up to `cap` total), then the combined pick is
+    restored to newest-first order (picking humans first can otherwise
+    put an older human entry ahead of a newer one that got bumped)."""
+    if not entries:
+        return []
+    deduped = _dedupe_machine_entries(entries)
+    human = [e for e in deduped if _entry_is_human(e)]
+    machine = [e for e in deduped if not _entry_is_human(e)]
+    selected = human[:cap]
+    if len(selected) < cap:
+        selected += machine[: cap - len(selected)]
+    order = {id(e): i for i, e in enumerate(entries)}
+    selected.sort(key=lambda e: order.get(id(e), len(entries)))
+    return selected
+
+
+def load_recent_sweep_reviews(log_path, format_name,
+                              max_entries=DEFAULT_MAX_SWEEP_REVIEW_ENTRIES,
+                              max_other_format_entries=DEFAULT_MAX_SWEEP_REVIEW_ENTRIES):
+    """Read scripts/log_sweep_review.py's JSONL log and return recent
+    entries relevant to format_name, newest first.
+
+    Spec K4 two-tier selection: up to `max_entries` (default 4) most
+    recent SAME-format entries (any verdict -- accepted teaches a
+    convention worked, rejected teaches it didn't), PLUS up to
+    `max_other_format_entries` (default 4) most recent REJECTIONS from
+    every OTHER format ("rejections generalize" -- a PrintConv-byte-check
+    or duplicate-emission lesson learned on Canon.pm applies to Nikon.pm
+    too). Within each tier, human-verdict entries are always preferred
+    over machine ones (see _select_tier), and machine entries are
+    deduped by (patch_id, reason) so a re-polled merger/sweep failure
+    cannot flood the window and evict human verdicts. Cross-format
+    entries carry a synthetic "_sweep_review_tier": "other_format" key
+    (harmless extra dict key -- format_sweep_review_history uses it to
+    render them under their own subheader; nothing else reads it).
 
     Unlike format_previous_attempts (which only ever sees a build/test
     failure on the *exact same tag* being retried), this surfaces actual
-    sweep-review verdicts -- both accepted and rejected -- across every
-    tag in this format, so a fixer working on a *different* tag in the
-    same format still benefits from what a reviewer already found there
-    (a naming convention that was wrong, a duplicate that already
-    existed, a formatting guess that didn't match real ExifTool output).
+    sweep-review verdicts across many tags, so a fixer working on a
+    *different* tag still benefits from what a reviewer already found.
 
-    Missing/corrupt log or nothing for this format: returns [] -- this is
-    advisory context, never a hard dependency (matches
-    load_tag_state's own "missing file = nothing recorded yet" handling).
+    Missing/corrupt log: returns [] -- this is advisory context, never a
+    hard dependency (matches load_tag_state's own "missing file = nothing
+    recorded yet" handling).
     """
     if not log_path.exists():
         return []
-    entries = []
+    same_format, other_format = [], []
     try:
         with log_path.open() as f:
             for line in f:
@@ -1498,29 +1699,56 @@ def load_recent_sweep_reviews(log_path, format_name, max_entries=DEFAULT_MAX_SWE
                 except json.JSONDecodeError:
                     continue
                 if entry.get("format") == format_name:
-                    entries.append(entry)
+                    same_format.append(entry)
+                elif _is_rejection_entry(entry):
+                    other_format.append(dict(entry, _sweep_review_tier="other_format"))
     except OSError:
         return []
-    entries.reverse()  # file is append-order (oldest first); newest first for display
-    return entries[:max_entries]
+    # file is append-order (oldest first); newest first for display/selection
+    same_format.reverse()
+    other_format.reverse()
+    return (_select_tier(same_format, max_entries)
+            + _select_tier(other_format, max_other_format_entries))
 
 
 def format_sweep_review_history(entries):
-    """Render load_recent_sweep_reviews' output into a prompt section."""
+    """Render load_recent_sweep_reviews' output into a prompt section.
+
+    Spec K4: same-format entries render under the original heading;
+    cross-format rejections (tagged "_sweep_review_tier": "other_format")
+    render under their own subheader, each line naming its source format
+    so "the mistakes generalize" reads clearly even though the tag/format
+    differs from the one currently being fixed."""
     if not entries:
         return ""
-    lines = []
-    for entry in entries:
-        verdict = entry.get("verdict", "unknown").upper()
-        tag = entry.get("tag", "?")
-        reason = entry.get("reason", "no reason given")
-        lines.append(f"  - {verdict} {tag}: {reason}")
-    return (
-        "\n\nRecent sweep-review outcomes for this format (a human reviewer's actual "
-        "verdicts on other fixes in this format -- REJECTED means a diff that built and "
-        "tested fine was still wrong; learn the specific reason, not just that it failed):\n"
-        + "\n".join(lines)
-    )
+
+    def render_lines(items, show_format):
+        lines = []
+        for entry in items:
+            verdict = entry.get("verdict", "unknown").upper()
+            tag = entry.get("tag", "?")
+            reason = entry.get("reason", "no reason given")
+            prefix = f"{entry.get('format', '?')}:" if show_format else ""
+            lines.append(f"  - {verdict} {prefix}{tag}: {reason}")
+        return lines
+
+    same = [e for e in entries if e.get("_sweep_review_tier") != "other_format"]
+    other = [e for e in entries if e.get("_sweep_review_tier") == "other_format"]
+
+    sections = []
+    if same:
+        sections.append(
+            "\n\nRecent sweep-review outcomes for this format (a human reviewer's actual "
+            "verdicts on other fixes in this format -- REJECTED means a diff that built and "
+            "tested fine was still wrong; learn the specific reason, not just that it failed):\n"
+            + "\n".join(render_lines(same, show_format=False))
+        )
+    if other:
+        sections.append(
+            "\n\nRejections from other formats (the mistakes generalize):\n"
+            + "\n".join(render_lines(other, show_format=True))
+        )
+    return "".join(sections)
 
 
 DEFAULT_INLINE_SAMPLE_MAX_BYTES = 4096
@@ -1570,12 +1798,95 @@ def build_exact_sample_block(gap, samples_dir):
     )
 
 
+# --- Section 6: lessons tail (part of the learning block) ------------------
+
+DEFAULT_LESSONS_TAIL_KB = 256
+DEFAULT_LESSONS_TAIL_MAX_ENTRIES = 8
+
+
+def read_lessons_tail(lessons_path, module_key, format_name,
+                       tail_kb=DEFAULT_LESSONS_TAIL_KB,
+                       max_entries=DEFAULT_LESSONS_TAIL_MAX_ENTRIES):
+    """Section 6: the last `tail_kb` KB of <home>/logs/lessons.jsonl via
+    seek (bounded, no full scan of a ledger that only ever grows), non-
+    infra events filtered to the same module (when module_key is given)
+    else the same format, newest `max_entries` kept.
+
+    A byte offset can land mid-line (either the seek itself, or a writer
+    mid-append at the moment of the read) -- the first split chunk after
+    a nonzero offset is dropped rather than risking a truncated JSON
+    object; every other malformed line is skipped the same way every
+    other K1 reader skips one (never degrades to {}). Missing file (not
+    yet created, or no lessons_path given): []."""
+    if not lessons_path:
+        return []
+    path = Path(lessons_path)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return []
+    offset = max(0, size - tail_kb * 1024)
+    try:
+        with path.open("rb") as f:
+            f.seek(offset)
+            data = f.read()
+    except OSError:
+        return []
+    lines = data.split(b"\n")
+    if offset > 0:
+        lines = lines[1:]  # drop a possibly-partial leading fragment
+    events = []
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            ev = json.loads(raw)
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(ev, dict):
+            continue
+        event = ev.get("event")
+        if not event or event == "infra":
+            continue
+        if module_key:
+            if ev.get("module") != module_key:
+                continue
+        elif ev.get("format") != format_name:
+            continue
+        events.append(ev)
+    events.reverse()  # ledger is append-order (oldest first); newest first
+    return events[:max_entries]
+
+
+def format_lessons_tail(events):
+    """Render read_lessons_tail's output into a learning-block section."""
+    if not events:
+        return ""
+    lines = []
+    for ev in events:
+        event = ev.get("event", "?")
+        reason = str(ev.get("reason") or "").strip()
+        tag_key = ev.get("tag_key") or ""
+        suffix = f" ({tag_key})" if tag_key else ""
+        lines.append(f"  - {event}: {reason}{suffix}")
+    return (
+        "\n\nRecent lessons ledger entries (fleet-wide, spec K1 -- other "
+        "workers' recent outcomes on this module/format):\n"
+        + "\n".join(lines)
+    )
+
+
 def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                   max_file_bytes=DEFAULT_MAX_PROMPT_FILE_BYTES, samples_dir=None,
                   max_samples_listed=DEFAULT_MAX_SAMPLE_FILES_LISTED, previous_attempts=None,
-                  perl_lib_dir=None, sweep_review_log_path=None, format_memory_dir=None,
+                  perl_lib_dir=None, sweep_review_log_path=None,
                   max_prompt_tokens=DEFAULT_MAX_PROMPT_TOKENS,
-                  neighbor_precedent_block=""):
+                  neighbor_precedent_block="",
+                  knowledge_home=None, module_name=None,
+                  learning_budget_tokens=DEFAULT_LEARNING_BUDGET_TOKENS,
+                  parser_floor_tokens=DEFAULT_PARSER_FLOOR_TOKENS,
+                  lessons_tail_kb=DEFAULT_LESSONS_TAIL_KB):
     """Format one gap into a model prompt, capped so a huge format (e.g.
     JPEG with thousands of gaps and dozens of parser files) becomes an
     iterative, tractable request instead of one impossibly large prompt.
@@ -1600,16 +1911,35 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     environment-independent output.
 
     sweep_review_log_path, if given, is used to include recent human
-    sweep-review verdicts (accepted/rejected, with reasons) for this
-    gap's format -- see load_recent_sweep_reviews/format_sweep_review_history.
-    None (the default) omits this section, same reasoning as perl_lib_dir.
+    sweep-review verdicts (spec K4: same-format entries plus cross-format
+    REJECTIONS, see load_recent_sweep_reviews/format_sweep_review_history)
+    for this gap's format. None (the default) omits this section, same
+    reasoning as perl_lib_dir.
 
-    format_memory_dir, if given, is used to include this format's rolling
-    memory -- see load_format_memory/append_format_memory_note/
-    summarize_format_memory. Unlike sweep_review_log_path (a human
-    reviewer's verdicts on specific merged/rejected commits), this is the
-    loop's own accumulated, periodically-condensed account of everything
-    tried on this format so far. None omits this section.
+    knowledge_home, if given, is the OXIDEX_HOME-style directory the
+    shared knowledge layer lives under (spec K2/K3): it gates BOTH the
+    curated <knowledge_home>/logs/knowledge/GLOBAL-PITFALLS.md (replacing
+    the bare KNOWN_PITFALLS constant -- see load_global_pitfalls) and the
+    module playbook + lessons-tail sections below. None (the default)
+    keeps every existing caller's output byte-identical AND keeps this
+    function hermetic (it never touches the real OXIDEX_HOME unless a
+    caller opts in) -- exactly like perl_lib_dir/sweep_review_log_path.
+
+    module_name, if given, selects which
+    <knowledge_home>/logs/knowledge/modules/<module_name>.md playbook to
+    show (spec K3); None falls back to gap["format"] as the key. Also
+    scopes the lessons-tail selection (module match takes priority over
+    format match -- see read_lessons_tail). Has no effect when
+    knowledge_home is None.
+
+    learning_budget_tokens/parser_floor_tokens/lessons_tail_kb are the
+    section-6 knobs: the learning block (pitfalls excerpt + module
+    playbook + sweep reviews + lessons tail -- everything knowledge_home
+    gates, plus sweep_review_log_path's section) is capped at
+    learning_budget_tokens and never dropped entirely; the parser-files
+    section never shrinks below parser_floor_tokens even under the worst
+    overflow; lessons_tail_kb bounds how much of the tail of
+    logs/lessons.jsonl read_lessons_tail seeks into.
 
     neighbor_precedent_block is a pre-rendered string (see
     build_neighbor_precedent_block, built by the caller so build_prompt
@@ -1618,8 +1948,14 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
 
     Sections are ordered static-first (constraints/pitfalls/manifest),
     then per-tag content, then volatile history, so the byte-stable
-    prefix is maximal for provider prompt caching and survives
-    head-keeping truncation.
+    prefix is maximal for provider prompt caching. Section 6: overflow
+    beyond max_prompt_tokens is shed via graduated per-section truncation
+    (see assemble_prompt_sections) rather than plain head-keeping --
+    attempts, then samples, then neighbor precedent, then perl_block,
+    then the parser-files section down to (never below)
+    parser_floor_tokens, in that priority order; the learning block is
+    never part of that squeeze (it gets its own flat, never-emptied
+    budget instead).
     """
     missing_shown = gap["missing_tags"][:max_tags]
     missing_omitted = len(gap["missing_tags"]) - len(missing_shown)
@@ -1675,48 +2011,87 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
 
     overview_block = build_format_overview_block(perl_lib_dir, perl_block)
 
+    # Spec K2: fresh read every call, falls back to the KNOWN_PITFALLS
+    # constant when knowledge_home is omitted (hermetic by default -- see
+    # the docstring above) or the file is missing/blank.
+    pitfalls_text = load_global_pitfalls(knowledge_home) if knowledge_home is not None else KNOWN_PITFALLS
+
     sweep_review_block = ""
     if sweep_review_log_path is not None:
         sweep_review_block = format_sweep_review_history(
             load_recent_sweep_reviews(sweep_review_log_path, gap["format"])
         )
 
-    memory_block = ""
-    if format_memory_dir is not None:
-        memory_text = load_format_memory(format_memory_dir, gap["format"]).strip()
-        if memory_text:
-            memory_block = (
-                "\n\nAccumulated notes from previous rounds working on this format "
-                "(condensed periodically so this stays a manageable size -- treat this as "
-                "background context, not necessarily about the exact tag(s) above):\n\n"
-                + memory_text
+    # Spec K3: module playbook, replacing load_format_memory. Format-name
+    # fallback key when module attribution is ambiguous/unavailable.
+    module_block = ""
+    if knowledge_home is not None:
+        module_key = module_name or gap["format"]
+        playbook_text = load_module_playbook(knowledge_home, module_key)
+        if playbook_text:
+            module_block = (
+                "\n\nModule playbook (distilled cross-worker lessons for this gap's "
+                f"module -- {module_key} -- see scripts/distill_lessons.py):\n\n"
+                + playbook_text
             )
+
+    # Section 6: lessons tail, also part of the learning block.
+    lessons_tail_block = ""
+    if knowledge_home is not None:
+        lessons_tail_block = format_lessons_tail(read_lessons_tail(
+            Path(knowledge_home) / "logs" / "lessons.jsonl",
+            module_name, gap["format"], tail_kb=lessons_tail_kb,
+        ))
+
+    # Spec section 6: the learning block (pitfalls excerpt sits in the
+    # static prefix above for cache-prefix reasons -- see the docstring's
+    # "Section order otherwise unchanged" note; only the remaining three
+    # pieces share this reserved, never-emptied budget) is capped flat,
+    # independent of whatever else is squeezing the rest of the prompt.
+    learning_text = _clamp_section_tokens(
+        sweep_review_block + module_block + lessons_tail_block, learning_budget_tokens,
+    )
 
     attempts_block = format_previous_attempts(previous_attempts)
 
     manifest = build_reply_shape_manifest(max_prompt_tokens)
-    prompt = (
-        f"{RUST_ARCHITECTURE_CONSTRAINTS}\n\n"
-        f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
-        f"{KNOWN_PITFALLS}\n\n"
-        f"{manifest}\n\n"
-        f"Missing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
-        f"Value differences (both extract it, values disagree):\n{diffs}"
-        f"{overview_block}\n\n"
-        f"Likely relevant source files:\n{files}"
-        f"{samples_block}"
-        f"{exact_sample_block}"
-        f"{perl_block}"
-        f"{neighbor_precedent_block}"
-        f"{sweep_review_block}"
-        f"{memory_block}"
-        f"{attempts_block}\n\n"
-        "For value differences, only fix genuine bugs, not benign formatting differences. "
-        "If more gaps exist than are shown above, that's expected -- fix what's shown here; "
-        "future rounds will address the rest.\n\n"
-        f"{TERMINAL_REMINDER}"
-    )
-    return truncate_to_token_budget(prompt, max_prompt_tokens)
+    sections = [
+        ("intro", (
+            f"{RUST_ARCHITECTURE_CONSTRAINTS}\n\n"
+            f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
+            f"{pitfalls_text}\n\n"
+            f"{manifest}\n\n"
+            f"Missing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
+        )),
+        ("gaps", f"Value differences (both extract it, values disagree):\n{diffs}"),
+        ("overview", f"{overview_block}\n\nLikely relevant source files:\n"),
+        ("parser_files", files),
+        ("samples", samples_block),
+        ("exact_sample", exact_sample_block),
+        ("perl_block", perl_block),
+        ("neighbor", neighbor_precedent_block),
+        ("learning", learning_text),
+        ("attempts", attempts_block),
+        ("tail", (
+            "\n\nFor value differences, only fix genuine bugs, not benign formatting differences. "
+            "If more gaps exist than are shown above, that's expected -- fix what's shown here; "
+            "future rounds will address the rest.\n\n"
+            f"{TERMINAL_REMINDER}"
+        )),
+    ]
+    # Section 6 shrink-priority order: attempts, then samples, then
+    # neighbor precedent, then perl_block, then parser files down to
+    # (never below) parser_floor_tokens. "learning" is deliberately
+    # absent -- its own flat cap above already gives it the "reserved,
+    # never dropped entirely" guarantee independent of this squeeze.
+    budgets = {
+        "attempts": 0,
+        "samples": 0,
+        "neighbor": 0,
+        "perl_block": 0,
+        "parser_files": parser_floor_tokens,
+    }
+    return assemble_prompt_sections(sections, budgets, max_prompt_tokens)
 
 
 FORMAT_SAMPLE_EXTENSIONS = {
@@ -1734,14 +2109,55 @@ FORMAT_SAMPLE_EXTENSIONS = {
 }
 
 
-def build_review_prompt(gap, diff):
+#: K5/section 6: independent of the fixer's max_prompt_tokens.
+DEFAULT_REVIEWER_MAX_PROMPT_TOKENS = 8192
+
+#: Section 6 checklist, verbatim (maps 1:1 to the human rejection
+#: taxonomy): C1/C2 are class (a) wrong-value mistakes, C3 is class (b)
+#: double emission, C4 is class (c) fixture invention, C5 is the general
+#: hardcoded-sample-value smell. Checklist ids flow into lessons.jsonl as
+#: the clusterable fingerprint key (see parse_checklist_id).
+REVIEW_CHECKLIST = """
+C1: exact tag ID / table index matches the Perl shown (class a).
+C2: PrintConv strings byte-identical, not paraphrased (class a).
+C3: the diff edits an emitter found in the emission scan rather than adding a second path (class b).
+C4: any new/changed test asserts values from a real corpus sample, not a fixture invented in this diff (class c).
+C5: no hardcoded sample-specific values.
+""".strip()
+
+_CHECKLIST_ID_RE = re.compile(r"\b(C[1-5])\b", re.IGNORECASE)
+
+
+def parse_checklist_id(reason):
+    """The first "C1".."C5" checklist token mentioned in a REJECT/
+    UNVERIFIABLE reason string (spec section 6), or None. Shared by K1's
+    review_rejected lesson event and K5's UNVERIFIABLE routing."""
+    m = _CHECKLIST_ID_RE.search(str(reason or ""))
+    return m.group(1).upper() if m else None
+
+
+def build_review_prompt(gap, diff, perl_block="", live_evidence="", emission_scan="",
+                        max_tokens=DEFAULT_REVIEWER_MAX_PROMPT_TOKENS):
+    """K5: the reviewer prompt, now carrying the same Perl reference the
+    fixer saw (perl_block), a live post-fix re-extraction (live_evidence
+    -- NOT the comparison JSON, whose matched_tags carries no values),
+    and a scoped emission scan (emission_scan -- rg over this format's
+    parser subtree, not a repo-wide grep), plus the C1-C5 checklist with
+    its mandatory APPROVE/REJECT/UNVERIFIABLE reply shape. All three
+    evidence params default to "" (omitted) so callers that don't have
+    them (including every existing test) keep prior, environment-
+    independent output.
+    """
     missing_names = ", ".join(
         f"{t['family']}:{t['name']}" for t in gap["missing_tags"][:10]
     ) or "(none)"
     diff_names = ", ".join(
         d["tag_key"] for d in gap["value_differences"][:10]
     ) or "(none)"
-    return (
+    perl_section = f"\n\nExifTool Perl reference (the same snippets the fixer saw):\n{perl_block}" if perl_block else ""
+    evidence_section = f"\n\nLive re-extraction, post-fix (exiftool vs oxidex on the real sample):\n{live_evidence}" if live_evidence else ""
+    emission_section = f"\n\nEmission scan (every place this tag is emitted in the format's parser subtree):\n{emission_scan}" if emission_scan else ""
+    prompt = (
         f"You are reviewing a proposed fix for ExifTool tag-coverage gaps in the oxidex Rust codebase, "
         f"format \"{gap['format']}\". The fix was supposed to address (among possibly more): "
         f"missing tags [{missing_names}], value differences [{diff_names}].\n\n"
@@ -1749,28 +2165,54 @@ def build_review_prompt(gap, diff):
         "Judge whether this is a genuine, general implementation of the missing tag parsing/serialization "
         "logic, or whether it games the specific sample file it was tested against -- for example, "
         "hardcoding a literal expected value instead of actually decoding it, special-casing a filename, "
-        "or any other shortcut that would only work for the one file used to verify this fix.\n\n"
+        "or any other shortcut that would only work for the one file used to verify this fix."
+        f"{perl_section}{evidence_section}{emission_section}\n\n"
+        "Checklist -- answer each item briefly, THEN give your verdict:\n\n"
+        f"{REVIEW_CHECKLIST}\n\n"
         "Respond with exactly one of:\n"
         "APPROVE\n"
         "or\n"
-        "REJECT: <one-sentence reason>"
+        "REJECT: <Cn> <reason>\n"
+        "or\n"
+        "UNVERIFIABLE: <Cn> <reason -- what evidence you'd need but don't have, e.g. the relevant "
+        "Perl table didn't fit the prompt budget>"
     )
+    return truncate_to_token_budget(prompt, max_tokens)
+
+
+def extract_review_verdict_full(response_text):
+    """K5: parse a reviewer response into the full three-way verdict --
+    ("approve" | "reject" | "unverifiable", reason). Unparseable
+    responses are "reject" -- fail-safe, never silently approve something
+    we couldn't understand. See extract_review_verdict for the
+    preserved, backward-compatible two-tuple shape existing callers use."""
+    stripped = response_text.strip()
+    if stripped.upper().startswith("APPROVE"):
+        return "approve", ""
+    if stripped.upper().startswith("UNVERIFIABLE"):
+        _, _, reason = stripped.partition(":")
+        return "unverifiable", reason.strip() or "unverifiable, no checklist id given"
+    if stripped.upper().startswith("REJECT"):
+        _, _, reason = stripped.partition(":")
+        return "reject", reason.strip() or "rejected, no reason given"
+    return "reject", f"unparseable review verdict: {stripped[:200]!r}"
 
 
 def extract_review_verdict(response_text):
-    """Parse a review response into (approved, reason). Unparseable
-    responses are treated as rejections -- fail-safe, never silently
-    approve something we couldn't understand."""
-    stripped = response_text.strip()
-    if stripped.upper().startswith("APPROVE"):
-        return True, ""
-    if stripped.upper().startswith("REJECT"):
-        _, _, reason = stripped.partition(":")
-        return False, reason.strip() or "rejected, no reason given"
-    return False, f"unparseable review verdict: {stripped[:200]!r}"
+    """Parse a review response into (approved, reason) -- the ORIGINAL
+    two-tuple contract, preserved byte-for-byte for existing callers.
+    Delegates to extract_review_verdict_full (K5's three-way vocabulary):
+    "unverifiable" degrades to "not approved" here, same as "reject",
+    since a plain boolean has no way to represent the third state.
+    Callers that need to route UNVERIFIABLE to the human queue instead of
+    a hard rejection use review_verdict (or extract_review_verdict_full
+    directly), not this function."""
+    verdict, reason = extract_review_verdict_full(response_text)
+    return verdict == "approve", reason
 
 
-def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=random.choice):
+def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=random.choice,
+                   perl_block="", live_evidence="", emission_scan=""):
     """Ask the model to review a diff for genuineness (not gaming the
     sample file).
 
@@ -1780,8 +2222,24 @@ def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=ra
     a {"name", "base_url", "api_key"} dict -- pool entries may span
     different providers, not just different model names on the same one.
     Injectable for deterministic tests.
+
+    perl_block/live_evidence/emission_scan (spec K5), each "" by default,
+    are passed straight through to build_review_prompt.
+
+    Returns (approved, reason) -- the same two-tuple every caller (fix_gap
+    included) already expects. UNVERIFIABLE replies are folded into
+    approved=True (spec: "the fix STILL lands") with reason prefixed
+    "UNVERIFIABLE: " so fix_gap can detect it and populate review_flags/
+    the Review-Unverifiable trailer for C1/C2 -- or, when the reply
+    omits a parseable Cn token entirely, UNKNOWN (fail-safe: unknown
+    severity still routes to the human queue rather than silently
+    passing) -- see extract_review_verdict_full/parse_checklist_id,
+    without fix_gap needing its own reviewer-calling contract change.
     """
-    prompt = build_review_prompt(gap, diff)
+    prompt = build_review_prompt(
+        gap, diff, perl_block=perl_block, live_evidence=live_evidence, emission_scan=emission_scan,
+        max_tokens=config.get("reviewer_max_prompt_tokens", DEFAULT_REVIEWER_MAX_PROMPT_TOKENS),
+    )
     model_spec = pick_model_fn(config["models"])
     try:
         reply = call_model_fn(
@@ -1796,7 +2254,12 @@ def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=ra
         )
     except Exception as e:
         return False, f"review call failed: {e}"
-    return extract_review_verdict(reply)
+    verdict, reason = extract_review_verdict_full(reply)
+    if verdict == "approve":
+        return True, ""
+    if verdict == "unverifiable":
+        return True, f"UNVERIFIABLE: {reason}"
+    return False, reason
 
 
 def build_failure_critique_prompt(gap, diff, failure_kind, failure_detail):
@@ -2215,6 +2678,249 @@ DEFAULT_MAX_TEST_OUTPUT_CHARS = 3000
 INFRA_FAILURE_PREFIX = "model call failed:"
 
 
+# --- K5: reviewer evidence defaults -----------------------------------------
+
+def default_extract_live_evidence(repo_root, sample_path, tag_keys):
+    """K5 real default for fix_gap's extract_evidence_fn: shell out to
+    exiftool and this worktree's own oxidex binary for just the target
+    tags on one real sample file -- NOT the comparison JSON (whose
+    matched_tags carries no values, the unimplementable-recheck-evidence
+    critique this resolves). Renders "<tag>: exiftool=<v> oxidex=<v>
+    (post-fix)" per tag found in either output.
+
+    target/debug is tried first, target/fixloop next (see cargo_build's
+    "fixloop" profile -- the one this loop's own build step actually
+    produces). Best-effort throughout: a missing binary/exiftool/sample,
+    or any parse failure, yields "" rather than raising -- reviewer
+    evidence is advisory, never a hard dependency of the review call.
+    """
+    if not sample_path or not tag_keys:
+        return ""
+    repo_root = Path(repo_root)
+    binary = next(
+        (c for c in (repo_root / "target" / "debug" / "oxidex",
+                     repo_root / "target" / "fixloop" / "oxidex") if c.is_file()),
+        None,
+    )
+    if binary is None or not shutil.which("exiftool"):
+        return ""
+    try:
+        et_proc = subprocess.run(  # nosec B603
+            ["exiftool", "-j", "-G", str(sample_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        ox_proc = subprocess.run(  # nosec B603
+            [str(binary), "-j", "--exiftool-compat", str(sample_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        et_tags = json.loads(et_proc.stdout)[0] if et_proc.stdout.strip() else {}
+        ox_tags = json.loads(ox_proc.stdout)[0] if ox_proc.stdout.strip() else {}
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return ""
+
+    def lookup(tags, tag_key):
+        name = tag_key.rsplit(":", 1)[-1]
+        for k, v in tags.items():
+            if k == tag_key or k.rsplit(":", 1)[-1] == name:
+                return v
+        return None
+
+    lines = []
+    for tag_key in tag_keys:
+        et_val, ox_val = lookup(et_tags, tag_key), lookup(ox_tags, tag_key)
+        if et_val is None and ox_val is None:
+            continue
+        lines.append(f"{tag_key}: exiftool={et_val!r} oxidex={ox_val!r} (post-fix)")
+    return "\n".join(lines)
+
+
+def default_emission_scan(repo_root, parser_files, tag_keys, diff_text=None):
+    """K5 real default for fix_gap's scan_fn: `rg -n` over this gap's
+    OWN parser-file directories (never a repo-wide grep, which would
+    fill the reviewer's context with other manufacturers' unrelated
+    hits), one search per target tag name, plus -- when diff_text is
+    given -- the same pre/post occurrence-count machinery
+    detect_duplicate_tag_insertion uses for every file the diff touches.
+    Best-effort: a missing `rg`/unreadable file yields no line for that
+    tag/file rather than raising."""
+    if not tag_keys:
+        return ""
+    repo_root = Path(repo_root)
+    dirs = sorted({str((repo_root / f).parent) for f in (parser_files or [])})
+    lines = []
+    if dirs:
+        for tag_key in tag_keys:
+            name = tag_key.rsplit(":", 1)[-1]
+            try:
+                result = subprocess.run(  # nosec B603
+                    ["rg", "-n", "-F", name, *dirs],
+                    capture_output=True, text=True, timeout=15,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            hits = [ln for ln in result.stdout.splitlines() if ln.strip()]
+            lines.append(f"{tag_key}: {len(hits)} occurrence(s) in the parser subtree"
+                         + ("\n" + "\n".join(hits[:5]) if hits else ""))
+    if diff_text:
+        for path in DIFF_FILE_HEADER_RE.findall(diff_text):
+            full_path = repo_root / path
+            try:
+                post_text = full_path.read_text()
+            except OSError:
+                continue
+            pre_text = file_content_at_head(path, repo_root)
+            for tag_key in tag_keys:
+                name = tag_key.rsplit(":", 1)[-1]
+                lines.append(
+                    f"{path}: {tag_key} occurrences pre={pre_text.count(name)} "
+                    f"post={post_text.count(name)}"
+                )
+    return "\n".join(lines)
+
+
+# --- K1 lesson writers + M3 recheck classification (fix_gap helpers) -------
+
+def _gap_primary_tag_key(gap):
+    """Best tag_key for a K1 lesson from a fix_gap gap dict (single or
+    clustered) -- the first entry across missing_tags then
+    value_differences; "" when the gap somehow has neither."""
+    for e in gap["missing_tags"]:
+        return f"{e['family']}:{e['name']}"
+    for e in gap["value_differences"]:
+        return e["tag_key"]
+    return ""
+
+
+def _gap_member_tag_gaps(gap):
+    """Reconstruct tag_still_open-shaped {"kind", "entry"} member dicts
+    from a fix_gap gap's own missing_tags/value_differences lists (a
+    fix_gap gap may bundle several tags together -- see
+    make_cluster_gap)."""
+    members = [{"kind": "missing", "entry": e} for e in gap["missing_tags"]]
+    members += [{"kind": "diff", "entry": e} for e in gap["value_differences"]]
+    return members
+
+
+def _member_tag_key(member):
+    entry = member["entry"]
+    if member["kind"] == "missing":
+        return f"{entry['family']}:{entry['name']}"
+    return entry["tag_key"]
+
+
+def _classify_recheck_failure(gap, post_match):
+    """Best-effort classification of why a recheck still shows this gap
+    open, for the K1 lesson event (spec items 2/9): "structural" when
+    tag_still_open flags a duplicate emission (M3 -- checked first, it's
+    the deterministic signal), "wrong_value" with the live exiftool/
+    oxidex values when a member is present-but-wrong, else the generic
+    "gap_not_closed". post_match=None (the legacy 1-/2-tuple recheck_fn
+    contract most existing callers/tests still use) always falls back to
+    "gap_not_closed" -- there is nothing structured here to classify.
+    Returns (event, evidence_or_None, tag_key_or_None)."""
+    if post_match is None:
+        return "gap_not_closed", None, None
+    members = _gap_member_tag_gaps(gap)
+    for member in members:
+        if tag_still_open(post_match, member) == ("duplicate_emission",):
+            return "structural", None, _member_tag_key(member)
+    for member in members:
+        verdict = tag_still_open(post_match, member)
+        if verdict and verdict[0] == "value_differs":
+            return (
+                "wrong_value",
+                {"exiftool_value": verdict[1], "oxidex_value": verdict[2]},
+                _member_tag_key(member),
+            )
+    return "gap_not_closed", None, None
+
+
+def _write_fix_gap_lesson(knowledge_home, worker_label, event, reason, format_name, *,
+                          evidence=None, tag_key=None, checklist_id=None,
+                          module=None, table=None, now_fn=time.time):
+    """Best-effort K1 lesson append (spec item 2): a lesson-append
+    failure must NEVER break the fixer loop. knowledge_home=None (the
+    default everywhere in this module) is a no-op -- lesson writing is
+    strictly opt-in, same hermetic-by-default contract as build_prompt's
+    knowledge_home."""
+    if knowledge_home is None:
+        return
+    try:
+        event_dict = make_lesson_event(
+            ts=now_fn(), worker=worker_label, format_name=format_name,
+            module=module, table=table, event=event, reason=reason,
+            evidence=evidence or "", tag_key=tag_key or "", checklist_id=checklist_id or "",
+        )
+        append_lesson(knowledge_home, event_dict)
+    except OSError:
+        pass
+
+
+def _parse_live_evidence_value(live_evidence, tag_key):
+    """Best-effort extraction of one tag's (exiftool_value, oxidex_value)
+    back out of default_extract_live_evidence's rendered text, for the
+    M1 Exiftool-Value/Oxidex-Value trailers. (None, None) when not found
+    or live_evidence is empty -- evidence is advisory, so a trailer this
+    can't recover simply isn't emitted (spec M1's "else omit")."""
+    if not live_evidence or not tag_key:
+        return None, None
+    m = re.search(
+        re.escape(tag_key) + r": exiftool=(.*?) oxidex=(.*?) \(post-fix\)", live_evidence,
+    )
+    if not m:
+        return None, None
+    return m.group(1), m.group(2)
+
+
+def _perl_ref_from_block(perl_block_text):
+    """Best-effort pm-file for the M1 Perl-Ref trailer, parsed from
+    build_perl_reference_block's own snippet header (see
+    PERL_MODULE_HEADER_RE) -- None (omit) when perl_block_text is empty
+    (no --perl-lib resolved) or carries no recognizable module header.
+    The snippet header itself carries no line number, so this is always
+    just "<pm-file>", never "<pm-file>:<line>" -- a real limitation of
+    extract_perl_tag_snippet's current return shape, not something this
+    function guesses at."""
+    if not perl_block_text:
+        return None
+    m = PERL_MODULE_HEADER_RE.search(perl_block_text)
+    return m.group(1) if m else None
+
+
+def _build_fix_gap_trailers(gap, fmt, tag_keys, sample_path, live_evidence, perl_block_text,
+                            gap_count_before, remaining_after, worker_label, table_name,
+                            review_flags):
+    """Assemble the M1 evidence-trailer list for a landed fix_gap commit:
+    an ordered [(key, value), ...] list (git_commit's own contract,
+    which is what lets a cluster commit carry multiple Tag: entries).
+    Omittable trailers (Sample/Exiftool-Value/Oxidex-Value/Perl-Ref/
+    Worker/Table/Review-Unverifiable) are simply absent from the list
+    when their evidence isn't available -- git_commit already skips any
+    falsy value defensively too."""
+    trailers = [("Format", fmt)]
+    for tag_key in tag_keys:
+        trailers.append(("Tag", tag_key))
+    if sample_path:
+        trailers.append(("Sample", sample_path))
+    if tag_keys:
+        et_val, ox_val = _parse_live_evidence_value(live_evidence, tag_keys[0])
+        if et_val is not None:
+            trailers.append(("Exiftool-Value", et_val))
+        if ox_val is not None:
+            trailers.append(("Oxidex-Value", ox_val))
+    perl_ref = _perl_ref_from_block(perl_block_text)
+    if perl_ref:
+        trailers.append(("Perl-Ref", perl_ref))
+    trailers.append(("Verified", f"recheck-pass gaps={gap_count_before}->{remaining_after}"))
+    if worker_label:
+        trailers.append(("Worker", worker_label))
+    if table_name:
+        trailers.append(("Table", table_name))
+    if review_flags:
+        trailers.append(("Review-Unverifiable", ",".join(review_flags)))
+    return trailers
+
+
 def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             critique_call_model_fn=None,
             git_apply_fn=git_apply,
@@ -2227,9 +2933,11 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             pick_model_fn=random.choice, log_fn=print,
             review_config=None, recheck_fn=None, repo_root=None, samples_dir=None,
             previous_attempts=None, detect_duplicate_fn=detect_duplicate_tag_insertion,
-            perl_lib_dir=None, sweep_review_log_path=None, format_memory_dir=None,
+            perl_lib_dir=None, sweep_review_log_path=None,
             neighbor_precedent_block="",
-            max_repair_rounds=DEFAULT_MAX_REPAIR_ROUNDS):
+            max_repair_rounds=DEFAULT_MAX_REPAIR_ROUNDS,
+            knowledge_home=None, module_name=None, table_name=None, worker_label=None,
+            recheck_baseline=None, extract_evidence_fn=None, scan_fn=None):
     """Attempt to close one format's gaps via up to max_repair_rounds
     candidates, each round feeding the previous round's outcome -- build
     error, gap count, test regression, or review rejection -- plus a
@@ -2320,12 +3028,33 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     build_prompt (see load_recent_sweep_reviews/format_sweep_review_history)
     so the prompt includes recent human sweep-review verdicts for this format.
 
-    format_memory_dir, if given, is passed straight through to build_prompt
-    (see load_format_memory) so the prompt includes this format's rolling
-    memory. fix_gap only reads it -- appending a new note after this call
-    and triggering summarization when it grows too large is the caller's
-    job (see main()'s real_fix_tag), since that's bookkeeping about the
-    *result* of this call, not something fix_gap itself needs to do.
+    knowledge_home/module_name, if given, are passed straight through to
+    build_prompt (spec K2/K3 -- GLOBAL-PITFALLS.md + module playbook +
+    lessons tail) AND double as the K1 lesson-writer destination/module
+    tag below. table_name, when known (Phase 2 attribution isn't wired
+    yet, so this is always None today), rides into both the K1 module+
+    table fields and the M1 Table: trailer. worker_label identifies this
+    process in every K1 lesson and the M1 Worker: trailer. None (the
+    default) for any of these keeps every existing caller's behavior
+    exactly as it was -- build_prompt omits the sections, and every K1
+    lesson write below is a no-op (see _write_fix_gap_lesson).
+
+    recheck_baseline, if given, is the pre-attempt per-format comparison
+    dict for this gap's format (same shape as recheck_fn's optional 3rd
+    tuple element below) -- spec M3's structural double-emission gate:
+    when recheck_fn also supplies the POST-attempt comparison dict,
+    new_oxidex_only_keys(recheck_baseline, post) is checked every round,
+    and any newly-introduced oxidex-only tag fails the attempt (event
+    "structural" in the K1 ledger) even if the gap count itself
+    decreased. None (the default, matching every existing test's
+    recheck_fn) skips this check entirely.
+
+    extract_evidence_fn(repo_root, sample_path, tag_keys) -> str and
+    scan_fn(repo_root, parser_files, tag_keys, diff_text) -> str (spec
+    K5) are threaded into the reviewer call as live_evidence/
+    emission_scan -- default to default_extract_live_evidence/
+    default_emission_scan (real subprocess-backed implementations; see
+    their own docstrings) when not given.
 
     neighbor_precedent_block, a pre-rendered string, is passed straight
     through to build_prompt (see build_neighbor_precedent_block) -- built
@@ -2335,7 +3064,22 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     review_config = review_config or config
     review_call_model_fn = review_call_model_fn or call_model_fn
     critique_call_model_fn = critique_call_model_fn or call_model_fn
+    extract_evidence_fn = extract_evidence_fn or default_extract_live_evidence
+    scan_fn = scan_fn or default_emission_scan
     fmt = gap["format"]
+
+    # Computed once and reused for both the fixer prompt (build_prompt
+    # resolves its own copy internally from perl_lib_dir) and the K5
+    # reviewer evidence below -- pure text extraction, not a model call,
+    # so recomputing is cheap but there's no reason to.
+    perl_block_text = build_perl_reference_block(gap, perl_lib_dir)
+    target_tag_keys = [_member_tag_key(m) for m in _gap_member_tag_gaps(gap)]
+    sample_path = next(
+        (e.get("source_file") for e in (gap["missing_tags"] + gap["value_differences"])
+         if e.get("source_file")),
+        None,
+    )
+
     messages = [{"role": "user", "content": build_prompt(
         gap, repo_root=repo_root,
         # A clustered gap (see make_cluster_gap) must show EVERY member
@@ -2349,14 +3093,25 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         samples_dir=samples_dir,
         perl_lib_dir=perl_lib_dir,
         sweep_review_log_path=sweep_review_log_path,
-        format_memory_dir=format_memory_dir,
         previous_attempts=previous_attempts,
         max_prompt_tokens=config.get("max_prompt_tokens", DEFAULT_MAX_PROMPT_TOKENS),
         neighbor_precedent_block=neighbor_precedent_block,
+        knowledge_home=knowledge_home, module_name=module_name,
+        learning_budget_tokens=config.get("learning_budget_tokens", DEFAULT_LEARNING_BUDGET_TOKENS),
+        parser_floor_tokens=config.get("parser_floor_tokens", DEFAULT_PARSER_FLOOR_TOKENS),
+        lessons_tail_kb=config.get("lessons_tail_kb", DEFAULT_LESSONS_TAIL_KB),
     )}]
 
     rounds = []  # every non-fixed round: {"diff", "reason", "critique"} -- see run_tag_loop
     diff = None
+
+    def lesson(event, reason, **kwargs):
+        """K1 writer shorthand bound to this call's fixed identity
+        fields (best-effort -- see _write_fix_gap_lesson)."""
+        _write_fix_gap_lesson(
+            knowledge_home, worker_label, event, reason, fmt,
+            module=module_name, table=table_name, **kwargs,
+        )
 
     def critique_and_continue(failure_kind, reason, round_index):
         """Shared tail for every non-"fixed"/"duplicate" outcome: get a
@@ -2368,14 +3123,23 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         INFRA_FAILURE_PREFIX) skips critique_fn entirely and uses the
         reason itself as the critique: critiquing a rate-limit error
         wastes a model call that will usually itself be rate-limited,
-        and produces no signal about the tag or the diff."""
+        and produces no signal about the tag or the diff.
+
+        Spec K1: ALSO writes its own lesson event ("infra" for an
+        infrastructure failure, "critique" otherwise, carrying the
+        critique text itself as the reason) -- distinct from the more
+        specific event (build_failed/test_regressed/wrong_value/
+        gap_not_closed/structural) the caller already wrote right before
+        calling this."""
         if reason.startswith(INFRA_FAILURE_PREFIX):
             critique = reason
+            lesson("infra", critique, tag_key=_gap_primary_tag_key(gap))
         else:
             critique = critique_fn(
                 gap, diff, failure_kind, reason, config,
                 call_model_fn=critique_call_model_fn, pick_model_fn=pick_model_fn,
             )
+            lesson("critique", critique, tag_key=_gap_primary_tag_key(gap))
         rounds.append({"diff": diff, "reason": reason, "critique": critique})
         if round_index == max_repair_rounds - 1:
             return {"format": fmt, "status": "failed", "reason": reason, "diff": diff, "rounds": rounds}
@@ -2400,6 +3164,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         )
         if not built:
             log_fn(f"[{fmt}] build failed: {reason}")
+            lesson("build_failed", reason, tag_key=_gap_primary_tag_key(gap))
             outcome = critique_and_continue("build_failed", reason, round_index)
             if outcome:
                 return outcome
@@ -2407,15 +3172,48 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
 
         recheck_result = recheck_fn(fmt) if recheck_fn else gap["gap_count"]
         recheck_detail = None
+        post_match = None
         if isinstance(recheck_result, tuple):
-            remaining, recheck_detail = recheck_result
+            # Spec M3: a 3rd element is the raw post-attempt comparison
+            # dict for this format (same shape recheck_baseline carries),
+            # enabling both the structural double-emission classification
+            # below and the new_oxidex_only_keys gate. Legacy 2-tuple
+            # (count, detail) callers -- most existing tests -- are
+            # unaffected; post_match just stays None for them.
+            if len(recheck_result) >= 3:
+                remaining, recheck_detail, post_match = (
+                    recheck_result[0], recheck_result[1], recheck_result[2],
+                )
+            else:
+                remaining, recheck_detail = recheck_result
         else:
             remaining = recheck_result
         log_fn(f"[{fmt}] gaps {gap['gap_count']} -> {remaining}")
+
+        if recheck_baseline is not None and post_match is not None:
+            introduced = new_oxidex_only_keys(recheck_baseline, post_match)
+            if introduced:
+                git_checkout_clean_fn(repo_root)
+                reason = f"introduced new oxidex-only tag(s): {', '.join(introduced)}"
+                log_fn(f"[{fmt}] {reason}, reverting")
+                lesson("structural", reason, tag_key=_gap_primary_tag_key(gap))
+                outcome = critique_and_continue("gap_not_closed", reason, round_index)
+                if outcome:
+                    return outcome
+                continue
+
         if remaining >= gap["gap_count"]:
             git_checkout_clean_fn(repo_root)
             reason = recheck_detail or "gap count did not decrease"
             log_fn(f"[{fmt}] {reason}, reverting")
+            # Spec M3/K1: classify via tag_still_open's own verdict when
+            # the recheck_fn contract supplies a post-attempt comparison
+            # dict -- "wrong_value" (with the live values as evidence)
+            # over the generic "gap_not_closed" when a member is
+            # present-but-wrong; "structural" when a member reads back as
+            # a duplicate emission.
+            event, evidence, lesson_tag_key = _classify_recheck_failure(gap, post_match)
+            lesson(event, reason, evidence=evidence, tag_key=lesson_tag_key or _gap_primary_tag_key(gap))
             outcome = critique_and_continue("gap_not_closed", reason, round_index)
             if outcome:
                 return outcome
@@ -2426,6 +3224,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             git_checkout_clean_fn(repo_root)
             reason = f"targeted tests ({fmt.lower()}) regressed:\n{t_out[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
             log_fn(f"[{fmt}] targeted tests regressed, reverting")
+            lesson("test_regressed", reason, tag_key=_gap_primary_tag_key(gap))
             outcome = critique_and_continue("test_regressed", reason, round_index)
             if outcome:
                 return outcome
@@ -2436,10 +3235,24 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             git_checkout_clean_fn(repo_root)
             reason = f"duplicate: a handler for {tag_literal} already exists elsewhere"
             log_fn(f"[{fmt}] {reason}, reverting (not a failure -- another worker got there first)")
+            lesson("duplicate", reason, tag_key=_gap_primary_tag_key(gap))
             return {"format": fmt, "status": "duplicate", "reason": reason, "diff": diff, "rounds": rounds}
+
+        # Spec K5: live post-fix re-extraction and a scoped emission scan,
+        # both best-effort (a failure here degrades to "" -- reviewer
+        # evidence is advisory, never a hard dependency of the review call).
+        try:
+            live_evidence = extract_evidence_fn(repo_root, sample_path, target_tag_keys)
+        except Exception:
+            live_evidence = ""
+        try:
+            emission_scan = scan_fn(repo_root, gap["parser_files"], target_tag_keys, diff)
+        except Exception:
+            emission_scan = ""
 
         approved, review_reason = review_fn(
             gap, diff, review_config, call_model_fn=review_call_model_fn, pick_model_fn=pick_model_fn,
+            perl_block=perl_block_text, live_evidence=live_evidence, emission_scan=emission_scan,
         )
         if approved:
             tests_passed, test_output = cargo_test_workspace_fn(repo_root)
@@ -2452,21 +3265,58 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
                 tail = test_output[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]
                 reason = f"cargo test --workspace regressed:\n{tail}"
                 log_fn(f"[{fmt}] cargo test --workspace regressed, reverting")
+                lesson("test_regressed", reason, tag_key=_gap_primary_tag_key(gap))
                 outcome = critique_and_continue("test_regressed", reason, round_index)
                 if outcome:
                     return outcome
                 continue
             closed = gap["gap_count"] - remaining
+
+            # Spec K5: UNVERIFIABLE reviewer replies still land (review_fn
+            # folds them into approved=True), but C1/C2 -- the two
+            # checklist items whose failure means we could not actually
+            # verify correctness -- route this commit to the human
+            # judgment queue via review_flags + the M1 Review-Unverifiable
+            # trailer (see review_fn/extract_review_verdict_full).
+            #
+            # A reply can say UNVERIFIABLE without a parseable C1-C5 token
+            # (the prompt requires one, but a model formatting slip is a
+            # real possibility -- extract_review_verdict_full already
+            # anticipates this with its "no checklist id given" fallback
+            # reason). checklist_id is then None, and None is never in
+            # ("C1", "C2"), so treating that case as "not C1/C2" would
+            # silently drop the safety net for the exact reply where the
+            # model told us it couldn't verify the fix but we can't tell
+            # which checklist item -- possibly C1/C2 -- was the reason.
+            # Fail safe like every other unparseable-verdict path in this
+            # file: unknown severity escalates to the human queue too,
+            # tagged UNVERIFIABLE:UNKNOWN rather than silently passing.
+            review_flags = []
+            if review_reason.startswith("UNVERIFIABLE:"):
+                checklist_id = parse_checklist_id(review_reason)
+                if checklist_id in ("C1", "C2") or checklist_id is None:
+                    review_flags.append(f"UNVERIFIABLE:{checklist_id or 'UNKNOWN'}")
+
+            trailers = _build_fix_gap_trailers(
+                gap, fmt, target_tag_keys, sample_path, live_evidence, perl_block_text,
+                gap["gap_count"], remaining, worker_label, table_name, review_flags,
+            )
             git_commit_fn(
                 f"fix({fmt.lower()}): wire {closed} missing tags "
                 f"(via {'/'.join(m['name'] for m in config['models'])})",
-                repo_root,
+                repo_root, trailers=trailers,
             )
             log_fn(f"[{fmt}] FIXED: closed {closed} gaps (committed)")
-            return {"format": fmt, "status": "fixed", "gaps_closed": closed, "rounds": rounds}
+            lesson("fixed", f"closed {closed} gap(s)", tag_key=_gap_primary_tag_key(gap))
+            result = {"format": fmt, "status": "fixed", "gaps_closed": closed, "rounds": rounds}
+            if review_flags:
+                result["review_flags"] = review_flags
+            return result
 
         log_fn(f"[{fmt}] review REJECTED: {review_reason}")
         git_checkout_clean_fn(repo_root)
+        lesson("review_rejected", review_reason, checklist_id=parse_checklist_id(review_reason),
+              tag_key=_gap_primary_tag_key(gap))
         rounds.append({"diff": diff, "reason": f"rejected by review: {review_reason}", "critique": review_reason})
         if round_index == max_repair_rounds - 1:
             return {
@@ -2574,23 +3424,54 @@ def tag_still_open(match, tag_gap):
     value_differences -- counting only its original list called that
     "closed", which is exactly how a wrong-valued XMP:ArtworkTitle fix
     passed recheck and survived to human sweep review. Returns None
-    (closed), ("missing",), or ("value_differs", exiftool_value,
-    oxidex_value) so the caller can put the actual values in front of
-    the model on the retry."""
+    (closed), ("missing",), ("duplicate_emission",), or
+    ("value_differs", exiftool_value, oxidex_value) so the caller can put
+    the actual values in front of the model on the retry.
+
+    Spec M3 (double-emission gate): a target tag whose key appears in
+    match["duplicate_emissions"] (an oxidex-side tag key the Rust
+    ComparisonEngine found emitted more than once for the SAME sample
+    file -- see comparison/engine.rs's compare()) is ALSO still open,
+    checked FIRST and regardless of what the missing/value_differences
+    lists would otherwise say: a fix that only "closes" the gap count by
+    emitting a tag twice must never pass recheck."""
     if not match:
         return None
     if tag_gap["kind"] == "missing":
         fam, name = tag_gap["entry"]["family"], tag_gap["entry"]["name"]
+        key = f"{fam}:{name}"
+        if key in (match.get("duplicate_emissions") or []):
+            return ("duplicate_emission",)
         if any(t.get("family") == fam and t.get("name") == name
                for t in match.get("missing_tags") or []):
             return ("missing",)
-        key = f"{fam}:{name}"
     else:
         key = tag_gap["entry"]["tag_key"]
+        if key in (match.get("duplicate_emissions") or []):
+            return ("duplicate_emission",)
     for d in match.get("value_differences") or []:
         if d.get("tag_key") == key:
             return ("value_differs", d.get("exiftool_value"), d.get("oxidex_value"))
     return None
+
+
+def new_oxidex_only_keys(pre_report, post_report):
+    """Spec M3: sorted "family:name" keys present in post_report's
+    extra_in_oxidex but absent from pre_report's -- oxidex-side tags that
+    appeared as a SIDE EFFECT of the change under test. pre_report/
+    post_report are per-format comparison dicts carrying an
+    "extra_in_oxidex" list of {"family", "name", ...} dicts (the same
+    shape group_gaps_by_format threads straight from the Rust
+    ComparisonReport, see find_tag_gaps.py). Lineage (same worktree, same
+    tree modulo the change under test) is the caller's responsibility --
+    this function is a pure set difference. Either side missing/falsy is
+    "no extra tags" for that side."""
+    def keys(report):
+        return {
+            f"{e.get('family')}:{e.get('name')}"
+            for e in (report or {}).get("extra_in_oxidex") or []
+        }
+    return sorted(keys(post_report) - keys(pre_report))
 
 
 def make_single_tag_gap(tag_gap):
@@ -3280,6 +4161,12 @@ def _normalize_model_config(table):
         "use_sccache": table.get("use_sccache", True),
         "claim_stale_seconds": table.get("claim_stale_seconds", DEFAULT_CLAIM_STALE_SECONDS),
         "heartbeat_seconds": table.get("heartbeat_seconds", DEFAULT_HEARTBEAT_SECONDS),
+        # Section 6 / K5 knobs (Phase 1 spec).
+        "reviewer_max_prompt_tokens": table.get(
+            "reviewer_max_prompt_tokens", DEFAULT_REVIEWER_MAX_PROMPT_TOKENS),
+        "learning_budget_tokens": table.get("learning_budget_tokens", DEFAULT_LEARNING_BUDGET_TOKENS),
+        "parser_floor_tokens": table.get("parser_floor_tokens", DEFAULT_PARSER_FLOOR_TOKENS),
+        "lessons_tail_kb": table.get("lessons_tail_kb", DEFAULT_LESSONS_TAIL_KB),
     }
 
 
@@ -3369,12 +4256,6 @@ def main(argv=None):
         help="scripts/log_sweep_review.py's JSONL log of human sweep-review verdicts "
              "(accepted/rejected, with reasons) -- read back into the prompt for this gap's "
              f"format if present. Default: {OXIDEX_HOME / 'logs' / 'sweep-review-history.jsonl'}",
-    )
-    parser.add_argument(
-        "--format-memory-dir", default=str(OXIDEX_HOME / "logs" / "format-memory"),
-        help="Directory of <FORMAT>.md rolling-memory files (see append_format_memory_note/"
-             "summarize_format_memory) -- updated after every round regardless of outcome, "
-             f"condensed via a model call once it grows too large. Default: {OXIDEX_HOME / 'logs' / 'format-memory'}",
     )
     args = parser.parse_args(argv)
 
@@ -3623,20 +4504,38 @@ def main(argv=None):
     # is handled by load_recent_sweep_reviews itself -- always pass the
     # configured path rather than checking existence here first.
     sweep_review_log_path = Path(args.sweep_review_log)
-    format_memory_dir = Path(args.format_memory_dir)
+    # Spec K1/K2/K3: the shared knowledge layer lives under OXIDEX_HOME
+    # (GLOBAL-PITFALLS.md, knowledge/modules/*.md, logs/lessons.jsonl) --
+    # the same fixed, worktree-independent home every other shared store
+    # in this module already uses (rate-governor.json, landed-tags.log).
+    # Module/table attribution isn't wired until Phase 2, so every call
+    # below passes module_name=None/table_name=None (format-name
+    # fallback keys, per K3).
+    knowledge_home = OXIDEX_HOME
 
     def real_fix_tag(tag_gap, cfg, previous_attempts=None):
+        fmt = tag_gap["format"]
+
+        def current_match():
+            """One fresh comparison for this tag's format -- used both
+            as the M3 pre-attempt baseline (recheck_baseline, captured
+            once before fix_gap's repair rounds begin) and, called
+            again, by recheck() itself post-attempt each round ("read
+            the tagcmp JSON before applying the diff" per spec M3).
+            out_suffix keeps this out from under every other same-format
+            process's feet -- see find_gaps_fn above."""
+            path = run_format_comparison(fmt, args.cache_dir, out_suffix=worker_label)
+            regrouped = group_gaps_by_format(load_comparison_report(path))
+            return next((g for g in regrouped if g["format"] == fmt), None)
+
+        recheck_baseline = current_match()
+
         def recheck(_fmt):
             # _fmt is ignored -- tag_gap already knows its own format;
             # fix_gap's recheck_fn(format_name) contract is reused as-is,
             # scoped here to whether this ONE tag is still present rather
-            # than the whole format's gap count. out_suffix keeps this
-            # recheck's report out from under every other same-format
-            # process's feet -- see find_gaps_fn above.
-            fmt = tag_gap["format"]
-            path = run_format_comparison(fmt, args.cache_dir, out_suffix=worker_label)
-            regrouped = group_gaps_by_format(load_comparison_report(path))
-            match = next((g for g in regrouped if g["format"] == fmt), None)
+            # than the whole format's gap count.
+            match = current_match()
             targets = [tag_gap] + list(tag_gap.get("cluster_members") or [])
             open_count, detail = 0, None
             for t in targets:
@@ -3646,7 +4545,14 @@ def main(argv=None):
                     if st[0] == "value_differs" and detail is None:
                         detail = (f'{t["tag_key"]}: present but wrong -- expected (exiftool): '
                                   f'"{st[1]}" / got (oxidex): "{st[2]}". Fix the value.')
-            return (open_count, detail) if detail else open_count
+                    elif st[0] == "duplicate_emission" and detail is None:
+                        detail = (f'{t["tag_key"]}: duplicate emission detected (spec M3) -- '
+                                  "the fix inserted a redundant second handler for this tag.")
+            # 3-tuple (spec M3): the 3rd element is this round's raw
+            # comparison dict, letting fix_gap classify wrong_value vs
+            # structural (tag_still_open) and run the new_oxidex_only_keys
+            # gate against recheck_baseline.
+            return (open_count, detail, match)
 
         single_gap = make_cluster_gap(tag_gap)
         # Computed once per attempt (two git subprocess calls) and shared
@@ -3669,9 +4575,12 @@ def main(argv=None):
             previous_attempts=previous_attempts,
             perl_lib_dir=perl_lib_dir,
             sweep_review_log_path=sweep_review_log_path,
-            format_memory_dir=format_memory_dir,
             max_prompt_tokens=cfg.get("max_prompt_tokens", DEFAULT_MAX_PROMPT_TOKENS),
             neighbor_precedent_block=precedent,
+            knowledge_home=knowledge_home, module_name=None,
+            learning_budget_tokens=cfg.get("learning_budget_tokens", DEFAULT_LEARNING_BUDGET_TOKENS),
+            parser_floor_tokens=cfg.get("parser_floor_tokens", DEFAULT_PARSER_FLOOR_TOKENS),
+            lessons_tail_kb=cfg.get("lessons_tail_kb", DEFAULT_LESSONS_TAIL_KB),
         )
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         banner = f"\n{'=' * 20} [{ts}] worker={worker_label} tag={tag_gap['tag_key']} {'=' * 20}\n"
@@ -3680,7 +4589,8 @@ def main(argv=None):
             f.write(banner + prompt_preview + "\n")
 
         result = fix_gap(
-            single_gap, cfg, recheck_fn=recheck, review_config=review_config,
+            single_gap, cfg, recheck_fn=recheck, recheck_baseline=recheck_baseline,
+            review_config=review_config,
             git_apply_fn=logging_git_apply, log_fn=timestamped_log,
             call_model_fn=logging_call_model_fixer, review_call_model_fn=logging_call_model_reviewer,
             critique_call_model_fn=logging_call_model_critique,
@@ -3688,25 +4598,13 @@ def main(argv=None):
             previous_attempts=previous_attempts,
             perl_lib_dir=perl_lib_dir,
             sweep_review_log_path=sweep_review_log_path,
-            format_memory_dir=format_memory_dir,
             neighbor_precedent_block=precedent,
             max_repair_rounds=cfg.get("max_repair_rounds", DEFAULT_MAX_REPAIR_ROUNDS),
+            knowledge_home=knowledge_home, module_name=None, table_name=None,
+            worker_label=worker_label,
         )
         if result["status"] == "fixed":
             log_tag_found(tag_gap, result)
-
-        # Record this round's outcome in the format's rolling memory,
-        # then condense it if it's grown too large -- both regardless of
-        # outcome, so the memory captures the full arc (successes and
-        # failures alike), not just this one tag's own attempt history.
-        fmt = tag_gap["format"]
-        if result["status"] == "fixed":
-            note = f"Fixed {tag_gap['tag_key']} ({result.get('gaps_closed', '?')} gap(s) closed)."
-        else:
-            note = f"{result['status'].upper()} {tag_gap['tag_key']}: {result.get('reason', 'unknown')}"
-        append_format_memory_note(format_memory_dir, fmt, note[:500])
-        summarize_format_memory(format_memory_dir, fmt, cfg, call_model_fn=logging_call_model_critique)
-
         return result
 
     max_tags_per_process = (

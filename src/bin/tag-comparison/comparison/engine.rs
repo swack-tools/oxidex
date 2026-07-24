@@ -829,6 +829,29 @@ impl ComparisonEngine {
             }
         }
 
+        // Spec M3: any oxidex-side tag key that repeats for the SAME
+        // sample file is a duplicate emission -- the deterministic gate
+        // the literal-string diff backstop (detect_duplicate_tag_insertion
+        // in model_fix_loop.py) is blind to for registry/dynamic-name
+        // emitters. Grouped by (source_file, key) so the same key
+        // appearing once each in several DIFFERENT sample files is never
+        // mistaken for a duplicate; a missing source_file collapses to
+        // one shared "no file" bucket, which is correct as long as the
+        // caller's oxidex_tags already carries per-file provenance.
+        let mut per_file_counts: HashMap<(String, String), usize> = HashMap::new();
+        for tag in &oxidex_tags {
+            let source = tag.source_file.clone().unwrap_or_default();
+            *per_file_counts.entry((source, tag.key())).or_insert(0) += 1;
+        }
+        let mut duplicate_keys: HashSet<String> = HashSet::new();
+        for ((_source, key), count) in per_file_counts {
+            if count > 1 {
+                duplicate_keys.insert(key);
+            }
+        }
+        comparison.duplicate_emissions = duplicate_keys.into_iter().collect();
+        comparison.duplicate_emissions.sort();
+
         // Detect regressions: tags that were in previous.matched_tags but NOT in current matched_tags
         if let Some(prev) = previous {
             let current_matched: HashSet<_> = comparison.matched_tags.iter().collect();
@@ -1157,5 +1180,68 @@ mod tests {
 
         // Coverage: 1 matched out of 4 total = 25%
         assert_eq!(result.coverage_percentage, 25.0);
+    }
+
+    #[test]
+    fn test_duplicate_emission_same_file_same_key_is_flagged() {
+        // Spec M3: two oxidex TagInfo entries sharing (source_file, key)
+        // -- the deterministic double-emission gate.
+        let oxidex_tags = vec![
+            TagInfo::new(
+                "AELButton".to_string(),
+                "MakerNotes".to_string(),
+                "1".to_string(),
+            )
+            .with_source_file("canon.jpg".to_string()),
+            TagInfo::new(
+                "AELButton".to_string(),
+                "MakerNotes".to_string(),
+                "2".to_string(),
+            )
+            .with_source_file("canon.jpg".to_string()),
+        ];
+        let exiftool_tags = vec![
+            TagInfo::new(
+                "AELButton".to_string(),
+                "MakerNotes".to_string(),
+                "1".to_string(),
+            )
+            .with_source_file("canon.jpg".to_string()),
+        ];
+
+        let result = ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 1, None);
+        assert_eq!(
+            result.duplicate_emissions,
+            vec!["MakerNotes:AELButton".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_same_key_different_files_is_not_a_duplicate_emission() {
+        let oxidex_tags = vec![
+            TagInfo::new("Make".to_string(), "EXIF".to_string(), "Canon".to_string())
+                .with_source_file("a.jpg".to_string()),
+            TagInfo::new("Make".to_string(), "EXIF".to_string(), "Canon".to_string())
+                .with_source_file("b.jpg".to_string()),
+        ];
+        let exiftool_tags = vec![];
+
+        let result = ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 2, None);
+        assert!(result.duplicate_emissions.is_empty());
+    }
+
+    #[test]
+    fn test_no_duplicate_emissions_in_the_ordinary_case() {
+        let oxidex_tags = vec![
+            TagInfo::new("Make".to_string(), "EXIF".to_string(), "Canon".to_string())
+                .with_source_file("a.jpg".to_string()),
+        ];
+        let exiftool_tags = vec![
+            TagInfo::new("Make".to_string(), "EXIF".to_string(), "Canon".to_string())
+                .with_source_file("a.jpg".to_string()),
+        ];
+
+        let result = ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 1, None);
+        assert!(result.duplicate_emissions.is_empty());
     }
 }
