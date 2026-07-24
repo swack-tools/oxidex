@@ -165,16 +165,26 @@ def run_full_comparison(cache_dir, repo_root=REPO_ROOT):
     return repo_root / "comparison.json"
 
 
-def run_format_comparison(format_name, cache_dir, repo_root=REPO_ROOT):
+def run_format_comparison(format_name, cache_dir, repo_root=REPO_ROOT, out_suffix=""):
     """Re-run tag-comparison for a single format against the cached samples.
 
     Requires run_full_comparison to have populated cache_dir at least once
     (this does not download or build the combined samples itself).
+
+    out_suffix, when non-empty, namespaces the output paths per caller:
+    /tmp/tagcmp-<FMT>-<suffix>.json plus a matching -md dir. Every
+    concurrent process re-checking the same format (each model-fix
+    worker passes its worker id) gets its own report file, ending the
+    shared-fixed-path race where two same-format workers overwrote each
+    other's report mid-recheck and corrupted tag_still_open verdicts.
+    Empty (the default) keeps the legacy un-suffixed path for
+    single-process/manual use.
     """
     ensure_tag_comparison_built(repo_root)
     # Fixed /tmp paths are a race-condition concern on shared multi-user
     # systems; this is a single-developer local CLI tool.
-    output = Path(f"/tmp/tagcmp-{format_name}.json")  # nosec B108
+    suffix = f"-{out_suffix}" if out_suffix else ""
+    output = Path(f"/tmp/tagcmp-{format_name}{suffix}.json")  # nosec B108
     subprocess.run(  # nosec B603 # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
         [
             str(repo_root / "target/fixloop/tag-comparison"),
@@ -182,7 +192,7 @@ def run_format_comparison(format_name, cache_dir, repo_root=REPO_ROOT):
             "--samples", f"{cache_dir}/combined-samples",
             "--format", format_name,
             "-o", str(output),
-            "--markdown-dir", f"/tmp/tagcmp-{format_name}-md",  # nosec B108
+            "--markdown-dir", f"/tmp/tagcmp-{format_name}{suffix}-md",  # nosec B108
         ],
         cwd=repo_root, check=True,
     )

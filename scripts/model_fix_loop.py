@@ -113,6 +113,16 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           so cargo_env never routes rustc through
                           sccache (cargo's normal per-worktree
                           incremental cache only)
+    claim_stale_seconds    default 7200 (worker only; a tag claim in the
+                          shared tag-state older than this is treated as
+                          abandoned -- its owner is dead, since a live
+                          owner's heartbeat re-stamps it -- and may be
+                          re-claimed by any worker; see run_tag_loop)
+    heartbeat_seconds      default 60 (worker only; cadence at which a
+                          daemon thread re-stamps this worker's claim
+                          while an attempt is in flight, so long
+                          governor waits and cargo runs never let a
+                          live claim go stale; 0 disables)
 
 [reviewer] defaults to [worker] entirely when omitted, so a single table
 covers both the fixer and the reviewer by default -- add [reviewer] only to
@@ -145,6 +155,8 @@ import re
 import shutil
 import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
+import tempfile
+import threading
 import time
 import tomllib
 import urllib.error
@@ -2654,22 +2666,91 @@ def load_landed_tags(path):
 
 
 def load_tag_state(path):
-    """Load the persistent per-tag blacklist/fail-count state. A missing or
-    corrupt file just means "nothing blacklisted yet" -- this is advisory,
-    resumable state, not something worth failing a run over."""
+    """Load the persistent per-tag blacklist/fail-count/claim state.
+
+    A missing file means "nothing recorded yet" -> {}. A torn or
+    corrupt file is NOT the same thing: this state carries every
+    worker's claims and blacklist history, so treating a torn read as
+    empty -- what this used to do -- means the very next save_tag_state
+    silently wipes every other worker's entries. That exact wipe was
+    observed live (a reader racing a non-atomic writer saw a truncated
+    file). Parse failure now logs clearly and raises; save_tag_state's
+    tempfile+os.replace writes make a torn file a real corruption signal
+    worth stopping for, never a routine race to paper over.
+    """
+    path = Path(path)
     try:
-        return json.loads(Path(path).read_text())
-    except (OSError, json.JSONDecodeError):
+        text = path.read_text()
+    except FileNotFoundError:
         return {}
+    try:
+        state = json.loads(text)
+        if not isinstance(state, dict):
+            raise ValueError(f"tag state is {type(state).__name__}, not a dict")
+    except (json.JSONDecodeError, ValueError) as e:
+        print(
+            f"FATAL: tag state at {path} is unreadable ({e}) -- refusing to "
+            "treat it as empty, which would let the next save wipe every "
+            "worker's claims/blacklist entries. Inspect or restore the file "
+            "before restarting.",
+            file=sys.stderr,
+        )
+        raise ValueError(f"corrupt tag state at {path}: {e}") from e
+    return state
 
 
 def save_tag_state(path, state):
+    """Atomically persist the tag state: write to a NamedTemporaryFile in
+    the same directory, then os.replace over the real path. Readers
+    (load_tag_state, other workers, dashboards) can never observe a
+    half-written file -- they see the old complete state or the new one,
+    nothing in between."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2))
+    with tempfile.NamedTemporaryFile(
+        "w", dir=path.parent, prefix=path.name + ".", suffix=".tmp", delete=False,
+    ) as f:
+        f.write(json.dumps(state, indent=2))
+        tmp_name = f.name
+    os.replace(tmp_name, path)
+
+
+def _state_locked(path, mutate_fn, load_state_fn=load_tag_state, save_state_fn=save_tag_state):
+    """Run mutate_fn(state) -> (new_state, result) under an exclusive
+    flock on path's sibling .lock file, loading the state fresh inside
+    the lock and saving it before releasing -- the tag-state twin of
+    _governor_locked. Every read-modify-write of the shared tag state
+    (claiming, recording results, blacklisting, the exhaustion reset,
+    heartbeats) goes through here, so two workers can never interleave
+    load/save and lose each other's updates. Critical sections are
+    milliseconds; even 100 claimants is well under 10 acquisitions/sec.
+
+    Unlike the governor (whose state is disposable bookkeeping and
+    rebuilds permissively), a corrupt tag state propagates
+    load_tag_state's raise -- see its docstring for why that must never
+    be papered over."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(".lock")
+    with open(lock_path, "w") as lock_f:
+        fcntl.flock(lock_f, fcntl.LOCK_EX)
+        state = load_state_fn(path)
+        new_state, result = mutate_fn(state)
+        save_state_fn(path, new_state)
+        return result
 
 
 DEFAULT_MAX_TAG_FAILS = 10
+
+# A claim's staleness threshold and the heartbeat that keeps it fresh.
+# With a time-based heartbeat re-stamping claimed_at every
+# DEFAULT_HEARTBEAT_SECONDS while an attempt is in flight, a stale claim
+# now means "the owning process is dead", not merely "the owning process
+# is slow" -- so the threshold is generous (2 h, up from the old 30 min,
+# which real attempts overran routinely while queued behind the governor
+# or a long cargo run, letting a second worker double-claim the tag).
+DEFAULT_CLAIM_STALE_SECONDS = 7200
+DEFAULT_HEARTBEAT_SECONDS = 60
 
 # Keep in sync with parallel_tag_fix_loop.py's own copy of this default --
 # each worker (whether launched directly or via the parallel wrapper)
@@ -2682,8 +2763,10 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
                   git_checkout_clean_fn=None, repo_root=None, log_fn=print,
                   load_state_fn=load_tag_state, save_state_fn=save_tag_state,
                   max_rounds=None, max_fails=DEFAULT_MAX_TAG_FAILS, blacklist_full=False,
-                  worker_id=None, claim_stale_seconds=1800, max_distinct_tags=None,
-                  refresh_worktree_fn=None, max_cluster_tags=1, landed_tags_path=None):
+                  worker_id=None, claim_stale_seconds=DEFAULT_CLAIM_STALE_SECONDS,
+                  max_distinct_tags=None,
+                  refresh_worktree_fn=None, max_cluster_tags=1, landed_tags_path=None,
+                  heartbeat_seconds=DEFAULT_HEARTBEAT_SECONDS, time_fn=time.time):
     """Loop-until-everything-found driver, blacklisting individual TAGS
     (never a whole format) after max_fails failed attempts each. State
     persists to disk at state_path, so the blacklist -- and each tag's
@@ -2696,11 +2779,20 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
     carries forward N-1 rounds of "here's what was already tried and why
     it failed" instead of starting from zero each time.
 
+    Every read-modify-write of the shared state file happens inside a
+    _state_locked closure (flock on state_path's sibling .lock file):
+    load fresh under the lock, mutate, save atomically, release. Two
+    workers sharing one state_path can therefore never interleave their
+    load/save pairs and silently drop each other's claims or results.
+
     Once every currently-known tag is either fixed or blacklisted:
-      - by default (blacklist_full=False), the blacklist is cleared
-        entirely and a fresh cycle starts, so a tag given up on under one
-        random model pick gets a clean second chance later rather than
-        being abandoned forever
+      - by default (blacklist_full=False), the reset deletes exactly the
+        state keys THIS worker considered at claim-filter time this
+        round (never the whole dict -- a shared state file also carries
+        other formats'/workers' entries, which a bare `state = {}` used
+        to wipe), and a fresh cycle starts, so a tag given up on under
+        one random model pick gets a clean second chance later rather
+        than being abandoned forever
       - with blacklist_full=True, the loop stops instead -- for a parallel
         run where the point IS to exhaust every tag once and report,
         rather than cycle forever
@@ -2711,6 +2803,20 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
     the same currently-unclaimed tag -- see claim_stale_seconds: a claim
     older than this is treated as abandoned (its owning process likely
     crashed) and can be re-claimed by anyone.
+
+    heartbeat_seconds (0/None disables): while an attempt is in flight, a
+    daemon thread re-stamps this worker's claimed_at on the leader and
+    every cluster member at this cadence, through the same _state_locked
+    path as everything else. Time-based rather than call-based on
+    purpose: a call-based heartbeat starves exactly when claims most
+    need to survive -- queued behind the rate governor or inside a long
+    cargo build -- which is how sub-30-minute claim_stale_seconds
+    produced double-claims in practice. The thread stops (threading.
+    Event) the moment fix_gap_fn returns.
+
+    time_fn is the clock used for claim stamps, staleness checks, and
+    blacklisted_at -- injectable so tests can drive staleness and
+    heartbeat behavior without real waiting.
 
     fix_gap_fn(tag_gap, config, previous_attempts) -> result dict; result
     must have "status" ("fixed" or anything else) and, when not fixed,
@@ -2754,18 +2860,23 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
     default) skips this entirely -- standalone/non-parallel runs have no
     shared branch to refresh against.
     """
-    state = load_state_fn(state_path)
     fixed, failed, skipped = [], [], []
     cycles_reset = 0
     round_num = 0
     seen_tag_keys = set()
+
+    def locked(mutate_fn):
+        """One serialized read-modify-write of the shared tag state --
+        see _state_locked. Every state access in this loop goes through
+        here; nothing reads or writes the file outside the flock."""
+        return _state_locked(state_path, mutate_fn, load_state_fn, save_state_fn)
 
     def is_claimed_by_someone_else(entry):
         claimed_by = entry.get("claimed_by")
         if not claimed_by or claimed_by == worker_id:
             return False
         claimed_at = entry.get("claimed_at", 0)
-        return (time.time() - claimed_at) < claim_stale_seconds
+        return (time_fn() - claimed_at) < claim_stale_seconds
 
     while max_rounds is None or round_num < max_rounds:
         round_num += 1
@@ -2780,72 +2891,101 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             log_fn("All tags found -- nothing left to fix.")
             break
 
-        state = load_state_fn(state_path)  # fresh read -- other workers may have updated it
         landed = load_landed_tags(landed_tags_path) if landed_tags_path else set()
-        active = [
-            tg for tg in tag_gaps
-            if not state.get(tg["tag_key"], {}).get("blacklisted")
-            and not is_claimed_by_someone_else(state.get(tg["tag_key"], {}))
-            and (max_distinct_tags is None or len(seen_tag_keys) < max_distinct_tags
-                 or tg["tag_key"] in seen_tag_keys)
-        ]
+        # The explicit list of state keys this worker considered at
+        # claim-filter time. If this round ends in blacklist exhaustion,
+        # exactly these keys get deleted -- never a whole-dict reset
+        # (which also wipes other formats'/workers' entries in a shared
+        # state file) and never a key-prefix match (formats and squads
+        # are not key prefixes).
+        considered_keys = [tg["tag_key"] for tg in tag_gaps]
 
-        landed_hits = [tg for tg in active if tg["tag_key"] in landed]
-        if landed_hits:
-            for tg in landed_hits:
-                log_fn(f"[{tg['tag_key']}] skipped -- already landed via sweep")
-                state.pop(tg["tag_key"], None)
+        def claim(state):
+            """The whole claim step as one locked critical section:
+            filter against fresh state (other workers' claims and
+            blacklists), drop already-landed entries, then either claim
+            a leader (plus cluster members) or decide how this round
+            ends. The scoped exhaustion reset lives here too, because it
+            must share the lock with the all-blacklisted check it
+            depends on -- checked-then-reset across two lock
+            acquisitions would race a concurrent claimant."""
+            active = [
+                tg for tg in tag_gaps
+                if not state.get(tg["tag_key"], {}).get("blacklisted")
+                and not is_claimed_by_someone_else(state.get(tg["tag_key"], {}))
+                and (max_distinct_tags is None or len(seen_tag_keys) < max_distinct_tags
+                     or tg["tag_key"] in seen_tag_keys)
+            ]
+
+            landed_hits = [tg["tag_key"] for tg in active if tg["tag_key"] in landed]
+            for key in landed_hits:
+                state.pop(key, None)
             active = [tg for tg in active if tg["tag_key"] not in landed]
-            save_state_fn(state_path, state)
 
-        if not active and max_distinct_tags is not None and len(seen_tag_keys) >= max_distinct_tags:
+            if not active and max_distinct_tags is not None and len(seen_tag_keys) >= max_distinct_tags:
+                return state, ("stop_max_distinct", landed_hits, None, None)
+
+            if not active:
+                all_blacklisted = all(state.get(tg["tag_key"], {}).get("blacklisted") for tg in tag_gaps)
+                if blacklist_full and all_blacklisted:
+                    return state, ("stop_blacklist_full", landed_hits, None, None)
+                if all_blacklisted:
+                    for key in considered_keys:
+                        state.pop(key, None)
+                    return state, ("reset", landed_hits, None, None)
+                return state, ("wait", landed_hits, None, None)
+
+            tag_gap = active[0]
+            entry = state.setdefault(tag_gap["tag_key"], {"fails": 0, "blacklisted": False, "attempts": []})
+            entry["claimed_by"] = worker_id
+            entry["claimed_at"] = time_fn()
+
+            members = []
+            if max_cluster_tags > 1:
+                leader_key = cluster_key(tag_gap)
+                for cand in active[1:]:
+                    if len(members) >= max_cluster_tags - 1:
+                        break
+                    if cluster_key(cand) == leader_key:
+                        members.append(cand)
+                for m in members:
+                    m_entry = state.setdefault(m["tag_key"], {"fails": 0, "blacklisted": False, "attempts": []})
+                    m_entry["claimed_by"] = worker_id
+                    m_entry["claimed_at"] = time_fn()
+            if members:
+                tag_gap = dict(tag_gap, cluster_members=members)
+            return state, ("claimed", landed_hits, tag_gap, list(entry.get("attempts", [])))
+
+        outcome, landed_hits, tag_gap, previous_attempts = locked(claim)
+        for key in landed_hits:
+            log_fn(f"[{key}] skipped -- already landed via sweep")
+
+        if outcome == "stop_max_distinct":
             log_fn(f"Reached max_distinct_tags={max_distinct_tags} for this process -- stopping.")
             break
-
-        if not active:
-            all_blacklisted = all(state.get(tg["tag_key"], {}).get("blacklisted") for tg in tag_gaps)
-            if blacklist_full and all_blacklisted:
-                log_fn(f"All {len(tag_gaps)} tag(s) are blacklisted -- stopping (--blacklist-full).")
-                break
-            if all_blacklisted:
-                log_fn(
-                    f"All {len(tag_gaps)} remaining tag(s) are blacklisted -- "
-                    "resetting the blacklist and starting a new cycle"
-                )
-                state = {}
-                save_state_fn(state_path, state)
-                cycles_reset += 1
-                continue
+        if outcome == "stop_blacklist_full":
+            log_fn(f"All {len(tag_gaps)} tag(s) are blacklisted -- stopping (--blacklist-full).")
+            break
+        if outcome == "reset":
+            log_fn(
+                f"All {len(tag_gaps)} remaining tag(s) are blacklisted -- "
+                f"resetting this worker's {len(considered_keys)} tag entr"
+                f"{'y' if len(considered_keys) == 1 else 'ies'} and starting a new cycle"
+            )
+            cycles_reset += 1
+            continue
+        if outcome == "wait":
             # Nothing blacklisted, but everything currently claimed by
             # other (non-stale) workers -- wait rather than busy-loop.
             log_fn("All remaining tags are claimed by other workers -- waiting")
             time.sleep(5)
             continue
 
-        tag_gap = active[0]
         seen_tag_keys.add(tag_gap["tag_key"])
-        entry = state.setdefault(tag_gap["tag_key"], {"fails": 0, "blacklisted": False, "attempts": []})
-        entry["claimed_by"] = worker_id
-        entry["claimed_at"] = time.time()
-        save_state_fn(state_path, state)
-
-        if max_cluster_tags > 1:
-            leader_key = cluster_key(tag_gap)
-            members = []
-            for cand in active[1:]:
-                if len(members) >= max_cluster_tags - 1:
-                    break
-                if cluster_key(cand) == leader_key:
-                    members.append(cand)
-            for m in members:
-                m_entry = state.setdefault(m["tag_key"], {"fails": 0, "blacklisted": False, "attempts": []})
-                m_entry["claimed_by"] = worker_id
-                m_entry["claimed_at"] = time.time()
-                seen_tag_keys.add(m["tag_key"])
-            if members:
-                tag_gap = dict(tag_gap, cluster_members=members)
-                save_state_fn(state_path, state)
-                log_fn(f"clustered {len(members)} sibling tag(s) with {tag_gap['tag_key']}")
+        for m in tag_gap.get("cluster_members") or []:
+            seen_tag_keys.add(m["tag_key"])
+        if tag_gap.get("cluster_members"):
+            log_fn(f"clustered {len(tag_gap['cluster_members'])} sibling tag(s) with {tag_gap['tag_key']}")
 
         # One line per round naming both the round number and the tag --
         # the single source watch_parallel_fix.py's dashboard reads to
@@ -2854,103 +2994,145 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
         # to be logged deeper inside fix_gap.
         log_fn(f"round {round_num}: attempting {tag_gap['tag_key']}")
 
-        previous_attempts = entry.get("attempts", [])
-        result = fix_gap_fn(tag_gap, config, previous_attempts)
+        claimed_keys = [tag_gap["tag_key"]] + [m["tag_key"] for m in tag_gap.get("cluster_members") or []]
 
-        # Re-read in case another worker touched other tags meanwhile --
-        # then re-fetch this tag's own entry to mutate it in place.
-        state = load_state_fn(state_path)
-        entry = state.setdefault(tag_gap["tag_key"], {"fails": 0, "blacklisted": False, "attempts": []})
-        entry.pop("claimed_by", None)
-        entry.pop("claimed_at", None)
+        def heartbeat_touch(state):
+            now = time_fn()
+            for key in claimed_keys:
+                entry = state.get(key)
+                if entry and entry.get("claimed_by") == worker_id:
+                    entry["claimed_at"] = now
+            return state, None
 
-        if result["status"] == "fixed":
-            fixed.append({"tag_key": tag_gap["tag_key"], **result})
-            state.pop(tag_gap["tag_key"], None)
-            for m in tag_gap.get("cluster_members") or []:
-                state.pop(m["tag_key"], None)
-            log_fn(f"[{tag_gap['tag_key']}] FIXED")
-        elif result["status"] == "duplicate":
-            # Already fixed elsewhere (see fix_gap's detect_duplicate_fn)
-            # -- this worker's own worktree was stale when it started,
-            # not a real failure of this tag, so don't count it against
-            # the fail budget or let it march toward blacklisting; just
-            # drop any stale attempt history the same way a genuine fix
-            # would, and move on to a different tag next round.
-            skipped.append({"tag_key": tag_gap["tag_key"], **result})
-            state.pop(tag_gap["tag_key"], None)
-            for m in tag_gap.get("cluster_members") or []:
-                state.pop(m["tag_key"], None)
-            log_fn(f"[{tag_gap['tag_key']}] SKIPPED (already fixed elsewhere)")
-        else:
-            failed.append({"tag_key": tag_gap["tag_key"], **result})
-            # A cluster failure charges only the leader -- members are
-            # simply released (claims dropped) so they stay eligible,
-            # individually or under a future leader, without inheriting
-            # a fail count for an attempt that was the leader's.
-            for m in tag_gap.get("cluster_members") or []:
-                me = state.get(m["tag_key"])
-                if me:
-                    me.pop("claimed_by", None)
-                    me.pop("claimed_at", None)
-            rounds_list = result.get("rounds") or [
-                {"diff": result.get("diff"), "reason": result.get("reason", "unknown"), "critique": None}
-            ]
-            infra_only = all(
-                str(r.get("reason", "")).startswith(INFRA_FAILURE_PREFIX) for r in rounds_list
+        stop_heartbeat = threading.Event()
+
+        def heartbeat_loop():
+            # Event.wait doubles as the sleep: it returns True the
+            # moment the attempt ends and the event is set, so the
+            # thread never outlives the attempt by more than one
+            # (milliseconds-long) state touch.
+            while not stop_heartbeat.wait(heartbeat_seconds):
+                locked(heartbeat_touch)
+
+        # Time-based heartbeat -- see the docstring. Daemon so a worker
+        # dying mid-attempt can never be kept alive by its own
+        # heartbeat; its claim then goes stale and is re-claimable,
+        # which is exactly the semantics claim_stale_seconds promises.
+        heartbeat_thread = None
+        if heartbeat_seconds:
+            heartbeat_thread = threading.Thread(
+                target=heartbeat_loop, name=f"claim-heartbeat-{worker_id or 'solo'}", daemon=True,
             )
-            if infra_only:
-                # Every round was an infrastructure failure (rate limit,
-                # network, provider error -- see INFRA_FAILURE_PREFIX)
-                # -- that isn't the tag's fault, and counting it lets a
-                # rate-limit storm blacklist every active tag; just as
-                # bad, persisting the junk rounds clutters every future
-                # prompt for this tag. Report it (failed above) but
-                # charge nothing: no fail increment, no attempt history,
-                # no blacklist check.
-                log_fn(
-                    f"[{tag_gap['tag_key']}] infrastructure failure "
-                    f"(not counted against fail budget): {result.get('reason', 'unknown')}"
-                )
-            else:
-                entry["fails"] = entry.get("fails", 0) + 1
-                # fix_gap's own "rounds" is every internal repair sub-attempt
-                # (build failure, gap-not-closed, test regression, or review
-                # rejection), each with its own critique -- persist all of
-                # them, not just the call's final outcome, so a future round
-                # sees the whole arc of what was tried and why each step
-                # failed. Falls back to one flattened entry (no critique) for
-                # a caller whose fix_gap_fn doesn't return "rounds".
-                # Infrastructure-failure rounds inside a mixed result are
-                # dropped -- they carry no signal about the tag -- keeping
-                # only the real-signal rounds (with a fall-back to
-                # everything should filtering somehow leave nothing).
-                real_rounds = [
-                    r for r in rounds_list
-                    if not str(r.get("reason", "")).startswith(INFRA_FAILURE_PREFIX)
-                ]
-                for sub_round in real_rounds or rounds_list:
-                    entry.setdefault("attempts", []).append({
-                        "round": entry["fails"], "diff": sub_round.get("diff"),
-                        "reason": sub_round.get("reason", "unknown"), "critique": sub_round.get("critique"),
-                    })
-                if entry["fails"] >= max_fails:
-                    entry["blacklisted"] = True
-                    # Both persisted alongside "blacklisted" (not just logged)
-                    # so a dashboard reading tag-state.json later -- possibly
-                    # long after this worker's own log has been truncated by a
-                    # respawn -- can still answer "when" and "by which worker"
-                    # for every blacklist event, not just the current count.
-                    entry["blacklisted_at"] = time.time()
-                    entry["blacklisted_by"] = worker_id
-                    log_fn(f"[{tag_gap['tag_key']}] blacklisted after {entry['fails']} failed attempts")
-                    if git_checkout_clean_fn and repo_root:
-                        git_checkout_clean_fn(repo_root)
-                else:
-                    log_fn(f"[{tag_gap['tag_key']}] failed attempt {entry['fails']}/{max_fails}")
-            state[tag_gap["tag_key"]] = entry
+            heartbeat_thread.start()
 
-        save_state_fn(state_path, state)
+        try:
+            result = fix_gap_fn(tag_gap, config, previous_attempts)
+        finally:
+            stop_heartbeat.set()
+            if heartbeat_thread is not None:
+                heartbeat_thread.join()
+
+        def record(state):
+            """Locked result step: re-fetch this tag's entry from fresh
+            state (other workers may have touched other tags meanwhile),
+            release the claims, and apply the outcome. Returns whether
+            this outcome just blacklisted the tag, so the caller can run
+            git cleanup OUTSIDE the lock -- a git subprocess has no
+            business extending the flock critical section."""
+            entry = state.setdefault(tag_gap["tag_key"], {"fails": 0, "blacklisted": False, "attempts": []})
+            entry.pop("claimed_by", None)
+            entry.pop("claimed_at", None)
+            blacklisted_now = False
+
+            if result["status"] == "fixed":
+                fixed.append({"tag_key": tag_gap["tag_key"], **result})
+                state.pop(tag_gap["tag_key"], None)
+                for m in tag_gap.get("cluster_members") or []:
+                    state.pop(m["tag_key"], None)
+                log_fn(f"[{tag_gap['tag_key']}] FIXED")
+            elif result["status"] == "duplicate":
+                # Already fixed elsewhere (see fix_gap's detect_duplicate_fn)
+                # -- this worker's own worktree was stale when it started,
+                # not a real failure of this tag, so don't count it against
+                # the fail budget or let it march toward blacklisting; just
+                # drop any stale attempt history the same way a genuine fix
+                # would, and move on to a different tag next round.
+                skipped.append({"tag_key": tag_gap["tag_key"], **result})
+                state.pop(tag_gap["tag_key"], None)
+                for m in tag_gap.get("cluster_members") or []:
+                    state.pop(m["tag_key"], None)
+                log_fn(f"[{tag_gap['tag_key']}] SKIPPED (already fixed elsewhere)")
+            else:
+                failed.append({"tag_key": tag_gap["tag_key"], **result})
+                # A cluster failure charges only the leader -- members are
+                # simply released (claims dropped) so they stay eligible,
+                # individually or under a future leader, without inheriting
+                # a fail count for an attempt that was the leader's.
+                for m in tag_gap.get("cluster_members") or []:
+                    me = state.get(m["tag_key"])
+                    if me:
+                        me.pop("claimed_by", None)
+                        me.pop("claimed_at", None)
+                rounds_list = result.get("rounds") or [
+                    {"diff": result.get("diff"), "reason": result.get("reason", "unknown"), "critique": None}
+                ]
+                infra_only = all(
+                    str(r.get("reason", "")).startswith(INFRA_FAILURE_PREFIX) for r in rounds_list
+                )
+                if infra_only:
+                    # Every round was an infrastructure failure (rate limit,
+                    # network, provider error -- see INFRA_FAILURE_PREFIX)
+                    # -- that isn't the tag's fault, and counting it lets a
+                    # rate-limit storm blacklist every active tag; just as
+                    # bad, persisting the junk rounds clutters every future
+                    # prompt for this tag. Report it (failed above) but
+                    # charge nothing: no fail increment, no attempt history,
+                    # no blacklist check.
+                    log_fn(
+                        f"[{tag_gap['tag_key']}] infrastructure failure "
+                        f"(not counted against fail budget): {result.get('reason', 'unknown')}"
+                    )
+                else:
+                    entry["fails"] = entry.get("fails", 0) + 1
+                    # fix_gap's own "rounds" is every internal repair sub-attempt
+                    # (build failure, gap-not-closed, test regression, or review
+                    # rejection), each with its own critique -- persist all of
+                    # them, not just the call's final outcome, so a future round
+                    # sees the whole arc of what was tried and why each step
+                    # failed. Falls back to one flattened entry (no critique) for
+                    # a caller whose fix_gap_fn doesn't return "rounds".
+                    # Infrastructure-failure rounds inside a mixed result are
+                    # dropped -- they carry no signal about the tag -- keeping
+                    # only the real-signal rounds (with a fall-back to
+                    # everything should filtering somehow leave nothing).
+                    real_rounds = [
+                        r for r in rounds_list
+                        if not str(r.get("reason", "")).startswith(INFRA_FAILURE_PREFIX)
+                    ]
+                    for sub_round in real_rounds or rounds_list:
+                        entry.setdefault("attempts", []).append({
+                            "round": entry["fails"], "diff": sub_round.get("diff"),
+                            "reason": sub_round.get("reason", "unknown"), "critique": sub_round.get("critique"),
+                        })
+                    if entry["fails"] >= max_fails:
+                        entry["blacklisted"] = True
+                        # Both persisted alongside "blacklisted" (not just logged)
+                        # so a dashboard reading tag-state.json later -- possibly
+                        # long after this worker's own log has been truncated by a
+                        # respawn -- can still answer "when" and "by which worker"
+                        # for every blacklist event, not just the current count.
+                        entry["blacklisted_at"] = time_fn()
+                        entry["blacklisted_by"] = worker_id
+                        blacklisted_now = True
+                        log_fn(f"[{tag_gap['tag_key']}] blacklisted after {entry['fails']} failed attempts")
+                    else:
+                        log_fn(f"[{tag_gap['tag_key']}] failed attempt {entry['fails']}/{max_fails}")
+                state[tag_gap["tag_key"]] = entry
+
+            return state, blacklisted_now
+
+        if locked(record) and git_checkout_clean_fn and repo_root:
+            git_checkout_clean_fn(repo_root)
 
     return {
         "rounds": round_num,
@@ -3071,6 +3253,8 @@ def _normalize_model_config(table):
         "governor_max_cooldown_seconds": table.get("governor_max_cooldown_seconds", DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS),
         "max_cluster_tags": table.get("max_cluster_tags", DEFAULT_MAX_CLUSTER_TAGS),
         "use_sccache": table.get("use_sccache", True),
+        "claim_stale_seconds": table.get("claim_stale_seconds", DEFAULT_CLAIM_STALE_SECONDS),
+        "heartbeat_seconds": table.get("heartbeat_seconds", DEFAULT_HEARTBEAT_SECONDS),
     }
 
 
@@ -3212,9 +3396,20 @@ def main(argv=None):
     # (worker table, default on) reach cargo_env's OXIDEX_USE_SCCACHE gate.
     os.environ["OXIDEX_USE_SCCACHE"] = "1" if config.get("use_sccache", True) else "0"
 
+    # This process's identity in every shared artifact: manifest.log lines,
+    # request/response/diff filenames, the per-worker prompt log, and the
+    # /tmp/tagcmp-* comparison outputs (out_suffix below). Standalone runs
+    # get "1" so nothing is ever unlabeled.
+    worker_label = args.worker_id or "1"
+
     def find_gaps_fn():
         if args.only_format:
-            report_path = run_format_comparison(args.only_format, args.cache_dir)
+            # out_suffix isolates this worker's comparison output from
+            # every other process re-checking the same format -- see
+            # run_format_comparison. The shared fixed /tmp path used to
+            # let two same-format workers overwrite each other's report
+            # mid-recheck and corrupt tag_still_open verdicts.
+            report_path = run_format_comparison(args.only_format, args.cache_dir, out_suffix=worker_label)
         else:
             report_path = run_full_comparison(args.cache_dir)
         gaps = group_gaps_by_format(load_comparison_report(report_path))
@@ -3233,12 +3428,17 @@ def main(argv=None):
     manifest_path = diff_log_dir / "manifest.log"
 
     def logging_git_apply(diff_text, repo_root):
+        # worker_label in the filename: diff_log_dir is one shared
+        # OXIDEX_HOME location, and two workers applying diffs in the
+        # same second used to overwrite each other's .diff artifact --
+        # the manifest then pointed at a file holding the OTHER worker's
+        # diff.
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         applied, msg = git_apply(diff_text, repo_root)
-        diff_path = diff_log_dir / f"{ts}-{'applied' if applied else 'rejected'}.diff"
+        diff_path = diff_log_dir / f"{ts}-{worker_label}-{'applied' if applied else 'rejected'}.diff"
         diff_path.write_text(diff_text)
         with manifest_path.open("a") as f:
-            f.write(f"{ts} applied={applied} file={diff_path.name} apply_msg={msg[:200]!r}\n")
+            f.write(f"{ts} worker={worker_label} applied={applied} file={diff_path.name} apply_msg={msg[:200]!r}\n")
         return applied, msg
 
     def timestamped_log(msg):
@@ -3254,7 +3454,6 @@ def main(argv=None):
     req_log_dir.mkdir(parents=True, exist_ok=True)
     req_manifest_path = req_log_dir / "manifest.log"
     cache_stats_path = req_log_dir / "cache-stats.log"
-    worker_label = args.worker_id or "1"
 
     def make_logging_call_model(phase):
         """Build a call_model_fn wrapper tagged with phase ("fixer" or
@@ -3279,7 +3478,13 @@ def main(argv=None):
                                 max_retry_backoff_seconds=DEFAULT_MAX_RETRY_BACKOFF_SECONDS):
             ts = time.strftime("%Y-%m-%dT%H:%M:%S")
             prompt_chars = sum(len(m.get("content", "")) for m in messages)
-            req_path = req_log_dir / f"{ts}-{phase}-request.json"
+            # worker_label in the filename (not just the manifest line):
+            # req_log_dir is shared by every worker, and two workers
+            # calling in the same second used to overwrite each other's
+            # request/response artifacts. watch_context.py resolves the
+            # worker-tagged name first and falls back to this legacy
+            # shape for pre-existing files.
+            req_path = req_log_dir / f"{ts}-{worker_label}-{phase}-request.json"
             req_path.write_text(json.dumps({
                 "phase": phase, "model": model, "base_url": base_url, "max_tokens": max_tokens,
                 "reasoning_effort": reasoning_effort, "stream": stream,
@@ -3332,7 +3537,7 @@ def main(argv=None):
                     )
                 raise
             elapsed = time.time() - t0
-            reply_path = req_log_dir / f"{ts}-{phase}-response.txt"
+            reply_path = req_log_dir / f"{ts}-{worker_label}-{phase}-response.txt"
             reply_path.write_text(reply)
             with req_manifest_path.open("a") as f:
                 f.write(
@@ -3400,9 +3605,11 @@ def main(argv=None):
             # _fmt is ignored -- tag_gap already knows its own format;
             # fix_gap's recheck_fn(format_name) contract is reused as-is,
             # scoped here to whether this ONE tag is still present rather
-            # than the whole format's gap count.
+            # than the whole format's gap count. out_suffix keeps this
+            # recheck's report out from under every other same-format
+            # process's feet -- see find_gaps_fn above.
             fmt = tag_gap["format"]
-            path = run_format_comparison(fmt, args.cache_dir)
+            path = run_format_comparison(fmt, args.cache_dir, out_suffix=worker_label)
             regrouped = group_gaps_by_format(load_comparison_report(path))
             match = next((g for g in regrouped if g["format"] == fmt), None)
             targets = [tag_gap] + list(tag_gap.get("cluster_members") or [])
@@ -3492,6 +3699,8 @@ def main(argv=None):
         max_distinct_tags=max_tags_per_process, refresh_worktree_fn=refresh_worktree_fn,
         max_cluster_tags=config["max_cluster_tags"],
         landed_tags_path=DEFAULT_LANDED_TAGS_PATH,
+        claim_stale_seconds=config["claim_stale_seconds"],
+        heartbeat_seconds=config["heartbeat_seconds"],
     )
     print(f"stopped after {summary['rounds']} rounds")
     print(f"  fixed:   {len(summary['fixed'])} tags")

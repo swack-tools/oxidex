@@ -75,6 +75,39 @@ class RunFormatComparisonTests(unittest.TestCase):
         self.assertIn("/tmp/fake-cache/combined-samples", args[0])  # nosec B108
         self.assertEqual(result, Path("/tmp/tagcmp-NEF.json"))  # nosec B108
 
+    @patch("find_tag_gaps.ensure_tag_comparison_built")
+    @patch("find_tag_gaps.subprocess.run")
+    def test_empty_out_suffix_keeps_the_legacy_paths(self, mock_run, mock_ensure):
+        mock_run.return_value = MagicMock(returncode=0)
+        result = run_format_comparison(
+            "JPEG", "/tmp/fake-cache", repo_root=Path("/fake/repo"), out_suffix="",  # nosec B108
+        )
+        self.assertEqual(result, Path("/tmp/tagcmp-JPEG.json"))  # nosec B108
+        args, _ = mock_run.call_args
+        self.assertIn("/tmp/tagcmp-JPEG-md", args[0])  # nosec B108
+
+    @patch("find_tag_gaps.ensure_tag_comparison_built")
+    @patch("find_tag_gaps.subprocess.run")
+    def test_out_suffix_gives_each_worker_its_own_output_paths(self, mock_run, mock_ensure):
+        # Two workers re-checking the same format must write disjoint
+        # report and markdown paths -- the shared fixed /tmp path let
+        # them overwrite each other's report mid-recheck.
+        mock_run.return_value = MagicMock(returncode=0)
+        result_1 = run_format_comparison(
+            "JPEG", "/tmp/fake-cache", repo_root=Path("/fake/repo"), out_suffix="JPEG-1",  # nosec B108
+        )
+        argv_1 = mock_run.call_args.args[0]
+        result_2 = run_format_comparison(
+            "JPEG", "/tmp/fake-cache", repo_root=Path("/fake/repo"), out_suffix="JPEG-2",  # nosec B108
+        )
+        argv_2 = mock_run.call_args.args[0]
+
+        self.assertEqual(result_1, Path("/tmp/tagcmp-JPEG-JPEG-1.json"))  # nosec B108
+        self.assertEqual(result_2, Path("/tmp/tagcmp-JPEG-JPEG-2.json"))  # nosec B108
+        self.assertNotEqual(result_1, result_2)
+        self.assertIn("/tmp/tagcmp-JPEG-JPEG-1-md", argv_1)  # nosec B108
+        self.assertIn("/tmp/tagcmp-JPEG-JPEG-2-md", argv_2)  # nosec B108
+
 
 if __name__ == "__main__":
     unittest.main()
