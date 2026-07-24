@@ -253,6 +253,18 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 for (tag_id, field_type, value_count, raw_bytes) in &tags {
                     let bytes = raw_bytes.as_ref();
 
+                    // RW2 tag 0x002e contains the JPEG preview whose EXIF IFD
+                    // carries a handful of standard EXIF tags omitted from the
+                    // outer Panasonic RAW IFDs.
+                    if format == RawFormat::PanasonicRW2
+                        && ifd_index == 0
+                        && *tag_id == 0x002e
+                    {
+                        if let Err(error) = extract_rw2_embedded_exif_tags(bytes, &mut metadata) {
+                            eprintln!("Warning: Failed to parse RW2 preview EXIF: {}", error);
+                        }
+                    }
+
                     // Check for EXIF Sub-IFD pointer (tag 0x8769)
                     if *tag_id == 0x8769 && bytes.len() >= 4 {
                         let offset = read_u32(bytes, byte_order);
@@ -569,6 +581,123 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     }
 
     Ok(metadata)
+}
+
+/// Extract standard EXIF tags stored only in Panasonic RW2's JpgFromRaw data.
+///
+/// TIFF offsets in an APP1 EXIF payload are relative to its embedded TIFF
+/// header. Giving that header its own `SliceReader` keeps the offset base and
+/// byte order local to this parse instead of mutating parser-wide state.
+fn extract_rw2_embedded_exif_tags(
+    jpeg: &[u8],
+    metadata: &mut MetadataMap,
+) -> Result<()> {
+    let Some(tiff_data) = find_jpeg_exif_tiff(jpeg)? else {
+        return Ok(());
+    };
+
+    let byte_order = detect_byte_order(tiff_data)?;
+    let first_ifd_bytes = tiff_data
+        .get(4..8)
+        .ok_or_else(|| ExifToolError::parse_error("Truncated TIFF header in RW2 preview EXIF"))?;
+    let first_ifd_offset = u64::from(read_u32(first_ifd_bytes, byte_order));
+    let reader = SliceReader::new(tiff_data);
+    let ifd0_tags = parse_ifd(&reader, first_ifd_offset, byte_order)?;
+
+    let exif_ifd_offset = ifd0_tags.iter().find_map(
+        |(tag_id, field_type, value_count, raw_bytes)| {
+            if *tag_id == 0x8769 && *field_type == 4 && *value_count >= 1 {
+                read_tiff_u32(raw_bytes.as_ref(), byte_order).map(u64::from)
+            } else {
+                None
+            }
+        },
+    );
+    let Some(exif_ifd_offset) = exif_ifd_offset else {
+        return Ok(());
+    };
+
+    for (tag_id, field_type, value_count, raw_bytes) in
+        parse_ifd(&reader, exif_ifd_offset, byte_order)?
+    {
+        if !matches!(tag_id, 0x9101 | 0x9102 | 0xA001 | 0xA302 | 0xA408) {
+            continue;
+        }
+
+        if let Some(value) = format_exif_display_value(
+            tag_id,
+            raw_bytes.as_ref(),
+            field_type,
+            value_count,
+            byte_order,
+        ) {
+            metadata.insert(
+                lookup_tag_name(tag_id, "ExifIFD"),
+                TagValue::new_string(value),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Locate the TIFF header in a JPEG APP1 EXIF segment.
+fn find_jpeg_exif_tiff(jpeg: &[u8]) -> Result<Option<&[u8]>> {
+    if jpeg.get(..2) != Some(&[0xff, 0xd8]) {
+        return Ok(None);
+    }
+
+    let mut offset = 2usize;
+    while offset < jpeg.len() {
+        if jpeg.get(offset) != Some(&0xff) {
+            return Ok(None);
+        }
+
+        while jpeg.get(offset) == Some(&0xff) {
+            offset = offset
+                .checked_add(1)
+                .ok_or_else(|| ExifToolError::parse_error("Invalid JPEG marker offset"))?;
+        }
+        let Some(&marker) = jpeg.get(offset) else {
+            return Ok(None);
+        };
+        offset = offset
+            .checked_add(1)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid JPEG marker offset"))?;
+
+        if marker == 0xd9 || marker == 0xda {
+            return Ok(None);
+        }
+        if marker == 0x01 || (0xd0..=0xd8).contains(&marker) {
+            continue;
+        }
+
+        let length_bytes: [u8; 2] = jpeg
+            .get(offset..offset.saturating_add(2))
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(|| ExifToolError::parse_error("Truncated JPEG segment length"))?;
+        let segment_length = usize::from(u16::from_be_bytes(length_bytes));
+        if segment_length < 2 {
+            return Err(ExifToolError::parse_error("Invalid JPEG segment length"));
+        }
+
+        let payload_start = offset
+            .checked_add(2)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid JPEG segment offset"))?;
+        let segment_end = offset
+            .checked_add(segment_length)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid JPEG segment length"))?;
+        let payload = jpeg
+            .get(payload_start..segment_end)
+            .ok_or_else(|| ExifToolError::parse_error("Truncated JPEG segment"))?;
+
+        if marker == 0xe1 && payload.get(..6) == Some(b"Exif\0\0") {
+            return Ok(payload.get(6..));
+        }
+        offset = segment_end;
+    }
+
+    Ok(None)
 }
 
 /// Format DNG integer-array tags whose ExifTool default output preserves all
@@ -897,6 +1026,73 @@ mod panasonic_rw2_tests {
             )
             .as_deref(),
             Some("Panasonic RAW 1")
+        );
+    }
+
+    #[test]
+    fn extracts_standard_exif_tags_from_rw2_preview() {
+        let mut tiff = vec![0u8; 108];
+        tiff[0..8].copy_from_slice(b"II\x2a\x00\x08\x00\x00\x00");
+
+        // Embedded IFD0 points to an EXIF IFD at TIFF-relative offset 26.
+        tiff[8..10].copy_from_slice(&1u16.to_le_bytes());
+        tiff[10..12].copy_from_slice(&0x8769u16.to_le_bytes());
+        tiff[12..14].copy_from_slice(&4u16.to_le_bytes());
+        tiff[14..18].copy_from_slice(&1u32.to_le_bytes());
+        tiff[18..22].copy_from_slice(&26u32.to_le_bytes());
+
+        tiff[26..28].copy_from_slice(&5u16.to_le_bytes());
+        let entries = [
+            (0x9101u16, 7u16, 4u32, [1, 2, 3, 0]),
+            (0x9102u16, 5u16, 1u32, 92u32.to_le_bytes()),
+            (0xA001u16, 3u16, 1u32, [1, 0, 0, 0]),
+            (0xA302u16, 7u16, 8u32, 100u32.to_le_bytes()),
+            (0xA408u16, 3u16, 1u32, [0, 0, 0, 0]),
+        ];
+        for (index, (tag_id, field_type, count, value)) in entries.iter().enumerate() {
+            let start = 28 + index * 12;
+            tiff[start..start + 2].copy_from_slice(&tag_id.to_le_bytes());
+            tiff[start + 2..start + 4].copy_from_slice(&field_type.to_le_bytes());
+            tiff[start + 4..start + 8].copy_from_slice(&count.to_le_bytes());
+            tiff[start + 8..start + 12].copy_from_slice(value);
+        }
+        tiff[92..96].copy_from_slice(&2u32.to_le_bytes());
+        tiff[96..100].copy_from_slice(&1u32.to_le_bytes());
+        tiff[100..108].copy_from_slice(&[2, 0, 2, 0, 2, 1, 1, 0]);
+
+        let app1_length = u16::try_from(2 + 6 + tiff.len())
+            .expect("synthetic APP1 segment length fits in u16");
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpeg.extend_from_slice(&app1_length.to_be_bytes());
+        jpeg.extend_from_slice(b"Exif\0\0");
+        jpeg.extend_from_slice(&tiff);
+        jpeg.extend_from_slice(&[0xff, 0xd9]);
+
+        let mut metadata = MetadataMap::new();
+        extract_rw2_embedded_exif_tags(&jpeg, &mut metadata)
+            .expect("synthetic preview EXIF should parse");
+
+        assert_eq!(
+            metadata.get("ExifIFD:ComponentsConfiguration"),
+            Some(&TagValue::new_string("Y, Cb, Cr, -".to_string()))
+        );
+        assert_eq!(
+            metadata.get("ExifIFD:CompressedBitsPerPixel"),
+            Some(&TagValue::new_string("2".to_string()))
+        );
+        assert_eq!(
+            metadata.get("ExifIFD:ColorSpace"),
+            Some(&TagValue::new_string("sRGB".to_string()))
+        );
+        assert_eq!(
+            metadata.get("ExifIFD:CFAPattern"),
+            Some(&TagValue::new_string(
+                "[Blue,Green][Green,Red]".to_string()
+            ))
+        );
+        assert_eq!(
+            metadata.get("ExifIFD:Contrast"),
+            Some(&TagValue::new_string("Normal".to_string()))
         );
     }
 }
