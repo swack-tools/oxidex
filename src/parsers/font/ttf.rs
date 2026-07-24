@@ -331,6 +331,23 @@ impl TTFParser {
             }
         }
 
+        // Preserve the localized Hebrew copyright record. The language ID
+        // namespace depends on the name record's platform.
+        for record in records.iter().filter(|record| {
+            record.name_id == NAME_COPYRIGHT
+                && ((record.platform_id == PLATFORM_MACINTOSH
+                    && record.language_id == LANGUAGE_HEBREW_MACINTOSH)
+                    || (record.platform_id == PLATFORM_WINDOWS
+                        && record.language_id == LANGUAGE_HEBREW_WINDOWS))
+        }) {
+            if let Some(value) = Self::extract_name_string(reader, table, record, string_offset)?
+                && !value.is_empty()
+            {
+                metadata.insert("Font:Copyright-he".to_string(), TagValue::String(value));
+                break;
+            }
+        }
+
         Ok(metadata)
     }
 
