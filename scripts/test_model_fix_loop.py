@@ -43,6 +43,8 @@ from model_fix_loop import (
     git_apply,
     git_checkout_clean,
     git_commit,
+    governor_acquire,
+    governor_report,
     load_recent_sweep_reviews,
     load_toml_config,
     make_single_tag_gap,
@@ -3907,6 +3909,83 @@ class RunTagLoopInfraFailureTests(unittest.TestCase):
         self.assertEqual(len(entry["attempts"]), 1)
         self.assertEqual(entry["attempts"][0]["reason"], "cargo build failed: error[E0308]")
         self.assertEqual(entry["attempts"][0]["critique"], "type mismatch")
+
+
+class RateGovernorTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmpdir.name) / "rate-governor.json"
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_none_path_is_a_noop(self):
+        governor_acquire(None)  # must not raise or sleep
+        governor_report(None, limited=True)
+
+    def test_burst_tokens_allow_immediate_calls_then_throttle(self):
+        clock = [1000.0]
+        sleeps = []
+
+        def now():
+            return clock[0]
+
+        def sleep(s):
+            sleeps.append(s)
+            clock[0] += s
+
+        for _ in range(5):  # burst = 5 -> all immediate
+            governor_acquire(self.path, calls_per_minute=60, burst=5,
+                             now_fn=now, sleep_fn=sleep, jitter_fn=lambda: 0.5)
+        self.assertEqual(sleeps, [])
+        # 6th call: bucket empty, refill is 1/sec -> must wait ~1s
+        governor_acquire(self.path, calls_per_minute=60, burst=5,
+                         now_fn=now, sleep_fn=sleep, jitter_fn=lambda: 0.5)
+        self.assertEqual(len(sleeps), 1)
+        self.assertGreater(sleeps[0], 0)
+        self.assertLess(sleeps[0], 2.5)
+
+    def test_report_limited_sets_global_cooldown_acquire_waits_it_out(self):
+        clock = [1000.0]
+        sleeps = []
+
+        def now():
+            return clock[0]
+
+        def sleep(s):
+            sleeps.append(s)
+            clock[0] += s
+
+        governor_report(self.path, limited=True, cooldown_seconds=30,
+                        max_cooldown_seconds=300, now_fn=now)
+        governor_acquire(self.path, calls_per_minute=60, burst=5,
+                         now_fn=now, sleep_fn=sleep, jitter_fn=lambda: 0.5)
+        self.assertTrue(sleeps)
+        self.assertGreaterEqual(sum(sleeps), 30 * 0.8)  # jitter can shave 20%
+
+    def test_consecutive_limited_reports_grow_the_cooldown_capped(self):
+        now_fn = lambda: 1000.0
+        for _ in range(10):
+            governor_report(self.path, limited=True, cooldown_seconds=30,
+                            max_cooldown_seconds=120, now_fn=now_fn)
+        state = json.loads(self.path.read_text())
+        self.assertLessEqual(state["cooldown_until"], 1000.0 + 120)
+        self.assertGreaterEqual(state["consecutive_limited"], 10)
+
+    def test_success_resets_the_streak(self):
+        now_fn = lambda: 1000.0
+        governor_report(self.path, limited=True, now_fn=now_fn)
+        governor_report(self.path, limited=False, now_fn=now_fn)
+        state = json.loads(self.path.read_text())
+        self.assertEqual(state["consecutive_limited"], 0)
+
+    def test_corrupt_state_file_recovers_permissively(self):
+        self.path.write_text("{not json")
+        governor_acquire(self.path, calls_per_minute=60, burst=5,
+                         now_fn=lambda: 1000.0, sleep_fn=lambda s: None,
+                         jitter_fn=lambda: 0.5)  # must not raise
+        governor_report(self.path, limited=False, now_fn=lambda: 1000.0)
+        json.loads(self.path.read_text())  # now valid again
 
 
 if __name__ == "__main__":

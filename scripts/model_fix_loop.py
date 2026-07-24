@@ -107,6 +107,7 @@ Usage:
     uv run scripts/model_fix_loop.py --config /path/to/config.toml
 """
 import argparse
+import fcntl
 import functools
 import json
 import os
@@ -616,6 +617,99 @@ def cargo_env():
     if shutil.which("sccache"):
         env["RUSTC_WRAPPER"] = "sccache"
     return env
+
+
+DEFAULT_GOVERNOR_PATH = OXIDEX_HOME / "logs" / "rate-governor.json"
+DEFAULT_GOVERNOR_CALLS_PER_MINUTE = 30
+DEFAULT_GOVERNOR_BURST = 5
+DEFAULT_GOVERNOR_COOLDOWN_SECONDS = 30
+DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS = 300
+
+
+def _governor_locked(path, mutate_fn, now_fn):
+    """Run mutate_fn(state) -> (new_state, result) under an exclusive
+    flock on path's sibling lockfile, loading/saving the JSON state
+    around it. A missing or corrupt state file becomes a fresh
+    permissive state -- the governor must never brick the loop over its
+    own bookkeeping."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(".lock")
+    with open(lock_path, "w") as lock_f:
+        fcntl.flock(lock_f, fcntl.LOCK_EX)
+        try:
+            state = json.loads(path.read_text())
+            if not isinstance(state, dict):
+                raise ValueError("state is not a dict")
+        except (OSError, ValueError):
+            state = {}
+        state.setdefault("tokens", float(DEFAULT_GOVERNOR_BURST))
+        state.setdefault("last_refill", now_fn())
+        state.setdefault("cooldown_until", 0.0)
+        state.setdefault("consecutive_limited", 0)
+        new_state, result = mutate_fn(state)
+        path.write_text(json.dumps(new_state))
+        return result
+
+
+def governor_acquire(path, calls_per_minute=DEFAULT_GOVERNOR_CALLS_PER_MINUTE,
+                     burst=DEFAULT_GOVERNOR_BURST, now_fn=time.time,
+                     sleep_fn=time.sleep, jitter_fn=random.random):
+    """Block until this process may make one model API call.
+
+    Cross-process token bucket + global cooldown, shared by every worker
+    through one flock-guarded JSON file: refill at calls_per_minute/60
+    tokens/sec (capped at burst), spend one per call, and honor
+    cooldown_until -- which governor_report sets GLOBALLY on a 429/5xx,
+    so one worker being limited pauses the whole fleet instead of the
+    other N-1 continuing to hammer the shared account limit (measured
+    today: 20 independent backoffs -> 13k 429s and zero successes in an
+    hour). Waits carry +/-20% jitter so workers don't all wake at the
+    same instant. path=None disables (old callers, tests).
+    """
+    if path is None:
+        return
+    while True:
+        def try_take(state):
+            now = now_fn()
+            rate = calls_per_minute / 60.0
+            elapsed = max(0.0, now - state["last_refill"])
+            state["tokens"] = min(float(burst), state["tokens"] + elapsed * rate)
+            state["last_refill"] = now
+            if now < state["cooldown_until"]:
+                return state, state["cooldown_until"] - now
+            if state["tokens"] < 1.0:
+                return state, (1.0 - state["tokens"]) / rate
+            state["tokens"] -= 1.0
+            return state, None
+
+        wait = _governor_locked(path, try_take, now_fn)
+        if wait is None:
+            return
+        sleep_fn(wait * (0.8 + 0.4 * jitter_fn()))
+
+
+def governor_report(path, limited, cooldown_seconds=DEFAULT_GOVERNOR_COOLDOWN_SECONDS,
+                    max_cooldown_seconds=DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS,
+                    now_fn=time.time):
+    """Record one call outcome. limited=True (429 or 5xx) sets/extends
+    the GLOBAL cooldown with exponential growth per consecutive limited
+    outcome, capped; limited=False resets the streak (the next limited
+    outcome starts from the base cooldown again). path=None disables."""
+    if path is None:
+        return
+    def mutate(state):
+        if limited:
+            state["consecutive_limited"] += 1
+            backoff = min(
+                cooldown_seconds * (2 ** (state["consecutive_limited"] - 1)),
+                max_cooldown_seconds,
+            )
+            state["cooldown_until"] = max(state["cooldown_until"], now_fn() + backoff)
+        else:
+            state["consecutive_limited"] = 0
+        return state, None
+    _governor_locked(path, mutate, now_fn)
 
 
 def cargo_build(repo_root):
