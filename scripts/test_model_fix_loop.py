@@ -14,6 +14,7 @@ from model_fix_loop import (
     build_exact_sample_block,
     build_failure_critique_prompt,
     build_format_overview_block,
+    build_neighbor_precedent_block,
     build_perl_reference_block,
     build_prompt,
     build_reply_shape_manifest,
@@ -37,6 +38,7 @@ from model_fix_loop import (
     extract_perl_tag_snippet,
     extract_review_verdict,
     file_content_at_head,
+    find_implemented_sibling,
     fix_gap,
     format_previous_attempts,
     load_format_memory,
@@ -1303,6 +1305,61 @@ class RustArchitectureConstraintsTests(unittest.TestCase):
     def test_build_prompt_includes_the_constraints_block(self):
         prompt = build_prompt(make_gap(gap_count=2))
         self.assertIn("CRITICAL RUST ARCHITECTURE CONSTRAINTS", prompt)
+
+
+class NeighborPrecedentTests(unittest.TestCase):
+    def _gap(self, tmp):
+        (tmp / "j.rs").write_text('metadata.insert("APP12:ColorMode".to_string(), v);')
+        return {"format": "JPEG",
+                "missing_tags": [{"family": "APP12", "name": "MODE3", "value": "0",
+                                  "tag_id": None, "source_file": None}],
+                "value_differences": [], "gap_count": 1, "parser_files": ["j.rs"]}
+
+    def test_finds_an_implemented_sibling_literal(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            gap = self._gap(tmp)
+            self.assertEqual(find_implemented_sibling(gap, tmp), "APP12:ColorMode")
+
+    def test_own_gap_tags_are_not_their_own_precedent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            gap = self._gap(tmp)
+            # Overwrite AFTER _gap (which itself writes a ColorMode
+            # literal) so the file holds only the gap's own tag.
+            (tmp / "j.rs").write_text('metadata.insert("APP12:MODE3".to_string(), v);')
+            self.assertIsNone(find_implemented_sibling(gap, tmp))
+
+    def test_block_includes_the_historic_patch(self):
+        calls = []
+        def fake_git(args, cwd):
+            calls.append(args)
+            if args[0] == "log":
+                return "abc123\n"
+            return "commit abc123\n+++ test added here\n"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            block = build_neighbor_precedent_block(self._gap(tmp), tmp, git_runner_fn=fake_git)
+        self.assertIn("APP12:ColorMode", block)
+        self.assertIn("test added here", block)
+        self.assertIn("-S", str(calls[0]))
+
+    def test_git_failure_yields_empty_block(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            block = build_neighbor_precedent_block(
+                self._gap(tmp), tmp, git_runner_fn=lambda a, c: "")
+        self.assertEqual(block, "")
+
+
+class BuildPromptNeighborPrecedentTests(unittest.TestCase):
+    def test_block_appears_in_the_stable_section(self):
+        gap = make_gap(gap_count=1)
+        prompt = build_prompt(gap, neighbor_precedent_block="\n\nPRECEDENT-MARKER-XYZ")
+        self.assertIn("PRECEDENT-MARKER-XYZ", prompt)
+        self.assertLess(prompt.index("PRECEDENT-MARKER-XYZ"),
+                        prompt.index("Previous attempts") if "Previous attempts" in prompt
+                        else len(prompt))
 
 
 class ParseRequestRangeTests(unittest.TestCase):

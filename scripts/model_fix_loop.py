@@ -1097,6 +1097,69 @@ def build_perl_reference_block(gap, lib_dir, max_tags_shown=DEFAULT_MAX_PERL_SNI
     )
 
 
+DEFAULT_MAX_PRECEDENT_CHARS = 3000
+SIBLING_LITERAL_RE_TEMPLATE = r'"({family}:[A-Za-z0-9_]+)"'
+
+
+def find_implemented_sibling(gap, repo_root):
+    """First already-implemented same-family tag literal in the gap's own
+    parser files, excluding the gap's own tags -- the nearest working
+    example of 'how tags in this table get wired'."""
+    families, own = set(), set()
+    for e in gap["missing_tags"]:
+        families.add(e["family"]); own.add(f'{e["family"]}:{e["name"]}')
+    for d in gap["value_differences"]:
+        fam = d["tag_key"].split(":")[0]
+        families.add(fam); own.add(d["tag_key"])
+    for f in gap["parser_files"]:
+        try:
+            text = (Path(repo_root) / f).read_text(errors="replace")
+        except OSError:
+            continue
+        for family in sorted(families):
+            for m in re.finditer(SIBLING_LITERAL_RE_TEMPLATE.format(family=re.escape(family)), text):
+                if m.group(1) not in own:
+                    return m.group(1)
+    return None
+
+
+def _run_git(args, cwd):
+    try:
+        result = subprocess.run(  # nosec B603 -- fixed git argv, no untrusted input
+            ["git", *args], capture_output=True, text=True, cwd=cwd, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout if result.returncode == 0 else ""
+
+
+def build_neighbor_precedent_block(gap, repo_root, git_runner_fn=None):
+    """The historical diff that added the nearest implemented sibling tag
+    -- nearly every landed fix this loop has produced was 'generalize the
+    neighboring tag's branch' (LightS from ColorMode, MODE3-6 from
+    MODE1/2, ZipCRC from ZipBitFlag), so showing how the neighbor was
+    added (implementation AND its test) up front replaces a whole
+    REQUEST investigation. Empty string on any miss; never fatal."""
+    git_runner_fn = git_runner_fn or _run_git
+    sibling = find_implemented_sibling(gap, repo_root)
+    if not sibling:
+        return ""
+    files = list(gap["parser_files"])
+    sha = git_runner_fn(["log", "-S", sibling, "-1", "--format=%H", "--", *files], repo_root).strip()
+    if not sha:
+        return ""
+    patch = git_runner_fn(["show", sha], repo_root)
+    if not patch:
+        return ""
+    if len(patch) > DEFAULT_MAX_PRECEDENT_CHARS:
+        patch = patch[:DEFAULT_MAX_PRECEDENT_CHARS] + "\n... (truncated)"
+    return (
+        f"\n\nHow the neighboring tag {sibling} was added to this same code path "
+        "(historical commit -- pattern-match this, including adding an equivalent test):\n"
+        f"{patch}"
+    )
+
+
 PERL_MODULE_HEADER_RE = re.compile(r"^--- (\S+\.pm)(?:, table (\S+))?", re.MULTILINE)
 NOTES_START_RE = re.compile(r"^\s*NOTES\s*=>\s*q[qw]?([{(\[])\s*$")
 _NOTES_CLOSERS = {"{": "}", "(": ")", "[": "]"}
@@ -1450,7 +1513,8 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                   max_file_bytes=DEFAULT_MAX_PROMPT_FILE_BYTES, samples_dir=None,
                   max_samples_listed=DEFAULT_MAX_SAMPLE_FILES_LISTED, previous_attempts=None,
                   perl_lib_dir=None, sweep_review_log_path=None, format_memory_dir=None,
-                  max_prompt_tokens=DEFAULT_MAX_PROMPT_TOKENS):
+                  max_prompt_tokens=DEFAULT_MAX_PROMPT_TOKENS,
+                  neighbor_precedent_block=""):
     """Format one gap into a model prompt, capped so a huge format (e.g.
     JPEG with thousands of gaps and dozens of parser files) becomes an
     iterative, tractable request instead of one impossibly large prompt.
@@ -1485,6 +1549,11 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     reviewer's verdicts on specific merged/rejected commits), this is the
     loop's own accumulated, periodically-condensed account of everything
     tried on this format so far. None omits this section.
+
+    neighbor_precedent_block is a pre-rendered string (see
+    build_neighbor_precedent_block, built by the caller so build_prompt
+    itself stays free of subprocess calls) inserted after the Perl
+    reference in the stable per-tag section; "" (the default) omits it.
 
     Sections are ordered static-first (constraints/pitfalls/manifest),
     then per-tag content, then volatile history, so the byte-stable
@@ -1577,6 +1646,7 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
         f"{samples_block}"
         f"{exact_sample_block}"
         f"{perl_block}"
+        f"{neighbor_precedent_block}"
         f"{sweep_review_block}"
         f"{memory_block}"
         f"{attempts_block}\n\n"
@@ -2095,6 +2165,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             review_config=None, recheck_fn=None, repo_root=None, samples_dir=None,
             previous_attempts=None, detect_duplicate_fn=detect_duplicate_tag_insertion,
             perl_lib_dir=None, sweep_review_log_path=None, format_memory_dir=None,
+            neighbor_precedent_block="",
             max_repair_rounds=DEFAULT_MAX_REPAIR_ROUNDS):
     """Attempt to close one format's gaps via up to max_repair_rounds
     candidates, each round feeding the previous round's outcome -- build
@@ -2186,6 +2257,10 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     and triggering summarization when it grows too large is the caller's
     job (see main()'s real_fix_tag), since that's bookkeeping about the
     *result* of this call, not something fix_gap itself needs to do.
+
+    neighbor_precedent_block, a pre-rendered string, is passed straight
+    through to build_prompt (see build_neighbor_precedent_block) -- built
+    by the caller so fix_gap stays free of git subprocess calls.
     """
     repo_root = repo_root or REPO_ROOT
     review_config = review_config or config
@@ -2208,6 +2283,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         format_memory_dir=format_memory_dir,
         previous_attempts=previous_attempts,
         max_prompt_tokens=config.get("max_prompt_tokens", DEFAULT_MAX_PROMPT_TOKENS),
+        neighbor_precedent_block=neighbor_precedent_block,
     )}]
 
     rounds = []  # every non-fixed round: {"diff", "reason", "critique"} -- see run_tag_loop
@@ -3234,6 +3310,10 @@ def main(argv=None):
             return (open_count, detail) if detail else open_count
 
         single_gap = make_cluster_gap(tag_gap)
+        # Computed once per attempt (two git subprocess calls) and shared
+        # by the preview and the real prompt below, so both show the
+        # exact same precedent.
+        precedent = build_neighbor_precedent_block(single_gap, REPO_ROOT)
         # Log the exact prompt this round is about to send -- to the
         # screen and to a per-worker file -- before the call goes out, so
         # "what is it sending" is visible immediately rather than only
@@ -3252,6 +3332,7 @@ def main(argv=None):
             sweep_review_log_path=sweep_review_log_path,
             format_memory_dir=format_memory_dir,
             max_prompt_tokens=cfg.get("max_prompt_tokens", DEFAULT_MAX_PROMPT_TOKENS),
+            neighbor_precedent_block=precedent,
         )
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         banner = f"\n{'=' * 20} [{ts}] worker={worker_label} tag={tag_gap['tag_key']} {'=' * 20}\n"
@@ -3269,6 +3350,7 @@ def main(argv=None):
             perl_lib_dir=perl_lib_dir,
             sweep_review_log_path=sweep_review_log_path,
             format_memory_dir=format_memory_dir,
+            neighbor_precedent_block=precedent,
             max_repair_rounds=cfg.get("max_repair_rounds", DEFAULT_MAX_REPAIR_ROUNDS),
         )
         if result["status"] == "fixed":
