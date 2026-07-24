@@ -412,7 +412,7 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
                 "qt  " => "Apple QuickTime (.MOV/QT)",
                 "mp4 " => "MP4 Base Media v1 [IS0 14496-12:2003]",
                 // HEIF/HEIC brands
-                "mif1" => "High Efficiency Image Format still image (.HEIC)",
+                "mif1" => "High Efficiency Image Format still image (.HEIF)",
                 "msf1" => "High Efficiency Image Format sequence (.HEICS)",
                 "heic" => "High Efficiency Image Coding (.HEIC)",
                 "heix" => "High Efficiency Image Coding (.HEIC)",
