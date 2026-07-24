@@ -8,6 +8,7 @@ use zip::ZipArchive;
 const ZIP_SIGNATURE: &[u8] = b"PK";
 const ZIP_LOCAL_FILE_HEADER_SIGNATURE: &[u8] = b"PK\x03\x04";
 const ZIP_LOCAL_FILE_HEADER_PREFIX_SIZE: usize = 8;
+const ZIP_LOCAL_FILE_HEADER_SIZE: usize = 30;
 const ZIP_LOCAL_FILE_COMPRESSION_OFFSET: usize = 8;
 const ZIP_LOCAL_FILE_COMPRESSION_FIELD_END: usize = ZIP_LOCAL_FILE_COMPRESSION_OFFSET + 2;
 const ZIP_LOCAL_FILE_BIT_FLAG_OFFSET: usize = 6;
@@ -23,6 +24,72 @@ const ZIP_LOCAL_FILE_CRC_FIELD_END: usize = ZIP_LOCAL_FILE_CRC_OFFSET + 4;
 pub struct ZipParser;
 
 impl ZipParser {
+    /// Reads the unnumbered ZIP tags from the first local file header.
+    ///
+    /// ExifTool's ZIP table reports these header fields for the first archive
+    /// member, while this parser's existing `FileN` tags describe every member.
+    fn read_first_local_file_tags(
+        reader: &dyn FileReader,
+        metadata: &mut MetadataMap,
+    ) -> Result<()> {
+        if reader.size() < ZIP_LOCAL_FILE_HEADER_SIZE as u64 {
+            return Ok(());
+        }
+
+        let header = reader.read(0, ZIP_LOCAL_FILE_HEADER_SIZE)?;
+        if !header.starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+            return Ok(());
+        }
+
+        let required_version = u16::from_le_bytes([header[4], header[5]]);
+        let modify_time = u16::from_le_bytes([header[10], header[11]]);
+        let modify_date = u16::from_le_bytes([header[12], header[13]]);
+        let compressed_size = u32::from_le_bytes([header[18], header[19], header[20], header[21]]);
+        let uncompressed_size =
+            u32::from_le_bytes([header[22], header[23], header[24], header[25]]);
+        let file_name_length = u16::from_le_bytes([header[26], header[27]]) as usize;
+
+        metadata.insert(
+            "ZIP:ZipRequiredVersion".to_string(),
+            TagValue::new_integer(required_version as i64),
+        );
+        metadata.insert(
+            "ZIP:ZipCompressedSize".to_string(),
+            TagValue::new_integer(compressed_size as i64),
+        );
+        metadata.insert(
+            "ZIP:ZipUncompressedSize".to_string(),
+            TagValue::new_integer(uncompressed_size as i64),
+        );
+
+        let year = ((modify_date >> 9) & 0x7f) + 1980;
+        let month = (modify_date >> 5) & 0x0f;
+        let day = modify_date & 0x1f;
+        let hour = (modify_time >> 11) & 0x1f;
+        let minute = (modify_time >> 5) & 0x3f;
+        let second = (modify_time & 0x1f) * 2;
+        metadata.insert(
+            "ZIP:ZipModifyDate".to_string(),
+            TagValue::new_string(format!(
+                "{year:04}:{month:02}:{day:02} {hour:02}:{minute:02}:{second:02}"
+            )),
+        );
+
+        let file_name_end = ZIP_LOCAL_FILE_HEADER_SIZE
+            .checked_add(file_name_length)
+            .ok_or_else(|| ExifToolError::parse_error("ZIP filename length overflows"))?;
+        if reader.size() < file_name_end as u64 {
+            return Ok(());
+        }
+        let file_name = reader.read(ZIP_LOCAL_FILE_HEADER_SIZE as u64, file_name_length)?;
+        metadata.insert(
+            "ZIP:ZipFileName".to_string(),
+            TagValue::new_string(String::from_utf8_lossy(file_name).to_string()),
+        );
+
+        Ok(())
+    }
+
     /// Reads the general-purpose bit flag from the first local file header.
     ///
     /// The flag is a little-endian 16-bit value at offset 6 from the start of
@@ -147,6 +214,8 @@ impl FormatParser for ZipParser {
         }
 
         let mut metadata = MetadataMap::new();
+
+        Self::read_first_local_file_tags(reader, &mut metadata)?;
 
         if let Some(bit_flag) = Self::read_first_local_file_bit_flag(reader)? {
             metadata.insert(

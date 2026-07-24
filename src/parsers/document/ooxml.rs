@@ -47,6 +47,50 @@ fn extract_zip_compressed_size(data: &[u8]) -> Option<u32> {
     ]))
 }
 
+/// Extract ExifTool ZIP tags from the first ZIP local file header.
+fn extract_zip_local_header_tags(data: &[u8]) -> Option<(String, String, String, u16, u32)> {
+    let header_offset = data.windows(4).position(|window| window == b"PK\x03\x04")?;
+    let header = data.get(header_offset..)?;
+
+    let required_version = u16::from_le_bytes(header.get(4..6)?.try_into().ok()?);
+    let compression_method = u16::from_le_bytes(header.get(8..10)?.try_into().ok()?);
+    let dos_time = u16::from_le_bytes(header.get(10..12)?.try_into().ok()?);
+    let dos_date = u16::from_le_bytes(header.get(12..14)?.try_into().ok()?);
+    let uncompressed_size = u32::from_le_bytes(header.get(22..26)?.try_into().ok()?);
+    let filename_length = usize::from(u16::from_le_bytes(header.get(26..28)?.try_into().ok()?));
+    let filename_end = 30usize.checked_add(filename_length)?;
+    let filename = header.get(30..filename_end)?;
+
+    let compression = match compression_method {
+        0 => "Stored",
+        8 => "Deflated",
+        _ => "Unknown",
+    };
+
+    let year = 1980 + i32::from(dos_date >> 9);
+    let month = (dos_date >> 5) & 0x0f;
+    let day = dos_date & 0x1f;
+    let hour = dos_time >> 11;
+    let minute = (dos_time >> 5) & 0x3f;
+    let second = (dos_time & 0x1f) * 2;
+    if month > 12 || day > 31 || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+
+    // ZIP permits zero month/day values; ExifTool renders these as 1.
+    let month = month.max(1);
+    let day = day.max(1);
+    let modify_date = format!("{year:04}:{month:02}:{day:02} {hour:02}:{minute:02}:{second:02}");
+
+    Some((
+        compression.to_string(),
+        String::from_utf8_lossy(filename).into_owned(),
+        modify_date,
+        required_version,
+        uncompressed_size,
+    ))
+}
+
 /// DOCX parser
 pub struct DocxParser;
 
@@ -60,9 +104,35 @@ impl FormatParser for DocxParser {
         let zip_bit_flag = extract_zip_bit_flag(file_data);
         let zip_crc = extract_zip_crc(file_data);
         let zip_compressed_size = extract_zip_compressed_size(file_data);
+        let zip_local_header_tags = extract_zip_local_header_tags(file_data);
         let cursor = Cursor::new(file_data);
         let mut archive = ZipArchive::new(cursor)
             .map_err(|e| ExifToolError::parse_error(format!("Not a valid DOCX: {}", e)))?;
+
+        if let Some((compression, filename, modify_date, required_version, uncompressed_size)) =
+            zip_local_header_tags
+        {
+            metadata.insert(
+                "ZIP:ZipCompression".to_string(),
+                TagValue::new_string(compression),
+            );
+            metadata.insert(
+                "ZIP:ZipFileName".to_string(),
+                TagValue::new_string(filename),
+            );
+            metadata.insert(
+                "ZIP:ZipModifyDate".to_string(),
+                TagValue::new_string(modify_date),
+            );
+            metadata.insert(
+                "ZIP:ZipRequiredVersion".to_string(),
+                TagValue::new_integer(i64::from(required_version)),
+            );
+            metadata.insert(
+                "ZIP:ZipUncompressedSize".to_string(),
+                TagValue::new_integer(i64::from(uncompressed_size)),
+            );
+        }
 
         if let Some(crc) = zip_crc {
             metadata.insert(
@@ -151,7 +221,10 @@ impl FormatParser for DocxParser {
 
 #[cfg(test)]
 mod zip_bit_flag_tests {
-    use super::{extract_zip_bit_flag, extract_zip_compressed_size, extract_zip_crc};
+    use super::{
+        extract_zip_bit_flag, extract_zip_compressed_size, extract_zip_crc,
+        extract_zip_local_header_tags,
+    };
 
     #[test]
     fn extracts_zip_bit_flag_from_local_header() {
@@ -172,6 +245,23 @@ mod zip_bit_flag_tests {
     #[test]
     fn rejects_truncated_crc() {
         assert_eq!(extract_zip_crc(b"PK\x03\x04\x14\x00\x00\x00\x08\x00"), None);
+    }
+
+    #[test]
+    fn extracts_zip_local_header_tags() {
+        let header = b"PK\x03\x04\x14\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00\
+                       \x00\x00\x00\x00\xd1\x05\x00\x00\x13\x00\x00\x00[Content_Types].xml";
+
+        assert_eq!(
+            extract_zip_local_header_tags(header),
+            Some((
+                "Deflated".to_string(),
+                "[Content_Types].xml".to_string(),
+                "1980:01:01 00:00:00".to_string(),
+                20,
+                1489,
+            ))
+        );
     }
 
     #[test]
