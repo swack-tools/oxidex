@@ -2150,7 +2150,9 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     recheck_fn(format_name) -> int must return the gap count for that
     format after the attempted fix (used to confirm real progress). If not
     provided, progress can never be confirmed and the attempt always fails
-    the "gap count did not decrease" check.
+    the "gap count did not decrease" check. It may instead return a
+    (count, detail) tuple, where a non-None detail string replaces the
+    generic "gap count did not decrease" as the failure reason.
 
     previous_attempts, if given, is passed straight through to build_prompt
     (see format_previous_attempts) -- prior rounds' diffs/failure reasons
@@ -2252,11 +2254,16 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
                 return outcome
             continue
 
-        remaining = recheck_fn(fmt) if recheck_fn else gap["gap_count"]
+        recheck_result = recheck_fn(fmt) if recheck_fn else gap["gap_count"]
+        recheck_detail = None
+        if isinstance(recheck_result, tuple):
+            remaining, recheck_detail = recheck_result
+        else:
+            remaining = recheck_result
         log_fn(f"[{fmt}] gaps {gap['gap_count']} -> {remaining}")
         if remaining >= gap["gap_count"]:
             git_checkout_clean_fn(repo_root)
-            reason = "gap count did not decrease"
+            reason = recheck_detail or "gap count did not decrease"
             log_fn(f"[{fmt}] {reason}, reverting")
             outcome = critique_and_continue("gap_not_closed", reason, round_index)
             if outcome:
@@ -2398,6 +2405,32 @@ def expand_gaps_to_tags(gaps):
                 "kind": "diff", "entry": d, "parser_files": g["parser_files"],
             })
     return tag_gaps
+
+
+def tag_still_open(match, tag_gap):
+    """Is this one tag still a gap in a fresh comparison? Checks BOTH
+    lists regardless of the tag's original kind: a kind=="missing" tag
+    that a fix made present-but-wrong moves from missing_in_oxidex into
+    value_differences -- counting only its original list called that
+    "closed", which is exactly how a wrong-valued XMP:ArtworkTitle fix
+    passed recheck and survived to human sweep review. Returns None
+    (closed), ("missing",), or ("value_differs", exiftool_value,
+    oxidex_value) so the caller can put the actual values in front of
+    the model on the retry."""
+    if not match:
+        return None
+    if tag_gap["kind"] == "missing":
+        fam, name = tag_gap["entry"]["family"], tag_gap["entry"]["name"]
+        if any(t.get("family") == fam and t.get("name") == name
+               for t in match.get("missing_tags") or []):
+            return ("missing",)
+        key = f"{fam}:{name}"
+    else:
+        key = tag_gap["entry"]["tag_key"]
+    for d in match.get("value_differences") or []:
+        if d.get("tag_key") == key:
+            return ("value_differs", d.get("exiftool_value"), d.get("oxidex_value"))
+    return None
 
 
 def make_single_tag_gap(tag_gap):
@@ -3108,17 +3141,14 @@ def main(argv=None):
             path = run_format_comparison(fmt, args.cache_dir)
             regrouped = group_gaps_by_format(load_comparison_report(path))
             match = next((g for g in regrouped if g["format"] == fmt), None)
-            if not match:
-                return 0
-            if tag_gap["kind"] == "missing":
-                fam, name = tag_gap["entry"]["family"], tag_gap["entry"]["name"]
-                present = any(
-                    t["family"] == fam and t["name"] == name for t in match["missing_tags"]
+            open_state = tag_still_open(match, tag_gap)
+            if open_state and open_state[0] == "value_differs":
+                return 1, (
+                    f"target tag is present but its value is wrong -- "
+                    f'expected (exiftool): "{open_state[1]}" / got (oxidex): "{open_state[2]}". '
+                    "Fix the value, do not just emit the tag."
                 )
-            else:
-                tk = tag_gap["entry"]["tag_key"]
-                present = any(d["tag_key"] == tk for d in match["value_differences"])
-            return 1 if present else 0
+            return 1 if open_state else 0
 
         single_gap = make_single_tag_gap(tag_gap)
         # Log the exact prompt this round is about to send -- to the

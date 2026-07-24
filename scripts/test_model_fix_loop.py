@@ -59,6 +59,7 @@ from model_fix_loop import (
     run_tag_loop,
     tag_key_for,
     tag_literal_for_gap,
+    tag_still_open,
     TERMINAL_REMINDER,
     truncate_to_token_budget,
 )
@@ -3456,6 +3457,79 @@ class MakeSingleTagGapTests(unittest.TestCase):
         self.assertEqual(gap["missing_tags"], [])
         self.assertEqual(gap["value_differences"], [tag_gap["entry"]])
         self.assertEqual(gap["gap_count"], 1)
+
+
+class TagStillOpenTests(unittest.TestCase):
+    MISSING_GAP = {"format": "XMP", "kind": "missing", "tag_key": "XMP:XMP:ArtworkTitle",
+                   "entry": {"family": "XMP", "name": "ArtworkTitle", "value": "test",
+                             "tag_id": None, "source_file": None},
+                   "parser_files": []}
+    DIFF_GAP = {"format": "RW2", "kind": "diff", "tag_key": "RW2:EXIF:ISO",
+                "entry": {"tag_key": "EXIF:ISO", "exiftool_value": "100",
+                          "oxidex_value": "0", "source_file": None},
+                "parser_files": []}
+
+    def test_no_match_for_format_means_closed(self):
+        self.assertIsNone(tag_still_open(None, self.MISSING_GAP))
+
+    def test_still_missing(self):
+        match = {"missing_tags": [{"family": "XMP", "name": "ArtworkTitle"}],
+                 "value_differences": []}
+        self.assertEqual(tag_still_open(match, self.MISSING_GAP), ("missing",))
+
+    def test_missing_tag_that_arrived_with_wrong_value_is_STILL_OPEN(self):
+        # The ArtworkTitle escape: leaves missing_in_oxidex, lands in
+        # value_differences with the wrong value -- must NOT count closed.
+        match = {"missing_tags": [],
+                 "value_differences": [{"tag_key": "XMP:ArtworkTitle",
+                                        "exiftool_value": "test",
+                                        "oxidex_value": "test, verfänglich"}]}
+        self.assertEqual(
+            tag_still_open(match, self.MISSING_GAP),
+            ("value_differs", "test", "test, verfänglich"),
+        )
+
+    def test_diff_tag_still_differing(self):
+        match = {"missing_tags": [],
+                 "value_differences": [{"tag_key": "EXIF:ISO",
+                                        "exiftool_value": "100", "oxidex_value": "0"}]}
+        self.assertEqual(tag_still_open(match, self.DIFF_GAP),
+                         ("value_differs", "100", "0"))
+
+    def test_fully_closed(self):
+        match = {"missing_tags": [], "value_differences": []}
+        self.assertIsNone(tag_still_open(match, self.MISSING_GAP))
+        self.assertIsNone(tag_still_open(match, self.DIFF_GAP))
+
+
+class FixGapRecheckDetailTests(unittest.TestCase):
+    def test_tuple_recheck_detail_becomes_the_failure_reason(self):
+        result = fix_gap(
+            make_gap(gap_count=1), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            recheck_fn=lambda fmt: (1, 'target still wrong: expected "test", got "test, x"'),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            critique_fn=lambda *a, **k: "critique",
+            log_fn=lambda s: None,
+            max_repair_rounds=1,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn('expected "test"', result["reason"])
+
+    def test_plain_int_recheck_still_works(self):
+        result = fix_gap(
+            make_gap(gap_count=1), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            recheck_fn=lambda fmt: 1,
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            critique_fn=lambda *a, **k: "critique",
+            log_fn=lambda s: None,
+            max_repair_rounds=1,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("gap count did not decrease", result["reason"])
 
 
 class RunTagLoopTests(unittest.TestCase):
