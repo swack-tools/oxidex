@@ -17,6 +17,21 @@ fn extract_zip_bit_flag(data: &[u8]) -> Option<u16> {
     Some(u16::from_le_bytes([flag_bytes[0], flag_bytes[1]]))
 }
 
+/// Extract the compressed size from the first ZIP local file header.
+///
+/// ExifTool exposes this header field as `ZIP:ZipCompressedSize`.
+fn extract_zip_compressed_size(data: &[u8]) -> Option<u32> {
+    let header_offset = data.windows(4).position(|window| window == b"PK\x03\x04")?;
+    let size_bytes = data.get(header_offset + 18..header_offset + 22)?;
+
+    Some(u32::from_le_bytes([
+        size_bytes[0],
+        size_bytes[1],
+        size_bytes[2],
+        size_bytes[3],
+    ]))
+}
+
 /// DOCX parser
 pub struct DocxParser;
 
@@ -28,6 +43,7 @@ impl FormatParser for DocxParser {
         let size = reader.size() as usize;
         let file_data = reader.read(0, size)?;
         let zip_bit_flag = extract_zip_bit_flag(file_data);
+        let zip_compressed_size = extract_zip_compressed_size(file_data);
         let cursor = Cursor::new(file_data);
         let mut archive = ZipArchive::new(cursor)
             .map_err(|e| ExifToolError::parse_error(format!("Not a valid DOCX: {}", e)))?;
@@ -44,6 +60,13 @@ impl FormatParser for DocxParser {
             metadata.insert(
                 "ZIP:ZipBitFlag".to_string(),
                 TagValue::new_integer(i64::from(bit_flag)),
+            );
+        }
+
+        if let Some(compressed_size) = zip_compressed_size {
+            metadata.insert(
+                "ZIP:ZipCompressedSize".to_string(),
+                TagValue::new_integer(i64::from(compressed_size)),
             );
         }
 
@@ -105,7 +128,7 @@ impl FormatParser for DocxParser {
 
 #[cfg(test)]
 mod zip_bit_flag_tests {
-    use super::extract_zip_bit_flag;
+    use super::{extract_zip_bit_flag, extract_zip_compressed_size};
 
     #[test]
     fn extracts_zip_bit_flag_from_local_header() {
@@ -114,6 +137,22 @@ mod zip_bit_flag_tests {
 
         let flagged = b"prefixPK\x03\x04\x14\x00\x08\x08\x08\x00";
         assert_eq!(extract_zip_bit_flag(flagged), Some(0x0808));
+    }
+
+    #[test]
+    fn extracts_zip_compressed_size_from_local_header() {
+        let header =
+            b"PK\x03\x04\x14\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00\x6a\x01\x00\x00";
+
+        assert_eq!(extract_zip_compressed_size(header), Some(362));
+    }
+
+    #[test]
+    fn rejects_truncated_compressed_size() {
+        assert_eq!(
+            extract_zip_compressed_size(b"PK\x03\x04\x14\x00\x00\x00\x08\x00"),
+            None
+        );
     }
 
     #[test]
