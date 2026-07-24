@@ -598,6 +598,19 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:ContTake".to_string(), app12_value);
             }
 
+            // MTR1 is an Olympus Picture Info diagnostic field. ExifTool
+            // exposes it in the JPEG APP12 group using its original name.
+            // Keep unexpected non-numeric values rather than dropping a
+            // malformed or vendor-specific record.
+            if key.eq_ignore_ascii_case("MTR1") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:MTR1".to_string(), app12_value);
+            }
+
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
 
             // ExifTool exposes the Olympus diagnostic CAM1 field in the
@@ -813,6 +826,15 @@ mod camera_type_tests {
                 .expect("Olympus Picture Info should parse");
 
         assert_eq!(metadata.get_integer("APP12:EXP3"), Some(227));
+    }
+
+    #[test]
+    fn test_olympus_mtr1_diagnostic_value() {
+        let metadata =
+            parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nMTR1=504\r\n")
+                .expect("Olympus Picture Info should parse");
+
+        assert_eq!(metadata.get_integer("APP12:MTR1"), Some(504));
     }
 
     #[test]
