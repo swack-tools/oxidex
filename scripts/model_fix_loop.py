@@ -2602,6 +2602,27 @@ def make_cluster_gap(leader):
     }
 
 
+DEFAULT_LANDED_TAGS_PATH = OXIDEX_HOME / "logs" / "landed-tags.log"
+
+
+def load_landed_tags(path):
+    """tag_keys the sweep has already landed (see log_sweep_review.py's
+    accepted-verdict append) -- workers skip these instead of re-deriving
+    a fix that's already merged (observed live: the ZIP worker reproduced
+    the identical ZipCRC diff a full round after the sweep landed it).
+    Missing/corrupt file = empty set; each line is "<iso-ts> <tag_key>"."""
+    try:
+        text = Path(path).read_text()
+    except OSError:
+        return set()
+    landed = set()
+    for line in text.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2:
+            landed.add(parts[1])
+    return landed
+
+
 def load_tag_state(path):
     """Load the persistent per-tag blacklist/fail-count state. A missing or
     corrupt file just means "nothing blacklisted yet" -- this is advisory,
@@ -2632,7 +2653,7 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
                   load_state_fn=load_tag_state, save_state_fn=save_tag_state,
                   max_rounds=None, max_fails=DEFAULT_MAX_TAG_FAILS, blacklist_full=False,
                   worker_id=None, claim_stale_seconds=1800, max_distinct_tags=None,
-                  refresh_worktree_fn=None, max_cluster_tags=1):
+                  refresh_worktree_fn=None, max_cluster_tags=1, landed_tags_path=None):
     """Loop-until-everything-found driver, blacklisting individual TAGS
     (never a whole format) after max_fails failed attempts each. State
     persists to disk at state_path, so the blacklist -- and each tag's
@@ -2686,6 +2707,11 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
     members' claims. The default of 1 preserves the original
     one-tag-per-conversation behavior exactly.
 
+    landed_tags_path, if given, is re-read at the top of every round
+    (see load_landed_tags); any active tag whose tag_key is already in
+    that set is skipped -- its state entry cleared like a duplicate --
+    instead of re-deriving a fix the sweep has already merged.
+
     refresh_worktree_fn(), if given, is called at the start of every
     round before find_gaps_fn() -- see main()'s wiring to the real
     refresh_worktree(repo_root, base_ref), which fast-forwards this
@@ -2725,6 +2751,7 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             break
 
         state = load_state_fn(state_path)  # fresh read -- other workers may have updated it
+        landed = load_landed_tags(landed_tags_path) if landed_tags_path else set()
         active = [
             tg for tg in tag_gaps
             if not state.get(tg["tag_key"], {}).get("blacklisted")
@@ -2732,6 +2759,14 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             and (max_distinct_tags is None or len(seen_tag_keys) < max_distinct_tags
                  or tg["tag_key"] in seen_tag_keys)
         ]
+
+        landed_hits = [tg for tg in active if tg["tag_key"] in landed]
+        if landed_hits:
+            for tg in landed_hits:
+                log_fn(f"[{tg['tag_key']}] skipped -- already landed via sweep")
+                state.pop(tg["tag_key"], None)
+            active = [tg for tg in active if tg["tag_key"] not in landed]
+            save_state_fn(state_path, state)
 
         if not active and max_distinct_tags is not None and len(seen_tag_keys) >= max_distinct_tags:
             log_fn(f"Reached max_distinct_tags={max_distinct_tags} for this process -- stopping.")
@@ -3425,6 +3460,7 @@ def main(argv=None):
         blacklist_full=args.blacklist_full, worker_id=args.worker_id,
         max_distinct_tags=max_tags_per_process, refresh_worktree_fn=refresh_worktree_fn,
         max_cluster_tags=config["max_cluster_tags"],
+        landed_tags_path=DEFAULT_LANDED_TAGS_PATH,
     )
     print(f"stopped after {summary['rounds']} rounds")
     print(f"  fixed:   {len(summary['fixed'])} tags")

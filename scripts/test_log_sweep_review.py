@@ -44,6 +44,22 @@ class AppendSweepReviewTests(unittest.TestCase):
             append_sweep_review(log_path, "NEF", "A", "accepted", "r")
             self.assertTrue(log_path.exists())
 
+    def test_accepted_verdict_appends_to_landed_log(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log = Path(tmpdir) / "reviews.jsonl"
+            landed = Path(tmpdir) / "landed.log"
+            append_sweep_review(log, "JPEG", "APP12:MODE3", "accepted", "verified",
+                                landed_log_path=landed, now_fn=lambda: 1_784_800_000)
+            self.assertIn("JPEG:APP12:MODE3", landed.read_text())
+
+    def test_rejected_verdict_does_not_touch_landed_log(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log = Path(tmpdir) / "reviews.jsonl"
+            landed = Path(tmpdir) / "landed.log"
+            append_sweep_review(log, "XMP", "XMP:ArtworkTitle", "rejected", "wrong value",
+                                landed_log_path=landed, now_fn=lambda: 1_784_800_000)
+            self.assertFalse(landed.exists())
+
 
 class MainTests(unittest.TestCase):
     def test_cli_writes_expected_entry(self):

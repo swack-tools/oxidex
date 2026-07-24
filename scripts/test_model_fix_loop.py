@@ -52,6 +52,7 @@ from model_fix_loop import (
     git_commit,
     governor_acquire,
     governor_report,
+    load_landed_tags,
     load_recent_sweep_reviews,
     load_toml_config,
     make_cluster_gap,
@@ -3733,6 +3734,19 @@ class FixGapRecheckDetailTests(unittest.TestCase):
         self.assertIn("gap count did not decrease", result["reason"])
 
 
+class LoadLandedTagsTests(unittest.TestCase):
+    def test_missing_file_is_empty_set(self):
+        self.assertEqual(load_landed_tags(Path("/nonexistent/landed.log")), set())
+
+    def test_parses_tag_keys_skipping_malformed_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir) / "landed.log"
+            p.write_text("2026-07-23T17:00:00 JPEG:APP12:MODE3\n\ngarbage-no-space\n"
+                         "2026-07-23T17:05:00 PSD:EXIF:Compression\n")
+            self.assertEqual(load_landed_tags(p),
+                             {"JPEG:APP12:MODE3", "PSD:EXIF:Compression"})
+
+
 class RunTagLoopTests(unittest.TestCase):
     def _state_io(self):
         store = {}
@@ -4118,6 +4132,36 @@ class RunTagLoopTests(unittest.TestCase):
         # Popped from state entirely, same cleanup as a genuine fix --
         # not left sitting around with a fail count or blacklist flag.
         self.assertNotIn("NEF:EXIF:LensModel", store)
+
+    def test_landed_tag_is_skipped_and_its_state_cleared(self):
+        # A tag the sweep already landed (present in the landed-tags log)
+        # must never be attempted again -- it's skipped like a duplicate:
+        # state entry popped, and the skip logged.
+        gaps = [make_gap()]  # LensModel (missing) + ISO (diff)
+        attempts = []
+        logged = []
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            attempts.append(tag_gap["tag_key"])
+            return {"status": "fixed", "gaps_closed": 1}
+
+        store, load, save = self._state_io()
+        store["NEF:EXIF:LensModel"] = {"fails": 1, "blacklisted": False, "attempts": []}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            landed = Path(tmpdir) / "landed.log"
+            landed.write_text("2026-07-23T17:00:00 NEF:EXIF:LensModel\n")
+            run_tag_loop(
+                {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+                state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+                max_rounds=1, log_fn=logged.append, landed_tags_path=landed,
+            )
+        # fix_gap_fn only ever sees the OTHER tag -- the landed one is
+        # filtered out before selection.
+        self.assertEqual(attempts, ["NEF:EXIF:ISO"])
+        # The landed tag's stale state entry (fail count, any claim) is
+        # popped, same cleanup as a duplicate.
+        self.assertNotIn("NEF:EXIF:LensModel", store)
+        self.assertTrue(any("already landed via sweep" in line for line in logged))
 
     def test_refresh_worktree_fn_is_called_once_per_round(self):
         gaps = [make_gap()]
