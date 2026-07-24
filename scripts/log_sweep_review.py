@@ -38,12 +38,19 @@ from pathlib import Path
 
 OXIDEX_HOME = Path(os.environ.get("OXIDEX_HOME", str(Path.home() / ".oxidex")))
 DEFAULT_LOG_PATH = OXIDEX_HOME / "logs" / "sweep-review-history.jsonl"
+DEFAULT_LANDED_LOG_PATH = OXIDEX_HOME / "logs" / "landed-tags.log"
 
 
-def append_sweep_review(log_path, format_name, tag, verdict, reason, commit=None, now_fn=time.time):
+def append_sweep_review(log_path, format_name, tag, verdict, reason, commit=None, now_fn=time.time,
+                        landed_log_path=None):
     """Append one JSON line. Appends are small single lines (well under
     PIPE_BUF), so this is safe without extra locking even with concurrent
-    writers -- same reasoning as model_fix_loop.py's log_tag_found."""
+    writers -- same reasoning as model_fix_loop.py's log_tag_found.
+
+    An accepted verdict additionally appends "<iso-ts> <format>:<tag>" to
+    landed_log_path (when given) -- the landed-tags set model_fix_loop.py's
+    run_tag_loop reads back so workers stop re-deriving already-merged
+    fixes."""
     if verdict not in ("accepted", "rejected"):
         raise ValueError(f"verdict must be 'accepted' or 'rejected', got {verdict!r}")
     entry = {
@@ -57,6 +64,11 @@ def append_sweep_review(log_path, format_name, tag, verdict, reason, commit=None
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a") as f:
         f.write(json.dumps(entry) + "\n")
+    if verdict == "accepted" and landed_log_path:
+        landed_log_path = Path(landed_log_path)
+        landed_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with landed_log_path.open("a") as f:
+            f.write(f"{entry['timestamp']} {format_name}:{tag}\n")
     return entry
 
 
@@ -68,10 +80,16 @@ def main(argv=None):
     parser.add_argument("--reason", required=True, help="Why -- this is what future rounds will read")
     parser.add_argument("--commit", default=None, help="Short SHA, if applicable")
     parser.add_argument("--log-path", default=str(DEFAULT_LOG_PATH))
+    parser.add_argument(
+        "--landed-log", default=str(DEFAULT_LANDED_LOG_PATH),
+        help="Landed-tags log appended to on accepted verdicts -- the skip "
+             "set model_fix_loop.py workers re-read every round",
+    )
     args = parser.parse_args(argv)
 
     entry = append_sweep_review(
         Path(args.log_path), args.format, args.tag, args.verdict, args.reason, args.commit,
+        landed_log_path=Path(args.landed_log),
     )
     print(f"logged: {entry['format']} {entry['tag']} {entry['verdict']} -> {args.log_path}")
     return 0
