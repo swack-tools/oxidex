@@ -117,8 +117,13 @@ fmt:
 
 # Check if code is formatted
 fmt-check:
-    @echo "Checking code formatting..."
-    @cargo fmt --all -- --check 2>&1 | grep -v "^Warning:" || test $? -eq 1
+    #!/usr/bin/env bash
+    set -uo pipefail
+    echo "Checking code formatting..."
+    output=$(cargo fmt --all -- --check 2>&1)
+    status=$?
+    echo "$output" | grep -v "^Warning:" || true
+    exit $status
 
 # Clean build artifacts
 clean:
@@ -313,9 +318,16 @@ ci-standard: fmt-check lint-release build-release test test-ffi-c
     @echo "✓ Tests (cargo test)"
     @echo "✓ C FFI integration test"
 
-# Pre-commit hook: format, lint, test
-pre-commit: fmt lint test
+# Pre-commit hook: format check, lint, test
+pre-commit: fmt-check lint test
     @echo "Pre-commit checks passed!"
+
+# Install git hooks (points core.hooksPath at .githooks)
+install-hooks:
+    @echo "Installing git hooks..."
+    git config core.hooksPath .githooks
+    @echo "Git hooks installed! Pre-commit will run fmt-check, lint, and test."
+    @echo "Skip with OXIDEX_SKIP_HOOKS=1; linked worktrees are exempt."
 
 # Coverage report (requires cargo-tarpaulin)
 coverage:
