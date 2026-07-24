@@ -298,20 +298,17 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                     // Convert tag to metadata
                     // Panasonic RW2 stores BitsPerSample in its proprietary
-                    // IFD0 tag 0x000A instead of the standard TIFF tag 0x0102.
-                    // Use the standard tag ID for name lookup so this is
-                    // exposed as the canonical EXIF BitsPerSample tag.
+                    // IFD0 tag 0x000A and Compression in tag 0x000B instead
+                    // of the standard TIFF tags 0x0102 and 0x0103.
                     //
                     // BlackLevelRed, BlackLevelGreen, and BlackLevelBlue are
                     // PanasonicRaw tags 0x001C, 0x001D, and 0x001E and have no equivalent standard
                     // TIFF tag IDs, so name them explicitly.
-                    let canonical_tag_id =
-                        if format == RawFormat::PanasonicRW2 && ifd_index == 0 && *tag_id == 0x000A
-                        {
-                            0x0102
-                        } else {
-                            *tag_id
-                        };
+                    let canonical_tag_id = match (format, ifd_index, *tag_id) {
+                        (RawFormat::PanasonicRW2, 0, 0x000A) => 0x0102,
+                        (RawFormat::PanasonicRW2, 0, 0x000B) => 0x0103,
+                        _ => *tag_id,
+                    };
                     let tag_name = match (format, ifd_index, *tag_id) {
                         (RawFormat::PanasonicRW2, 0, 0x001C) => {
                             format!("{}:BlackLevelRed", ifd_name)
@@ -324,7 +321,34 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
                         _ => lookup_raw_tag_name(canonical_tag_id, ifd_name, format),
                     };
-                    let tag_value = if format == RawFormat::AdobeDNG {
+                    let tag_value = if format == RawFormat::PanasonicRW2
+                        && ifd_index == 0
+                        && *tag_id == 0x000B
+                    {
+                        format_panasonic_raw_compression(
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        )
+                        .map(TagValue::new_string)
+                        .unwrap_or_else(|| {
+                            raw_bytes_to_simple_tag_value(
+                                bytes,
+                                *field_type,
+                                *value_count,
+                                byte_order,
+                            )
+                        })
+                    } else if let Some(value) = format_exif_display_value(
+                        *tag_id,
+                        bytes,
+                        *field_type,
+                        *value_count,
+                        byte_order,
+                    ) {
+                        TagValue::new_string(value)
+                    } else if format == RawFormat::AdobeDNG {
                         format_dng_integer_array(
                             *tag_id,
                             bytes,
@@ -371,22 +395,14 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
 
                         let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
-                        // CFAPattern (0xA302) is stored as UNDEFINED data
-                        // containing two endian-dependent u16 dimensions
-                        // followed by the one-byte color values. ExifTool
-                        // reports only the color values, not the dimension
-                        // header.
-                        let tag_value = if *tag_id == 0xA302 {
-                            decode_exif_cfa_pattern(bytes, byte_order)
-                                .map(TagValue::new_string)
-                                .unwrap_or_else(|| {
-                                    raw_bytes_to_simple_tag_value(
-                                        bytes,
-                                        *field_type,
-                                        *value_count,
-                                        byte_order,
-                                    )
-                                })
+                        let tag_value = if let Some(value) = format_exif_display_value(
+                            *tag_id,
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        ) {
+                            TagValue::new_string(value)
                         } else {
                             raw_bytes_to_simple_tag_value(
                                 bytes,
@@ -610,6 +626,108 @@ fn format_dng_integer_array(
     Some(formatted.join(" "))
 }
 
+fn read_tiff_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
+    let bytes: [u8; 2] = bytes.get(..2)?.try_into().ok()?;
+    Some(match byte_order {
+        ByteOrder::LittleEndian => u16::from_le_bytes(bytes),
+        ByteOrder::BigEndian => u16::from_be_bytes(bytes),
+    })
+}
+
+fn read_tiff_u32(bytes: &[u8], byte_order: ByteOrder) -> Option<u32> {
+    let bytes: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
+    Some(match byte_order {
+        ByteOrder::LittleEndian => u32::from_le_bytes(bytes),
+        ByteOrder::BigEndian => u32::from_be_bytes(bytes),
+    })
+}
+
+/// Format EXIF values whose raw TIFF representation differs from ExifTool's
+/// default text output.
+fn format_exif_display_value(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    match tag_id {
+        // ComponentsConfiguration: UNDEFINED[4].
+        0x9101 if field_type == 7 => {
+            let count = usize::try_from(value_count).ok()?;
+            let components = bytes.get(..count)?;
+            if components.is_empty() {
+                return None;
+            }
+
+            Some(
+                components
+                    .iter()
+                    .map(|component| match component {
+                        0 => "-".to_string(),
+                        1 => "Y".to_string(),
+                        2 => "Cb".to_string(),
+                        3 => "Cr".to_string(),
+                        4 => "R".to_string(),
+                        5 => "G".to_string(),
+                        6 => "B".to_string(),
+                        value => value.to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+        }
+        // CompressedBitsPerPixel: RATIONAL[1].
+        0x9102 if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                None
+            } else if numerator % denominator == 0 {
+                Some((numerator / denominator).to_string())
+            } else {
+                Some(format!("{}", f64::from(numerator) / f64::from(denominator)))
+            }
+        }
+        // ColorSpace: SHORT[1].
+        0xA001 if field_type == 3 && value_count >= 1 => {
+            match read_tiff_u16(bytes, byte_order)? {
+                1 => Some("sRGB".to_string()),
+                0xffff => Some("Uncalibrated".to_string()),
+                _ => None,
+            }
+        }
+        // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
+        0xA302 if field_type == 7 => decode_exif_cfa_pattern(bytes, byte_order),
+        // Contrast: SHORT[1].
+        0xA408 if field_type == 3 && value_count >= 1 => {
+            match read_tiff_u16(bytes, byte_order)? {
+                0 => Some("Normal".to_string()),
+                1 => Some("Soft".to_string()),
+                2 => Some("Hard".to_string()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn format_panasonic_raw_compression(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    if field_type != 3 || value_count < 1 {
+        return None;
+    }
+
+    match read_tiff_u16(bytes, byte_order)? {
+        34316 => Some("Panasonic RAW 1".to_string()),
+        _ => None,
+    }
+}
+
 /// Decode EXIF tag 0xA302 (CFAPattern).
 ///
 /// The first four bytes are the horizontal and vertical repeat dimensions,
@@ -638,13 +756,28 @@ fn decode_exif_cfa_pattern(bytes: &[u8], byte_order: ByteOrder) -> Option<String
     let pattern_end = 4usize.checked_add(pattern_len)?;
     let pattern = bytes.get(4..pattern_end)?;
 
-    Some(
-        pattern
+    let color_name = |color: &u8| match color {
+        0 => Some("Red"),
+        1 => Some("Green"),
+        2 => Some("Blue"),
+        3 => Some("Cyan"),
+        4 => Some("Magenta"),
+        5 => Some("Yellow"),
+        6 => Some("White"),
+        _ => None,
+    };
+
+    let mut formatted = String::new();
+    for row in pattern.chunks(horizontal_repeat) {
+        let colors = row
             .iter()
-            .map(u8::to_string)
-            .collect::<Vec<_>>()
-            .join(" "),
-    )
+            .map(color_name)
+            .collect::<Option<Vec<_>>>()?;
+        formatted.push('[');
+        formatted.push_str(&colors.join(","));
+        formatted.push(']');
+    }
+    Some(formatted)
 }
 
 #[cfg(test)]
@@ -652,25 +785,25 @@ mod cfa_pattern_tests {
     use super::*;
 
     #[test]
-    fn decodes_little_endian_cfa_pattern2() {
+    fn decodes_little_endian_cfa_pattern() {
         let bytes = [2, 0, 2, 0, 2, 1, 1, 0];
         assert_eq!(
             decode_exif_cfa_pattern(&bytes, ByteOrder::LittleEndian).as_deref(),
-            Some("2 1 1 0")
+            Some("[Blue,Green][Green,Red]")
         );
     }
 
     #[test]
-    fn decodes_big_endian_cfa_pattern2() {
+    fn decodes_big_endian_cfa_pattern() {
         let bytes = [0, 2, 0, 2, 2, 1, 1, 0];
         assert_eq!(
             decode_exif_cfa_pattern(&bytes, ByteOrder::BigEndian).as_deref(),
-            Some("2 1 1 0")
+            Some("[Blue,Green][Green,Red]")
         );
     }
 
     #[test]
-    fn rejects_truncated_cfa_pattern2() {
+    fn rejects_truncated_cfa_pattern() {
         let bytes = [2, 0, 2, 0, 2];
         assert_eq!(
             decode_exif_cfa_pattern(&bytes, ByteOrder::LittleEndian),
@@ -749,6 +882,21 @@ mod panasonic_rw2_tests {
         assert!(
             metadata.contains_key("IFD0:BlackLevelBlue"),
             "PanasonicRaw tag 0x001E should use its canonical EXIF name"
+        );
+    }
+
+    #[test]
+    fn formats_observed_panasonic_raw_compression_code() {
+        let bytes = 34316u16.to_le_bytes();
+        assert_eq!(
+            format_panasonic_raw_compression(
+                &bytes,
+                3,
+                1,
+                ByteOrder::LittleEndian,
+            )
+            .as_deref(),
+            Some("Panasonic RAW 1")
         );
     }
 }
