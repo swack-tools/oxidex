@@ -3012,7 +3012,21 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             # thread never outlives the attempt by more than one
             # (milliseconds-long) state touch.
             while not stop_heartbeat.wait(heartbeat_seconds):
-                locked(heartbeat_touch)
+                try:
+                    locked(heartbeat_touch)
+                except Exception as e:
+                    # One failed touch must NOT kill this thread: an
+                    # unhandled raise here dies via threading's default
+                    # excepthook (stderr only) while the attempt keeps
+                    # running for hours -- silently reverting to exactly
+                    # the stale-claim/double-claim behavior the heartbeat
+                    # exists to prevent. The triggers are transient by
+                    # nature (a torn read of state written by a pre-flock
+                    # worker during the mixed-version rollout window,
+                    # ENOSPC/EACCES on save), so log through log_fn --
+                    # where a human is actually looking -- and beat again
+                    # next cadence.
+                    log_fn(f"claim heartbeat touch failed ({e!r}) -- retrying next beat")
 
         # Time-based heartbeat -- see the docstring. Daemon so a worker
         # dying mid-attempt can never be kept alive by its own

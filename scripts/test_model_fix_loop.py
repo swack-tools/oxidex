@@ -4298,6 +4298,57 @@ class RunTagLoopTests(unittest.TestCase):
             [t.name for t in threading.enumerate() if t.name.startswith("claim-heartbeat-")]
         )
 
+    def test_heartbeat_survives_a_transient_touch_failure(self):
+        # A heartbeat touch can legitimately raise mid-attempt --
+        # load_tag_state's raise-on-torn-read while a pre-flock worker
+        # is still writing the file non-atomically (the mixed-version
+        # rollout window), or ENOSPC/EACCES on save. One such raise must
+        # not kill the daemon thread for the rest of a multi-hour
+        # attempt (silently reverting to the stale-claim/double-claim
+        # behavior the heartbeat exists to prevent): the loop logs via
+        # log_fn and beats again. Proven end-to-end here: the FIRST
+        # touch from the heartbeat thread raises, and the attempt then
+        # observes a re-stamp at the advanced clock -- a beat that can
+        # only have come from the thread surviving its failure.
+        clock = [1000.0]
+        heartbeat_failed = threading.Event()
+        logged = []
+        observed = {}
+
+        def flaky_load(path):
+            # Only the heartbeat thread's loads fail (once); the main
+            # loop's claim/record path must stay healthy throughout.
+            if (threading.current_thread().name.startswith("claim-heartbeat-")
+                    and not heartbeat_failed.is_set()):
+                heartbeat_failed.set()
+                raise ValueError("synthetic torn tag-state read")
+            return load_tag_state(path)
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            clock[0] = 3000.0
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                if heartbeat_failed.is_set():
+                    entry = load_tag_state(self.state_path).get(tag_gap["tag_key"]) or {}
+                    if entry.get("claimed_at") == 3000.0:
+                        observed.update(entry)
+                        break
+                time.sleep(0.005)
+            return {"status": "failed", "reason": "nope"}
+
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: [make_gap()], fix_gap_fn=fake_fix,
+            state_path=self.state_path, load_state_fn=flaky_load, log_fn=logged.append,
+            max_rounds=1, worker_id="w1", claim_stale_seconds=1800,
+            heartbeat_seconds=0.01, time_fn=lambda: clock[0],
+        )
+        self.assertTrue(heartbeat_failed.is_set())
+        self.assertEqual(observed.get("claimed_by"), "w1")
+        # The post-failure beat landed: the claim reads fresh at t=3000
+        # even though one touch blew up along the way.
+        self.assertEqual(observed.get("claimed_at"), 3000.0)
+        self.assertTrue(any("heartbeat touch failed" in line for line in logged))
+
     def test_fixed_tag_clears_its_state_entry(self):
         gaps = [make_gap()]
 

@@ -94,6 +94,19 @@ _active_pgids_lock = threading.Lock()
 # injected test path) once the singleton lock is held.
 _pgids_persist_path = None
 
+# Serializes the snapshot+write pair in _persist_active_pgids. Up to
+# max_parallel worker threads register/unregister concurrently; if the
+# snapshot were taken under _active_pgids_lock but written OUTSIDE any
+# lock, two persists could complete their writes in the opposite order of
+# their snapshots and a stale snapshot would win -- e.g. an unregister's
+# empty snapshot overwriting a register's, erasing a live worker's pgid
+# from the very record the next dispatcher's orphan reaper depends on.
+# Deliberately a second lock (not _active_pgids_lock itself) so set
+# mutation stays cheap: registering a pgid never waits behind another
+# thread's file I/O, and _kill_all_active_workers (signal path) never
+# contends with a write in flight.
+_pgids_persist_lock = threading.Lock()
+
 
 def _set_pgids_persist_path(path):
     global _pgids_persist_path
@@ -117,9 +130,14 @@ def _write_pgids_file(path, pgids):
 def _persist_active_pgids():
     if _pgids_persist_path is None:
         return
-    with _active_pgids_lock:
-        pgids = sorted(_active_pgids)
-    _write_pgids_file(_pgids_persist_path, pgids)
+    # Snapshot AND write under one persist lock: because the snapshot is
+    # taken at write time (not at mutation time), whichever persist call
+    # writes last always wrote the then-current set -- a delayed thread
+    # can never clobber the file with an older view of _active_pgids.
+    with _pgids_persist_lock:
+        with _active_pgids_lock:
+            pgids = sorted(_active_pgids)
+        _write_pgids_file(_pgids_persist_path, pgids)
 
 
 def acquire_dispatcher_lock(lock_path=DISPATCHER_LOCK_PATH):
@@ -281,7 +299,8 @@ def fast_forward_local_main(repo_root, log_fn=print):
 
 
 def ensure_integration_branch(repo_root, log_fn=print):
-    """The branch this round's worker merges land on.
+    """The branch this round's worker merges land on, or None when no
+    integration target can be safely established this round.
 
     M5: local `main` is a mirror of origin/main, never an integration
     target -- merging worker branches into it makes it diverge
@@ -293,18 +312,54 @@ def ensure_integration_branch(repo_root, log_fn=print):
     never a reset) if it does, so unswept merges from prior rounds
     survive every restart. A repo already on any other branch keeps that
     branch as the integration target, exactly as before.
+
+    The retarget can legitimately fail: once SWEEP_LOCAL_BRANCH has
+    diverged from main, a dirty dispatcher checkout (an operator's
+    uncommitted edits touching files the branches differ on) makes
+    `git checkout` refuse rather than clobber them -- correct, and not
+    this function's place to override. That failure must NOT propagate:
+    an --infinite dispatcher lives for weeks, and one un-checkoutable
+    round killing the whole loop is far worse than skipping the round.
+    Log loudly and return None; run_round treats None as "no safe
+    integration target, skip this round entirely" (dispatching workers
+    just to refuse to merge them would waste a full round of API budget).
+
+    Rollout notes (spec M5, Phase 0 -- operator-facing, land these
+    expectations with the rollout-ops pass):
+      * The dispatcher repo's checkout silently moves from main to
+        SWEEP_LOCAL_BRANCH at the first round after a restart; anyone
+        (human or tooling) working inside that checkout should expect
+        to find it on SWEEP_LOCAL_BRANCH, not main.
+      * Sweep tooling that used to look for integrated-but-unswept
+        commits on local main must look at SWEEP_LOCAL_BRANCH instead.
+      * Phase 0 cuts SWEEP_LOCAL_BRANCH once and never re-anchors it to
+        origin/main -- the integration base drifts behind origin/main
+        until the Phase 2+ merger re-cut rule (or a manual sweep +
+        branch delete) re-cuts it. The round-start mirror ff plus the
+        patch-id dup gate keep that drift from double-landing fixes.
     """
     current = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo_root, check=True).stdout.strip()
     if current != "main":
         return current
     if not _branch_exists(repo_root, SWEEP_LOCAL_BRANCH):
-        subprocess.run(  # nosec B603
-            ["git", "branch", SWEEP_LOCAL_BRANCH, "main"], cwd=repo_root, check=True,
+        created = _git(["branch", SWEEP_LOCAL_BRANCH, "main"], repo_root)
+        if created.returncode != 0:
+            log_fn(
+                f"WARNING: could not create {SWEEP_LOCAL_BRANCH!r} from main "
+                f"({created.stderr.strip()}) -- refusing to integrate on main (M5); "
+                "this round will be skipped"
+            )
+            return None
+    checkout = _git(["checkout", SWEEP_LOCAL_BRANCH], repo_root)
+    if checkout.returncode != 0:
+        log_fn(
+            f"WARNING: could not check out {SWEEP_LOCAL_BRANCH!r} "
+            f"({checkout.stderr.strip()}) -- likely uncommitted changes in the "
+            "dispatcher checkout conflicting with it. Refusing to integrate on "
+            "main (M5); this round will be skipped. Commit/stash those changes "
+            "to unblock the next round."
         )
-    subprocess.run(  # nosec B603
-        ["git", "checkout", SWEEP_LOCAL_BRANCH],
-        cwd=repo_root, check=True, capture_output=True, text=True,
-    )
+        return None
     log_fn(
         f"local main is a mirror (M5) -- integrating this round on {SWEEP_LOCAL_BRANCH!r} instead"
     )
@@ -533,7 +588,8 @@ def _register_pgid(pgid):
     with _active_pgids_lock:
         _active_pgids.add(pgid)
     # Persist outside the lock -- _persist_active_pgids re-takes it, and
-    # threading.Lock is not reentrant.
+    # threading.Lock is not reentrant. Cross-thread write ordering is
+    # _pgids_persist_lock's job (see _persist_active_pgids).
     _persist_active_pgids()
 
 
@@ -645,6 +701,14 @@ def run_round(args, config_path):
     _updated, ff_message = fast_forward_local_main(REPO_ROOT)
     print(f"local main mirror: {ff_message}")
     base_ref = ensure_integration_branch(REPO_ROOT)
+    if base_ref is None:
+        # No safe integration target (see ensure_integration_branch's
+        # docstring) -- skip the whole round rather than dispatch workers
+        # whose merges would have nowhere M5-legal to land. In --infinite
+        # mode the next round retries, so a dirty checkout stalls rounds
+        # until fixed instead of killing the dispatcher.
+        print("no usable integration branch this round -- skipping dispatch (see warning above)")
+        return False
 
     if args.formats:
         formats = [f.strip() for f in args.formats.split(",") if f.strip()]

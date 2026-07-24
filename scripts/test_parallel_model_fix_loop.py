@@ -2,7 +2,9 @@ import json
 import os
 import signal
 import tempfile
+import threading
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
@@ -24,6 +26,7 @@ from parallel_model_fix_loop import (
     merge_branch,
     novel_commits,
     reap_orphan_worker_pgids,
+    run_round,
     worktree_path,
 )
 
@@ -603,6 +606,50 @@ class PgidPersistenceTests(unittest.TestCase):
         self.assertEqual(leftovers, [])
         self.assertEqual(self._recorded(), [1, 2, 3])
 
+    def test_stale_snapshot_can_never_overwrite_a_newer_one(self):
+        # Register/unregister run concurrently on up to max_parallel
+        # worker threads. The losing interleaving this pins down: T1
+        # unregisters the last pgid, snapshots [], and stalls before its
+        # write; T2 registers a new pgid and writes [new]; T1's stale []
+        # then lands over it -- a LIVE worker vanishes from the file, and
+        # a SIGKILLed dispatcher's successor reaps nothing while that
+        # worker's cargo/rustc tree runs unsupervised forever. The fix
+        # takes snapshot AND write under one persist lock, so the last
+        # write always reflects the then-current set. Deterministic
+        # both ways: pre-fix, T2 finishes its write during the join
+        # below and T1's gated stale write clobbers it; post-fix, lock
+        # ordering forces T2's snapshot+write entirely after T1's write.
+        _register_pgid(100)
+
+        real_write = parallel_model_fix_loop._write_pgids_file
+        gate = threading.Event()
+        empty_write_entered = threading.Event()
+
+        def gated_write(path, pgids):
+            # Hold exactly the unregister's empty-set write open,
+            # simulating T1 preempted mid-persist while T2 races it.
+            if list(pgids) == []:
+                empty_write_entered.set()
+                gate.wait(timeout=10)
+            real_write(path, pgids)
+
+        with patch("parallel_model_fix_loop._write_pgids_file", gated_write):
+            t1 = threading.Thread(target=_unregister_pgid, args=(100,))
+            t1.start()
+            self.assertTrue(empty_write_entered.wait(timeout=10))
+            t2 = threading.Thread(target=_register_pgid, args=(300,))
+            t2.start()
+            # Post-fix this join times out (T2 is correctly queued behind
+            # the persist lock T1 holds); pre-fix it completes, having
+            # already written [300] for T1 to clobber.
+            t2.join(timeout=0.5)
+            gate.set()
+            t1.join(timeout=10)
+            t2.join(timeout=10)
+        self.assertFalse(t1.is_alive())
+        self.assertFalse(t2.is_alive())
+        self.assertEqual(self._recorded(), [300])
+
 
 class AcquireDispatcherLockTests(unittest.TestCase):
     def setUp(self):
@@ -821,6 +868,75 @@ class EnsureIntegrationBranchTests(unittest.TestCase):
         # only the branch lookup ran -- nothing was created or checked out
         argvs = [c.args[0] for c in mock_run.call_args_list]
         self.assertEqual(argvs, [["git", "rev-parse", "--abbrev-ref", "HEAD"]])
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_checkout_failure_returns_none_and_logs_instead_of_raising(self, mock_run):
+        # Once sweep-local has diverged from main, a dirty dispatcher
+        # checkout makes `git checkout` refuse (correctly). That must
+        # come back as None + a loud warning carrying git's own stderr --
+        # never a CalledProcessError, which would propagate out of
+        # run_round and kill an --infinite dispatcher outright.
+        def fake_run(argv, **kwargs):
+            if argv == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+                return MagicMock(returncode=0, stdout="main\n", stderr="")
+            if argv[:4] == ["git", "rev-parse", "--verify", "--quiet"]:
+                return MagicMock(returncode=0, stdout="abc\n", stderr="")  # branch exists
+            if argv[:2] == ["git", "checkout"]:
+                return MagicMock(
+                    returncode=1, stdout="",
+                    stderr="error: Your local changes to the following files would be overwritten",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = fake_run
+        logged = []
+        branch = ensure_integration_branch(Path("/fake/repo"), log_fn=logged.append)
+        self.assertIsNone(branch)
+        self.assertTrue(any("WARNING" in line for line in logged))
+        self.assertTrue(any("would be overwritten" in line for line in logged))
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_branch_creation_failure_returns_none_and_logs_instead_of_raising(self, mock_run):
+        def fake_run(argv, **kwargs):
+            if argv == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+                return MagicMock(returncode=0, stdout="main\n", stderr="")
+            if argv[:4] == ["git", "rev-parse", "--verify", "--quiet"]:
+                return MagicMock(returncode=1, stdout="", stderr="")  # branch missing
+            if argv[:2] == ["git", "branch"]:
+                return MagicMock(returncode=1, stdout="", stderr="fatal: cannot lock ref")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = fake_run
+        logged = []
+        branch = ensure_integration_branch(Path("/fake/repo"), log_fn=logged.append)
+        self.assertIsNone(branch)
+        self.assertTrue(any("WARNING" in line for line in logged))
+        # and it never went on to check anything out
+        argvs = [c.args[0] for c in mock_run.call_args_list]
+        self.assertFalse(any(argv[:2] == ["git", "checkout"] for argv in argvs))
+
+
+class RunRoundIntegrationTargetTests(unittest.TestCase):
+    @patch("parallel_model_fix_loop.discover_formats")
+    @patch("parallel_model_fix_loop.process_format")
+    @patch("parallel_model_fix_loop.ensure_integration_branch", return_value=None)
+    @patch("parallel_model_fix_loop.fast_forward_local_main", return_value=(True, "ok"))
+    def test_no_integration_target_skips_the_round_without_dispatching(
+        self, mock_ff, mock_ensure, mock_process, mock_discover,
+    ):
+        # ensure_integration_branch returning None (un-checkoutable
+        # sweep-local, see its docstring) means the round has nowhere
+        # M5-legal to merge: run_round must report failure WITHOUT
+        # raising and WITHOUT dispatching a single worker -- the
+        # --infinite loop then simply retries next round.
+        args = SimpleNamespace(
+            formats="NEF", cache_dir="/nonexistent", max_parallel=1,
+            worktree_dir="/nonexistent", log_dir="/nonexistent", timeout=None,
+        )
+        ok = run_round(args, Path("/fake/config.toml"))
+        self.assertFalse(ok)
+        mock_discover.assert_not_called()
+        mock_process.assert_not_called()
 
 
 if __name__ == "__main__":
