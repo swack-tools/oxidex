@@ -29,12 +29,17 @@ use crate::parsers::raw::{RawFormat, raf_parser};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use crate::tag_db::lookup_tag_name;
 
-/// Resolve TIFF/EP DNG tags using ExifTool's EXIF group.
+/// Resolve RAW-specific tags using the names and groups assigned by ExifTool.
 ///
-/// DNG stores these tags in a RAW SubIFD, but ExifTool assigns them to its
-/// EXIF group rather than exposing the physical SubIFD directory name.
+/// Some physical RAW IFD tags correspond to standard EXIF concepts but use
+/// format-specific IDs and representations.
 fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String {
-    if format == RawFormat::AdobeDNG
+    if format == RawFormat::PanasonicRW2 && tag_id == 0x0009 {
+        // PanasonicRaw CFAPattern is stored at 0x0009, while the canonical
+        // EXIF CFAPattern name is registered under tag 0xA302. ExifTool
+        // assigns the Panasonic tag to its EXIF group.
+        lookup_tag_name(0xA302, "EXIF")
+    } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
             0xC619 // BlackLevelRepeatDim
@@ -334,6 +339,25 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         _ => lookup_raw_tag_name(canonical_tag_id, ifd_name, format),
                     };
                     let tag_value = if format == RawFormat::PanasonicRW2
+                        && ifd_index == 0
+                        && *tag_id == 0x0009
+                    {
+                        format_panasonic_cfa_pattern(
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        )
+                        .map(TagValue::new_string)
+                        .unwrap_or_else(|| {
+                            raw_bytes_to_simple_tag_value(
+                                bytes,
+                                *field_type,
+                                *value_count,
+                                byte_order,
+                            )
+                        })
+                    } else if format == RawFormat::PanasonicRW2
                         && ifd_index == 0
                         && *tag_id == 0x000B
                     {
@@ -841,6 +865,30 @@ fn format_exif_display_value(
     }
 }
 
+/// Format PanasonicRaw tag 0x0009 (CFAPattern).
+///
+/// Panasonic stores the Bayer arrangement as a single SHORT enum rather than
+/// using the dimension-and-cell payload of EXIF tag 0xA302.
+fn format_panasonic_cfa_pattern(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    if field_type != 3 || value_count < 1 {
+        return None;
+    }
+
+    let pattern = match read_tiff_u16(bytes, byte_order)? {
+        1 => "[Red,Green][Green,Blue]",
+        2 => "[Green,Red][Blue,Green]",
+        3 => "[Green,Blue][Red,Green]",
+        4 => "[Blue,Green][Green,Red]",
+        _ => return None,
+    };
+    Some(pattern.to_string())
+}
+
 fn format_panasonic_raw_compression(
     bytes: &[u8],
     field_type: u16,
@@ -912,6 +960,14 @@ fn decode_exif_cfa_pattern(bytes: &[u8], byte_order: ByteOrder) -> Option<String
 #[cfg(test)]
 mod cfa_pattern_tests {
     use super::*;
+
+    #[test]
+    fn formats_panasonic_rw2_cfa_pattern() {
+        assert_eq!(
+            format_panasonic_cfa_pattern(&[4, 0], 3, 1, ByteOrder::LittleEndian).as_deref(),
+            Some("[Blue,Green][Green,Red]")
+        );
+    }
 
     #[test]
     fn decodes_little_endian_cfa_pattern() {
