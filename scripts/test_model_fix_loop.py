@@ -172,6 +172,12 @@ class NormalizeModelConfigTests(unittest.TestCase):
         self.assertEqual(config["governor_cooldown_seconds"], 30)
         self.assertEqual(config["governor_max_cooldown_seconds"], 300)
 
+    def test_throughput_knobs_have_defaults(self):
+        config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
+        self.assertEqual(config["max_cluster_tags"], 6)
+        self.assertEqual(config["use_sccache"], True)
+        self.assertEqual(config["governor_calls_per_minute"], 30)
+
 
 class ExtractDiffTests(unittest.TestCase):
     def test_extracts_fenced_diff_block(self):

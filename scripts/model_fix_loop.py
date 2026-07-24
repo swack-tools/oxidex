@@ -84,6 +84,32 @@ variables. Each of the [worker] and [reviewer] tables takes:
     max_retry_backoff_seconds default 120 (caps the exponential backoff's
                           growth -- otherwise a large max_retries implies
                           an absurd wait on later attempts)
+    governor_calls_per_minute default 30 (cross-process rate governor:
+                          steady-state model-call budget shared by every
+                          worker through one flock-guarded token bucket
+                          at ~/.oxidex/logs/rate-governor.json -- see
+                          governor_acquire. The governor is
+                          account-global, so the [worker] table's knobs
+                          govern every phase, reviewer calls included)
+    governor_burst         default 5 (bucket capacity -- calls that may
+                          go out back-to-back before the per-minute
+                          refill rate throttles the rest)
+    governor_cooldown_seconds default 30 (base GLOBAL cooldown one
+                          rate-limited call (429/5xx) imposes on the
+                          whole fleet via governor_report; doubles per
+                          consecutive limited outcome)
+    governor_max_cooldown_seconds default 300 (cap on that exponential
+                          cooldown growth)
+    max_cluster_tags       default 6 (worker only; sibling-tag
+                          clustering -- the selected tag pulls up to
+                          max_cluster_tags - 1 still-active sibling tags
+                          (same format/family/parser files) into one fix
+                          conversation -- see choose_next_gap. 1 restores
+                          the old one-tag-per-conversation behavior)
+    use_sccache            default true; false sets OXIDEX_USE_SCCACHE=0
+                          so cargo_env never routes rustc through
+                          sccache (cargo's normal per-worktree
+                          incremental cache only)
 
 [reviewer] defaults to [worker] entirely when omitted, so a single table
 covers both the fixer and the reviewer by default -- add [reviewer] only to
