@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -14,6 +15,7 @@ from model_fix_loop import (
     build_exact_sample_block,
     build_failure_critique_prompt,
     build_format_overview_block,
+    build_neighbor_precedent_block,
     build_perl_reference_block,
     build_prompt,
     build_reply_shape_manifest,
@@ -21,11 +23,15 @@ from model_fix_loop import (
     critique_failed_attempt,
     cargo_build,
     cargo_check,
+    cargo_env,
+    cargo_test_targeted,
     cargo_test_workspace,
     apply_prompt_cache_markers,
     call_model,
     extract_cache_usage,
+    cluster_key,
     compact_messages,
+    DEFAULT_GOVERNOR_BURST,
     detect_duplicate_tag_insertion,
     estimate_tokens,
     expand_gaps_to_tags,
@@ -35,6 +41,7 @@ from model_fix_loop import (
     extract_perl_tag_snippet,
     extract_review_verdict,
     file_content_at_head,
+    find_implemented_sibling,
     fix_gap,
     format_previous_attempts,
     load_format_memory,
@@ -43,8 +50,12 @@ from model_fix_loop import (
     git_apply,
     git_checkout_clean,
     git_commit,
+    governor_acquire,
+    governor_report,
+    load_landed_tags,
     load_recent_sweep_reviews,
     load_toml_config,
+    make_cluster_gap,
     make_single_tag_gap,
     models_for_phase,
     parse_request_range,
@@ -56,6 +67,7 @@ from model_fix_loop import (
     run_tag_loop,
     tag_key_for,
     tag_literal_for_gap,
+    tag_still_open,
     TERMINAL_REMINDER,
     truncate_to_token_budget,
 )
@@ -152,6 +164,19 @@ class NormalizeModelConfigTests(unittest.TestCase):
         self.assertEqual(config["max_verify_turns"], 2)
         self.assertEqual(config["compaction_trigger_tokens"], 6000)
         self.assertEqual(config["compaction_keep_recent_turns"], 8)
+
+    def test_governor_knobs_have_defaults(self):
+        config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
+        self.assertEqual(config["governor_calls_per_minute"], 30)
+        self.assertEqual(config["governor_burst"], 5)
+        self.assertEqual(config["governor_cooldown_seconds"], 30)
+        self.assertEqual(config["governor_max_cooldown_seconds"], 300)
+
+    def test_throughput_knobs_have_defaults(self):
+        config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
+        self.assertEqual(config["max_cluster_tags"], 6)
+        self.assertEqual(config["use_sccache"], True)
+        self.assertEqual(config["governor_calls_per_minute"], 30)
 
 
 class ExtractDiffTests(unittest.TestCase):
@@ -592,6 +617,45 @@ class CallModelRetryTests(unittest.TestCase):
                 max_retries=-1, sleep_fn=lambda s: None,
             )
 
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_429_is_retried(self, mock_urlopen):
+        ok_body = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
+        ok_cm = MagicMock()
+        ok_cm.read.return_value = ok_body
+        ok_response = MagicMock()
+        ok_response.__enter__.return_value = ok_cm
+        mock_urlopen.side_effect = [self._http_error(429), ok_response]
+        reply = call_model(
+            [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "max",
+            sleep_fn=lambda s: None,
+        )
+        self.assertEqual(reply, "hi")
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_governor_is_acquired_per_attempt_and_reported(self, mock_urlopen):
+        ok_body = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
+        ok_cm = MagicMock()
+        ok_cm.read.return_value = ok_body
+        ok_response = MagicMock()
+        ok_response.__enter__.return_value = ok_cm
+        mock_urlopen.side_effect = [self._http_error(429), ok_response]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gov = Path(tmpdir) / "gov.json"
+            # cooldown_seconds=0: the 429 must still be REPORTED (streak
+            # increments, then the success resets it) without creating a
+            # real-wall-clock cooldown this test would have to sit out --
+            # cooldown waiting itself is covered by RateGovernorTests with
+            # injected clocks.
+            call_model(
+                [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "max",
+                sleep_fn=lambda s: None, governor_path=gov,
+                governor_cooldown_seconds=0, governor_max_cooldown_seconds=0,
+            )
+            state = json.loads(gov.read_text())
+        # limited once (the 429) then reset by the success
+        self.assertEqual(state["consecutive_limited"], 0)
+        self.assertLess(state["tokens"], DEFAULT_GOVERNOR_BURST)  # slots were spent
+
 
 class CallModelStreamingTests(unittest.TestCase):
     @patch("model_fix_loop.urllib.request.urlopen")
@@ -993,6 +1057,32 @@ class CargoTestWorkspaceTests(unittest.TestCase):
         self.assertIn("thread panicked", output)
 
 
+class CargoTestTargetedTests(unittest.TestCase):
+    @patch("model_fix_loop.subprocess.run")
+    def test_runs_lib_tests_with_the_filter(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
+        ok, output = cargo_test_targeted(Path("/fake"), "app12")
+        self.assertTrue(ok)
+        self.assertEqual(mock_run.call_args[0][0], ["cargo", "test", "--lib", "app12"])
+
+
+class CargoEnvSccacheTests(unittest.TestCase):
+    @patch("model_fix_loop.shutil.which")
+    def test_sets_wrapper_when_available_and_enabled(self, mock_which):
+        mock_which.return_value = "/opt/homebrew/bin/sccache"
+        with patch.dict(os.environ, {"OXIDEX_USE_SCCACHE": "1"}, clear=False):
+            os.environ.pop("RUSTC_WRAPPER", None)
+            env = cargo_env()
+        self.assertEqual(env.get("RUSTC_WRAPPER"), "sccache")
+
+    @patch("model_fix_loop.shutil.which")
+    def test_disabled_by_env_flag(self, mock_which):
+        mock_which.return_value = "/opt/homebrew/bin/sccache"
+        with patch.dict(os.environ, {"OXIDEX_USE_SCCACHE": "0"}, clear=False):
+            env = cargo_env()
+        self.assertNotEqual(env.get("RUSTC_WRAPPER"), "sccache")
+
+
 def make_gap(gap_count=2):
     return {
         "format": "NEF",
@@ -1248,9 +1338,75 @@ class RustArchitectureConstraintsTests(unittest.TestCase):
         self.assertIn("u32::from_be_bytes", RUST_ARCHITECTURE_CONSTRAINTS)
         self.assertIn("u32::from_le_bytes", RUST_ARCHITECTURE_CONSTRAINTS)
 
+    def test_constraints_block_is_the_very_first_content_in_the_prompt(self):
+        # Position zero: byte-stable constraints lead every fixer prompt --
+        # maximal prompt-cache prefix, and the guardrails can never be
+        # truncated away (truncate_to_token_budget keeps the head).
+        prompt = build_prompt(make_gap(gap_count=2))
+        self.assertTrue(prompt.startswith("CRITICAL RUST ARCHITECTURE CONSTRAINTS"))
+
+    def test_constraints_are_numbered_with_caps_labels(self):
+        for label in ("STATE:", "TYPES:", "BYTES:", "TREES:", "BLOAT:", "ERRORS:", "PERL MAP:"):
+            self.assertIn(label, RUST_ARCHITECTURE_CONSTRAINTS)
+
     def test_build_prompt_includes_the_constraints_block(self):
         prompt = build_prompt(make_gap(gap_count=2))
         self.assertIn("CRITICAL RUST ARCHITECTURE CONSTRAINTS", prompt)
+
+
+class NeighborPrecedentTests(unittest.TestCase):
+    def _gap(self, tmp):
+        (tmp / "j.rs").write_text('metadata.insert("APP12:ColorMode".to_string(), v);')
+        return {"format": "JPEG",
+                "missing_tags": [{"family": "APP12", "name": "MODE3", "value": "0",
+                                  "tag_id": None, "source_file": None}],
+                "value_differences": [], "gap_count": 1, "parser_files": ["j.rs"]}
+
+    def test_finds_an_implemented_sibling_literal(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            gap = self._gap(tmp)
+            self.assertEqual(find_implemented_sibling(gap, tmp), "APP12:ColorMode")
+
+    def test_own_gap_tags_are_not_their_own_precedent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            gap = self._gap(tmp)
+            # Overwrite AFTER _gap (which itself writes a ColorMode
+            # literal) so the file holds only the gap's own tag.
+            (tmp / "j.rs").write_text('metadata.insert("APP12:MODE3".to_string(), v);')
+            self.assertIsNone(find_implemented_sibling(gap, tmp))
+
+    def test_block_includes_the_historic_patch(self):
+        calls = []
+        def fake_git(args, cwd):
+            calls.append(args)
+            if args[0] == "log":
+                return "abc123\n"
+            return "commit abc123\n+++ test added here\n"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            block = build_neighbor_precedent_block(self._gap(tmp), tmp, git_runner_fn=fake_git)
+        self.assertIn("APP12:ColorMode", block)
+        self.assertIn("test added here", block)
+        self.assertIn("-S", str(calls[0]))
+
+    def test_git_failure_yields_empty_block(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            block = build_neighbor_precedent_block(
+                self._gap(tmp), tmp, git_runner_fn=lambda a, c: "")
+        self.assertEqual(block, "")
+
+
+class BuildPromptNeighborPrecedentTests(unittest.TestCase):
+    def test_block_appears_in_the_stable_section(self):
+        gap = make_gap(gap_count=1)
+        prompt = build_prompt(gap, neighbor_precedent_block="\n\nPRECEDENT-MARKER-XYZ")
+        self.assertIn("PRECEDENT-MARKER-XYZ", prompt)
+        self.assertLess(prompt.index("PRECEDENT-MARKER-XYZ"),
+                        prompt.index("Previous attempts") if "Previous attempts" in prompt
+                        else len(prompt))
 
 
 class ParseRequestRangeTests(unittest.TestCase):
@@ -1913,6 +2069,7 @@ class FixGapHappyPathTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: commit_calls.append(msg),
             cargo_build_fn=lambda root: (True, ""),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             review_fn=lambda g, diff, config, **kwargs: (True, ""),
             recheck_fn=lambda fmt: 0,
@@ -2708,13 +2865,71 @@ class FixGapFailureTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: self.fail("should not commit"),
             cargo_build_fn=lambda root: (True, ""),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (False, "test output"),
+            review_fn=lambda g, diff, config, **kwargs: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
         )
         self.assertEqual(result["status"], "failed")
         self.assertIn("cargo test --workspace regressed", result["reason"])
         self.assertIn("test output", result["reason"])
+
+
+class FixGapTestOrderingTests(unittest.TestCase):
+    def test_targeted_runs_before_review_full_suite_only_before_commit(self):
+        order = []
+        result = fix_gap(
+            make_gap(gap_count=1), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            recheck_fn=lambda fmt: 0,
+            cargo_test_targeted_fn=lambda root, f: (order.append("targeted"), (True, ""))[1],
+            cargo_test_workspace_fn=lambda root: (order.append("full"), (True, ""))[1],
+            review_fn=lambda *a, **k: (order.append("review"), (True, ""))[1],
+            git_commit_fn=lambda msg, root: order.append("commit"),
+            git_checkout_clean_fn=lambda root: None,
+            detect_duplicate_fn=lambda *a: False,
+            log_fn=lambda s: None,
+        )
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(order, ["targeted", "review", "full", "commit"])
+
+    def test_targeted_failure_is_a_test_regressed_round_without_full_suite(self):
+        full_runs = []
+        result = fix_gap(
+            make_gap(gap_count=1), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            recheck_fn=lambda fmt: 0,
+            cargo_test_targeted_fn=lambda root, f: (False, "targeted boom"),
+            cargo_test_workspace_fn=lambda root: (full_runs.append(1), (True, ""))[1],
+            git_checkout_clean_fn=lambda root: None,
+            critique_fn=lambda *a, **k: "critique",
+            log_fn=lambda s: None,
+            max_repair_rounds=1,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("targeted boom", result["reason"])
+        self.assertEqual(full_runs, [])
+
+    def test_full_suite_failure_before_commit_reverts_and_fails_the_round(self):
+        commits = []
+        result = fix_gap(
+            make_gap(gap_count=1), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            recheck_fn=lambda fmt: 0,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (False, "full boom"),
+            review_fn=lambda *a, **k: (True, ""),
+            git_commit_fn=lambda msg, root: commits.append(1),
+            git_checkout_clean_fn=lambda root: None,
+            detect_duplicate_fn=lambda *a: False,
+            critique_fn=lambda *a, **k: "critique",
+            log_fn=lambda s: None,
+            max_repair_rounds=1,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("full boom", result["reason"])
+        self.assertEqual(commits, [])
 
 
 class FixGapCritiqueTests(unittest.TestCase):
@@ -2730,7 +2945,9 @@ class FixGapCritiqueTests(unittest.TestCase):
             gap, CONFIG,
             attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
             critique_fn=lambda g, diff, fk, reason, cfg, **kwargs: critique_reasons.append(reason) or "critique",
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (False, "thread 'x' panicked: assertion failed"),
+            review_fn=lambda g, diff, config, **kwargs: (True, ""),
             git_checkout_clean_fn=lambda root: None,
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -2763,6 +2980,7 @@ class FixGapCritiqueTests(unittest.TestCase):
             review_fn=lambda g, diff, config, **kwargs: (True, ""),
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -2793,6 +3011,7 @@ class FixGapCritiqueTests(unittest.TestCase):
             review_fn=lambda g, diff, config, **kwargs: (True, ""),
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -2827,6 +3046,7 @@ class FixGapCritiqueTests(unittest.TestCase):
             critique_fn=lambda *a, **kwargs: critique_calls.append(1),
             detect_duplicate_fn=lambda diff, tag, root: True,
             git_checkout_clean_fn=lambda root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -2883,6 +3103,7 @@ class FixGapReviewTests(unittest.TestCase):
             review_fn=fake_review,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: commit_calls.append(msg),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -2907,6 +3128,7 @@ class FixGapReviewTests(unittest.TestCase):
             review_fn=lambda g, diff, config, **kwargs: (False, "hardcodes the sample value"),
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: self.fail("should not commit"),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -2936,6 +3158,7 @@ class FixGapReviewTests(unittest.TestCase):
             attempt_build_fn=fake_attempt_build,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -2972,6 +3195,7 @@ class FixGapReviewTests(unittest.TestCase):
             attempt_build_fn=fake_attempt_build,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3002,6 +3226,7 @@ class FixGapReviewTests(unittest.TestCase):
             attempt_build_fn=fake_attempt_build,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3030,6 +3255,7 @@ class FixGapReviewTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
             cargo_build_fn=lambda root: (True, ""),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3061,6 +3287,7 @@ class FixGapReviewTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
             cargo_build_fn=lambda root: (True, ""),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3089,6 +3316,7 @@ class FixGapReviewTests(unittest.TestCase):
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
             cargo_build_fn=lambda root: (True, ""),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3123,6 +3351,7 @@ class FixGapReviewTests(unittest.TestCase):
             review_config=review_config,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3156,6 +3385,7 @@ class FixGapReviewTests(unittest.TestCase):
             review_fn=fake_review,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3184,6 +3414,7 @@ class FixGapDuplicateDetectionTests(unittest.TestCase):
             detect_duplicate_fn=lambda diff, tag_literal, repo_root: True,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: self.fail("must not commit a detected duplicate"),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3204,6 +3435,7 @@ class FixGapDuplicateDetectionTests(unittest.TestCase):
             detect_duplicate_fn=lambda diff, tag_literal, repo_root: False,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: commit_calls.append(msg),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3226,6 +3458,7 @@ class FixGapDuplicateDetectionTests(unittest.TestCase):
             detect_duplicate_fn=lambda diff, tag_literal, repo_root: detect_calls.append(tag_literal) or False,
             git_checkout_clean_fn=lambda root: None,
             git_commit_fn=lambda msg, root: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
@@ -3407,6 +3640,128 @@ class MakeSingleTagGapTests(unittest.TestCase):
         self.assertEqual(gap["missing_tags"], [])
         self.assertEqual(gap["value_differences"], [tag_gap["entry"]])
         self.assertEqual(gap["gap_count"], 1)
+
+
+class ClusterKeyTests(unittest.TestCase):
+    def test_family_is_the_middle_component(self):
+        tg = {"format": "RW2", "tag_key": "RW2:EXIF:BlackLevelRed", "parser_files": ["a.rs"]}
+        self.assertEqual(cluster_key(tg), ("RW2", "EXIF", ("a.rs",)))
+
+    def test_different_parser_files_do_not_cluster(self):
+        a = {"format": "F", "tag_key": "F:X:A", "parser_files": ["a.rs"]}
+        b = {"format": "F", "tag_key": "F:X:B", "parser_files": ["b.rs"]}
+        self.assertNotEqual(cluster_key(a), cluster_key(b))
+
+
+class MakeClusterGapTests(unittest.TestCase):
+    def _tg(self, name, kind="missing"):
+        if kind == "missing":
+            entry = {"family": "APP12", "name": name, "value": "1", "tag_id": None, "source_file": None}
+        else:
+            entry = {"tag_key": f"APP12:{name}", "exiftool_value": "1", "oxidex_value": "0", "source_file": None}
+        return {"format": "JPEG", "tag_key": f"JPEG:APP12:{name}", "kind": kind,
+                "entry": entry, "parser_files": ["j.rs"]}
+
+    def test_leader_without_members_matches_single_tag_gap(self):
+        leader = self._tg("MODE3")
+        gap = make_cluster_gap(leader)
+        self.assertEqual(gap["gap_count"], 1)
+        self.assertTrue(gap["clustered"])
+        self.assertEqual(len(gap["missing_tags"]), 1)
+
+    def test_members_are_unioned_across_kinds(self):
+        leader = self._tg("MODE3")
+        leader["cluster_members"] = [self._tg("MODE4"), self._tg("MODE5", kind="diff")]
+        gap = make_cluster_gap(leader)
+        self.assertEqual(gap["gap_count"], 3)
+        self.assertEqual(len(gap["missing_tags"]), 2)
+        self.assertEqual(len(gap["value_differences"]), 1)
+
+
+class TagStillOpenTests(unittest.TestCase):
+    MISSING_GAP = {"format": "XMP", "kind": "missing", "tag_key": "XMP:XMP:ArtworkTitle",
+                   "entry": {"family": "XMP", "name": "ArtworkTitle", "value": "test",
+                             "tag_id": None, "source_file": None},
+                   "parser_files": []}
+    DIFF_GAP = {"format": "RW2", "kind": "diff", "tag_key": "RW2:EXIF:ISO",
+                "entry": {"tag_key": "EXIF:ISO", "exiftool_value": "100",
+                          "oxidex_value": "0", "source_file": None},
+                "parser_files": []}
+
+    def test_no_match_for_format_means_closed(self):
+        self.assertIsNone(tag_still_open(None, self.MISSING_GAP))
+
+    def test_still_missing(self):
+        match = {"missing_tags": [{"family": "XMP", "name": "ArtworkTitle"}],
+                 "value_differences": []}
+        self.assertEqual(tag_still_open(match, self.MISSING_GAP), ("missing",))
+
+    def test_missing_tag_that_arrived_with_wrong_value_is_STILL_OPEN(self):
+        # The ArtworkTitle escape: leaves missing_in_oxidex, lands in
+        # value_differences with the wrong value -- must NOT count closed.
+        match = {"missing_tags": [],
+                 "value_differences": [{"tag_key": "XMP:ArtworkTitle",
+                                        "exiftool_value": "test",
+                                        "oxidex_value": "test, verfänglich"}]}
+        self.assertEqual(
+            tag_still_open(match, self.MISSING_GAP),
+            ("value_differs", "test", "test, verfänglich"),
+        )
+
+    def test_diff_tag_still_differing(self):
+        match = {"missing_tags": [],
+                 "value_differences": [{"tag_key": "EXIF:ISO",
+                                        "exiftool_value": "100", "oxidex_value": "0"}]}
+        self.assertEqual(tag_still_open(match, self.DIFF_GAP),
+                         ("value_differs", "100", "0"))
+
+    def test_fully_closed(self):
+        match = {"missing_tags": [], "value_differences": []}
+        self.assertIsNone(tag_still_open(match, self.MISSING_GAP))
+        self.assertIsNone(tag_still_open(match, self.DIFF_GAP))
+
+
+class FixGapRecheckDetailTests(unittest.TestCase):
+    def test_tuple_recheck_detail_becomes_the_failure_reason(self):
+        result = fix_gap(
+            make_gap(gap_count=1), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            recheck_fn=lambda fmt: (1, 'target still wrong: expected "test", got "test, x"'),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            critique_fn=lambda *a, **k: "critique",
+            log_fn=lambda s: None,
+            max_repair_rounds=1,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn('expected "test"', result["reason"])
+
+    def test_plain_int_recheck_still_works(self):
+        result = fix_gap(
+            make_gap(gap_count=1), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            recheck_fn=lambda fmt: 1,
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            critique_fn=lambda *a, **k: "critique",
+            log_fn=lambda s: None,
+            max_repair_rounds=1,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("gap count did not decrease", result["reason"])
+
+
+class LoadLandedTagsTests(unittest.TestCase):
+    def test_missing_file_is_empty_set(self):
+        self.assertEqual(load_landed_tags(Path("/nonexistent/landed.log")), set())
+
+    def test_parses_tag_keys_skipping_malformed_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir) / "landed.log"
+            p.write_text("2026-07-23T17:00:00 JPEG:APP12:MODE3\n\ngarbage-no-space\n"
+                         "2026-07-23T17:05:00 PSD:EXIF:Compression\n")
+            self.assertEqual(load_landed_tags(p),
+                             {"JPEG:APP12:MODE3", "PSD:EXIF:Compression"})
 
 
 class RunTagLoopTests(unittest.TestCase):
@@ -3795,6 +4150,36 @@ class RunTagLoopTests(unittest.TestCase):
         # not left sitting around with a fail count or blacklist flag.
         self.assertNotIn("NEF:EXIF:LensModel", store)
 
+    def test_landed_tag_is_skipped_and_its_state_cleared(self):
+        # A tag the sweep already landed (present in the landed-tags log)
+        # must never be attempted again -- it's skipped like a duplicate:
+        # state entry popped, and the skip logged.
+        gaps = [make_gap()]  # LensModel (missing) + ISO (diff)
+        attempts = []
+        logged = []
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            attempts.append(tag_gap["tag_key"])
+            return {"status": "fixed", "gaps_closed": 1}
+
+        store, load, save = self._state_io()
+        store["NEF:EXIF:LensModel"] = {"fails": 1, "blacklisted": False, "attempts": []}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            landed = Path(tmpdir) / "landed.log"
+            landed.write_text("2026-07-23T17:00:00 NEF:EXIF:LensModel\n")
+            run_tag_loop(
+                {"models": ["x"]}, find_gaps_fn=lambda: gaps, fix_gap_fn=fake_fix,
+                state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+                max_rounds=1, log_fn=logged.append, landed_tags_path=landed,
+            )
+        # fix_gap_fn only ever sees the OTHER tag -- the landed one is
+        # filtered out before selection.
+        self.assertEqual(attempts, ["NEF:EXIF:ISO"])
+        # The landed tag's stale state entry (fail count, any claim) is
+        # popped, same cleanup as a duplicate.
+        self.assertNotIn("NEF:EXIF:LensModel", store)
+        self.assertTrue(any("already landed via sweep" in line for line in logged))
+
     def test_refresh_worktree_fn_is_called_once_per_round(self):
         gaps = [make_gap()]
         refresh_calls = []
@@ -3839,6 +4224,82 @@ class RunTagLoopTests(unittest.TestCase):
         )
         self.assertEqual(result["rounds"], 1)
         self.assertTrue(any("refresh skipped" in line for line in logged))
+
+    def _cluster_gaps(self):
+        # Three same-family siblings plus one outsider, all in one
+        # format-level gap so every tag shares parser_files (the third
+        # cluster_key component); COM:Other differs in family, so it
+        # must never ride along with the APP12 cluster.
+        def entry(family, name):
+            return {"family": family, "name": name, "value": "1", "tag_id": None, "source_file": None}
+        return [{
+            "format": "JPEG",
+            "missing_tags": [entry("APP12", "MODE3"), entry("APP12", "MODE4"),
+                             entry("APP12", "MODE5"), entry("COM", "Other")],
+            "value_differences": [],
+            "gap_count": 4,
+            "parser_files": ["j.rs"],
+        }]
+
+    def test_clusters_siblings_onto_the_leader(self):
+        seen = []
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            seen.append([m["tag_key"] for m in [tag_gap] + tag_gap.get("cluster_members", [])])
+            return {"status": "fixed", "gaps_closed": 1, "rounds": []}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=self._cluster_gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1, max_cluster_tags=6,
+        )
+        self.assertEqual(sorted(seen[0]),
+                         ["JPEG:APP12:MODE3", "JPEG:APP12:MODE4", "JPEG:APP12:MODE5"])
+
+    def test_fixed_clears_state_for_every_member(self):
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            return {"status": "fixed", "gaps_closed": 1, "rounds": []}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=self._cluster_gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1, max_cluster_tags=6,
+        )
+        for key in ("JPEG:APP12:MODE3", "JPEG:APP12:MODE4", "JPEG:APP12:MODE5"):
+            self.assertNotIn(key, store)
+
+    def test_failure_charges_only_the_leader(self):
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            return {"status": "failed", "reason": "nope"}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=self._cluster_gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1, max_cluster_tags=6,
+        )
+        self.assertEqual(store["JPEG:APP12:MODE3"]["fails"], 1)
+        for key in ("JPEG:APP12:MODE4", "JPEG:APP12:MODE5"):
+            self.assertEqual(store[key].get("fails", 0), 0)
+            self.assertNotIn("claimed_by", store[key])
+            self.assertNotIn("claimed_at", store[key])
+
+    def test_max_cluster_tags_1_disables_clustering(self):
+        seen = []
+
+        def fake_fix(tag_gap, config, previous_attempts=None):
+            seen.append(tag_gap)
+            return {"status": "fixed", "gaps_closed": 1, "rounds": []}
+
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=self._cluster_gaps, fix_gap_fn=fake_fix,
+            state_path="/fake/state.json", load_state_fn=load, save_state_fn=save,
+            max_rounds=1,
+        )
+        self.assertNotIn("cluster_members", seen[0])
 
 
 class RunTagLoopInfraFailureTests(unittest.TestCase):
@@ -3907,6 +4368,83 @@ class RunTagLoopInfraFailureTests(unittest.TestCase):
         self.assertEqual(len(entry["attempts"]), 1)
         self.assertEqual(entry["attempts"][0]["reason"], "cargo build failed: error[E0308]")
         self.assertEqual(entry["attempts"][0]["critique"], "type mismatch")
+
+
+class RateGovernorTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmpdir.name) / "rate-governor.json"
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_none_path_is_a_noop(self):
+        governor_acquire(None)  # must not raise or sleep
+        governor_report(None, limited=True)
+
+    def test_burst_tokens_allow_immediate_calls_then_throttle(self):
+        clock = [1000.0]
+        sleeps = []
+
+        def now():
+            return clock[0]
+
+        def sleep(s):
+            sleeps.append(s)
+            clock[0] += s
+
+        for _ in range(5):  # burst = 5 -> all immediate
+            governor_acquire(self.path, calls_per_minute=60, burst=5,
+                             now_fn=now, sleep_fn=sleep, jitter_fn=lambda: 0.5)
+        self.assertEqual(sleeps, [])
+        # 6th call: bucket empty, refill is 1/sec -> must wait ~1s
+        governor_acquire(self.path, calls_per_minute=60, burst=5,
+                         now_fn=now, sleep_fn=sleep, jitter_fn=lambda: 0.5)
+        self.assertEqual(len(sleeps), 1)
+        self.assertGreater(sleeps[0], 0)
+        self.assertLess(sleeps[0], 2.5)
+
+    def test_report_limited_sets_global_cooldown_acquire_waits_it_out(self):
+        clock = [1000.0]
+        sleeps = []
+
+        def now():
+            return clock[0]
+
+        def sleep(s):
+            sleeps.append(s)
+            clock[0] += s
+
+        governor_report(self.path, limited=True, cooldown_seconds=30,
+                        max_cooldown_seconds=300, now_fn=now)
+        governor_acquire(self.path, calls_per_minute=60, burst=5,
+                         now_fn=now, sleep_fn=sleep, jitter_fn=lambda: 0.5)
+        self.assertTrue(sleeps)
+        self.assertGreaterEqual(sum(sleeps), 30 * 0.8)  # jitter can shave 20%
+
+    def test_consecutive_limited_reports_grow_the_cooldown_capped(self):
+        now_fn = lambda: 1000.0
+        for _ in range(10):
+            governor_report(self.path, limited=True, cooldown_seconds=30,
+                            max_cooldown_seconds=120, now_fn=now_fn)
+        state = json.loads(self.path.read_text())
+        self.assertLessEqual(state["cooldown_until"], 1000.0 + 120)
+        self.assertGreaterEqual(state["consecutive_limited"], 10)
+
+    def test_success_resets_the_streak(self):
+        now_fn = lambda: 1000.0
+        governor_report(self.path, limited=True, now_fn=now_fn)
+        governor_report(self.path, limited=False, now_fn=now_fn)
+        state = json.loads(self.path.read_text())
+        self.assertEqual(state["consecutive_limited"], 0)
+
+    def test_corrupt_state_file_recovers_permissively(self):
+        self.path.write_text("{not json")
+        governor_acquire(self.path, calls_per_minute=60, burst=5,
+                         now_fn=lambda: 1000.0, sleep_fn=lambda s: None,
+                         jitter_fn=lambda: 0.5)  # must not raise
+        governor_report(self.path, limited=False, now_fn=lambda: 1000.0)
+        json.loads(self.path.read_text())  # now valid again
 
 
 if __name__ == "__main__":
