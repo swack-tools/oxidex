@@ -12,7 +12,11 @@ from pathlib import Path
 from model_fix_loop import (
     ARCHITECTURE_PRIMER,
     KNOWN_PITFALLS,
+    _dedupe_machine_entries,
+    _entry_is_human,
+    _is_rejection_entry,
     _normalize_model_config,
+    _select_tier,
     _state_locked,
     load_tag_state,
     save_tag_state,
@@ -1831,6 +1835,100 @@ class LoadRecentSweepReviewsTests(unittest.TestCase):
             result = load_recent_sweep_reviews(log_path, "NEF")
         self.assertEqual(len(result), 1)
 
+    # -- Spec K4 two-tier selection: cross-format rejections tier --
+
+    def test_cross_format_rejections_are_included_and_tagged(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            entries = [
+                {"format": "JPEG", "tag": "A", "verdict": "rejected", "reason": "wrong table"},
+            ]
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(log_path, "NEF")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["format"], "JPEG")
+        self.assertEqual(result[0]["_sweep_review_tier"], "other_format")
+
+    def test_cross_format_non_rejections_are_excluded(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            entries = [
+                {"format": "JPEG", "tag": "A", "verdict": "accepted", "reason": "fine"},
+            ]
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(log_path, "NEF")
+        self.assertEqual(result, [])
+
+    def test_cross_format_recognizes_verdict_class_rejections_without_legacy_verdict(self):
+        # No legacy "verdict" field at all -- only verdict_class -- to
+        # isolate _is_rejection_entry's verdict_class branch from its
+        # legacy-verdict branch.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            entries = [
+                {"format": "JPEG", "tag": "A",
+                 "verdict_class": "human_rejected", "reason": "human said no"},
+                {"format": "PNG", "tag": "B",
+                 "verdict_class": "machine_rejected", "reason": "recheck failed"},
+                {"format": "TIFF", "tag": "C",
+                 "verdict_class": "machine_accepted", "reason": "shipped"},
+            ]
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(log_path, "NEF")
+        self.assertEqual({e["tag"] for e in result}, {"A", "B"})
+
+    def test_cross_format_tier_capped_by_max_other_format_entries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            entries = [
+                {"format": "JPEG", "tag": f"T{i}", "verdict": "rejected", "reason": f"r{i}",
+                 "patch_id": f"p{i}"}
+                for i in range(10)
+            ]
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(
+                log_path, "NEF", max_entries=4, max_other_format_entries=2
+            )
+        self.assertEqual(len(result), 2)
+        self.assertEqual([e["tag"] for e in result], ["T9", "T8"])
+
+    def test_same_format_and_cross_format_tiers_are_independent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            entries = (
+                [{"format": "NEF", "tag": f"S{i}", "verdict": "accepted", "reason": "r",
+                  "patch_id": f"s{i}"} for i in range(6)]
+                + [{"format": "JPEG", "tag": f"X{i}", "verdict": "rejected", "reason": "r",
+                    "patch_id": f"x{i}"} for i in range(6)]
+            )
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(
+                log_path, "NEF", max_entries=2, max_other_format_entries=3
+            )
+        same = [e for e in result if e.get("_sweep_review_tier") != "other_format"]
+        other = [e for e in result if e.get("_sweep_review_tier") == "other_format"]
+        self.assertEqual(len(same), 2)
+        self.assertEqual(len(other), 3)
+
+    def test_human_verdicts_preferred_over_machine_within_a_tier(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "log.jsonl"
+            # Append order (oldest first): human1 is the OLDEST entry,
+            # machine1/machine2 are newer. A plain recency cutoff at
+            # max_entries=1 would pick machine2; human preference must
+            # override that and pick human1 instead.
+            entries = [
+                {"format": "NEF", "tag": "human1", "verdict": "rejected",
+                 "verdict_class": "human_rejected", "reason": "human reason"},
+                {"format": "NEF", "tag": "machine1", "verdict": "accepted",
+                 "verdict_class": "machine_accepted", "reason": "r", "patch_id": "m1"},
+                {"format": "NEF", "tag": "machine2", "verdict": "accepted",
+                 "verdict_class": "machine_accepted", "reason": "r2", "patch_id": "m2"},
+            ]
+            log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            result = load_recent_sweep_reviews(log_path, "NEF", max_entries=1)
+        self.assertEqual([e["tag"] for e in result], ["human1"])
+
 
 class FormatSweepReviewHistoryTests(unittest.TestCase):
     def test_empty_entries_returns_empty_string(self):
@@ -1841,6 +1939,148 @@ class FormatSweepReviewHistoryTests(unittest.TestCase):
             {"format": "NEF", "tag": "ExifIFD:CFAPattern", "verdict": "rejected", "reason": "wrong name"},
         ])
         self.assertIn("REJECTED ExifIFD:CFAPattern: wrong name", rendered)
+
+    def test_same_format_entries_render_under_original_heading_without_format_prefix(self):
+        rendered = format_sweep_review_history([
+            {"format": "NEF", "tag": "A", "verdict": "accepted", "reason": "r1"},
+        ])
+        self.assertIn("Recent sweep-review outcomes for this format", rendered)
+        self.assertIn("ACCEPTED A: r1", rendered)
+        self.assertNotIn("NEF:A", rendered)
+
+    def test_cross_format_entries_render_under_their_own_subheader_with_format_prefix(self):
+        rendered = format_sweep_review_history([
+            {"format": "JPEG", "tag": "B", "verdict": "rejected", "reason": "r2",
+             "_sweep_review_tier": "other_format"},
+        ])
+        self.assertIn("Rejections from other formats (the mistakes generalize):", rendered)
+        self.assertIn("REJECTED JPEG:B: r2", rendered)
+        # No same-format entries -- that heading must not appear.
+        self.assertNotIn("Recent sweep-review outcomes for this format", rendered)
+
+    def test_combines_both_sections_when_both_tiers_present(self):
+        rendered = format_sweep_review_history([
+            {"format": "NEF", "tag": "A", "verdict": "accepted", "reason": "r1"},
+            {"format": "JPEG", "tag": "B", "verdict": "rejected", "reason": "r2",
+             "_sweep_review_tier": "other_format"},
+        ])
+        self.assertIn("Recent sweep-review outcomes for this format", rendered)
+        self.assertIn("Rejections from other formats (the mistakes generalize):", rendered)
+        self.assertIn("ACCEPTED A: r1", rendered)
+        self.assertIn("REJECTED JPEG:B: r2", rendered)
+
+
+class IsRejectionEntryTests(unittest.TestCase):
+    def test_legacy_verdict_rejected_is_a_rejection(self):
+        self.assertTrue(_is_rejection_entry({"verdict": "rejected"}))
+
+    def test_legacy_verdict_accepted_is_not_a_rejection(self):
+        self.assertFalse(_is_rejection_entry({"verdict": "accepted"}))
+
+    def test_verdict_class_human_rejected_is_a_rejection(self):
+        self.assertTrue(_is_rejection_entry({"verdict_class": "human_rejected"}))
+
+    def test_verdict_class_machine_rejected_is_a_rejection(self):
+        self.assertTrue(_is_rejection_entry({"verdict_class": "machine_rejected"}))
+
+    def test_verdict_class_machine_accepted_is_not_a_rejection(self):
+        self.assertFalse(_is_rejection_entry({"verdict_class": "machine_accepted"}))
+
+    def test_empty_entry_is_not_a_rejection(self):
+        self.assertFalse(_is_rejection_entry({}))
+
+
+class EntryIsHumanTests(unittest.TestCase):
+    def test_missing_verdict_class_counts_as_human_legacy_entry(self):
+        self.assertTrue(_entry_is_human({"verdict": "accepted"}))
+
+    def test_human_accepted_is_human(self):
+        self.assertTrue(_entry_is_human({"verdict_class": "human_accepted"}))
+
+    def test_human_rejected_is_human(self):
+        self.assertTrue(_entry_is_human({"verdict_class": "human_rejected"}))
+
+    def test_machine_accepted_is_not_human(self):
+        self.assertFalse(_entry_is_human({"verdict_class": "machine_accepted"}))
+
+    def test_machine_rejected_is_not_human(self):
+        self.assertFalse(_entry_is_human({"verdict_class": "machine_rejected"}))
+
+
+class DedupeMachineEntriesTests(unittest.TestCase):
+    def test_drops_machine_entry_sharing_patch_id_and_reason(self):
+        entries = [
+            {"verdict_class": "machine_rejected", "patch_id": "p1", "reason": "same"},
+            {"verdict_class": "machine_rejected", "patch_id": "p1", "reason": "same"},
+        ]
+        out = _dedupe_machine_entries(entries)
+        self.assertEqual(len(out), 1)
+
+    def test_keeps_machine_entries_with_different_reason(self):
+        entries = [
+            {"verdict_class": "machine_rejected", "patch_id": "p1", "reason": "a"},
+            {"verdict_class": "machine_rejected", "patch_id": "p1", "reason": "b"},
+        ]
+        out = _dedupe_machine_entries(entries)
+        self.assertEqual(len(out), 2)
+
+    def test_human_entries_are_never_deduped_even_with_identical_identity(self):
+        entries = [
+            {"verdict_class": "human_rejected", "patch_id": "p1", "reason": "same"},
+            {"verdict_class": "human_rejected", "patch_id": "p1", "reason": "same"},
+        ]
+        out = _dedupe_machine_entries(entries)
+        self.assertEqual(len(out), 2)
+
+    def test_machine_entries_missing_patch_id_or_reason_are_kept(self):
+        entries = [
+            {"verdict_class": "machine_rejected", "reason": "same"},
+            {"verdict_class": "machine_rejected", "reason": "same"},
+        ]
+        out = _dedupe_machine_entries(entries)
+        self.assertEqual(len(out), 2)
+
+
+class SelectTierTests(unittest.TestCase):
+    def test_empty_entries_returns_empty(self):
+        self.assertEqual(_select_tier([], 4), [])
+
+    def test_under_cap_keeps_everything_in_original_order(self):
+        entries = [
+            {"verdict_class": "machine_accepted", "tag": "a"},
+            {"verdict_class": "human_rejected", "tag": "b"},
+        ]
+        self.assertEqual([e["tag"] for e in _select_tier(entries, 4)], ["a", "b"])
+
+    def test_human_entries_preferred_over_machine_when_over_cap(self):
+        # newest-first input; only 1 slot -- the (older) human entry must
+        # still win over the (newer) machine entry.
+        entries = [
+            {"verdict_class": "machine_accepted", "tag": "newer_machine"},
+            {"verdict_class": "human_rejected", "tag": "older_human"},
+        ]
+        self.assertEqual(_select_tier(entries, 1)[0]["tag"], "older_human")
+
+    def test_remaining_slots_filled_by_machine_when_not_enough_humans(self):
+        entries = [
+            {"verdict_class": "machine_accepted", "tag": "m1"},
+            {"verdict_class": "machine_accepted", "tag": "m2"},
+            {"verdict_class": "human_rejected", "tag": "h1"},
+        ]
+        selected = _select_tier(entries, 2)
+        self.assertEqual(len(selected), 2)
+        self.assertIn("h1", [e["tag"] for e in selected])
+
+    def test_selection_restored_to_newest_first_order(self):
+        # Two humans (newer, older) and cap=2: both kept, but must come
+        # back out newest-first, not human-then-machine-grouped.
+        entries = [
+            {"verdict_class": "human_rejected", "tag": "newer_human"},
+            {"verdict_class": "machine_accepted", "tag": "middle_machine"},
+            {"verdict_class": "human_rejected", "tag": "older_human"},
+        ]
+        selected = _select_tier(entries, 2)
+        self.assertEqual([e["tag"] for e in selected], ["newer_human", "older_human"])
 
 
 # A minimal but realistic fixture mirroring Exif.pm's actual structure: one
@@ -2468,7 +2708,45 @@ class BuildReviewPromptChecklistTests(unittest.TestCase):
         self.assertIn("src/parsers/x.rs:10:foo", prompt)
 
 
-class FixGapHappyPathTests(unittest.TestCase):
+class HermeticFixGapTestCase(unittest.TestCase):
+    """Shared base for every TestCase below that calls fix_gap.
+
+    fix_gap defaults extract_evidence_fn/scan_fn to
+    default_extract_live_evidence/default_emission_scan (spec K5's real
+    subprocess-backed implementations -- they shell out to exiftool, rg,
+    and `git show HEAD:<path>` against repo_root) whenever a caller
+    doesn't pass its own. Most fix_gap tests below exercise the
+    post-build review path without ever wiring a fake for either
+    parameter, which means they'd otherwise silently inherit those real,
+    non-hermetic defaults against whatever repo_root resolves to --
+    violating the house rule (hermetic Python tests: no network/cargo/
+    real ~/.oxidex; injectable fns). Patching the two names on
+    model_fix_loop's own module object (not this test module's imported
+    copy) is what actually intercepts them: fix_gap's `extract_evidence_fn
+    or default_extract_live_evidence` is a bare-name lookup resolved via
+    fix_gap's own __globals__ (model_fix_loop's module dict) at call
+    time, not a reference captured at def-time. A test that passes its
+    own extract_evidence_fn/scan_fn is unaffected -- fix_gap only falls
+    back to the (now-patched) module default when the caller's argument
+    is falsy."""
+
+    def setUp(self):
+        super().setUp()
+        evidence_patcher = patch(
+            "model_fix_loop.default_extract_live_evidence",
+            lambda repo_root, sample_path, tag_keys: "",
+        )
+        scan_patcher = patch(
+            "model_fix_loop.default_emission_scan",
+            lambda repo_root, parser_files, tag_keys, diff_text=None: "",
+        )
+        evidence_patcher.start()
+        scan_patcher.start()
+        self.addCleanup(evidence_patcher.stop)
+        self.addCleanup(scan_patcher.stop)
+
+
+class FixGapHappyPathTests(HermeticFixGapTestCase):
     def test_commits_when_build_and_tests_pass_and_gaps_shrink(self):
         gap = make_gap(gap_count=2)
         model_calls = []
@@ -3246,7 +3524,7 @@ class CritiqueUsesExploreTierTests(unittest.TestCase):
         self.assertEqual(pools_seen, [["terra"]])
 
 
-class FixGapFailureTests(unittest.TestCase):
+class FixGapFailureTests(HermeticFixGapTestCase):
     def test_fails_when_gap_count_does_not_decrease(self):
         gap = make_gap(gap_count=2)
         result = fix_gap(
@@ -3293,7 +3571,7 @@ class FixGapFailureTests(unittest.TestCase):
         self.assertIn("test output", result["reason"])
 
 
-class FixGapTestOrderingTests(unittest.TestCase):
+class FixGapTestOrderingTests(HermeticFixGapTestCase):
     def test_targeted_runs_before_review_full_suite_only_before_commit(self):
         order = []
         result = fix_gap(
@@ -3349,7 +3627,7 @@ class FixGapTestOrderingTests(unittest.TestCase):
         self.assertEqual(commits, [])
 
 
-class FixGapCritiqueTests(unittest.TestCase):
+class FixGapCritiqueTests(HermeticFixGapTestCase):
     """Every non-fixed round -- not just a review rejection -- now gets a
     critique and a chance to retry, up to max_repair_rounds. See fix_gap's
     critique_and_continue helper."""
@@ -3496,7 +3774,7 @@ class FixGapCritiqueTests(unittest.TestCase):
             self.assertEqual(r["critique"], infra_reason)
 
 
-class FixGapReviewTests(unittest.TestCase):
+class FixGapReviewTests(HermeticFixGapTestCase):
     def test_retries_once_when_review_rejects_then_approves(self):
         gap = make_gap(gap_count=2)
         review_calls = []
@@ -3812,7 +4090,7 @@ class FixGapReviewTests(unittest.TestCase):
         self.assertEqual(seen_review_config[0], CONFIG)
 
 
-class FixGapDuplicateDetectionTests(unittest.TestCase):
+class FixGapDuplicateDetectionTests(HermeticFixGapTestCase):
     def _fake_attempt_build(self, messages, **kwargs):
         messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
         return True, None, "--- a/x\n+++ b/x\n", messages
@@ -3892,7 +4170,7 @@ def _read_lessons(home):
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-class FixGapK1LessonTests(unittest.TestCase):
+class FixGapK1LessonTests(HermeticFixGapTestCase):
     """Spec K1 writers: fix_gap best-effort appends a lesson event at
     every decision point. knowledge_home=None (every OTHER test in this
     file) is a documented no-op -- these tests opt in with a tempdir."""
@@ -4004,7 +4282,7 @@ class FixGapK1LessonTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
 
 
-class FixGapM3MultisetTests(unittest.TestCase):
+class FixGapM3MultisetTests(HermeticFixGapTestCase):
     """Spec M3: fix_gap's recheck path classifies wrong_value/structural
     via tag_still_open when recheck_fn supplies a post-attempt
     comparison dict (the 3rd tuple element), and fails the attempt when
@@ -4107,7 +4385,7 @@ class FixGapM3MultisetTests(unittest.TestCase):
         self.assertEqual(result["status"], "fixed")
 
 
-class FixGapK5EvidenceTests(unittest.TestCase):
+class FixGapK5EvidenceTests(HermeticFixGapTestCase):
     """Spec K5: fix_gap threads perl_block/live_evidence/emission_scan
     into review_fn, folds UNVERIFIABLE into review_flags/trailers on
     C1/C2 only, and degrades evidence functions to "" on failure."""
@@ -4206,6 +4484,52 @@ class FixGapK5EvidenceTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "fixed")
         self.assertNotIn("review_flags", result)
+
+    def test_unverifiable_without_checklist_id_still_routes_to_human_queue(self):
+        # A reviewer reply can say UNVERIFIABLE without a parseable
+        # C1-C5 token (a plausible model formatting slip -- the prompt
+        # requires one, but nothing enforces it). parse_checklist_id
+        # returns None for this, and fix_gap must fail safe: unknown
+        # severity still escalates to the human queue rather than
+        # silently landing with no Review-Unverifiable trailer at all.
+        commits = []
+
+        def fake_git_commit(msg, root, trailers=None):
+            commits.append(trailers)
+
+        result = fix_gap(
+            make_gap(gap_count=2), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            review_fn=lambda *a, **k: (
+                True, "UNVERIFIABLE: the perl table didn't fit the prompt"),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=fake_git_commit,
+            recheck_fn=lambda fmt: 0,
+        )
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(result["review_flags"], ["UNVERIFIABLE:UNKNOWN"])
+        trailer_dict = dict(commits[0])
+        self.assertEqual(trailer_dict["Review-Unverifiable"], "UNVERIFIABLE:UNKNOWN")
+
+    def test_unverifiable_with_no_reason_at_all_still_routes_to_human_queue(self):
+        # extract_review_verdict_full's own "no checklist id given"
+        # fallback text (for a bare "UNVERIFIABLE" with nothing after
+        # the colon) must also escalate, not just a reply with prose but
+        # no Cn.
+        result = fix_gap(
+            make_gap(gap_count=2), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            review_fn=lambda *a, **k: (True, "UNVERIFIABLE: unverifiable, no checklist id given"),
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **kw: None,
+            recheck_fn=lambda fmt: 0,
+        )
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(result["review_flags"], ["UNVERIFIABLE:UNKNOWN"])
 
 
 class DefaultExtractLiveEvidenceTests(unittest.TestCase):
@@ -4563,7 +4887,7 @@ class NewOxidexOnlyKeysTests(unittest.TestCase):
                          ["A:B"])
 
 
-class FixGapRecheckDetailTests(unittest.TestCase):
+class FixGapRecheckDetailTests(HermeticFixGapTestCase):
     def test_tuple_recheck_detail_becomes_the_failure_reason(self):
         result = fix_gap(
             make_gap(gap_count=1), CONFIG,

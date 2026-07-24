@@ -2230,9 +2230,11 @@ def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=ra
     included) already expects. UNVERIFIABLE replies are folded into
     approved=True (spec: "the fix STILL lands") with reason prefixed
     "UNVERIFIABLE: " so fix_gap can detect it and populate review_flags/
-    the Review-Unverifiable trailer for C1/C2 (see extract_review_verdict_full/
-    parse_checklist_id) without fix_gap needing its own reviewer-calling
-    contract change.
+    the Review-Unverifiable trailer for C1/C2 -- or, when the reply
+    omits a parseable Cn token entirely, UNKNOWN (fail-safe: unknown
+    severity still routes to the human queue rather than silently
+    passing) -- see extract_review_verdict_full/parse_checklist_id,
+    without fix_gap needing its own reviewer-calling contract change.
     """
     prompt = build_review_prompt(
         gap, diff, perl_block=perl_block, live_evidence=live_evidence, emission_scan=emission_scan,
@@ -3276,11 +3278,24 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             # verify correctness -- route this commit to the human
             # judgment queue via review_flags + the M1 Review-Unverifiable
             # trailer (see review_fn/extract_review_verdict_full).
+            #
+            # A reply can say UNVERIFIABLE without a parseable C1-C5 token
+            # (the prompt requires one, but a model formatting slip is a
+            # real possibility -- extract_review_verdict_full already
+            # anticipates this with its "no checklist id given" fallback
+            # reason). checklist_id is then None, and None is never in
+            # ("C1", "C2"), so treating that case as "not C1/C2" would
+            # silently drop the safety net for the exact reply where the
+            # model told us it couldn't verify the fix but we can't tell
+            # which checklist item -- possibly C1/C2 -- was the reason.
+            # Fail safe like every other unparseable-verdict path in this
+            # file: unknown severity escalates to the human queue too,
+            # tagged UNVERIFIABLE:UNKNOWN rather than silently passing.
             review_flags = []
             if review_reason.startswith("UNVERIFIABLE:"):
                 checklist_id = parse_checklist_id(review_reason)
-                if checklist_id in ("C1", "C2"):
-                    review_flags.append(f"UNVERIFIABLE:{checklist_id}")
+                if checklist_id in ("C1", "C2") or checklist_id is None:
+                    review_flags.append(f"UNVERIFIABLE:{checklist_id or 'UNKNOWN'}")
 
             trailers = _build_fix_gap_trailers(
                 gap, fmt, target_tag_keys, sample_path, live_evidence, perl_block_text,
