@@ -96,6 +96,24 @@ class LatestCallsPerWorkerTests(unittest.TestCase):
     def test_empty_entries_returns_empty_dict(self):
         self.assertEqual(latest_calls_per_worker([]), {})
 
+    def test_retry_does_not_overwrite_the_content_entry(self):
+        entries = [
+            {"ts": "t1", "phase": "fixer", "worker": "A", "status": "OK"},
+            {"ts": "t2", "phase": "fixer", "worker": "A", "status": "RETRY"},
+            {"ts": "t3", "phase": "fixer", "worker": "A", "status": "RETRY"},
+        ]
+        result = latest_calls_per_worker(entries)
+        self.assertEqual(result["A"]["fixer"]["ts"], "t3")          # live status
+        self.assertEqual(result["A"]["fixer_content"]["ts"], "t1")  # last completed
+
+    def test_ok_and_error_entries_update_the_content_entry(self):
+        entries = [
+            {"ts": "t1", "phase": "fixer", "worker": "A", "status": "OK"},
+            {"ts": "t2", "phase": "fixer", "worker": "A", "status": "ERROR"},
+        ]
+        result = latest_calls_per_worker(entries)
+        self.assertEqual(result["A"]["fixer_content"]["ts"], "t2")
+
 
 class LoadRequestResponseTests(unittest.TestCase):
     def test_load_request_messages_reads_messages_list(self):
@@ -189,6 +207,33 @@ class RenderWorkerDetailTests(unittest.TestCase):
         self.assertIn("fix this gap", rendered)
         self.assertIn("=== RECEIVED", rendered)
         self.assertIn("+fix", rendered)
+
+    def test_retry_with_no_request_file_falls_back_to_last_completed_call(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            req_log_dir = Path(tmpdir)
+            (req_log_dir / "2026-07-23T11:00:00-fixer-request.json").write_text(
+                json.dumps({"messages": [{"role": "user", "content": "the real conversation"}]})
+            )
+            (req_log_dir / "2026-07-23T11:00:00-fixer-response.txt").write_text("the real reply")
+            calls = {
+                "fixer": {"status": "RETRY", "ts": "2026-07-23T11:05:00", "phase": "fixer", "model": "m"},
+                "fixer_content": {"status": "OK", "ts": "2026-07-23T11:00:00", "phase": "fixer", "model": "m"},
+            }
+            rendered = strip_ansi(
+                render_worker_detail("ISO", calls, req_log_dir, "fixer", 100, now_fn=lambda: 0)
+            )
+        self.assertIn("showing the last completed fixer call", rendered)
+        self.assertIn("the real conversation", rendered)
+        self.assertIn("the real reply", rendered)
+        self.assertNotIn("Request file missing", rendered)
+
+    def test_retry_with_no_content_entry_still_reports_missing_request(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            calls = {"fixer": {"status": "RETRY", "ts": "2026-07-23T11:05:00", "phase": "fixer", "model": "m"}}
+            rendered = strip_ansi(
+                render_worker_detail("ISO", calls, Path(tmpdir), "fixer", 100, now_fn=lambda: 0)
+            )
+        self.assertIn("Request file missing", rendered)
 
     def test_missing_response_shows_placeholder(self):
         with tempfile.TemporaryDirectory() as tmpdir:
