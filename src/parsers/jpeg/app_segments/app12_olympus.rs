@@ -102,6 +102,10 @@ const KNOWN_TAGS: &[&str] = &[
     "IMgg",
     "IMrb",
     "IMrr",
+    "Protect",
+    "REV",
+    "S0",
+    "STB1",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -556,6 +560,35 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:IMrb".to_string(), app12_value);
             }
 
+            // ExifTool exposes the Protect diagnostic field in the APP12
+            // group using its original name.
+            if key.eq_ignore_ascii_case("Protect") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:Protect".to_string(), app12_value);
+            }
+
+            // REV is exposed verbatim in ExifTool's APP12 group.
+            if key.eq_ignore_ascii_case("REV") {
+                metadata.insert("APP12:REV".to_string(), TagValue::String(value.clone()));
+            }
+
+            // S0 is a comma-separated diagnostic string and should be kept verbatim.
+            if key.eq_ignore_ascii_case("S0") {
+                metadata.insert("APP12:S0".to_string(), TagValue::String(value.clone()));
+            }
+
+            // STB1 is exposed as a numeric APP12 diagnostic field.
+            if key.eq_ignore_ascii_case("STB1") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:STB1".to_string(), app12_value);
+            }
+
             // ExifTool exposes the Olympus IMrr diagnostic field in the APP12
             // group using its original mixed-case name.
             if key.eq_ignore_ascii_case("IMrr") {
@@ -738,16 +771,6 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 };
                 metadata.insert("APP12:COLOR4".to_string(), app12_value);
             }
-
-            // ExifTool exposes the Olympus diagnostic CAM9 field in the
-            // APP12 group using its original name.
-            if key.eq_ignore_ascii_case("CAM9") {
-                let app12_value = match value.parse::<i64>() {
-                    Ok(number) => TagValue::Integer(number),
-                    Err(_) => TagValue::String(value.clone()),
-                };
-                metadata.insert("APP12:CAM9".to_string(), app12_value);
-            }
         }
     }
 }
@@ -907,6 +930,43 @@ mod camera_type_tests {
                 .expect("Olympus Picture Info should parse");
 
         assert_eq!(metadata.get_integer("APP12:LightS"), Some(1));
+    }
+
+    #[test]
+    fn test_olympus_protect_app12_tag() {
+        let metadata = parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nProtect=0\r\n")
+            .expect("Olympus Picture Info should parse");
+
+        assert_eq!(metadata.get_integer("APP12:Protect"), Some(0));
+    }
+
+    #[test]
+    fn test_olympus_rev_app12_tag() {
+        let metadata = parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nREV=DCPT\r\n")
+            .expect("Olympus Picture Info should parse");
+
+        assert_eq!(metadata.get_string("APP12:REV"), Some("DCPT"));
+    }
+
+    #[test]
+    fn test_olympus_s0_app12_tag() {
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nS0=1e8,0,11b0,6f72,15cf,4225,4225,1050000,a1e0004,0,2f0030d,2f102c5,2880090,0,0\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:S0"),
+            Some("1e8,0,11b0,6f72,15cf,4225,4225,1050000,a1e0004,0,2f0030d,2f102c5,2880090,0,0")
+        );
+    }
+
+    #[test]
+    fn test_olympus_stb1_app12_tag() {
+        let metadata = parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nSTB1=0\r\n")
+            .expect("Olympus Picture Info should parse");
+
+        assert_eq!(metadata.get_integer("APP12:STB1"), Some(0));
     }
 
     #[test]
