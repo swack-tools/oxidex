@@ -939,12 +939,20 @@ fn format_exif_display_value(
             } else {
                 format!("{:.0}-{:.0}mm", values[0], values[1])
             };
+            let format_f_stop = |v: f64| {
+                let rounded = (v * 10.0).round() / 10.0;
+                if (rounded - rounded.round()).abs() < 0.001 {
+                    format!("{:.0}", rounded)
+                } else {
+                    format!("{:.1}", rounded)
+                }
+            };
             let aperture_str = if values[3] == 0.0
                 || (values[2] - values[3]).abs() < 0.01
             {
-                format!("f/{:.1}", values[2])
+                format!("f/{}", format_f_stop(values[2]))
             } else {
-                format!("f/{:.1}-{:.1}", values[2], values[3])
+                format!("f/{}-{}", format_f_stop(values[2]), format_f_stop(values[3]))
             };
             Some(format!("{} {}", focal_str, aperture_str))
         }
