@@ -7,9 +7,10 @@ pub use exiftool_extractor::ExifToolExtractor;
 pub use oxidex_extractor::OxiDexExtractor;
 
 use crate::models::TagInfo;
+use serde::{Deserialize, Serialize};
 
 /// Result of extracting tags from files
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractionResult {
     /// Tags extracted from files
     pub tags: Vec<TagInfo>,

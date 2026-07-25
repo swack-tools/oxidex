@@ -195,14 +195,16 @@ fn test_fujifilm_parse_basic_tags() {
     // IFD: entry count (little-endian)
     data.extend_from_slice(&[0x02, 0x00]); // 2 entries
 
-    // Entry 1: Quality (tag 0x1000) = Fine (value 3)
+    // Entry 1: Quality (tag 0x1000) = "FINE" -- Quality is a raw ASCII
+    // string tag (ExifTool: Writable => 'string'), not an enumerated
+    // int16u, so it's stored inline as 4 bytes.
     data.extend_from_slice(&[0x00, 0x10]); // Tag ID
-    data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
-    data.extend_from_slice(&[0x03, 0x00, 0x00, 0x00]); // Value: 3 (Fine)
+    data.extend_from_slice(&[0x02, 0x00]); // Type: ASCII
+    data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]); // Count: 4
+    data.extend_from_slice(b"FINE"); // Value: "FINE" (inline, <=4 bytes)
 
-    // Entry 2: Sequence Number (tag 0x1103) = 42
-    data.extend_from_slice(&[0x03, 0x11]); // Tag ID
+    // Entry 2: Sequence Number (tag 0x1101) = 42
+    data.extend_from_slice(&[0x01, 0x11]); // Tag ID
     data.extend_from_slice(&[0x04, 0x00]); // Type: LONG
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
     data.extend_from_slice(&[0x2A, 0x00, 0x00, 0x00]); // Value: 42
@@ -215,7 +217,7 @@ fn test_fujifilm_parse_basic_tags() {
 
     // Verify extracted tags
     assert!(tags.contains_key("Fujifilm:Quality"));
-    assert_eq!(tags.get("Fujifilm:Quality"), Some(&"Fine".to_string()));
+    assert_eq!(tags.get("Fujifilm:Quality"), Some(&"FINE".to_string()));
 
     assert!(tags.contains_key("Fujifilm:SequenceNumber"));
     assert_eq!(tags.get("Fujifilm:SequenceNumber"), Some(&"42".to_string()));
@@ -242,13 +244,13 @@ fn test_fujifilm_parse_film_simulation() {
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
     data.extend_from_slice(&[0x00, 0x06, 0x00, 0x00]); // Value: 0x0600
 
-    // Entry 2: Dynamic Range (tag 0x1402) = Wide 2 (400%) (value 3)
-    data.extend_from_slice(&[0x02, 0x14]);
+    // Entry 2: Dynamic Range (tag 0x1400) = Wide (value 3)
+    data.extend_from_slice(&[0x00, 0x14]);
     data.extend_from_slice(&[0x03, 0x00]);
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
     data.extend_from_slice(&[0x03, 0x00, 0x00, 0x00]);
 
-    // Entry 3: Shutter Type (tag 0x1100) = Electronic (value 1)
+    // Entry 3: AutoBracketing (tag 0x1100) = On (value 1)
     data.extend_from_slice(&[0x00, 0x11]);
     data.extend_from_slice(&[0x03, 0x00]);
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
@@ -264,14 +266,8 @@ fn test_fujifilm_parse_film_simulation() {
         tags.get("Fujifilm:FilmMode"),
         Some(&"Classic Chrome".to_string())
     );
-    assert_eq!(
-        tags.get("Fujifilm:DynamicRange"),
-        Some(&"Wide 2 (400%)".to_string())
-    );
-    assert_eq!(
-        tags.get("Fujifilm:ShutterType"),
-        Some(&"Electronic".to_string())
-    );
+    assert_eq!(tags.get("Fujifilm:DynamicRange"), Some(&"Wide".to_string()));
+    assert_eq!(tags.get("Fujifilm:AutoBracketing"), Some(&"On".to_string()));
 }
 
 #[test]
@@ -316,7 +312,8 @@ fn test_fujifilm_parse_focus_and_flash() {
         tags.get("Fujifilm:FocusMode"),
         Some(&"AF-C (Continuous)".to_string())
     );
-    assert_eq!(tags.get("Fujifilm:FlashMode"), Some(&"On".to_string()));
+    // ExifTool names this tag "FujiFlashMode", not "FlashMode".
+    assert_eq!(tags.get("Fujifilm:FujiFlashMode"), Some(&"On".to_string()));
     assert_eq!(
         tags.get("Fujifilm:WhiteBalance"),
         Some(&"Daylight".to_string())
@@ -361,11 +358,12 @@ fn test_fujifilm_parser_big_endian() {
     // IFD: 1 entry (little-endian, as Fujifilm always uses)
     data.extend_from_slice(&[0x01, 0x00]); // Entry count (LE) = 1
 
-    // Entry: Quality (tag 0x1000) = Fine+RAW (value 5)
+    // Entry: Quality (tag 0x1000) = "FINE" -- a raw ASCII string tag
+    // (ExifTool: Writable => 'string'), stored inline since <=4 bytes.
     data.extend_from_slice(&[0x00, 0x10]); // Tag ID (LE) = 0x1000
-    data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT (LE) = 3
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1 (LE)
-    data.extend_from_slice(&[0x05, 0x00, 0x00, 0x00]); // Value: 5 (LE)
+    data.extend_from_slice(&[0x02, 0x00]); // Type: ASCII (LE) = 2
+    data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]); // Count: 4 (LE)
+    data.extend_from_slice(b"FINE"); // Value: "FINE" (inline, <=4 bytes)
 
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD (LE)
 
@@ -374,7 +372,7 @@ fn test_fujifilm_parser_big_endian() {
     // but the parser should still handle Fujifilm's little-endian format correctly
     parse_fujifilm_makernotes(&data, ByteOrder::BigEndian, &mut tags);
 
-    assert_eq!(tags.get("Fujifilm:Quality"), Some(&"Fine+RAW".to_string()));
+    assert_eq!(tags.get("Fujifilm:Quality"), Some(&"FINE".to_string()));
 }
 
 #[test]
@@ -432,7 +430,7 @@ fn test_fujifilm_parse_advanced_settings() {
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
     data.extend_from_slice(&[0x03, 0x00, 0x00, 0x00]);
 
-    // Entry 4: Burst Mode (tag 0x1101) = Continuous High (value 2)
+    // Entry 4: SequenceNumber (tag 0x1101) = 2
     data.extend_from_slice(&[0x01, 0x11]);
     data.extend_from_slice(&[0x03, 0x00]);
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
@@ -447,8 +445,5 @@ fn test_fujifilm_parse_advanced_settings() {
     assert!(tags.contains_key("Fujifilm:ShadowTone"));
     assert!(tags.contains_key("Fujifilm:HighlightTone"));
     assert_eq!(tags.get("Fujifilm:FacesDetected"), Some(&"3".to_string()));
-    assert_eq!(
-        tags.get("Fujifilm:BurstMode"),
-        Some(&"On (High Speed)".to_string())
-    );
+    assert_eq!(tags.get("Fujifilm:SequenceNumber"), Some(&"2".to_string()));
 }

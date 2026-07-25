@@ -215,7 +215,7 @@ fn parse_fmt_chunk(reader: &dyn FileReader, offset: u64, metadata: &mut Metadata
 }
 
 /// Parse INFO chunk (metadata tags)
-fn parse_info_chunk(
+pub(crate) fn parse_info_chunk(
     reader: &dyn FileReader,
     start_offset: u64,
     end_offset: u64,

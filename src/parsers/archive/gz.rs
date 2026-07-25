@@ -42,40 +42,62 @@ impl GZParser {
         let header = reader.read(0, 10)?;
         let r = EndianReader::little_endian(header);
 
-        let method = header[2];
-        let compression_name = match method {
-            8 => "DEFLATE",
+        let compression = match header[2] {
+            8 => "Deflated",
             _ => "Unknown",
         };
         metadata.insert(
-            "CompressionMethod".to_string(),
-            TagValue::String(compression_name.to_string()),
+            "ZIP:Compression".to_string(),
+            TagValue::String(compression.to_string()),
         );
 
         let flags = header[3];
+        let mut flag_names = Vec::new();
+        if flags & FTEXT != 0 {
+            flag_names.push("Text");
+        }
+        if flags & FHCRC != 0 {
+            flag_names.push("HeaderCRC");
+        }
+        if flags & FEXTRA != 0 {
+            flag_names.push("ExtraField");
+        }
+        if flags & FNAME != 0 {
+            flag_names.push("FileName");
+        }
+        if flags & FCOMMENT != 0 {
+            flag_names.push("Comment");
+        }
+        if !flag_names.is_empty() {
+            metadata.insert(
+                "ZIP:Flags".to_string(),
+                TagValue::String(flag_names.join(", ")),
+            );
+        }
 
         // MTIME: Unix timestamp (4 bytes, little-endian)
         let mtime = r.u32_at(4).unwrap_or(0);
         if mtime != 0 {
-            use chrono::{TimeZone, Utc};
-            if let Some(dt) = Utc.timestamp_opt(mtime as i64, 0).single() {
+            use chrono::{Local, TimeZone};
+            if let Some(dt) = Local.timestamp_opt(mtime as i64, 0).single() {
                 metadata.insert(
-                    "ModificationTime".to_string(),
-                    TagValue::String(dt.format("%Y:%m:%d %H:%M:%S").to_string()),
+                    "ZIP:ModifyDate".to_string(),
+                    TagValue::String(dt.format("%Y:%m:%d %H:%M:%S%:z").to_string()),
                 );
             }
         }
 
         // XFL: Extra flags
         let xfl = header[8];
-        let compression_level = match xfl {
-            2 => "Maximum compression",
-            4 => "Fastest compression",
-            _ => "Normal",
+        let extra_flags = match xfl {
+            0 => "(none)",
+            2 => "Maximum Compression",
+            4 => "Fastest Algorithm",
+            _ => "Unknown",
         };
         metadata.insert(
-            "CompressionLevel".to_string(),
-            TagValue::String(compression_level.to_string()),
+            "ZIP:ExtraFlags".to_string(),
+            TagValue::String(extra_flags.to_string()),
         );
 
         // OS: Operating system
@@ -98,7 +120,7 @@ impl GZParser {
             _ => "Unknown",
         };
         metadata.insert(
-            "OperatingSystem".to_string(),
+            "ZIP:OperatingSystem".to_string(),
             TagValue::String(os_name.to_string()),
         );
 
@@ -119,7 +141,10 @@ impl GZParser {
         if flags & FNAME != 0
             && let Some(filename) = Self::read_null_terminated_string(reader, offset)?
         {
-            metadata.insert("OriginalFileName".to_string(), TagValue::String(filename.0));
+            metadata.insert(
+                "ZIP:ArchivedFileName".to_string(),
+                TagValue::String(filename.0),
+            );
             offset = filename.1;
         }
 
@@ -127,7 +152,7 @@ impl GZParser {
         if flags & FCOMMENT != 0
             && let Some(comment) = Self::read_null_terminated_string(reader, offset)?
         {
-            metadata.insert("Comment".to_string(), TagValue::String(comment.0));
+            metadata.insert("ZIP:Comment".to_string(), TagValue::String(comment.0));
             offset = comment.1;
         }
 

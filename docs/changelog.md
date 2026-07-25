@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Removed `test.yml` workflow (redundant with `ci.yml`)
 - Removed VitePress build artifacts from repository (now built by CI only)
+- Removed `sync-exiftool-tags.yml` workflow (unreliable; tag database now synced manually, see [Tag Database docs](reference/tag-database.md#synchronization))
 
 ### Fixed
 - Fixed sidebar links pointing to non-existent documentation pages

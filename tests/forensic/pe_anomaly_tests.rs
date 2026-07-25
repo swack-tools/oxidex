@@ -405,19 +405,19 @@ fn test_analyze_normal_pe_no_flags() {
 
     // Normal PE should not have suspicious flags
     assert!(
-        !metadata.contains_key("PE:SectionAnomalies"),
+        !metadata.contains_key("EXE:SectionAnomalies"),
         "Normal PE should not have section anomalies"
     );
     assert!(
-        !metadata.contains_key("PE:SuspiciousSections"),
+        !metadata.contains_key("EXE:SuspiciousSections"),
         "Normal PE should not be marked suspicious"
     );
     assert!(
-        !metadata.contains_key("PE:HighEntropySections"),
+        !metadata.contains_key("EXE:HighEntropySections"),
         "Normal PE should not have high entropy sections"
     );
     assert!(
-        !metadata.contains_key("PE:PossiblyPacked"),
+        !metadata.contains_key("EXE:PossiblyPacked"),
         "Normal PE should not be marked as possibly packed"
     );
 }
@@ -442,21 +442,21 @@ fn test_analyze_pe_with_high_entropy_section() {
 
     // Should detect high entropy
     assert!(
-        metadata.contains_key("PE:HighEntropySections"),
+        metadata.contains_key("EXE:HighEntropySections"),
         "Should detect high entropy section"
     );
     assert!(
-        metadata.contains_key("PE:PossiblyPacked"),
+        metadata.contains_key("EXE:PossiblyPacked"),
         "Should mark as possibly packed"
     );
 
-    if let Some(TagValue::Array(sections)) = metadata.get("PE:HighEntropySections") {
+    if let Some(TagValue::Array(sections)) = metadata.get("EXE:HighEntropySections") {
         assert!(
             !sections.is_empty(),
             "Should have at least one high entropy section"
         );
     } else {
-        panic!("PE:HighEntropySections should be an array");
+        panic!("EXE:HighEntropySections should be an array");
     }
 }
 
@@ -486,21 +486,21 @@ fn test_analyze_pe_with_packer_signatures() {
 
     // Should detect packer signatures
     assert!(
-        metadata.contains_key("PE:SectionAnomalies"),
+        metadata.contains_key("EXE:SectionAnomalies"),
         "Should detect section anomalies"
     );
     assert!(
-        metadata.contains_key("PE:SuspiciousSections"),
+        metadata.contains_key("EXE:SuspiciousSections"),
         "Should mark sections as suspicious"
     );
 
-    if let Some(TagValue::Array(anomalies)) = metadata.get("PE:SectionAnomalies") {
+    if let Some(TagValue::Array(anomalies)) = metadata.get("EXE:SectionAnomalies") {
         assert!(
             anomalies.len() >= 2,
             "Should detect multiple anomalies (UPX + W+X)"
         );
     } else {
-        panic!("PE:SectionAnomalies should be an array");
+        panic!("EXE:SectionAnomalies should be an array");
     }
 }
 
@@ -520,11 +520,11 @@ fn test_analyze_unusual_entry_point_in_data_section() {
 
     // Should detect unusual entry point
     assert!(
-        metadata.contains_key("PE:UnusualEntrySection"),
+        metadata.contains_key("EXE:UnusualEntrySection"),
         "Should detect unusual entry point location"
     );
 
-    if let Some(TagValue::String(msg)) = metadata.get("PE:UnusualEntrySection") {
+    if let Some(TagValue::String(msg)) = metadata.get("EXE:UnusualEntrySection") {
         assert!(msg.contains(".data"), "Should mention .data section");
     }
 }
@@ -545,11 +545,11 @@ fn test_analyze_entry_point_outside_all_sections() {
 
     // Should detect entry point anomaly
     assert!(
-        metadata.contains_key("PE:EntryPointAnomaly"),
+        metadata.contains_key("EXE:EntryPointAnomaly"),
         "Should detect entry point outside sections"
     );
 
-    if let Some(TagValue::String(msg)) = metadata.get("PE:EntryPointAnomaly") {
+    if let Some(TagValue::String(msg)) = metadata.get("EXE:EntryPointAnomaly") {
         assert!(
             msg.contains("outside all sections"),
             "Should mention entry point is outside sections"
@@ -622,25 +622,25 @@ fn test_analyze_comprehensive_malicious_characteristics() {
 
     // Should detect multiple issues
     assert!(
-        metadata.contains_key("PE:SectionAnomalies"),
+        metadata.contains_key("EXE:SectionAnomalies"),
         "Should detect section anomalies"
     );
     assert!(
-        metadata.contains_key("PE:SuspiciousSections"),
+        metadata.contains_key("EXE:SuspiciousSections"),
         "Should mark as suspicious"
     );
     assert!(
-        metadata.contains_key("PE:HighEntropySections")
-            || metadata.contains_key("PE:PossiblyPacked"),
+        metadata.contains_key("EXE:HighEntropySections")
+            || metadata.contains_key("EXE:PossiblyPacked"),
         "Should detect high entropy or packing"
     );
     assert!(
-        metadata.contains_key("PE:UnusualEntrySection"),
+        metadata.contains_key("EXE:UnusualEntrySection"),
         "Should detect unusual entry section"
     );
 
     // Verify we have multiple anomalies
-    if let Some(TagValue::Array(anomalies)) = metadata.get("PE:SectionAnomalies") {
+    if let Some(TagValue::Array(anomalies)) = metadata.get("EXE:SectionAnomalies") {
         assert!(
             anomalies.len() >= 3,
             "Should detect at least 3 anomalies (UPX, W+X, size ratio, non-printable), found: {}",

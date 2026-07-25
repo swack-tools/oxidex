@@ -1,0 +1,165 @@
+# Copy this file to config.toml (gitignored) and fill in real values.
+# scripts/model_fix_loop.py and scripts/parallel_model_fix_loop.py both read
+# config.toml by default (override the path with --config).
+#
+# Each [[worker.models]]/[[reviewer.models]] entry is one pool member. One
+# is picked at random for every individual model call (each fixer attempt,
+# each reviewer verdict), so a run rotates across the whole pool instead of
+# pinning to one model. A single-entry pool behaves exactly like the old
+# fixed-model setup.
+#
+# An entry needs only "name" -- it inherits base_url/api_key from its
+# [worker]/[reviewer] table. Add base_url/api_key directly on an entry to
+# pull that one model from a different provider (see the Fireworks example
+# below), so a single pool can mix providers.
+
+[worker]
+base_url = "https://pass.wafer.ai/v1"
+api_key = "your-api-key-here"
+max_tokens = 4096
+# max_prompt_tokens: section 6 raised the default 4096 -> 8192 (not the
+# critiqued 12288 -- TPM economics), paired with graduated per-section
+# truncation (assemble_prompt_sections) so the extra room reaches the
+# learning block instead of just more parser-file text.
+max_prompt_tokens = 8192
+reasoning_effort = "low"
+# stream = true is the default; the reply (and, when the provider sends a
+# final usage chunk via stream_options.include_usage, its cache/token
+# accounting) is reassembled exactly as a non-streamed call would return.
+stream = true
+# prompt_cache: "auto" (default) sends plain messages and relies on the
+# provider's automatic prefix caching -- build_prompt orders sections
+# static-first so that prefix is maximal. "explicit" additionally wraps the
+# static prefix in an Anthropic-style cache_control breakpoint (only helps
+# providers that accept it; opt-in since it changes the request shape).
+# "off" disables both. Either way, cached-token counts the provider reports
+# are logged to manifest.log as cached_tokens=<hit>/<total>.
+prompt_cache = "auto"
+thinking = false
+temperature = 0.7
+max_prompt_tags = 40
+max_prompt_file_bytes = 60000
+timeout = 600
+max_request_turns = 20
+max_request_repeats = 3
+max_verify_turns = 10
+compaction_trigger_tokens = 150000
+compaction_keep_recent_turns = 10
+# compaction_min_elide_tokens: once compaction triggers, only served user
+# payloads whose own estimated size exceeds this floor are stubbed (default
+# 3000); smaller turns are left intact.
+compaction_min_elide_tokens = 3000
+governor_calls_per_minute = 30
+governor_burst = 5
+governor_cooldown_seconds = 30
+governor_max_cooldown_seconds = 300
+max_cluster_tags = 6
+use_sccache = true
+# claim_stale_seconds: a tag claim in the shared tag-state older than this
+# is treated as abandoned (owner dead) and re-claimable. Generous because a
+# live owner's heartbeat thread re-stamps its claim every heartbeat_seconds
+# while an attempt is in flight -- stale means dead, not slow.
+claim_stale_seconds = 7200
+heartbeat_seconds = 60
+max_retries = 1000
+retry_backoff_seconds = 2
+max_retry_backoff_seconds = 120
+# build_semaphore: spec section 5's cross-process cargo build/test slot
+# ceiling (find_tag_gaps.build_semaphore) -- the max number of concurrent
+# cargo build/check/test invocations across every worker+merger sharing
+# this host, so a full round of workers all rechecking gaps at once can't
+# oversubscribe the host's cores by linking concurrently. 5 is the spec's
+# own default for a 10-core host; raise only with measured disk/CPU
+# headroom (see scripts/check_scale_gate.py).
+build_semaphore = 5
+
+# --- Phase 1 knowledge layer / section 6 knobs (spec K1-K5) ---------------
+# learning_budget_tokens: flat, reserved token budget for build_prompt's
+# learning block (GLOBAL-PITFALLS.md excerpt + module playbook + sweep
+# reviews + lessons tail) -- never squeezed further by the graduated
+# per-section truncation, and never dropped entirely.
+learning_budget_tokens = 1200
+# parser_floor_tokens: the parser-files section is elastic under overflow
+# but never shrinks below this -- "elastic with a floor", never squeezed
+# to zero (the inverted-starvation critique this resolves).
+parser_floor_tokens = 2000
+# lessons_tail_kb: how far back build_prompt seeks into the tail of
+# logs/lessons.jsonl (bounded, no full scan of a ledger that only grows)
+# when rendering the learning block's "recent lessons" entries.
+lessons_tail_kb = 256
+
+# Tiered routing: explore-phase turns (investigation, REQUEST/VERIFY
+# round-trips) use the cheap fast model; patch-phase turns (final diffs,
+# repairs, retries) use the strongest model. Omit "phase" on an entry to
+# use it for both.
+[[worker.models]]
+name = "gpt-5.6-terra"
+phase = "explore"
+reasoning_effort = "medium"
+
+[[worker.models]]
+name = "gpt-5.6-sol"
+phase = "patch"
+reasoning_effort = "max"
+
+# Mixed-provider example: an entry with its own base_url/api_key pulls that
+# one model from a different provider (see the header comment above).
+# [[worker.models]]
+# name = "accounts/fireworks/routers/kimi-k2p7-code-fast"
+# base_url = "https://api.fireworks.ai/inference/v1"
+# api_key = "your-fireworks-api-key-here"
+
+# Optional: omit this table entirely to have the reviewer reuse [worker]'s
+# pool/config exactly. Add it to review with a different model pool and/or
+# provider than the fixer.
+[reviewer]
+base_url = "https://pass.wafer.ai/v1"
+api_key = "your-api-key-here"
+max_tokens = 256
+reasoning_effort = "max"
+stream = true
+thinking = true
+temperature = 0
+timeout = 600
+max_retries = 1000
+retry_backoff_seconds = 2
+max_retry_backoff_seconds = 120
+# reviewer_max_prompt_tokens: independent of the fixer's max_prompt_tokens
+# -- the reviewer prompt now carries the Perl reference, live post-fix
+# evidence, and a scoped emission scan (spec K5) alongside the C1-C5
+# checklist, so it gets its own generous budget.
+reviewer_max_prompt_tokens = 8192
+
+[[reviewer.models]]
+name = "glm5.2-fast"
+
+[[reviewer.models]]
+name = "MiniMax-M3"
+
+[[reviewer.models]]
+name = "Kimi-K2.6"
+
+[[reviewer.models]]
+name = "accounts/fireworks/routers/kimi-k2p7-code-fast"
+base_url = "https://api.fireworks.ai/inference/v1"
+api_key = "your-fireworks-api-key-here"
+
+# Optional: configures scripts/parallel_tag_fix_loop.py. Omit entirely to
+# use its own defaults (workers = 4, max_tags_per_process = 1).
+[parallel]
+workers = 4
+max_tags_per_process = 1
+
+# Optional: spec S3's T3 TABLE-PORT / T4 FOUNDATION-UNLOCK job knobs --
+# scripts/model_fix_loop.py's attempt_table_port/attempt_foundation_job.
+# Omit entirely to use the spec's own defaults (16384 / 8). These tiers
+# are opt-in (no job runs unless explicitly dispatched); this table only
+# tunes them when they do.
+[table_job]
+max_prompt_tokens = 16384
+max_repair_rounds = 8
+# model: the strongest configured model, per spec S3 -- tag the
+# strongest [[worker.models]]/[[reviewer.models]] entry(ies) with
+# phase = "table" (alongside the existing "explore"/"patch" tags) rather
+# than repeating a model name here; attempt_table_port/
+# attempt_foundation_job select via models_for_phase(pool, "table").

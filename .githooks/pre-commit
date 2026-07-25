@@ -1,0 +1,41 @@
+#!/bin/sh
+# OxiDex pre-commit hook: runs `just pre-commit` (fmt-check, lint, test).
+# Installed via `just install-hooks` (sets core.hooksPath to .githooks).
+#
+# Escape hatch: OXIDEX_SKIP_HOOKS=1 skips the fmt/lint/test gate
+# (the chained hooks below still run).
+
+# Chain the pre-commit hook this repo's hooksPath shadows (a global
+# core.hooksPath, else .git/hooks — e.g. git-lfs wrappers). Consulting
+# both locations is deliberately broader than native git, which uses one.
+global="$(git config --global --path core.hooksPath 2>/dev/null)"
+native="$(git rev-parse --git-common-dir)/hooks"
+if [ -n "$global" ] && [ -x "$global/pre-commit" ]; then
+    "$global/pre-commit" "$@" || exit $?
+elif [ -n "$global" ] && [ -e "$global/pre-commit" ]; then
+    echo "warning: $global/pre-commit is not executable; skipping" >&2
+elif [ -x "$native/pre-commit" ]; then
+    "$native/pre-commit" "$@" || exit $?
+elif [ -e "$native/pre-commit" ]; then
+    echo "warning: $native/pre-commit is not executable; skipping" >&2
+fi
+
+[ "$OXIDEX_SKIP_HOOKS" = "1" ] && exit 0
+
+# Skip in linked worktrees. RATIONALE: this repo runs automated fleet
+# agents in worktrees under .claude/worktrees/ that commit frequently;
+# the full fmt+lint+test gate would cripple them, and their changes get
+# re-verified on merge to main anyway.
+gd=$(git rev-parse --git-dir)
+gcd=$(git rev-parse --git-common-dir)
+if [ "$gd" != "$gcd" ]; then
+    exit 0
+fi
+
+# Never hard-block commits on missing tooling.
+if ! command -v just >/dev/null 2>&1; then
+    echo "warning: 'just' not installed; skipping pre-commit checks (fmt/lint/test)" >&2
+    exit 0
+fi
+
+exec just pre-commit
