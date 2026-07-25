@@ -785,6 +785,26 @@ fn read_tiff_u32(bytes: &[u8], byte_order: ByteOrder) -> Option<u32> {
     })
 }
 
+fn read_tiff_rational(bytes: &[u8], byte_order: ByteOrder) -> Option<f64> {
+    let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+    let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+    if denominator == 0 {
+        return None;
+    }
+    Some(f64::from(numerator) / f64::from(denominator))
+}
+
+fn format_trimmed_decimal(value: f64) -> String {
+    let mut formatted = format!("{:.10}", value);
+    while formatted.contains('.') && formatted.ends_with('0') {
+        formatted.pop();
+    }
+    if formatted.ends_with('.') {
+        formatted.pop();
+    }
+    formatted
+}
+
 /// Format EXIF values whose raw TIFF representation differs from ExifTool's
 /// default text output.
 fn format_exif_display_value(
@@ -794,6 +814,11 @@ fn format_exif_display_value(
     value_count: u32,
     byte_order: ByteOrder,
 ) -> Option<String> {
+    let read_ascii = || {
+        Some(
+            String::from_utf8_lossy(bytes).trim_end_matches('\0').to_string(),
+        )
+    };
     match tag_id {
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
@@ -832,6 +857,43 @@ fn format_exif_display_value(
                 Some(format!("{}", f64::from(numerator) / f64::from(denominator)))
             }
         }
+        // RecommendedExposureIndex: SHORT/LONG/RATIONAL[1].
+        0x8832 if value_count >= 1 => match field_type {
+            3 => Some(read_tiff_u16(bytes, byte_order)?.to_string()),
+            4 => Some(read_tiff_u32(bytes, byte_order)?.to_string()),
+            5 => Some(format_trimmed_decimal(read_tiff_rational(bytes, byte_order)?)),
+            _ => None,
+        },
+        // OffsetTime: ASCII string.
+        0x9010 if field_type == 2 && value_count >= 1 => read_ascii(),
+        // ApertureValue: RATIONAL[1], printed as the stored APEX value.
+        0x9202 if field_type == 5 && value_count >= 1 => {
+            Some(format_trimmed_decimal(read_tiff_rational(bytes, byte_order)?))
+        }
+        // LensInfo / LensSpecification: RATIONAL[4].
+        0xA432 if field_type == 5 && value_count >= 4 => {
+            let values = [
+                read_tiff_rational(bytes.get(0..8)?, byte_order)?,
+                read_tiff_rational(bytes.get(8..16)?, byte_order)?,
+                read_tiff_rational(bytes.get(16..24)?, byte_order)?,
+                read_tiff_rational(bytes.get(24..32)?, byte_order)?,
+            ];
+            let focal = if (values[0] - values[1]).abs() < f64::EPSILON {
+                format!("{}mm", format_trimmed_decimal(values[0]))
+            } else {
+                format!("{}-{}mm", format_trimmed_decimal(values[0]), format_trimmed_decimal(values[1]))
+            };
+            let aperture = if values[2] == 0.0 && values[3] == 0.0 {
+                "f/0".to_string()
+            } else if (values[2] - values[3]).abs() < f64::EPSILON {
+                format!("f/{}", format_trimmed_decimal(values[2]))
+            } else {
+                format!("f/{}-{}", format_trimmed_decimal(values[2]), format_trimmed_decimal(values[3]))
+            };
+            Some(format!("{} {}", focal, aperture))
+        }
+        // LensModel / LensSerialNumber: ASCII strings.
+        0xA434 | 0xA435 if field_type == 2 && value_count >= 1 => read_ascii(),
         // ColorSpace: SHORT[1].
         0xA001 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
             1 => Some("sRGB".to_string()),
@@ -938,6 +1000,51 @@ fn decode_exif_cfa_pattern(bytes: &[u8], byte_order: ByteOrder) -> Option<String
         formatted.push(']');
     }
     Some(formatted)
+}
+
+#[cfg(test)]
+mod exif_display_value_tests {
+    use super::*;
+
+    #[test]
+    fn formats_missing_cr3_exif_tags_like_exiftool() {
+        assert_eq!(
+            format_exif_display_value(0x9010, b"+00:00\0", 2, 7, ByteOrder::LittleEndian).as_deref(),
+            Some("+00:00")
+        );
+        assert_eq!(
+            format_exif_display_value(0xA434, b"EF-M15-45mm f/3.5-6.3 IS STM\0", 2, 30, ByteOrder::LittleEndian).as_deref(),
+            Some("EF-M15-45mm f/3.5-6.3 IS STM")
+        );
+        assert_eq!(
+            format_exif_display_value(0xA435, b"0000000000\0", 2, 11, ByteOrder::LittleEndian).as_deref(),
+            Some("0000000000")
+        );
+        assert_eq!(
+            format_exif_display_value(0x8832, &12800u32.to_le_bytes(), 4, 1, ByteOrder::LittleEndian).as_deref(),
+            Some("12800")
+        );
+        let lens_info = [
+            15u32.to_le_bytes(),
+            1u32.to_le_bytes(),
+            45u32.to_le_bytes(),
+            1u32.to_le_bytes(),
+            0u32.to_le_bytes(),
+            1u32.to_le_bytes(),
+            0u32.to_le_bytes(),
+            1u32.to_le_bytes(),
+        ]
+        .concat();
+        assert_eq!(
+            format_exif_display_value(0xA432, &lens_info, 5, 4, ByteOrder::LittleEndian).as_deref(),
+            Some("15-45mm f/0")
+        );
+        let aperture_value = [7u32.to_le_bytes(), 2u32.to_le_bytes()].concat();
+        assert_eq!(
+            format_exif_display_value(0x9202, &aperture_value, 5, 1, ByteOrder::LittleEndian).as_deref(),
+            Some("3.5")
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1526,6 +1633,69 @@ fn find_cr3_cmt1_tiff(data: &[u8]) -> Option<&[u8]> {
     None
 }
 
+/// Locate the Canon CR3 `CMT2` metadata box and return its TIFF payload.
+///
+/// Canon stores the primary EXIF IFD metadata in `CMT2`, parallel to the IFD0
+/// metadata stored in `CMT1`.
+fn find_cr3_cmt2_tiff(data: &[u8]) -> Option<&[u8]> {
+    let mut cursor = 0;
+    while cursor + 4 <= data.len() {
+        let rel = data[cursor..].windows(4).position(|w| w == b"CMT2")?;
+        let type_offset = cursor + rel;
+        cursor = type_offset + 4;
+        if type_offset < 4 {
+            continue;
+        }
+
+        let box_start = type_offset - 4;
+        let box_size = u32::from_be_bytes([
+            data[box_start],
+            data[box_start + 1],
+            data[box_start + 2],
+            data[box_start + 3],
+        ]) as usize;
+        let payload_start = type_offset + 4;
+        let box_end = match box_start.checked_add(box_size) {
+            Some(end) if box_size >= 8 && end <= data.len() && end > payload_start => end,
+            _ => continue,
+        };
+
+        let payload = &data[payload_start..box_end];
+        if payload.starts_with(b"II*\0") || payload.starts_with(b"MM\x00*") {
+            return Some(payload);
+        }
+    }
+    None
+}
+
+fn extract_cr3_cmt_ifd_tags(tiff: &[u8], ifd_name: &str, metadata: &mut MetadataMap) {
+    if tiff.len() < 8 {
+        return;
+    }
+
+    let Ok(byte_order) = detect_byte_order(tiff) else {
+        return;
+    };
+    let ifd_offset = read_u32(&tiff[4..8], byte_order) as u64;
+    let reader = SliceReader::new(tiff);
+    let Ok(tags) = parse_ifd(&reader, ifd_offset, byte_order) else {
+        return;
+    };
+
+    for (tag_id, field_type, value_count, raw_bytes) in tags {
+        let bytes = raw_bytes.as_ref();
+        let tag_name = lookup_tag_name(tag_id, ifd_name);
+        let tag_value = if let Some(value) =
+            format_exif_display_value(tag_id, bytes, field_type, value_count, byte_order)
+        {
+            TagValue::new_string(value)
+        } else {
+            raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order)
+        };
+        metadata.insert(tag_name, tag_value);
+    }
+}
+
 /// Read an IFD0 tag from a CMT1 TIFF payload.
 ///
 /// An entry that is present but contains an empty ASCII string still yields an
@@ -1562,6 +1732,11 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     // a QuickTime-style box/atom parser will replace this). For now, extract
     // standard IFD0 metadata from the CMT1 TIFF payload.
     if let Some(tiff) = find_cr3_cmt1_tiff(data) {
+        extract_cr3_cmt_ifd_tags(tiff, "IFD0", &mut metadata);
+    }
+
+    if let Some(tiff) = find_cr3_cmt2_tiff(data) {
+        extract_cr3_cmt_ifd_tags(tiff, "ExifIFD", &mut metadata);
         // ExifTool reports Artist even when its stored ASCII value is empty.
         if let Some(artist) = extract_cr3_cmt1_ifd0_tag(tiff, 0x013B) {
             metadata.insert(lookup_tag_name(0x013B, "IFD0"), artist);
