@@ -492,6 +492,30 @@ def _branch_head_sha(repo_root, branch):
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def _head_already_covered_by_base(repo_root, head_sha, base_ref):
+    """True when head_sha is base_ref itself or an ancestor of it -- i.e.
+    the worker branch never committed anything of its own beyond whatever
+    base_ref already was, so a `checkout -B` reset discards nothing the
+    squad merger hasn't seen (there is nothing NEW for it to have seen).
+
+    Without this check, a worker that investigates a tag and never lands
+    a commit sits forever at its creation-time head sha, which the merger
+    (correctly) never records in squad-status -- nothing ever happened on
+    that branch worth recording. The consume-handshake guard below reads
+    "no entry" as "not yet resolved" and blocks the reset every round,
+    forever, even though there was never anything to protect. This is the
+    common case (most attempts fail before landing a commit), so without
+    this escape hatch worker worktrees never refresh to a newer squad
+    branch tip at all once created.
+
+    Errs on the side of GUARDING (returns False, blocking the reset) if
+    git can't answer -- the same fail-closed posture as the sibling
+    checks this sits next to.
+    """
+    result = _git(["merge-base", "--is-ancestor", head_sha, base_ref], repo_root)
+    return result.returncode == 0
+
+
 def _squad_status_resolved(squad_status_path, sha):
     """True when `sha` is recorded consumed OR quarantined in a squad
     merger's status file (spec M2/M5 consume handshake).
@@ -567,6 +591,7 @@ def create_worktree(repo_root, path, branch, base_ref, config_path=DEFAULT_CONFI
             squad_status_path is not None
             and _branch_exists(repo_root, branch)
             and (head_sha := _branch_head_sha(repo_root, branch))
+            and not _head_already_covered_by_base(repo_root, head_sha, base_ref)
             and not _squad_status_resolved(squad_status_path, head_sha)
         ):
             # Consume handshake (spec M2/M5): the squad merger hasn't

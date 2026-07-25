@@ -424,7 +424,7 @@ class ConsumeHandshakeTests(unittest.TestCase):
     """
     BRANCH = "model-fix-parallel-nef"
 
-    def _fake_run(self, head_sha):
+    def _fake_run(self, head_sha, covered_by_base=False):
         def fake_run(argv, **kwargs):
             if argv == ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{self.BRANCH}"]:
                 return MagicMock(returncode=0, stdout="abc123\n", stderr="")
@@ -432,11 +432,20 @@ class ConsumeHandshakeTests(unittest.TestCase):
                 return MagicMock(returncode=0, stdout="0\n", stderr="")  # nothing undiscardable
             if argv == ["git", "rev-parse", "--verify", "--quiet", self.BRANCH]:
                 return MagicMock(returncode=0, stdout=f"{head_sha}\n", stderr="")
+            if argv[:2] == ["git", "merge-base"]:
+                # returncode 0 = head_sha IS an ancestor of (or equal to)
+                # base_ref -- the worker never committed anything beyond
+                # base_ref, so there is nothing for the consume handshake
+                # to protect. Defaults to "not covered" (1) so every
+                # existing test in this class -- which simulates a worker
+                # branch that genuinely diverged -- keeps its original
+                # blocked-reset expectation unless it opts in.
+                return MagicMock(returncode=0 if covered_by_base else 1, stdout="", stderr="")
             return MagicMock(returncode=0, stdout="", stderr="")
         return fake_run
 
-    def _create(self, tmp, mock_run, head_sha, squad_status_path=None):
-        mock_run.side_effect = self._fake_run(head_sha)
+    def _create(self, tmp, mock_run, head_sha, squad_status_path=None, covered_by_base=False):
+        mock_run.side_effect = self._fake_run(head_sha, covered_by_base=covered_by_base)
         worktree = tmp / "worktree"
         worktree.mkdir()
         create_worktree(
@@ -504,6 +513,43 @@ class ConsumeHandshakeTests(unittest.TestCase):
             tmp = Path(tmpdir)
             status_path = tmp / "squad-status" / "nikon.json"  # never created
             argvs = self._create(tmp, mock_run, "whatever-sha", squad_status_path=status_path)
+            self.assertNotIn(["git", "checkout", "-B", self.BRANCH, "main"], argvs)
+            self.assertIn(["git", "checkout", self.BRANCH], argvs)
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_allows_reset_when_head_never_diverged_from_base(self, mock_run):
+        # The common case: a worker investigated a tag and never landed a
+        # commit, so its branch head is still exactly whatever base_ref
+        # was at creation time. The merger never recorded this sha --
+        # there was never a real commit for it to look at -- so without
+        # the _head_already_covered_by_base escape hatch this worktree
+        # would be blocked from ever refreshing to a newer base_ref tip,
+        # forever, even though there is nothing on the branch to protect.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            status_path = tmp / "squad-status" / "nikon.json"  # no entry for this sha either
+            status_path.parent.mkdir()
+            status_path.write_text(json.dumps({"heads": {}}))
+            argvs = self._create(
+                tmp, mock_run, "never-diverged-sha", squad_status_path=status_path,
+                covered_by_base=True,
+            )
+            self.assertIn(["git", "checkout", "-B", self.BRANCH, "main"], argvs)
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_still_blocks_reset_when_diverged_and_unresolved_even_if_status_file_exists(self, mock_run):
+        # Guards against a too-broad fix: a genuinely diverged, unresolved
+        # head must stay blocked even when the squad-status file exists
+        # and has entries -- just not for this sha.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            status_path = tmp / "squad-status" / "nikon.json"
+            status_path.parent.mkdir()
+            status_path.write_text(json.dumps({"heads": {"some-other-sha": {"status": "consumed"}}}))
+            argvs = self._create(
+                tmp, mock_run, "diverged-unresolved-sha", squad_status_path=status_path,
+                covered_by_base=False,
+            )
             self.assertNotIn(["git", "checkout", "-B", self.BRANCH, "main"], argvs)
             self.assertIn(["git", "checkout", self.BRANCH], argvs)
 
