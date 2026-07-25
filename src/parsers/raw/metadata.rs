@@ -321,6 +321,8 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     let canonical_tag_id = match (format, ifd_index, *tag_id) {
                         (RawFormat::PanasonicRW2, 0, 0x000A) => 0x0102,
                         (RawFormat::PanasonicRW2, 0, 0x000B) => 0x0103,
+                        (RawFormat::CanonCR2, 0, 0x0111) => 0x0111,
+                        (RawFormat::CanonCR2, 0, 0x0117) => 0x0117,
                         _ => *tag_id,
                     };
                     let tag_name = match (format, ifd_index, *tag_id) {
@@ -329,6 +331,15 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
                         (RawFormat::PanasonicRW2, 0, 0x001D) => {
                             format!("{}:BlackLevelGreen", ifd_name)
+                        }
+                        (RawFormat::CanonCR2, 0, 0x0111) => {
+                            format!("{}:PreviewImageLength", ifd_name)
+                        }
+                        (RawFormat::CanonCR2, 0, 0x0117) => {
+                            format!("{}:PreviewImageStart", ifd_name)
+                        }
+                        (RawFormat::CanonCR2, 1, 0x0201) => {
+                            format!("{}:ThumbnailOffset", ifd_name)
                         }
                         (RawFormat::PanasonicRW2, 0, 0x001E) => {
                             format!("{}:BlackLevelBlue", ifd_name)
@@ -586,6 +597,34 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
             extract_dng_tags(&mut metadata);
         }
         RawFormat::CanonCR2 => {
+            // In CR2, IFD0 StripOffsets/StripByteCounts identify the preview image.
+            // Expose the binary payload when the reported absolute file offset and
+            // byte count are both valid.
+            if let (Some(start_val), Some(length_val)) = (
+                metadata.get("IFD0:PreviewImageStart"),
+                metadata.get("IFD0:PreviewImageLength"),
+            ) {
+                let start = match start_val {
+                    TagValue::Integer(i) => usize::try_from(*i).ok(),
+                    TagValue::String(s) => s.parse::<usize>().ok(),
+                    _ => None,
+                };
+                let length = match length_val {
+                    TagValue::Integer(i) => usize::try_from(*i).ok(),
+                    TagValue::String(s) => s.parse::<usize>().ok(),
+                    _ => None,
+                };
+                if let (Some(start), Some(length)) = (start, length) {
+                    if let Some(end) = start.checked_add(length) {
+                        if end <= data.len() {
+                            metadata.insert(
+                                "IFD0:PreviewImage".to_string(),
+                                TagValue::Binary(data[start..end].to_vec()),
+                            );
+                        }
+                    }
+                }
+            }
             extract_cr2_tags(&mut metadata);
         }
         RawFormat::NikonNEF | RawFormat::NikonNRW => {
@@ -840,6 +879,21 @@ fn format_exif_display_value(
         },
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
         0xA302 if field_type == 7 => decode_exif_cfa_pattern(bytes, byte_order),
+        // SensitivityType: SHORT[1].
+        0x8830 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Unknown".to_string()),
+            1 => Some("Standard Output Sensitivity".to_string()),
+            2 => Some("Recommended Exposure Index".to_string()),
+            3 => Some("ISO Speed".to_string()),
+            4 => Some("Standard Output Sensitivity and Recommended Exposure Index".to_string()),
+            5 => Some("ISO Speed and Recommended Exposure Index".to_string()),
+            6 => Some(
+                "ISO Speed, Standard Output Sensitivity and Recommended Exposure Index"
+                    .to_string(),
+            ),
+            7 => Some("Recommended Exposure Index and ISO Speed".to_string()),
+            _ => None,
+        },
         // Contrast: SHORT[1].
         0xA408 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
             0 => Some("Normal".to_string()),
@@ -1551,6 +1605,46 @@ fn extract_cr3_cmt1_ifd0_tag(tiff: &[u8], wanted_tag_id: u16) -> Option<TagValue
     None
 }
 
+/// Read a specific tag from the ExifIFD inside a CMT1 TIFF payload.
+fn extract_cr3_cmt1_exif_tag(tiff: &[u8], wanted_tag_id: u16) -> Option<TagValue> {
+    if tiff.len() < 8 {
+        return None;
+    }
+    let byte_order = detect_byte_order(tiff).ok()?;
+    let ifd0_offset = read_u32(&tiff[4..8], byte_order) as u64;
+    let reader = SliceReader::new(tiff);
+    let ifd0_tags = parse_ifd(&reader, ifd0_offset, byte_order).ok()?;
+
+    let exif_ifd_offset =
+        ifd0_tags
+            .iter()
+            .find_map(|(tag_id, field_type, value_count, raw_bytes)| {
+                if *tag_id == 0x8769 && *field_type == 4 && *value_count >= 1 {
+                    read_tiff_u32(raw_bytes.as_ref(), byte_order).map(u64::from)
+                } else {
+                    None
+                }
+            })?;
+
+    let exif_tags = parse_ifd(&reader, exif_ifd_offset, byte_order).ok()?;
+    for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+        if *tag_id == wanted_tag_id {
+            let bytes = raw_bytes.as_ref();
+            if let Some(value) = format_exif_display_value(
+                *tag_id,
+                bytes,
+                *field_type,
+                *value_count,
+                byte_order,
+            ) {
+                return Some(TagValue::new_string(value));
+            }
+            return Some(raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order));
+        }
+    }
+    None
+}
+
 fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
     metadata.insert(
@@ -1568,6 +1662,15 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         }
         if let Some(copyright) = extract_cr3_cmt1_ifd0_tag(tiff, 0x8298) {
             metadata.insert(lookup_tag_name(0x8298, "IFD0"), copyright);
+        }
+        if let Some(owner_name) = extract_cr3_cmt1_exif_tag(tiff, 0xA430) {
+            metadata.insert(lookup_tag_name(0xA430, "ExifIFD"), owner_name);
+        }
+        if let Some(sensitivity_type) = extract_cr3_cmt1_exif_tag(tiff, 0x8830) {
+            metadata.insert(
+                lookup_tag_name(0x8830, "ExifIFD"),
+                sensitivity_type,
+            );
         }
     }
 
