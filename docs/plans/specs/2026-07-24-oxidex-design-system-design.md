@@ -112,8 +112,11 @@ Each is a documented component with variants + usage notes:
   `get_claude_design_prompt` before writing).
 - README / design-system guide: token reference, semantic pairing rule,
   do/don't notes.
-- One `.dc.html` per component (13) + `showcase.dc.html`; each file
-  self-contained (carries the shared token CSS block) per canonical-HTML rules.
+- Components per the canonical design-system layout discovered at build time:
+  `.jsx` + `.d.ts` + `.prompt.md` triples with `core-*.card.html` galleries
+  (as built — supersedes the earlier one-`.dc.html`-per-component guess), plus
+  `showcase.dc.html`; each renderable file self-contained per canonical-HTML
+  rules.
 
 ## Verification
 
