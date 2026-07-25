@@ -42,7 +42,13 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0xC619 // BlackLevelRepeatDim
+            0x828D // CFARepeatPatternDim
+                | 0x828E // CFAPattern2
+                | 0xC616 // CFAPlaneColor
+                | 0xC617 // CFALayout
+                | 0xC61F // DefaultCropOrigin
+                | 0xC620 // DefaultCropSize
+                | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
                 | 0xC62D // BayerGreenSplit
                 | 0xC632 // AntiAliasStrength
@@ -50,7 +56,17 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
                 | 0xC68D // ActiveArea
         )
     {
-        lookup_tag_name(tag_id, "EXIF")
+        // Some DNG tags are not yet in the generated oxidex-tags database.
+        // Use hardcoded names to avoid emitting hex fallbacks like EXIF:0x828D.
+        match tag_id {
+            0x828D => "EXIF:CFARepeatPatternDim".to_string(),
+            0x828E => "EXIF:CFAPattern2".to_string(),
+            0xC616 => "EXIF:CFAPlaneColor".to_string(),
+            0xC617 => "EXIF:CFALayout".to_string(),
+            0xC61F => "EXIF:DefaultCropOrigin".to_string(),
+            0xC620 => "EXIF:DefaultCropSize".to_string(),
+            _ => lookup_tag_name(tag_id, "EXIF"),
+        }
     } else {
         lookup_tag_name(tag_id, ifd_name)
     }
@@ -377,7 +393,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     ) {
                         TagValue::new_string(value)
                     } else if format == RawFormat::AdobeDNG {
-                        format_dng_integer_array(
+                        format_dng_display_value(
                             *tag_id,
                             bytes,
                             *field_type,
@@ -502,30 +518,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
-                            // TIFF/EP tag 0x828E (CFAPattern2) is a plain
-                            // int8u array with no dimension header, unlike
-                            // EXIF tag 0xA302 (CFAPattern). The generic
-                            // decoder below has no BYTE-array case and falls
-                            // back to raw TagValue::Binary, so this still
-                            // needs its own formatting -- but the name comes
-                            // from the same lookup_tag_name(tag_id,
-                            // sub_ifd_name) every other tag in this loop
-                            // uses, for consistency.
-                            if tag_id == 0x828E {
-                                metadata.insert(
-                                    lookup_tag_name(tag_id, sub_ifd_name),
-                                    TagValue::new_string(format_cfa_pattern2(
-                                        raw_bytes.as_ref(),
-                                        value_count,
-                                    )),
-                                );
-                                continue;
-                            }
-
                             let tag_name = lookup_raw_tag_name(tag_id, sub_ifd_name, format);
                             let bytes = raw_bytes.as_ref();
                             let tag_value = if format == RawFormat::AdobeDNG {
-                                format_dng_integer_array(
+                                format_dng_display_value(
                                     tag_id,
                                     bytes,
                                     field_type,
@@ -541,6 +537,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                         byte_order,
                                     )
                                 })
+                            } else if tag_id == 0x828E {
+                                TagValue::new_string(format_cfa_pattern2(
+                                    bytes,
+                                    value_count,
+                                ))
                             } else {
                                 raw_bytes_to_simple_tag_value(
                                     bytes,
@@ -721,52 +722,113 @@ fn find_jpeg_exif_tiff(jpeg: &[u8]) -> Result<Option<&[u8]>> {
 /// values to one scalar. These two DNG tags have meaningful fixed-size arrays,
 /// so validate their declared TIFF type and complete byte payload before
 /// formatting them.
-fn format_dng_integer_array(
+fn format_dng_display_value(
     tag_id: u16,
     bytes: &[u8],
     field_type: u16,
     value_count: u32,
     byte_order: ByteOrder,
 ) -> Option<String> {
-    let component_size = match tag_id {
-        0xC619 if field_type == 3 => 2, // BlackLevelRepeatDim: SHORT[2]
-        0xC68D if field_type == 4 => 4, // ActiveArea: LONG[4]
+    match tag_id {
+        // CFARepeatPatternDim: SHORT[2]
+        0x828D if field_type == 3 => format_short_array(bytes, value_count, byte_order),
+        // CFAPattern2: BYTE[n]
+        0x828E if field_type == 1 => Some(format_cfa_pattern2(bytes, value_count)),
+        // CFAPlaneColor: BYTE[n] -> color names joined by comma
+        0xC616 if field_type == 1 => {
+            let count = usize::try_from(value_count).ok()?;
+            let colors = bytes.get(..count)?;
+            let names: Vec<String> = colors.iter().map(|&b| match b {
+                0 => "Red".to_string(),
+                1 => "Green".to_string(),
+                2 => "Blue".to_string(),
+                3 => "Cyan".to_string(),
+                4 => "Magenta".to_string(),
+                5 => "Yellow".to_string(),
+                6 => "White".to_string(),
+                other => format!("Unknown({})", other),
+            }).collect();
+            Some(names.join(","))
+        }
+        // CFALayout: SHORT[1]
+        0xC617 if field_type == 3 && value_count == 1 => {
+            let value = read_tiff_u16(bytes, byte_order)?;
+            match value {
+                1 => Some("Rectangular".to_string()),
+                2 => Some("Even columns offset down 1/2 row".to_string()),
+                3 => Some("Even columns offset up 1/2 row".to_string()),
+                4 => Some("Even rows offset right 1/2 column".to_string()),
+                5 => Some("Even rows offset left 1/2 column".to_string()),
+                6 => Some("Even rows offset up by 1/2 row, even columns offset left by 1/2 column".to_string()),
+                7 => Some("Even rows offset up by 1/2 row, even columns offset right by 1/2 column".to_string()),
+                8 => Some("Even rows offset down by 1/2 row, even columns offset left by 1/2 column".to_string()),
+                9 => Some("Even rows offset down by 1/2 row, even columns offset right by 1/2 column".to_string()),
+                _ => None,
+            }
+        }
+        // DefaultCropOrigin: SHORT[2] or RATIONAL[2]
+        0xC61F => match field_type {
+            3 => format_short_array(bytes, value_count, byte_order),
+            5 => format_rational_array(bytes, value_count, byte_order),
+            _ => None,
+        },
+        // DefaultCropSize: SHORT[2] or RATIONAL[2]
+        0xC620 => match field_type {
+            3 => format_short_array(bytes, value_count, byte_order),
+            5 => format_rational_array(bytes, value_count, byte_order),
+            _ => None,
+        },
+        // BlackLevelRepeatDim: SHORT[2]
+        0xC619 if field_type == 3 => format_short_array(bytes, value_count, byte_order),
+        // ActiveArea: LONG[4]
+        0xC68D if field_type == 4 => format_long_array(bytes, value_count, byte_order),
         _ => return None,
-    };
+    }
+}
 
-    let value_count = usize::try_from(value_count).ok()?;
-    let byte_len = value_count.checked_mul(component_size)?;
-    let values = bytes.get(..byte_len)?;
+fn format_short_array(bytes: &[u8], count: u32, byte_order: ByteOrder) -> Option<String> {
+    let count = usize::try_from(count).ok()?;
+    let mut values = Vec::with_capacity(count);
+    for i in 0..count {
+        let offset = i.checked_mul(2)?;
+        let val = read_tiff_u16(bytes.get(offset..offset.checked_add(2)?)?, byte_order)?;
+        values.push(val.to_string());
+    }
+    Some(values.join(" "))
+}
 
-    let formatted = match component_size {
-        2 => values
-            .chunks_exact(2)
-            .map(|chunk| {
-                let value = match byte_order {
-                    ByteOrder::LittleEndian => u16::from_le_bytes([chunk[0], chunk[1]]),
-                    ByteOrder::BigEndian => u16::from_be_bytes([chunk[0], chunk[1]]),
-                };
-                value.to_string()
-            })
-            .collect::<Vec<_>>(),
-        4 => values
-            .chunks_exact(4)
-            .map(|chunk| {
-                let value = match byte_order {
-                    ByteOrder::LittleEndian => {
-                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
-                    }
-                    ByteOrder::BigEndian => {
-                        u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
-                    }
-                };
-                value.to_string()
-            })
-            .collect::<Vec<_>>(),
-        _ => return None,
-    };
+fn format_long_array(bytes: &[u8], count: u32, byte_order: ByteOrder) -> Option<String> {
+    let count = usize::try_from(count).ok()?;
+    let mut values = Vec::with_capacity(count);
+    for i in 0..count {
+        let offset = i.checked_mul(4)?;
+        let val = read_tiff_u32(bytes.get(offset..offset.checked_add(4)?)?, byte_order)?;
+        values.push(val.to_string());
+    }
+    Some(values.join(" "))
+}
 
-    Some(formatted.join(" "))
+fn format_rational_array(bytes: &[u8], count: u32, byte_order: ByteOrder) -> Option<String> {
+    let count = usize::try_from(count).ok()?;
+    let mut values = Vec::with_capacity(count);
+    for i in 0..count {
+        let offset = i.checked_mul(8)?;
+        let num_end = offset.checked_add(4)?;
+        let denom_end = num_end.checked_add(4)?;
+        let num = read_tiff_u32(bytes.get(offset..num_end)?, byte_order)?;
+        let denom = read_tiff_u32(bytes.get(num_end..denom_end)?, byte_order)?;
+        if denom == 0 {
+            return None;
+        }
+        let val = f64::from(num) / f64::from(denom);
+        let s = if val == val.trunc() {
+            format!("{:.0}", val)
+        } else {
+            format!("{}", val)
+        };
+        values.push(s);
+    }
+    Some(values.join(" "))
 }
 
 fn read_tiff_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
@@ -987,12 +1049,12 @@ mod dng_integer_array_tests {
     #[test]
     fn formats_little_endian_dng_integer_arrays() {
         assert_eq!(
-            format_dng_integer_array(0xC619, &[1, 0, 1, 0], 3, 2, ByteOrder::LittleEndian,)
+            format_dng_display_value(0xC619, &[1, 0, 1, 0], 3, 2, ByteOrder::LittleEndian,)
                 .as_deref(),
             Some("1 1")
         );
         assert_eq!(
-            format_dng_integer_array(
+            format_dng_display_value(
                 0xC68D,
                 &[14, 0, 0, 0, 42, 0, 0, 0, 24, 9, 0, 0, 188, 13, 0, 0,],
                 4,
@@ -1007,11 +1069,11 @@ mod dng_integer_array_tests {
     #[test]
     fn rejects_wrong_type_or_truncated_dng_integer_array() {
         assert_eq!(
-            format_dng_integer_array(0xC619, &[1, 0, 1, 0], 4, 2, ByteOrder::LittleEndian),
+            format_dng_display_value(0xC619, &[1, 0, 1, 0], 4, 2, ByteOrder::LittleEndian),
             None
         );
         assert_eq!(
-            format_dng_integer_array(0xC68D, &[14, 0, 0, 0], 4, 4, ByteOrder::LittleEndian,),
+            format_dng_display_value(0xC68D, &[14, 0, 0, 0], 4, 4, ByteOrder::LittleEndian,),
             None
         );
     }
@@ -1019,8 +1081,52 @@ mod dng_integer_array_tests {
     #[test]
     fn ignores_unrelated_dng_array_tags() {
         assert_eq!(
-            format_dng_integer_array(0xC61A, &[1, 0], 3, 1, ByteOrder::LittleEndian),
+            format_dng_display_value(0xC61A, &[1, 0], 3, 1, ByteOrder::LittleEndian),
             None
+        );
+    }
+
+    #[test]
+    fn formats_dng_cfa_tags() {
+        assert_eq!(
+            format_dng_display_value(0x828D, &[2, 0, 2, 0], 3, 2, ByteOrder::LittleEndian),
+            Some("2 2".to_string())
+        );
+        assert_eq!(
+            format_dng_display_value(0x828E, &[0, 1, 1, 2], 1, 4, ByteOrder::LittleEndian),
+            Some("0 1 1 2".to_string())
+        );
+        assert_eq!(
+            format_dng_display_value(0xC616, &[0, 1, 2], 1, 3, ByteOrder::LittleEndian),
+            Some("Red,Green,Blue".to_string())
+        );
+        assert_eq!(
+            format_dng_display_value(0xC617, &[1, 0], 3, 1, ByteOrder::LittleEndian),
+            Some("Rectangular".to_string())
+        );
+    }
+
+    #[test]
+    fn formats_dng_crop_tags() {
+        assert_eq!(
+            format_dng_display_value(0xC61F, &[10, 0, 5, 0], 3, 2, ByteOrder::LittleEndian),
+            Some("10 5".to_string())
+        );
+        assert_eq!(
+            format_dng_display_value(0xC620, &[0x80, 0x0D, 0x00, 0x09], 3, 2, ByteOrder::LittleEndian),
+            Some("3456 2304".to_string())
+        );
+    }
+
+    #[test]
+    fn formats_dng_rational_crop() {
+        let rational_bytes: Vec<u8> = [
+            10, 0, 0, 0, 1, 0, 0, 0,  // 10/1
+            5, 0, 0, 0, 1, 0, 0, 0,   // 5/1
+        ].to_vec();
+        assert_eq!(
+            format_dng_display_value(0xC61F, &rational_bytes, 5, 2, ByteOrder::LittleEndian),
+            Some("10 5".to_string())
         );
     }
 }
