@@ -1,6 +1,7 @@
 //! Integration tests module
 
 pub mod format_detection;
+pub mod makernote_integration;
 
 // Phase 1: Video/Audio integration tests
 pub mod mkv_integration_tests;

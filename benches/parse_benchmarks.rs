@@ -24,12 +24,12 @@
 //! start target/criterion/report/index.html
 //! ```
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use oxidex::core::operations::read_metadata;
 use oxidex::io::MMapReader;
-use oxidex::parsers::format_detector::detect_format;
+use oxidex::parsers::detection::detect_format;
 use oxidex::parsers::jpeg::segment_parser::parse_segments;
-use oxidex::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};
+use oxidex::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use std::hint::black_box;
 use std::path::Path;
 

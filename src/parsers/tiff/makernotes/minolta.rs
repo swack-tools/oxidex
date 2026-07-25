@@ -25,182 +25,21 @@
 #![allow(unused_imports)]
 
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
 use super::minolta_lens_database::lookup_minolta_lens;
+use super::registries::minolta::minolta_registry;
 use super::shared::MakerNoteParser;
+use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::tag_registry::TagRegistry;
 
-// Minolta MakerNote Tag IDs
-const MINOLTA_CAMERA_SETTINGS_OLD: u16 = 0x0001; // Camera settings (old models)
-const MINOLTA_CAMERA_SETTINGS: u16 = 0x0003; // Camera settings array
-const MINOLTA_IMAGE_SIZE: u16 = 0x0040; // Image dimensions
-const MINOLTA_IMAGE_QUALITY: u16 = 0x0041; // Quality setting
-const MINOLTA_FLASH_MODE: u16 = 0x0042; // Flash mode
-const MINOLTA_FLASH_EXPOSURE_COMP: u16 = 0x0043; // Flash compensation
-const MINOLTA_TELECONVERTER: u16 = 0x0044; // Teleconverter used
-const MINOLTA_WHITE_BALANCE: u16 = 0x0045; // White balance mode
-const MINOLTA_BRIGHTNESS: u16 = 0x0046; // Scene brightness value
-const MINOLTA_FOCUS_MODE: u16 = 0x0047; // Manual/Auto focus
-const MINOLTA_FOCUS_DISTANCE: u16 = 0x0048; // Focus distance
-const MINOLTA_ZOOM_POSITION: u16 = 0x004A; // Zoom position
-const MINOLTA_MACRO_MODE: u16 = 0x004B; // Macro mode on/off
-const MINOLTA_SHARPNESS: u16 = 0x004C; // Sharpness setting
-const MINOLTA_CONTRAST: u16 = 0x004D; // Contrast setting
-const MINOLTA_SATURATION: u16 = 0x004E; // Color saturation
-const MINOLTA_COLOR_MODE: u16 = 0x0050; // Color mode
-const MINOLTA_SCENE_MODE: u16 = 0x0052; // Scene mode selection
-const MINOLTA_EXPOSURE_MODE: u16 = 0x0053; // Exposure program mode
-const MINOLTA_LENS_ID: u16 = 0x0054; // Lens model ID
-const MINOLTA_MIN_FOCAL_LENGTH: u16 = 0x0055; // Min focal length
-const MINOLTA_MAX_FOCAL_LENGTH: u16 = 0x0056; // Max focal length
-const MINOLTA_FIRMWARE_VERSION: u16 = 0x0058; // Camera firmware
-const MINOLTA_AF_POINTS: u16 = 0x0059; // AF points used
+// ===== Minolta MakerNote Tag IDs =====
+// Tag definitions are now centralized in the registry.
+// See registries/minolta.rs for the complete tag registry.
 
-/// Decodes Minolta image quality setting
-///
-/// # Arguments
-/// * `value` - Image quality value
-///
-/// # Returns
-/// Human-readable quality description
-fn decode_image_quality(value: u16) -> String {
-    match value {
-        0 => "Raw".to_string(),
-        1 => "Super Fine".to_string(),
-        2 => "Fine".to_string(),
-        3 => "Standard".to_string(),
-        4 => "Economy".to_string(),
-        5 => "Extra Fine".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
-/// Decodes Minolta flash mode
-///
-/// # Arguments
-/// * `value` - Flash mode value
-///
-/// # Returns
-/// Human-readable flash mode
-fn decode_flash_mode(value: u16) -> String {
-    match value {
-        0 => "Auto".to_string(),
-        1 => "On".to_string(),
-        2 => "Off".to_string(),
-        3 => "Red-eye Reduction".to_string(),
-        4 => "Slow Sync".to_string(),
-        5 => "Rear Curtain Sync".to_string(),
-        6 => "Fill Flash".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
-/// Decodes Minolta white balance mode
-///
-/// # Arguments
-/// * `value` - White balance value
-///
-/// # Returns
-/// Human-readable white balance mode
-fn decode_white_balance(value: u16) -> String {
-    match value {
-        0 => "Auto".to_string(),
-        1 => "Daylight".to_string(),
-        2 => "Cloudy".to_string(),
-        3 => "Tungsten".to_string(),
-        4 => "Fluorescent".to_string(),
-        5 => "Flash".to_string(),
-        6 => "Shade".to_string(),
-        7 => "Custom".to_string(),
-        8 => "Kelvin".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
-/// Decodes Minolta focus mode
-///
-/// # Arguments
-/// * `value` - Focus mode value
-///
-/// # Returns
-/// Human-readable focus mode
-fn decode_focus_mode(value: u16) -> String {
-    match value {
-        0 => "Auto".to_string(),
-        1 => "Manual".to_string(),
-        2 => "AF-C (Continuous)".to_string(),
-        3 => "AF-S (Single)".to_string(),
-        4 => "AF-A (Automatic)".to_string(),
-        5 => "DMF (Direct Manual Focus)".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
-/// Decodes Minolta color mode
-///
-/// # Arguments
-/// * `value` - Color mode value
-///
-/// # Returns
-/// Human-readable color mode
-fn decode_color_mode(value: u16) -> String {
-    match value {
-        0 => "Natural".to_string(),
-        1 => "Vivid".to_string(),
-        2 => "Portrait".to_string(),
-        3 => "Landscape".to_string(),
-        4 => "Black & White".to_string(),
-        5 => "Adobe RGB".to_string(),
-        6 => "Neutral".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
-/// Decodes Minolta exposure mode
-///
-/// # Arguments
-/// * `value` - Exposure mode value
-///
-/// # Returns
-/// Human-readable exposure mode
-fn decode_exposure_mode(value: u16) -> String {
-    match value {
-        0 => "Program".to_string(),
-        1 => "Aperture Priority".to_string(),
-        2 => "Shutter Priority".to_string(),
-        3 => "Manual".to_string(),
-        4 => "Auto".to_string(),
-        5 => "Portrait".to_string(),
-        6 => "Landscape".to_string(),
-        7 => "Sports".to_string(),
-        8 => "Night Portrait".to_string(),
-        9 => "Macro".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
-/// Decodes Minolta scene mode
-///
-/// # Arguments
-/// * `value` - Scene mode value
-///
-/// # Returns
-/// Human-readable scene mode
-fn decode_scene_mode(value: u16) -> String {
-    match value {
-        0 => "Standard".to_string(),
-        1 => "Portrait".to_string(),
-        2 => "Landscape".to_string(),
-        3 => "Sports".to_string(),
-        4 => "Sunset".to_string(),
-        5 => "Night View".to_string(),
-        6 => "Night Portrait".to_string(),
-        7 => "Fireworks".to_string(),
-        8 => "Food".to_string(),
-        9 => "Text".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
+// Static registry instance for efficient tag lookup and decoding
+static TAG_REGISTRY: Lazy<TagRegistry> = Lazy::new(minolta_registry);
 
 /// Extracts a 16-bit unsigned value from IFD entry
 ///
@@ -300,6 +139,82 @@ fn extract_string(entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) -> Optio
     }
 }
 
+// ============================================================================
+// DECODERS - Minolta Value Decoders
+// ============================================================================
+// Minolta-specific value decoders for camera settings
+
+use crate::const_decoder;
+
+// Decoder for Minolta image quality settings
+// Maps image quality codes to quality level names:
+// - 0 = Standard quality (baseline compression)
+// - 1 = Super Fine quality (highest setting, minimal compression)
+// - 2 = Fine quality (medium-high setting, moderate compression)
+const_decoder!(pub DECODE_IMAGE_QUALITY, u16, [
+    (0, "Standard"),
+    (1, "Super Fine"),
+    (2, "Fine"),
+]);
+
+// Decoder for Minolta flash modes
+const_decoder!(pub DECODE_FLASH_MODE, u16, [
+    (0, "Off"),
+    (1, "Auto"),
+    (2, "On"),
+    (3, "Red-eye Reduction"),
+    (4, "Fill Flash"),
+]);
+
+// Decoder for Minolta white balance settings
+const_decoder!(pub DECODE_WHITE_BALANCE, u16, [
+    (0, "Auto"),
+    (1, "Daylight"),
+    (2, "Cloudy"),
+    (3, "Tungsten"),
+    (4, "Fluorescent"),
+    (5, "Flash"),
+    (6, "Custom"),
+]);
+
+// Decoder for Minolta focus modes
+const_decoder!(pub DECODE_FOCUS_MODE, u16, [
+    (0, "Single Shot"),
+    (1, "Continuous"),
+    (2, "Manual"),
+    (3, "AF-S"),
+    (4, "AF-C"),
+]);
+
+// Decoder for Minolta color modes
+const_decoder!(pub DECODE_COLOR_MODE, u16, [
+    (0, "Standard"),
+    (1, "Vivid"),
+    (2, "Neutral"),
+    (3, "B&W"),
+    (4, "Sepia"),
+]);
+
+// Decoder for Minolta exposure modes
+const_decoder!(pub DECODE_EXPOSURE_MODE, u16, [
+    (0, "Auto"),
+    (1, "Program"),
+    (2, "Aperture Priority"),
+    (3, "Shutter Priority"),
+    (4, "Manual"),
+]);
+
+// Decoder for Minolta scene modes
+const_decoder!(pub DECODE_SCENE_MODE, u16, [
+    (0, "Standard"),
+    (1, "Portrait"),
+    (2, "Landscape"),
+    (3, "Macro"),
+    (4, "Sports"),
+    (5, "Sunset"),
+    (6, "Night"),
+]);
+
 /// Minolta MakerNote parser implementation
 pub struct MinoltaParser;
 
@@ -329,141 +244,79 @@ impl MinoltaParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) {
-        let tag_id = entry.tag_id;
+        // Get tag name from registry
+        let tag_name = match TAG_REGISTRY.get_tag_name(entry.tag_id) {
+            Some(name) => name,
+            None => return, // Unknown tag, skip it
+        };
 
-        match tag_id {
-            MINOLTA_IMAGE_QUALITY => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert(
-                        "Minolta:ImageQuality".to_string(),
-                        decode_image_quality(value),
-                    );
+        // Extract value using helper functions and format based on tag type
+        let formatted_value = match entry.tag_id {
+            // Lens ID (0x0054) - use database lookup for lens name
+            0x0054 => {
+                let lens_id = extract_u16_value(entry, data, byte_order).unwrap_or(0);
+                tags.insert(
+                    format!("Minolta:{}", tag_name),
+                    format!("0x{:04X}", lens_id),
+                );
+                if let Some(lens_name) = lookup_minolta_lens(lens_id) {
+                    tags.insert("Minolta:LensType".to_string(), lens_name);
+                }
+                return;
+            }
+            // Flash Exposure Compensation (0x0043) - format as EV
+            0x0043 => {
+                let value = extract_i16_value(entry, data, byte_order).unwrap_or(0);
+                let ev = value as f32 / 10.0;
+                format!("{:.1} EV", ev)
+            }
+            // Min/Max focal length (0x0055, 0x0056) - format with "mm"
+            0x0055 | 0x0056 => {
+                let value = extract_u16_value(entry, data, byte_order).unwrap_or(0);
+                format!("{} mm", value)
+            }
+            // Image size (0x0040) - convert to readable format
+            0x0040 => {
+                let value = extract_u16_value(entry, data, byte_order).unwrap_or(0);
+                match value {
+                    0 => "Full".to_string(),
+                    1 => "Medium".to_string(),
+                    2 => "Small".to_string(),
+                    _ => "Unknown".to_string(),
                 }
             }
-            MINOLTA_FLASH_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Minolta:FlashMode".to_string(), decode_flash_mode(value));
+            // Teleconverter (0x0044) - convert to readable format
+            0x0044 => {
+                let value = extract_u16_value(entry, data, byte_order).unwrap_or(0);
+                match value {
+                    0 => "None".to_string(),
+                    1 => "1.4x".to_string(),
+                    2 => "2.0x".to_string(),
+                    _ => "Unknown".to_string(),
                 }
             }
-            MINOLTA_FLASH_EXPOSURE_COMP => {
-                if let Some(value) = extract_i16_value(entry, data, byte_order) {
-                    let ev = value as f32 / 10.0;
-                    tags.insert(
-                        "Minolta:FlashExposureComp".to_string(),
-                        format!("{:.1} EV", ev),
-                    );
+            // Macro mode (0x004B) - binary on/off
+            0x004B => {
+                let value = extract_u16_value(entry, data, byte_order).unwrap_or(0);
+                if value > 0 {
+                    "On".to_string()
+                } else {
+                    "Off".to_string()
                 }
             }
-            MINOLTA_WHITE_BALANCE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert(
-                        "Minolta:WhiteBalance".to_string(),
-                        decode_white_balance(value),
-                    );
-                }
-            }
-            MINOLTA_FOCUS_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Minolta:FocusMode".to_string(), decode_focus_mode(value));
-                }
-            }
-            MINOLTA_MACRO_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    let mode = if value > 0 { "On" } else { "Off" };
-                    tags.insert("Minolta:MacroMode".to_string(), mode.to_string());
-                }
-            }
-            MINOLTA_SHARPNESS => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Minolta:Sharpness".to_string(), value.to_string());
-                }
-            }
-            MINOLTA_CONTRAST => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Minolta:Contrast".to_string(), value.to_string());
-                }
-            }
-            MINOLTA_SATURATION => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Minolta:Saturation".to_string(), value.to_string());
-                }
-            }
-            MINOLTA_COLOR_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Minolta:ColorMode".to_string(), decode_color_mode(value));
-                }
-            }
-            MINOLTA_SCENE_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Minolta:SceneMode".to_string(), decode_scene_mode(value));
-                }
-            }
-            MINOLTA_EXPOSURE_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert(
-                        "Minolta:ExposureMode".to_string(),
-                        decode_exposure_mode(value),
-                    );
-                }
-            }
-            MINOLTA_LENS_ID => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    // Store the lens ID
-                    tags.insert("Minolta:LensID".to_string(), format!("0x{:04X}", value));
-
-                    // Lookup lens name from database
-                    if let Some(lens_name) = lookup_minolta_lens(value) {
-                        tags.insert("Minolta:LensType".to_string(), lens_name);
-                    }
-                }
-            }
-            MINOLTA_MIN_FOCAL_LENGTH => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert(
-                        "Minolta:MinFocalLength".to_string(),
-                        format!("{} mm", value),
-                    );
-                }
-            }
-            MINOLTA_MAX_FOCAL_LENGTH => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert(
-                        "Minolta:MaxFocalLength".to_string(),
-                        format!("{} mm", value),
-                    );
-                }
-            }
-            MINOLTA_FIRMWARE_VERSION => {
-                if let Some(version) = extract_string(entry, data, byte_order) {
-                    tags.insert("Minolta:FirmwareVersion".to_string(), version);
-                }
-            }
-            MINOLTA_IMAGE_SIZE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    let size_str = match value {
-                        0 => "Full",
-                        1 => "Medium",
-                        2 => "Small",
-                        _ => "Unknown",
-                    };
-                    tags.insert("Minolta:ImageSize".to_string(), size_str.to_string());
-                }
-            }
-            MINOLTA_TELECONVERTER => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    let tc = match value {
-                        0 => "None",
-                        1 => "1.4x",
-                        2 => "2.0x",
-                        _ => "Unknown",
-                    };
-                    tags.insert("Minolta:Teleconverter".to_string(), tc.to_string());
-                }
-            }
+            // Firmware version (0x0058) - extract as string
+            0x0058 => extract_string(entry, data, byte_order).unwrap_or_default(),
+            // All other tags use registry decoder if available
             _ => {
-                // Unknown tag - skip for now
+                if let Some(value) = extract_u16_value(entry, data, byte_order) {
+                    TAG_REGISTRY.decode_u16(entry.tag_id, value)
+                } else {
+                    return;
+                }
             }
-        }
+        };
+
+        tags.insert(format!("Minolta:{}", tag_name), formatted_value);
     }
 }
 
@@ -486,90 +339,18 @@ impl MakerNoteParser for MinoltaParser {
             return Err("Minolta MakerNote data too short".to_string());
         }
 
-        // Minolta MakerNotes typically start immediately with IFD
-        // Some models may have a small header, but most don't
-        let ifd_offset = 0;
-
-        if ifd_offset + 2 > data.len() {
-            return Err("Invalid IFD offset".to_string());
-        }
-
-        // Read number of IFD entries
-        let entry_count = match byte_order {
-            ByteOrder::LittleEndian => u16::from_le_bytes([data[ifd_offset], data[ifd_offset + 1]]),
-            ByteOrder::BigEndian => u16::from_be_bytes([data[ifd_offset], data[ifd_offset + 1]]),
+        // Minolta MakerNotes typically start immediately with IFD entries
+        // No header is used, so signature is None
+        let config = IfdParserConfig {
+            signature: None,
+            signature_offset: 0,
+            max_entries: 500,
         };
 
-        if entry_count == 0 || entry_count > 500 {
-            return Err(format!(
-                "Invalid entry count: {} (expected 1-500)",
-                entry_count
-            ));
-        }
-
-        // Parse each IFD entry
-        let entry_size = 12; // Standard IFD entry size
-        let mut offset = ifd_offset + 2;
-
-        for _ in 0..entry_count {
-            if offset + entry_size > data.len() {
-                break;
-            }
-
-            // Parse IFD entry manually
-            let tag = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([data[offset], data[offset + 1]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([data[offset], data[offset + 1]]),
-            };
-
-            let field_type = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([data[offset + 2], data[offset + 3]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([data[offset + 2], data[offset + 3]]),
-            };
-
-            let count = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                ]),
-            };
-
-            let value_offset = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    data[offset + 8],
-                    data[offset + 9],
-                    data[offset + 10],
-                    data[offset + 11],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    data[offset + 8],
-                    data[offset + 9],
-                    data[offset + 10],
-                    data[offset + 11],
-                ]),
-            };
-
-            let entry = IfdEntry {
-                tag_id: tag,
-                field_type,
-                value_count: count,
-                value_offset,
-            };
-
-            self.parse_entry(&entry, data, byte_order, tags);
-
-            offset += entry_size;
-        }
-
-        Ok(())
+        // Parse IFD entries using the shared parser
+        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
+            self.parse_entry(entry, parse_data, byte_order, tags);
+        })
     }
 
     fn lookup_lens(&self, lens_id: u16) -> Option<String> {
@@ -580,47 +361,6 @@ impl MakerNoteParser for MinoltaParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_decode_image_quality() {
-        assert_eq!(decode_image_quality(0), "Raw");
-        assert_eq!(decode_image_quality(2), "Fine");
-        assert_eq!(decode_image_quality(5), "Extra Fine");
-    }
-
-    #[test]
-    fn test_decode_flash_mode() {
-        assert_eq!(decode_flash_mode(0), "Auto");
-        assert_eq!(decode_flash_mode(1), "On");
-        assert_eq!(decode_flash_mode(3), "Red-eye Reduction");
-    }
-
-    #[test]
-    fn test_decode_white_balance() {
-        assert_eq!(decode_white_balance(0), "Auto");
-        assert_eq!(decode_white_balance(3), "Tungsten");
-        assert_eq!(decode_white_balance(7), "Custom");
-    }
-
-    #[test]
-    fn test_decode_focus_mode() {
-        assert_eq!(decode_focus_mode(0), "Auto");
-        assert_eq!(decode_focus_mode(2), "AF-C (Continuous)");
-        assert_eq!(decode_focus_mode(5), "DMF (Direct Manual Focus)");
-    }
-
-    #[test]
-    fn test_decode_color_mode() {
-        assert_eq!(decode_color_mode(0), "Natural");
-        assert_eq!(decode_color_mode(4), "Black & White");
-    }
-
-    #[test]
-    fn test_decode_exposure_mode() {
-        assert_eq!(decode_exposure_mode(0), "Program");
-        assert_eq!(decode_exposure_mode(3), "Manual");
-        assert_eq!(decode_exposure_mode(7), "Sports");
-    }
 
     #[test]
     fn test_minolta_parser_trait() {

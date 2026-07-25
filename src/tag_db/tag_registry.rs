@@ -2,12 +2,13 @@
 //!
 //! This module provides a static registry of 500+ metadata tags covering EXIF (300+),
 //! GPS (30+), XMP (100+), IPTC (50+), PDF (10+), and QuickTime (10+) formats.
-//! This is a manual implementation that will later be replaced by automated tag
-//! generation in build.rs (task I5.T5).
+//! This is a manual implementation. Automated tag generation now lives in
+//! `src/tag_sync/` and `src/bin/sync_tags.rs` (run explicitly via
+//! `cargo run --bin sync_tags`, not as part of the build).
 
 use crate::core::{FormatFamily, TagDescriptor, TagId, ValueType};
 use oxidex_tags::GENERATED_TAG_REGISTRY;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 // Import YAML tag databases for fallback lookup
@@ -6794,38 +6795,79 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     registry
 });
 
+fn parse_yaml_tag_id(id_str: &str) -> TagId {
+    if let Some(hex_str) = id_str.strip_prefix("0x") {
+        u16::from_str_radix(hex_str, 16)
+            .map(TagId::new_numeric)
+            .unwrap_or_else(|_| TagId::new_named(id_str))
+    } else {
+        id_str
+            .parse::<u16>()
+            .map(TagId::new_numeric)
+            .unwrap_or_else(|_| TagId::new_named(id_str))
+    }
+}
+
+fn parse_yaml_value_type(type_name: Option<&str>) -> Option<ValueType> {
+    let normalized = type_name?.to_ascii_lowercase();
+
+    if normalized.starts_with("int") {
+        Some(ValueType::Integer)
+    } else if normalized.starts_with("rational") {
+        Some(ValueType::Rational)
+    } else if matches!(normalized.as_str(), "float" | "double" | "real") {
+        Some(ValueType::Float)
+    } else if normalized.starts_with("string")
+        || matches!(normalized.as_str(), "unicode" | "utf8" | "utf-8")
+    {
+        Some(ValueType::String)
+    } else if matches!(normalized.as_str(), "undef" | "binary" | "bytes") {
+        Some(ValueType::Binary)
+    } else if normalized.contains("date") || normalized.contains("time") {
+        Some(ValueType::DateTime)
+    } else {
+        None
+    }
+}
+
+fn yaml_format_info(table_name: &str) -> Option<(FormatFamily, &str)> {
+    let prefix = table_name.split("::").next()?;
+    let format_family = match prefix {
+        "Exif" => FormatFamily::EXIF,
+        "GPS" => FormatFamily::GPS,
+        "XMP" => FormatFamily::XMP,
+        "IPTC" => FormatFamily::IPTC,
+        "ICC_Profile" => FormatFamily::ICCProfile,
+        "Photoshop" => FormatFamily::Photoshop,
+        "JFIF" => FormatFamily::JFIF,
+        "JPEG" => FormatFamily::JPEG,
+        "PNG" => FormatFamily::PNG,
+        "PDF" => FormatFamily::PDF,
+        "QuickTime" => FormatFamily::QuickTime,
+        "TIFF" => FormatFamily::TIFF,
+        "RIFF" => FormatFamily::RIFF,
+        "PostScript" => FormatFamily::PostScript,
+        "Canon" | "CanonCustom" | "CanonRaw" | "Nikon" | "NikonCapture" | "NikonCustom"
+        | "NikonSettings" | "Sony" | "SonyIDC" | "Panasonic" | "PanasonicRaw" | "Olympus"
+        | "FujiFilm" | "Pentax" | "Casio" | "Minolta" | "MinoltaRaw" | "Ricoh" | "Sigma"
+        | "SigmaRaw" | "PhaseOne" | "Kodak" | "KyoceraRaw" | "Samsung" | "Sanyo" | "HP" | "GE"
+        | "Reconyx" | "JVC" | "Motorola" | "Apple" | "DJI" | "GoPro" | "Google" | "Parrot"
+        | "InfiRay" | "FLIR" | "Microsoft" | "Nintendo" | "Red" => FormatFamily::MakerNotes,
+        _ => return None,
+    };
+    let canonical_prefix = if prefix == "Exif" { "EXIF" } else { prefix };
+    Some((format_family, canonical_prefix))
+}
+
+struct YamlTagEntry {
+    descriptor: TagDescriptor,
+    reliable_value_type: bool,
+}
+
 /// Lazy-loaded registry of TagDescriptors built from YAML tag databases.
 /// This serves as a fallback when tags are not found in the manual TAG_REGISTRY.
-static YAML_TAG_DESCRIPTORS: LazyLock<HashMap<String, TagDescriptor>> = LazyLock::new(|| {
-    let mut descriptors = HashMap::with_capacity(10000);
-
-    // Helper to parse hex tag ID
-    fn parse_tag_id(id_str: &str) -> Option<u16> {
-        if let Some(hex_str) = id_str.strip_prefix("0x") {
-            u16::from_str_radix(hex_str, 16).ok()
-        } else {
-            id_str.parse::<u16>().ok()
-        }
-    }
-
-    // Helper to determine FormatFamily and prefix from table name
-    fn get_format_info(table_name: &str) -> Option<(FormatFamily, &str)> {
-        if table_name.starts_with("Exif::") {
-            Some((FormatFamily::EXIF, "EXIF"))
-        } else if table_name.starts_with("GPS::") {
-            Some((FormatFamily::GPS, "GPS"))
-        } else if table_name.starts_with("XMP::") {
-            Some((FormatFamily::XMP, "XMP"))
-        } else if table_name.starts_with("IPTC::") {
-            Some((FormatFamily::IPTC, "IPTC"))
-        } else if table_name.starts_with("ICC_Profile::") {
-            Some((FormatFamily::ICCProfile, "ICC_Profile"))
-        } else if table_name.starts_with("Photoshop::") {
-            Some((FormatFamily::Photoshop, "Photoshop"))
-        } else {
-            None
-        }
-    }
+static YAML_TAG_ENTRIES: LazyLock<HashMap<String, YamlTagEntry>> = LazyLock::new(|| {
+    let mut entries: HashMap<String, YamlTagEntry> = HashMap::with_capacity(10000);
 
     // Scan all domain tag databases
     let all_tables = [
@@ -6839,29 +6881,43 @@ static YAML_TAG_DESCRIPTORS: LazyLock<HashMap<String, TagDescriptor>> = LazyLock
 
     for tables in all_tables.iter() {
         for table in tables.iter() {
-            if let Some((format_family, prefix)) = get_format_info(&table.name) {
+            if let Some((format_family, prefix)) = yaml_format_info(&table.name) {
                 for tag in &table.tags {
-                    if let Some(tag_id) = parse_tag_id(&tag.id) {
-                        let full_name = format!("{}:{}", prefix, tag.name);
-                        let descriptor = TagDescriptor::new(
-                            TagId::Numeric(tag_id),
-                            full_name.clone(),
-                            format_family,
-                            tag.writable,
-                            ValueType::String, // Default to String; YAML doesn't have detailed type info
-                            tag.description
-                                .clone()
-                                .unwrap_or_else(|| format!("{} tag", tag.name)),
-                            Vec::new(), // No example values in YAML
-                        );
-                        descriptors.insert(full_name, descriptor);
-                    }
+                    let full_name = format!("{}:{}", prefix, tag.name);
+                    let parsed_type = parse_yaml_value_type(tag.type_name.as_deref());
+                    let descriptor = TagDescriptor::new(
+                        parse_yaml_tag_id(&tag.id),
+                        full_name.clone(),
+                        format_family,
+                        tag.writable,
+                        parsed_type.unwrap_or(ValueType::String),
+                        tag.description
+                            .clone()
+                            .unwrap_or_else(|| format!("{} tag", tag.name)),
+                        Vec::new(), // No example values in YAML
+                    );
+                    let reliable_value_type = entries.get(&full_name).map_or_else(
+                        || parsed_type.is_some(),
+                        |previous| {
+                            previous.reliable_value_type
+                                && parsed_type.is_some_and(|value_type| {
+                                    value_type == previous.descriptor.value_type()
+                                })
+                        },
+                    );
+                    entries.insert(
+                        full_name,
+                        YamlTagEntry {
+                            descriptor,
+                            reliable_value_type,
+                        },
+                    );
                 }
             }
         }
     }
 
-    descriptors
+    entries
 });
 
 /// Retrieves a tag descriptor by its canonical name.
@@ -6896,8 +6952,8 @@ pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
     }
 
     // Try YAML registry direct match
-    if let Some(descriptor) = YAML_TAG_DESCRIPTORS.get(name) {
-        return Some(descriptor);
+    if let Some(entry) = YAML_TAG_ENTRIES.get(name) {
+        return Some(&entry.descriptor);
     }
 
     // Handle IFD prefix mapping for validation
@@ -6918,20 +6974,90 @@ pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
     } else {
         // GPS and other families stay as-is
         // Try YAML registry before giving up
-        return YAML_TAG_DESCRIPTORS.get(name);
+        return YAML_TAG_ENTRIES.get(name).map(|entry| &entry.descriptor);
     };
 
     TAG_REGISTRY
         .get(normalized_name.as_str())
         .or_else(|| GENERATED_TAG_REGISTRY.get(normalized_name.as_str()))
-        .or_else(|| YAML_TAG_DESCRIPTORS.get(normalized_name.as_str()))
+        .or_else(|| {
+            YAML_TAG_ENTRIES
+                .get(normalized_name.as_str())
+                .map(|entry| &entry.descriptor)
+        })
 }
 
-/// Returns the total number of tags in the registry.
+pub(crate) fn has_reliable_value_type(name: &str) -> bool {
+    if TAG_REGISTRY.contains_key(name) || GENERATED_TAG_REGISTRY.contains_key(name) {
+        return true;
+    }
+    if let Some(entry) = YAML_TAG_ENTRIES.get(name) {
+        return entry.reliable_value_type;
+    }
+
+    let normalized_name = if name.starts_with("IFD0:")
+        || name.starts_with("IFD1:")
+        || name.starts_with("ExifIFD:")
+        || name.starts_with("InteropIFD:")
+    {
+        name.find(':')
+            .map(|colon_pos| format!("EXIF:{}", &name[colon_pos + 1..]))
+    } else {
+        None
+    };
+
+    normalized_name.is_some_and(|normalized_name| {
+        TAG_REGISTRY.contains_key(normalized_name.as_str())
+            || GENERATED_TAG_REGISTRY.contains_key(normalized_name.as_str())
+            || YAML_TAG_ENTRIES
+                .get(normalized_name.as_str())
+                .is_some_and(|entry| entry.reliable_value_type)
+    })
+}
+
+/// Reports whether `descriptor`'s value type came from reliable metadata.
 ///
-/// This should return 500+ tags for the expanded implementation.
+/// Reliability is derived from *provenance* via pointer identity: only the
+/// exact `&TagDescriptor` returned by the active registry can be recognized as
+/// a YAML-backed entry with unreliable type metadata. A CLONE of such a
+/// descriptor loses that provenance and is treated as reliable (strict
+/// validation) again — pinned by
+/// `validation::tests::test_cloned_unreliable_yaml_descriptor_remains_strict`.
+/// Callers that need lenient validation must pass the registry reference
+/// itself, not a copy.
+pub(crate) fn descriptor_has_reliable_value_type(descriptor: &TagDescriptor) -> bool {
+    let name = descriptor.name();
+
+    if TAG_REGISTRY
+        .get(name)
+        .is_some_and(|registered| std::ptr::eq(registered, descriptor))
+        || GENERATED_TAG_REGISTRY
+            .get(name)
+            .is_some_and(|registered| std::ptr::eq(registered, descriptor))
+    {
+        return true;
+    }
+
+    YAML_TAG_ENTRIES
+        .get(name)
+        .filter(|entry| std::ptr::eq(&entry.descriptor, descriptor))
+        .is_none_or(|entry| entry.reliable_value_type)
+}
+
+/// Returns the total number of unique tags reachable through descriptor lookup.
+///
+/// This mirrors `get_tag_descriptor()` by counting the manual registry,
+/// generated domain registry, and YAML-backed descriptors.
 pub fn tag_count() -> usize {
-    TAG_REGISTRY.len()
+    let mut tags = HashSet::with_capacity(
+        TAG_REGISTRY.len() + GENERATED_TAG_REGISTRY.len() + YAML_TAG_ENTRIES.len(),
+    );
+
+    tags.extend(TAG_REGISTRY.keys().copied());
+    tags.extend(GENERATED_TAG_REGISTRY.keys().map(String::as_str));
+    tags.extend(YAML_TAG_ENTRIES.keys().map(String::as_str));
+
+    tags.len()
 }
 
 #[cfg(test)]
@@ -6946,6 +7072,53 @@ mod tests {
             "Registry must contain at least 500 tags, found {}",
             count
         );
+    }
+
+    #[test]
+    fn test_yaml_format_family_mapping_does_not_mislabel_unsupported_domains() {
+        for table_name in [
+            "Canon::Main",
+            "Google::HDRPMakerNote",
+            "InfiRay::Factory",
+            "Microsoft::Stitch",
+            "Nintendo::CameraInfo",
+            "Red::Main",
+        ] {
+            assert_eq!(
+                yaml_format_info(table_name).map(|(family, _)| family),
+                Some(FormatFamily::MakerNotes),
+                "{table_name} should map to MakerNotes"
+            );
+        }
+        assert!(yaml_format_info("BMP::Main").is_none());
+        assert!(yaml_format_info("DICOM::Main").is_none());
+        assert!(yaml_format_info("EXE::Main").is_none());
+    }
+
+    #[test]
+    fn test_mixed_duplicate_yaml_types_are_unreliable() {
+        assert!(!has_reliable_value_type("Panasonic:WBRedLevel"));
+        assert!(!has_reliable_value_type("Olympus:ExternalFlashZoom"));
+    }
+
+    #[test]
+    fn test_ifd_alias_reliability_matches_canonical_exif_tag() {
+        for (alias, canonical) in [
+            ("IFD0:Make", "EXIF:Make"),
+            ("IFD1:ImageWidth", "EXIF:ImageWidth"),
+            ("ExifIFD:ExposureTime", "EXIF:ExposureTime"),
+        ] {
+            assert_eq!(
+                has_reliable_value_type(alias),
+                has_reliable_value_type(canonical),
+                "{alias} should use the same reliability as {canonical}"
+            );
+            assert_eq!(
+                get_tag_descriptor(alias).map(TagDescriptor::name),
+                get_tag_descriptor(canonical).map(TagDescriptor::name),
+                "{alias} should resolve to the canonical EXIF descriptor"
+            );
+        }
     }
 
     #[test]

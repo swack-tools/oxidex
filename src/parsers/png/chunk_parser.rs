@@ -23,11 +23,11 @@
 
 use crate::core::FileReader;
 use crate::error::{ExifToolError, Result};
-use crate::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder, IfdEntries};
+use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntries, parse_ifd};
 use nom::{
+    IResult,
     bytes::complete::{tag, take},
     number::complete::be_u32,
-    IResult,
 };
 use std::io;
 
@@ -176,7 +176,9 @@ pub fn parse_chunk(reader: &dyn FileReader, offset: u64) -> Result<(u64, PngChun
     // Read CRC
     let crc_offset = offset + 8 + length as u64;
     let crc_data = reader.read(crc_offset, 4)?;
-    let crc = u32::from_be_bytes([crc_data[0], crc_data[1], crc_data[2], crc_data[3]]);
+    let crc = crate::io::EndianReader::big_endian(crc_data)
+        .u32_at(0)
+        .ok_or_else(|| ExifToolError::parse_error_at("Failed to read CRC", crc_offset as usize))?;
 
     let chunk = PngChunk {
         chunk_type,
@@ -348,8 +350,13 @@ pub fn parse_ihdr_chunk(data: &[u8]) -> Result<(u32, u32, u8, u8, u8, u8, u8)> {
         )));
     }
 
-    let width = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-    let height = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+    let reader = crate::io::EndianReader::big_endian(data);
+    let width = reader
+        .u32_at(0)
+        .ok_or_else(|| ExifToolError::parse_error("IHDR chunk: failed to read width"))?;
+    let height = reader
+        .u32_at(4)
+        .ok_or_else(|| ExifToolError::parse_error("IHDR chunk: failed to read height"))?;
     let bit_depth = data[8];
     let color_type = data[9];
     let compression = data[10];
@@ -401,14 +408,15 @@ pub fn parse_chrm_chunk(data: &[u8]) -> Result<ChromaticityValues> {
     }
 
     // Each value is stored as integer × 100,000
-    let white_x = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as f64 / 100000.0;
-    let white_y = u32::from_be_bytes([data[4], data[5], data[6], data[7]]) as f64 / 100000.0;
-    let red_x = u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as f64 / 100000.0;
-    let red_y = u32::from_be_bytes([data[12], data[13], data[14], data[15]]) as f64 / 100000.0;
-    let green_x = u32::from_be_bytes([data[16], data[17], data[18], data[19]]) as f64 / 100000.0;
-    let green_y = u32::from_be_bytes([data[20], data[21], data[22], data[23]]) as f64 / 100000.0;
-    let blue_x = u32::from_be_bytes([data[24], data[25], data[26], data[27]]) as f64 / 100000.0;
-    let blue_y = u32::from_be_bytes([data[28], data[29], data[30], data[31]]) as f64 / 100000.0;
+    let reader = crate::io::EndianReader::big_endian(data);
+    let white_x = reader.u32_at(0).unwrap_or(0) as f64 / 100000.0;
+    let white_y = reader.u32_at(4).unwrap_or(0) as f64 / 100000.0;
+    let red_x = reader.u32_at(8).unwrap_or(0) as f64 / 100000.0;
+    let red_y = reader.u32_at(12).unwrap_or(0) as f64 / 100000.0;
+    let green_x = reader.u32_at(16).unwrap_or(0) as f64 / 100000.0;
+    let green_y = reader.u32_at(20).unwrap_or(0) as f64 / 100000.0;
+    let blue_x = reader.u32_at(24).unwrap_or(0) as f64 / 100000.0;
+    let blue_y = reader.u32_at(28).unwrap_or(0) as f64 / 100000.0;
 
     Ok((
         white_x, white_y, red_x, red_y, green_x, green_y, blue_x, blue_y,
@@ -441,11 +449,46 @@ pub fn parse_phys_chunk(data: &[u8]) -> Result<(u32, u32, u8)> {
         )));
     }
 
-    let pixels_x = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-    let pixels_y = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+    let reader = crate::io::EndianReader::big_endian(data);
+    let pixels_x = reader.u32_at(0).unwrap_or(0);
+    let pixels_y = reader.u32_at(4).unwrap_or(0);
     let unit = data[8];
 
     Ok((pixels_x, pixels_y, unit))
+}
+
+/// Parses a gAMA chunk (Image Gamma).
+///
+/// # Format
+///
+/// ```text
+/// Gamma: 4 bytes (u32, big-endian) - gamma × 100,000
+/// ```
+///
+/// The gamma value is stored as an unsigned integer representing gamma × 100,000.
+/// For example, a gamma of 1/2.2 (≈0.45455) is stored as 45455.
+///
+/// # Parameters
+///
+/// - `data`: gAMA chunk data (4 bytes)
+///
+/// # Returns
+///
+/// - `Ok(gamma)`: Gamma value as f64
+/// - `Err`: Parse error
+pub fn parse_gama_chunk(data: &[u8]) -> Result<f64> {
+    if data.len() != 4 {
+        return Err(ExifToolError::parse_error(format!(
+            "gAMA chunk must be 4 bytes, got {}",
+            data.len()
+        )));
+    }
+
+    let reader = crate::io::EndianReader::big_endian(data);
+    let gamma_int = reader.u32_at(0).unwrap_or(0);
+    let gamma = gamma_int as f64 / 100000.0;
+
+    Ok(gamma)
 }
 
 /// Parses a bKGD chunk (Background Color).
@@ -467,14 +510,143 @@ pub fn parse_phys_chunk(data: &[u8]) -> Result<(u32, u32, u8)> {
 /// - `Err`: Parse error
 pub fn parse_bkgd_chunk(data: &[u8]) -> Result<u16> {
     match data.len() {
-        1 => Ok(data[0] as u16),                         // Palette index
-        2 => Ok(u16::from_be_bytes([data[0], data[1]])), // Gray value
-        6 => Ok(u16::from_be_bytes([data[0], data[1]])), // Red component (simplified)
+        1 => Ok(data[0] as u16), // Palette index
+        2 | 6 => {
+            // Gray value (2 bytes) or Red component (6 bytes, simplified to first value)
+            let reader = crate::io::EndianReader::big_endian(data);
+            Ok(reader.u16_at(0).unwrap_or(0))
+        }
         _ => Err(ExifToolError::parse_error(format!(
             "bKGD chunk has invalid length: {}",
             data.len()
         ))),
     }
+}
+
+/// Parses a zTXt chunk (Compressed Text).
+///
+/// # Format
+///
+/// ```text
+/// Keyword: 1-79 bytes (Latin-1)
+/// Null separator: 1 byte (0x00)
+/// Compression method: 1 byte (0=deflate)
+/// Compressed text: n bytes (zlib compressed)
+/// ```
+///
+/// # Parameters
+///
+/// - `data`: zTXt chunk data
+///
+/// # Returns
+///
+/// - `Ok((keyword, text))`: Extracted keyword and decompressed text as UTF-8 strings
+/// - `Err`: Parse error
+pub fn parse_ztxt_chunk(data: &[u8]) -> Result<(String, String)> {
+    use flate2::read::ZlibDecoder;
+    use std::io::Read;
+
+    // Find null separator
+    let null_pos = data
+        .iter()
+        .position(|&b| b == 0)
+        .ok_or_else(|| ExifToolError::parse_error("zTXt chunk missing null separator"))?;
+
+    if null_pos == 0 {
+        return Err(ExifToolError::parse_error("zTXt chunk has empty keyword"));
+    }
+
+    // Extract keyword
+    let keyword = String::from_utf8_lossy(&data[..null_pos]).to_string();
+
+    // Check compression method
+    if null_pos + 1 >= data.len() {
+        return Err(ExifToolError::parse_error("zTXt chunk truncated"));
+    }
+
+    let compression_method = data[null_pos + 1];
+    if compression_method != 0 {
+        return Err(ExifToolError::parse_error(format!(
+            "Unsupported zTXt compression method: {}",
+            compression_method
+        )));
+    }
+
+    // Decompress text
+    let compressed_data = &data[null_pos + 2..];
+    let mut decoder = ZlibDecoder::new(compressed_data);
+    let mut decompressed = Vec::new();
+
+    decoder
+        .read_to_end(&mut decompressed)
+        .map_err(|e| ExifToolError::parse_error(format!("Failed to decompress zTXt: {}", e)))?;
+
+    let text = String::from_utf8_lossy(&decompressed).to_string();
+
+    Ok((keyword, text))
+}
+
+/// Parses an sBIT chunk (Significant Bits).
+///
+/// # Format
+///
+/// Format depends on color type:
+/// - Grayscale (0): 1 byte (gray)
+/// - RGB (2): 3 bytes (red, green, blue)
+/// - Palette (3): 3 bytes (red, green, blue)
+/// - Grayscale+Alpha (4): 2 bytes (gray, alpha)
+/// - RGBA (6): 4 bytes (red, green, blue, alpha)
+///
+/// # Parameters
+///
+/// - `data`: sBIT chunk data (1-4 bytes)
+///
+/// # Returns
+///
+/// - `Ok(bits)`: Vector of significant bit values
+/// - `Err`: Parse error
+pub fn parse_sbit_chunk(data: &[u8]) -> Result<Vec<u8>> {
+    if data.is_empty() || data.len() > 4 {
+        return Err(ExifToolError::parse_error(format!(
+            "sBIT chunk has invalid length: {}",
+            data.len()
+        )));
+    }
+
+    Ok(data.to_vec())
+}
+
+/// Parses an hIST chunk (Image Histogram).
+///
+/// # Format
+///
+/// ```text
+/// Frequencies: 2*n bytes (n = palette size)
+/// Each frequency: 2 bytes (u16, big-endian)
+/// ```
+///
+/// # Parameters
+///
+/// - `data`: hIST chunk data
+///
+/// # Returns
+///
+/// - `Ok(histogram)`: Vector of frequency values
+/// - `Err`: Parse error
+pub fn parse_hist_chunk(data: &[u8]) -> Result<Vec<u16>> {
+    if !data.len().is_multiple_of(2) {
+        return Err(ExifToolError::parse_error("hIST chunk length must be even"));
+    }
+
+    let reader = crate::io::EndianReader::big_endian(data);
+    let mut histogram = Vec::new();
+    for i in (0..data.len()).step_by(2) {
+        if let Some(freq) = reader.u16_at(i) {
+            histogram.push(freq);
+        }
+    }
+
+    Ok(histogram)
 }
 
 /// Parses a tIME chunk (Last Modification Time).
@@ -506,7 +678,8 @@ pub fn parse_time_chunk(data: &[u8]) -> Result<String> {
         )));
     }
 
-    let year = u16::from_be_bytes([data[0], data[1]]);
+    let reader = crate::io::EndianReader::big_endian(data);
+    let year = reader.u16_at(0).unwrap_or(0);
     let month = data[2];
     let day = data[3];
     let hour = data[4];
@@ -559,10 +732,14 @@ pub fn parse_exif_chunk(data: &[u8]) -> Result<IfdEntries> {
     };
 
     // Verify TIFF magic number (0x002A)
-    let magic = match byte_order {
-        ByteOrder::LittleEndian => u16::from_le_bytes([data[2], data[3]]),
-        ByteOrder::BigEndian => u16::from_be_bytes([data[2], data[3]]),
+    let reader = match byte_order {
+        ByteOrder::LittleEndian => crate::io::EndianReader::little_endian(data),
+        ByteOrder::BigEndian => crate::io::EndianReader::big_endian(data),
     };
+
+    let magic = reader.u16_at(2).ok_or_else(|| {
+        ExifToolError::parse_error("eXIf chunk too small to read TIFF magic number")
+    })?;
 
     if magic != 0x002A {
         return Err(ExifToolError::parse_error(format!(
@@ -572,10 +749,9 @@ pub fn parse_exif_chunk(data: &[u8]) -> Result<IfdEntries> {
     }
 
     // Read IFD offset
-    let ifd_offset = match byte_order {
-        ByteOrder::LittleEndian => u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
-        ByteOrder::BigEndian => u32::from_be_bytes([data[4], data[5], data[6], data[7]]),
-    };
+    let ifd_offset = reader
+        .u32_at(4)
+        .ok_or_else(|| ExifToolError::parse_error("eXIf chunk too small to read IFD offset"))?;
 
     // Create an in-memory reader for the EXIF data
     let exif_reader = ExifDataReader::new(data.to_vec());
@@ -620,37 +796,7 @@ impl FileReader for ExifDataReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Simple in-memory FileReader for testing
-    struct TestReader {
-        data: Vec<u8>,
-    }
-
-    impl TestReader {
-        fn new(data: Vec<u8>) -> Self {
-            Self { data }
-        }
-    }
-
-    impl FileReader for TestReader {
-        fn read(&self, offset: u64, length: usize) -> io::Result<&[u8]> {
-            let start = offset as usize;
-            let end = start + length;
-
-            if end > self.data.len() {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "read beyond end of file",
-                ));
-            }
-
-            Ok(&self.data[start..end])
-        }
-
-        fn size(&self) -> u64 {
-            self.data.len() as u64
-        }
-    }
+    use crate::test_support::TestReader;
 
     #[test]
     fn test_parse_png_signature() {
@@ -858,5 +1004,107 @@ mod tests {
             crc: 0,
         };
         assert!(!text_chunk.is_exif_chunk());
+    }
+
+    #[test]
+    fn test_parse_gama_chunk() {
+        // Test gamma value of 2.2 (stored as 220000)
+        let data = 220000u32.to_be_bytes();
+        let result = parse_gama_chunk(&data);
+        assert!(result.is_ok());
+        let gamma = result.unwrap();
+        assert!((gamma - 2.2).abs() < 0.0001);
+
+        // Test gamma value of 1/2.2 ≈ 0.45455 (stored as 45455)
+        let data = 45455u32.to_be_bytes();
+        let result = parse_gama_chunk(&data);
+        assert!(result.is_ok());
+        let gamma = result.unwrap();
+        assert!((gamma - 0.45455).abs() < 0.00001);
+    }
+
+    #[test]
+    fn test_parse_gama_chunk_invalid_length() {
+        let data = [0u8; 3]; // Wrong length
+        let result = parse_gama_chunk(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_ztxt_chunk() {
+        use flate2::Compression;
+        use flate2::write::ZlibEncoder;
+        use std::io::Write;
+
+        // Create compressed text data
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(b"This is compressed text").unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        // Build zTXt chunk data: keyword\0compression_method\0compressed_data
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Description");
+        data.push(0); // null
+        data.push(0); // compression method = 0 (deflate)
+        data.extend_from_slice(&compressed);
+
+        let result = parse_ztxt_chunk(&data);
+        assert!(result.is_ok());
+
+        let (keyword, text) = result.unwrap();
+        assert_eq!(keyword, "Description");
+        assert_eq!(text, "This is compressed text");
+    }
+
+    #[test]
+    fn test_parse_sbit_chunk() {
+        // Test grayscale (1 byte)
+        let data = vec![8];
+        let result = parse_sbit_chunk(&data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![8]);
+
+        // Test RGB (3 bytes)
+        let data = vec![8, 8, 8];
+        let result = parse_sbit_chunk(&data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![8, 8, 8]);
+
+        // Test RGBA (4 bytes)
+        let data = vec![8, 8, 8, 8];
+        let result = parse_sbit_chunk(&data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![8, 8, 8, 8]);
+
+        // Test invalid (too many bytes)
+        let data = vec![8, 8, 8, 8, 8];
+        let result = parse_sbit_chunk(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_hist_chunk() {
+        // Create histogram with 3 entries
+        let mut data = Vec::new();
+        data.extend_from_slice(&100u16.to_be_bytes());
+        data.extend_from_slice(&200u16.to_be_bytes());
+        data.extend_from_slice(&300u16.to_be_bytes());
+
+        let result = parse_hist_chunk(&data);
+        assert!(result.is_ok());
+
+        let histogram = result.unwrap();
+        assert_eq!(histogram.len(), 3);
+        assert_eq!(histogram[0], 100);
+        assert_eq!(histogram[1], 200);
+        assert_eq!(histogram[2], 300);
+    }
+
+    #[test]
+    fn test_parse_hist_chunk_invalid_length() {
+        // Odd length should fail
+        let data = vec![0, 1, 2];
+        let result = parse_hist_chunk(&data);
+        assert!(result.is_err());
     }
 }

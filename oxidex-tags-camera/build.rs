@@ -1,3 +1,4 @@
+use oxidex_tags_shared::TagDatabase;
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -19,29 +20,6 @@ fn main() {
     let yaml_path = "src/camera_tags.yaml";
     let yaml_content = fs::read_to_string(yaml_path).expect("Failed to read camera_tags.yaml");
 
-    // Deserialize YAML into TagDatabase structure
-    // We need to use the same types that will be used at runtime
-    #[derive(serde::Deserialize, serde::Serialize)]
-    struct Tag {
-        id: String,
-        name: String,
-        writable: bool,
-        #[serde(rename = "type")]
-        type_name: Option<String>,
-        description: Option<String>,
-    }
-
-    #[derive(serde::Deserialize, serde::Serialize)]
-    struct TagTable {
-        name: String,
-        tags: Vec<Tag>,
-    }
-
-    #[derive(serde::Deserialize, serde::Serialize)]
-    struct TagDatabase {
-        tables: Vec<TagTable>,
-    }
-
     let tag_database: TagDatabase =
         serde_yaml::from_str(&yaml_content).expect("Failed to parse camera_tags.yaml during build");
 
@@ -55,9 +33,4 @@ fn main() {
     let dest_path = Path::new(&out_dir).join("camera_tags.bin");
 
     fs::write(&dest_path, binary_data).expect("Failed to write binary tag database file");
-
-    println!(
-        "cargo:warning=Pre-compiled camera_tags.yaml to binary format ({} bytes)",
-        fs::metadata(&dest_path).unwrap().len()
-    );
 }

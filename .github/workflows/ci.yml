@@ -2,308 +2,137 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE"
-      - ".gitignore"
+    branches: ['**']
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', '.gitignore']
   pull_request:
-    branches: ["**"]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE"
-      - ".gitignore"
+    branches: ['**']
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', '.gitignore']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  CARGO_INCREMENTAL: 1
-  CARGO_PROFILE_DEV_DEBUG: 0
-  CARGO_PROFILE_TEST_DEBUG: 0
 
 jobs:
-  test:
-    name: Test Suite
-    runs-on: arc-runner-set
-    timeout-minutes: 30
-
+  lint:
+    name: Lint & Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-features -- -D warnings
+      - uses: rustsec/audit-check@e9159ac5f7d7d873ce074ca134da2f445c0a4a61 # v1.3.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Accept the informational "bincode is unmaintained" advisory: it is a
+          # transitive dependency with no security vulnerability, and the
+          # advisory postdates the last green run. Reporting it also makes the
+          # action fail on push events ("Resource not accessible by
+          # integration") when it tries to file an issue without issues:write.
+          ignore: RUSTSEC-2025-0141
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y wget build-essential libssl-dev pkg-config
-
-      - name: Build
-        run: cargo build --release --verbose --all-features
-
-      - name: Run tests
-        run: cargo test --verbose --all-features
-
-      - name: Install cbindgen
-        run: |
-          if ! command -v cbindgen &> /dev/null; then
-            echo "cbindgen not found in cache, installing..."
-            cargo install cbindgen --locked
-          else
-            echo "cbindgen found in cache: $(cbindgen --version)"
-          fi
-
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
+        with:
+          # Pin cbindgen: the committed api/oxidex.h is generated with 0.29.2,
+          # and newer cbindgen emits extra #define macros that would fail the
+          # "Verify C header is up-to-date" check non-deterministically.
+          tool: cargo-nextest,cbindgen@0.29.2
+      - run: cargo build --release --all-features --features tag-comparison-binary
+      # Tests run in the (unwind) test profile: the release profile sets
+      # panic = "abort", which newer cargo refuses to mix with the unwind test
+      # harness. The release artifacts themselves are covered by the build step
+      # above and the multi-platform jobs.
+      - run: cargo nextest run --all-features --features tag-comparison-binary
+      - name: C FFI integration test
+        run: cargo test --test ffi_c_integration -- --nocapture
+      - name: Run doc tests
+        run: cargo test --doc --all-features
       - name: Verify C header is up-to-date
         run: |
           cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
-          if ! diff -q api/oxidex.h api/oxidex.h.tmp; then
-            echo "Error: C header file is out of date. Please regenerate it with:"
-            echo "  cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h"
-            echo ""
-            echo "Differences:"
-            diff api/oxidex.h api/oxidex.h.tmp || true
+          diff -q api/oxidex.h api/oxidex.h.tmp || (echo "C header out of date" && exit 1)
+          rm api/oxidex.h.tmp
+      - name: Install ExifTool
+        run: |
+          # "files/latest/download" now resolves to the Windows/default zip
+          # package rather than the Unix tarball, so find the newest
+          # Image-ExifTool-*.tar.gz entry from the project's RSS feed instead.
+          tarball_url=$(curl -sSL "https://sourceforge.net/projects/exiftool/rss?path=/" \
+            | grep -oE '<link>[^<]*Image-ExifTool-[0-9.]+\.tar\.gz/download</link>' \
+            | head -1 \
+            | sed -E 's#<link>(.*)</link>#\1#')
+          if [ -z "$tarball_url" ]; then
+            echo "Could not find an Image-ExifTool tarball URL" >&2
             exit 1
           fi
-          rm api/oxidex.h.tmp
-          echo "C header file is up-to-date"
+          curl -sSL "$tarball_url" -o /tmp/exiftool.tar.gz
+          mkdir -p /tmp/exiftool-src
+          tar xzf /tmp/exiftool.tar.gz -C /tmp/exiftool-src --strip-components=1
+          echo "/tmp/exiftool-src" >> "$GITHUB_PATH"
+          /tmp/exiftool-src/exiftool -ver
+      - name: Integration tests (ExifTool comparison)
+        run: cargo test --features exiftool-comparison
 
-  audit:
-    name: Security Audit
-    runs-on: arc-runner-set
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y wget build-essential libssl-dev pkg-config
-          rustup component add clippy rustfmt
-
-      - name: Run cargo-audit
-        uses: rustsec/audit-check@e9159ac5f7d7d873ce074ca134da2f445c0a4a61 # v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Run Clippy
-        run: cargo clippy --all-features -- -D warnings
-
-      - name: Generate build artifacts
-        run: cargo check --all-features
-        env:
-          CARGO_TERM_COLOR: always
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-  integration-tests:
-    name: Integration Tests (ExifTool Comparison)
-    runs-on: arc-runner-set
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y wget build-essential libssl-dev pkg-config pkg-config libssl-dev
-
-      - name: Install Perl ExifTool
-        run: |
-          if ! command -v exiftool &> /dev/null; then
-            echo "ExifTool not found, installing..."
-            sudo apt-get update -qq
-            sudo apt-get install -y libimage-exiftool-perl
-          else
-            echo "ExifTool already installed: $(exiftool -ver)"
-          fi
-
-      - name: Build OxiDex
-        run: cargo build --release --all-features
-
-      - name: Run integration tests with ExifTool comparison
-        id: integration-tests
-        continue-on-error: true
-        run: |
-          cargo test --release --features exiftool-comparison -- --nocapture 2>&1 | tee test_output.log
-          echo "test_exit_code=$?" >> $GITHUB_OUTPUT
-
-      - name: Generate comparison report
-        if: always()
-        run: |
-          echo "# ExifTool Comparison Test Results" > comparison_report.md
-          echo "" >> comparison_report.md
-          echo "**Platform:** ${{ runner.os }} (${{ runner.arch }})" >> comparison_report.md
-          echo "**Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> comparison_report.md
-          echo "**Exit Code:** ${{ steps.integration-tests.outputs.test_exit_code }}" >> comparison_report.md
-          echo "" >> comparison_report.md
-          echo "## Test Output" >> comparison_report.md
-          echo "" >> comparison_report.md
-          echo '```' >> comparison_report.md
-          if [ -f test_output.log ]; then
-            cat test_output.log >> comparison_report.md
-          else
-            echo "No test output captured" >> comparison_report.md
-          fi
-          echo '```' >> comparison_report.md
-
-      - name: Upload comparison report
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: comparison-report
-          path: comparison_report.md
-          retention-days: 90
-
-  benchmarks:
-    name: Performance Benchmarks
-    runs-on: arc-runner-set
-    timeout-minutes: 30
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y wget build-essential libssl-dev pkg-config pkg-config libssl-dev
-
-      - name: Clean cargo to avoid cache corruption
-        run: |
-          cargo clean
-          rm -rf ~/.cargo/registry/cache
-          rm -rf ~/.cargo/git/db
-
-      - name: Run benchmarks
-        run: cargo bench --bench integration_benchmarks --bench parse_benchmarks
-
-      - name: Upload benchmark results
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: benchmark-results
-          path: target/criterion/
-          retention-days: 90
-
-  publish-benchmarks:
-    name: Publish Benchmarks to GitHub Pages
-    runs-on: arc-runner-set
-    needs: benchmarks
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-
-      - name: Download benchmark results
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
-        with:
-          name: benchmark-results
-          path: benchmark-results
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e # v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./benchmark-results
-          destination_dir: benchmarks
-          keep_files: false
-
-  multi-platform-build:
-    name: Multi-platform Build Test (${{ matrix.target }})
+  multi-platform:
+    name: Multi-platform Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 20
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux ARM64 - native build on arm64
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
           - target: aarch64-unknown-linux-musl
             os: warp-ubuntu-latest-arm64-2x
-
-          # Linux x86_64 - native build on x64
-          - target: x86_64-unknown-linux-musl
-            os: arc-runner-set
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y wget build-essential libssl-dev pkg-config pkg-config libssl-dev
-      - name: Install musl development tools
-        run: |
+      - run: |
           sudo apt-get update -qq
           sudo apt-get install -y musl-tools musl-dev
+      - run: cargo build --release --target ${{ matrix.target }}
+      - run: ls -lh target/${{ matrix.target }}/release/oxidex
 
-      - name: Build (native)
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Verify binary
-        run: |
-          ls -lh target/${{ matrix.target }}/release/oxidex
-          file target/${{ matrix.target }}/release/oxidex || true
-
-  coverage:
-    name: Code Coverage
-    runs-on: arc-runner-set
+  metrics:
+    name: Benchmarks & Coverage
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test]
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y wget build-essential libssl-dev pkg-config pkg-config libssl-dev
-
-      - name: Install cargo-tarpaulin
-        run: |
-          if ! command -v cargo-tarpaulin &> /dev/null; then
-            echo "cargo-tarpaulin not found, installing..."
-            cargo install cargo-tarpaulin --locked
-          else
-            echo "cargo-tarpaulin found: $(cargo-tarpaulin --version)"
-          fi
-
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Run benchmarks
+        run: cargo bench --bench integration_benchmarks --bench parse_benchmarks
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: benchmark-results
+          path: target/criterion/
+          retention-days: 90
+      - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
+        with:
+          tool: cargo-tarpaulin
       - name: Generate coverage
-        run: |
-          cargo tarpaulin --verbose --all-features --workspace --timeout 300 --out xml --output-dir ./coverage
-        env:
-          CARGO_TERM_COLOR: always
-
-      - name: Upload coverage to Codacy
-        uses: codacy/codacy-coverage-reporter-action@89d6c85cfafaec52c72b6c5e8b2878d33104c699 # v1
+        run: cargo tarpaulin --verbose --all-features --workspace --timeout 300 --out xml --output-dir ./coverage
+      - uses: codacy/codacy-coverage-reporter-action@89d6c85cfafaec52c72b6c5e8b2878d33104c699 # v1.3.0
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           coverage-reports: coverage/cobertura.xml

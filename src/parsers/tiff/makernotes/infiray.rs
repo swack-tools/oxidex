@@ -26,38 +26,21 @@
 //! InfiRay uses a subset of thermal imaging metadata.
 
 #![allow(dead_code)]
-#![allow(unused_imports)]
 
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
-use super::shared::array_extractors::extract_i16_array;
+use super::registries::infiray::infiray_registry;
 use super::shared::MakerNoteParser;
-
-// InfiRay MakerNote Tag IDs
-const INFIRAY_MODEL: u16 = 0x0001; // Camera model
-const INFIRAY_SERIAL: u16 = 0x0002; // Serial number
-const INFIRAY_FIRMWARE: u16 = 0x0003; // Firmware version
-const INFIRAY_TEMP_MIN: u16 = 0x0100; // Minimum temperature (°C * 10)
-const INFIRAY_TEMP_MAX: u16 = 0x0101; // Maximum temperature (°C * 10)
-const INFIRAY_TEMP_CENTER: u16 = 0x0102; // Center temperature (°C * 10)
-const INFIRAY_EMISSIVITY: u16 = 0x0103; // Emissivity (0-100)
-const INFIRAY_DISTANCE: u16 = 0x0104; // Distance to object (cm)
-const INFIRAY_PALETTE: u16 = 0x0105; // Color palette
-const INFIRAY_RANGE_MIN: u16 = 0x0106; // Measurement range min (°C * 10)
-const INFIRAY_RANGE_MAX: u16 = 0x0107; // Measurement range max (°C * 10)
-const INFIRAY_ATMOSPHERIC_TEMP: u16 = 0x0108; // Atmospheric temp (°C * 10)
-const INFIRAY_HUMIDITY: u16 = 0x0109; // Relative humidity (%)
-const INFIRAY_ENHANCEMENT: u16 = 0x010A; // Image enhancement mode
-const INFIRAY_ZOOM: u16 = 0x010B; // Digital zoom level
-const INFIRAY_CONTRAST: u16 = 0x010C; // Contrast level
-const INFIRAY_BRIGHTNESS: u16 = 0x010D; // Brightness level
-const INFIRAY_SHARPNESS: u16 = 0x010E; // Sharpness level
-const INFIRAY_SPOT_METER: u16 = 0x010F; // Spot meter position
-const INFIRAY_ISOTHERM: u16 = 0x0110; // Isotherm mode
-const INFIRAY_UNIT: u16 = 0x0111; // Temperature unit
+use super::shared::array_extractors::extract_i16_array;
+use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::tag_registry::TagRegistry;
 
 const INFIRAY_SIGNATURE: &[u8] = b"InfiRay";
+
+// Lazy-initialized tag registry using centralized registry function
+static TAG_REGISTRY: Lazy<TagRegistry> = Lazy::new(infiray_registry);
 
 /// Decodes InfiRay color palette
 fn decode_palette(value: i16) -> String {
@@ -149,11 +132,7 @@ fn extract_string(entry: &IfdEntry, data: &[u8]) -> Option<String> {
         .trim_end_matches('\0')
         .to_string();
 
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 /// InfiRay Thermal Camera MakerNote parser
@@ -165,6 +144,62 @@ impl InfiRayParser {
     /// Creates a new InfiRay parser instance
     pub fn new() -> Self {
         InfiRayParser
+    }
+}
+
+impl InfiRayParser {
+    fn parse_entry(
+        &self,
+        entry: &IfdEntry,
+        data: &[u8],
+        byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+    ) {
+        let tag_id = entry.tag_id;
+
+        // Handle string tags (Model, Serial, Firmware)
+        if let 0x0001..=0x0003 = tag_id {
+            if let Some(s) = extract_string(entry, data)
+                && let Some(name) = TAG_REGISTRY.get_tag_name(tag_id)
+            {
+                tags.insert(format!("InfiRay:{}", name), s);
+            }
+            return;
+        }
+
+        // Handle i16 array tags
+        if let Some(array) = extract_i16_array(entry, data, byte_order)
+            && let Some(&val) = array.first()
+        {
+            let tag_name = match TAG_REGISTRY.get_tag_name(tag_id) {
+                Some(name) => name,
+                None => return,
+            };
+
+            let formatted_value = match tag_id {
+                0x0100..=0x0102 => format_temperature(val),
+                0x0103 => format_emissivity(val),
+                0x0104 => format_distance(val),
+                0x0105 => decode_palette(val),
+                0x0106 | 0x0107 => format_temperature(val),
+                0x0108 => format_temperature(val),
+                0x0109 => format!("{}%", val),
+                0x010A => decode_enhancement(val),
+                0x010B => format_zoom(val),
+                0x010C..=0x010E => val.to_string(),
+                0x010F | 0x0110 => {
+                    if val != 0 {
+                        "On".to_string()
+                    } else {
+                        "Off".to_string()
+                    }
+                }
+                0x0111 => decode_unit(val),
+                _ => return,
+            };
+
+            tags.insert(format!("InfiRay:{}", tag_name), formatted_value);
+        }
     }
 }
 
@@ -190,144 +225,15 @@ impl MakerNoteParser for InfiRayParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        if data.len() < 8 {
-            return Err("InfiRay MakerNote data too short".to_string());
-        }
-
-        let start_offset = if data.starts_with(INFIRAY_SIGNATURE) {
-            7
-        } else {
-            0
+        let config = IfdParserConfig {
+            signature: Some(INFIRAY_SIGNATURE),
+            signature_offset: 7,
+            max_entries: 200,
         };
-        let parse_data = &data[start_offset..];
 
-        if parse_data.len() < 2 {
-            return Ok(());
-        }
-
-        let num_entries = match byte_order {
-            ByteOrder::LittleEndian => u16::from_le_bytes([parse_data[0], parse_data[1]]),
-            ByteOrder::BigEndian => u16::from_be_bytes([parse_data[0], parse_data[1]]),
-        } as usize;
-
-        if num_entries == 0 || num_entries > 200 {
-            return Ok(());
-        }
-
-        let mut offset = 2;
-        let entry_size = 12;
-
-        for _ in 0..num_entries {
-            if offset + entry_size > parse_data.len() {
-                break;
-            }
-
-            let entry_data = &parse_data[offset..offset + entry_size];
-
-            let tag = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([entry_data[0], entry_data[1]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([entry_data[0], entry_data[1]]),
-            };
-
-            let field_type = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([entry_data[2], entry_data[3]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([entry_data[2], entry_data[3]]),
-            };
-
-            let count = match byte_order {
-                ByteOrder::LittleEndian => {
-                    u32::from_le_bytes([entry_data[4], entry_data[5], entry_data[6], entry_data[7]])
-                }
-                ByteOrder::BigEndian => {
-                    u32::from_be_bytes([entry_data[4], entry_data[5], entry_data[6], entry_data[7]])
-                }
-            };
-
-            let value_offset = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    entry_data[8],
-                    entry_data[9],
-                    entry_data[10],
-                    entry_data[11],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    entry_data[8],
-                    entry_data[9],
-                    entry_data[10],
-                    entry_data[11],
-                ]),
-            };
-
-            let entry = IfdEntry {
-                tag_id: tag,
-                field_type,
-                value_count: count,
-                value_offset,
-            };
-
-            match tag {
-                INFIRAY_MODEL | INFIRAY_SERIAL | INFIRAY_FIRMWARE => {
-                    if let Some(s) = extract_string(&entry, parse_data) {
-                        let tag_name = match tag {
-                            INFIRAY_MODEL => "Model",
-                            INFIRAY_SERIAL => "SerialNumber",
-                            INFIRAY_FIRMWARE => "FirmwareVersion",
-                            _ => continue,
-                        };
-                        tags.insert(format!("InfiRay:{}", tag_name), s);
-                    }
-                }
-                _ => {
-                    if let Some(array) = extract_i16_array(&entry, parse_data, byte_order) {
-                        if let Some(&val) = array.first() {
-                            let (tag_name, formatted_value) = match tag {
-                                INFIRAY_TEMP_MIN => ("TemperatureMin", format_temperature(val)),
-                                INFIRAY_TEMP_MAX => ("TemperatureMax", format_temperature(val)),
-                                INFIRAY_TEMP_CENTER => {
-                                    ("TemperatureCenter", format_temperature(val))
-                                }
-                                INFIRAY_EMISSIVITY => ("Emissivity", format_emissivity(val)),
-                                INFIRAY_DISTANCE => ("Distance", format_distance(val)),
-                                INFIRAY_PALETTE => ("Palette", decode_palette(val)),
-                                INFIRAY_RANGE_MIN => ("RangeMin", format_temperature(val)),
-                                INFIRAY_RANGE_MAX => ("RangeMax", format_temperature(val)),
-                                INFIRAY_ATMOSPHERIC_TEMP => {
-                                    ("AtmosphericTemp", format_temperature(val))
-                                }
-                                INFIRAY_HUMIDITY => ("Humidity", format!("{}%", val)),
-                                INFIRAY_ENHANCEMENT => ("Enhancement", decode_enhancement(val)),
-                                INFIRAY_ZOOM => ("DigitalZoom", format_zoom(val)),
-                                INFIRAY_CONTRAST => ("Contrast", val.to_string()),
-                                INFIRAY_BRIGHTNESS => ("Brightness", val.to_string()),
-                                INFIRAY_SHARPNESS => ("Sharpness", val.to_string()),
-                                INFIRAY_SPOT_METER => (
-                                    "SpotMeter",
-                                    if val != 0 {
-                                        "On".to_string()
-                                    } else {
-                                        "Off".to_string()
-                                    },
-                                ),
-                                INFIRAY_ISOTHERM => (
-                                    "Isotherm",
-                                    if val != 0 {
-                                        "On".to_string()
-                                    } else {
-                                        "Off".to_string()
-                                    },
-                                ),
-                                INFIRAY_UNIT => ("TemperatureUnit", decode_unit(val)),
-                                _ => continue,
-                            };
-                            tags.insert(format!("InfiRay:{}", tag_name), formatted_value);
-                        }
-                    }
-                }
-            }
-
-            offset += entry_size;
-        }
-
+        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
+            self.parse_entry(entry, parse_data, byte_order, tags);
+        })?;
         Ok(())
     }
 }

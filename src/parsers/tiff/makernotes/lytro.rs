@@ -24,33 +24,55 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use std::collections::HashMap;
 
-use super::shared::array_extractors::extract_i16_array;
 use super::shared::MakerNoteParser;
+use super::shared::array_extractors::extract_i16_array;
 
-const LYTRO_MODEL: u16 = 0x0001;
-const LYTRO_SERIAL: u16 = 0x0002;
-const LYTRO_FIRMWARE: u16 = 0x0003;
-const LYTRO_LF_VERSION: u16 = 0x0100; // Light field data version
-const LYTRO_MICROLENS_PITCH: u16 = 0x0101; // Microlens pitch (micrometers)
-const LYTRO_MICROLENS_ROTATION: u16 = 0x0102; // Microlens array rotation
-const LYTRO_DEPTH_MIN: u16 = 0x0103; // Minimum depth (mm)
-const LYTRO_DEPTH_MAX: u16 = 0x0104; // Maximum depth (mm)
-const LYTRO_FOCUS_DEPTH: u16 = 0x0105; // Current focus plane depth (mm)
-const LYTRO_REFOCUS_RANGE: u16 = 0x0106; // Refocusable depth range (mm)
-const LYTRO_SENSOR_RESOLUTION: u16 = 0x0107; // Sensor resolution code
-const LYTRO_IMAGE_ORIENTATION: u16 = 0x0108; // Image orientation
-const LYTRO_EXPOSURE_DURATION: u16 = 0x0109; // Exposure duration (ms)
-const LYTRO_ISO_SPEED: u16 = 0x010A; // ISO setting
-const LYTRO_ZOOM_FACTOR: u16 = 0x010B; // Zoom factor (x100)
-const LYTRO_ALGORITHM_VERSION: u16 = 0x010C; // Processing algorithm version
-const LYTRO_DEPTH_MAP_ENABLED: u16 = 0x010D; // Depth map generation enabled
-const LYTRO_PERSPECTIVE_SHIFT: u16 = 0x010E; // Perspective shift capability
-const LYTRO_CALIBRATION_DATE: u16 = 0x010F; // Camera calibration date
-const LYTRO_TEMPERATURE: u16 = 0x0110; // Sensor temperature (°C)
-const LYTRO_RAW_DATA_SIZE: u16 = 0x0111; // Raw light field data size (MB)
+/// Camera model identifier
+pub const LYTRO_MODEL: u16 = 0x0001;
+/// Camera serial number
+pub const LYTRO_SERIAL: u16 = 0x0002;
+/// Firmware version
+pub const LYTRO_FIRMWARE: u16 = 0x0003;
+/// Light field data version
+pub const LYTRO_LF_VERSION: u16 = 0x0100;
+/// Microlens pitch (micrometers)
+pub const LYTRO_MICROLENS_PITCH: u16 = 0x0101;
+/// Microlens array rotation
+pub const LYTRO_MICROLENS_ROTATION: u16 = 0x0102;
+/// Minimum depth (mm)
+pub const LYTRO_DEPTH_MIN: u16 = 0x0103;
+/// Maximum depth (mm)
+pub const LYTRO_DEPTH_MAX: u16 = 0x0104;
+/// Current focus plane depth (mm)
+pub const LYTRO_FOCUS_DEPTH: u16 = 0x0105;
+/// Refocusable depth range (mm)
+pub const LYTRO_REFOCUS_RANGE: u16 = 0x0106;
+/// Sensor resolution code
+pub const LYTRO_SENSOR_RESOLUTION: u16 = 0x0107;
+/// Image orientation
+pub const LYTRO_IMAGE_ORIENTATION: u16 = 0x0108;
+/// Exposure duration (ms)
+pub const LYTRO_EXPOSURE_DURATION: u16 = 0x0109;
+/// ISO setting
+pub const LYTRO_ISO_SPEED: u16 = 0x010A;
+/// Zoom factor (x100)
+pub const LYTRO_ZOOM_FACTOR: u16 = 0x010B;
+/// Processing algorithm version
+pub const LYTRO_ALGORITHM_VERSION: u16 = 0x010C;
+/// Depth map generation enabled
+pub const LYTRO_DEPTH_MAP_ENABLED: u16 = 0x010D;
+/// Perspective shift capability
+pub const LYTRO_PERSPECTIVE_SHIFT: u16 = 0x010E;
+/// Camera calibration date
+pub const LYTRO_CALIBRATION_DATE: u16 = 0x010F;
+/// Sensor temperature (°C)
+pub const LYTRO_TEMPERATURE: u16 = 0x0110;
+/// Raw light field data size (MB)
+pub const LYTRO_RAW_DATA_SIZE: u16 = 0x0111;
 
 const LYTRO_SIGNATURE: &[u8] = b"Lytro";
 
@@ -132,11 +154,7 @@ fn extract_string(entry: &IfdEntry, data: &[u8]) -> Option<String> {
     let s = String::from_utf8_lossy(&data[offset..offset + count])
         .trim_end_matches('\0')
         .to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 /// Lytro Light Field Camera MakerNote parser
@@ -183,10 +201,9 @@ impl MakerNoteParser for LytroParser {
             return Ok(());
         }
 
-        let num_entries = match byte_order {
-            ByteOrder::LittleEndian => u16::from_le_bytes([parse_data[0], parse_data[1]]),
-            ByteOrder::BigEndian => u16::from_be_bytes([parse_data[0], parse_data[1]]),
-        } as usize;
+        // Read number of entries using EndianReader
+        let reader = EndianReader::new(parse_data, byte_order.to_io_byte_order());
+        let num_entries = reader.u16_at(0).unwrap_or(0) as usize;
         if num_entries == 0 || num_entries > 200 {
             return Ok(());
         }
@@ -197,37 +214,13 @@ impl MakerNoteParser for LytroParser {
                 break;
             }
             let entry_data = &parse_data[offset..offset + 12];
+            let entry_reader = EndianReader::new(entry_data, byte_order.to_io_byte_order());
 
-            let tag = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([entry_data[0], entry_data[1]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([entry_data[0], entry_data[1]]),
-            };
-            let field_type = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([entry_data[2], entry_data[3]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([entry_data[2], entry_data[3]]),
-            };
-            let count = match byte_order {
-                ByteOrder::LittleEndian => {
-                    u32::from_le_bytes([entry_data[4], entry_data[5], entry_data[6], entry_data[7]])
-                }
-                ByteOrder::BigEndian => {
-                    u32::from_be_bytes([entry_data[4], entry_data[5], entry_data[6], entry_data[7]])
-                }
-            };
-            let value_offset = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    entry_data[8],
-                    entry_data[9],
-                    entry_data[10],
-                    entry_data[11],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    entry_data[8],
-                    entry_data[9],
-                    entry_data[10],
-                    entry_data[11],
-                ]),
-            };
+            // Parse IFD entry fields using EndianReader
+            let tag = entry_reader.u16_at(0).unwrap_or(0);
+            let field_type = entry_reader.u16_at(2).unwrap_or(0);
+            let count = entry_reader.u32_at(4).unwrap_or(0);
+            let value_offset = entry_reader.u32_at(8).unwrap_or(0);
 
             let entry = IfdEntry {
                 tag_id: tag,
@@ -257,52 +250,48 @@ impl MakerNoteParser for LytroParser {
                     }
                 }
                 _ => {
-                    if let Some(array) = extract_i16_array(&entry, parse_data, byte_order) {
-                        if let Some(&val) = array.first() {
-                            let (tag_name, formatted_value) = match tag {
-                                LYTRO_MICROLENS_PITCH => {
-                                    ("MicrolensPitch", format_microlens_pitch(val))
-                                }
-                                LYTRO_MICROLENS_ROTATION => {
-                                    ("MicrolensRotation", format_rotation(val))
-                                }
-                                LYTRO_DEPTH_MIN => ("DepthMin", format_depth(val)),
-                                LYTRO_DEPTH_MAX => ("DepthMax", format_depth(val)),
-                                LYTRO_FOCUS_DEPTH => ("FocusDepth", format_depth(val)),
-                                LYTRO_REFOCUS_RANGE => ("RefocusRange", format_depth(val)),
-                                LYTRO_SENSOR_RESOLUTION => {
-                                    ("SensorResolution", decode_sensor_resolution(val))
-                                }
-                                LYTRO_IMAGE_ORIENTATION => {
-                                    ("ImageOrientation", decode_orientation(val))
-                                }
-                                LYTRO_EXPOSURE_DURATION => {
-                                    ("ExposureDuration", format_exposure(val))
-                                }
-                                LYTRO_ISO_SPEED => ("ISO", val.to_string()),
-                                LYTRO_ZOOM_FACTOR => ("ZoomFactor", format_zoom(val)),
-                                LYTRO_DEPTH_MAP_ENABLED => (
-                                    "DepthMapEnabled",
-                                    if val != 0 {
-                                        "Yes".to_string()
-                                    } else {
-                                        "No".to_string()
-                                    },
-                                ),
-                                LYTRO_PERSPECTIVE_SHIFT => (
-                                    "PerspectiveShiftCapable",
-                                    if val != 0 {
-                                        "Yes".to_string()
-                                    } else {
-                                        "No".to_string()
-                                    },
-                                ),
-                                LYTRO_TEMPERATURE => ("SensorTemperature", format_temperature(val)),
-                                LYTRO_RAW_DATA_SIZE => ("RawDataSize", format_data_size(val)),
-                                _ => continue,
-                            };
-                            tags.insert(format!("Lytro:{}", tag_name), formatted_value);
-                        }
+                    if let Some(array) = extract_i16_array(&entry, parse_data, byte_order)
+                        && let Some(&val) = array.first()
+                    {
+                        let (tag_name, formatted_value) = match tag {
+                            LYTRO_MICROLENS_PITCH => {
+                                ("MicrolensPitch", format_microlens_pitch(val))
+                            }
+                            LYTRO_MICROLENS_ROTATION => ("MicrolensRotation", format_rotation(val)),
+                            LYTRO_DEPTH_MIN => ("DepthMin", format_depth(val)),
+                            LYTRO_DEPTH_MAX => ("DepthMax", format_depth(val)),
+                            LYTRO_FOCUS_DEPTH => ("FocusDepth", format_depth(val)),
+                            LYTRO_REFOCUS_RANGE => ("RefocusRange", format_depth(val)),
+                            LYTRO_SENSOR_RESOLUTION => {
+                                ("SensorResolution", decode_sensor_resolution(val))
+                            }
+                            LYTRO_IMAGE_ORIENTATION => {
+                                ("ImageOrientation", decode_orientation(val))
+                            }
+                            LYTRO_EXPOSURE_DURATION => ("ExposureDuration", format_exposure(val)),
+                            LYTRO_ISO_SPEED => ("ISO", val.to_string()),
+                            LYTRO_ZOOM_FACTOR => ("ZoomFactor", format_zoom(val)),
+                            LYTRO_DEPTH_MAP_ENABLED => (
+                                "DepthMapEnabled",
+                                if val != 0 {
+                                    "Yes".to_string()
+                                } else {
+                                    "No".to_string()
+                                },
+                            ),
+                            LYTRO_PERSPECTIVE_SHIFT => (
+                                "PerspectiveShiftCapable",
+                                if val != 0 {
+                                    "Yes".to_string()
+                                } else {
+                                    "No".to_string()
+                                },
+                            ),
+                            LYTRO_TEMPERATURE => ("SensorTemperature", format_temperature(val)),
+                            LYTRO_RAW_DATA_SIZE => ("RawDataSize", format_data_size(val)),
+                            _ => continue,
+                        };
+                        tags.insert(format!("Lytro:{}", tag_name), formatted_value);
                     }
                 }
             }

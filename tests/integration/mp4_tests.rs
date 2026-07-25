@@ -117,7 +117,7 @@ fn test_parse_mp4_with_quicktime_user_data() {
 
     assert_eq!(
         metadata.get_string("QuickTime:Title"),
-        Some("QT Title!!"),
+        Some("Sample Video Title"),
         "QuickTime:Title value incorrect"
     );
 

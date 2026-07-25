@@ -1,0 +1,31 @@
+<svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="60" cy="60" r="58" fill="#dd7732" stroke="#b5551e" stroke-width="2"/>
+
+  <!-- Document/image icon -->
+  <rect x="30" y="25" width="60" height="70" rx="4" fill="white" opacity="0.95"/>
+
+  <!-- Image placeholder icon (mountain/sun) -->
+  <circle cx="48" cy="45" r="5" fill="#dd7732"/>
+  <path d="M 35 70 L 45 55 L 55 65 L 70 50 L 85 70 Z" fill="#dd7732" opacity="0.7"/>
+
+  <!-- Metadata lines (representing text) -->
+  <line x1="35" y1="80" x2="65" y2="80" stroke="#dd7732" stroke-width="2" opacity="0.8"/>
+  <line x1="35" y1="87" x2="75" y2="87" stroke="#dd7732" stroke-width="2" opacity="0.6"/>
+
+  <!-- Rust cog symbol overlay -->
+  <circle cx="75" cy="85" r="12" fill="#b5551e"/>
+  <g transform="translate(75, 85)">
+    <!-- Simplified cog teeth -->
+    <circle cx="0" cy="0" r="8" fill="white"/>
+    <circle cx="0" cy="-10" r="2" fill="#b5551e"/>
+    <circle cx="7" cy="-7" r="2" fill="#b5551e"/>
+    <circle cx="10" cy="0" r="2" fill="#b5551e"/>
+    <circle cx="7" cy="7" r="2" fill="#b5551e"/>
+    <circle cx="0" cy="10" r="2" fill="#b5551e"/>
+    <circle cx="-7" cy="7" r="2" fill="#b5551e"/>
+    <circle cx="-10" cy="0" r="2" fill="#b5551e"/>
+    <circle cx="-7" cy="-7" r="2" fill="#b5551e"/>
+    <circle cx="0" cy="0" r="3" fill="#b5551e"/>
+  </g>
+</svg>

@@ -27,10 +27,20 @@
 #![allow(unused_imports)]
 
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
-use super::shared::array_extractors::extract_i16_array;
+use super::registries::parrot::parrot_registry;
 use super::shared::MakerNoteParser;
+use super::shared::array_extractors::{extract_i16_array, extract_i32_value, extract_string};
+use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::tag_registry::TagRegistry;
+
+// ============================================================================
+// Parrot MakerNote Tag IDs (for parsing reference)
+// ============================================================================
+// Tag definitions are centralized in the registry (registries/parrot.rs)
+// These constants are retained for parse_entry() to identify special handling
 
 const PARROT_MODEL: u16 = 0x0001;
 const PARROT_SERIAL: u16 = 0x0002;
@@ -48,82 +58,65 @@ const PARROT_WIFI_SIGNAL: u16 = 0x0109;
 const PARROT_FLIGHT_MODE: u16 = 0x010A;
 const PARROT_DISTANCE: u16 = 0x010B;
 
+// Parrot signature
 const PARROT_SIGNATURE: &[u8] = b"Parrot";
 
-fn decode_flight_mode(value: i16) -> String {
-    match value {
-        0 => "Manual".to_string(),
-        1 => "GPS".to_string(),
-        2 => "Follow Me".to_string(),
-        3 => "Return Home".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
+// Static registry instance for efficient tag lookup and decoding
+static TAG_REGISTRY: Lazy<TagRegistry> = Lazy::new(parrot_registry);
 
+// ============================================================================
+// Custom Value Formatters
+// ============================================================================
+
+/// Formats GPS coordinates (stored as 1/10,000,000 degrees)
+///
+/// # Arguments
+/// * `value` - GPS coordinate in 1/10,000,000 degree units
+///
+/// # Returns
+/// Formatted coordinate with 7 decimal places
 fn format_gps_coord(value: i32) -> String {
     format!("{:.7}", value as f64 / 10_000_000.0)
 }
 
+/// Formats altitude (stored as centimeters)
+///
+/// # Arguments
+/// * `value` - Altitude in centimeters
+///
+/// # Returns
+/// Formatted altitude in meters with 2 decimal places
 fn format_altitude(value: i16) -> String {
     format!("{:.2} m", value as f64 / 100.0)
 }
 
+/// Formats speed (stored as tenths of m/s)
+///
+/// # Arguments
+/// * `value` - Speed in 1/10 m/s units
+///
+/// # Returns
+/// Formatted speed in m/s with 1 decimal place
 fn format_speed(value: i16) -> String {
     format!("{:.1} m/s", value as f64 / 10.0)
 }
 
-fn extract_string(entry: &IfdEntry, data: &[u8]) -> Option<String> {
-    if entry.field_type != 2 {
-        return None;
-    }
-    let offset = entry.value_offset as usize;
-    let count = entry.value_count as usize;
-    if count <= 4 {
-        let bytes = entry.value_offset.to_le_bytes();
-        let s = String::from_utf8_lossy(&bytes[..count.min(4)])
-            .trim_end_matches('\0')
-            .to_string();
-        return if s.is_empty() { None } else { Some(s) };
-    }
-    if offset + count > data.len() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&data[offset..offset + count])
-        .trim_end_matches('\0')
-        .to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+/// Formats gimbal angle (stored as decidegrees)
+///
+/// # Arguments
+/// * `value` - Angle in 1/10 degree units
+///
+/// # Returns
+/// Formatted angle in degrees with 1 decimal place
+fn format_gimbal_angle(value: i16) -> String {
+    format!("{:.1}°", value as f64 / 10.0)
 }
 
-fn extract_i32(entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) -> Option<i32> {
-    if entry.value_count == 1 && (entry.field_type == 4 || entry.field_type == 9) {
-        return Some(entry.value_offset as i32);
-    }
-    let offset = entry.value_offset as usize;
-    if offset + 4 > data.len() {
-        return None;
-    }
-    match byte_order {
-        ByteOrder::LittleEndian => Some(i32::from_le_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ])),
-        ByteOrder::BigEndian => Some(i32::from_be_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ])),
-    }
-}
+// ============================================================================
+// Parser Implementation
+// ============================================================================
 
 /// Parrot Drone MakerNote parser
-/// Default implementation for parser
 #[derive(Default)]
 pub struct ParrotParser;
 
@@ -131,6 +124,90 @@ impl ParrotParser {
     /// Creates a new Parrot parser instance
     pub fn new() -> Self {
         ParrotParser
+    }
+
+    /// Parses a single IFD entry and extracts the tag value
+    ///
+    /// # Arguments
+    /// * `entry` - IFD entry to parse
+    /// * `data` - Full MakerNote data buffer
+    /// * `byte_order` - Byte order for multi-byte values
+    /// * `tags` - HashMap to insert extracted tags into
+    ///
+    /// Handles three types of Parrot tags:
+    /// - String tags (model, serial, version)
+    /// - GPS coordinates (i32 values with unit conversion)
+    /// - i16 array tags (flight metrics with custom formatting)
+    fn parse_entry(
+        &self,
+        entry: &IfdEntry,
+        data: &[u8],
+        byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+    ) {
+        let tag_id = entry.tag_id;
+
+        // Get tag name from registry first - skip unknown tags
+        let tag_name = match TAG_REGISTRY.get_tag_name(tag_id) {
+            Some(name) => name,
+            None => return,
+        };
+
+        // Handle string tags (Model, SerialNumber, Version)
+        if matches!(tag_id, PARROT_MODEL | PARROT_SERIAL | PARROT_VERSION) {
+            if let Some(s) = extract_string(entry, data, byte_order) {
+                tags.insert(format!("Parrot:{}", tag_name), s);
+            }
+            return;
+        }
+
+        // Handle GPS coordinates (i32 type with decimal formatting)
+        if matches!(tag_id, PARROT_GPS_LAT | PARROT_GPS_LON) {
+            if let Some(val) = extract_i32_value(entry, data, byte_order) {
+                tags.insert(format!("Parrot:{}", tag_name), format_gps_coord(val));
+            }
+            return;
+        }
+
+        // Handle i16 array tags (flight metrics, gimbal angles, battery, etc.)
+        if let Some(array) = extract_i16_array(entry, data, byte_order)
+            && let Some(&value) = array.first()
+        {
+            // Apply tag-specific formatting
+            let formatted_value = match tag_id {
+                // Flight mode has a registry decoder
+                PARROT_FLIGHT_MODE => TAG_REGISTRY.decode_i16(tag_id, value),
+
+                // Altitude: cm to meters
+                PARROT_ALTITUDE => format_altitude(value),
+
+                // Speed: 0.1 m/s to m/s
+                PARROT_SPEED => format_speed(value),
+
+                // Direction: degrees
+                PARROT_DIRECTION => format!("{}°", value),
+
+                // Gimbal angles: 0.1 degrees to degrees
+                PARROT_GIMBAL_PITCH | PARROT_GIMBAL_ROLL => format_gimbal_angle(value),
+
+                // Gimbal yaw: degrees
+                PARROT_GIMBAL_YAW => format!("{}°", value),
+
+                // Battery: percentage
+                PARROT_BATTERY => format!("{}%", value),
+
+                // WiFi: dBm signal strength
+                PARROT_WIFI_SIGNAL => format!("{} dBm", value),
+
+                // Home distance: meters
+                PARROT_DISTANCE => format!("{} m", value),
+
+                // Fallback for unhandled i16 tags
+                _ => return,
+            };
+
+            tags.insert(format!("Parrot:{}", tag_name), formatted_value);
+        }
     }
 }
 
@@ -153,124 +230,21 @@ impl MakerNoteParser for ParrotParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        if data.len() < 8 {
-            return Err("Parrot MakerNote data too short".to_string());
-        }
-        let start_offset = if data.starts_with(PARROT_SIGNATURE) {
-            6
-        } else {
-            0
+        let config = IfdParserConfig {
+            signature: Some(PARROT_SIGNATURE),
+            signature_offset: 6, // Skip "Parrot" signature
+            max_entries: 200,
         };
-        let parse_data = &data[start_offset..];
-        if parse_data.len() < 2 {
-            return Ok(());
-        }
 
-        let num_entries = match byte_order {
-            ByteOrder::LittleEndian => u16::from_le_bytes([parse_data[0], parse_data[1]]),
-            ByteOrder::BigEndian => u16::from_be_bytes([parse_data[0], parse_data[1]]),
-        } as usize;
-        if num_entries == 0 || num_entries > 200 {
-            return Ok(());
-        }
-
-        let mut offset = 2;
-        for _ in 0..num_entries {
-            if offset + 12 > parse_data.len() {
-                break;
-            }
-            let entry_data = &parse_data[offset..offset + 12];
-
-            let tag = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([entry_data[0], entry_data[1]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([entry_data[0], entry_data[1]]),
-            };
-            let field_type = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([entry_data[2], entry_data[3]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([entry_data[2], entry_data[3]]),
-            };
-            let count = match byte_order {
-                ByteOrder::LittleEndian => {
-                    u32::from_le_bytes([entry_data[4], entry_data[5], entry_data[6], entry_data[7]])
-                }
-                ByteOrder::BigEndian => {
-                    u32::from_be_bytes([entry_data[4], entry_data[5], entry_data[6], entry_data[7]])
-                }
-            };
-            let value_offset = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    entry_data[8],
-                    entry_data[9],
-                    entry_data[10],
-                    entry_data[11],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    entry_data[8],
-                    entry_data[9],
-                    entry_data[10],
-                    entry_data[11],
-                ]),
-            };
-
-            let entry = IfdEntry {
-                tag_id: tag,
-                field_type,
-                value_count: count,
-                value_offset,
-            };
-
-            match tag {
-                PARROT_MODEL | PARROT_SERIAL | PARROT_VERSION => {
-                    if let Some(s) = extract_string(&entry, parse_data) {
-                        let tag_name = match tag {
-                            PARROT_MODEL => "Model",
-                            PARROT_SERIAL => "SerialNumber",
-                            PARROT_VERSION => "Version",
-                            _ => continue,
-                        };
-                        tags.insert(format!("Parrot:{}", tag_name), s);
-                    }
-                }
-                PARROT_GPS_LAT | PARROT_GPS_LON => {
-                    if let Some(val) = extract_i32(&entry, parse_data, byte_order) {
-                        let tag_name = if tag == PARROT_GPS_LAT {
-                            "GPSLatitude"
-                        } else {
-                            "GPSLongitude"
-                        };
-                        tags.insert(format!("Parrot:{}", tag_name), format_gps_coord(val));
-                    }
-                }
-                _ => {
-                    if let Some(array) = extract_i16_array(&entry, parse_data, byte_order) {
-                        if let Some(&val) = array.first() {
-                            let (tag_name, formatted_value) = match tag {
-                                PARROT_ALTITUDE => ("Altitude", format_altitude(val)),
-                                PARROT_SPEED => ("Speed", format_speed(val)),
-                                PARROT_DIRECTION => ("Direction", format!("{}°", val)),
-                                PARROT_GIMBAL_PITCH => {
-                                    ("GimbalPitch", format!("{:.1}°", val as f64 / 10.0))
-                                }
-                                PARROT_GIMBAL_ROLL => {
-                                    ("GimbalRoll", format!("{:.1}°", val as f64 / 10.0))
-                                }
-                                PARROT_GIMBAL_YAW => ("GimbalYaw", format!("{}°", val)),
-                                PARROT_BATTERY => ("BatteryLevel", format!("{}%", val)),
-                                PARROT_WIFI_SIGNAL => ("WiFiSignal", format!("{} dBm", val)),
-                                PARROT_FLIGHT_MODE => ("FlightMode", decode_flight_mode(val)),
-                                PARROT_DISTANCE => ("HomeDistance", format!("{} m", val)),
-                                _ => continue,
-                            };
-                            tags.insert(format!("Parrot:{}", tag_name), formatted_value);
-                        }
-                    }
-                }
-            }
-            offset += 12;
-        }
-        Ok(())
+        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
+            self.parse_entry(entry, parse_data, byte_order, tags);
+        })
     }
 }
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -284,18 +258,36 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_flight_mode() {
-        assert_eq!(decode_flight_mode(1), "GPS");
-        assert_eq!(decode_flight_mode(3), "Return Home");
+    fn test_format_gps_coord() {
+        assert_eq!(format_gps_coord(123456789), "12.3456789");
+        assert_eq!(format_gps_coord(-87654321), "-8.7654321");
     }
 
     #[test]
     fn test_format_altitude() {
         assert_eq!(format_altitude(1250), "12.50 m");
+        assert_eq!(format_altitude(0), "0.00 m");
     }
 
     #[test]
     fn test_format_speed() {
         assert_eq!(format_speed(55), "5.5 m/s");
+        assert_eq!(format_speed(100), "10.0 m/s");
+    }
+
+    #[test]
+    fn test_format_gimbal_angle() {
+        assert_eq!(format_gimbal_angle(450), "45.0°");
+        assert_eq!(format_gimbal_angle(-300), "-30.0°");
+    }
+
+    #[test]
+    fn test_tag_registry() {
+        assert_eq!(TAG_REGISTRY.get_tag_name(PARROT_MODEL), Some("Model"));
+        assert_eq!(
+            TAG_REGISTRY.get_tag_name(PARROT_FLIGHT_MODE),
+            Some("FlightMode")
+        );
+        assert!(TAG_REGISTRY.has_tag(PARROT_ALTITUDE));
     }
 }

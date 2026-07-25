@@ -23,7 +23,7 @@
 //! - No panics (all errors are `Result<T, E>`)
 
 use oxidex::io::buffered_reader::BufferedReader;
-use oxidex::parsers::format_detector::detect_format;
+use oxidex::parsers::detection::detect_format;
 use oxidex::parsers::jpeg::segment_parser::parse_segments;
 use oxidex::parsers::tiff::file_parser::parse_tiff_file;
 use std::io;

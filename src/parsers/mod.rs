@@ -23,12 +23,14 @@ impl Default for DetectorMode {
 pub mod archive;
 pub mod audio;
 pub mod common;
+pub mod detection;
 pub mod document;
+pub mod elf;
 pub mod font;
-pub mod format_detector;
-pub mod icc_parser;
+pub mod icc;
 pub mod image;
 pub mod jpeg;
+pub mod macho;
 pub mod pdf;
 pub mod pe;
 pub mod png;
@@ -45,4 +47,4 @@ pub mod xmp;
 pub mod magika_detector;
 
 // Re-export the format detection function for convenient access
-pub use format_detector::detect_format;
+pub use detection::detect_format;

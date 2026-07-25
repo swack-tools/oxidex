@@ -190,6 +190,44 @@ fn extract_value(val: &Value) -> Value {
 /// while Perl ExifTool often simplifies these to just the namespace and tag (e.g., "PNG:Author").
 /// This function normalizes both formats to enable comparison.
 fn normalize_tag_name(tag_name: &str) -> String {
+    // XMP namespace normalization MUST come first
+    // Perl ExifTool outputs: "XMP-dc:Title", "XMP-xmp:Creator"
+    // OxiDex outputs: "XMP:Title", "XMP:Creator"
+    // Normalize to unified "XMP:" prefix for comparison
+    if let Some(rest) = tag_name.strip_prefix("XMP-dc:") {
+        return format!("XMP:{}", rest);
+    }
+    if let Some(rest) = tag_name.strip_prefix("XMP-xmp:") {
+        return format!("XMP:{}", rest);
+    }
+    if let Some(rest) = tag_name.strip_prefix("XMP-xmpMM:") {
+        return format!("XMP:{}", rest);
+    }
+    if let Some(rest) = tag_name.strip_prefix("XMP-xmpRights:") {
+        return format!("XMP:{}", rest);
+    }
+    if let Some(rest) = tag_name.strip_prefix("XMP-tiff:") {
+        return format!("XMP:{}", rest);
+    }
+    if let Some(rest) = tag_name.strip_prefix("XMP-exif:") {
+        return format!("XMP:{}", rest);
+    }
+    if let Some(rest) = tag_name.strip_prefix("XMP-photoshop:") {
+        return format!("XMP:{}", rest);
+    }
+    if let Some(rest) = tag_name.strip_prefix("XMP-iptcCore:") {
+        return format!("XMP:{}", rest);
+    }
+    if let Some(rest) = tag_name.strip_prefix("XMP-iptcExt:") {
+        return format!("XMP:{}", rest);
+    }
+    if let Some(rest) = tag_name.strip_prefix("XMP-plus:") {
+        return format!("XMP:{}", rest);
+    }
+    if let Some(rest) = tag_name.strip_prefix("XMP-crs:") {
+        return format!("XMP:{}", rest);
+    }
+
     // PNG tEXt date chunks MUST be handled first (more specific prefix)
     // "PNG:tEXt:date:create" → "PNG:Datecreate"
     // Perl ExifTool lowercases the entire tag after "Date"
@@ -219,10 +257,15 @@ fn normalize_tag_name(tag_name: &str) -> String {
     // PNG-pHYs namespace: "PNG-pHYs:PixelUnits" stays as is (Perl uses this format)
     // PNG namespace for chunk data: "PNG:ImageWidth" stays as is
 
+    // GPS namespace normalization: OxiDex uses "GPS:" but ExifTool uses "EXIF:" for GPS tags
+    // "GPS:GPSLatitude" → "EXIF:GPSLatitude"
+    if let Some(rest) = tag_name.strip_prefix("GPS:") {
+        return format!("EXIF:{}", rest);
+    }
+
     // EXIF raw tag IDs: "EXIF:0x010F" should match "IFD0:Make" etc.
     // This is complex - we'll rely on the parser to use proper names instead
 
-    // GPS namespace: "GPS:GPSLatitude" → stays as is
     // EXIF namespace: "EXIF:Artist" → stays as is
     // IFD0, ExifIFD namespaces: stay as is
 

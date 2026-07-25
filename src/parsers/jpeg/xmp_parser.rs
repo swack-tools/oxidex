@@ -33,7 +33,7 @@
 
 use crate::error::{ExifToolError, Result};
 use crate::parsers::jpeg::segment_parser::Segment;
-use crate::parsers::xmp::parse_xmp;
+use crate::parsers::xmp::{parse_xmp, parse_xmp_history};
 
 /// The XMP identifier string that appears at the start of XMP APP1 segments.
 /// This is a null-terminated string: "http://ns.adobe.com/xap/1.0/\0"
@@ -103,12 +103,18 @@ pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, St
         // Extract the XML payload (skip the 29-byte XMP identifier)
         let xml_payload = &segment.data[XMP_IDENTIFIER.len()..];
 
-        // Parse the XMP XML data
+        // Parse the XMP XML data for standard properties
         let xmp_tags = parse_xmp(xml_payload).map_err(|e| {
             ExifToolError::parse_error(format!("Failed to parse XMP segment: {}", e))
         })?;
 
         all_xmp_tags.extend(xmp_tags);
+
+        // Parse XMP history for forensic metadata
+        let xml_str = std::str::from_utf8(xml_payload).unwrap_or("");
+        if let Ok(history_tags) = parse_xmp_history(xml_str) {
+            all_xmp_tags.extend(history_tags);
+        }
     }
 
     Ok(all_xmp_tags)
@@ -227,16 +233,17 @@ mod tests {
             result.len()
         );
 
-        // Check for specific tags with namespace-specific prefixes
+        // Check for specific tags with ExifTool-compatible prefixes
+        // Stream 6 changed to use simplified XMP: prefix for common namespaces
         let has_creator = result
             .iter()
-            .any(|(name, value)| name == "XMP-xmp:Creator" && value == "John Doe");
-        assert!(has_creator, "Missing XMP-xmp:Creator tag");
+            .any(|(name, value)| name == "XMP:Creator" && value == "John Doe");
+        assert!(has_creator, "Missing XMP:Creator tag");
 
         let has_rating = result
             .iter()
-            .any(|(name, value)| name == "XMP-xmp:Rating" && value == "5");
-        assert!(has_rating, "Missing XMP-xmp:Rating tag");
+            .any(|(name, value)| name == "XMP:Rating" && value == "5");
+        assert!(has_rating, "Missing XMP:Rating tag");
     }
 
     #[test]
@@ -304,19 +311,21 @@ mod tests {
         assert!(result.len() >= 4, "Expected at least 4 XMP tags");
 
         // Check that we have properties from all namespaces
+        // Stream 6 changed to use simplified XMP: prefix for common namespaces (xmp, dc)
+        // but XMP-exif: is kept for specialized exif namespace
         let tag_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
 
         assert!(
-            tag_names.iter().any(|n| n == "XMP-xmp:Creator"),
-            "Missing XMP-xmp:Creator"
+            tag_names.iter().any(|n| n == "XMP:Creator"),
+            "Missing XMP:Creator"
         );
         assert!(
-            tag_names.iter().any(|n| n == "XMP-dc:Title"),
-            "Missing XMP-dc:Title"
+            tag_names.iter().any(|n| n == "XMP:Title"),
+            "Missing XMP:Title"
         );
         assert!(
-            tag_names.iter().any(|n| n == "XMP-dc:Rights"),
-            "Missing XMP-dc:Rights"
+            tag_names.iter().any(|n| n == "XMP:Rights"),
+            "Missing XMP:Rights"
         );
         assert!(
             tag_names.iter().any(|n| n == "XMP-exif:Make"),
@@ -355,10 +364,11 @@ mod tests {
         let result = extract_xmp_from_segments(&segments).expect("Failed to extract XMP");
 
         // Should have tags from both segments
+        // Stream 6 changed to use simplified XMP: prefix for common namespaces
         assert!(result.len() >= 2, "Expected tags from both XMP segments");
 
-        let has_creator = result.iter().any(|(name, _)| name == "XMP-xmp:Creator");
-        let has_title = result.iter().any(|(name, _)| name == "XMP-dc:Title");
+        let has_creator = result.iter().any(|(name, _)| name == "XMP:Creator");
+        let has_title = result.iter().any(|(name, _)| name == "XMP:Title");
 
         assert!(has_creator, "Missing tag from first XMP segment");
         assert!(has_title, "Missing tag from second XMP segment");

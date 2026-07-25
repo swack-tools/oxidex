@@ -10,6 +10,8 @@
 //! from parsing YAML files on first access.
 
 pub use oxidex_tags_core::types::*;
+use oxidex_tags_shared::find_table;
+pub use oxidex_tags_shared::{Tag, TagDatabase, TagTable};
 use std::sync::LazyLock;
 
 // Include pre-compiled binary tag data generated at build time
@@ -36,17 +38,20 @@ pub static SPECIALTY_TAGS: LazyLock<TagDatabase> = LazyLock::new(|| {
 ///
 /// An Option containing a reference to the TagTable if found, or None if not found
 pub fn get_tag_table(name: &str) -> Option<&'static TagTable> {
-    SPECIALTY_TAGS.tables.iter().find(|t| t.name == name)
+    find_table(&SPECIALTY_TAGS, name).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxidex_tags_shared::validate_database;
 
     #[test]
     fn test_specialty_tags_loads() {
         // Force initialization and verify tags loaded successfully
         let _tags = &*SPECIALTY_TAGS;
         assert!(!SPECIALTY_TAGS.tables.is_empty());
+        validate_database(&SPECIALTY_TAGS)
+            .expect("Specialty tags should satisfy shared validation");
     }
 }

@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Performance**: Benchmarks included for signature vs Magika comparison
   - **Testing**: Comprehensive feature-gated integration tests (8 test cases)
   - **Documentation**: Complete README and CLI help text coverage
+- **Specific Tag Extraction**: CLI now supports `-TAG` syntax to display only specific tags (e.g., `oxidex -Make -Model photo.jpg`)
+- **Tag Deletion**: CLI supports `-TAG=` syntax to delete individual tags (e.g., `oxidex -EXIF:Artist= photo.jpg`)
+- **Clear All Metadata**: New `-all=` command to remove all metadata from a file for privacy
+- **Short Format Output**: `-s` flag for compact output with abbreviated tag names
+- **High-Level Library API**: New `Metadata` struct with ergonomic builder pattern:
+  - `Metadata::from_path()` - Load metadata from file
+  - `.get_string()`, `.get_integer()`, `.get_float()` - Typed accessors
+  - `.set_tag()` - Builder pattern for modifications
+  - `.save()` / `.write_to()` - Write metadata back to file
+  - `.copy_to()` - Copy metadata between files
 
 ## [1.2.1] - 2025-11-19
 
@@ -248,8 +258,6 @@ These features are planned for future releases (v1.1+):
   - Current impact: Rational value precision may be lost in some round-trip scenarios
   - Workaround: Ensure EXIF type information is present
 
-## [Unreleased]
-
 ### Future Enhancements (Roadmap)
 
 **Phase 2 (v1.1 - v2.0): Expansion & Performance**
@@ -276,7 +284,7 @@ These features are planned for future releases (v1.1+):
 OxiDex achieves its foundational milestone with a fully-featured, production-ready metadata management tool. This release completes **Phase 1: Foundation & Adoption** with:
 
 - **50+ format support** covering 90% of common use cases (JPEG, PNG, TIFF, PDF, MP4, RAW formats)
-- **16-65x performance improvement** over Perl ExifTool through compiled code and parallel processing
+- **3.7-9.7x performance improvement** over Perl ExifTool through compiled code and parallel processing (up to 65x on Apple Silicon)
 - **Memory safety guarantees** eliminating entire classes of security vulnerabilities
 - **Cross-platform binaries** for Linux, macOS, Windows with zero runtime dependencies
 - **Comprehensive documentation** and migration guide for Perl ExifTool users
@@ -294,5 +302,8 @@ This release is suitable for production use in:
 
 ---
 
+[Unreleased]: https://github.com/swack-tools/oxidex/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/swack-tools/oxidex/releases/tag/v1.2.1
+[1.2.0]: https://github.com/swack-tools/oxidex/releases/tag/v1.2.0
 [1.1.0]: https://github.com/swack-tools/oxidex/releases/tag/v1.1.0
 [1.0.0]: https://github.com/swack-tools/oxidex/releases/tag/v1.0.0

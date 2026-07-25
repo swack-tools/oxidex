@@ -12,6 +12,9 @@
 //! - `tiff:` → http://ns.adobe.com/tiff/1.0/ (TIFF properties)
 //! - `photoshop:` → http://ns.adobe.com/photoshop/1.0/ (Photoshop metadata)
 //! - `xmpRights:` → http://ns.adobe.com/xap/1.0/rights/ (Rights management)
+//! - `Iptc4xmpCore:` → http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/ (IPTC Core metadata)
+//! - `Iptc4xmpExt:` → http://iptc.org/std/Iptc4xmpExt/2008-02-29/ (IPTC Extension metadata)
+//! - `plus:` → http://ns.useplus.org/ldf/xmp/1.0/ (PLUS image licensing)
 //!
 //! # Example
 //!
@@ -47,6 +50,12 @@ impl NamespaceResolver {
     /// - `xmp:` (Core XMP properties)
     /// - `dc:` (Dublin Core)
     /// - `exif:` (EXIF properties)
+    /// - `tiff:` (TIFF properties)
+    /// - `photoshop:` (Photoshop metadata)
+    /// - `xmpRights:` (Rights management)
+    /// - `Iptc4xmpCore:` (IPTC Core metadata)
+    /// - `Iptc4xmpExt:` (IPTC Extension metadata)
+    /// - `plus:` (PLUS image licensing)
     ///
     /// # Example
     ///
@@ -70,6 +79,16 @@ impl NamespaceResolver {
         resolver.register_namespace("photoshop", "http://ns.adobe.com/photoshop/1.0/");
         resolver.register_namespace("xmpRights", "http://ns.adobe.com/xap/1.0/rights/");
         resolver.register_namespace("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#");
+
+        // Register IPTC namespaces for professional workflow metadata
+        resolver.register_namespace(
+            "Iptc4xmpCore",
+            "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/",
+        );
+        resolver.register_namespace("Iptc4xmpExt", "http://iptc.org/std/Iptc4xmpExt/2008-02-29/");
+
+        // Register PLUS namespace for image licensing
+        resolver.register_namespace("plus", "http://ns.useplus.org/ldf/xmp/1.0/");
 
         resolver
     }
@@ -221,6 +240,44 @@ mod tests {
         assert_eq!(
             resolver.resolve_prefix("exif"),
             Some("http://ns.adobe.com/exif/1.0/")
+        );
+        assert_eq!(
+            resolver.resolve_prefix("tiff"),
+            Some("http://ns.adobe.com/tiff/1.0/")
+        );
+        assert_eq!(
+            resolver.resolve_prefix("photoshop"),
+            Some("http://ns.adobe.com/photoshop/1.0/")
+        );
+        assert_eq!(
+            resolver.resolve_prefix("xmpRights"),
+            Some("http://ns.adobe.com/xap/1.0/rights/")
+        );
+    }
+
+    #[test]
+    fn test_iptc_namespaces_registered() {
+        let resolver = NamespaceResolver::new();
+
+        // Verify IPTC namespaces are registered
+        assert_eq!(
+            resolver.resolve_prefix("Iptc4xmpCore"),
+            Some("http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/")
+        );
+        assert_eq!(
+            resolver.resolve_prefix("Iptc4xmpExt"),
+            Some("http://iptc.org/std/Iptc4xmpExt/2008-02-29/")
+        );
+    }
+
+    #[test]
+    fn test_plus_namespace_registered() {
+        let resolver = NamespaceResolver::new();
+
+        // Verify PLUS namespace is registered
+        assert_eq!(
+            resolver.resolve_prefix("plus"),
+            Some("http://ns.useplus.org/ldf/xmp/1.0/")
         );
     }
 

@@ -25,10 +25,15 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use crate::const_decoder;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
+use super::registries::kodak::kodak_registry;
 use super::shared::MakerNoteParser;
+use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::tag_registry::TagRegistry;
 
 // Kodak MakerNote Tag IDs
 const KODAK_MODEL: u16 = 0x0001; // Camera model
@@ -52,137 +57,97 @@ const KODAK_TIME_ZONE: u16 = 0x0029; // Time zone offset
 // Kodak signature for validation
 const KODAK_SIGNATURE: &[u8] = b"KDK";
 
-/// Decodes Kodak image quality setting
-///
-/// # Arguments
-/// * `value` - Image quality value
-///
-/// # Returns
-/// Human-readable quality description
-fn decode_quality(value: u16) -> String {
-    match value {
-        1 => "Fine".to_string(),
-        2 => "Normal".to_string(),
-        3 => "Economy".to_string(),
-        4 => "Best".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
+// Static registry instance for efficient tag lookup and decoding
+static TAG_REGISTRY: Lazy<TagRegistry> = Lazy::new(kodak_registry);
+
+// ============================================================================
+// DECODERS - Kodak Value Decoders
+// ============================================================================
+// Decoder definitions are centralized in registries/kodak.rs if needed.
+// For now, these decoders are kept here as they are used for value formatting.
+
+// Decodes Kodak image quality setting
+const_decoder! {
+    DECODE_QUALITY, u16, [
+        (1, "Fine"),
+        (2, "Normal"),
+        (3, "Economy"),
+        (4, "Best"),
+    ]
 }
 
-/// Decodes Kodak burst mode
-///
-/// # Arguments
-/// * `value` - Burst mode value
-///
-/// # Returns
-/// Human-readable burst mode
-fn decode_burst_mode(value: u16) -> String {
-    match value {
-        0 => "Off".to_string(),
-        1 => "On".to_string(),
-        2 => "Continuous".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
+// Decodes Kodak burst mode
+const_decoder! {
+    DECODE_BURST_MODE, u16, [
+        (0, "Off"),
+        (1, "On"),
+        (2, "Continuous"),
+    ]
 }
 
-/// Decodes Kodak focus mode
-///
-/// # Arguments
-/// * `value` - Focus mode value
-///
-/// # Returns
-/// Human-readable focus mode
-fn decode_focus_mode(value: u16) -> String {
-    match value {
-        0 => "Auto".to_string(),
-        1 => "Manual".to_string(),
-        2 => "Macro".to_string(),
-        3 => "Infinity".to_string(),
-        4 => "Multi-Zone".to_string(),
-        5 => "Center".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
+// Decodes Kodak focus mode
+const_decoder! {
+    DECODE_FOCUS_MODE, u16, [
+        (0, "Auto"),
+        (1, "Manual"),
+        (2, "Macro"),
+        (3, "Infinity"),
+        (4, "Multi-Zone"),
+        (5, "Center"),
+    ]
 }
 
-/// Decodes Kodak white balance mode
-///
-/// # Arguments
-/// * `value` - White balance value
-///
-/// # Returns
-/// Human-readable white balance mode
-fn decode_white_balance(value: u16) -> String {
-    match value {
-        0 => "Auto".to_string(),
-        1 => "Daylight".to_string(),
-        2 => "Tungsten".to_string(),
-        3 => "Fluorescent".to_string(),
-        4 => "Flash".to_string(),
-        5 => "Cloudy".to_string(),
-        6 => "Shade".to_string(),
-        7 => "Manual".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
+// Decodes Kodak white balance mode
+const_decoder! {
+    DECODE_WHITE_BALANCE, u16, [
+        (0, "Auto"),
+        (1, "Daylight"),
+        (2, "Tungsten"),
+        (3, "Fluorescent"),
+        (4, "Flash"),
+        (5, "Cloudy"),
+        (6, "Shade"),
+        (7, "Manual"),
+    ]
 }
 
-/// Decodes Kodak flash mode
-///
-/// # Arguments
-/// * `value` - Flash mode value
-///
-/// # Returns
-/// Human-readable flash mode
-fn decode_flash_mode(value: u16) -> String {
-    match value {
-        0 => "Auto".to_string(),
-        1 => "Fill Flash".to_string(),
-        2 => "Off".to_string(),
-        3 => "Red-eye Reduction".to_string(),
-        4 => "Slow Sync".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
+// Decodes Kodak flash mode
+const_decoder! {
+    DECODE_FLASH_MODE, u16, [
+        (0, "Auto"),
+        (1, "Fill Flash"),
+        (2, "Off"),
+        (3, "Red-eye Reduction"),
+        (4, "Slow Sync"),
+    ]
 }
 
-/// Decodes Kodak color mode
-///
-/// # Arguments
-/// * `value` - Color mode value
-///
-/// # Returns
-/// Human-readable color mode
-fn decode_color_mode(value: u16) -> String {
-    match value {
-        0 => "Natural".to_string(),
-        1 => "Vivid".to_string(),
-        2 => "Black & White".to_string(),
-        3 => "Sepia".to_string(),
-        4 => "High Saturation".to_string(),
-        5 => "Low Saturation".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
+// Decodes Kodak color mode
+const_decoder! {
+    DECODE_COLOR_MODE, u16, [
+        (0, "Natural"),
+        (1, "Vivid"),
+        (2, "Black & White"),
+        (3, "Sepia"),
+        (4, "High Saturation"),
+        (5, "Low Saturation"),
+    ]
 }
 
-/// Decodes Kodak scene mode
-///
-/// # Arguments
-/// * `value` - Scene mode value
-///
-/// # Returns
-/// Human-readable scene mode
-fn decode_scene_mode(value: u16) -> String {
-    match value {
-        0 => "Auto".to_string(),
-        1 => "Portrait".to_string(),
-        2 => "Landscape".to_string(),
-        3 => "Sports".to_string(),
-        4 => "Night".to_string(),
-        5 => "Sunset".to_string(),
-        6 => "Snow".to_string(),
-        7 => "Beach".to_string(),
-        8 => "Fireworks".to_string(),
-        9 => "Text".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
+// Decodes Kodak scene mode
+const_decoder! {
+    DECODE_SCENE_MODE, u16, [
+        (0, "Auto"),
+        (1, "Portrait"),
+        (2, "Landscape"),
+        (3, "Sports"),
+        (4, "Night"),
+        (5, "Sunset"),
+        (6, "Snow"),
+        (7, "Beach"),
+        (8, "Fireworks"),
+        (9, "Text"),
+    ]
 }
 
 /// Extracts a 16-bit unsigned value from IFD entry
@@ -309,93 +274,100 @@ impl KodakParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) {
-        let tag_id = entry.tag_id;
+        // Get tag name from registry
+        let tag_name = match TAG_REGISTRY.get_tag_name(entry.tag_id) {
+            Some(name) => name,
+            None => return, // Unknown tag, skip it
+        };
 
-        match tag_id {
-            KODAK_MODEL => {
-                if let Some(model) = extract_string(entry, data, byte_order) {
-                    tags.insert("Kodak:CameraModel".to_string(), model);
-                }
+        // Extract and format the value based on tag type
+        let formatted_value = match entry.tag_id {
+            // String tags
+            KODAK_MODEL | KODAK_FIRMWARE => {
+                extract_string(entry, data, byte_order).unwrap_or_default()
             }
+            // Decoder-based tags
             KODAK_QUALITY => {
                 if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Kodak:Quality".to_string(), decode_quality(value));
+                    DECODE_QUALITY.decode(value)
+                } else {
+                    return;
                 }
             }
             KODAK_BURST_MODE => {
                 if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Kodak:BurstMode".to_string(), decode_burst_mode(value));
+                    DECODE_BURST_MODE.decode(value)
+                } else {
+                    return;
                 }
             }
             KODAK_FOCUS_MODE => {
                 if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Kodak:FocusMode".to_string(), decode_focus_mode(value));
+                    DECODE_FOCUS_MODE.decode(value)
+                } else {
+                    return;
                 }
             }
             KODAK_WHITE_BALANCE => {
                 if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert(
-                        "Kodak:WhiteBalance".to_string(),
-                        decode_white_balance(value),
-                    );
+                    DECODE_WHITE_BALANCE.decode(value)
+                } else {
+                    return;
                 }
             }
             KODAK_FLASH_MODE => {
                 if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Kodak:FlashMode".to_string(), decode_flash_mode(value));
-                }
-            }
-            KODAK_FLASH_FIRED => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    let fired = if value > 0 { "Yes" } else { "No" };
-                    tags.insert("Kodak:FlashFired".to_string(), fired.to_string());
-                }
-            }
-            KODAK_ISO_SETTING => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Kodak:ISO".to_string(), value.to_string());
+                    DECODE_FLASH_MODE.decode(value)
+                } else {
+                    return;
                 }
             }
             KODAK_COLOR_MODE => {
                 if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Kodak:ColorMode".to_string(), decode_color_mode(value));
-                }
-            }
-            KODAK_SHARPNESS => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Kodak:Sharpness".to_string(), value.to_string());
-                }
-            }
-            KODAK_SATURATION => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Kodak:Saturation".to_string(), value.to_string());
-                }
-            }
-            KODAK_CONTRAST => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Kodak:Contrast".to_string(), value.to_string());
+                    DECODE_COLOR_MODE.decode(value)
+                } else {
+                    return;
                 }
             }
             KODAK_SCENE_MODE => {
                 if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Kodak:SceneMode".to_string(), decode_scene_mode(value));
+                    DECODE_SCENE_MODE.decode(value)
+                } else {
+                    return;
                 }
             }
+            // Binary tags
+            KODAK_FLASH_FIRED => {
+                if let Some(value) = extract_u16_value(entry, data, byte_order) {
+                    if value > 0 {
+                        "Yes".to_string()
+                    } else {
+                        "No".to_string()
+                    }
+                } else {
+                    return;
+                }
+            }
+            // EV format tags
             KODAK_EXPOSURE_BIAS => {
                 if let Some(value) = extract_i16_value(entry, data, byte_order) {
                     let ev = value as f32 / 10.0;
-                    tags.insert("Kodak:ExposureBias".to_string(), format!("{:.1} EV", ev));
+                    format!("{:.1} EV", ev)
+                } else {
+                    return;
                 }
             }
-            KODAK_FIRMWARE => {
-                if let Some(firmware) = extract_string(entry, data, byte_order) {
-                    tags.insert("Kodak:FirmwareVersion".to_string(), firmware);
-                }
-            }
+            // Raw numeric tags
             _ => {
-                // Unknown tag - skip
+                if let Some(value) = extract_u16_value(entry, data, byte_order) {
+                    value.to_string()
+                } else {
+                    return;
+                }
             }
-        }
+        };
+
+        tags.insert(format!("Kodak:{}", tag_name), formatted_value);
     }
 }
 
@@ -414,136 +386,29 @@ impl MakerNoteParser for KodakParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        if data.len() < 2 {
-            return Err("Kodak MakerNote data too short".to_string());
-        }
-
-        // Kodak MakerNotes may start with "KDK" signature
-        let ifd_offset = if data.len() >= 3 && &data[0..3] == KODAK_SIGNATURE {
-            // Skip signature and padding
-            8
+        // Kodak MakerNotes may start with "KDK" signature (8 bytes)
+        let signature = if data.len() >= 8 && &data[0..3] == KODAK_SIGNATURE {
+            Some(&data[0..8])
         } else {
-            0
+            None
         };
 
-        if ifd_offset + 2 > data.len() {
-            return Err("Invalid IFD offset".to_string());
-        }
-
-        // Read number of IFD entries
-        let entry_count = match byte_order {
-            ByteOrder::LittleEndian => u16::from_le_bytes([data[ifd_offset], data[ifd_offset + 1]]),
-            ByteOrder::BigEndian => u16::from_be_bytes([data[ifd_offset], data[ifd_offset + 1]]),
+        let config = IfdParserConfig {
+            signature,
+            signature_offset: 0,
+            max_entries: 500,
         };
 
-        if entry_count == 0 || entry_count > 500 {
-            return Err(format!(
-                "Invalid entry count: {} (expected 1-500)",
-                entry_count
-            ));
-        }
-
-        // Parse each IFD entry
-        let entry_size = 12;
-        let mut offset = ifd_offset + 2;
-
-        for _ in 0..entry_count {
-            if offset + entry_size > data.len() {
-                break;
-            }
-
-            let tag = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([data[offset], data[offset + 1]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([data[offset], data[offset + 1]]),
-            };
-
-            let field_type = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([data[offset + 2], data[offset + 3]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([data[offset + 2], data[offset + 3]]),
-            };
-
-            let count = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                ]),
-            };
-
-            let value_offset = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    data[offset + 8],
-                    data[offset + 9],
-                    data[offset + 10],
-                    data[offset + 11],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    data[offset + 8],
-                    data[offset + 9],
-                    data[offset + 10],
-                    data[offset + 11],
-                ]),
-            };
-
-            let entry = IfdEntry {
-                tag_id: tag,
-                field_type,
-                value_count: count,
-                value_offset,
-            };
-
-            self.parse_entry(&entry, data, byte_order, tags);
-
-            offset += entry_size;
-        }
-
-        Ok(())
+        // Parse IFD entries using the shared parser
+        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
+            self.parse_entry(entry, parse_data, byte_order, tags);
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_decode_quality() {
-        assert_eq!(decode_quality(1), "Fine");
-        assert_eq!(decode_quality(2), "Normal");
-        assert_eq!(decode_quality(4), "Best");
-    }
-
-    #[test]
-    fn test_decode_burst_mode() {
-        assert_eq!(decode_burst_mode(0), "Off");
-        assert_eq!(decode_burst_mode(2), "Continuous");
-    }
-
-    #[test]
-    fn test_decode_focus_mode() {
-        assert_eq!(decode_focus_mode(0), "Auto");
-        assert_eq!(decode_focus_mode(2), "Macro");
-        assert_eq!(decode_focus_mode(4), "Multi-Zone");
-    }
-
-    #[test]
-    fn test_decode_white_balance() {
-        assert_eq!(decode_white_balance(0), "Auto");
-        assert_eq!(decode_white_balance(2), "Tungsten");
-        assert_eq!(decode_white_balance(7), "Manual");
-    }
-
-    #[test]
-    fn test_decode_color_mode() {
-        assert_eq!(decode_color_mode(0), "Natural");
-        assert_eq!(decode_color_mode(2), "Black & White");
-    }
 
     #[test]
     fn test_kodak_parser_trait() {
@@ -557,8 +422,9 @@ mod tests {
         let parser = KodakParser::new();
         let mut data = Vec::new();
 
+        // Create minimal IFD with one entry
         data.extend_from_slice(&[0x01, 0x00]); // 1 entry
-        data.extend_from_slice(&[0x09, 0x00]); // Tag: KODAK_QUALITY
+        data.extend_from_slice(&[0x09, 0x00]); // Tag: KODAK_QUALITY (0x0009)
         data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
         data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
         data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1 (Fine)
@@ -575,8 +441,9 @@ mod tests {
         let parser = KodakParser::new();
         let mut data = Vec::new();
 
+        // Create minimal IFD with one entry
         data.extend_from_slice(&[0x01, 0x00]); // 1 entry
-        data.extend_from_slice(&[0x0D, 0x00]); // Tag: KODAK_FOCUS_MODE
+        data.extend_from_slice(&[0x0D, 0x00]); // Tag: KODAK_FOCUS_MODE (0x000D)
         data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
         data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
         data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // Value: 2 (Macro)
@@ -593,8 +460,9 @@ mod tests {
         let parser = KodakParser::new();
         let mut data = Vec::new();
 
+        // Create minimal IFD with one entry
         data.extend_from_slice(&[0x01, 0x00]); // 1 entry
-        data.extend_from_slice(&[0x20, 0x00]); // Tag: KODAK_SCENE_MODE
+        data.extend_from_slice(&[0x20, 0x00]); // Tag: KODAK_SCENE_MODE (0x0020)
         data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
         data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
         data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1 (Portrait)
@@ -604,5 +472,24 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(tags.get("Kodak:SceneMode"), Some(&"Portrait".to_string()));
+    }
+
+    #[test]
+    fn test_parse_flash_fired_tag() {
+        let parser = KodakParser::new();
+        let mut data = Vec::new();
+
+        // Create minimal IFD with one entry
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x11, 0x00]); // Tag: KODAK_FLASH_FIRED (0x0011)
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1 (Yes)
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert!(result.is_ok());
+        assert_eq!(tags.get("Kodak:FlashFired"), Some(&"Yes".to_string()));
     }
 }

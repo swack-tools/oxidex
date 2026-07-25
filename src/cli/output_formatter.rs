@@ -26,6 +26,7 @@
 
 use crate::core::metadata_map::MetadataMap;
 use crate::core::tag_value::TagValue;
+use crate::core::value_formatter::format_gps_reference;
 use crate::parsers::tiff::tiff_enums::tiff_enum_to_string;
 use csv::Writer;
 
@@ -46,6 +47,17 @@ pub trait OutputFormatter {
     ///
     /// A formatted string representation of the metadata
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String;
+}
+
+fn tag_matches_filter(tag_name: &str, filter: &[String]) -> bool {
+    // ExifTool tag-name arguments are case-insensitive (`-make` matches IFD0:Make).
+    filter.iter().any(|requested| {
+        requested.eq_ignore_ascii_case(tag_name)
+            || tag_name
+                .rsplit(':')
+                .next()
+                .is_some_and(|short_name| short_name.eq_ignore_ascii_case(requested))
+    })
 }
 
 /// Formats metadata in human-readable key-value format
@@ -82,7 +94,7 @@ impl OutputFormatter for HumanReadableFormatter {
 
         // Filter tags if a filter is provided
         if let Some(filter) = filter_tags {
-            tags.retain(|(name, _)| filter.contains(name));
+            tags.retain(|(name, _)| tag_matches_filter(name, filter));
             if tags.is_empty() {
                 return String::new();
             }
@@ -121,11 +133,11 @@ impl OutputFormatter for HumanReadableFormatter {
 
         for (tag_name, tag_value) in tags {
             // Skip large binary data fields to prevent terminal corruption
-            if let TagValue::Binary(bytes) = tag_value {
-                if bytes.len() > 256 {
-                    // Skip large binary fields in human-readable output
-                    continue;
-                }
+            if let TagValue::Binary(bytes) = tag_value
+                && bytes.len() > 256
+            {
+                // Skip large binary fields in human-readable output
+                continue;
             }
 
             // Skip known problematic tags that contain structured binary/text data
@@ -177,7 +189,7 @@ impl OutputFormatter for JsonFormatter {
         let metadata_to_filter = if let Some(filter) = filter_tags {
             let filtered: MetadataMap = metadata
                 .iter()
-                .filter(|(name, _)| filter.contains(name))
+                .filter(|(name, _)| tag_matches_filter(name, filter))
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect();
             filtered
@@ -219,10 +231,10 @@ impl OutputFormatter for JsonFormatter {
 /// - DateTime → JSON string (EXIF format: "YYYY:MM:DD HH:MM:SS")
 /// - Struct → JSON object (recursive)
 fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> serde_json::Value {
-    if let Some(name) = tag_name {
-        if let Some(label) = friendly_enum_name(name, value) {
-            return serde_json::Value::String(label);
-        }
+    if let Some(name) = tag_name
+        && let Some(label) = friendly_enum_name(name, value)
+    {
+        return serde_json::Value::String(label);
     }
 
     match value {
@@ -319,7 +331,7 @@ impl OutputFormatter for CsvFormatter {
 
         // Filter tags if a filter is provided
         if let Some(filter) = filter_tags {
-            tags.retain(|(name, _)| filter.contains(name));
+            tags.retain(|(name, _)| tag_matches_filter(name, filter));
             if tags.is_empty() {
                 return String::new();
             }
@@ -339,11 +351,11 @@ impl OutputFormatter for CsvFormatter {
         // Write data rows
         for (tag_name, tag_value) in tags {
             // Skip large binary data fields to prevent CSV corruption
-            if let TagValue::Binary(bytes) = tag_value {
-                if bytes.len() > 256 {
-                    // Skip large binary fields in CSV output
-                    continue;
-                }
+            if let TagValue::Binary(bytes) = tag_value
+                && bytes.len() > 256
+            {
+                // Skip large binary fields in CSV output
+                continue;
             }
 
             let formatted_value = format_tag_value(tag_name, tag_value);
@@ -365,6 +377,134 @@ impl OutputFormatter for CsvFormatter {
 
         // Convert bytes to UTF-8 string
         String::from_utf8(data).unwrap_or_else(|_| String::from("Tag,Value\n"))
+    }
+}
+
+/// Formats metadata in short (compact) format
+///
+/// Output format: "ShortTagName: Value" with family prefix stripped
+/// and long values truncated. This provides a more concise view of metadata.
+///
+/// # Examples
+///
+/// ```
+/// use oxidex::cli::output_formatter::{OutputFormatter, ShortFormatter};
+/// use oxidex::core::metadata_map::MetadataMap;
+/// use oxidex::core::tag_value::TagValue;
+///
+/// let mut metadata = MetadataMap::new();
+/// metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
+/// metadata.insert("EXIF:ISO", TagValue::new_integer(400));
+///
+/// let formatter = ShortFormatter;
+/// let output = formatter.format(&metadata, None);
+/// // Output:
+/// // Make: Canon
+/// // ISO: 400
+/// ```
+pub struct ShortFormatter;
+
+impl OutputFormatter for ShortFormatter {
+    fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
+        if metadata.is_empty() {
+            return String::new();
+        }
+
+        // Collect tags into a vector for sorting
+        let mut tags: Vec<_> = metadata.iter().collect();
+
+        // Filter tags if a filter is provided
+        if let Some(filter) = filter_tags {
+            tags.retain(|(name, _)| tag_matches_filter(name, filter));
+            if tags.is_empty() {
+                return String::new();
+            }
+        }
+
+        // Sort tags alphabetically by name
+        tags.sort_by_key(|(name, _)| *name);
+
+        // Format each tag in short format
+        let mut output = String::new();
+        for (tag_name, tag_value) in tags {
+            // Skip large binary data fields
+            if let TagValue::Binary(bytes) = tag_value
+                && bytes.len() > 256
+            {
+                continue;
+            }
+
+            // Skip known problematic tags
+            if matches!(
+                tag_name.as_str(),
+                "IFD0:LeafData"
+                    | "IFD1:LeafData"
+                    | "EXIF:MakerNoteApple"
+                    | "EXIF:PrintIM"
+                    | "EXIF:ApplicationNotes"
+            ) {
+                continue;
+            }
+
+            // Extract short name (after last colon)
+            let short_name = tag_name.rsplit(':').next().unwrap_or(tag_name);
+            let formatted_value = format_tag_value_short(tag_name, tag_value);
+            output.push_str(&format!("{}: {}\n", short_name, formatted_value));
+        }
+
+        output
+    }
+}
+
+/// Helper function to format a TagValue for short format display
+///
+/// Similar to format_tag_value but truncates long strings for compact output.
+fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String {
+    if let Some(label) = friendly_enum_name(tag_name, value) {
+        // Truncate enum labels if too long
+        if label.len() > 50 {
+            return format!("{}...", &label[..47]);
+        }
+        return label;
+    }
+
+    match value {
+        TagValue::String(s) => {
+            // Truncate long strings for short format
+            if s.len() > 50 {
+                format!("{}...", &s[..47])
+            } else {
+                s.clone()
+            }
+        }
+        TagValue::Integer(i) => i.to_string(),
+        TagValue::Float(f) => format!("{:.2}", f), // Limit decimal places
+        TagValue::Rational {
+            numerator,
+            denominator,
+        } => {
+            if *denominator == 1 {
+                numerator.to_string()
+            } else if *denominator == 0 {
+                "0".to_string()
+            } else {
+                format!("{}/{}", numerator, denominator)
+            }
+        }
+        TagValue::Binary(bytes) => format!("({} bytes)", bytes.len()),
+        TagValue::DateTime(dt) => dt.format("%Y:%m:%d %H:%M:%S").to_string(),
+        TagValue::Struct(_) => "(struct)".to_string(),
+        TagValue::Array(values) => {
+            if values.len() > 3 {
+                format!("[{} items]", values.len())
+            } else {
+                let formatted: Vec<String> = values
+                    .iter()
+                    .map(|v| format_tag_value_short(tag_name, v))
+                    .collect();
+                format!("[{}]", formatted.join(", "))
+            }
+        }
     }
 }
 
@@ -398,11 +538,30 @@ fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
     }
 }
 
-/// Resolves TIFF enumeration names while leaving raw numeric values intact.
+/// Resolves TIFF enumeration names and GPS reference values to human-readable text.
 ///
-/// This looks up the tag descriptor to retrieve the numeric tag ID and uses
-/// the TIFF enum table to translate well-known values (e.g., Orientation).
+/// This function handles two types of value formatting:
+/// 1. TIFF enums: Looks up the tag descriptor to retrieve the numeric tag ID and uses
+///    the TIFF enum table to translate well-known values (e.g., Orientation).
+/// 2. GPS reference values: Converts single-character codes to human-readable descriptions
+///    (e.g., "N" -> "North", "T" -> "True North").
 fn friendly_enum_name(tag_name: &str, value: &TagValue) -> Option<String> {
+    // First, check if this is a GPS reference value (string-based)
+    if let TagValue::String(s) = value
+        && let Some(formatted) = format_gps_reference(tag_name, s)
+    {
+        return Some(formatted);
+    }
+
+    // Also handle GPS reference values that may be stored as integers
+    // (e.g., GPSAltitudeRef 0/1 or GPSDifferential 0/1)
+    if let TagValue::Integer(i) = value
+        && let Some(formatted) = format_gps_reference(tag_name, &i.to_string())
+    {
+        return Some(formatted);
+    }
+
+    // Then try TIFF enum lookup for integer values
     let tag_id = lookup_tiff_enum_tag_id(tag_name)?;
 
     match value {
@@ -468,6 +627,58 @@ fn lookup_tiff_enum_tag_id(tag_name: &str) -> Option<u16> {
 
         // ColorSpace (tag 0xA001)
         "ExifIFD:ColorSpace" | "EXIF:ColorSpace" => Some(0xA001),
+
+        // SceneType (tag 0xA301)
+        // Note: Often stored as binary data, but may appear as integer in some files
+        "ExifIFD:SceneType" | "EXIF:SceneType" => Some(0xA301),
+
+        // SensitivityType (tag 0x8830)
+        "ExifIFD:SensitivityType" | "EXIF:SensitivityType" => Some(0x8830),
+
+        // CompositeImage (tag 0xA460)
+        "ExifIFD:CompositeImage" | "EXIF:CompositeImage" => Some(0xA460),
+
+        // MakerNoteSafety (DNG tag 0xC635)
+        "IFD0:MakerNoteSafety" | "EXIF:MakerNoteSafety" => Some(0xC635),
+
+        // MeteringMode (tag 0x9207)
+        "ExifIFD:MeteringMode" | "EXIF:MeteringMode" => Some(0x9207),
+
+        // SensingMethod (tag 0xA217)
+        "ExifIFD:SensingMethod" | "EXIF:SensingMethod" => Some(0xA217),
+
+        // CustomRendered (tag 0xA401)
+        "ExifIFD:CustomRendered" | "EXIF:CustomRendered" => Some(0xA401),
+
+        // ExposureMode (tag 0xA402)
+        "ExifIFD:ExposureMode" | "EXIF:ExposureMode" => Some(0xA402),
+
+        // WhiteBalance (tag 0xA403)
+        "ExifIFD:WhiteBalance" | "EXIF:WhiteBalance" => Some(0xA403),
+
+        // SceneCaptureType (tag 0xA406)
+        "ExifIFD:SceneCaptureType" | "EXIF:SceneCaptureType" => Some(0xA406),
+
+        // ExposureProgram (tag 0x8822)
+        "ExifIFD:ExposureProgram" | "EXIF:ExposureProgram" => Some(0x8822),
+
+        // LightSource (tag 0x9208)
+        "ExifIFD:LightSource" | "EXIF:LightSource" => Some(0x9208),
+
+        // GainControl (tag 0xA407)
+        "ExifIFD:GainControl" | "EXIF:GainControl" => Some(0xA407),
+
+        // Contrast (tag 0xA408)
+        "ExifIFD:Contrast" | "EXIF:Contrast" => Some(0xA408),
+
+        // Saturation (tag 0xA409)
+        "ExifIFD:Saturation" | "EXIF:Saturation" => Some(0xA409),
+
+        // Sharpness (tag 0xA40A)
+        "ExifIFD:Sharpness" | "EXIF:Sharpness" => Some(0xA40A),
+
+        // SubjectDistanceRange (tag 0xA40C)
+        "ExifIFD:SubjectDistanceRange" | "EXIF:SubjectDistanceRange" => Some(0xA40C),
 
         _ => None,
     }
@@ -904,9 +1115,11 @@ mod tests {
 
         // CSV reader should correctly parse values with commas and quotes
         assert!(records.iter().any(|r| r.get(1) == Some("Doe, John")));
-        assert!(records
-            .iter()
-            .any(|r| r.get(1) == Some("Copyright \"2023\"")));
+        assert!(
+            records
+                .iter()
+                .any(|r| r.get(1) == Some("Copyright \"2023\""))
+        );
     }
 
     #[test]

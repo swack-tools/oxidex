@@ -2,8 +2,8 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
@@ -91,7 +91,7 @@ fn extract_opf_path(xml: &str) -> Result<String> {
                 return Err(ExifToolError::parse_error(format!(
                     "XML parse error: {}",
                     e
-                )))
+                )));
             }
             _ => {}
         }
@@ -129,26 +129,26 @@ fn parse_opf_metadata(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
                 }
             }
             Ok(Event::Text(e)) if in_metadata => {
-                if let Ok(text) = e.xml_content() {
-                    if !text.is_empty() && !current_element.is_empty() {
-                        let tag_name = match current_element.as_str() {
-                            "title" => "EPUB:Title",
-                            "creator" => "EPUB:Creator",
-                            "subject" => "EPUB:Subject",
-                            "description" => "EPUB:Description",
-                            "publisher" => "EPUB:Publisher",
-                            "date" => "EPUB:Date",
-                            "language" => "EPUB:Language",
-                            "identifier" => "EPUB:Identifier",
-                            "rights" => "EPUB:Rights",
-                            _ => {
-                                buf.clear();
-                                continue;
-                            }
-                        };
-                        metadata
-                            .insert(tag_name.to_string(), TagValue::new_string(text.to_string()));
-                    }
+                if let Ok(text) = e.xml10_content()
+                    && !text.is_empty()
+                    && !current_element.is_empty()
+                {
+                    let tag_name = match current_element.as_str() {
+                        "title" => "EPUB:Title",
+                        "creator" => "EPUB:Creator",
+                        "subject" => "EPUB:Subject",
+                        "description" => "EPUB:Description",
+                        "publisher" => "EPUB:Publisher",
+                        "date" => "EPUB:Date",
+                        "language" => "EPUB:Language",
+                        "identifier" => "EPUB:Identifier",
+                        "rights" => "EPUB:Rights",
+                        _ => {
+                            buf.clear();
+                            continue;
+                        }
+                    };
+                    metadata.insert(tag_name.to_string(), TagValue::new_string(text.to_string()));
                 }
             }
             Ok(Event::Eof) => break,
@@ -156,7 +156,7 @@ fn parse_opf_metadata(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
                 return Err(ExifToolError::parse_error(format!(
                     "XML parse error: {}",
                     e
-                )))
+                )));
             }
             _ => {}
         }

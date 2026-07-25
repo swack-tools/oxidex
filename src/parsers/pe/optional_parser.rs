@@ -2,8 +2,8 @@
 
 use crate::parsers::pe::structures::{OptionalHeaderNT, OptionalHeaderStandard};
 use nom::{
-    number::complete::{le_u16, le_u32, le_u64, le_u8},
     IResult,
+    number::complete::{le_u8, le_u16, le_u32, le_u64},
 };
 
 /// Parse Optional Header Standard Fields

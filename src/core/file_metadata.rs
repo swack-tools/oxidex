@@ -40,6 +40,7 @@
 //! # }
 //! ```
 
+use crate::core::value_formatter::format_file_size as fmt_file_size;
 use crate::core::{MetadataMap, TagValue};
 use crate::error::Result;
 use std::fs;
@@ -93,13 +94,13 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
     let file_metadata = fs::metadata(path)?; // From trait converts io::Error to ExifToolError::IoError
 
     // File name (basename without directory)
-    if let Some(filename) = path.file_name() {
-        if let Some(filename_str) = filename.to_str() {
-            metadata.insert(
-                "File:FileName".to_string(),
-                TagValue::new_string(filename_str.to_string()),
-            );
-        }
+    if let Some(filename) = path.file_name()
+        && let Some(filename_str) = filename.to_str()
+    {
+        metadata.insert(
+            "File:FileName".to_string(),
+            TagValue::new_string(filename_str.to_string()),
+        );
     }
 
     // Directory (parent directory path)
@@ -114,7 +115,7 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
 
     // File size (human-readable format)
     let file_size = file_metadata.len();
-    let size_str = format_file_size(file_size);
+    let size_str = fmt_file_size(file_size);
     metadata.insert("File:FileSize".to_string(), TagValue::new_string(size_str));
 
     // File modification date/time
@@ -181,52 +182,37 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
     }
 
     // File type and extension based on path
-    if let Some(extension) = path.extension() {
-        if let Some(ext_str) = extension.to_str() {
-            let ext_lower = ext_str.to_lowercase();
+    if let Some(extension) = path.extension()
+        && let Some(ext_str) = extension.to_str()
+    {
+        let ext_lower = ext_str.to_lowercase();
 
-            // File type extension
-            metadata.insert(
-                "File:FileTypeExtension".to_string(),
-                TagValue::new_string(ext_lower.clone()),
-            );
+        // File type extension
+        metadata.insert(
+            "File:FileTypeExtension".to_string(),
+            TagValue::new_string(ext_lower.clone()),
+        );
 
-            // File type (human-readable)
-            let file_type = get_file_type(&ext_lower);
-            metadata.insert(
-                "File:FileType".to_string(),
-                TagValue::new_string(file_type.to_string()),
-            );
+        // File type (human-readable)
+        let file_type = get_file_type(&ext_lower);
+        metadata.insert(
+            "File:FileType".to_string(),
+            TagValue::new_string(file_type.to_string()),
+        );
 
-            // MIME type
-            let mime_type = get_mime_type(&ext_lower);
-            metadata.insert(
-                "File:MIMEType".to_string(),
-                TagValue::new_string(mime_type.to_string()),
-            );
-        }
+        // MIME type
+        let mime_type = get_mime_type(&ext_lower);
+        metadata.insert(
+            "File:MIMEType".to_string(),
+            TagValue::new_string(mime_type.to_string()),
+        );
     }
 
     Ok(metadata)
 }
 
-/// Formats a file size in bytes to a human-readable string.
-///
-/// Examples:
-/// - 1024 bytes → "1024 bytes"
-/// - 10240 bytes → "10 kB"
-/// - 1048576 bytes → "1.0 MB"
-fn format_file_size(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{} bytes", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{} kB", bytes / 1024)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
-}
+// File size formatting moved to core::value_formatter module
+// to ensure consistency with ExifTool (decimal units: 1 kB = 1000 bytes)
 
 /// Formats a SystemTime to ExifTool-compatible date format.
 ///
@@ -317,16 +303,16 @@ fn get_timezone_offset() -> String {
     #[cfg(unix)]
     {
         use std::process::Command;
-        if let Ok(output) = Command::new("date").arg("+%z").output() {
-            if let Ok(tz_str) = String::from_utf8(output.stdout) {
-                let trimmed = tz_str.trim();
-                if trimmed.len() >= 5 {
-                    // Format is +HHMM or -HHMM, convert to +HH:MM or -HH:MM
-                    let sign = &trimmed[0..1];
-                    let hours = &trimmed[1..3];
-                    let mins = &trimmed[3..5];
-                    return format!("{}{}:{}", sign, hours, mins);
-                }
+        if let Ok(output) = Command::new("date").arg("+%z").output()
+            && let Ok(tz_str) = String::from_utf8(output.stdout)
+        {
+            let trimmed = tz_str.trim();
+            if trimmed.len() >= 5 {
+                // Format is +HHMM or -HHMM, convert to +HH:MM or -HH:MM
+                let sign = &trimmed[0..1];
+                let hours = &trimmed[1..3];
+                let mins = &trimmed[3..5];
+                return format!("{}{}:{}", sign, hours, mins);
             }
         }
     }
@@ -389,9 +375,12 @@ fn get_file_type(extension: &str) -> &'static str {
         "mov" => "MOV",
         "avi" => "AVI",
         "mkv" => "MKV",
+        "flv" => "FLV",
+        "wmv" | "asf" => "ASF",
         "mp3" => "MP3",
         "wav" => "WAV",
         "flac" => "FLAC",
+        "ogg" => "OGG",
         "txt" => "TXT",
         "doc" | "docx" => "DOC",
         "xls" | "xlsx" => "XLS",
@@ -421,9 +410,12 @@ fn get_mime_type(extension: &str) -> &'static str {
         "mov" => "video/quicktime",
         "avi" => "video/x-msvideo",
         "mkv" => "video/x-matroska",
+        "flv" => "video/x-flv",
+        "wmv" | "asf" => "video/x-ms-wmv",
         "mp3" => "audio/mpeg",
         "wav" => "audio/wav",
         "flac" => "audio/flac",
+        "ogg" => "audio/ogg",
         "txt" => "text/plain",
         "doc" => "application/msword",
         "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -444,14 +436,7 @@ fn get_mime_type(extension: &str) -> &'static str {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_format_file_size() {
-        assert_eq!(format_file_size(512), "512 bytes");
-        assert_eq!(format_file_size(1024), "1 kB");
-        assert_eq!(format_file_size(10240), "10 kB");
-        assert_eq!(format_file_size(1048576), "1.0 MB");
-        assert_eq!(format_file_size(1073741824), "1.00 GB");
-    }
+    // File size tests moved to core::value_formatter module
 
     #[test]
     fn test_get_file_type() {

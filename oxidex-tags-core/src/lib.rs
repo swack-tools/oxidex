@@ -9,9 +9,11 @@
 //! directly in the compiled binary, eliminating the ~40ms cold start penalty
 //! from parsing YAML files on first access.
 
+use oxidex_tags_shared::find_table;
 use std::sync::LazyLock;
 
 pub mod types;
+pub use oxidex_tags_shared::{Tag, TagDatabase, TagTable};
 pub use types::*;
 
 // Include pre-compiled binary tag data generated at build time
@@ -38,7 +40,7 @@ pub static CORE_TAGS: LazyLock<TagDatabase> = LazyLock::new(|| {
 ///
 /// An Option containing a reference to the TagTable if found, or None if not found
 pub fn get_tag_table(name: &str) -> Option<&'static TagTable> {
-    CORE_TAGS.tables.iter().find(|t| t.name == name)
+    find_table(&CORE_TAGS, name).ok()
 }
 
 #[cfg(test)]
@@ -60,5 +62,55 @@ mod tests {
 
         let gps = get_tag_table("GPS::Main");
         assert!(gps.is_some(), "Should find GPS::Main table");
+    }
+
+    #[test]
+    fn test_forensic_timezone_tags() {
+        // Test that critical forensic EXIF tags for timeline reconstruction are present
+        let exif_table = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
+
+        // Timezone offset tags
+        let offset_time = exif_table
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x9010")
+            .expect("OffsetTime (0x9010) should exist");
+        assert_eq!(offset_time.name, "OffsetTime");
+
+        let offset_time_original = exif_table
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x9011")
+            .expect("OffsetTimeOriginal (0x9011) should exist");
+        assert_eq!(offset_time_original.name, "OffsetTimeOriginal");
+
+        let offset_time_digitized = exif_table
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x9012")
+            .expect("OffsetTimeDigitized (0x9012) should exist");
+        assert_eq!(offset_time_digitized.name, "OffsetTimeDigitized");
+
+        // Subsecond precision tags
+        let subsec_time = exif_table
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x9290")
+            .expect("SubSecTime (0x9290) should exist");
+        assert_eq!(subsec_time.name, "SubSecTime");
+
+        let subsec_time_original = exif_table
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x9291")
+            .expect("SubSecTimeOriginal (0x9291) should exist");
+        assert_eq!(subsec_time_original.name, "SubSecTimeOriginal");
+
+        let subsec_time_digitized = exif_table
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x9292")
+            .expect("SubSecTimeDigitized (0x9292) should exist");
+        assert_eq!(subsec_time_digitized.name, "SubSecTimeDigitized");
     }
 }

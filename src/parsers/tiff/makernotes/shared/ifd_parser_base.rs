@@ -1,3 +1,4 @@
+use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 
 /// Configuration for IFD parsing
@@ -108,11 +109,14 @@ where
 
     let parse_data = &data[start_offset..];
 
+    // Create EndianReader for all byte order-aware parsing
+    let reader = EndianReader::new(parse_data, byte_order.to_io_byte_order());
+
     // Read number of IFD entries (2 bytes at start of IFD)
-    let entry_count = match byte_order {
-        ByteOrder::LittleEndian => u16::from_le_bytes([parse_data[0], parse_data[1]]),
-        ByteOrder::BigEndian => u16::from_be_bytes([parse_data[0], parse_data[1]]),
-    } as usize;
+    let entry_count = reader
+        .u16_at(0)
+        .ok_or_else(|| "Failed to read IFD entry count".to_string())?
+        as usize;
 
     // Validate entry count to avoid processing corrupted data
     if entry_count == 0 || entry_count > config.max_entries {
@@ -132,38 +136,12 @@ where
             break; // Incomplete entry, stop parsing gracefully
         }
 
-        let entry_data = &parse_data[offset..offset + ENTRY_SIZE];
-
-        // Parse IFD entry fields based on byte order
+        // Parse IFD entry fields using EndianReader
         // Format: [tag:2][type:2][count:4][value_offset:4]
-
-        let tag_id = match byte_order {
-            ByteOrder::LittleEndian => u16::from_le_bytes([entry_data[0], entry_data[1]]),
-            ByteOrder::BigEndian => u16::from_be_bytes([entry_data[0], entry_data[1]]),
-        };
-
-        let field_type = match byte_order {
-            ByteOrder::LittleEndian => u16::from_le_bytes([entry_data[2], entry_data[3]]),
-            ByteOrder::BigEndian => u16::from_be_bytes([entry_data[2], entry_data[3]]),
-        };
-
-        let value_count = match byte_order {
-            ByteOrder::LittleEndian => {
-                u32::from_le_bytes([entry_data[4], entry_data[5], entry_data[6], entry_data[7]])
-            }
-            ByteOrder::BigEndian => {
-                u32::from_be_bytes([entry_data[4], entry_data[5], entry_data[6], entry_data[7]])
-            }
-        };
-
-        let value_offset = match byte_order {
-            ByteOrder::LittleEndian => {
-                u32::from_le_bytes([entry_data[8], entry_data[9], entry_data[10], entry_data[11]])
-            }
-            ByteOrder::BigEndian => {
-                u32::from_be_bytes([entry_data[8], entry_data[9], entry_data[10], entry_data[11]])
-            }
-        };
+        let tag_id = reader.u16_at(offset).unwrap_or(0);
+        let field_type = reader.u16_at(offset + 2).unwrap_or(0);
+        let value_count = reader.u32_at(offset + 4).unwrap_or(0);
+        let value_offset = reader.u32_at(offset + 8).unwrap_or(0);
 
         // Create IFD entry structure
         let entry = IfdEntry {

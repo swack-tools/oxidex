@@ -16,7 +16,7 @@
 //! cargo bench --bench integration_benchmarks
 //! ```
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use oxidex::core::operations::read_metadata;
 use std::hint::black_box;
 use std::path::Path;

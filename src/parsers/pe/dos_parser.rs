@@ -2,8 +2,8 @@
 
 use crate::parsers::pe::structures::DosHeader;
 use nom::{
-    number::complete::{le_u16, le_u32},
     IResult,
+    number::complete::{le_u16, le_u32},
 };
 
 /// Parse DOS header from PE file

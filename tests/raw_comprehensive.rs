@@ -7,7 +7,7 @@
 //! - Integration with real raw files (ignored tests for manual verification)
 
 use oxidex::core::operations::read_metadata;
-use oxidex::parsers::raw::{detect_raw_format, parse_raw_metadata, RawFormat};
+use oxidex::parsers::raw::{RawFormat, detect_raw_format, parse_raw_metadata};
 use std::path::Path;
 
 /// Test that all raw format extensions are correctly detected

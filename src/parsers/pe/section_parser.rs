@@ -2,9 +2,9 @@
 
 use crate::parsers::pe::structures::SectionHeader;
 use nom::{
+    IResult,
     bytes::complete::take,
     number::complete::{le_u16, le_u32},
-    IResult,
 };
 
 /// Parse a single PE section header (40 bytes)

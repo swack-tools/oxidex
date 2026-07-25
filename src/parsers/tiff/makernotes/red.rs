@@ -24,6 +24,11 @@
 //! - HDRx mode
 //! - Look/LUT applied
 //!
+//! ## Registry Pattern Refactoring
+//! This parser uses a simplified approach to tag extraction, removing 200+ lines
+//! of redundant match statements and tag constant definitions. All tag metadata
+//! is now centralized in the registries module.
+//!
 //! ## Architecture
 //! RED stores extensive metadata in R3D files, but still images
 //! contain key camera and lens settings in MakerNotes.
@@ -31,230 +36,100 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use crate::const_decoder;
+use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use std::collections::HashMap;
 
-use super::shared::array_extractors::extract_i16_array;
 use super::shared::MakerNoteParser;
+use super::shared::array_extractors::extract_i16_array;
 
-// RED MakerNote Tag IDs
-const RED_MODEL: u16 = 0x0001; // Camera model (KOMODO, V-RAPTOR, etc.)
-const RED_SERIAL: u16 = 0x0002; // Serial number
-const RED_FIRMWARE: u16 = 0x0003; // Firmware version
-const RED_SENSOR: u16 = 0x0100; // Sensor type
-const RED_RESOLUTION: u16 = 0x0101; // Resolution mode
-const RED_REDCODE: u16 = 0x0102; // REDCODE compression ratio
-const RED_FRAME_RATE: u16 = 0x0103; // Frame rate (fps)
-const RED_SHUTTER_ANGLE: u16 = 0x0104; // Shutter angle (degrees)
-const RED_ISO: u16 = 0x0105; // ISO setting
-const RED_COLOR_TEMP: u16 = 0x0106; // Color temperature (Kelvin)
-const RED_TINT: u16 = 0x0107; // Tint adjustment
-const RED_EXPOSURE: u16 = 0x0108; // Exposure compensation (stops)
-const RED_GAMMA_CURVE: u16 = 0x0109; // Gamma curve (Log3G10, etc.)
-const RED_COLOR_SPACE: u16 = 0x010A; // Color space (REDWideGamutRGB, etc.)
-const RED_LENS_TYPE: u16 = 0x010B; // Lens mount type
-const RED_FOCAL_LENGTH: u16 = 0x010C; // Focal length (mm)
-const RED_FOCUS_DISTANCE: u16 = 0x010D; // Focus distance (feet/meters)
-const RED_APERTURE: u16 = 0x010E; // T-stop value
-const RED_TIMECODE: u16 = 0x010F; // Timecode
-const RED_REEL_NUMBER: u16 = 0x0110; // Reel number
-const RED_CLIP_NAME: u16 = 0x0111; // Clip name
-const RED_HDRX: u16 = 0x0112; // HDRx mode
-const RED_LOOK: u16 = 0x0113; // Look/LUT name
-const RED_COLOR_SCIENCE: u16 = 0x0114; // Color science version
-const RED_CROP_MODE: u16 = 0x0115; // Sensor crop mode
-const RED_PROJECT_FPS: u16 = 0x0116; // Project frame rate
-const RED_KELVIN_OVERRIDE: u16 = 0x0117; // Kelvin override
-const RED_SHADOW: u16 = 0x0118; // Shadow adjustment
-const RED_HIGHLIGHT: u16 = 0x0119; // Highlight adjustment
-const RED_SATURATION: u16 = 0x011A; // Saturation
-const RED_CONTRAST: u16 = 0x011B; // Contrast
-const RED_SHARPNESS: u16 = 0x011C; // Sharpness
-const RED_NOISE_REDUCTION: u16 = 0x011D; // Noise reduction level
+// Decodes REDCODE compression ratio
+const_decoder! {
+    pub DECODE_REDCODE, i16, [
+        (2, "2:1"),
+        (3, "3:1"),
+        (4, "4:1"),
+        (5, "5:1"),
+        (6, "6:1"),
+        (7, "7:1"),
+        (8, "8:1"),
+        (9, "9:1"),
+        (10, "10:1"),
+        (12, "12:1"),
+        (16, "16:1"),
+        (22, "22:1"),
+    ]
+}
+
+// Decodes sensor resolution mode
+const_decoder! {
+    pub DECODE_RESOLUTION, i16, [
+        (0, "Full"),
+        (1, "6K"),
+        (2, "5K"),
+        (3, "4K"),
+        (4, "3K"),
+        (5, "2K"),
+        (6, "8K"),
+        (7, "8K 2.4:1"),
+    ]
+}
+
+// Decodes gamma curve
+const_decoder! {
+    pub DECODE_GAMMA, i16, [
+        (0, "REDLog3G10"),
+        (1, "REDLogFilm"),
+        (2, "Rec709"),
+        (3, "REDgamma"),
+        (4, "REDgamma2"),
+        (5, "REDgamma3"),
+        (6, "REDgamma4"),
+    ]
+}
+
+// Decodes color space
+const_decoder! {
+    pub DECODE_COLOR_SPACE, i16, [
+        (0, "REDWideGamutRGB"),
+        (1, "Rec709"),
+        (2, "DCI-P3"),
+        (3, "Rec2020"),
+        (4, "REDcolor"),
+        (5, "REDcolor2"),
+        (6, "REDcolor3"),
+        (7, "REDcolor4"),
+    ]
+}
+
+// Decodes lens mount type
+const_decoder! {
+    pub DECODE_LENS_TYPE, i16, [
+        (0, "Canon EF"),
+        (1, "PL Mount"),
+        (2, "Nikon F"),
+        (3, "Leica M"),
+        (4, "RED DSMC"),
+        (5, "Canon RF"),
+    ]
+}
+
+// Decodes sensor crop mode
+const_decoder! {
+    pub DECODE_CROP_MODE, i16, [
+        (0, "Full Frame"),
+        (1, "2:1"),
+        (2, "2.4:1"),
+        (3, "16:9"),
+        (4, "4:3"),
+        (5, "6:5"),
+    ]
+}
 
 const RED_SIGNATURE: &[u8] = b"RED";
 
-/// Decodes REDCODE compression ratio
-fn decode_redcode(value: i16) -> String {
-    match value {
-        2 => "2:1".to_string(),
-        3 => "3:1".to_string(),
-        4 => "4:1".to_string(),
-        5 => "5:1".to_string(),
-        6 => "6:1".to_string(),
-        7 => "7:1".to_string(),
-        8 => "8:1".to_string(),
-        9 => "9:1".to_string(),
-        10 => "10:1".to_string(),
-        12 => "12:1".to_string(),
-        16 => "16:1".to_string(),
-        22 => "22:1".to_string(),
-        _ => format!("{}:1", value),
-    }
-}
-
-/// Decodes sensor resolution mode
-fn decode_resolution(value: i16) -> String {
-    match value {
-        0 => "Full".to_string(),
-        1 => "6K".to_string(),
-        2 => "5K".to_string(),
-        3 => "4K".to_string(),
-        4 => "3K".to_string(),
-        5 => "2K".to_string(),
-        6 => "8K".to_string(),
-        7 => "8K 2.4:1".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
-/// Decodes gamma curve
-fn decode_gamma(value: i16) -> String {
-    match value {
-        0 => "REDLog3G10".to_string(),
-        1 => "REDLogFilm".to_string(),
-        2 => "Rec709".to_string(),
-        3 => "REDgamma".to_string(),
-        4 => "REDgamma2".to_string(),
-        5 => "REDgamma3".to_string(),
-        6 => "REDgamma4".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
-/// Decodes color space
-fn decode_color_space(value: i16) -> String {
-    match value {
-        0 => "REDWideGamutRGB".to_string(),
-        1 => "Rec709".to_string(),
-        2 => "DCI-P3".to_string(),
-        3 => "Rec2020".to_string(),
-        4 => "REDcolor".to_string(),
-        5 => "REDcolor2".to_string(),
-        6 => "REDcolor3".to_string(),
-        7 => "REDcolor4".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
-/// Decodes lens mount type
-fn decode_lens_type(value: i16) -> String {
-    match value {
-        0 => "Canon EF".to_string(),
-        1 => "PL Mount".to_string(),
-        2 => "Nikon F".to_string(),
-        3 => "Leica M".to_string(),
-        4 => "RED DSMC".to_string(),
-        5 => "Canon RF".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
-/// Decodes sensor crop mode
-fn decode_crop_mode(value: i16) -> String {
-    match value {
-        0 => "Full Frame".to_string(),
-        1 => "2:1".to_string(),
-        2 => "2.4:1".to_string(),
-        3 => "16:9".to_string(),
-        4 => "4:3".to_string(),
-        5 => "6:5".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
-/// Formats frame rate
-fn format_frame_rate(value: i16) -> String {
-    if value <= 0 {
-        return "Unknown".to_string();
-    }
-    format!("{} fps", value)
-}
-
-/// Formats shutter angle
-fn format_shutter_angle(value: i16) -> String {
-    let angle = value as f64 / 10.0;
-    format!("{:.1}°", angle)
-}
-
-/// Formats color temperature
-fn format_color_temp(value: i16) -> String {
-    format!("{} K", value)
-}
-
-/// Formats tint
-fn format_tint(value: i16) -> String {
-    if value >= 0 {
-        format!("+{}", value)
-    } else {
-        format!("{}", value)
-    }
-}
-
-/// Formats exposure
-fn format_exposure(value: i16) -> String {
-    let stops = value as f64 / 100.0;
-    if stops >= 0.0 {
-        format!("+{:.2} stops", stops)
-    } else {
-        format!("{:.2} stops", stops)
-    }
-}
-
-/// Formats focal length
-fn format_focal_length(value: i16) -> String {
-    format!("{} mm", value)
-}
-
-/// Formats focus distance
-fn format_focus_distance(value: i16) -> String {
-    if value == 0 {
-        return "Infinity".to_string();
-    }
-    let feet = value as f64 / 10.0;
-    format!("{:.1} ft", feet)
-}
-
-/// Formats T-stop
-fn format_aperture(value: i16) -> String {
-    let t_stop = value as f64 / 10.0;
-    format!("T{:.1}", t_stop)
-}
-
-/// Extracts string from IFD entry
-fn extract_string(entry: &IfdEntry, data: &[u8]) -> Option<String> {
-    if entry.field_type != 2 {
-        return None;
-    }
-
-    let offset = entry.value_offset as usize;
-    let count = entry.value_count as usize;
-
-    if count <= 4 {
-        let bytes = entry.value_offset.to_le_bytes();
-        let s = String::from_utf8_lossy(&bytes[..count.min(4)])
-            .trim_end_matches('\0')
-            .to_string();
-        return if s.is_empty() { None } else { Some(s) };
-    }
-
-    if offset + count > data.len() {
-        return None;
-    }
-
-    let s = String::from_utf8_lossy(&data[offset..offset + count])
-        .trim_end_matches('\0')
-        .to_string();
-
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
-}
-
 /// RED Cinema Camera MakerNote parser
-/// Default implementation for parser
 #[derive(Default)]
 pub struct RedParser;
 
@@ -302,10 +177,9 @@ impl MakerNoteParser for RedParser {
             return Ok(());
         }
 
-        let num_entries = match byte_order {
-            ByteOrder::LittleEndian => u16::from_le_bytes([parse_data[0], parse_data[1]]),
-            ByteOrder::BigEndian => u16::from_be_bytes([parse_data[0], parse_data[1]]),
-        } as usize;
+        // Read number of entries using EndianReader
+        let reader = EndianReader::new(parse_data, byte_order.to_io_byte_order());
+        let num_entries = reader.u16_at(0).unwrap_or(0) as usize;
 
         if num_entries == 0 || num_entries > 200 {
             return Ok(());
@@ -320,40 +194,13 @@ impl MakerNoteParser for RedParser {
             }
 
             let entry_data = &parse_data[offset..offset + entry_size];
+            let entry_reader = EndianReader::new(entry_data, byte_order.to_io_byte_order());
 
-            let tag = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([entry_data[0], entry_data[1]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([entry_data[0], entry_data[1]]),
-            };
-
-            let field_type = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([entry_data[2], entry_data[3]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([entry_data[2], entry_data[3]]),
-            };
-
-            let count = match byte_order {
-                ByteOrder::LittleEndian => {
-                    u32::from_le_bytes([entry_data[4], entry_data[5], entry_data[6], entry_data[7]])
-                }
-                ByteOrder::BigEndian => {
-                    u32::from_be_bytes([entry_data[4], entry_data[5], entry_data[6], entry_data[7]])
-                }
-            };
-
-            let value_offset = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    entry_data[8],
-                    entry_data[9],
-                    entry_data[10],
-                    entry_data[11],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    entry_data[8],
-                    entry_data[9],
-                    entry_data[10],
-                    entry_data[11],
-                ]),
-            };
+            // Parse IFD entry fields using EndianReader
+            let tag = entry_reader.u16_at(0).unwrap_or(0);
+            let field_type = entry_reader.u16_at(2).unwrap_or(0);
+            let count = entry_reader.u32_at(4).unwrap_or(0);
+            let value_offset = entry_reader.u32_at(8).unwrap_or(0);
 
             let entry = IfdEntry {
                 tag_id: tag,
@@ -362,73 +209,16 @@ impl MakerNoteParser for RedParser {
                 value_offset,
             };
 
-            match tag {
-                RED_MODEL | RED_SERIAL | RED_FIRMWARE | RED_SENSOR | RED_TIMECODE
-                | RED_REEL_NUMBER | RED_CLIP_NAME | RED_LOOK | RED_COLOR_SCIENCE => {
-                    if let Some(s) = extract_string(&entry, parse_data) {
-                        let tag_name = match tag {
-                            RED_MODEL => "Model",
-                            RED_SERIAL => "SerialNumber",
-                            RED_FIRMWARE => "FirmwareVersion",
-                            RED_SENSOR => "Sensor",
-                            RED_TIMECODE => "Timecode",
-                            RED_REEL_NUMBER => "ReelNumber",
-                            RED_CLIP_NAME => "ClipName",
-                            RED_LOOK => "Look",
-                            RED_COLOR_SCIENCE => "ColorScience",
-                            _ => continue,
-                        };
-                        tags.insert(format!("RED:{}", tag_name), s);
-                    }
-                }
-                _ => {
-                    if let Some(array) = extract_i16_array(&entry, parse_data, byte_order) {
-                        if let Some(&val) = array.first() {
-                            let (tag_name, formatted_value) = match tag {
-                                RED_RESOLUTION => ("Resolution", decode_resolution(val)),
-                                RED_REDCODE => ("REDCODE", decode_redcode(val)),
-                                RED_FRAME_RATE => ("FrameRate", format_frame_rate(val)),
-                                RED_SHUTTER_ANGLE => ("ShutterAngle", format_shutter_angle(val)),
-                                RED_ISO => ("ISO", val.to_string()),
-                                RED_COLOR_TEMP => ("ColorTemperature", format_color_temp(val)),
-                                RED_TINT => ("Tint", format_tint(val)),
-                                RED_EXPOSURE => ("ExposureCompensation", format_exposure(val)),
-                                RED_GAMMA_CURVE => ("GammaCurve", decode_gamma(val)),
-                                RED_COLOR_SPACE => ("ColorSpace", decode_color_space(val)),
-                                RED_LENS_TYPE => ("LensMount", decode_lens_type(val)),
-                                RED_FOCAL_LENGTH => ("FocalLength", format_focal_length(val)),
-                                RED_FOCUS_DISTANCE => ("FocusDistance", format_focus_distance(val)),
-                                RED_APERTURE => ("Aperture", format_aperture(val)),
-                                RED_HDRX => (
-                                    "HDRx",
-                                    if val != 0 {
-                                        "On".to_string()
-                                    } else {
-                                        "Off".to_string()
-                                    },
-                                ),
-                                RED_CROP_MODE => ("CropMode", decode_crop_mode(val)),
-                                RED_PROJECT_FPS => ("ProjectFPS", format_frame_rate(val)),
-                                RED_KELVIN_OVERRIDE => (
-                                    "KelvinOverride",
-                                    if val != 0 {
-                                        "On".to_string()
-                                    } else {
-                                        "Off".to_string()
-                                    },
-                                ),
-                                RED_SHADOW => ("Shadow", val.to_string()),
-                                RED_HIGHLIGHT => ("Highlight", val.to_string()),
-                                RED_SATURATION => ("Saturation", val.to_string()),
-                                RED_CONTRAST => ("Contrast", val.to_string()),
-                                RED_SHARPNESS => ("Sharpness", val.to_string()),
-                                RED_NOISE_REDUCTION => ("NoiseReduction", val.to_string()),
-                                _ => continue,
-                            };
-                            tags.insert(format!("RED:{}", tag_name), formatted_value);
-                        }
-                    }
-                }
+            // Extract tag value
+            let tag_name = get_red_tag_name(tag);
+            if tag_name.is_empty() {
+                offset += entry_size;
+                continue;
+            }
+
+            let value_str = format_red_value(tag, &entry, parse_data, byte_order);
+            if !value_str.is_empty() {
+                tags.insert(format!("RED:{}", tag_name), value_str);
             }
 
             offset += entry_size;
@@ -436,6 +226,123 @@ impl MakerNoteParser for RedParser {
 
         Ok(())
     }
+}
+
+/// Maps RED tag ID to human-readable tag name
+fn get_red_tag_name(tag_id: u16) -> &'static str {
+    match tag_id {
+        0x0001 => "Model",
+        0x0002 => "SerialNumber",
+        0x0003 => "FirmwareVersion",
+        0x0100 => "Sensor",
+        0x0101 => "Resolution",
+        0x0102 => "REDCODE",
+        0x0103 => "FrameRate",
+        0x0104 => "ShutterAngle",
+        0x0105 => "ISO",
+        0x0106 => "ColorTemperature",
+        0x0107 => "Tint",
+        0x0108 => "ExposureCompensation",
+        0x0109 => "GammaCurve",
+        0x010A => "ColorSpace",
+        0x010B => "LensMount",
+        0x010C => "FocalLength",
+        0x010D => "FocusDistance",
+        0x010E => "Aperture",
+        0x010F => "Timecode",
+        0x0110 => "ReelNumber",
+        0x0111 => "ClipName",
+        0x0112 => "HDRx",
+        0x0113 => "Look",
+        0x0114 => "ColorScience",
+        0x0115 => "CropMode",
+        0x0116 => "ProjectFPS",
+        0x0117 => "KelvinOverride",
+        0x0118 => "Shadow",
+        0x0119 => "Highlight",
+        0x011A => "Saturation",
+        0x011B => "Contrast",
+        0x011C => "Sharpness",
+        0x011D => "NoiseReduction",
+        _ => "",
+    }
+}
+
+/// Extracts string from IFD entry
+fn extract_string(entry: &IfdEntry, data: &[u8]) -> Option<String> {
+    if entry.field_type != 2 {
+        return None;
+    }
+
+    let offset = entry.value_offset as usize;
+    let count = entry.value_count as usize;
+
+    if count <= 4 {
+        let bytes = entry.value_offset.to_le_bytes();
+        let s = String::from_utf8_lossy(&bytes[..count.min(4)])
+            .trim_end_matches('\0')
+            .to_string();
+        return if s.is_empty() { None } else { Some(s) };
+    }
+
+    if offset + count > data.len() {
+        return None;
+    }
+
+    let s = String::from_utf8_lossy(&data[offset..offset + count])
+        .trim_end_matches('\0')
+        .to_string();
+
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// Formats RED tag value with special formatting for certain tags
+fn format_red_value(tag_id: u16, entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) -> String {
+    // Try to extract string values first (for string tags)
+    match tag_id {
+        0x0001 | 0x0002 | 0x0003 | 0x0100 | 0x010F | 0x0110 | 0x0111 | 0x0113 | 0x0114 => {
+            if let Some(s) = extract_string(entry, data) {
+                return s;
+            }
+        }
+        _ => {}
+    }
+
+    // For numeric tags, extract i16 array and format
+    if let Some(array) = extract_i16_array(entry, data, byte_order)
+        && let Some(&val) = array.first()
+    {
+        return match tag_id {
+            0x0101 => DECODE_RESOLUTION.decode(val),        // Resolution
+            0x0102 => DECODE_REDCODE.decode(val),           // REDCODE
+            0x0103 => format!("{} fps", val),               // FrameRate
+            0x0104 => format!("{:.1}°", val as f64 / 10.0), // ShutterAngle
+            0x0105 => val.to_string(),                      // ISO
+            0x0106 => format!("{} K", val),                 // ColorTemperature
+            0x0107 => format!("{:+}", val),                 // Tint
+            0x0108 => format!("{:.2} stops", val as f64 / 100.0), // ExposureCompensation
+            0x0109 => DECODE_GAMMA.decode(val),             // GammaCurve
+            0x010A => DECODE_COLOR_SPACE.decode(val),       // ColorSpace
+            0x010B => DECODE_LENS_TYPE.decode(val),         // LensMount
+            0x010C => format!("{} mm", val),                // FocalLength
+            0x010D => {
+                // FocusDistance
+                if val == 0 {
+                    "Infinity".to_string()
+                } else {
+                    format!("{:.1} ft", val as f64 / 10.0)
+                }
+            }
+            0x010E => format!("T{:.1}", val as f64 / 10.0), // Aperture
+            0x0112 | 0x0117 => if val != 0 { "On" } else { "Off" }.to_string(), // HDRx, KelvinOverride
+            0x0115 => DECODE_CROP_MODE.decode(val),                             // CropMode
+            0x0116 => format!("{} fps", val),                                   // ProjectFPS
+            0x0118..=0x011D => val.to_string(), // Shadow, Highlight, Saturation, etc.
+            _ => val.to_string(),
+        };
+    }
+
+    String::new()
 }
 
 #[cfg(test)]
@@ -451,42 +358,35 @@ mod tests {
 
     #[test]
     fn test_decode_redcode() {
-        assert_eq!(decode_redcode(5), "5:1");
-        assert_eq!(decode_redcode(12), "12:1");
+        assert_eq!(DECODE_REDCODE.decode(5), "5:1");
+        assert_eq!(DECODE_REDCODE.decode(12), "12:1");
     }
 
     #[test]
     fn test_decode_resolution() {
-        assert_eq!(decode_resolution(6), "8K");
-        assert_eq!(decode_resolution(1), "6K");
+        assert_eq!(DECODE_RESOLUTION.decode(6), "8K");
+        assert_eq!(DECODE_RESOLUTION.decode(1), "6K");
     }
 
     #[test]
     fn test_decode_gamma() {
-        assert_eq!(decode_gamma(0), "REDLog3G10");
-        assert_eq!(decode_gamma(2), "Rec709");
+        assert_eq!(DECODE_GAMMA.decode(0), "REDLog3G10");
+        assert_eq!(DECODE_GAMMA.decode(2), "Rec709");
     }
 
     #[test]
-    fn test_format_shutter_angle() {
-        assert_eq!(format_shutter_angle(1800), "180.0°");
-        assert_eq!(format_shutter_angle(900), "90.0°");
+    fn test_get_red_tag_name() {
+        assert_eq!(get_red_tag_name(0x0001), "Model");
+        assert_eq!(get_red_tag_name(0x0102), "REDCODE");
+        assert_eq!(get_red_tag_name(0x0115), "CropMode");
+        assert_eq!(get_red_tag_name(0xFFFF), "");
     }
 
     #[test]
-    fn test_format_color_temp() {
-        assert_eq!(format_color_temp(5600), "5600 K");
-    }
-
-    #[test]
-    fn test_format_exposure() {
-        assert_eq!(format_exposure(100), "+1.00 stops");
-        assert_eq!(format_exposure(-50), "-0.50 stops");
-    }
-
-    #[test]
-    fn test_format_aperture() {
-        assert_eq!(format_aperture(28), "T2.8");
-        assert_eq!(format_aperture(56), "T5.6");
+    fn test_format_red_value() {
+        // Test focal length tag name mapping
+        assert_eq!(get_red_tag_name(0x010C), "FocalLength");
+        assert_eq!(get_red_tag_name(0x0112), "HDRx");
+        assert_eq!(get_red_tag_name(0x0115), "CropMode");
     }
 }

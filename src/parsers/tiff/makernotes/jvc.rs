@@ -19,40 +19,41 @@
 
 #![allow(dead_code)]
 
+use crate::const_decoder;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
+use super::registries::jvc::jvc_registry;
 use super::shared::MakerNoteParser;
+use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::tag_registry::TagRegistry;
 
-// JVC MakerNote Tag IDs
-const JVC_QUALITY: u16 = 0x0001;
-const JVC_FOCUS_MODE: u16 = 0x0002;
-const JVC_FLASH_MODE: u16 = 0x0003;
-const JVC_WHITE_BALANCE: u16 = 0x0004;
-const JVC_SHARPNESS: u16 = 0x0005;
-const JVC_COLOR_MODE: u16 = 0x0006;
+// Decodes JVC image quality
+const_decoder!(pub DECODE_QUALITY, u16, [
+    (0, "Standard"),
+    (1, "Fine"),
+    (2, "Super Fine"),
+]);
 
-fn decode_quality(value: u16) -> String {
-    match value {
-        0 => "Standard".to_string(),
-        1 => "Fine".to_string(),
-        2 => "Super Fine".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
+// Decodes JVC focus mode
+const_decoder!(pub DECODE_FOCUS_MODE, u16, [
+    (0, "Auto"),
+    (1, "Manual"),
+]);
 
-fn decode_focus_mode(value: u16) -> String {
-    match value {
-        0 => "Auto".to_string(),
-        1 => "Manual".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
+// Lazy-initialized tag registry using centralized registry function
+static TAG_REGISTRY: Lazy<TagRegistry> = Lazy::new(jvc_registry);
 
+// Extracts a u16 value from an IFD entry's value_offset field
+// This handles the case where the value is stored inline in the offset field
+// rather than as a pointer to external data
 fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> Option<u16> {
     if entry.value_count != 1 {
         return None;
     }
+    // Extract the u16 value from the appropriate bytes of the u32 value_offset
+    // based on byte order. Little endian uses lower 16 bits, big endian uses upper 16 bits
     let value = match byte_order {
         ByteOrder::LittleEndian => (entry.value_offset & 0xFFFF) as u16,
         ByteOrder::BigEndian => ((entry.value_offset >> 16) & 0xFFFF) as u16,
@@ -60,7 +61,7 @@ fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> O
     Some(value)
 }
 
-/// Parser for JVC camera MakerNotes
+/// Parser for JVC MakerNotes
 pub struct JvcParser;
 
 impl Default for JvcParser {
@@ -75,6 +76,8 @@ impl JvcParser {
         JvcParser
     }
 
+    /// Parses a single JVC MakerNote IFD entry and extracts its tag value
+    /// Uses centralized registry for tag metadata and decoding
     fn parse_entry(
         &self,
         entry: &IfdEntry,
@@ -82,29 +85,30 @@ impl JvcParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) {
-        match entry.tag_id {
-            JVC_QUALITY => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("JVC:Quality".to_string(), decode_quality(value));
+        if let Some(value) = extract_u16_value(entry, data, byte_order) {
+            let tag_name = match TAG_REGISTRY.get_tag_name(entry.tag_id) {
+                Some(name) => name,
+                None => return,
+            };
+
+            // Try registry decoding first
+            let formatted_value = TAG_REGISTRY.decode_u16(entry.tag_id, value);
+
+            // Fallback for tags without decoder in registry
+            let formatted_value = if formatted_value == value.to_string() {
+                match entry.tag_id {
+                    0x0003 => {
+                        let mode = if value > 0 { "On" } else { "Off" };
+                        mode.to_string()
+                    }
+                    0x0005 => value.to_string(),
+                    _ => formatted_value,
                 }
-            }
-            JVC_FOCUS_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("JVC:FocusMode".to_string(), decode_focus_mode(value));
-                }
-            }
-            JVC_FLASH_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    let mode = if value > 0 { "On" } else { "Off" };
-                    tags.insert("JVC:FlashMode".to_string(), mode.to_string());
-                }
-            }
-            JVC_SHARPNESS => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("JVC:Sharpness".to_string(), value.to_string());
-                }
-            }
-            _ => {}
+            } else {
+                formatted_value
+            };
+
+            tags.insert(format!("JVC:{}", tag_name), formatted_value);
         }
     }
 }
@@ -124,79 +128,15 @@ impl MakerNoteParser for JvcParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        if data.len() < 2 {
-            return Err("JVC MakerNote data too short".to_string());
-        }
-
-        let ifd_offset = 0;
-        let entry_count = match byte_order {
-            ByteOrder::LittleEndian => u16::from_le_bytes([data[ifd_offset], data[ifd_offset + 1]]),
-            ByteOrder::BigEndian => u16::from_be_bytes([data[ifd_offset], data[ifd_offset + 1]]),
+        let config = IfdParserConfig {
+            signature: None,
+            signature_offset: 0,
+            max_entries: 500,
         };
 
-        if entry_count == 0 || entry_count > 500 {
-            return Err(format!("Invalid entry count: {}", entry_count));
-        }
-
-        let entry_size = 12;
-        let mut offset = ifd_offset + 2;
-
-        for _ in 0..entry_count {
-            if offset + entry_size > data.len() {
-                break;
-            }
-
-            let tag = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([data[offset], data[offset + 1]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([data[offset], data[offset + 1]]),
-            };
-
-            let field_type = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([data[offset + 2], data[offset + 3]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([data[offset + 2], data[offset + 3]]),
-            };
-
-            let count = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                ]),
-            };
-
-            let value_offset = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    data[offset + 8],
-                    data[offset + 9],
-                    data[offset + 10],
-                    data[offset + 11],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    data[offset + 8],
-                    data[offset + 9],
-                    data[offset + 10],
-                    data[offset + 11],
-                ]),
-            };
-
-            let entry = IfdEntry {
-                tag_id: tag,
-                field_type,
-                value_count: count,
-                value_offset,
-            };
-
-            self.parse_entry(&entry, data, byte_order, tags);
-            offset += entry_size;
-        }
-
+        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
+            self.parse_entry(entry, parse_data, byte_order, tags);
+        })?;
         Ok(())
     }
 }
@@ -207,8 +147,8 @@ mod tests {
 
     #[test]
     fn test_decode_quality() {
-        assert_eq!(decode_quality(0), "Standard");
-        assert_eq!(decode_quality(2), "Super Fine");
+        assert_eq!(DECODE_QUALITY.decode(0), "Standard");
+        assert_eq!(DECODE_QUALITY.decode(2), "Super Fine");
     }
 
     #[test]

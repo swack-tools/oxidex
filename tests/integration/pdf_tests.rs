@@ -207,10 +207,12 @@ fn test_parse_invalid_pdf() {
     let _ = std::fs::remove_file(&temp_path);
 
     assert!(result.is_err(), "Should fail on invalid PDF");
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Invalid PDF signature"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid PDF signature")
+    );
 }
 
 #[test]

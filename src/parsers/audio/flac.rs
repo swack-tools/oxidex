@@ -42,9 +42,10 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap};
 use crate::error::{ExifToolError, Result};
+use crate::io::EndianReader;
 use nom::{
-    number::complete::{be_u16, be_u24, be_u8},
     IResult,
+    number::complete::{be_u8, be_u16, be_u24},
 };
 
 /// FLAC file signature
@@ -175,12 +176,20 @@ fn parse_streaminfo_block(data: &[u8], metadata: &mut MetadataMap) -> Result<()>
     use crate::core::TagValue;
 
     metadata.insert(
-        "FLAC:MinBlockSize".to_string(),
+        "FLAC:BlockSizeMin".to_string(),
         TagValue::new_integer(stream_info.min_block_size as i64),
     );
     metadata.insert(
-        "FLAC:MaxBlockSize".to_string(),
+        "FLAC:BlockSizeMax".to_string(),
         TagValue::new_integer(stream_info.max_block_size as i64),
+    );
+    metadata.insert(
+        "FLAC:FrameSizeMin".to_string(),
+        TagValue::new_integer(stream_info.min_frame_size as i64),
+    );
+    metadata.insert(
+        "FLAC:FrameSizeMax".to_string(),
+        TagValue::new_integer(stream_info.max_frame_size as i64),
     );
     metadata.insert(
         "FLAC:SampleRate".to_string(),
@@ -217,6 +226,35 @@ fn parse_streaminfo_block(data: &[u8], metadata: &mut MetadataMap) -> Result<()>
     metadata.insert(
         "FLAC:MD5Signature".to_string(),
         TagValue::new_string(md5_hex),
+    );
+
+    // Add FLAC format-specific tags for ExifTool compatibility
+
+    // AudioEncoding: Always "FLAC" for FLAC files
+    metadata.insert(
+        "FLAC:AudioEncoding".to_string(),
+        TagValue::new_string("FLAC".to_string()),
+    );
+
+    // FrameCount: Calculated from total samples
+    // Frame size varies but we can estimate from total_samples
+    // In FLAC, the actual frame count is not stored in STREAMINFO
+    // We'll calculate it based on a typical frame size
+    if stream_info.total_samples > 0 {
+        // Typical FLAC frame sizes are 1152 or 4096 samples per frame
+        // Using 4096 as typical for modern FLAC encodings
+        let estimated_frame_count = (stream_info.total_samples + 4095) / 4096;
+        metadata.insert(
+            "FLAC:FrameCount".to_string(),
+            TagValue::new_integer(estimated_frame_count as i64),
+        );
+    }
+
+    // VorbisComments: Set to true if we found any in subsequent parsing
+    // This will be updated if we encounter the VORBIS_COMMENT block
+    metadata.insert(
+        "FLAC:VorbisComments".to_string(),
+        TagValue::new_string("false".to_string()),
     );
 
     Ok(())
@@ -279,37 +317,92 @@ fn parse_streaminfo(input: &[u8]) -> IResult<&[u8], StreamInfo> {
     ))
 }
 
+/// Maps Vorbis comment field names to ExifTool-compatible tag names
+/// Returns (family, tag_name) tuple
+fn map_vorbis_field_name(field_name: &str) -> (&'static str, String) {
+    // Normalize field name to uppercase for matching
+    let upper = field_name.to_uppercase();
+
+    match upper.as_str() {
+        // Vorbis family tags
+        "TITLE" => ("Vorbis", "Title".to_string()),
+        "ARTIST" => ("Vorbis", "Artist".to_string()),
+        "ALBUM" => ("Vorbis", "Album".to_string()),
+        "TRACKNUMBER" => ("Vorbis", "TrackNumber".to_string()),
+        "DATE" => ("Vorbis", "Date".to_string()),
+        "GENRE" => ("Vorbis", "Genre".to_string()),
+        "COMMENT" => ("Vorbis", "Comment".to_string()),
+        "DESCRIPTION" => ("Vorbis", "Description".to_string()),
+        "COPYRIGHT" => ("Vorbis", "Copyright".to_string()),
+        "LICENSE" => ("Vorbis", "License".to_string()),
+        "ORGANIZATION" => ("Vorbis", "Organization".to_string()),
+        "PERFORMER" => ("Vorbis", "Performer".to_string()),
+        "COMPOSER" => ("Vorbis", "Composer".to_string()),
+        "CONDUCTOR" => ("Vorbis", "Conductor".to_string()),
+        "ISRC" => ("Vorbis", "ISRC".to_string()),
+        "LYRICS" => ("Vorbis", "Lyrics".to_string()),
+        "ALBUMARTIST" => ("Vorbis", "AlbumArtist".to_string()),
+        "DISCNUMBER" => ("Vorbis", "DiscNumber".to_string()),
+        "TOTALTRACKS" => ("Vorbis", "TotalTracks".to_string()),
+        "TOTALDISCS" => ("Vorbis", "TotalDiscs".to_string()),
+        "ENCODER" => ("Vorbis", "Encoder".to_string()),
+        "ENCODEDBY" => ("Vorbis", "EncodedBy".to_string()),
+        "ENCODED_BY" => ("Vorbis", "EncodedBy".to_string()),
+        "CONTACT" => ("Vorbis", "Contact".to_string()),
+        "LOCATION" => ("Vorbis", "Location".to_string()),
+        "VERSION" => ("Vorbis", "Version".to_string()),
+        // ReplayGain tags - use Vorbis family with proper casing
+        "REPLAYGAIN_TRACK_GAIN" => ("Vorbis", "ReplayGainTrackGain".to_string()),
+        "REPLAYGAIN_TRACK_PEAK" => ("Vorbis", "ReplayGainTrackPeak".to_string()),
+        "REPLAYGAIN_ALBUM_GAIN" => ("Vorbis", "ReplayGainAlbumGain".to_string()),
+        "REPLAYGAIN_ALBUM_PEAK" => ("Vorbis", "ReplayGainAlbumPeak".to_string()),
+        "REPLAYGAIN_REFERENCE_LOUDNESS" => ("Vorbis", "ReplayGainReferenceLoudness".to_string()),
+        // Unknown fields - use FLAC family with original case
+        _ => ("FLAC", field_name.to_string()),
+    }
+}
+
 /// Parses VORBIS_COMMENT block
 fn parse_vorbis_comment_block(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
     use encoding_rs::UTF_8;
 
     let mut offset = 0;
+    let reader = EndianReader::little_endian(data);
 
     // Vendor string length (4 bytes, little-endian)
     if data.len() < 4 {
         return Err(ExifToolError::parse_error("Vorbis comment block too small"));
     }
 
-    let vendor_length = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    let vendor_length = reader.u32_at(offset).unwrap_or(0) as usize;
     offset += 4;
 
-    // Skip vendor string
+    // Read and store vendor string
     if offset + vendor_length > data.len() {
         return Err(ExifToolError::parse_error("Invalid vendor string length"));
     }
+    let vendor_bytes = &data[offset..offset + vendor_length];
+    let (vendor_str, _, _) = UTF_8.decode(vendor_bytes);
+    if !vendor_str.is_empty() {
+        metadata.insert(
+            "Vorbis:Vendor".to_string(),
+            crate::core::TagValue::new_string(vendor_str.to_string()),
+        );
+    }
     offset += vendor_length;
+
+    // Mark that VorbisComments are present in this FLAC file
+    metadata.insert(
+        "FLAC:VorbisComments".to_string(),
+        crate::core::TagValue::new_string("true".to_string()),
+    );
 
     // User comment list length (4 bytes, little-endian)
     if offset + 4 > data.len() {
         return Err(ExifToolError::parse_error("Missing comment list length"));
     }
 
-    let comment_count = u32::from_le_bytes([
-        data[offset],
-        data[offset + 1],
-        data[offset + 2],
-        data[offset + 3],
-    ]);
+    let comment_count = reader.u32_at(offset).unwrap_or(0);
     offset += 4;
 
     // Safety limit: cap at 10,000 comments to prevent excessive memory usage
@@ -323,12 +416,7 @@ fn parse_vorbis_comment_block(data: &[u8], metadata: &mut MetadataMap) -> Result
         }
 
         // Comment length (4 bytes, little-endian)
-        let comment_length = u32::from_le_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]) as usize;
+        let comment_length = reader.u32_at(offset).unwrap_or(0) as usize;
         offset += 4;
 
         if offset + comment_length > data.len() {
@@ -344,18 +432,43 @@ fn parse_vorbis_comment_block(data: &[u8], metadata: &mut MetadataMap) -> Result
             let field_name = &comment_str[..eq_pos];
             let field_value = &comment_str[eq_pos + 1..];
 
-            // Map to FLAC: prefix
-            let tag_name = format!("FLAC:{}", field_name);
-            metadata.insert(
-                tag_name,
-                crate::core::TagValue::new_string(field_value.to_string()),
-            );
+            // Map to ExifTool-compatible tag name
+            let (family, tag_name) = map_vorbis_field_name(field_name);
+            let full_tag = format!("{}:{}", family, tag_name);
+
+            // Format ReplayGain Peak values to match ExifTool (strip trailing zeros)
+            let formatted_value = if field_name.to_uppercase().contains("_PEAK") {
+                if let Ok(val) = field_value.parse::<f64>() {
+                    format_peak_value(val)
+                } else {
+                    field_value.to_string()
+                }
+            } else {
+                field_value.to_string()
+            };
+
+            metadata.insert(full_tag, crate::core::TagValue::new_string(formatted_value));
         }
 
         offset += comment_length;
     }
 
     Ok(())
+}
+
+/// Format ReplayGain peak value to match ExifTool output
+///
+/// ExifTool strips trailing zeros from peak values, so "0.00000000" becomes "0.0"
+fn format_peak_value(val: f64) -> String {
+    // Format with enough precision
+    let s = format!("{:.8}", val);
+    // Strip trailing zeros after decimal point, but keep at least one digit after decimal
+    let trimmed = s.trim_end_matches('0');
+    if trimmed.ends_with('.') {
+        format!("{}0", trimmed)
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Parses PICTURE block

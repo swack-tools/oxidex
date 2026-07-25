@@ -1,57 +1,31 @@
+use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
-/// Read u16 from byte slice at offset
+/// Read u16 from byte slice at offset using EndianReader.
 ///
-/// Returns None if offset is out of bounds
+/// Returns None if offset is out of bounds.
+#[inline]
 pub fn read_u16(data: &[u8], offset: usize, byte_order: ByteOrder) -> Option<u16> {
-    if offset + 2 > data.len() {
-        return None;
-    }
-
-    let value = match byte_order {
-        ByteOrder::LittleEndian => u16::from_le_bytes([data[offset], data[offset + 1]]),
-        ByteOrder::BigEndian => u16::from_be_bytes([data[offset], data[offset + 1]]),
-    };
-
-    Some(value)
+    let reader = EndianReader::new(data, byte_order.to_io_byte_order());
+    reader.u16_at(offset)
 }
 
-/// Read i16 from byte slice at offset
+/// Read i16 from byte slice at offset using EndianReader.
+///
+/// Returns None if offset is out of bounds.
+#[inline]
 pub fn read_i16(data: &[u8], offset: usize, byte_order: ByteOrder) -> Option<i16> {
-    if offset + 2 > data.len() {
-        return None;
-    }
-
-    let value = match byte_order {
-        ByteOrder::LittleEndian => i16::from_le_bytes([data[offset], data[offset + 1]]),
-        ByteOrder::BigEndian => i16::from_be_bytes([data[offset], data[offset + 1]]),
-    };
-
-    Some(value)
+    let reader = EndianReader::new(data, byte_order.to_io_byte_order());
+    reader.i16_at(offset)
 }
 
-/// Read u32 from byte slice at offset
+/// Read u32 from byte slice at offset using EndianReader.
+///
+/// Returns None if offset is out of bounds.
+#[inline]
 pub fn read_u32(data: &[u8], offset: usize, byte_order: ByteOrder) -> Option<u32> {
-    if offset + 4 > data.len() {
-        return None;
-    }
-
-    let value = match byte_order {
-        ByteOrder::LittleEndian => u32::from_le_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]),
-        ByteOrder::BigEndian => u32::from_be_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]),
-    };
-
-    Some(value)
+    let reader = EndianReader::new(data, byte_order.to_io_byte_order());
+    reader.u32_at(offset)
 }
 
 /// Read ASCII string from byte slice

@@ -59,8 +59,10 @@
 
 use crate::core::FileReader;
 use crate::error::{ExifToolError, Result};
-use crate::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder, IfdEntries};
-use std::collections::HashSet;
+use crate::io::EndianReader;
+use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntries, parse_ifd};
+use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote;
+use std::collections::{HashMap, HashSet};
 
 /// TIFF header structure
 ///
@@ -81,6 +83,21 @@ const EXIF_IFD_POINTER: u16 = 0x8769;
 const GPS_INFO_IFD_POINTER: u16 = 0x8825;
 const INTEROPERABILITY_IFD_POINTER: u16 = 0xA005;
 const SUB_IFDS: u16 = 0x014A;
+const MAKERNOTE: u16 = 0x927C; // MakerNote tag
+
+// Embedded metadata tag IDs
+const XMP_TAG: u16 = 0x02BC; // Tag 700: XMP metadata (ApplicationNotes)
+const IPTC_TAG: u16 = 0x83BB; // Tag 33723: IPTC-NAA metadata
+const PHOTOSHOP_TAG: u16 = 0x8649; // Tag 34377: Photoshop IRB metadata
+
+// GeoTiff tag IDs
+const GEOTIFF_DIRECTORY_TAG: u16 = 0x87AF; // Tag 34735: GeoKeyDirectoryTag
+const GEOTIFF_DOUBLE_PARAMS_TAG: u16 = 0x87B0; // Tag 34736: GeoDoubleParamsTag
+const GEOTIFF_ASCII_PARAMS_TAG: u16 = 0x87B1; // Tag 34737: GeoAsciiParamsTag
+const MODEL_TRANSFORMATION_TAG: u16 = 0x85D8; // Tag 34264: ModelTransformation
+
+// Tag IDs for camera detection
+const MAKE: u16 = 0x010F; // Camera manufacturer (e.g., "Canon", "Nikon")
 
 /// Parses the 8-byte TIFF file header.
 ///
@@ -132,28 +149,34 @@ pub fn parse_tiff_header(reader: &dyn FileReader) -> Result<TiffHeader> {
             return Err(ExifToolError::parse_error(format!(
                 "Invalid TIFF byte order marker: 0x{:02X}{:02X}",
                 header[0], header[1]
-            )))
+            )));
         }
     };
 
-    // Parse magic number (bytes 2-3) - should be 42
-    let magic = match byte_order {
-        ByteOrder::LittleEndian => u16::from_le_bytes([header[2], header[3]]),
-        ByteOrder::BigEndian => u16::from_be_bytes([header[2], header[3]]),
-    };
+    // Create EndianReader for parsing remaining header fields
+    let endian_reader = EndianReader::new(header, byte_order.to_io_byte_order());
 
-    if magic != 42 {
+    // Parse magic number (bytes 2-3)
+    // Standard TIFF uses 42 (0x002A), but some formats use variants:
+    // - 42 (0x002A): Standard TIFF, Canon CR2, Nikon NEF, Sony ARW, DNG, etc.
+    // - 0x55 (85): Panasonic RW2 format (variant TIFF)
+    // - 0x4F4F ("RO"): Olympus ORF format (uses "RO" marker instead of magic number)
+    let magic = endian_reader
+        .u16_at(2)
+        .ok_or_else(|| ExifToolError::parse_error("Failed to read TIFF magic number"))?;
+
+    // Accept both standard TIFF magic (42) and known variants
+    if magic != 42 && magic != 0x55 {
         return Err(ExifToolError::parse_error(format!(
-            "Invalid TIFF magic number: {} (expected 42)",
+            "Invalid TIFF magic number: {} (expected 42 or 0x55 for RW2)",
             magic
         )));
     }
 
     // Parse first IFD offset (bytes 4-7)
-    let first_ifd_offset = match byte_order {
-        ByteOrder::LittleEndian => u32::from_le_bytes([header[4], header[5], header[6], header[7]]),
-        ByteOrder::BigEndian => u32::from_be_bytes([header[4], header[5], header[6], header[7]]),
-    };
+    let first_ifd_offset = endian_reader
+        .u32_at(4)
+        .ok_or_else(|| ExifToolError::parse_error("Failed to read first IFD offset"))?;
 
     Ok(TiffHeader {
         byte_order,
@@ -179,11 +202,10 @@ fn read_entry_count(
     byte_order: ByteOrder,
 ) -> Result<u16> {
     let data = reader.read(ifd_offset, 2)?;
-    let count = match byte_order {
-        ByteOrder::LittleEndian => u16::from_le_bytes([data[0], data[1]]),
-        ByteOrder::BigEndian => u16::from_be_bytes([data[0], data[1]]),
-    };
-    Ok(count)
+    let endian_reader = EndianReader::new(data, byte_order.to_io_byte_order());
+    endian_reader.u16_at(0).ok_or_else(|| {
+        ExifToolError::parse_error_at("Failed to read IFD entry count", ifd_offset as usize)
+    })
 }
 
 /// Reads the "next IFD offset" field after an IFD's tag entries.
@@ -210,11 +232,13 @@ fn read_next_ifd_offset(
 ) -> Result<u32> {
     let next_offset_location = ifd_offset + 2 + (entry_count as u64 * 12);
     let data = reader.read(next_offset_location, 4)?;
-    let offset = match byte_order {
-        ByteOrder::LittleEndian => u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
-        ByteOrder::BigEndian => u32::from_be_bytes([data[0], data[1], data[2], data[3]]),
-    };
-    Ok(offset)
+    let endian_reader = EndianReader::new(data, byte_order.to_io_byte_order());
+    endian_reader.u32_at(0).ok_or_else(|| {
+        ExifToolError::parse_error_at(
+            "Failed to read next IFD offset",
+            next_offset_location as usize,
+        )
+    })
 }
 
 /// Extracts a u32 value from tag value bytes.
@@ -231,16 +255,41 @@ fn read_next_ifd_offset(
 /// - `Some(u32)`: Extracted offset value
 /// - `None`: Value is too small to contain a u32
 fn extract_u32_from_tag_value(value: &[u8], byte_order: ByteOrder) -> Option<u32> {
-    if value.len() < 4 {
-        return None;
+    let endian_reader = EndianReader::new(value, byte_order.to_io_byte_order());
+    endian_reader.u32_at(0)
+}
+
+/// Extracts the camera Make string from tag values
+///
+/// Searches through tags for the Make tag (0x010F) and extracts it as a string.
+///
+/// # Parameters
+///
+/// - `tags`: Vector of (tag_id, field_type, value_count, raw_value) tuples
+///
+/// # Returns
+///
+/// - `Some(String)`: Camera make if found
+/// - `None`: Make tag not found or invalid data
+fn extract_make_from_tags(tags: &IfdEntries) -> Option<String> {
+    for (tag_id, _field_type, _count, value) in tags {
+        if *tag_id == MAKE {
+            // Make is ASCII string, typically null-terminated
+            let value_bytes = value.as_ref();
+
+            // Find null terminator or use full length
+            let end = value_bytes
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(value_bytes.len());
+
+            // Convert to string, trimming whitespace
+            if let Ok(make) = String::from_utf8(value_bytes[..end].to_vec()) {
+                return Some(make.trim().to_string());
+            }
+        }
     }
-
-    let offset = match byte_order {
-        ByteOrder::LittleEndian => u32::from_le_bytes([value[0], value[1], value[2], value[3]]),
-        ByteOrder::BigEndian => u32::from_be_bytes([value[0], value[1], value[2], value[3]]),
-    };
-
-    Some(offset)
+    None
 }
 
 /// Parses a complete TIFF file and extracts all metadata tags.
@@ -330,7 +379,7 @@ pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<IfdEntries> {
         // Parse this IFD and collect tags
         let tags = parse_ifd(reader, current_offset, byte_order)?;
 
-        // Check for sub-IFD pointers and recursively parse them
+        // Check for sub-IFD pointers and MakerNote, and recursively parse them
         for (tag_id, _field_type, _value_count, value) in &tags {
             match *tag_id {
                 EXIF_IFD_POINTER | GPS_INFO_IFD_POINTER | INTEROPERABILITY_IFD_POINTER => {
@@ -367,25 +416,192 @@ pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<IfdEntries> {
                         let offset_bytes = &value_bytes[i * 4..(i + 1) * 4];
                         if let Some(sub_ifd_offset) =
                             extract_u32_from_tag_value(offset_bytes, byte_order)
+                            && !visited_offsets.contains(&(sub_ifd_offset as u64))
                         {
-                            if !visited_offsets.contains(&(sub_ifd_offset as u64)) {
-                                match parse_ifd(reader, sub_ifd_offset as u64, byte_order) {
-                                    Ok(sub_tags) => {
-                                        all_tags.extend(sub_tags);
-                                        visited_offsets.insert(sub_ifd_offset as u64);
-                                    }
-                                    Err(e) => {
-                                        eprintln!(
-                                            "Warning: Failed to parse sub-IFD at offset {}: {}",
-                                            sub_ifd_offset, e
-                                        );
-                                    }
+                            match parse_ifd(reader, sub_ifd_offset as u64, byte_order) {
+                                Ok(sub_tags) => {
+                                    all_tags.extend(sub_tags);
+                                    visited_offsets.insert(sub_ifd_offset as u64);
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "Warning: Failed to parse sub-IFD at offset {}: {}",
+                                        sub_ifd_offset, e
+                                    );
                                 }
                             }
                         }
                     }
                 }
+                MAKERNOTE => {
+                    // MakerNote handling
+                    // Extract camera make from current tags
+                    if let Some(make) = extract_make_from_tags(&all_tags) {
+                        // Parse MakerNote using dispatcher
+                        let mut makernote_tags = HashMap::new();
+                        let makernote_data = value.as_ref();
+
+                        match dispatch_makernote(
+                            &make,
+                            makernote_data,
+                            byte_order,
+                            &mut makernote_tags,
+                        ) {
+                            Ok(()) => {
+                                // Convert HashMap<String, String> to IfdEntries format
+                                // Tag ID 0x927C, Type 7 (UNDEFINED), count = data length
+                                for (key, val) in makernote_tags {
+                                    // Create synthetic tag entries for MakerNote tags
+                                    // We use a synthetic tag ID and store the key:value as a string
+                                    let synthetic_value = format!("{}: {}", key, val);
+                                    all_tags.push((
+                                        MAKERNOTE, // Use MakerNote tag ID
+                                        7,         // Type UNDEFINED
+                                        synthetic_value.len() as u32,
+                                        std::borrow::Cow::Owned(synthetic_value.into_bytes()),
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: Failed to parse MakerNote for {}: {}", make, e);
+                            }
+                        }
+                    }
+                }
+                XMP_TAG => {
+                    // Tag 700: XMP metadata
+                    // Extract XMP metadata using the XMP parser
+                    use crate::parsers::xmp::parse_xmp;
+
+                    let xmp_data = value.as_ref();
+                    match parse_xmp(xmp_data) {
+                        Ok(xmp_tags) => {
+                            // Convert XMP tags to IfdEntries format
+                            // Store as synthetic entries with XMP_TAG ID
+                            for (key, val) in xmp_tags {
+                                let synthetic_value = format!("{}: {}", key, val);
+                                all_tags.push((
+                                    XMP_TAG,
+                                    7, // Type UNDEFINED
+                                    synthetic_value.len() as u32,
+                                    std::borrow::Cow::Owned(synthetic_value.into_bytes()),
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to parse XMP metadata from tag 700: {}", e);
+                        }
+                    }
+                }
+                IPTC_TAG => {
+                    // Tag 33723: IPTC-NAA metadata
+                    // Extract IPTC metadata using the IPTC parser
+                    use crate::parsers::jpeg::iptc_parser::dataset_to_tag_name;
+                    use crate::parsers::jpeg::iptc_parser::decode_iptc_string;
+                    use crate::parsers::jpeg::iptc_parser::parse_all_iptc_records;
+
+                    let iptc_data = value.as_ref();
+                    match parse_all_iptc_records(iptc_data) {
+                        Ok(records) => {
+                            // Convert IPTC records to IfdEntries format
+                            for record in records {
+                                let tag_name = dataset_to_tag_name(
+                                    record.record_number,
+                                    record.dataset_number,
+                                );
+                                let tag_value = decode_iptc_string(&record.data);
+                                let synthetic_value = format!("{}: {}", tag_name, tag_value);
+                                all_tags.push((
+                                    IPTC_TAG,
+                                    7, // Type UNDEFINED
+                                    synthetic_value.len() as u32,
+                                    std::borrow::Cow::Owned(synthetic_value.into_bytes()),
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: Failed to parse IPTC metadata from tag 33723: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+                PHOTOSHOP_TAG => {
+                    // Tag 34377: Photoshop IRB metadata
+                    // Note: Photoshop IRB is complex and may contain IPTC and other data
+                    // For now, we'll log that we found it but skip detailed parsing
+                    // A full implementation would parse Image Resource Blocks (8BIM)
+                    eprintln!(
+                        "Info: Found Photoshop IRB metadata in tag 34377 ({} bytes). \
+                        Detailed parsing not yet implemented.",
+                        value.as_ref().len()
+                    );
+                }
                 _ => {}
+            }
+        }
+
+        // Process GeoTiff tags if present
+        // GeoTiff uses three tags together: directory, double params, and ASCII params
+        let geotiff_directory: Option<&[u8]> = tags
+            .iter()
+            .find(|(id, _, _, _)| *id == GEOTIFF_DIRECTORY_TAG)
+            .map(|(_, _, _, v)| v.as_ref());
+
+        let geotiff_double_params: Option<&[u8]> = tags
+            .iter()
+            .find(|(id, _, _, _)| *id == GEOTIFF_DOUBLE_PARAMS_TAG)
+            .map(|(_, _, _, v)| v.as_ref());
+
+        let geotiff_ascii_params: Option<&str> = tags
+            .iter()
+            .find(|(id, _, _, _)| *id == GEOTIFF_ASCII_PARAMS_TAG)
+            .and_then(|(_, _, _, v)| std::str::from_utf8(v.as_ref()).ok());
+
+        let model_transformation: Option<&[u8]> = tags
+            .iter()
+            .find(|(id, _, _, _)| *id == MODEL_TRANSFORMATION_TAG)
+            .map(|(_, _, _, v)| v.as_ref());
+
+        if let Some(directory) = geotiff_directory {
+            use crate::parsers::tiff::geotiff_parser::parse_geotiff_keys;
+
+            let is_little_endian = byte_order == ByteOrder::LittleEndian;
+            let geotiff_tags = parse_geotiff_keys(
+                directory,
+                geotiff_double_params,
+                geotiff_ascii_params,
+                is_little_endian,
+            );
+
+            // Convert GeoTiff tags to IfdEntries format
+            for (key, val) in geotiff_tags {
+                let synthetic_value = format!("{}: {}", key, val);
+                all_tags.push((
+                    GEOTIFF_DIRECTORY_TAG,
+                    7, // Type UNDEFINED
+                    synthetic_value.len() as u32,
+                    std::borrow::Cow::Owned(synthetic_value.into_bytes()),
+                ));
+            }
+        }
+
+        // Process ModelTransformation if present
+        if let Some(transform_data) = model_transformation {
+            use crate::parsers::tiff::geotiff_parser::parse_model_transformation;
+
+            let is_little_endian = byte_order == ByteOrder::LittleEndian;
+            if let Some(transform_value) =
+                parse_model_transformation(transform_data, is_little_endian)
+            {
+                let synthetic_value = format!("EXIF:ModelTransform: {}", transform_value);
+                all_tags.push((
+                    MODEL_TRANSFORMATION_TAG,
+                    7, // Type UNDEFINED
+                    synthetic_value.len() as u32,
+                    std::borrow::Cow::Owned(synthetic_value.into_bytes()),
+                ));
             }
         }
 
@@ -686,6 +902,29 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_tiff_header_rw2_magic() {
+        // Panasonic RW2 uses magic number 0x55 (85) instead of 42
+        let mut data = vec![0u8; 8];
+        data[0] = 0x49;
+        data[1] = 0x49; // Little-endian
+        data[2] = 0x55; // Magic: 85 (0x55) - RW2 variant
+        data[3] = 0x00;
+        // First IFD offset: 8
+        data[4] = 0x08;
+        data[5] = 0x00;
+        data[6] = 0x00;
+        data[7] = 0x00;
+
+        let reader = TestReader::new(data);
+        let result = parse_tiff_header(&reader);
+
+        assert!(result.is_ok(), "RW2 magic (0x55) should be accepted");
+        let header = result.unwrap();
+        assert_eq!(header.byte_order, ByteOrder::LittleEndian);
+        assert_eq!(header.first_ifd_offset, 8);
+    }
+
+    #[test]
     fn test_parse_tiff_file_single_ifd() {
         let data = create_minimal_tiff_le();
         let reader = TestReader::new(data);
@@ -778,5 +1017,31 @@ mod tests {
         let value = vec![0x12, 0x34];
         let result = extract_u32_from_tag_value(&value, ByteOrder::LittleEndian);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_make_from_tags() {
+        use std::borrow::Cow;
+
+        // Create tags with Make tag
+        let tags = vec![
+            (0x010F, 2, 6, Cow::Owned(b"Canon\0".to_vec())), // Make tag
+            (0x0110, 2, 6, Cow::Owned(b"EOS 5D".to_vec())),  // Model tag
+        ];
+
+        let make = extract_make_from_tags(&tags);
+        assert_eq!(make, Some("Canon".to_string()));
+    }
+
+    #[test]
+    fn test_extract_make_from_tags_not_found() {
+        use std::borrow::Cow;
+
+        let tags = vec![
+            (0x0110, 2, 6, Cow::Owned(b"EOS 5D".to_vec())), // Model but no Make
+        ];
+
+        let make = extract_make_from_tags(&tags);
+        assert_eq!(make, None);
     }
 }

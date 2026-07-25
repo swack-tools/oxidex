@@ -99,19 +99,27 @@ fn print_help() {
     println!("OPTIONS:");
     println!("    -h, --help              Print help information");
     println!("    -V, --version           Print version information");
-    println!("    -i, --input PATH        Input directory containing test images [default: tests/fixtures]");
-    println!("    -o, --output PATH       Output directory for baseline files [default: tests/baselines]");
+    println!(
+        "    -i, --input PATH        Input directory containing test images [default: tests/fixtures]"
+    );
+    println!(
+        "    -o, --output PATH       Output directory for baseline files [default: tests/baselines]"
+    );
     println!("    -u, --update            Update existing baselines (uses default paths)");
     println!();
     println!("EXAMPLES:");
     println!("    # Generate initial baseline");
-    println!("    cargo run --bin generate_baseline -- --input tests/fixtures/ --output tests/baselines/");
+    println!(
+        "    cargo run --bin generate_baseline -- --input tests/fixtures/ --output tests/baselines/"
+    );
     println!();
     println!("    # Update existing baseline");
     println!("    cargo run --bin generate_baseline -- --update");
     println!();
     println!("    # Generate baseline for specific format");
-    println!("    cargo run --bin generate_baseline -- --input tests/fixtures/jpeg --output tests/baselines/jpeg");
+    println!(
+        "    cargo run --bin generate_baseline -- --input tests/fixtures/jpeg --output tests/baselines/jpeg"
+    );
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -343,10 +351,10 @@ fn find_test_images(dir: &Path) -> Result<Vec<PathBuf>, String> {
                 let path = entry.path();
                 if path.is_dir() {
                     visit_dirs(&path, images, extensions)?;
-                } else if let Some(ext) = path.extension() {
-                    if extensions.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str()) {
-                        images.push(path);
-                    }
+                } else if let Some(ext) = path.extension()
+                    && extensions.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str())
+                {
+                    images.push(path);
                 }
             }
         }

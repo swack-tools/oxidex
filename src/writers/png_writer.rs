@@ -5,14 +5,14 @@
 //! The writer preserves image data (IDAT chunks) unchanged while updating
 //! metadata chunks (tEXt, iTXt, eXIf) based on the modified MetadataMap.
 
-use crate::core::metadata_map::MetadataMap;
 use crate::core::FileReader;
+use crate::core::metadata_map::MetadataMap;
 use crate::error::{ExifToolError, Result};
-use crate::parsers::png::chunk_parser::{parse_chunk, PngChunk, PNG_SIGNATURE};
+use crate::parsers::png::chunk_parser::{PNG_SIGNATURE, PngChunk, parse_chunk};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::tiff_writer::serialize_ifd;
-use crc::{Crc, CRC_32_ISO_HDLC};
+use crc::{CRC_32_ISO_HDLC, Crc};
 use std::path::Path;
 
 /// CRC-32 instance for PNG chunk validation
@@ -87,6 +87,34 @@ fn serialize_text_chunk(keyword: &str, text: &str) -> Vec<u8> {
     data.extend_from_slice(keyword.as_bytes());
     data.push(0); // Null separator
     data.extend_from_slice(text.as_bytes());
+    data
+}
+
+/// Serializes a zTXt chunk (compressed textual data) from keyword and text.
+///
+/// zTXt chunk format: `keyword\0compression_method<zlib-deflated text>`
+/// - Keyword: Latin-1 string (1-79 bytes)
+/// - Compression method: 1 byte (0 = zlib/deflate)
+fn serialize_ztxt_chunk(keyword: &str, text: &str) -> Vec<u8> {
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use std::io::Write;
+
+    let mut data = Vec::new();
+    data.extend_from_slice(keyword.as_bytes());
+    data.push(0); // Null separator
+    data.push(0); // Compression method = 0 (deflate)
+
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    // Writing to an in-memory encoder is infallible in practice.
+    let compressed = encoder
+        .write_all(text.as_bytes())
+        .and_then(|_| encoder.finish());
+    match compressed {
+        Ok(bytes) => data.extend_from_slice(&bytes),
+        // Fall back to storing the value uncompressed rather than losing it.
+        Err(_) => return serialize_text_chunk(keyword, text),
+    }
     data
 }
 
@@ -281,21 +309,33 @@ pub fn write_png_metadata(
 
     // Process tEXt chunks
     for (tag_name, tag_value) in modified_metadata.iter() {
-        if let Some(keyword) = tag_name.strip_prefix("PNG:tEXt:") {
-            if let Some(text) = tag_value.as_string() {
-                let data = serialize_text_chunk(keyword, text);
-                metadata_chunks.push((b"tEXt", data));
-            }
+        if let Some(keyword) = tag_name.strip_prefix("PNG:tEXt:")
+            && let Some(text) = tag_value.as_string()
+        {
+            let data = serialize_text_chunk(keyword, text);
+            metadata_chunks.push((b"tEXt", data));
         }
     }
 
     // Process iTXt chunks
     for (tag_name, tag_value) in modified_metadata.iter() {
-        if let Some(keyword) = tag_name.strip_prefix("PNG:iTXt:") {
-            if let Some(text) = tag_value.as_string() {
-                let data = serialize_itxt_chunk(keyword, text);
-                metadata_chunks.push((b"iTXt", data));
-            }
+        if let Some(keyword) = tag_name.strip_prefix("PNG:iTXt:")
+            && let Some(text) = tag_value.as_string()
+        {
+            let data = serialize_itxt_chunk(keyword, text);
+            metadata_chunks.push((b"iTXt", data));
+        }
+    }
+
+    // Process zTXt chunks. The reader surfaces compressed text as PNG:zTXt:*,
+    // so re-serialize it here or a read->write round trip would silently drop
+    // every zTXt chunk.
+    for (tag_name, tag_value) in modified_metadata.iter() {
+        if let Some(keyword) = tag_name.strip_prefix("PNG:zTXt:")
+            && let Some(text) = tag_value.as_string()
+        {
+            let data = serialize_ztxt_chunk(keyword, text);
+            metadata_chunks.push((b"zTXt", data));
         }
     }
 

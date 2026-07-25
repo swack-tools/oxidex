@@ -14,6 +14,10 @@
 //! - EXIF sub-IFD extraction
 //! - Error handling (invalid headers, truncated files)
 
+#[path = "../common/mod.rs"]
+mod common;
+
+use common::TestReader;
 use oxidex::io::buffered_reader::BufferedReader;
 use oxidex::parsers::tiff::file_parser::{parse_tiff_file, parse_tiff_header};
 use oxidex::parsers::tiff::ifd_parser::ByteOrder;
@@ -348,4 +352,218 @@ fn test_parser_handles_metadata_only() {
     // StripOffsets and TileOffsets tags (0x0111, 0x0144) should NOT cause parsing to fail
     // if they're present - we just extract them as metadata, not the pixel data they point to
     println!("Parser successfully extracted {} metadata tags", tags.len());
+}
+
+#[test]
+fn test_forensic_timezone_and_subsecond_tags() {
+    // Test that the parser correctly extracts forensic timeline tags:
+    // - OffsetTime (0x9010), OffsetTimeOriginal (0x9011), OffsetTimeDigitized (0x9012)
+    // - SubSecTime (0x9290), SubSecTimeOriginal (0x9291), SubSecTimeDigitized (0x9292)
+    //
+    // These tags are critical for digital forensics timeline reconstruction as they provide:
+    // 1. Timezone information for datetime tags
+    // 2. Subsecond precision for timestamps
+
+    use oxidex::parsers::tiff::ifd_parser::parse_ifd;
+
+    // Build test IFD with all 6 forensic tags
+    let mut data = vec![0u8; 500];
+
+    // Entry count: 6 tags (little-endian)
+    data[0] = 0x06;
+    data[1] = 0x00;
+
+    // Tag 1: OffsetTime (0x9010) - ASCII string "+05:30"
+    data[2] = 0x10; // Tag ID low byte
+    data[3] = 0x90; // Tag ID high byte
+    data[4] = 0x02; // Type: ASCII
+    data[5] = 0x00;
+    data[6] = 0x07; // Count: 7 (includes null terminator)
+    data[7] = 0x00;
+    data[8] = 0x00;
+    data[9] = 0x00;
+    data[10] = 0x64; // Offset: 100 (points to "+05:30\0")
+    data[11] = 0x00;
+    data[12] = 0x00;
+    data[13] = 0x00;
+
+    // Tag 2: OffsetTimeOriginal (0x9011) - ASCII string "-08:00"
+    data[14] = 0x11;
+    data[15] = 0x90;
+    data[16] = 0x02; // ASCII
+    data[17] = 0x00;
+    data[18] = 0x07; // Count: 7
+    data[19] = 0x00;
+    data[20] = 0x00;
+    data[21] = 0x00;
+    data[22] = 0x6B; // Offset: 107 (points to "-08:00\0")
+    data[23] = 0x00;
+    data[24] = 0x00;
+    data[25] = 0x00;
+
+    // Tag 3: OffsetTimeDigitized (0x9012) - ASCII string "Z" (UTC)
+    data[26] = 0x12;
+    data[27] = 0x90;
+    data[28] = 0x02; // ASCII
+    data[29] = 0x00;
+    data[30] = 0x02; // Count: 2 ("Z\0")
+    data[31] = 0x00;
+    data[32] = 0x00;
+    data[33] = 0x00;
+    data[34] = b'Z'; // Inline value (fits in 4 bytes)
+    data[35] = 0x00;
+    data[36] = 0x00;
+    data[37] = 0x00;
+
+    // Tag 4: SubSecTime (0x9290) - ASCII string "123"
+    data[38] = 0x90;
+    data[39] = 0x92;
+    data[40] = 0x02; // ASCII
+    data[41] = 0x00;
+    data[42] = 0x04; // Count: 4 ("123\0")
+    data[43] = 0x00;
+    data[44] = 0x00;
+    data[45] = 0x00;
+    data[46] = b'1'; // Inline value
+    data[47] = b'2';
+    data[48] = b'3';
+    data[49] = 0x00;
+
+    // Tag 5: SubSecTimeOriginal (0x9291) - ASCII string "456789"
+    data[50] = 0x91;
+    data[51] = 0x92;
+    data[52] = 0x02; // ASCII
+    data[53] = 0x00;
+    data[54] = 0x07; // Count: 7 ("456789\0")
+    data[55] = 0x00;
+    data[56] = 0x00;
+    data[57] = 0x00;
+    data[58] = 0x72; // Offset: 114 (points to "456789\0")
+    data[59] = 0x00;
+    data[60] = 0x00;
+    data[61] = 0x00;
+
+    // Tag 6: SubSecTimeDigitized (0x9292) - ASCII string "000"
+    data[62] = 0x92;
+    data[63] = 0x92;
+    data[64] = 0x02; // ASCII
+    data[65] = 0x00;
+    data[66] = 0x04; // Count: 4 ("000\0")
+    data[67] = 0x00;
+    data[68] = 0x00;
+    data[69] = 0x00;
+    data[70] = b'0'; // Inline value
+    data[71] = b'0';
+    data[72] = b'0';
+    data[73] = 0x00;
+
+    // Next IFD offset: 0 (no more IFDs)
+    data[74] = 0x00;
+    data[75] = 0x00;
+    data[76] = 0x00;
+    data[77] = 0x00;
+
+    // Value data at offsets
+    data[100..107].copy_from_slice(b"+05:30\0");
+    data[107..114].copy_from_slice(b"-08:00\0");
+    data[114..121].copy_from_slice(b"456789\0");
+
+    let reader = TestReader::new(data);
+    let tags = parse_ifd(&reader, 0, ByteOrder::LittleEndian)
+        .expect("Failed to parse IFD with forensic tags");
+
+    // Verify all 6 tags are extracted
+    assert_eq!(tags.len(), 6, "Should extract all 6 forensic tags");
+
+    // Verify OffsetTime (0x9010)
+    let offset_time = tags
+        .iter()
+        .find(|(id, _, _, _)| *id == 0x9010)
+        .expect("OffsetTime tag should be present");
+    let offset_time_str = String::from_utf8_lossy(&offset_time.3);
+    assert!(
+        offset_time_str.contains("+05:30"),
+        "OffsetTime should be '+05:30'"
+    );
+
+    // Verify OffsetTimeOriginal (0x9011)
+    let offset_time_orig = tags
+        .iter()
+        .find(|(id, _, _, _)| *id == 0x9011)
+        .expect("OffsetTimeOriginal tag should be present");
+    let offset_time_orig_str = String::from_utf8_lossy(&offset_time_orig.3);
+    assert!(
+        offset_time_orig_str.contains("-08:00"),
+        "OffsetTimeOriginal should be '-08:00'"
+    );
+
+    // Verify OffsetTimeDigitized (0x9012)
+    let offset_time_dig = tags
+        .iter()
+        .find(|(id, _, _, _)| *id == 0x9012)
+        .expect("OffsetTimeDigitized tag should be present");
+    let offset_time_dig_str = String::from_utf8_lossy(&offset_time_dig.3);
+    assert!(
+        offset_time_dig_str.contains("Z"),
+        "OffsetTimeDigitized should be 'Z'"
+    );
+
+    // Verify SubSecTime (0x9290)
+    let subsec_time = tags
+        .iter()
+        .find(|(id, _, _, _)| *id == 0x9290)
+        .expect("SubSecTime tag should be present");
+    let subsec_time_str = String::from_utf8_lossy(&subsec_time.3);
+    assert!(
+        subsec_time_str.contains("123"),
+        "SubSecTime should be '123'"
+    );
+
+    // Verify SubSecTimeOriginal (0x9291)
+    let subsec_time_orig = tags
+        .iter()
+        .find(|(id, _, _, _)| *id == 0x9291)
+        .expect("SubSecTimeOriginal tag should be present");
+    let subsec_time_orig_str = String::from_utf8_lossy(&subsec_time_orig.3);
+    assert!(
+        subsec_time_orig_str.contains("456789"),
+        "SubSecTimeOriginal should be '456789'"
+    );
+
+    // Verify SubSecTimeDigitized (0x9292)
+    let subsec_time_dig = tags
+        .iter()
+        .find(|(id, _, _, _)| *id == 0x9292)
+        .expect("SubSecTimeDigitized tag should be present");
+    let subsec_time_dig_str = String::from_utf8_lossy(&subsec_time_dig.3);
+    assert!(
+        subsec_time_dig_str.contains("000"),
+        "SubSecTimeDigitized should be '000'"
+    );
+
+    println!("Successfully parsed all 6 forensic timeline tags:");
+    println!(
+        "  OffsetTime (0x9010): {}",
+        offset_time_str.trim_end_matches('\0')
+    );
+    println!(
+        "  OffsetTimeOriginal (0x9011): {}",
+        offset_time_orig_str.trim_end_matches('\0')
+    );
+    println!(
+        "  OffsetTimeDigitized (0x9012): {}",
+        offset_time_dig_str.trim_end_matches('\0')
+    );
+    println!(
+        "  SubSecTime (0x9290): {}",
+        subsec_time_str.trim_end_matches('\0')
+    );
+    println!(
+        "  SubSecTimeOriginal (0x9291): {}",
+        subsec_time_orig_str.trim_end_matches('\0')
+    );
+    println!(
+        "  SubSecTimeDigitized (0x9292): {}",
+        subsec_time_dig_str.trim_end_matches('\0')
+    );
 }

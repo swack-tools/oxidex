@@ -26,7 +26,7 @@
 
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
-use crate::parsers::xmp::parse_xmp;
+use crate::parsers::xmp::{parse_xmp, parse_xmp_history};
 
 /// Searches for and extracts XMP metadata packets from a PDF file.
 ///
@@ -67,9 +67,19 @@ pub fn extract_xmp_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             let xmp_tags = parse_xmp(xmp_xml)
                 .map_err(|e| ExifToolError::parse_error(format!("XMP parsing failed: {}", e)))?;
 
+            // Parse XMP history for forensic metadata
+            let xml_str = std::str::from_utf8(xmp_xml).unwrap_or("");
+            let history_tags = parse_xmp_history(xml_str).unwrap_or_default();
+
             // Convert to MetadataMap
-            let mut metadata = MetadataMap::with_capacity(xmp_tags.len());
+            let total_tags = xmp_tags.len() + history_tags.len();
+            let mut metadata = MetadataMap::with_capacity(total_tags);
+
             for (key, value) in xmp_tags {
+                metadata.insert(key, crate::core::TagValue::new_string(value));
+            }
+
+            for (key, value) in history_tags {
                 metadata.insert(key, crate::core::TagValue::new_string(value));
             }
 

@@ -19,227 +19,26 @@
 //! metadata about computational photography features available on devices
 //! using Qualcomm chipsets. These tags are manufacturer-agnostic but specific
 //! to Qualcomm's camera pipeline.
+//!
+//! ## Code Organization
+//! This parser uses the TagRegistry pattern to eliminate repetitive match arms.
+//! All tag definitions and decoders are centralized in the registries::qualcomm module,
+//! reducing code duplication and improving maintainability.
 
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use std::collections::HashMap;
-use std::sync::LazyLock;
 
-use super::shared::array_extractors::{extract_i16_array, extract_i16_value, extract_u32_value};
-use super::shared::generic_decoders::{SimpleValueDecoder, ON_OFF};
-use super::shared::ifd_parser_base::{parse_ifd_entries, IfdParserConfig};
-use super::shared::tag_registry::TagRegistry;
+use super::registries::qualcomm::{QUALCOMM_ISP_VERSION, qualcomm_registry};
 use super::shared::MakerNoteParser;
-
-// Qualcomm MakerNote Tag IDs
-// Note: Qualcomm's tag structure is proprietary and reverse-engineered
-const QUALCOMM_CLEAR_SIGHT: u16 = 0x0001; // Clear Sight fusion status
-const QUALCOMM_CLEAR_SIGHT_MODE: u16 = 0x0002; // Fusion mode variant
-const QUALCOMM_CHROMA_FLASH: u16 = 0x0004; // Chroma Flash status
-const QUALCOMM_CHROMA_FLASH_FRAMES: u16 = 0x0005; // Number of frames used
-const QUALCOMM_OPTIZOOM: u16 = 0x0007; // OptiZoom enhancement
-const QUALCOMM_ZOOM_LEVEL: u16 = 0x0008; // Digital zoom level (10x = 100)
-const QUALCOMM_HDR_MODE: u16 = 0x000A; // HDR processing mode
-const QUALCOMM_MULTI_FRAME_NR: u16 = 0x000C; // Multi-frame noise reduction
-const QUALCOMM_SCENE_DETECTION: u16 = 0x000E; // AI scene detection
-const QUALCOMM_BOKEH_MODE: u16 = 0x0010; // Bokeh depth processing
-const QUALCOMM_BOKEH_LEVEL: u16 = 0x0011; // Bokeh blur amount
-const QUALCOMM_LOW_LIGHT_MODE: u16 = 0x0013; // Low-light enhancement
-const QUALCOMM_NIGHT_MODE: u16 = 0x0015; // Night mode processing
-const QUALCOMM_PHASE_DETECT_AF: u16 = 0x0017; // Phase detection AF status
-const QUALCOMM_ISP_VERSION: u16 = 0x0019; // Snapdragon ISP version
-const QUALCOMM_FRAME_MERGE_COUNT: u16 = 0x001B; // Merged frame count
+use super::shared::array_extractors::{extract_i16_value, extract_u32_value};
+use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
 
 // Qualcomm signature for validation
 const QUALCOMM_SIGNATURE: &[u8] = b"Qualcomm";
-
-// ============================================================================
-// Decoders - Using Shared Utilities
-// ============================================================================
-
-/// Decoder for Clear Sight fusion status
-/// Maps 0=Off, 1=On, 2=Auto
-const CLEAR_SIGHT_DECODER: SimpleValueDecoder<i16> =
-    SimpleValueDecoder::new(&[(0, "Off"), (1, "On"), (2, "Auto")]);
-
-/// Decoder for Clear Sight fusion mode variant
-/// Different types of camera fusion modes available
-const CLEAR_SIGHT_MODE_DECODER: SimpleValueDecoder<i16> = SimpleValueDecoder::new(&[
-    (0, "None"),
-    (1, "Monochrome + RGB Fusion"),
-    (2, "Wide + Telephoto Fusion"),
-    (3, "Multi-Camera Fusion"),
-]);
-
-/// Decoder for Chroma Flash multi-frame blending status
-/// Flash fusion techniques for improved lighting
-const CHROMA_FLASH_DECODER: SimpleValueDecoder<i16> = SimpleValueDecoder::new(&[
-    (0, "Off"),
-    (1, "Flash + No Flash Blend"),
-    (2, "Multi-Flash Blend"),
-]);
-
-/// Decoder for HDR processing mode
-/// Various HDR capture and processing techniques
-const HDR_MODE_DECODER: SimpleValueDecoder<i16> = SimpleValueDecoder::new(&[
-    (0, "Off"),
-    (1, "HDR"),
-    (2, "Auto HDR"),
-    (3, "HDR+"),
-    (4, "Staggered HDR"),
-]);
-
-/// Decoder for AI scene detection results
-/// Automatically detected scene types for optimal processing
-const SCENE_TYPE_DECODER: SimpleValueDecoder<i16> = SimpleValueDecoder::new(&[
-    (0, "None"),
-    (1, "Portrait"),
-    (2, "Landscape"),
-    (3, "Food"),
-    (4, "Night"),
-    (5, "Sunset"),
-    (6, "Beach"),
-    (7, "Snow"),
-    (8, "Flower"),
-    (9, "Pet"),
-    (10, "Document"),
-]);
-
-/// Decoder for OptiZoom enhancement level
-/// Digital zoom quality enhancement levels
-const OPTIZOOM_DECODER: SimpleValueDecoder<i16> = SimpleValueDecoder::new(&[
-    (0, "Off"),
-    (1, "Low"),
-    (2, "Medium"),
-    (3, "High"),
-    (4, "Maximum"),
-]);
-
-/// Decodes zoom level from encoded value
-///
-/// # Arguments
-/// * `value` - Zoom level (10 = 1.0x, 100 = 10.0x)
-///
-/// # Returns
-/// Human-readable zoom level with 'x' suffix
-///
-/// # Encoding
-/// The zoom level is encoded as value/10, so:
-/// - 10 = 1.0x
-/// - 25 = 2.5x
-/// - 100 = 10.0x
-fn decode_zoom_level(value: i16) -> String {
-    if value <= 0 {
-        return "1.0x".to_string();
-    }
-    let zoom = value as f32 / 10.0;
-    format!("{:.1}x", zoom)
-}
-
-/// Decodes Phase Detect AF status
-///
-/// # Arguments
-/// * `value` - Raw AF status value (0 = Inactive, >0 = Active)
-///
-/// # Returns
-/// Human-readable AF status string
-fn decode_phase_detect_af(value: i16) -> String {
-    if value > 0 {
-        "Active".to_string()
-    } else {
-        "Inactive".to_string()
-    }
-}
-
-/// Decodes ISP version from u32 value
-///
-/// # Arguments
-/// * `value` - ISP version encoded as u32 (upper 16 bits = major, lower 16 bits = minor)
-///
-/// # Returns
-/// Version string in "major.minor" format
-fn decode_isp_version(value: u32) -> String {
-    format!("{}.{}", value >> 16, value & 0xFFFF)
-}
-
-/// Normalizes non-zero values to 1 for binary ON_OFF decoder
-///
-/// # Arguments
-/// * `value` - Raw value (0 or non-zero)
-///
-/// # Returns
-/// Normalized value (0 or 1) suitable for ON_OFF decoder
-fn normalize_to_binary(value: i16) -> String {
-    let normalized = if value > 0 { 1 } else { 0 };
-    ON_OFF.decode(normalized)
-}
-
-// ============================================================================
-// Tag Registry - Centralized Tag Definitions
-// ============================================================================
-
-/// Static registry containing all Qualcomm MakerNote tag definitions
-///
-/// This registry eliminates the need for large match statements by providing:
-/// - Centralized tag name mapping
-/// - Automatic value decoding based on tag type
-/// - O(1) lookup performance
-///
-/// # Architecture
-/// The registry is initialized once at runtime using LazyLock and contains
-/// all tag definitions with their associated decoders. This approach:
-/// - Reduces code duplication from 153% to near 0%
-/// - Makes tag definitions easier to maintain
-/// - Provides compile-time guarantees for decoder types
-static QUALCOMM_TAGS: LazyLock<TagRegistry> = LazyLock::new(|| {
-    TagRegistry::with_capacity(15)
-        // Clear Sight dual-camera fusion tags
-        .register_simple_i16(QUALCOMM_CLEAR_SIGHT, "ClearSight", &CLEAR_SIGHT_DECODER)
-        .register_simple_i16(
-            QUALCOMM_CLEAR_SIGHT_MODE,
-            "ClearSightMode",
-            &CLEAR_SIGHT_MODE_DECODER,
-        )
-        // Chroma Flash multi-frame blending tags
-        .register_simple_i16(QUALCOMM_CHROMA_FLASH, "ChromaFlash", &CHROMA_FLASH_DECODER)
-        .register_raw(QUALCOMM_CHROMA_FLASH_FRAMES, "ChromaFlashFrames")
-        // OptiZoom digital enhancement tags
-        .register_simple_i16(QUALCOMM_OPTIZOOM, "OptiZoom", &OPTIZOOM_DECODER)
-        .register_i16(QUALCOMM_ZOOM_LEVEL, "ZoomLevel", decode_zoom_level)
-        // HDR processing tags
-        .register_simple_i16(QUALCOMM_HDR_MODE, "HDRMode", &HDR_MODE_DECODER)
-        // Multi-frame noise reduction (binary On/Off)
-        .register_i16(
-            QUALCOMM_MULTI_FRAME_NR,
-            "MultiFrameNoiseReduction",
-            normalize_to_binary,
-        )
-        // AI scene detection tag
-        .register_simple_i16(
-            QUALCOMM_SCENE_DETECTION,
-            "SceneDetection",
-            &SCENE_TYPE_DECODER,
-        )
-        // Bokeh depth processing tags
-        .register_i16(QUALCOMM_BOKEH_MODE, "BokehMode", normalize_to_binary)
-        .register_raw(QUALCOMM_BOKEH_LEVEL, "BokehLevel")
-        // Low-light enhancement (binary On/Off)
-        .register_i16(QUALCOMM_LOW_LIGHT_MODE, "LowLightMode", normalize_to_binary)
-        // Night mode processing (binary On/Off)
-        .register_i16(QUALCOMM_NIGHT_MODE, "NightMode", normalize_to_binary)
-        // Phase detection autofocus tag
-        .register_i16(
-            QUALCOMM_PHASE_DETECT_AF,
-            "PhaseDetectAF",
-            decode_phase_detect_af,
-        )
-        // ISP version tag (u32 decoder)
-        .register_u32(QUALCOMM_ISP_VERSION, "ISPVersion", decode_isp_version)
-        // Frame merge count (raw numeric value)
-        .register_raw(QUALCOMM_FRAME_MERGE_COUNT, "FrameMergeCount")
-});
 
 /// Qualcomm MakerNote parser implementation
 pub struct QualcommParser;
@@ -258,6 +57,10 @@ impl QualcommParser {
 
     /// Parse a single IFD entry and extract tag value using the registry
     ///
+    /// This method uses the TagRegistry pattern to eliminate repetitive match arms.
+    /// All tag definitions and decoders are accessed through the centralized registry,
+    /// reducing code duplication and improving maintainability.
+    ///
     /// # Arguments
     /// * `entry` - IFD entry to parse
     /// * `data` - Full MakerNote data buffer
@@ -265,15 +68,8 @@ impl QualcommParser {
     /// * `tags` - HashMap to insert extracted tags into
     ///
     /// # Implementation Strategy
-    /// Uses the TagRegistry pattern to eliminate code duplication:
-    /// - Single lookup determines if tag is known
-    /// - Registry automatically selects correct decoder based on tag type
-    /// - Handles special cases (i16, u32) through type-specific decoders
-    /// - Unknown tags are silently skipped for forward compatibility
-    ///
-    /// # Performance
-    /// - O(1) tag lookup via HashMap in registry
-    /// - Zero runtime overhead for decoder selection (compile-time dispatch)
+    /// - Special handling for ISP version (u32 type)
+    /// - All other tags use i16 values with registry-based decoding
     fn parse_entry(
         &self,
         entry: &IfdEntry,
@@ -282,21 +78,22 @@ impl QualcommParser {
         tags: &mut HashMap<String, String>,
     ) {
         let tag_id = entry.tag_id;
+        let registry = qualcomm_registry();
 
-        // Check if this tag is registered in our tag registry
-        if !QUALCOMM_TAGS.has_tag(tag_id) {
+        // Check if this tag is registered
+        if !registry.has_tag(tag_id) {
             // Unknown tag - skip silently for forward compatibility
             return;
         }
 
-        // Get the tag name from registry (guaranteed to exist due to has_tag check)
-        let tag_name = QUALCOMM_TAGS.get_tag_name(tag_id).unwrap();
+        // Get the tag name from registry
+        let tag_name = registry.get_tag_name(tag_id).unwrap();
         let full_tag_name = format!("Qualcomm:{}", tag_name);
 
         // Special handling for ISP version which uses u32
         if tag_id == QUALCOMM_ISP_VERSION {
             if let Some(value) = extract_u32_value(entry, data, byte_order) {
-                let decoded = QUALCOMM_TAGS.decode_u32(tag_id, value);
+                let decoded = registry.decode_u32(tag_id, value);
                 tags.insert(full_tag_name, decoded);
             }
             return;
@@ -304,7 +101,7 @@ impl QualcommParser {
 
         // All other tags use i16 values
         if let Some(value) = extract_i16_value(entry, data, byte_order) {
-            let decoded = QUALCOMM_TAGS.decode_i16(tag_id, value);
+            let decoded = registry.decode_i16(tag_id, value);
             tags.insert(full_tag_name, decoded);
         }
     }
@@ -340,7 +137,6 @@ impl MakerNoteParser for QualcommParser {
 
         // Use shared IFD parser to eliminate boilerplate
         // The callback receives each parsed IFD entry and the data buffer
-        // (after signature skip) to extract tag values
         parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
             self.parse_entry(entry, parse_data, byte_order, tags);
         })?;
@@ -356,7 +152,8 @@ impl MakerNoteParser for QualcommParser {
 
         // Also accept if it looks like valid IFD data (reasonable entry count)
         if data.len() >= 2 {
-            let entry_count = u16::from_le_bytes([data[0], data[1]]);
+            let reader = EndianReader::little_endian(data);
+            let entry_count = reader.u16_at(0).unwrap_or(0);
             if entry_count > 0 && entry_count < 500 {
                 return true;
             }
@@ -368,50 +165,52 @@ impl MakerNoteParser for QualcommParser {
 
 #[cfg(test)]
 mod tests {
+    use super::super::registries::qualcomm::{
+        CHROMA_FLASH, CLEAR_SIGHT, CLEAR_SIGHT_MODE, HDR_MODE, OPTIZOOM, SCENE_TYPE,
+        decode_zoom_level,
+    };
+    use super::super::shared::generic_decoders::ON_OFF;
     use super::*;
 
     #[test]
     fn test_clear_sight_decoder() {
-        assert_eq!(CLEAR_SIGHT_DECODER.decode(0), "Off");
-        assert_eq!(CLEAR_SIGHT_DECODER.decode(1), "On");
-        assert_eq!(CLEAR_SIGHT_DECODER.decode(2), "Auto");
+        assert_eq!(CLEAR_SIGHT.decode(0), "Off");
+        assert_eq!(CLEAR_SIGHT.decode(1), "On");
+        assert_eq!(CLEAR_SIGHT.decode(2), "Auto");
     }
 
     #[test]
     fn test_clear_sight_mode_decoder() {
-        assert_eq!(CLEAR_SIGHT_MODE_DECODER.decode(0), "None");
-        assert_eq!(
-            CLEAR_SIGHT_MODE_DECODER.decode(1),
-            "Monochrome + RGB Fusion"
-        );
-        assert_eq!(CLEAR_SIGHT_MODE_DECODER.decode(3), "Multi-Camera Fusion");
+        assert_eq!(CLEAR_SIGHT_MODE.decode(0), "None");
+        assert_eq!(CLEAR_SIGHT_MODE.decode(1), "Monochrome + RGB Fusion");
+        assert_eq!(CLEAR_SIGHT_MODE.decode(3), "Multi-Camera Fusion");
     }
 
     #[test]
     fn test_chroma_flash_decoder() {
-        assert_eq!(CHROMA_FLASH_DECODER.decode(0), "Off");
-        assert_eq!(CHROMA_FLASH_DECODER.decode(1), "Flash + No Flash Blend");
+        assert_eq!(CHROMA_FLASH.decode(0), "Off");
+        assert_eq!(CHROMA_FLASH.decode(1), "Flash + No Flash Blend");
     }
 
     #[test]
     fn test_hdr_mode_decoder() {
-        assert_eq!(HDR_MODE_DECODER.decode(0), "Off");
-        assert_eq!(HDR_MODE_DECODER.decode(1), "HDR");
-        assert_eq!(HDR_MODE_DECODER.decode(4), "Staggered HDR");
+        assert_eq!(HDR_MODE.decode(0), "Off");
+        assert_eq!(HDR_MODE.decode(1), "HDR");
+        assert_eq!(HDR_MODE.decode(4), "Staggered HDR");
     }
 
     #[test]
     fn test_scene_type_decoder() {
-        assert_eq!(SCENE_TYPE_DECODER.decode(0), "None");
-        assert_eq!(SCENE_TYPE_DECODER.decode(1), "Portrait");
-        assert_eq!(SCENE_TYPE_DECODER.decode(10), "Document");
+        assert_eq!(SCENE_TYPE.decode(0), "None");
+        assert_eq!(SCENE_TYPE.decode(1), "Portrait");
+        assert_eq!(SCENE_TYPE.decode(10), "Document");
     }
 
     #[test]
     fn test_optizoom_decoder() {
-        assert_eq!(OPTIZOOM_DECODER.decode(0), "Off");
-        assert_eq!(OPTIZOOM_DECODER.decode(2), "Medium");
-        assert_eq!(OPTIZOOM_DECODER.decode(4), "Maximum");
+        assert_eq!(OPTIZOOM.decode(0), "Off");
+        assert_eq!(OPTIZOOM.decode(2), "Medium");
+        assert_eq!(OPTIZOOM.decode(4), "Maximum");
     }
 
     #[test]
@@ -465,5 +264,51 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(tags.get("Qualcomm:ClearSight"), Some(&"On".to_string()));
+    }
+
+    #[test]
+    fn test_registry_based_parsing() {
+        // Verify that the registry pattern works for all tag types
+        let parser = QualcommParser::new();
+        let mut data = Vec::new();
+
+        // Create IFD with multiple entries
+        data.extend_from_slice(&[0x04, 0x00]); // 4 entries
+
+        // 1. Clear Sight (custom decoder)
+        data.extend_from_slice(&[0x01, 0x00]); // Tag 0x0001
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // Value: 2 (Auto)
+
+        // 2. HDR Mode (custom decoder)
+        data.extend_from_slice(&[0x0A, 0x00]); // Tag 0x000A
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1 (HDR)
+
+        // 3. Multi-frame NR (binary on/off)
+        data.extend_from_slice(&[0x0C, 0x00]); // Tag 0x000C
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1 (On)
+
+        // 4. Zoom Level (custom function decoder)
+        data.extend_from_slice(&[0x08, 0x00]); // Tag 0x0008
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x32, 0x00, 0x00, 0x00]); // Value: 50 (5.0x)
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert!(result.is_ok());
+        assert_eq!(tags.get("Qualcomm:ClearSight"), Some(&"Auto".to_string()));
+        assert_eq!(tags.get("Qualcomm:HDRMode"), Some(&"HDR".to_string()));
+        assert_eq!(
+            tags.get("Qualcomm:MultiFrameNoiseReduction"),
+            Some(&"On".to_string())
+        );
+        assert_eq!(tags.get("Qualcomm:ZoomLevel"), Some(&"5.0x".to_string()));
     }
 }

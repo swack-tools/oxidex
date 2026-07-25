@@ -2,9 +2,9 @@
 
 use crate::parsers::pe::structures::{CodeViewNB10, CodeViewRSDS, DebugDirectoryEntry};
 use nom::{
+    IResult,
     bytes::complete::take,
     number::complete::{le_u16, le_u32},
-    IResult,
 };
 
 /// Parse Debug Directory Entry (28 bytes)

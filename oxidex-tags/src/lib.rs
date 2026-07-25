@@ -38,6 +38,7 @@ pub use oxidex_tags_specialty as specialty;
 // Re-export common types at root level for convenience
 // This maintains backward compatibility with code expecting types at the root
 pub use oxidex_tags_core::types::*;
+pub use oxidex_tags_shared::{Tag, TagDatabase, TagTable};
 
 // Backward compatibility: stub implementation for old generated tag registry
 // The new YAML-based system doesn't use this, but old code may reference it
@@ -115,6 +116,7 @@ pub fn get_tag_table(name: &str) -> Option<&'static TagTable> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxidex_tags_shared::{render_table_preview, validate_database};
 
     /// Test that the facade can access all domain crates
     #[test]
@@ -138,6 +140,7 @@ mod tests {
             !core_tags.tables.is_empty(),
             "Core tags should not be empty"
         );
+        validate_database(core_tags).expect("Core tags should satisfy shared validation");
 
         // Camera domain should be accessible
         let camera_tags = &*camera::CAMERA_TAGS;
@@ -145,6 +148,15 @@ mod tests {
             !camera_tags.tables.is_empty(),
             "Camera tags should not be empty"
         );
+        validate_database(camera_tags).expect("Camera tags should satisfy shared validation");
+
+        if let Some(table) = core_tags.tables.first() {
+            let preview = render_table_preview(table, 3);
+            assert!(
+                preview.contains(&table.name),
+                "Preview should mention table name"
+            );
+        }
     }
 
     /// Test that the unified get_tag_table function works

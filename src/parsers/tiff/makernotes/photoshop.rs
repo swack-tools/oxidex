@@ -37,11 +37,11 @@
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use std::collections::HashMap;
 
+use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_string};
 use super::shared::generic_decoders::{BitfieldDecoder, SimpleValueDecoder, YES_NO};
-use super::shared::ifd_parser_base::{parse_ifd_entries, IfdParserConfig};
+use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
 use super::shared::tag_registry::TagRegistry;
-use super::shared::MakerNoteParser;
 
 // Import macros for declarative decoder definitions
 use crate::{bitfield_decoder, const_decoder};
@@ -505,13 +505,12 @@ impl PhotoshopParser {
         }
 
         // Handle numeric tags using registry for O(1) lookup and automatic decoding
-        if let Some(tag_name) = PHOTOSHOP_TAGS.get_tag_name(tag) {
-            if let Some(array) = extract_i16_array(entry, data, byte_order) {
-                if let Some(&val) = array.first() {
-                    let decoded = PHOTOSHOP_TAGS.decode_i16(tag, val);
-                    tags.insert(format!("Photoshop:{}", tag_name), decoded);
-                }
-            }
+        if let Some(tag_name) = PHOTOSHOP_TAGS.get_tag_name(tag)
+            && let Some(array) = extract_i16_array(entry, data, byte_order)
+            && let Some(&val) = array.first()
+        {
+            let decoded = PHOTOSHOP_TAGS.decode_i16(tag, val);
+            tags.insert(format!("Photoshop:{}", tag_name), decoded);
         }
     }
 }

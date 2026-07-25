@@ -1,7 +1,7 @@
 //! Integration tests for date/time shifting operations
 
 use chrono::{Datelike, Timelike, Utc};
-use oxidex::core::date_shift::{shift_metadata_dates, ShiftOperation};
+use oxidex::core::date_shift::{ShiftOperation, shift_metadata_dates};
 use oxidex::core::operations::{read_metadata, write_metadata};
 use oxidex::core::tag_value::TagValue;
 use std::fs;
@@ -262,7 +262,7 @@ fn test_parse_offset_and_apply() {
     let dt = Utc.with_ymd_and_hms(2025, 1, 15, 10, 30, 0).unwrap();
 
     // Parse and apply offset: +1 day
-    let offset = parse_offset("0:0:1 0:0:0").expect("Failed to parse offset");
+    let (offset, _neg) = parse_offset("0:0:1 0:0:0").expect("Failed to parse offset");
     let shifted = apply_shift(dt, &offset, ShiftOperation::Add).expect("Failed to apply shift");
 
     assert_eq!(shifted.day(), 16);

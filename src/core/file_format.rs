@@ -102,6 +102,12 @@ pub enum FileFormat {
     /// MTS (MPEG Transport Stream) format (.mts, .m2ts)
     MTS,
 
+    /// ASF/WMV (Advanced Systems Format) video format (.asf, .wmv, .wma)
+    ASF,
+
+    /// MXF (Material eXchange Format) video format (.mxf)
+    MXF,
+
     /// MP3 audio format (.mp3)
     MP3,
 
@@ -234,8 +240,54 @@ pub enum FileFormat {
     /// vCard contact format (.vcf)
     VCF,
 
+    /// iCalendar format (.ics)
+    ICS,
+
+    /// Email message format (.eml)
+    EML,
+
+    /// Plain text format (.txt)
+    TXT,
+
     /// Windows shortcut (.lnk)
     LNK,
+
+    /// SQLite database (.db, .sqlite, .sqlite3)
+    SQLite,
+
+    /// Windows Prefetch file (.pf)
+    Prefetch,
+
+    /// Windows Registry Hive (.dat, hive files)
+    Registry,
+
+    /// Windows Event Log (.evtx)
+    EVTX,
+
+    /// macOS Property List (.plist)
+    Plist,
+
+    /// OLE (Object Linking and Embedding) / Compound File Binary Format (.doc, .xls, .ppt, .msg)
+    OLE,
+
+    // Phase 8: Network formats
+    /// PCAP (libpcap) packet capture (.pcap, .cap)
+    PCAP,
+
+    /// PCAP-NG (next generation) packet capture (.pcapng)
+    PCAPNG,
+
+    /// X.509 Certificate (.crt, .cer, .pem, .der)
+    X509,
+
+    /// ICC Color Profile (.icc, .icm)
+    ICC,
+
+    /// XMP Sidecar (.xmp)
+    XMP,
+
+    /// EPS (Encapsulated PostScript) (.eps, .epsf, .ps)
+    EPS,
 
     /// Unknown or unsupported format
     Unknown,
@@ -273,6 +325,8 @@ impl FileFormat {
             FileFormat::FLV => "FLV",
             FileFormat::AVI => "AVI",
             FileFormat::MTS => "MTS",
+            FileFormat::ASF => "ASF",
+            FileFormat::MXF => "MXF",
             FileFormat::MP3 => "MP3",
             FileFormat::FLAC => "FLAC",
             FileFormat::AAC => "AAC",
@@ -315,7 +369,22 @@ impl FileFormat {
             FileFormat::FITS => "FITS",
             FileFormat::HDF5 => "HDF5",
             FileFormat::VCF => "vCard",
+            FileFormat::ICS => "iCalendar",
+            FileFormat::EML => "EML",
+            FileFormat::TXT => "TXT",
             FileFormat::LNK => "Windows Shortcut",
+            FileFormat::SQLite => "SQLite",
+            FileFormat::Prefetch => "Windows Prefetch",
+            FileFormat::Registry => "Windows Registry Hive",
+            FileFormat::EVTX => "EVTX",
+            FileFormat::Plist => "Plist",
+            FileFormat::OLE => "OLE",
+            FileFormat::PCAP => "PCAP",
+            FileFormat::PCAPNG => "PCAP-NG",
+            FileFormat::X509 => "X.509",
+            FileFormat::ICC => "ICC",
+            FileFormat::XMP => "XMP",
+            FileFormat::EPS => "EPS",
             FileFormat::Unknown => "Unknown",
         }
     }
@@ -354,6 +423,8 @@ impl FileFormat {
             FileFormat::FLV => &["flv"],
             FileFormat::AVI => &["avi"],
             FileFormat::MTS => &["mts", "m2ts"],
+            FileFormat::ASF => &["asf", "wmv", "wma"],
+            FileFormat::MXF => &["mxf"],
             FileFormat::MP3 => &["mp3"],
             FileFormat::FLAC => &["flac"],
             FileFormat::AAC => &["aac", "m4a"],
@@ -396,7 +467,22 @@ impl FileFormat {
             FileFormat::FITS => &["fits", "fit"],
             FileFormat::HDF5 => &["h5", "hdf5"],
             FileFormat::VCF => &["vcf", "vcard"],
+            FileFormat::ICS => &["ics", "ical"],
+            FileFormat::EML => &["eml", "email"],
+            FileFormat::TXT => &["txt", "text"],
             FileFormat::LNK => &["lnk"],
+            FileFormat::SQLite => &["db", "sqlite", "sqlite3"],
+            FileFormat::Prefetch => &["pf"],
+            FileFormat::Registry => &["dat"],
+            FileFormat::EVTX => &["evtx"],
+            FileFormat::Plist => &["plist"],
+            FileFormat::OLE => &["doc", "xls", "ppt", "msg", "vsd", "pub"],
+            FileFormat::PCAP => &["pcap", "cap"],
+            FileFormat::PCAPNG => &["pcapng"],
+            FileFormat::X509 => &["crt", "cer", "pem", "der"],
+            FileFormat::ICC => &["icc", "icm"],
+            FileFormat::XMP => &["xmp"],
+            FileFormat::EPS => &["eps", "epsf", "ps"],
             FileFormat::Unknown => &[],
         }
     }

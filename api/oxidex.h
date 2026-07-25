@@ -49,6 +49,2721 @@
 #define EXIFTOOL_ERR_INTERNAL 99
 
 /*
+ Magic number byte 0 (0x7F)
+ */
+#define EI_MAG0 0
+
+/*
+ Magic number byte 1 ('E')
+ */
+#define EI_MAG1 1
+
+/*
+ Magic number byte 2 ('L')
+ */
+#define EI_MAG2 2
+
+/*
+ Magic number byte 3 ('F')
+ */
+#define EI_MAG3 3
+
+/*
+ File class (32-bit or 64-bit)
+ */
+#define EI_CLASS 4
+
+/*
+ Data encoding (endianness)
+ */
+#define EI_DATA 5
+
+/*
+ ELF version
+ */
+#define EI_VERSION 6
+
+/*
+ OS/ABI identification
+ */
+#define EI_OSABI 7
+
+/*
+ ABI version
+ */
+#define EI_ABIVERSION 8
+
+/*
+ Start of padding bytes
+ */
+#define EI_PAD 9
+
+/*
+ Size of e_ident array
+ */
+#define EI_NIDENT 16
+
+/*
+ Invalid class
+ */
+#define ELFCLASSNONE 0
+
+/*
+ 32-bit objects
+ */
+#define ELFCLASS32 1
+
+/*
+ 64-bit objects
+ */
+#define ELFCLASS64 2
+
+/*
+ Invalid encoding
+ */
+#define ELFDATANONE 0
+
+/*
+ Little-endian (2's complement, LSB first)
+ */
+#define ELFDATA2LSB 1
+
+/*
+ Big-endian (2's complement, MSB first)
+ */
+#define ELFDATA2MSB 2
+
+/*
+ UNIX System V ABI
+ */
+#define ELFOSABI_NONE 0
+
+/*
+ Alias for ELFOSABI_NONE
+ */
+#define ELFOSABI_SYSV 0
+
+/*
+ HP-UX
+ */
+#define ELFOSABI_HPUX 1
+
+/*
+ NetBSD
+ */
+#define ELFOSABI_NETBSD 2
+
+/*
+ GNU/Linux (historically called ELFOSABI_LINUX)
+ */
+#define ELFOSABI_GNU 3
+
+/*
+ Alias for ELFOSABI_GNU
+ */
+#define ELFOSABI_LINUX 3
+
+/*
+ Sun Solaris
+ */
+#define ELFOSABI_SOLARIS 6
+
+/*
+ IBM AIX
+ */
+#define ELFOSABI_AIX 7
+
+/*
+ SGI IRIX
+ */
+#define ELFOSABI_IRIX 8
+
+/*
+ FreeBSD
+ */
+#define ELFOSABI_FREEBSD 9
+
+/*
+ Compaq TRU64 UNIX
+ */
+#define ELFOSABI_TRU64 10
+
+/*
+ Novell Modesto
+ */
+#define ELFOSABI_MODESTO 11
+
+/*
+ OpenBSD
+ */
+#define ELFOSABI_OPENBSD 12
+
+/*
+ ARM EABI
+ */
+#define ELFOSABI_ARM_AEABI 64
+
+/*
+ ARM
+ */
+#define ELFOSABI_ARM 97
+
+/*
+ Standalone (embedded) application
+ */
+#define ELFOSABI_STANDALONE 255
+
+/*
+ No file type
+ */
+#define ET_NONE 0
+
+/*
+ Relocatable file
+ */
+#define ET_REL 1
+
+/*
+ Executable file
+ */
+#define ET_EXEC 2
+
+/*
+ Shared object file
+ */
+#define ET_DYN 3
+
+/*
+ Core file
+ */
+#define ET_CORE 4
+
+/*
+ OS-specific range start
+ */
+#define ET_LOOS 65024
+
+/*
+ OS-specific range end
+ */
+#define ET_HIOS 65279
+
+/*
+ Processor-specific range start
+ */
+#define ET_LOPROC 65280
+
+/*
+ Processor-specific range end
+ */
+#define ET_HIPROC 65535
+
+/*
+ No machine
+ */
+#define EM_NONE 0
+
+/*
+ AT&T WE 32100
+ */
+#define EM_M32 1
+
+/*
+ SPARC
+ */
+#define EM_SPARC 2
+
+/*
+ Intel 80386
+ */
+#define EM_386 3
+
+/*
+ Motorola 68000
+ */
+#define EM_68K 4
+
+/*
+ Motorola 88000
+ */
+#define EM_88K 5
+
+/*
+ Intel MCU
+ */
+#define EM_IAMCU 6
+
+/*
+ Intel 80860
+ */
+#define EM_860 7
+
+/*
+ MIPS I Architecture
+ */
+#define EM_MIPS 8
+
+/*
+ IBM System/370
+ */
+#define EM_S370 9
+
+/*
+ MIPS RS3000 Little-endian
+ */
+#define EM_MIPS_RS3_LE 10
+
+/*
+ Hewlett-Packard PA-RISC
+ */
+#define EM_PARISC 15
+
+/*
+ Fujitsu VPP500
+ */
+#define EM_VPP500 17
+
+/*
+ Enhanced SPARC (SPARC32PLUS)
+ */
+#define EM_SPARC32PLUS 18
+
+/*
+ Intel 80960
+ */
+#define EM_960 19
+
+/*
+ PowerPC
+ */
+#define EM_PPC 20
+
+/*
+ 64-bit PowerPC
+ */
+#define EM_PPC64 21
+
+/*
+ IBM System/390
+ */
+#define EM_S390 22
+
+/*
+ IBM SPU/SPC
+ */
+#define EM_SPU 23
+
+/*
+ NEC V800
+ */
+#define EM_V800 36
+
+/*
+ Fujitsu FR20
+ */
+#define EM_FR20 37
+
+/*
+ TRW RH-32
+ */
+#define EM_RH32 38
+
+/*
+ Motorola RCE
+ */
+#define EM_RCE 39
+
+/*
+ ARM 32-bit
+ */
+#define EM_ARM 40
+
+/*
+ Digital Alpha
+ */
+#define EM_ALPHA 41
+
+/*
+ Hitachi SH
+ */
+#define EM_SH 42
+
+/*
+ SPARC V9 (64-bit)
+ */
+#define EM_SPARCV9 43
+
+/*
+ Siemens TriCore
+ */
+#define EM_TRICORE 44
+
+/*
+ Argonaut RISC Core
+ */
+#define EM_ARC 45
+
+/*
+ Hitachi H8/300
+ */
+#define EM_H8_300 46
+
+/*
+ Hitachi H8/300H
+ */
+#define EM_H8_300H 47
+
+/*
+ Hitachi H8S
+ */
+#define EM_H8S 48
+
+/*
+ Hitachi H8/500
+ */
+#define EM_H8_500 49
+
+/*
+ Intel Itanium
+ */
+#define EM_IA_64 50
+
+/*
+ Stanford MIPS-X
+ */
+#define EM_MIPS_X 51
+
+/*
+ Motorola ColdFire
+ */
+#define EM_COLDFIRE 52
+
+/*
+ Motorola 68HC12
+ */
+#define EM_68HC12 53
+
+/*
+ AMD x86-64
+ */
+#define EM_X86_64 62
+
+/*
+ Sony/Toshiba/IBM Cell BE SPU
+ */
+#define EM_SPU_2 23
+
+/*
+ ARM 64-bit (AArch64)
+ */
+#define EM_AARCH64 183
+
+/*
+ RISC-V
+ */
+#define EM_RISCV 243
+
+/*
+ Berkeley Packet Filter
+ */
+#define EM_BPF 247
+
+/*
+ WDC 65C816
+ */
+#define EM_65816 257
+
+/*
+ LoongArch
+ */
+#define EM_LOONGARCH 258
+
+/*
+ Unused entry
+ */
+#define PT_NULL 0
+
+/*
+ Loadable segment
+ */
+#define PT_LOAD 1
+
+/*
+ Dynamic linking information
+ */
+#define PT_DYNAMIC 2
+
+/*
+ Interpreter pathname
+ */
+#define PT_INTERP 3
+
+/*
+ Auxiliary information
+ */
+#define PT_NOTE 4
+
+/*
+ Reserved (unused)
+ */
+#define PT_SHLIB 5
+
+/*
+ Program header table
+ */
+#define PT_PHDR 6
+
+/*
+ Thread-local storage
+ */
+#define PT_TLS 7
+
+/*
+ OS-specific range start
+ */
+#define PT_LOOS 1610612736
+
+/*
+ GNU exception handling frame
+ */
+#define PT_GNU_EH_FRAME 1685382480
+
+/*
+ GNU stack executability
+ */
+#define PT_GNU_STACK 1685382481
+
+/*
+ GNU read-only after relocation
+ */
+#define PT_GNU_RELRO 1685382482
+
+/*
+ GNU property
+ */
+#define PT_GNU_PROPERTY 1685382483
+
+/*
+ OS-specific range end
+ */
+#define PT_HIOS 1879048191
+
+/*
+ Processor-specific range start
+ */
+#define PT_LOPROC 1879048192
+
+/*
+ Processor-specific range end
+ */
+#define PT_HIPROC 2147483647
+
+/*
+ Execute permission
+ */
+#define PF_X 1
+
+/*
+ Write permission
+ */
+#define PF_W 2
+
+/*
+ Read permission
+ */
+#define PF_R 4
+
+/*
+ OS-specific mask
+ */
+#define PF_MASKOS 267386880
+
+/*
+ Processor-specific mask
+ */
+#define PF_MASKPROC 4026531840
+
+/*
+ Inactive section
+ */
+#define SHT_NULL 0
+
+/*
+ Program data
+ */
+#define SHT_PROGBITS 1
+
+/*
+ Symbol table
+ */
+#define SHT_SYMTAB 2
+
+/*
+ String table
+ */
+#define SHT_STRTAB 3
+
+/*
+ Relocation entries with addends
+ */
+#define SHT_RELA 4
+
+/*
+ Symbol hash table
+ */
+#define SHT_HASH 5
+
+/*
+ Dynamic linking information
+ */
+#define SHT_DYNAMIC 6
+
+/*
+ Notes
+ */
+#define SHT_NOTE 7
+
+/*
+ BSS (uninitialized data)
+ */
+#define SHT_NOBITS 8
+
+/*
+ Relocation entries without addends
+ */
+#define SHT_REL 9
+
+/*
+ Reserved
+ */
+#define SHT_SHLIB 10
+
+/*
+ Dynamic linker symbol table
+ */
+#define SHT_DYNSYM 11
+
+/*
+ Array of constructors
+ */
+#define SHT_INIT_ARRAY 14
+
+/*
+ Array of destructors
+ */
+#define SHT_FINI_ARRAY 15
+
+/*
+ Array of pre-constructors
+ */
+#define SHT_PREINIT_ARRAY 16
+
+/*
+ Section group
+ */
+#define SHT_GROUP 17
+
+/*
+ Extended section indices
+ */
+#define SHT_SYMTAB_SHNDX 18
+
+/*
+ OS-specific range start
+ */
+#define SHT_LOOS 1610612736
+
+/*
+ GNU attributes
+ */
+#define SHT_GNU_ATTRIBUTES 1879048181
+
+/*
+ GNU symbol hash table
+ */
+#define SHT_GNU_HASH 1879048182
+
+/*
+ GNU library list
+ */
+#define SHT_GNU_LIBLIST 1879048183
+
+/*
+ GNU version definition
+ */
+#define SHT_GNU_VERDEF 1879048189
+
+/*
+ GNU version requirements
+ */
+#define SHT_GNU_VERNEED 1879048190
+
+/*
+ GNU version symbol table
+ */
+#define SHT_GNU_VERSYM 1879048191
+
+/*
+ OS-specific range end
+ */
+#define SHT_HIOS 1879048191
+
+/*
+ Processor-specific range start
+ */
+#define SHT_LOPROC 1879048192
+
+/*
+ Processor-specific range end
+ */
+#define SHT_HIPROC 2147483647
+
+/*
+ Application-specific range start
+ */
+#define SHT_LOUSER 2147483648
+
+/*
+ Application-specific range end
+ */
+#define SHT_HIUSER 2415919103
+
+/*
+ Writable data
+ */
+#define SHF_WRITE 1
+
+/*
+ Occupies memory during execution
+ */
+#define SHF_ALLOC 2
+
+/*
+ Executable instructions
+ */
+#define SHF_EXECINSTR 4
+
+/*
+ Might be merged
+ */
+#define SHF_MERGE 16
+
+/*
+ Contains null-terminated strings
+ */
+#define SHF_STRINGS 32
+
+/*
+ sh_info contains SHT index
+ */
+#define SHF_INFO_LINK 64
+
+/*
+ Preserve order after combining
+ */
+#define SHF_LINK_ORDER 128
+
+/*
+ Non-standard OS-specific handling required
+ */
+#define SHF_OS_NONCONFORMING 256
+
+/*
+ Section is member of a group
+ */
+#define SHF_GROUP 512
+
+/*
+ Section holds thread-local data
+ */
+#define SHF_TLS 1024
+
+/*
+ Section is compressed
+ */
+#define SHF_COMPRESSED 2048
+
+/*
+ OS-specific mask
+ */
+#define SHF_MASKOS 267386880
+
+/*
+ Processor-specific mask
+ */
+#define SHF_MASKPROC 4026531840
+
+/*
+ Marks end of dynamic section
+ */
+#define DT_NULL 0
+
+/*
+ Name of needed library
+ */
+#define DT_NEEDED 1
+
+/*
+ Size in bytes of PLT relocs
+ */
+#define DT_PLTRELSZ 2
+
+/*
+ Processor-defined value
+ */
+#define DT_PLTGOT 3
+
+/*
+ Address of symbol hash table
+ */
+#define DT_HASH 4
+
+/*
+ Address of string table
+ */
+#define DT_STRTAB 5
+
+/*
+ Address of symbol table
+ */
+#define DT_SYMTAB 6
+
+/*
+ Address of RELA relocs
+ */
+#define DT_RELA 7
+
+/*
+ Total size of RELA relocs
+ */
+#define DT_RELASZ 8
+
+/*
+ Size of one RELA reloc
+ */
+#define DT_RELAENT 9
+
+/*
+ Size of string table
+ */
+#define DT_STRSZ 10
+
+/*
+ Size of one symbol table entry
+ */
+#define DT_SYMENT 11
+
+/*
+ Address of init function
+ */
+#define DT_INIT 12
+
+/*
+ Address of fini function
+ */
+#define DT_FINI 13
+
+/*
+ Name of shared object
+ */
+#define DT_SONAME 14
+
+/*
+ Library search path (deprecated)
+ */
+#define DT_RPATH 15
+
+/*
+ Start symbol search here
+ */
+#define DT_SYMBOLIC 16
+
+/*
+ Address of REL relocs
+ */
+#define DT_REL 17
+
+/*
+ Total size of REL relocs
+ */
+#define DT_RELSZ 18
+
+/*
+ Size of one REL reloc
+ */
+#define DT_RELENT 19
+
+/*
+ Type of reloc in PLT
+ */
+#define DT_PLTREL 20
+
+/*
+ For debugging; unspecified
+ */
+#define DT_DEBUG 21
+
+/*
+ Reloc might modify .text
+ */
+#define DT_TEXTREL 22
+
+/*
+ Address of PLT relocs
+ */
+#define DT_JMPREL 23
+
+/*
+ Process relocations of object
+ */
+#define DT_BIND_NOW 24
+
+/*
+ Array with addresses of init functions
+ */
+#define DT_INIT_ARRAY 25
+
+/*
+ Array with addresses of fini functions
+ */
+#define DT_FINI_ARRAY 26
+
+/*
+ Size in bytes of DT_INIT_ARRAY
+ */
+#define DT_INIT_ARRAYSZ 27
+
+/*
+ Size in bytes of DT_FINI_ARRAY
+ */
+#define DT_FINI_ARRAYSZ 28
+
+/*
+ Library search path
+ */
+#define DT_RUNPATH 29
+
+/*
+ Flags for the object
+ */
+#define DT_FLAGS 30
+
+/*
+ Start of encoded range
+ */
+#define DT_ENCODING 32
+
+/*
+ Array with addresses of preinit functions
+ */
+#define DT_PREINIT_ARRAY 32
+
+/*
+ Size in bytes of DT_PREINIT_ARRAY
+ */
+#define DT_PREINIT_ARRAYSZ 33
+
+/*
+ Address of SYMTAB_SHNDX section
+ */
+#define DT_SYMTAB_SHNDX 34
+
+/*
+ GNU hash table
+ */
+#define DT_GNU_HASH 1879047925
+
+/*
+ Relocation count
+ */
+#define DT_RELACOUNT 1879048185
+
+/*
+ Relocation count
+ */
+#define DT_RELCOUNT 1879048186
+
+/*
+ State flags
+ */
+#define DT_FLAGS_1 1879048187
+
+/*
+ Version definition table
+ */
+#define DT_VERDEF 1879048188
+
+/*
+ Number of version definitions
+ */
+#define DT_VERDEFNUM 1879048189
+
+/*
+ Version requirements table
+ */
+#define DT_VERNEED 1879048190
+
+/*
+ Number of version requirements
+ */
+#define DT_VERNEEDNUM 1879048191
+
+/*
+ Object may use DF_ORIGIN
+ */
+#define DF_ORIGIN 1
+
+/*
+ Symbol resolutions start here
+ */
+#define DF_SYMBOLIC 2
+
+/*
+ Object contains text relocations
+ */
+#define DF_TEXTREL 4
+
+/*
+ No lazy binding for this object
+ */
+#define DF_BIND_NOW 8
+
+/*
+ Module uses the static TLS model
+ */
+#define DF_STATIC_TLS 16
+
+/*
+ Set RTLD_NOW for this object
+ */
+#define DF_1_NOW 1
+
+/*
+ Set RTLD_GLOBAL for this object
+ */
+#define DF_1_GLOBAL 2
+
+/*
+ Set RTLD_GROUP for this object
+ */
+#define DF_1_GROUP 4
+
+/*
+ Set RTLD_NODELETE for this object
+ */
+#define DF_1_NODELETE 8
+
+/*
+ Trigger filtee loading at runtime
+ */
+#define DF_1_LOADFLTR 16
+
+/*
+ Set RTLD_INITFIRST for this object
+ */
+#define DF_1_INITFIRST 32
+
+/*
+ Set RTLD_NOOPEN for this object
+ */
+#define DF_1_NOOPEN 64
+
+/*
+ $ORIGIN must be handled
+ */
+#define DF_1_ORIGIN 128
+
+/*
+ Direct binding enabled
+ */
+#define DF_1_DIRECT 256
+
+/*
+ Object is used to interpose
+ */
+#define DF_1_INTERPOSE 1024
+
+/*
+ Ignore default library search path
+ */
+#define DF_1_NODEFLIB 2048
+
+/*
+ Object cannot be dlopen()'d
+ */
+#define DF_1_NODUMP 4096
+
+/*
+ Configuration alternative created
+ */
+#define DF_1_CONFALT 8192
+
+/*
+ Filtee terminates filters search
+ */
+#define DF_1_ENDFILTEE 16384
+
+/*
+ Disp reloc applied at build time
+ */
+#define DF_1_DISPRELDNE 32768
+
+/*
+ Disp reloc applied at run-time
+ */
+#define DF_1_DISPRELPND 65536
+
+/*
+ Object has no-direct binding
+ */
+#define DF_1_NODIRECT 131072
+
+/*
+ Internal use
+ */
+#define DF_1_IGNMULDEF 262144
+
+/*
+ Internal use
+ */
+#define DF_1_NOKSYMS 524288
+
+/*
+ Internal use
+ */
+#define DF_1_NOHDR 1048576
+
+/*
+ Object is modified after built
+ */
+#define DF_1_EDITED 2097152
+
+/*
+ Internal use
+ */
+#define DF_1_NORELOC 4194304
+
+/*
+ Object has individual interposers
+ */
+#define DF_1_SYMINTPOSE 8388608
+
+/*
+ Global auditing required
+ */
+#define DF_1_GLOBAUDIT 16777216
+
+/*
+ Singleton symbols are used
+ */
+#define DF_1_SINGLETON 33554432
+
+/*
+ Stub
+ */
+#define DF_1_STUB 67108864
+
+/*
+ Object is a Position-Independent Executable
+ */
+#define DF_1_PIE 134217728
+
+/*
+ Build ID (unique binary identifier)
+ */
+#define NT_GNU_BUILD_ID 3
+
+/*
+ Gold version note
+ */
+#define NT_GNU_GOLD_VERSION 4
+
+/*
+ GNU property note
+ */
+#define NT_GNU_PROPERTY_TYPE_0 5
+
+/*
+ OS ABI tag (GNU)
+ */
+#define NT_GNU_ABI_TAG 1
+
+/*
+ Local symbol
+ */
+#define STB_LOCAL 0
+
+/*
+ Global symbol
+ */
+#define STB_GLOBAL 1
+
+/*
+ Weak symbol
+ */
+#define STB_WEAK 2
+
+/*
+ OS-specific range start
+ */
+#define STB_LOOS 10
+
+/*
+ GNU unique symbol
+ */
+#define STB_GNU_UNIQUE 10
+
+/*
+ OS-specific range end
+ */
+#define STB_HIOS 12
+
+/*
+ Processor-specific range start
+ */
+#define STB_LOPROC 13
+
+/*
+ Processor-specific range end
+ */
+#define STB_HIPROC 15
+
+/*
+ Symbol type is unspecified
+ */
+#define STT_NOTYPE 0
+
+/*
+ Symbol is a data object
+ */
+#define STT_OBJECT 1
+
+/*
+ Symbol is a code object (function)
+ */
+#define STT_FUNC 2
+
+/*
+ Symbol is a section
+ */
+#define STT_SECTION 3
+
+/*
+ Symbol's name is file name
+ */
+#define STT_FILE 4
+
+/*
+ Symbol is a common data object
+ */
+#define STT_COMMON 5
+
+/*
+ Symbol is thread-local storage object
+ */
+#define STT_TLS 6
+
+/*
+ OS-specific range start
+ */
+#define STT_LOOS 10
+
+/*
+ Symbol is an indirect function (GNU extension)
+ */
+#define STT_GNU_IFUNC 10
+
+/*
+ OS-specific range end
+ */
+#define STT_HIOS 12
+
+/*
+ Processor-specific range start
+ */
+#define STT_LOPROC 13
+
+/*
+ Processor-specific range end
+ */
+#define STT_HIPROC 15
+
+/*
+ Undefined section
+ */
+#define SHN_UNDEF 0
+
+/*
+ Start of processor-specific
+ */
+#define SHN_LOPROC 65280
+
+/*
+ End of processor-specific
+ */
+#define SHN_HIPROC 65311
+
+/*
+ Start of OS-specific
+ */
+#define SHN_LOOS 65312
+
+/*
+ End of OS-specific
+ */
+#define SHN_HIOS 65343
+
+/*
+ Associated symbol is absolute
+ */
+#define SHN_ABS 65521
+
+/*
+ Associated symbol is common
+ */
+#define SHN_COMMON 65522
+
+/*
+ Index is in extra table
+ */
+#define SHN_XINDEX 65535
+
+/*
+ Emissivity (f32) - thermal emissivity of the target object
+ */
+#define EMISSIVITY 32
+
+/*
+ Object distance in meters (f32)
+ */
+#define OBJECT_DISTANCE 36
+
+/*
+ Reflected apparent temperature in Kelvin (f32)
+ */
+#define REFLECTED_APPARENT_TEMP 40
+
+/*
+ Atmospheric temperature in Kelvin (f32)
+ */
+#define ATMOSPHERIC_TEMP 44
+
+/*
+ IR window temperature in Kelvin (f32)
+ */
+#define IR_WINDOW_TEMP 48
+
+/*
+ IR window transmission coefficient (f32)
+ */
+#define IR_WINDOW_TRANSMISSION 52
+
+/*
+ Relative humidity as percentage (f32)
+ */
+#define RELATIVE_HUMIDITY 60
+
+/*
+ Planck R1 constant (f32)
+ */
+#define PLANCK_R1 88
+
+/*
+ Planck B constant (f32)
+ */
+#define PLANCK_B 92
+
+/*
+ Planck F constant (f32)
+ */
+#define PLANCK_F 96
+
+/*
+ Atmospheric transmission alpha1 coefficient (f32)
+ */
+#define ATMOSPHERIC_TRANS_ALPHA1 112
+
+/*
+ Atmospheric transmission alpha2 coefficient (f32)
+ */
+#define ATMOSPHERIC_TRANS_ALPHA2 116
+
+/*
+ Atmospheric transmission beta1 coefficient (f32)
+ */
+#define ATMOSPHERIC_TRANS_BETA1 120
+
+/*
+ Atmospheric transmission beta2 coefficient (f32)
+ */
+#define ATMOSPHERIC_TRANS_BETA2 124
+
+/*
+ Atmospheric transmission X coefficient (f32)
+ */
+#define ATMOSPHERIC_TRANS_X 128
+
+/*
+ Camera temperature range maximum in Kelvin (f32)
+ */
+#define CAMERA_TEMP_RANGE_MAX 144
+
+/*
+ Camera temperature range minimum in Kelvin (f32)
+ */
+#define CAMERA_TEMP_RANGE_MIN 148
+
+/*
+ Camera temperature max clip value (f32)
+ */
+#define CAMERA_TEMP_MAX_CLIP 152
+
+/*
+ Camera temperature min clip value (f32)
+ */
+#define CAMERA_TEMP_MIN_CLIP 156
+
+/*
+ Camera temperature max warn value (f32)
+ */
+#define CAMERA_TEMP_MAX_WARN 160
+
+/*
+ Camera temperature min warn value (f32)
+ */
+#define CAMERA_TEMP_MIN_WARN 164
+
+/*
+ Camera temperature max saturated value (f32)
+ */
+#define CAMERA_TEMP_MAX_SATURATED 168
+
+/*
+ Camera temperature min saturated value (f32)
+ */
+#define CAMERA_TEMP_MIN_SATURATED 172
+
+/*
+ Camera model string (32 bytes)
+ */
+#define CAMERA_MODEL 212
+
+/*
+ Camera part number string (32 bytes)
+ */
+#define CAMERA_PART_NUMBER 244
+
+/*
+ Camera serial number string (16 bytes)
+ */
+#define CAMERA_SERIAL_NUMBER 260
+
+/*
+ Camera software version string (16 bytes)
+ */
+#define CAMERA_SOFTWARE 276
+
+/*
+ Lens model string (32 bytes)
+ */
+#define LENS_MODEL 368
+
+/*
+ Lens part number string (16 bytes)
+ */
+#define LENS_PART_NUMBER 400
+
+/*
+ Lens serial number string (16 bytes)
+ */
+#define LENS_SERIAL_NUMBER 416
+
+/*
+ Field of view in degrees (f32)
+ */
+#define FIELD_OF_VIEW 436
+
+/*
+ Peak spectral sensitivity in micrometers (f32)
+ */
+#define PEAK_SPECTRAL_SENSITIVITY 440
+
+/*
+ Filter model string (16 bytes)
+ */
+#define FILTER_MODEL 492
+
+/*
+ Filter part number string (32 bytes)
+ */
+#define FILTER_PART_NUMBER 508
+
+/*
+ Filter serial number string (32 bytes)
+ */
+#define FILTER_SERIAL_NUMBER 540
+
+/*
+ Planck O constant (i32)
+ */
+#define PLANCK_O 776
+
+/*
+ Planck R2 constant (f32)
+ */
+#define PLANCK_R2 780
+
+/*
+ Raw value range minimum (u16)
+ */
+#define RAW_VALUE_RANGE_MIN 784
+
+/*
+ Raw value range maximum (u16)
+ */
+#define RAW_VALUE_RANGE_MAX 786
+
+/*
+ Raw value median (u16)
+ */
+#define RAW_VALUE_MEDIAN 824
+
+/*
+ Raw value range (u16)
+ */
+#define RAW_VALUE_RANGE 828
+
+/*
+ Date/time original (various formats)
+ */
+#define DATE_TIME_ORIGINAL 900
+
+/*
+ Focus step count (i16)
+ */
+#define FOCUS_STEP_COUNT 912
+
+/*
+ Focus distance in meters (f32)
+ */
+#define FOCUS_DISTANCE 1116
+
+/*
+ Frame rate (u16)
+ */
+#define FRAME_RATE 1124
+
+/*
+ Byte order indicator (u16)
+ */
+#define BYTE_ORDER 0
+
+/*
+ Raw thermal image width (u16)
+ */
+#define WIDTH 2
+
+/*
+ Raw thermal image height (u16)
+ */
+#define HEIGHT 4
+
+/*
+ Raw thermal image type (u16)
+ */
+#define IMAGE_TYPE 16
+
+/*
+ Number of palette colors (u8)
+ */
+#define PALETTE_COLORS 0
+
+/*
+ Above color RGB (3 bytes)
+ */
+#define ABOVE_COLOR 6
+
+/*
+ Below color RGB (3 bytes)
+ */
+#define BELOW_COLOR 9
+
+/*
+ Overflow color RGB (3 bytes)
+ */
+#define OVERFLOW_COLOR 12
+
+/*
+ Underflow color RGB (3 bytes)
+ */
+#define UNDERFLOW_COLOR 15
+
+/*
+ Isotherm1 color RGB (3 bytes)
+ */
+#define ISOTHERM1_COLOR 18
+
+/*
+ Isotherm2 color RGB (3 bytes)
+ */
+#define ISOTHERM2_COLOR 21
+
+/*
+ Palette method (u8)
+ */
+#define PALETTE_METHOD 26
+
+/*
+ Palette stretch (u8)
+ */
+#define PALETTE_STRETCH 27
+
+/*
+ Palette file name (32 bytes)
+ */
+#define PALETTE_FILE_NAME 48
+
+/*
+ Palette name (32 bytes)
+ */
+#define PALETTE_NAME 80
+
+/*
+ Palette data (variable length)
+ */
+#define PALETTE 112
+
+/*
+ Regular section
+ */
+#define S_REGULAR 0
+
+/*
+ Zero-fill on demand section
+ */
+#define S_ZEROFILL 1
+
+/*
+ Section with only literal C strings
+ */
+#define S_CSTRING_LITERALS 2
+
+/*
+ Section with only 4-byte literals
+ */
+#define S_4BYTE_LITERALS 3
+
+/*
+ Section with only 8-byte literals
+ */
+#define S_8BYTE_LITERALS 4
+
+/*
+ Section with only literal pointers
+ */
+#define S_LITERAL_POINTERS 5
+
+/*
+ Non-lazy symbol pointers section
+ */
+#define S_NON_LAZY_SYMBOL_POINTERS 6
+
+/*
+ Lazy symbol pointers section
+ */
+#define S_LAZY_SYMBOL_POINTERS 7
+
+/*
+ Symbol stubs section
+ */
+#define S_SYMBOL_STUBS 8
+
+/*
+ Mod init function pointers
+ */
+#define S_MOD_INIT_FUNC_POINTERS 9
+
+/*
+ Mod term function pointers
+ */
+#define S_MOD_TERM_FUNC_POINTERS 10
+
+/*
+ Section contains symbols to be coalesced
+ */
+#define S_COALESCED 11
+
+/*
+ Zero-fill on demand section (larger)
+ */
+#define S_GB_ZEROFILL 12
+
+/*
+ Section with only pairs of function pointers for interposing
+ */
+#define S_INTERPOSING 13
+
+/*
+ Section with only 16-byte literals
+ */
+#define S_16BYTE_LITERALS 14
+
+/*
+ Section containing DTrace Object Format
+ */
+#define S_DTRACE_DOF 15
+
+/*
+ Section with lazy symbol pointers to lazy loaded dylibs
+ */
+#define S_LAZY_DYLIB_SYMBOL_POINTERS 16
+
+/*
+ Thread local variable section
+ */
+#define S_THREAD_LOCAL_REGULAR 17
+
+/*
+ Thread local zerofill section
+ */
+#define S_THREAD_LOCAL_ZEROFILL 18
+
+/*
+ Thread local variable descriptors
+ */
+#define S_THREAD_LOCAL_VARIABLES 19
+
+/*
+ Pointers to TLV descriptors
+ */
+#define S_THREAD_LOCAL_VARIABLE_POINTERS 20
+
+/*
+ Functions to call to initialize TLV values
+ */
+#define S_THREAD_LOCAL_INIT_FUNCTION_POINTERS 21
+
+/*
+ 32-bit offsets for initializers
+ */
+#define S_INIT_FUNC_OFFSETS 22
+
+/*
+ Section contains only true machine instructions
+ */
+#define S_ATTR_PURE_INSTRUCTIONS 2147483648
+
+/*
+ Section contains coalesced symbols
+ */
+#define S_ATTR_NO_TOC 1073741824
+
+/*
+ Ok to strip static symbols in this section
+ */
+#define S_ATTR_STRIP_STATIC_SYMS 536870912
+
+/*
+ No dead stripping
+ */
+#define S_ATTR_NO_DEAD_STRIP 268435456
+
+/*
+ Blocks are live if they reference live blocks
+ */
+#define S_ATTR_LIVE_SUPPORT 134217728
+
+/*
+ Used with i386 code stubs
+ */
+#define S_ATTR_SELF_MODIFYING_CODE 67108864
+
+/*
+ A debug section
+ */
+#define S_ATTR_DEBUG 33554432
+
+/*
+ Section contains some machine instructions
+ */
+#define S_ATTR_SOME_INSTRUCTIONS 1024
+
+/*
+ Section has external relocation entries
+ */
+#define S_ATTR_EXT_RELOC 512
+
+/*
+ Section has local relocation entries
+ */
+#define S_ATTR_LOC_RELOC 256
+
+/*
+ If set, the code has been validated by the kernel
+ */
+#define CS_VALID 1
+
+/*
+ Dynamically valid
+ */
+#define CS_ADHOC 2
+
+/*
+ Has a code signature
+ */
+#define CS_GET_TASK_ALLOW 4
+
+/*
+ Has an entitlements blob
+ */
+#define CS_INSTALLER 8
+
+/*
+ Force hard protection
+ */
+#define CS_FORCED_LV 16
+
+/*
+ Invalid page found
+ */
+#define CS_INVALID_ALLOWED 32
+
+/*
+ Code is hard-signed
+ */
+#define CS_HARD 256
+
+/*
+ Code must be killed on failure
+ */
+#define CS_KILL 512
+
+/*
+ Dyld must verify
+ */
+#define CS_CHECK_EXPIRATION 1024
+
+/*
+ Restrict privileges
+ */
+#define CS_RESTRICT 2048
+
+/*
+ Enforcement of code signing
+ */
+#define CS_ENFORCEMENT 4096
+
+/*
+ Library validation required
+ */
+#define CS_REQUIRE_LV 8192
+
+/*
+ Code signature entitlements validated
+ */
+#define CS_ENTITLEMENTS_VALIDATED 16384
+
+/*
+ NVRAM (platform code)
+ */
+#define CS_NVRAM_UNRESTRICTED 32768
+
+/*
+ Code is runtime signed
+ */
+#define CS_RUNTIME 65536
+
+/*
+ Linker signed
+ */
+#define CS_LINKER_SIGNED 131072
+
+/*
+ 32-bit Mach-O file, native byte order (0xFEEDFACE)
+ */
+#define MH_MAGIC 4277009102
+
+/*
+ 64-bit Mach-O file, native byte order (0xFEEDFACF)
+ */
+#define MH_MAGIC_64 4277009103
+
+/*
+ 32-bit Mach-O file, swapped byte order (0xCEFAEDFE)
+ */
+#define MH_CIGAM 3472551422
+
+/*
+ 64-bit Mach-O file, swapped byte order (0xCFFAEDFE)
+ */
+#define MH_CIGAM_64 3489328638
+
+/*
+ FAT binary magic (0xCAFEBABE)
+ */
+#define FAT_MAGIC 3405691582
+
+/*
+ FAT binary magic, swapped (0xBEBAFECA)
+ */
+#define FAT_CIGAM 3199925962
+
+/*
+ FAT binary 64-bit magic (0xCAFEBABF)
+ */
+#define FAT_MAGIC_64 3405691583
+
+/*
+ FAT binary 64-bit magic, swapped (0xBFBAFECA)
+ */
+#define FAT_CIGAM_64 3216703178
+
+/*
+ Any CPU type
+ */
+#define CPU_TYPE_ANY -1
+
+/*
+ x86 (i386)
+ */
+#define CPU_TYPE_I386 7
+
+/*
+ x86_64
+ */
+#define CPU_TYPE_X86_64 16777223
+
+/*
+ ARM 32-bit
+ */
+#define CPU_TYPE_ARM 12
+
+/*
+ ARM 64-bit
+ */
+#define CPU_TYPE_ARM64 16777228
+
+/*
+ ARM 64-bit (32-bit pointers)
+ */
+#define CPU_TYPE_ARM64_32 33554444
+
+/*
+ PowerPC
+ */
+#define CPU_TYPE_POWERPC 18
+
+/*
+ PowerPC 64-bit
+ */
+#define CPU_TYPE_POWERPC64 16777234
+
+/*
+ All ARM64 subtypes
+ */
+#define CPU_SUBTYPE_ARM64_ALL 0
+
+/*
+ ARM64e (Apple Silicon with pointer authentication)
+ */
+#define CPU_SUBTYPE_ARM64E 2
+
+/*
+ ARM64 v8
+ */
+#define CPU_SUBTYPE_ARM64_V8 1
+
+/*
+ All x86_64 subtypes
+ */
+#define CPU_SUBTYPE_X86_64_ALL 3
+
+/*
+ Haswell and later
+ */
+#define CPU_SUBTYPE_X86_64_H 8
+
+/*
+ Relocatable object file
+ */
+#define MH_OBJECT 1
+
+/*
+ Demand paged executable file
+ */
+#define MH_EXECUTE 2
+
+/*
+ Fixed VM shared library file
+ */
+#define MH_FVMLIB 3
+
+/*
+ Core file
+ */
+#define MH_CORE 4
+
+/*
+ Preloaded executable file
+ */
+#define MH_PRELOAD 5
+
+/*
+ Dynamically bound shared library
+ */
+#define MH_DYLIB 6
+
+/*
+ Dynamic link editor
+ */
+#define MH_DYLINKER 7
+
+/*
+ Dynamically bound bundle file
+ */
+#define MH_BUNDLE 8
+
+/*
+ Shared library stub for static linking only
+ */
+#define MH_DYLIB_STUB 9
+
+/*
+ Companion file with only debug sections
+ */
+#define MH_DSYM 10
+
+/*
+ Kext bundle
+ */
+#define MH_KEXT_BUNDLE 11
+
+/*
+ Set of Mach-Os to be run in same process space
+ */
+#define MH_FILESET 12
+
+/*
+ The object file has no undefined references
+ */
+#define MH_NOUNDEFS 1
+
+/*
+ The object file is the output of an incremental link
+ */
+#define MH_INCRLINK 2
+
+/*
+ The object file is input for the dynamic linker
+ */
+#define MH_DYLDLINK 4
+
+/*
+ The object file's undefined references are bound by the dynamic linker
+ */
+#define MH_BINDATLOAD 8
+
+/*
+ The file has its dynamic undefined references prebound
+ */
+#define MH_PREBOUND 16
+
+/*
+ The file has its read-only and read-write segments split
+ */
+#define MH_SPLIT_SEGS 32
+
+/*
+ The shared library init routine is to be run lazily
+ */
+#define MH_LAZY_INIT 64
+
+/*
+ The image is using two-level namespace bindings
+ */
+#define MH_TWOLEVEL 128
+
+/*
+ The executable is forcing flat namespace bindings
+ */
+#define MH_FORCE_FLAT 256
+
+/*
+ This umbrella guarantees no multiple definitions
+ */
+#define MH_NOMULTIDEFS 512
+
+/*
+ Do not have dyld notify the prebinding agent
+ */
+#define MH_NOFIXPREBINDING 1024
+
+/*
+ The binary is not prebound but can have its prebinding redone
+ */
+#define MH_PREBINDABLE 2048
+
+/*
+ Indicates that this binary binds to all two-level namespace modules
+ */
+#define MH_ALLMODSBOUND 4096
+
+/*
+ Safe to divide up sections into sub-sections
+ */
+#define MH_SUBSECTIONS_VIA_SYMBOLS 8192
+
+/*
+ The binary has been canonicalized
+ */
+#define MH_CANONICAL 16384
+
+/*
+ The final linked image contains external weak symbols
+ */
+#define MH_WEAK_DEFINES 32768
+
+/*
+ The final linked image uses weak symbols
+ */
+#define MH_BINDS_TO_WEAK 65536
+
+/*
+ Allow stack execution
+ */
+#define MH_ALLOW_STACK_EXECUTION 131072
+
+/*
+ The binary declares it is safe for use in processes with uid zero
+ */
+#define MH_ROOT_SAFE 262144
+
+/*
+ The binary declares it is safe for use in processes when issetugid() is true
+ */
+#define MH_SETUID_SAFE 524288
+
+/*
+ The static linker does not need to examine dependent dylibs
+ */
+#define MH_NO_REEXPORTED_DYLIBS 1048576
+
+/*
+ The OS will load the main executable at a random address (ASLR/PIE)
+ */
+#define MH_PIE 2097152
+
+/*
+ Only for use on dylibs. When linking against a dylib
+ */
+#define MH_DEAD_STRIPPABLE_DYLIB 4194304
+
+/*
+ Contains a section of type S_THREAD_LOCAL_VARIABLES
+ */
+#define MH_HAS_TLV_DESCRIPTORS 8388608
+
+/*
+ When this bit is set, the OS will run the main executable with a non-executable heap
+ */
+#define MH_NO_HEAP_EXECUTION 16777216
+
+/*
+ The code was linked for use in an application extension
+ */
+#define MH_APP_EXTENSION_SAFE 33554432
+
+/*
+ External symbols listed in nlist should not be considered
+ */
+#define MH_NLIST_OUTOFSYNC_WITH_DYLDINFO 67108864
+
+/*
+ Allow LC_MIN_VERSION_MACOS and LC_BUILD_VERSION load commands with the platforms macOS, macCatalyst, iOSSimulator, tvOSSimulator and watchOSSimulator
+ */
+#define MH_SIM_SUPPORT 134217728
+
+/*
+ Segment of this file to be mapped
+ */
+#define LC_SEGMENT 1
+
+/*
+ Link-edit stab symbol table info
+ */
+#define LC_SYMTAB 2
+
+/*
+ Link-edit gdb symbol table info (obsolete)
+ */
+#define LC_SYMSEG 3
+
+/*
+ Thread
+ */
+#define LC_THREAD 4
+
+/*
+ Unix thread (includes a stack)
+ */
+#define LC_UNIXTHREAD 5
+
+/*
+ Load a fixed VM shared library (obsolete)
+ */
+#define LC_LOADFVMLIB 6
+
+/*
+ Fixed VM shared library identification (obsolete)
+ */
+#define LC_IDFVMLIB 7
+
+/*
+ Object identification info (obsolete)
+ */
+#define LC_IDENT 8
+
+/*
+ Fixed VM file inclusion (internal use)
+ */
+#define LC_FVMFILE 9
+
+/*
+ Prepage command (internal use)
+ */
+#define LC_PREPAGE 10
+
+/*
+ Dynamic link-edit symbol table info
+ */
+#define LC_DYSYMTAB 11
+
+/*
+ Load a dynamically linked shared library
+ */
+#define LC_LOAD_DYLIB 12
+
+/*
+ Dynamically linked shared library identification
+ */
+#define LC_ID_DYLIB 13
+
+/*
+ Load a dynamic linker
+ */
+#define LC_LOAD_DYLINKER 14
+
+/*
+ Dynamic linker identification
+ */
+#define LC_ID_DYLINKER 15
+
+/*
+ Modules prebound for a dynamically linked shared library
+ */
+#define LC_PREBOUND_DYLIB 16
+
+/*
+ Image routines
+ */
+#define LC_ROUTINES 17
+
+/*
+ Sub framework
+ */
+#define LC_SUB_FRAMEWORK 18
+
+/*
+ Sub umbrella
+ */
+#define LC_SUB_UMBRELLA 19
+
+/*
+ Sub client
+ */
+#define LC_SUB_CLIENT 20
+
+/*
+ Sub library
+ */
+#define LC_SUB_LIBRARY 21
+
+/*
+ Two-level namespace lookup hints
+ */
+#define LC_TWOLEVEL_HINTS 22
+
+/*
+ Prebind checksum
+ */
+#define LC_PREBIND_CKSUM 23
+
+/*
+ Load weak dylib
+ */
+#define LC_LOAD_WEAK_DYLIB 2147483672
+
+/*
+ 64-bit segment of this file to be mapped
+ */
+#define LC_SEGMENT_64 25
+
+/*
+ 64-bit image routines
+ */
+#define LC_ROUTINES_64 26
+
+/*
+ The uuid
+ */
+#define LC_UUID 27
+
+/*
+ Runpath additions
+ */
+#define LC_RPATH 2147483676
+
+/*
+ Local of code signature
+ */
+#define LC_CODE_SIGNATURE 29
+
+/*
+ Local of info to split segments
+ */
+#define LC_SEGMENT_SPLIT_INFO 30
+
+/*
+ Load and re-export dylib
+ */
+#define LC_REEXPORT_DYLIB 2147483679
+
+/*
+ Delay load of dylib until first use
+ */
+#define LC_LAZY_LOAD_DYLIB 32
+
+/*
+ Encrypted segment information
+ */
+#define LC_ENCRYPTION_INFO 33
+
+/*
+ Compressed dyld info
+ */
+#define LC_DYLD_INFO 34
+
+/*
+ Compressed dyld info (only)
+ */
+#define LC_DYLD_INFO_ONLY 2147483682
+
+/*
+ Load upward dylib
+ */
+#define LC_LOAD_UPWARD_DYLIB 2147483683
+
+/*
+ Build for MacOSX min OS version
+ */
+#define LC_VERSION_MIN_MACOSX 36
+
+/*
+ Build for iPhoneOS min OS version
+ */
+#define LC_VERSION_MIN_IPHONEOS 37
+
+/*
+ Compressed table of function start addresses
+ */
+#define LC_FUNCTION_STARTS 38
+
+/*
+ String for dyld to treat like environment variable
+ */
+#define LC_DYLD_ENVIRONMENT 39
+
+/*
+ Replacement for LC_UNIXTHREAD
+ */
+#define LC_MAIN 2147483688
+
+/*
+ Table of non-instructions in __text
+ */
+#define LC_DATA_IN_CODE 41
+
+/*
+ Source version used to build binary
+ */
+#define LC_SOURCE_VERSION 42
+
+/*
+ Code signing DRs copied from linked dylibs
+ */
+#define LC_DYLIB_CODE_SIGN_DRS 43
+
+/*
+ 64-bit encrypted segment information
+ */
+#define LC_ENCRYPTION_INFO_64 44
+
+/*
+ Linker options in MH_OBJECT files
+ */
+#define LC_LINKER_OPTION 45
+
+/*
+ Optimization hints in MH_OBJECT files
+ */
+#define LC_LINKER_OPTIMIZATION_HINT 46
+
+/*
+ Build for watchOS min OS version
+ */
+#define LC_VERSION_MIN_WATCHOS 48
+
+/*
+ Build for tvOS min OS version
+ */
+#define LC_VERSION_MIN_TVOS 47
+
+/*
+ Arbitrary data included within a Mach-O file
+ */
+#define LC_NOTE 49
+
+/*
+ Build for platform min OS version
+ */
+#define LC_BUILD_VERSION 50
+
+/*
+ Dyld exports trie
+ */
+#define LC_DYLD_EXPORTS_TRIE 2147483699
+
+/*
+ Chained fixups
+ */
+#define LC_DYLD_CHAINED_FIXUPS 2147483700
+
+/*
+ Fileset entry
+ */
+#define LC_FILESET_ENTRY 2147483701
+
+/*
+ macOS
+ */
+#define PLATFORM_MACOS 1
+
+/*
+ iOS
+ */
+#define PLATFORM_IOS 2
+
+/*
+ tvOS
+ */
+#define PLATFORM_TVOS 3
+
+/*
+ watchOS
+ */
+#define PLATFORM_WATCHOS 4
+
+/*
+ bridgeOS
+ */
+#define PLATFORM_BRIDGEOS 5
+
+/*
+ Mac Catalyst
+ */
+#define PLATFORM_MACCATALYST 6
+
+/*
+ iOS Simulator
+ */
+#define PLATFORM_IOSSIMULATOR 7
+
+/*
+ tvOS Simulator
+ */
+#define PLATFORM_TVOSSIMULATOR 8
+
+/*
+ watchOS Simulator
+ */
+#define PLATFORM_WATCHOSSIMULATOR 9
+
+/*
+ DriverKit
+ */
+#define PLATFORM_DRIVERKIT 10
+
+/*
+ visionOS
+ */
+#define PLATFORM_VISIONOS 11
+
+/*
+ visionOS Simulator
+ */
+#define PLATFORM_VISIONOSSIMULATOR 12
+
+/*
+ Clang
+ */
+#define TOOL_CLANG 1
+
+/*
+ Swift
+ */
+#define TOOL_SWIFT 2
+
+/*
+ ld (linker)
+ */
+#define TOOL_LD 3
+
+/*
+ lld (LLVM linker)
+ */
+#define TOOL_LLD 4
+
+/*
+ Code directory
+ */
+#define CSSLOT_CODEDIRECTORY 0
+
+/*
+ CMS signature
+ */
+#define CSSLOT_SIGNATURESLOT 65536
+
+/*
+ Requirements
+ */
+#define CSSLOT_REQUIREMENTS 2
+
+/*
+ Entitlements
+ */
+#define CSSLOT_ENTITLEMENTS 5
+
+/*
+ DER entitlements
+ */
+#define CSSLOT_DER_ENTITLEMENTS 7
+
+/*
+ Launch constraints
+ */
+#define CSSLOT_LAUNCH_CONSTRAINT_SELF 8
+
+/*
+ Alternate code directories
+ */
+#define CSSLOT_ALTERNATE_CODEDIRECTORIES 4096
+
+/*
+ SuperBlob containing all code signature data
+ */
+#define CSMAGIC_EMBEDDED_SIGNATURE 4208856256
+
+/*
+ Code directory
+ */
+#define CSMAGIC_CODEDIRECTORY 4208856066
+
+/*
+ Requirements blob
+ */
+#define CSMAGIC_REQUIREMENTS 4208856065
+
+/*
+ Entitlements blob
+ */
+#define CSMAGIC_ENTITLEMENTS 4208882033
+
+/*
+ CMS signature blob
+ */
+#define CSMAGIC_BLOBWRAPPER 4208855809
+
+/*
+ Detached signature
+ */
+#define CSMAGIC_DETACHED_SIGNATURE 4208856257
+
+/*
+ No hash
+ */
+#define CS_HASHTYPE_SHA1 1
+
+/*
+ SHA-256
+ */
+#define CS_HASHTYPE_SHA256 2
+
+/*
+ SHA-256 truncated to 20 bytes
+ */
+#define CS_HASHTYPE_SHA256_TRUNCATED 3
+
+/*
+ SHA-384
+ */
+#define CS_HASHTYPE_SHA384 4
+
+/*
+ SHA-512
+ */
+#define CS_HASHTYPE_SHA512 5
+
+/*
+ Undefined symbol
+ */
+#define N_UNDF 0
+
+/*
+ Absolute symbol
+ */
+#define N_ABS 2
+
+/*
+ Section-relative symbol
+ */
+#define N_SECT 14
+
+/*
+ Prebound undefined (obsolete)
+ */
+#define N_PBUD 12
+
+/*
+ Indirect symbol
+ */
+#define N_INDR 10
+
+/*
+ Mask for symbol type
+ */
+#define N_TYPE 14
+
+/*
+ External symbol
+ */
+#define N_EXT 1
+
+/*
+ Private external symbol
+ */
+#define N_PEXT 16
+
+/*
+ Stab symbol (debug info)
+ */
+#define N_STAB 224
+
+/*
+ Referenced dynamically
+ */
+#define REFERENCED_DYNAMICALLY 16
+
+/*
+ No dead strip
+ */
+#define N_NO_DEAD_STRIP 32
+
+/*
+ Weak reference
+ */
+#define N_WEAK_REF 64
+
+/*
+ Weak definition
+ */
+#define N_WEAK_DEF 128
+
+/*
+ Symbol has thumb function (ARM)
+ */
+#define N_ARM_THUMB_DEF 8
+
+/*
+ Symbol is a resolver function
+ */
+#define N_SYMBOL_RESOLVER 256
+
+/*
+ Symbol has alternate entry point
+ */
+#define N_ALT_ENTRY 512
+
+/*
+ Symbol is cold (rarely executed)
+ */
+#define N_COLD_FUNC 1024
+
+/*
+ IL-only image (contains only MSIL, no native code)
+ */
+#define COMIMAGE_FLAGS_ILONLY 1
+
+/*
+ Image requires 32-bit environment
+ */
+#define COMIMAGE_FLAGS_32BITREQUIRED 2
+
+/*
+ Image has strong name signature
+ */
+#define COMIMAGE_FLAGS_STRONGNAMESIGNED 8
+
+/*
+ Image should be tracked for debug information
+ */
+#define COMIMAGE_FLAGS_TRACKDEBUGDATA 65536
+
+/*
+ Image prefers 32-bit execution
+ */
+#define COMIMAGE_FLAGS_32BITPREFERRED 131072
+
+/*
+ Certificate revision 1.0
+ */
+#define WIN_CERT_REVISION_1_0 256
+
+/*
+ Certificate revision 2.0
+ */
+#define WIN_CERT_REVISION_2_0 512
+
+/*
+ X.509 certificate format
+ */
+#define WIN_CERT_TYPE_X509 1
+
+/*
+ PKCS#7 SignedData format
+ */
+#define WIN_CERT_TYPE_PKCS_SIGNED_DATA 2
+
+/*
+ Reserved certificate type
+ */
+#define WIN_CERT_TYPE_RESERVED_1 3
+
+/*
+ Timestamp signed certificate
+ */
+#define WIN_CERT_TYPE_TS_STACK_SIGNED 4
+
+/*
  Unknown machine type
  */
 #define IMAGE_FILE_MACHINE_UNKNOWN 0
@@ -344,12 +3059,1326 @@
 #define IMAGE_DEBUG_TYPE_REPRO 16
 
 /*
+ GeoTiff tag ID for the GeoKeyDirectoryTag (34735)
+ */
+#define GEOTIFF_DIRECTORY_TAG 34735
+
+/*
+ GeoTiff tag ID for the GeoDoubleParamsTag (34736) - stores double precision values
+ */
+#define GEOTIFF_DOUBLE_PARAMS_TAG 34736
+
+/*
+ GeoTiff tag ID for the GeoAsciiParamsTag (34737) - stores ASCII string values
+ */
+#define GEOTIFF_ASCII_PARAMS_TAG 34737
+
+/*
+ TIFF tag ID for ModelTransformation (34264) - stores 4x4 transformation matrix
+ */
+#define MODEL_TRANSFORMATION_TAG 34264
+
+/*
+ Version string offset (4 bytes ASCII)
+ */
+#define VERSION 0
+
+/*
+ Exit pupil position offset
+ */
+#define EXIT_PUPIL_POSITION 4
+
+/*
+ AF aperture offset
+ */
+#define AF_APERTURE 5
+
+/*
+ Focus position offset
+ */
+#define FOCUS_POSITION 8
+
+/*
+ Focal length offset (encoded)
+ */
+#define FOCAL_LENGTH 10
+
+/*
+ Lens ID number offset
+ */
+#define LENS_ID_NUMBER 11
+
+/*
+ Lens F-stops offset (encoded as value / 12)
+ */
+#define LENS_FSTOPS 12
+
+/*
+ Minimum focal length offset (encoded)
+ */
+#define MIN_FOCAL_LENGTH 13
+
+/*
+ Maximum focal length offset (encoded)
+ */
+#define MAX_FOCAL_LENGTH 14
+
+/*
+ Maximum aperture at minimum focal length offset (encoded APEX value)
+ */
+#define MAX_APERTURE_AT_MIN_FOCAL 15
+
+/*
+ Maximum aperture at maximum focal length offset (encoded APEX value)
+ */
+#define MAX_APERTURE_AT_MAX_FOCAL 16
+
+/*
+ MCU (Micro Controller Unit) version offset
+ */
+#define MCU_VERSION 17
+
+/*
+ Minimum structure size for this version
+ */
+#define MIN_SIZE 18
+
+/*
+ Effective maximum aperture offset
+ */
+#define EFFECTIVE_MAX_APERTURE 19
+
+/*
+ Bit 0: MF (Manual Focus) lens - no AF motor
+ */
+#define MF 1
+
+/*
+ Bit 1: D lens - has distance encoder for 3D matrix metering
+ */
+#define D 2
+
+/*
+ Bit 2: G lens - no aperture ring (electronically controlled)
+ */
+#define G 4
+
+/*
+ Bit 3: VR (Vibration Reduction) lens - has optical stabilization
+ */
+#define VR 8
+
+/*
+ Bit 4: 1 (Nikon 1 mount lens)
+ */
+#define NIKON_1 16
+
+/*
+ Bit 5: FT-1 adapter (Nikon F to Nikon 1)
+ */
+#define FT1 32
+
+/*
+ Bit 6: E lens (electronic aperture, newer than G)
+ */
+#define E 64
+
+/*
+ Bit 7: AF-S lens (Silent Wave Motor for autofocus)
+ */
+#define AF_S 128
+
+/*
+ Rich Capture mode tag (Off/On/Auto)
+ */
+#define MICROSOFT_RICH_CAPTURE 1
+
+/*
+ Rich Capture variant type (HDR, Flash, etc.)
+ */
+#define MICROSOFT_RICH_CAPTURE_MODE 2
+
+/*
+ Living Image availability
+ */
+#define MICROSOFT_LIVING_IMAGE 4
+
+/*
+ Dynamic Flash blending mode
+ */
+#define MICROSOFT_DYNAMIC_FLASH 6
+
+/*
+ Refocus availability status
+ */
+#define MICROSOFT_REFOCUS 8
+
+/*
+ Refocus depth map resolution
+ */
+#define MICROSOFT_REFOCUS_DEPTH 9
+
+/*
+ PureView oversampling mode
+ */
+#define MICROSOFT_PUREVIEW_MODE 11
+
+/*
+ PureView full resolution
+ */
+#define MICROSOFT_PUREVIEW_RESOLUTION 12
+
+/*
+ Creative Studio effect type
+ */
+#define MICROSOFT_CREATIVE_EFFECT 14
+
+/*
+ 4K video recording enabled
+ */
+#define MICROSOFT_VIDEO_4K 16
+
+/*
+ Rich audio recording mode
+ */
+#define MICROSOFT_AUDIO_RICHRECORD 18
+
+/*
+ Optical image stabilization status
+ */
+#define MICROSOFT_STABILIZATION 20
+
+/*
+ Auto HDR mode enabled
+ */
+#define MICROSOFT_AUTO_HDR 22
+
+/*
+ Panorama mode enabled
+ */
+#define MICROSOFT_PANORAMA_MODE 24
+
+/*
+ Lens attachment type
+ */
+#define MICROSOFT_LENS_TYPE 26
+
+/*
+ ClearSight dual camera mode enabled
+ */
+#define QUALCOMM_CLEAR_SIGHT 1
+
+/*
+ ClearSight mode type
+ */
+#define QUALCOMM_CLEAR_SIGHT_MODE 2
+
+/*
+ ChromaFlash mode enabled
+ */
+#define QUALCOMM_CHROMA_FLASH 4
+
+/*
+ Number of frames used for ChromaFlash
+ */
+#define QUALCOMM_CHROMA_FLASH_FRAMES 5
+
+/*
+ OptiZoom hybrid zoom enabled
+ */
+#define QUALCOMM_OPTIZOOM 7
+
+/*
+ Digital zoom level
+ */
+#define QUALCOMM_ZOOM_LEVEL 8
+
+/*
+ HDR processing mode
+ */
+#define QUALCOMM_HDR_MODE 10
+
+/*
+ Multi-frame noise reduction enabled
+ */
+#define QUALCOMM_MULTI_FRAME_NR 12
+
+/*
+ Scene detection mode
+ */
+#define QUALCOMM_SCENE_DETECTION 14
+
+/*
+ Bokeh depth effect mode
+ */
+#define QUALCOMM_BOKEH_MODE 16
+
+/*
+ Bokeh blur intensity level
+ */
+#define QUALCOMM_BOKEH_LEVEL 17
+
+/*
+ Low light enhancement mode
+ */
+#define QUALCOMM_LOW_LIGHT_MODE 19
+
+/*
+ Night mode processing enabled
+ */
+#define QUALCOMM_NIGHT_MODE 21
+
+/*
+ Phase detection autofocus enabled
+ */
+#define QUALCOMM_PHASE_DETECT_AF 23
+
+/*
+ Image signal processor version
+ */
+#define QUALCOMM_ISP_VERSION 25
+
+/*
+ Number of frames merged for final image
+ */
+#define QUALCOMM_FRAME_MERGE_COUNT 27
+
+/*
+ MakerNote version string
+ */
+#define SAMSUNG_MAKERNOTE_VERSION 1
+
+/*
+ Device type identifier
+ */
+#define SAMSUNG_DEVICE_TYPE 2
+
+/*
+ Samsung model ID
+ */
+#define SAMSUNG_MODEL_ID 3
+
+/*
+ Picture Wizard settings
+ */
+#define SAMSUNG_PICTURE_WIZARD 33
+
+/*
+ Local location name
+ */
+#define SAMSUNG_LOCAL_LOCATION_NAME 48
+
+/*
+ Location name
+ */
+#define SAMSUNG_LOCATION_NAME 49
+
+/*
+ Preview image data
+ */
+#define SAMSUNG_PREVIEW 53
+
+/*
+ RAW data byte order
+ */
+#define SAMSUNG_RAW_DATA_BYTE_ORDER 64
+
+/*
+ White balance setup
+ */
+#define SAMSUNG_WHITE_BALANCE_SETUP 65
+
+/*
+ Camera temperature
+ */
+#define SAMSUNG_CAMERA_TEMPERATURE 67
+
+/*
+ RAW data CFA pattern
+ */
+#define SAMSUNG_RAW_DATA_CFA_PATTERN 80
+
+/*
+ Face detect enabled
+ */
+#define SAMSUNG_FACE_DETECT 256
+
+/*
+ Face recognition data
+ */
+#define SAMSUNG_FACE_RECOGNITION 288
+
+/*
+ Face name data
+ */
+#define SAMSUNG_FACE_NAME 291
+
+/*
+ Firmware name string
+ */
+#define SAMSUNG_FIRMWARE_NAME 513
+
+/*
+ Sensor areas information
+ */
+#define SAMSUNG_SENSOR_AREAS 528
+
+/*
+ Color space identifier
+ */
+#define SAMSUNG_COLOR_SPACE 545
+
+/*
+ Smart Range setting
+ */
+#define SAMSUNG_SMART_RANGE 546
+
+/*
+ Exposure compensation value
+ */
+#define SAMSUNG_EXPOSURE_COMPENSATION 547
+
+/*
+ ISO speed value
+ */
+#define SAMSUNG_ISO 548
+
+/*
+ Exposure time
+ */
+#define SAMSUNG_EXPOSURE_TIME 549
+
+/*
+ F-Number (aperture)
+ */
+#define SAMSUNG_FNUMBER 550
+
+/*
+ Focal length in 35mm format
+ */
+#define SAMSUNG_FOCAL_LENGTH_35MM 551
+
+/*
+ Encryption key for encrypted data
+ */
+#define SAMSUNG_ENCRYPTION_KEY 560
+
+/*
+ WB RGGB levels (uncorrected)
+ */
+#define SAMSUNG_WB_RGGB_LEVELS_UNCORRECTED 562
+
+/*
+ WB RGGB levels (auto)
+ */
+#define SAMSUNG_WB_RGGB_LEVELS_AUTO 563
+
+/*
+ WB RGGB levels (illuminator 1)
+ */
+#define SAMSUNG_WB_RGGB_LEVELS_ILLUMINATOR1 564
+
+/*
+ WB RGGB levels (illuminator 2)
+ */
+#define SAMSUNG_WB_RGGB_LEVELS_ILLUMINATOR2 565
+
+/*
+ WB RGGB levels (black)
+ */
+#define SAMSUNG_WB_RGGB_LEVELS_BLACK 566
+
+/*
+ Color matrix data
+ */
+#define SAMSUNG_COLOR_MATRIX 576
+
+/*
+ Color matrix for sRGB
+ */
+#define SAMSUNG_COLOR_MATRIX_SRGB 577
+
+/*
+ Color matrix for Adobe RGB
+ */
+#define SAMSUNG_COLOR_MATRIX_ADOBERGB 578
+
+/*
+ Tone curve 1 data
+ */
+#define SAMSUNG_TONE_CURVE_1 579
+
+/*
+ Tone curve 2 data
+ */
+#define SAMSUNG_TONE_CURVE_2 580
+
+/*
+ Tone curve 3 data
+ */
+#define SAMSUNG_TONE_CURVE_3 581
+
+/*
+ Tone curve 4 data
+ */
+#define SAMSUNG_TONE_CURVE_4 582
+
+/*
+ Lens type identifier (Type1)
+ */
+#define SAMSUNG_LENS_TYPE_T1 2561
+
+/*
+ Lens firmware version
+ */
+#define SAMSUNG_LENS_FIRMWARE 2562
+
+/*
+ Internal lens serial number
+ */
+#define SAMSUNG_INTERNAL_LENS_SERIAL_NUMBER 2563
+
+/*
+ Favorite color setting (Type2)
+ */
+#define SAMSUNG_FAVORITE_COLOR 4
+
+/*
+ World time location (Type2)
+ */
+#define SAMSUNG_WORLD_TIME_LOCATION 5
+
+/*
+ High dynamic range mode (Type2)
+ */
+#define SAMSUNG_HDR 10
+
+/*
+ Mobile Country Code (Type2)
+ */
+#define SAMSUNG_MCC 12
+
+/*
+ Mobile Network Code (Type2)
+ */
+#define SAMSUNG_MNC 13
+
+/*
+ Leica Camera ID (Type2 - for Leica-Samsung partnership)
+ */
+#define SAMSUNG_LEICA_CAMERA_ID 17
+
+/*
+ Leica Lens ID (Type2 - for Leica-Samsung partnership)
+ */
+#define SAMSUNG_LEICA_LENS_ID 18
+
+/*
+ Contrast level (Type2)
+ */
+#define SAMSUNG_CONTRAST_LEVEL 64
+
+/*
+ Sharpness level (Type2)
+ */
+#define SAMSUNG_SHARPNESS_LEVEL 65
+
+/*
+ Saturation level (Type2)
+ */
+#define SAMSUNG_SATURATION_LEVEL 80
+
+/*
+ Smart Album Color (Type2)
+ */
+#define SAMSUNG_SMART_ALBUM_COLOR 96
+
+/*
+ Depth map width (Type2)
+ */
+#define SAMSUNG_DEPTH_MAP_WIDTH 160
+
+/*
+ Depth map height (Type2)
+ */
+#define SAMSUNG_DEPTH_MAP_HEIGHT 161
+
+/*
+ Depth map data (Type2)
+ */
+#define SAMSUNG_DEPTH_MAP 162
+
+/*
+ AI Scene Optimizer enabled (Galaxy)
+ */
+#define SAMSUNG_SCENE_OPTIMIZER 4097
+
+/*
+ Detected scene type (Galaxy)
+ */
+#define SAMSUNG_SCENE_TYPE 4098
+
+/*
+ Single Take mode enabled (Galaxy)
+ */
+#define SAMSUNG_SINGLE_TAKE 4101
+
+/*
+ Single Take frame number (Galaxy)
+ */
+#define SAMSUNG_SINGLE_TAKE_FRAME 4102
+
+/*
+ Expert RAW mode enabled (Galaxy)
+ */
+#define SAMSUNG_EXPERT_RAW 4104
+
+/*
+ Multi-frame noise reduction enabled (Galaxy)
+ */
+#define SAMSUNG_MULTI_FRAME_NR 4106
+
+/*
+ Director's View multi-camera mode (Galaxy)
+ */
+#define SAMSUNG_DIRECTORS_VIEW 4108
+
+/*
+ Pro mode manual controls enabled (Galaxy)
+ */
+#define SAMSUNG_PRO_MODE 4110
+
+/*
+ Object tracking autofocus enabled (Galaxy)
+ */
+#define SAMSUNG_OBJECT_TRACKING 4112
+
+/*
+ Night mode processing enabled (Galaxy)
+ */
+#define SAMSUNG_NIGHT_MODE 4114
+
+/*
+ Night Hyperlapse mode enabled (Galaxy)
+ */
+#define SAMSUNG_NIGHT_HYPERLAPSE 4116
+
+/*
+ Super Steady video stabilization (Galaxy)
+ */
+#define SAMSUNG_SUPER_STEADY 4118
+
+/*
+ Food photography mode enabled (Galaxy)
+ */
+#define SAMSUNG_FOOD_MODE 4120
+
+/*
+ Portrait Live Focus effect (Galaxy)
+ */
+#define SAMSUNG_PORTRAIT_EFFECT 4122
+
+/*
+ Active camera lens identifier (Galaxy)
+ */
+#define SAMSUNG_LENS_TYPE 4124
+
+/*
+ Digital zoom magnification level (Galaxy)
+ */
+#define SAMSUNG_ZOOM_LEVEL 4126
+
+/*
+ GPS latitude (signed int, scale: 1e-7)
+ */
+#define DJI_GPS_LATITUDE 257
+
+/*
+ GPS longitude (signed int, scale: 1e-7)
+ */
+#define DJI_GPS_LONGITUDE 258
+
+/*
+ Absolute altitude MSL (meters)
+ */
+#define DJI_GPS_ALTITUDE 259
+
+/*
+ Relative altitude from takeoff (meters)
+ */
+#define DJI_RELATIVE_ALTITUDE 260
+
+/*
+ Gimbal pitch angle (degrees, -90 to +30)
+ */
+#define DJI_GIMBAL_PITCH 261
+
+/*
+ Gimbal roll angle (degrees)
+ */
+#define DJI_GIMBAL_ROLL 262
+
+/*
+ Gimbal yaw angle (degrees, 0-360)
+ */
+#define DJI_GIMBAL_YAW 263
+
+/*
+ Ground speed (m/s)
+ */
+#define DJI_FLIGHT_SPEED 264
+
+/*
+ Flight direction (degrees, 0-360)
+ */
+#define DJI_FLIGHT_DIRECTION 265
+
+/*
+ Aircraft yaw/heading (degrees)
+ */
+#define DJI_AIRCRAFT_YAW 266
+
+/*
+ Aircraft pitch (degrees)
+ */
+#define DJI_AIRCRAFT_PITCH 267
+
+/*
+ Aircraft roll (degrees)
+ */
+#define DJI_AIRCRAFT_ROLL 268
+
+/*
+ Distance from home point (meters)
+ */
+#define DJI_HOME_DISTANCE 269
+
+/*
+ Battery percentage (0-100)
+ */
+#define DJI_BATTERY_LEVEL 270
+
+/*
+ Battery voltage (millivolts)
+ */
+#define DJI_BATTERY_VOLTAGE 271
+
+/*
+ Flight time (seconds)
+ */
+#define DJI_FLIGHT_TIME 272
+
+/*
+ Flight mode code
+ */
+#define DJI_FLIGHT_MODE 273
+
+/*
+ GPS signal strength (0-5)
+ */
+#define DJI_GPS_SIGNAL 274
+
+/*
+ Number of GPS satellites
+ */
+#define DJI_SATELLITE_COUNT 275
+
+/*
+ Obstacle avoidance status
+ */
+#define DJI_OBSTACLE_AVOID 276
+
+/*
+ Camera ISO value
+ */
+#define DJI_CAMERA_ISO 277
+
+/*
+ Shutter speed (1/n)
+ */
+#define DJI_CAMERA_SHUTTER 278
+
+/*
+ Aperture f-number (f/n)
+ */
+#define DJI_CAMERA_APERTURE 279
+
+/*
+ Exposure compensation (EV)
+ */
+#define DJI_CAMERA_EV 280
+
+/*
+ White balance mode
+ */
+#define DJI_CAMERA_WB 281
+
+/*
+ Image format (JPEG/RAW/DNG)
+ */
+#define DJI_IMAGE_FORMAT 282
+
+/*
+ Color mode (Normal/D-Cinelike/D-Log)
+ */
+#define DJI_COLOR_MODE 283
+
+/*
+ Hasselblad camera flag
+ */
+#define DJI_HASSELBLAD 284
+
+/*
+ Camera model
+ */
+#define FLIR_MODEL 1
+
+/*
+ Serial number
+ */
+#define FLIR_SERIAL 2
+
+/*
+ Firmware version
+ */
+#define FLIR_FIRMWARE 3
+
+/*
+ Minimum temperature in scene (K)
+ */
+#define FLIR_TEMPERATURE_MIN 256
+
+/*
+ Maximum temperature in scene (K)
+ */
+#define FLIR_TEMPERATURE_MAX 257
+
+/*
+ Center spot temperature (K)
+ */
+#define FLIR_TEMPERATURE_CENTER 258
+
+/*
+ Emissivity (0-100, scale: 0.01)
+ */
+#define FLIR_EMISSIVITY 259
+
+/*
+ Reflected apparent temp (K)
+ */
+#define FLIR_REFLECTED_TEMP 260
+
+/*
+ Atmospheric temperature (K)
+ */
+#define FLIR_ATMOSPHERIC_TEMP 261
+
+/*
+ Distance to object (meters)
+ */
+#define FLIR_DISTANCE 262
+
+/*
+ Relative humidity (%)
+ */
+#define FLIR_HUMIDITY 263
+
+/*
+ Color palette code
+ */
+#define FLIR_PALETTE 264
+
+/*
+ Palette method (linear/histogram)
+ */
+#define FLIR_PALETTE_METHOD 265
+
+/*
+ Palette stretch mode
+ */
+#define FLIR_PALETTE_STRETCH 266
+
+/*
+ Camera range min (K)
+ */
+#define FLIR_TEMPERATURE_RANGE_MIN 267
+
+/*
+ Camera range max (K)
+ */
+#define FLIR_TEMPERATURE_RANGE_MAX 268
+
+/*
+ Atmospheric transmission (0-100)
+ */
+#define FLIR_ATMOSPHERIC_TRANS 269
+
+/*
+ External optics temp (K)
+ */
+#define FLIR_EXTERNAL_OPTICS_TEMP 270
+
+/*
+ External optics transmission
+ */
+#define FLIR_EXTERNAL_OPTICS_TRANS 271
+
+/*
+ IR window temperature (K)
+ */
+#define FLIR_IR_WINDOW_TEMP 272
+
+/*
+ IR window transmission
+ */
+#define FLIR_IR_WINDOW_TRANS 273
+
+/*
+ Planck R1 constant
+ */
+#define FLIR_PLANCK_R1 274
+
+/*
+ Planck R2 constant
+ */
+#define FLIR_PLANCK_R2 275
+
+/*
+ Planck B constant
+ */
+#define FLIR_PLANCK_B 276
+
+/*
+ Planck F constant
+ */
+#define FLIR_PLANCK_F 277
+
+/*
+ Planck O constant (offset)
+ */
+#define FLIR_PLANCK_O 278
+
+/*
+ Camera internal min temp (K)
+ */
+#define FLIR_CAMERA_TEMP_MIN 279
+
+/*
+ Camera internal max temp (K)
+ */
+#define FLIR_CAMERA_TEMP_MAX 280
+
+/*
+ Image type (thermal/visible)
+ */
+#define FLIR_IMAGE_TYPE 281
+
+/*
+ Last calibration date
+ */
+#define FLIR_CALIBRATION_DATE 282
+
+/*
+ Focus distance (meters)
+ */
+#define FLIR_FOCUS_DISTANCE 283
+
+/*
+ Lens model identifier
+ */
+#define FLIR_LENS_MODEL 284
+
+/*
+ Peak temperature in frame (K)
+ */
+#define FLIR_PEAK_TEMP 285
+
+/*
+ Valley (coldest) temp (K)
+ */
+#define FLIR_VALLEY_TEMP 286
+
+/*
+ Measurement mode
+ */
+#define FLIR_MEASUREMENT_MODE 287
+
+/*
+ Display unit (C/F/K)
+ */
+#define FLIR_TEMPERATURE_UNIT 288
+
+/*
+ Isotherm lower limit (K)
+ */
+#define FLIR_ISOTHERM_MIN 289
+
+/*
+ Isotherm upper limit (K)
+ */
+#define FLIR_ISOTHERM_MAX 290
+
+/*
+ Isotherm mode enabled
+ */
+#define FLIR_ISOTHERM_ENABLED 291
+
+/*
+ Auto level/span mode
+ */
+#define FLIR_LEVEL_SPAN_AUTO 292
+
+/*
+ Gain mode (auto/manual)
+ */
+#define FLIR_GAIN_MODE 293
+
+/*
+ Frame rate (Hz)
+ */
+#define FLIR_FRAME_RATE 294
+
+/*
+ Firmware version
+ */
+#define GOPRO_VERSION 1
+
+/*
+ Camera model
+ */
+#define GOPRO_MODEL 2
+
+/*
+ Serial number
+ */
+#define GOPRO_SERIAL 3
+
+/*
+ Video/Photo resolution
+ */
+#define GOPRO_RESOLUTION 256
+
+/*
+ Frame rate (fps)
+ */
+#define GOPRO_FRAME_RATE 257
+
+/*
+ Field of view
+ */
+#define GOPRO_FOV 258
+
+/*
+ Low light mode
+ */
+#define GOPRO_LOW_LIGHT 259
+
+/*
+ Protune enabled
+ */
+#define GOPRO_PROTUNE 260
+
+/*
+ White balance setting
+ */
+#define GOPRO_WHITE_BALANCE 261
+
+/*
+ Color profile (flat/GoPro)
+ */
+#define GOPRO_COLOR 262
+
+/*
+ Sharpness level
+ */
+#define GOPRO_SHARPNESS 263
+
+/*
+ Contrast (Protune)
+ */
+#define GOPRO_CONTRAST 264
+
+/*
+ Saturation (Protune)
+ */
+#define GOPRO_SATURATION 265
+
+/*
+ Minimum ISO (Protune)
+ */
+#define GOPRO_ISO_MIN 266
+
+/*
+ Maximum ISO (Protune)
+ */
+#define GOPRO_ISO_MAX 267
+
+/*
+ Exposure compensation
+ */
+#define GOPRO_EXPOSURE 268
+
+/*
+ Shutter speed
+ */
+#define GOPRO_SHUTTER 269
+
+/*
+ Metering mode
+ */
+#define GOPRO_METERING 270
+
+/*
+ Spot meter area
+ */
+#define GOPRO_SPOT_METER 271
+
+/*
+ Electronic Image Stabilization
+ */
+#define GOPRO_EIS 272
+
+/*
+ HyperSmooth level
+ */
+#define GOPRO_HYPERSMOOTH 273
+
+/*
+ HyperSmooth Boost
+ */
+#define GOPRO_BOOST 274
+
+/*
+ Stabilization mode
+ */
+#define GOPRO_STABILIZATION_MODE 275
+
+/*
+ Auto Boost mode
+ */
+#define GOPRO_AUTO_BOOST 276
+
+/*
+ SuperPhoto mode
+ */
+#define GOPRO_SUPER_PHOTO 277
+
+/*
+ HDR photo mode
+ */
+#define GOPRO_HDR 278
+
+/*
+ Digital zoom level
+ */
+#define GOPRO_DIGITAL_ZOOM 279
+
+/*
+ Raw audio enabled
+ */
+#define GOPRO_RAW_AUDIO 280
+
+/*
+ Wind noise reduction
+ */
+#define GOPRO_WIND_NOISE 281
+
+/*
+ TimeWarp speed multiplier
+ */
+#define GOPRO_TIMEWARP_SPEED 282
+
+/*
+ Video codec (H.264/H.265)
+ */
+#define GOPRO_VIDEO_ENCODING 283
+
+/*
+ Video bitrate
+ */
+#define GOPRO_BIT_RATE 284
+
+/*
+ Camera orientation
+ */
+#define GOPRO_ORIENTATION 285
+
+/*
+ GPS fix status
+ */
+#define GOPRO_GPS_FIX 286
+
+/*
+ Lens model identifier
+ */
+#define GOPRO_LENS_MODEL 287
+
+/*
+ Night photo mode
+ */
+#define GOPRO_NIGHT_PHOTO 288
+
+/*
+ Burst photo rate
+ */
+#define GOPRO_BURST_RATE 289
+
+/*
+ Live burst mode
+ */
+#define GOPRO_LIVE_BURST 290
+
+/*
+ Time lapse interval (ms)
+ */
+#define GOPRO_TIMELAPSE_INTERVAL 291
+
+/*
+ Night lapse interval
+ */
+#define GOPRO_NIGHT_LAPSE_INTERVAL 292
+
+/*
+ Loop recording duration
+ */
+#define GOPRO_LOOP_DURATION 293
+
+/*
+ Camera model identifier
+ */
+#define LYTRO_MODEL 1
+
+/*
+ Camera serial number
+ */
+#define LYTRO_SERIAL 2
+
+/*
+ Firmware version
+ */
+#define LYTRO_FIRMWARE 3
+
+/*
+ Light field data version
+ */
+#define LYTRO_LF_VERSION 256
+
+/*
+ Microlens pitch (micrometers)
+ */
+#define LYTRO_MICROLENS_PITCH 257
+
+/*
+ Microlens array rotation
+ */
+#define LYTRO_MICROLENS_ROTATION 258
+
+/*
+ Minimum depth (mm)
+ */
+#define LYTRO_DEPTH_MIN 259
+
+/*
+ Maximum depth (mm)
+ */
+#define LYTRO_DEPTH_MAX 260
+
+/*
+ Current focus plane depth (mm)
+ */
+#define LYTRO_FOCUS_DEPTH 261
+
+/*
+ Refocusable depth range (mm)
+ */
+#define LYTRO_REFOCUS_RANGE 262
+
+/*
+ Sensor resolution code
+ */
+#define LYTRO_SENSOR_RESOLUTION 263
+
+/*
+ Image orientation
+ */
+#define LYTRO_IMAGE_ORIENTATION 264
+
+/*
+ Exposure duration (ms)
+ */
+#define LYTRO_EXPOSURE_DURATION 265
+
+/*
+ ISO setting
+ */
+#define LYTRO_ISO_SPEED 266
+
+/*
+ Zoom factor (x100)
+ */
+#define LYTRO_ZOOM_FACTOR 267
+
+/*
+ Processing algorithm version
+ */
+#define LYTRO_ALGORITHM_VERSION 268
+
+/*
+ Depth map generation enabled
+ */
+#define LYTRO_DEPTH_MAP_ENABLED 269
+
+/*
+ Perspective shift capability
+ */
+#define LYTRO_PERSPECTIVE_SHIFT 270
+
+/*
+ Camera calibration date
+ */
+#define LYTRO_CALIBRATION_DATE 271
+
+/*
+ Sensor temperature (°C)
+ */
+#define LYTRO_TEMPERATURE 272
+
+/*
+ Raw light field data size (MB)
+ */
+#define LYTRO_RAW_DATA_SIZE 273
+
+/*
+ Special tag IDs for IFD pointers
+ */
+#define EXIF_IFD_POINTER 34665
+
+#define GPS_INFO_IFD_POINTER 34853
+
+/*
  Opaque handle type for C API.
  C code receives a pointer to this type but cannot access its contents.
  */
 typedef struct ExifToolHandle {
     uint8_t _private[0];
 } ExifToolHandle;
+
+/*
+ Retrieves the last error message.
+
+ # Returns
+ Pointer to null-terminated error message string.
+ Never returns NULL (returns "No error" if no error occurred).
+
+ # String Lifetime
+ The returned string is valid until:
+ - Next API call that sets an error on the same thread
+ - Thread termination
+
+ # Thread Safety
+ Thread-safe. Each thread has its own error message.
+ */
+const char *exiftool_get_last_error(void);
 
 /*
  Creates a new ExifTool handle.
@@ -606,22 +4635,5 @@ int exiftool_remove_tag(struct ExifToolHandle *handle, const char *tag_name);
  Thread-safe for read-only access to handle.
  */
 int exiftool_write_file(const struct ExifToolHandle *handle, const char *filepath);
-
-/*
- Retrieves the last error message.
-
- # Returns
- Pointer to null-terminated error message string.
- Never returns NULL (returns "No error" if no error occurred).
-
- # String Lifetime
- The returned string is valid until:
- - Next API call that sets an error on the same thread
- - Thread termination
-
- # Thread Safety
- Thread-safe. Each thread has its own error message.
- */
-const char *exiftool_get_last_error(void);
 
 #endif  /* OXIDEX_H */

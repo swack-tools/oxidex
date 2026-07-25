@@ -6,7 +6,7 @@
 //! Note: Tests requiring actual raw file fixtures will fail if fixtures
 //! don't exist yet - that's expected and OK for this iteration.
 
-use oxidex::parsers::raw::{parse_raw_metadata, RawFormat};
+use oxidex::parsers::raw::{RawFormat, parse_raw_metadata};
 use std::fs;
 
 #[test]

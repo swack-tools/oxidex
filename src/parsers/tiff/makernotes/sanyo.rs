@@ -20,69 +20,58 @@
 
 #![allow(dead_code)]
 
+use crate::const_decoder;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
+use super::registries::sanyo::sanyo_registry;
 use super::shared::MakerNoteParser;
+use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::tag_registry::TagRegistry;
 
-// Sanyo MakerNote Tag IDs
-const SANYO_QUALITY: u16 = 0x0100;
-const SANYO_FOCUS_MODE: u16 = 0x0102;
-const SANYO_FLASH_MODE: u16 = 0x0103;
-const SANYO_SEQUENTIAL_MODE: u16 = 0x0104;
-const SANYO_WHITE_BALANCE: u16 = 0x0105;
-const SANYO_SHARPNESS: u16 = 0x0107;
-const SANYO_COLOR_MODE: u16 = 0x0108;
-const SANYO_SCENE_MODE: u16 = 0x010A;
-const SANYO_RECORD_MODE: u16 = 0x010B;
+// ============================================================================
+// Declarative Decoder Definitions
+// ============================================================================
 
-fn decode_quality(value: u16) -> String {
-    match value {
-        0 => "Normal".to_string(),
-        1 => "Fine".to_string(),
-        2 => "Super Fine".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
+const_decoder!(pub
+    QUALITY,
+    u16,
+    [(0, "Normal"), (1, "Fine"), (2, "Super Fine"),]
+);
 
-fn decode_focus_mode(value: u16) -> String {
-    match value {
-        0 => "Normal".to_string(),
-        1 => "Macro".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
+const_decoder!(pub FOCUS_MODE, u16, [(0, "Normal"), (1, "Macro"),]);
 
-fn decode_sequential_mode(value: u16) -> String {
-    match value {
-        0 => "None".to_string(),
-        1 => "Standard".to_string(),
-        2 => "Best".to_string(),
-        3 => "Adjust Exposure".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
+const_decoder!(pub
+    SEQUENTIAL_MODE,
+    u16,
+    [
+        (0, "None"),
+        (1, "Standard"),
+        (2, "Best"),
+        (3, "Adjust Exposure"),
+    ]
+);
 
-fn decode_scene_mode(value: u16) -> String {
-    match value {
-        0 => "Normal".to_string(),
-        1 => "Portrait".to_string(),
-        2 => "Scenery".to_string(),
-        3 => "Sports".to_string(),
-        4 => "Night".to_string(),
-        5 => "Beach".to_string(),
-        6 => "Snow".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
+const_decoder!(pub
+    SCENE_MODE,
+    u16,
+    [
+        (0, "Normal"),
+        (1, "Portrait"),
+        (2, "Scenery"),
+        (3, "Sports"),
+        (4, "Night"),
+        (5, "Beach"),
+        (6, "Snow"),
+    ]
+);
 
-fn decode_record_mode(value: u16) -> String {
-    match value {
-        0 => "Still Image".to_string(),
-        1 => "Video".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
+const_decoder!(pub RECORD_MODE, u16, [(0, "Still Image"), (1, "Video"),]);
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
 
 fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> Option<u16> {
     if entry.value_count != 1 {
@@ -95,7 +84,18 @@ fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> O
     Some(value)
 }
 
-/// Parser for Sanyo camera MakerNotes
+// ============================================================================
+// Tag Registry
+// ============================================================================
+
+// Lazy-initialized tag registry using centralized registry function
+static TAG_REGISTRY: Lazy<TagRegistry> = Lazy::new(sanyo_registry);
+
+// ============================================================================
+// Parser Implementation
+// ============================================================================
+
+/// Parser for Sanyo MakerNotes
 pub struct SanyoParser;
 
 impl Default for SanyoParser {
@@ -105,7 +105,7 @@ impl Default for SanyoParser {
 }
 
 impl SanyoParser {
-    /// Creates a new Sanyo parser instance
+    /// Creates a new SanyoParser instance
     pub fn new() -> Self {
         SanyoParser
     }
@@ -117,47 +117,30 @@ impl SanyoParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) {
-        match entry.tag_id {
-            SANYO_QUALITY => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Sanyo:Quality".to_string(), decode_quality(value));
+        if let Some(value) = extract_u16_value(entry, data, byte_order) {
+            let tag_name = match TAG_REGISTRY.get_tag_name(entry.tag_id) {
+                Some(name) => name,
+                None => return,
+            };
+
+            // Try registry decoding first
+            let formatted_value = TAG_REGISTRY.decode_u16(entry.tag_id, value);
+
+            // Fallback for tags without decoder in registry
+            let formatted_value = if formatted_value == value.to_string() {
+                match entry.tag_id {
+                    0x0103 => {
+                        let mode = if value > 0 { "On" } else { "Off" };
+                        mode.to_string()
+                    }
+                    0x0107 => value.to_string(),
+                    _ => formatted_value,
                 }
-            }
-            SANYO_FOCUS_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Sanyo:FocusMode".to_string(), decode_focus_mode(value));
-                }
-            }
-            SANYO_FLASH_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    let mode = if value > 0 { "On" } else { "Off" };
-                    tags.insert("Sanyo:FlashMode".to_string(), mode.to_string());
-                }
-            }
-            SANYO_SEQUENTIAL_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert(
-                        "Sanyo:SequentialMode".to_string(),
-                        decode_sequential_mode(value),
-                    );
-                }
-            }
-            SANYO_SHARPNESS => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Sanyo:Sharpness".to_string(), value.to_string());
-                }
-            }
-            SANYO_SCENE_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Sanyo:SceneMode".to_string(), decode_scene_mode(value));
-                }
-            }
-            SANYO_RECORD_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Sanyo:RecordMode".to_string(), decode_record_mode(value));
-                }
-            }
-            _ => {}
+            } else {
+                formatted_value
+            };
+
+            tags.insert(format!("Sanyo:{}", tag_name), formatted_value);
         }
     }
 }
@@ -177,102 +160,42 @@ impl MakerNoteParser for SanyoParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        if data.len() < 2 {
-            return Err("Sanyo MakerNote data too short".to_string());
-        }
-
-        let ifd_offset = 0;
-        let entry_count = match byte_order {
-            ByteOrder::LittleEndian => u16::from_le_bytes([data[ifd_offset], data[ifd_offset + 1]]),
-            ByteOrder::BigEndian => u16::from_be_bytes([data[ifd_offset], data[ifd_offset + 1]]),
+        let config = IfdParserConfig {
+            signature: None,
+            signature_offset: 0,
+            max_entries: 500,
         };
 
-        if entry_count == 0 || entry_count > 500 {
-            return Err(format!("Invalid entry count: {}", entry_count));
-        }
-
-        let entry_size = 12;
-        let mut offset = ifd_offset + 2;
-
-        for _ in 0..entry_count {
-            if offset + entry_size > data.len() {
-                break;
-            }
-
-            let tag = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([data[offset], data[offset + 1]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([data[offset], data[offset + 1]]),
-            };
-
-            let field_type = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([data[offset + 2], data[offset + 3]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([data[offset + 2], data[offset + 3]]),
-            };
-
-            let count = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                ]),
-            };
-
-            let value_offset = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    data[offset + 8],
-                    data[offset + 9],
-                    data[offset + 10],
-                    data[offset + 11],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    data[offset + 8],
-                    data[offset + 9],
-                    data[offset + 10],
-                    data[offset + 11],
-                ]),
-            };
-
-            let entry = IfdEntry {
-                tag_id: tag,
-                field_type,
-                value_count: count,
-                value_offset,
-            };
-
-            self.parse_entry(&entry, data, byte_order, tags);
-            offset += entry_size;
-        }
-
+        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
+            self.parse_entry(entry, parse_data, byte_order, tags);
+        })?;
         Ok(())
     }
 }
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_decode_quality() {
-        assert_eq!(decode_quality(0), "Normal");
-        assert_eq!(decode_quality(2), "Super Fine");
+    fn test_quality_decoder() {
+        assert_eq!(QUALITY.decode(0), "Normal");
+        assert_eq!(QUALITY.decode(2), "Super Fine");
     }
 
     #[test]
-    fn test_decode_sequential_mode() {
-        assert_eq!(decode_sequential_mode(2), "Best");
+    fn test_sequential_mode_decoder() {
+        assert_eq!(SEQUENTIAL_MODE.decode(2), "Best");
     }
 
     #[test]
-    fn test_decode_record_mode() {
-        assert_eq!(decode_record_mode(0), "Still Image");
-        assert_eq!(decode_record_mode(1), "Video");
+    fn test_record_mode_decoder() {
+        assert_eq!(RECORD_MODE.decode(0), "Still Image");
+        assert_eq!(RECORD_MODE.decode(1), "Video");
     }
 
     #[test]
@@ -296,5 +219,11 @@ mod tests {
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
         assert!(result.is_ok());
         assert_eq!(tags.get("Sanyo:Quality"), Some(&"Fine".to_string()));
+    }
+
+    #[test]
+    fn test_tag_registry() {
+        assert_eq!(TAG_REGISTRY.get_tag_name(0x0100), Some("Quality"));
+        assert!(TAG_REGISTRY.has_tag(0x010A));
     }
 }

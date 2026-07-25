@@ -42,12 +42,10 @@
 
 #![allow(dead_code)]
 
-use crate::core::metadata_map::MetadataMap;
 use crate::core::FileReader;
+use crate::core::metadata_map::MetadataMap;
 use crate::error::{ExifToolError, Result};
-use crate::parsers::jpeg::{parse_segments, Segment};
-use crate::parsers::tiff::ifd_parser::ByteOrder;
-use crate::writers::tiff_writer::reconstruct_tiff_structure;
+use crate::parsers::jpeg::{Segment, parse_segments};
 
 /// EXIF identifier that appears at the start of EXIF APP1 segment data
 const EXIF_IDENTIFIER: &[u8] = b"Exif\0\0";
@@ -60,6 +58,9 @@ const SOI_MARKER: u16 = 0xFFD8;
 
 /// End of Image marker (0xFFD9)
 const EOI_MARKER: u16 = 0xFFD9;
+
+/// Start of Scan marker (0xFFDA) - entropy-coded image data follows its header
+const SOS_MARKER: u16 = 0xFFDA;
 
 /// Restart markers (RST0-RST7) have no length field
 const RST0_MARKER: u16 = 0xFFD0;
@@ -130,14 +131,39 @@ pub fn write_exif_to_jpeg(reader: &dyn FileReader, metadata: &MetadataMap) -> Re
     // Step 1: Parse original JPEG segments
     let segments = parse_segments(reader)?;
 
-    // Step 2: Build new EXIF APP1 segment
-    let new_exif_segment = build_exif_segment(metadata)?;
+    // Step 2: Build new EXIF APP1 segment surgically (raw carry-over,
+    // original byte order, MakerNotes preserved) — issue #20
+    let file_size = reader.size() as usize;
+    let file_bytes = reader.read(0, file_size)?;
+    let new_exif_segment = crate::writers::exif_surgical::rewrite_jpeg_exif(file_bytes, metadata)?;
 
-    // Step 3: Find existing EXIF segment position
-    let exif_position = segments.iter().position(|seg| is_exif_segment(seg));
+    // Step 3: Entropy-coded scan data follows the SOS header and is not
+    // segment-structured; the parser cannot represent it (it either stops or
+    // misreads scan bytes as segments). Reconstruct only the segments up to
+    // and including the SOS header, and copy everything after it verbatim.
+    let sos_index = segments.iter().position(|seg| seg.marker == SOS_MARKER);
+    let (head_segments, raw_tail) = match sos_index {
+        Some(index) => {
+            let sos = &segments[index];
+            // marker (2) + length field (2) + scan header payload
+            let tail_start = sos.offset as usize + 4 + sos.data.len();
+            let file_size = reader.size() as usize;
+            let tail = if tail_start < file_size {
+                &reader.read(0, file_size)?[tail_start..]
+            } else {
+                &[][..]
+            };
+            (&segments[..=index], tail)
+        }
+        None => (&segments[..], &[][..]),
+    };
 
-    // Step 4: Reconstruct JPEG with modified EXIF
-    reconstruct_jpeg(&segments, new_exif_segment, exif_position)
+    // Step 4: Find existing EXIF segment position (metadata segments always
+    // precede the scan, so search only the head)
+    let exif_position = head_segments.iter().position(|seg| is_exif_segment(seg));
+
+    // Step 5: Reconstruct JPEG with modified EXIF
+    reconstruct_jpeg(head_segments, new_exif_segment, exif_position, raw_tail)
 }
 
 /// Checks if a segment is an EXIF APP1 segment.
@@ -149,55 +175,6 @@ pub fn write_exif_to_jpeg(reader: &dyn FileReader, metadata: &MetadataMap) -> Re
 /// This distinguishes EXIF from XMP (which also uses APP1 but has different identifier).
 fn is_exif_segment(segment: &Segment) -> bool {
     segment.is_app1() && segment.data.starts_with(EXIF_IDENTIFIER)
-}
-
-/// Builds a complete EXIF APP1 segment from metadata.
-///
-/// This function:
-/// 1. Serializes EXIF tags to TIFF IFD format
-/// 2. Prepends TIFF header (8 bytes)
-/// 3. Prepends EXIF identifier ("Exif\0\0")
-/// 4. Returns complete segment data (excluding marker and length)
-///
-/// # TIFF Header Format
-///
-/// - Bytes 0-1: Byte order (0x4949 for little-endian, 0x4D4D for big-endian)
-/// - Bytes 2-3: TIFF magic number (0x002A)
-/// - Bytes 4-7: Offset to first IFD (always 8, pointing right after header)
-///
-/// # Parameters
-///
-/// - `metadata`: MetadataMap containing EXIF tags
-///
-/// # Returns
-///
-/// - `Ok(Vec<u8>)`: Complete segment data (EXIF identifier + TIFF header + IFD)
-/// - `Err(ExifToolError)`: If serialization fails
-fn build_exif_segment(metadata: &MetadataMap) -> Result<Vec<u8>> {
-    // Use little-endian byte order (more common in modern systems)
-    let byte_order = ByteOrder::LittleEndian;
-
-    // Create a dummy FileReader (not used by reconstruct_tiff_structure currently)
-    struct DummyReader;
-    impl FileReader for DummyReader {
-        fn read(&self, _offset: u64, _length: usize) -> std::io::Result<&[u8]> {
-            Ok(&[])
-        }
-        fn size(&self) -> u64 {
-            0
-        }
-    }
-    let dummy_reader = DummyReader;
-
-    // Build complete TIFF structure with header, IFD0, and sub-IFDs (ExifIFD, GPS)
-    let tiff_data = reconstruct_tiff_structure(&dummy_reader, byte_order, metadata)?;
-
-    // Combine: EXIF identifier + TIFF structure
-    let mut segment_data = Vec::with_capacity(EXIF_IDENTIFIER.len() + tiff_data.len());
-    segment_data.extend_from_slice(EXIF_IDENTIFIER);
-    segment_data.extend_from_slice(&tiff_data);
-
-    Ok(segment_data)
 }
 
 /// Reconstructs a complete JPEG file with modified EXIF segment.
@@ -224,10 +201,13 @@ fn reconstruct_jpeg(
     segments: &[Segment],
     new_exif_data: Vec<u8>,
     exif_position: Option<usize>,
+    raw_tail: &[u8],
 ) -> Result<Vec<u8>> {
     // Pre-allocate buffer (rough estimate)
     let mut output = Vec::with_capacity(
-        segments.iter().map(|s| s.data.len() + 4).sum::<usize>() + new_exif_data.len(),
+        segments.iter().map(|s| s.data.len() + 4).sum::<usize>()
+            + new_exif_data.len()
+            + raw_tail.len(),
     );
 
     // Determine insertion position if EXIF doesn't exist
@@ -248,14 +228,19 @@ fn reconstruct_jpeg(
     for (i, segment) in segments.iter().enumerate() {
         // Check if we need to insert new EXIF before this segment
         if exif_position.is_none() && i == insert_position && !exif_written {
-            write_segment(&mut output, APP1_MARKER, &new_exif_data)?;
+            if !new_exif_data.is_empty() {
+                write_segment(&mut output, APP1_MARKER, &new_exif_data)?;
+            }
             exif_written = true;
         }
 
         // Write segment
         if Some(i) == exif_position {
-            // Replace EXIF segment
-            write_segment(&mut output, APP1_MARKER, &new_exif_data)?;
+            // Replace EXIF segment (or drop it entirely when new_exif_data is
+            // empty — e.g. clear_all_metadata)
+            if !new_exif_data.is_empty() {
+                write_segment(&mut output, APP1_MARKER, &new_exif_data)?;
+            }
             exif_written = true;
         } else {
             // Copy original segment
@@ -264,7 +249,7 @@ fn reconstruct_jpeg(
     }
 
     // If we still haven't written EXIF (shouldn't happen), add at end before EOI
-    if !exif_written {
+    if !exif_written && !new_exif_data.is_empty() {
         // Remove EOI if present
         if output.len() >= 2 && output[output.len() - 2..] == [0xFF, 0xD9] {
             output.truncate(output.len() - 2);
@@ -273,6 +258,9 @@ fn reconstruct_jpeg(
         // Re-add EOI
         output.extend_from_slice(&EOI_MARKER.to_be_bytes());
     }
+
+    // Entropy-coded scan data, EOI, and any trailer copied verbatim
+    output.extend_from_slice(raw_tail);
 
     Ok(output)
 }
@@ -339,38 +327,8 @@ fn is_standalone_marker(marker: u16) -> bool {
 mod tests {
     use super::*;
     use crate::core::tag_value::TagValue;
-    use std::io;
-
-    /// Simple in-memory FileReader for testing
-    struct TestReader {
-        data: Vec<u8>,
-    }
-
-    impl TestReader {
-        fn new(data: Vec<u8>) -> Self {
-            Self { data }
-        }
-    }
-
-    impl FileReader for TestReader {
-        fn read(&self, offset: u64, length: usize) -> io::Result<&[u8]> {
-            let start = offset as usize;
-            let end = start + length;
-
-            if end > self.data.len() {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "read beyond end of file",
-                ));
-            }
-
-            Ok(&self.data[start..end])
-        }
-
-        fn size(&self) -> u64 {
-            self.data.len() as u64
-        }
-    }
+    use crate::io::EndianReader;
+    use crate::test_support::TestReader;
 
     /// Creates a minimal valid JPEG with EXIF
     fn create_jpeg_with_exif() -> Vec<u8> {
@@ -438,11 +396,14 @@ mod tests {
     }
 
     #[test]
-    fn test_build_exif_segment() {
+    fn test_rewrite_jpeg_exif_builds_new_segment() {
+        // No original EXIF segment: rewrite_jpeg_exif must still build a
+        // fresh one from the desired map (the "insert new" path).
+        let file_bytes = create_jpeg_without_exif();
         let mut metadata = MetadataMap::new();
         metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
 
-        let result = build_exif_segment(&metadata);
+        let result = crate::writers::exif_surgical::rewrite_jpeg_exif(&file_bytes, &metadata);
         assert!(result.is_ok());
 
         let segment_data = result.unwrap();
@@ -455,8 +416,15 @@ mod tests {
         assert_eq!(&segment_data[8..10], &[0x2A, 0x00]); // Magic
         assert_eq!(&segment_data[10..14], &[0x08, 0x00, 0x00, 0x00]); // IFD offset
 
-        // Should have IFD data after header
-        assert!(segment_data.len() > 14);
+        // The segment must actually parse and contain the tag we asked for
+        let tiff = &segment_data[EXIF_IDENTIFIER.len()..];
+        let scan = crate::writers::exif_surgical::scan_exif_entries(tiff).unwrap();
+        let make = scan
+            .entries
+            .iter()
+            .find(|e| e.tag_id == 0x010F)
+            .expect("Make tag must be present");
+        assert_eq!(make.value, b"Canon\0");
     }
 
     #[test]
@@ -471,7 +439,8 @@ mod tests {
         assert_eq!(&output[0..2], &[0xFF, 0xE1]);
 
         // Check length (2 + 9 = 11)
-        assert_eq!(u16::from_be_bytes([output[2], output[3]]), 11);
+        let reader = EndianReader::big_endian(&output);
+        assert_eq!(reader.u16_at(2).unwrap_or(0), 11);
 
         // Check data
         assert_eq!(&output[4..13], data);

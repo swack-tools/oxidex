@@ -1,5 +1,5 @@
-use oxidex::parsers::raw::detect_raw_format;
 use oxidex::parsers::raw::RawFormat;
+use oxidex::parsers::raw::detect_raw_format;
 
 #[test]
 fn test_detect_canon_cr2() {

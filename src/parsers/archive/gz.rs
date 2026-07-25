@@ -1,17 +1,23 @@
 //! GZIP compressed file format parser
 //!
-//! Implements basic metadata extraction from GZIP files.
+//! Implements comprehensive metadata extraction from GZIP files including
+//! header fields, optional fields, and trailer information.
 
 #![allow(dead_code)]
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::io::EndianReader;
 
 /// GZIP signature: 0x1F 0x8B
 const GZ_SIGNATURE: &[u8] = &[0x1F, 0x8B];
 
-/// GZIP compression method offset
-const GZ_COMPRESSION_METHOD_OFFSET: u64 = 2;
+/// GZIP flag bits
+const FTEXT: u8 = 0x01;
+const FHCRC: u8 = 0x02;
+const FEXTRA: u8 = 0x04;
+const FNAME: u8 = 0x08;
+const FCOMMENT: u8 = 0x10;
 
 /// GZIP parser for extracting metadata from compressed files
 pub struct GZParser;
@@ -27,24 +33,180 @@ impl GZParser {
         Ok(header == GZ_SIGNATURE)
     }
 
-    /// Reads compression method (should be 8 for DEFLATE)
-    pub fn read_compression_method(reader: &dyn FileReader) -> Result<u8> {
-        if reader.size() < 3 {
-            return Ok(0);
+    /// Parses the GZIP header and returns the offset after all header fields
+    pub fn parse_header(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<u64> {
+        if reader.size() < 10 {
+            return Err(ExifToolError::parse_error("GZIP header too short"));
         }
 
-        let method = reader.read(GZ_COMPRESSION_METHOD_OFFSET, 1)?;
-        Ok(method[0])
+        let header = reader.read(0, 10)?;
+        let r = EndianReader::little_endian(header);
+
+        let compression = match header[2] {
+            8 => "Deflated",
+            _ => "Unknown",
+        };
+        metadata.insert(
+            "ZIP:Compression".to_string(),
+            TagValue::String(compression.to_string()),
+        );
+
+        let flags = header[3];
+        let mut flag_names = Vec::new();
+        if flags & FTEXT != 0 {
+            flag_names.push("Text");
+        }
+        if flags & FHCRC != 0 {
+            flag_names.push("HeaderCRC");
+        }
+        if flags & FEXTRA != 0 {
+            flag_names.push("ExtraField");
+        }
+        if flags & FNAME != 0 {
+            flag_names.push("FileName");
+        }
+        if flags & FCOMMENT != 0 {
+            flag_names.push("Comment");
+        }
+        if !flag_names.is_empty() {
+            metadata.insert(
+                "ZIP:Flags".to_string(),
+                TagValue::String(flag_names.join(", ")),
+            );
+        }
+
+        // MTIME: Unix timestamp (4 bytes, little-endian)
+        let mtime = r.u32_at(4).unwrap_or(0);
+        if mtime != 0 {
+            use chrono::{Local, TimeZone};
+            if let Some(dt) = Local.timestamp_opt(mtime as i64, 0).single() {
+                metadata.insert(
+                    "ZIP:ModifyDate".to_string(),
+                    TagValue::String(dt.format("%Y:%m:%d %H:%M:%S%:z").to_string()),
+                );
+            }
+        }
+
+        // XFL: Extra flags
+        let xfl = header[8];
+        let extra_flags = match xfl {
+            0 => "(none)",
+            2 => "Maximum Compression",
+            4 => "Fastest Algorithm",
+            _ => "Unknown",
+        };
+        metadata.insert(
+            "ZIP:ExtraFlags".to_string(),
+            TagValue::String(extra_flags.to_string()),
+        );
+
+        // OS: Operating system
+        let os_name = match header[9] {
+            0 => "FAT",
+            1 => "Amiga",
+            2 => "VMS",
+            3 => "Unix",
+            4 => "VM/CMS",
+            5 => "Atari TOS",
+            6 => "HPFS",
+            7 => "Macintosh",
+            8 => "Z-System",
+            9 => "CP/M",
+            10 => "TOPS-20",
+            11 => "NTFS",
+            12 => "QDOS",
+            13 => "Acorn RISCOS",
+            255 => "Unknown",
+            _ => "Unknown",
+        };
+        metadata.insert(
+            "ZIP:OperatingSystem".to_string(),
+            TagValue::String(os_name.to_string()),
+        );
+
+        let mut offset = 10u64;
+
+        // FEXTRA: Extra field
+        if flags & FEXTRA != 0 {
+            if reader.size() < offset + 2 {
+                return Ok(offset);
+            }
+            let xlen_bytes = reader.read(offset, 2)?;
+            let r = EndianReader::little_endian(xlen_bytes);
+            let xlen = r.u16_at(0).unwrap_or(0) as u64;
+            offset += 2 + xlen;
+        }
+
+        // FNAME: Original filename
+        if flags & FNAME != 0
+            && let Some(filename) = Self::read_null_terminated_string(reader, offset)?
+        {
+            metadata.insert(
+                "ZIP:ArchivedFileName".to_string(),
+                TagValue::String(filename.0),
+            );
+            offset = filename.1;
+        }
+
+        // FCOMMENT: Comment
+        if flags & FCOMMENT != 0
+            && let Some(comment) = Self::read_null_terminated_string(reader, offset)?
+        {
+            metadata.insert("ZIP:Comment".to_string(), TagValue::String(comment.0));
+            offset = comment.1;
+        }
+
+        // FHCRC: Header CRC
+        if flags & FHCRC != 0 {
+            offset += 2;
+        }
+
+        Ok(offset)
     }
 
-    /// Reads flags byte
-    pub fn read_flags(reader: &dyn FileReader) -> Result<u8> {
-        if reader.size() < 4 {
-            return Ok(0);
+    /// Reads null-terminated string from offset, returns (string, next_offset) or None
+    fn read_null_terminated_string(
+        reader: &dyn FileReader,
+        offset: u64,
+    ) -> Result<Option<(String, u64)>> {
+        let available = (reader.size().saturating_sub(offset)).min(256);
+        if available == 0 {
+            return Ok(None);
         }
 
-        let flags = reader.read(3, 1)?;
-        Ok(flags[0])
+        let data = reader.read(offset, available as usize)?;
+        data.iter()
+            .position(|&b| b == 0)
+            .map(|pos| {
+                (
+                    String::from_utf8_lossy(&data[..pos]).to_string(),
+                    offset + pos as u64 + 1,
+                )
+            })
+            .map_or(Ok(None), |v| Ok(Some(v)))
+    }
+
+    /// Parses the GZIP trailer (last 8 bytes: CRC32 and original size)
+    pub fn parse_trailer(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
+        let size = reader.size();
+        if size < 8 {
+            return Ok(());
+        }
+
+        let trailer = reader.read(size - 8, 8)?;
+        let r = EndianReader::little_endian(trailer);
+        let crc32 = r.u32_at(0).unwrap_or(0);
+        let isize = r.u32_at(4).unwrap_or(0);
+
+        metadata.insert(
+            "CRC32".to_string(),
+            TagValue::String(format!("0x{:08X}", crc32)),
+        );
+        metadata.insert(
+            "OriginalSize".to_string(),
+            TagValue::String(isize.to_string()),
+        );
+        Ok(())
     }
 }
 
@@ -63,21 +225,11 @@ impl FormatParser for GZParser {
             TagValue::String(reader.size().to_string()),
         );
 
-        let method = Self::read_compression_method(reader)?;
-        let compression_name = match method {
-            8 => "DEFLATE",
-            _ => "Unknown",
-        };
-        metadata.insert(
-            "CompressionMethod".to_string(),
-            TagValue::String(compression_name.to_string()),
-        );
+        // Parse header fields including optional fields
+        Self::parse_header(reader, &mut metadata)?;
 
-        let flags = Self::read_flags(reader)?;
-        metadata.insert(
-            "Flags".to_string(),
-            TagValue::String(format!("0x{:02X}", flags)),
-        );
+        // Parse trailer (CRC32 and original size)
+        Self::parse_trailer(reader, &mut metadata)?;
 
         Ok(metadata)
     }
@@ -88,23 +240,10 @@ impl FormatParser for GZParser {
 }
 
 /// Standalone function for parsing GZIP metadata
-///
-/// This function provides a convenient interface for parsing GZIP compressed file metadata
-/// by instantiating the GZParser and calling its parse method.
-///
-/// # Arguments
-///
-/// * `reader` - A FileReader providing access to the GZIP file data
-///
-/// # Returns
-///
-/// * `Ok(MetadataMap)` - Successfully extracted metadata
-/// * `Err(String)` - Parse error description
 pub fn parse_gz_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = GZParser;
-    parser
+    GZParser
         .parse(reader)
         .map_err(|e| format!("GZIP parse error: {}", e))
 }
@@ -112,47 +251,12 @@ pub fn parse_gz_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io;
-
-    struct TestReader {
-        data: Vec<u8>,
-    }
-
-    impl TestReader {
-        fn new(data: Vec<u8>) -> Self {
-            Self { data }
-        }
-    }
-
-    impl FileReader for TestReader {
-        fn read(&self, offset: u64, length: usize) -> io::Result<&[u8]> {
-            let start = offset as usize;
-            let end = start.saturating_add(length).min(self.data.len());
-            if start > self.data.len() {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "offset beyond end",
-                ));
-            }
-            Ok(&self.data[start..end])
-        }
-
-        fn size(&self) -> u64 {
-            self.data.len() as u64
-        }
-    }
+    use crate::test_support::TestReader;
 
     #[test]
     fn test_gz_signature() {
-        let data = vec![0x1F, 0x8B, 0x08, 0x00];
+        let data = vec![0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03];
         let reader = TestReader::new(data);
         assert!(GZParser::verify_signature(&reader).unwrap());
-    }
-
-    #[test]
-    fn test_gz_compression_method() {
-        let data = vec![0x1F, 0x8B, 0x08, 0x00];
-        let reader = TestReader::new(data);
-        assert_eq!(GZParser::read_compression_method(&reader).unwrap(), 8);
     }
 }

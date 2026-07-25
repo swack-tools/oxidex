@@ -21,6 +21,12 @@
 //! The byte order marker appears at the start of the TIFF file and affects all
 //! multi-byte values in the IFD structure.
 //!
+//! # TIFF Variants
+//!
+//! While standard TIFF uses magic number 42 (0x002A), some RAW formats use variants:
+//! - Panasonic RW2: uses 0x55 (85) as magic number, but otherwise standard TIFF structure
+//! - The IFD parser works with all TIFF variants, as it only processes IFD structures
+//!
 //! # Value Storage
 //!
 //! Values are stored either inline or via offset:
@@ -55,12 +61,13 @@
 
 use crate::core::FileReader;
 use crate::error::{ExifToolError, Result};
+use crate::io::{ByteOrder as IoByteOrder, EndianReader};
 use crate::parsers::common::exif_types::ExifType;
 use nom::{
+    IResult,
     combinator::map,
     multi::count,
     number::complete::{be_u16, be_u32, le_u16, le_u32},
-    IResult,
 };
 use std::borrow::Cow;
 
@@ -86,6 +93,19 @@ pub enum ByteOrder {
     LittleEndian,
     /// Big-endian byte order (0x4D4D "MM")
     BigEndian,
+}
+
+impl ByteOrder {
+    /// Converts TIFF ByteOrder to the shared io::ByteOrder enum.
+    ///
+    /// This enables using EndianReader with TIFF byte order specification.
+    #[inline]
+    pub fn to_io_byte_order(self) -> IoByteOrder {
+        match self {
+            ByteOrder::LittleEndian => IoByteOrder::Little,
+            ByteOrder::BigEndian => IoByteOrder::Big,
+        }
+    }
 }
 
 /// Represents a single TIFF IFD tag entry.
@@ -177,12 +197,12 @@ pub fn parse_ifd(
         ));
     }
 
-    // Read entry count (2 bytes)
+    // Read entry count (2 bytes) using EndianReader for consistent byte order handling
     let entry_count_data = reader.read(ifd_offset, 2)?;
-    let entry_count = match byte_order {
-        ByteOrder::LittleEndian => u16::from_le_bytes([entry_count_data[0], entry_count_data[1]]),
-        ByteOrder::BigEndian => u16::from_be_bytes([entry_count_data[0], entry_count_data[1]]),
-    };
+    let endian_reader = EndianReader::new(entry_count_data, byte_order.to_io_byte_order());
+    let entry_count = endian_reader
+        .u16_at(0)
+        .ok_or_else(|| ExifToolError::parse_error("Failed to read IFD entry count"))?;
 
     // Calculate IFD size: 2 bytes (count) + 12 bytes per entry + 4 bytes (next IFD offset)
     let ifd_size = 2 + (entry_count as usize * 12) + 4;
@@ -284,15 +304,19 @@ pub fn parse_ifd(
 ///
 /// For values ≤4 bytes, TIFF stores them directly in the value_offset field.
 /// Values are left-justified (stored in the first N bytes).
+///
+/// This function reconstructs the original bytes from the u32 value based on
+/// the byte order used when the value was parsed.
 fn extract_inline_value(value_offset: u32, size: usize, byte_order: ByteOrder) -> Vec<u8> {
+    // Reconstruct the original bytes from the u32 value based on byte order.
+    // The EndianReader provides the bytes_at method but we need to first
+    // convert the u32 back to bytes in the correct order.
     let bytes = match byte_order {
         ByteOrder::LittleEndian => value_offset.to_le_bytes(),
         ByteOrder::BigEndian => value_offset.to_be_bytes(),
     };
 
-    // For little-endian, values are in bytes[0..size]
-    // For big-endian, values are also in bytes[0..size] when stored in the field
-    // (TIFF spec says values are left-justified in the 4-byte field)
+    // TIFF spec: values are left-justified in the 4-byte field
     bytes[0..size].to_vec()
 }
 
@@ -353,38 +377,7 @@ fn parse_ifd_entry_be(input: &[u8]) -> IResult<&[u8], IfdEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io;
-
-    /// Simple in-memory FileReader for testing
-    struct TestReader {
-        data: Vec<u8>,
-    }
-
-    impl TestReader {
-        fn new(data: Vec<u8>) -> Self {
-            Self { data }
-        }
-    }
-
-    impl FileReader for TestReader {
-        fn read(&self, offset: u64, length: usize) -> io::Result<&[u8]> {
-            let start = offset as usize;
-            let end = start + length;
-
-            if end > self.data.len() {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "read beyond end of file",
-                ));
-            }
-
-            Ok(&self.data[start..end])
-        }
-
-        fn size(&self) -> u64 {
-            self.data.len() as u64
-        }
-    }
+    use crate::test_support::TestReader;
 
     /// Creates a minimal TIFF IFD with 3 tags in little-endian format.
     ///

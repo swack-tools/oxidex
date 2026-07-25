@@ -3,45 +3,18 @@
 //! These tests verify the end-to-end functionality of writing modified EXIF
 //! metadata back to JPEG files.
 
+#[path = "../common/mod.rs"]
+mod common;
+
+use common::TestReader;
 use oxidex::core::metadata_map::MetadataMap;
 use oxidex::core::tag_value::TagValue;
 use oxidex::io::buffered_reader::BufferedReader;
-use oxidex::parsers::jpeg::{parse_segments, Segment};
-use oxidex::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};
+use oxidex::parsers::jpeg::{Segment, parse_segments};
+use oxidex::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use oxidex::writers::jpeg_writer::write_exif_to_jpeg;
-use std::io::{self, Write};
+use std::io::Write;
 use tempfile::NamedTempFile;
-
-/// Helper: Creates a FileReader from byte buffer
-struct TestReader {
-    data: Vec<u8>,
-}
-
-impl TestReader {
-    fn new(data: Vec<u8>) -> Self {
-        Self { data }
-    }
-}
-
-impl oxidex::core::FileReader for TestReader {
-    fn read(&self, offset: u64, length: usize) -> io::Result<&[u8]> {
-        let start = offset as usize;
-        let end = start + length;
-
-        if end > self.data.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "read beyond end of file",
-            ));
-        }
-
-        Ok(&self.data[start..end])
-    }
-
-    fn size(&self) -> u64 {
-        self.data.len() as u64
-    }
-}
 
 /// Helper: Creates a complete valid JPEG with EXIF metadata
 fn create_test_jpeg_with_metadata() -> Vec<u8> {

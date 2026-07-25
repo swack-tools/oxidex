@@ -1,0 +1,19 @@
+{
+  "name": "oxidex-docs",
+  "version": "1.1.0",
+  "description": "Documentation site for OxiDex - Modern Rust ExifTool",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "docs:dev": "vitepress dev",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "^1.5.0",
+    "vue": "^3.5.13"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

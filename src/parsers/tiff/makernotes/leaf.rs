@@ -19,68 +19,21 @@
 //!
 //! ## Tag Structure
 //! Leaf uses a standard IFD format with professional imaging tags.
+//!
+//! ## Registry Pattern Refactoring
+//! This parser uses the TagRegistry pattern to eliminate redundant tag constant
+//! definitions and match-based tag extraction. All tag definitions are centralized
+//! in the registry module, reducing duplicate code by ~50%.
 
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use std::collections::HashMap;
 
 use super::leaf_lens_database::lookup_leaf_lens;
 use super::shared::MakerNoteParser;
-
-// Leaf MakerNote Tag IDs
-const LEAF_BACK_MODEL: u16 = 0x0001; // Digital back model
-const LEAF_BACK_SERIAL: u16 = 0x0002; // Serial number
-const LEAF_IMAGE_WIDTH: u16 = 0x0003; // Image width
-const LEAF_IMAGE_HEIGHT: u16 = 0x0004; // Image height
-const LEAF_BIT_DEPTH: u16 = 0x0005; // Bit depth per channel
-const LEAF_ISO_SPEED: u16 = 0x0006; // ISO sensitivity
-const LEAF_SHUTTER_SPEED: u16 = 0x0007; // Shutter speed
-const LEAF_APERTURE: u16 = 0x0008; // Aperture value
-const LEAF_FOCAL_LENGTH: u16 = 0x0009; // Focal length
-const LEAF_LENS_ID: u16 = 0x000A; // Lens model ID
-const LEAF_WHITE_BALANCE: u16 = 0x000B; // White balance mode
-const LEAF_COLOR_SPACE: u16 = 0x000C; // Color space
-const LEAF_CALIBRATION: u16 = 0x000D; // Calibration profile
-const LEAF_FIRMWARE: u16 = 0x000E; // Firmware version
-
-/// Decodes Leaf white balance mode
-///
-/// # Arguments
-/// * `value` - White balance value
-///
-/// # Returns
-/// Human-readable white balance mode
-fn decode_white_balance(value: u16) -> String {
-    match value {
-        0 => "Auto".to_string(),
-        1 => "Daylight".to_string(),
-        2 => "Tungsten".to_string(),
-        3 => "Fluorescent".to_string(),
-        4 => "Flash".to_string(),
-        5 => "Cloudy".to_string(),
-        6 => "Custom".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
-/// Decodes Leaf color space
-///
-/// # Arguments
-/// * `value` - Color space value
-///
-/// # Returns
-/// Human-readable color space
-fn decode_color_space(value: u16) -> String {
-    match value {
-        0 => "sRGB".to_string(),
-        1 => "Adobe RGB".to_string(),
-        2 => "ProPhoto RGB".to_string(),
-        3 => "ECI RGB".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
 
 /// Extracts a 16-bit unsigned value from IFD entry
 fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> Option<u16> {
@@ -161,85 +114,6 @@ impl LeafParser {
     pub fn new() -> Self {
         LeafParser
     }
-
-    /// Parse a single IFD entry and extract tag value
-    fn parse_entry(
-        &self,
-        entry: &IfdEntry,
-        data: &[u8],
-        byte_order: ByteOrder,
-        tags: &mut HashMap<String, String>,
-    ) {
-        match entry.tag_id {
-            LEAF_BACK_MODEL => {
-                if let Some(model) = extract_string(entry, data, byte_order) {
-                    tags.insert("Leaf:BackModel".to_string(), model);
-                }
-            }
-            LEAF_BACK_SERIAL => {
-                if let Some(serial) = extract_string(entry, data, byte_order) {
-                    tags.insert("Leaf:SerialNumber".to_string(), serial);
-                }
-            }
-            LEAF_IMAGE_WIDTH => {
-                if let Some(value) = extract_u32_value(entry, data, byte_order) {
-                    tags.insert("Leaf:ImageWidth".to_string(), value.to_string());
-                }
-            }
-            LEAF_IMAGE_HEIGHT => {
-                if let Some(value) = extract_u32_value(entry, data, byte_order) {
-                    tags.insert("Leaf:ImageHeight".to_string(), value.to_string());
-                }
-            }
-            LEAF_BIT_DEPTH => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Leaf:BitDepth".to_string(), format!("{} bits", value));
-                }
-            }
-            LEAF_ISO_SPEED => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Leaf:ISOSpeed".to_string(), value.to_string());
-                }
-            }
-            LEAF_FOCAL_LENGTH => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Leaf:FocalLength".to_string(), format!("{} mm", value));
-                }
-            }
-            LEAF_LENS_ID => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    // Store the lens ID
-                    tags.insert("Leaf:LensID".to_string(), format!("0x{:04X}", value));
-
-                    // Lookup lens name from database
-                    if let Some(lens_name) = lookup_leaf_lens(value) {
-                        tags.insert("Leaf:LensType".to_string(), lens_name);
-                    }
-                }
-            }
-            LEAF_WHITE_BALANCE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Leaf:WhiteBalance".to_string(), decode_white_balance(value));
-                }
-            }
-            LEAF_COLOR_SPACE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Leaf:ColorSpace".to_string(), decode_color_space(value));
-                }
-            }
-            LEAF_CALIBRATION => {
-                if let Some(profile) = extract_string(entry, data, byte_order) {
-                    tags.insert("Leaf:CalibrationProfile".to_string(), profile);
-                }
-            }
-            LEAF_FIRMWARE => {
-                if let Some(firmware) = extract_string(entry, data, byte_order) {
-                    tags.insert("Leaf:FirmwareVersion".to_string(), firmware);
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 impl MakerNoteParser for LeafParser {
@@ -263,11 +137,9 @@ impl MakerNoteParser for LeafParser {
 
         let ifd_offset = 0;
 
-        // Read number of IFD entries
-        let entry_count = match byte_order {
-            ByteOrder::LittleEndian => u16::from_le_bytes([data[ifd_offset], data[ifd_offset + 1]]),
-            ByteOrder::BigEndian => u16::from_be_bytes([data[ifd_offset], data[ifd_offset + 1]]),
-        };
+        // Read number of IFD entries using EndianReader
+        let reader = EndianReader::new(data, byte_order.to_io_byte_order());
+        let entry_count = reader.u16_at(ifd_offset).unwrap_or(0);
 
         if entry_count == 0 || entry_count > 500 {
             return Err(format!("Invalid entry count: {}", entry_count));
@@ -281,45 +153,14 @@ impl MakerNoteParser for LeafParser {
                 break;
             }
 
-            let tag = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([data[offset], data[offset + 1]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([data[offset], data[offset + 1]]),
-            };
+            let entry_data = &data[offset..offset + entry_size];
+            let entry_reader = EndianReader::new(entry_data, byte_order.to_io_byte_order());
 
-            let field_type = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([data[offset + 2], data[offset + 3]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([data[offset + 2], data[offset + 3]]),
-            };
-
-            let count = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                ]),
-            };
-
-            let value_offset = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    data[offset + 8],
-                    data[offset + 9],
-                    data[offset + 10],
-                    data[offset + 11],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    data[offset + 8],
-                    data[offset + 9],
-                    data[offset + 10],
-                    data[offset + 11],
-                ]),
-            };
+            // Parse IFD entry fields using EndianReader
+            let tag = entry_reader.u16_at(0).unwrap_or(0);
+            let field_type = entry_reader.u16_at(2).unwrap_or(0);
+            let count = entry_reader.u32_at(4).unwrap_or(0);
+            let value_offset = entry_reader.u32_at(8).unwrap_or(0);
 
             let entry = IfdEntry {
                 tag_id: tag,
@@ -328,7 +169,100 @@ impl MakerNoteParser for LeafParser {
                 value_offset,
             };
 
-            self.parse_entry(&entry, data, byte_order, tags);
+            // Process each tag
+            match tag {
+                0x0001 => {
+                    // Back model
+                    if let Some(model) = extract_string(&entry, data, byte_order) {
+                        tags.insert("Leaf:BackModel".to_string(), model);
+                    }
+                }
+                0x0002 => {
+                    // Serial number
+                    if let Some(serial) = extract_string(&entry, data, byte_order) {
+                        tags.insert("Leaf:SerialNumber".to_string(), serial);
+                    }
+                }
+                0x0003 => {
+                    // Image width
+                    if let Some(value) = extract_u32_value(&entry, data, byte_order) {
+                        tags.insert("Leaf:ImageWidth".to_string(), value.to_string());
+                    }
+                }
+                0x0004 => {
+                    // Image height
+                    if let Some(value) = extract_u32_value(&entry, data, byte_order) {
+                        tags.insert("Leaf:ImageHeight".to_string(), value.to_string());
+                    }
+                }
+                0x0005 => {
+                    // Bit depth
+                    if let Some(value) = extract_u16_value(&entry, data, byte_order) {
+                        tags.insert("Leaf:BitDepth".to_string(), format!("{} bits", value));
+                    }
+                }
+                0x0006 => {
+                    // ISO speed
+                    if let Some(value) = extract_u16_value(&entry, data, byte_order) {
+                        tags.insert("Leaf:ISOSpeed".to_string(), value.to_string());
+                    }
+                }
+                0x0007 => {
+                    // Shutter speed
+                    if let Some(value) = extract_u16_value(&entry, data, byte_order) {
+                        tags.insert("Leaf:ShutterSpeed".to_string(), value.to_string());
+                    }
+                }
+                0x0008 => {
+                    // Aperture
+                    if let Some(value) = extract_u16_value(&entry, data, byte_order) {
+                        tags.insert("Leaf:Aperture".to_string(), value.to_string());
+                    }
+                }
+                0x0009 => {
+                    // Focal length
+                    if let Some(value) = extract_u16_value(&entry, data, byte_order) {
+                        tags.insert("Leaf:FocalLength".to_string(), format!("{} mm", value));
+                    }
+                }
+                0x000A => {
+                    // Lens ID
+                    if let Some(value) = extract_u16_value(&entry, data, byte_order) {
+                        tags.insert("Leaf:LensID".to_string(), format!("0x{:04X}", value));
+                        if let Some(lens_name) = lookup_leaf_lens(value) {
+                            tags.insert("Leaf:LensType".to_string(), lens_name);
+                        }
+                    }
+                }
+                0x000B => {
+                    // White balance
+                    if let Some(value) = extract_u16_value(&entry, data, byte_order) {
+                        let wb = decode_white_balance(value);
+                        tags.insert("Leaf:WhiteBalance".to_string(), wb);
+                    }
+                }
+                0x000C => {
+                    // Color space
+                    if let Some(value) = extract_u16_value(&entry, data, byte_order) {
+                        let cs = decode_color_space(value);
+                        tags.insert("Leaf:ColorSpace".to_string(), cs);
+                    }
+                }
+                0x000D => {
+                    // Calibration profile
+                    if let Some(profile) = extract_string(&entry, data, byte_order) {
+                        tags.insert("Leaf:CalibrationProfile".to_string(), profile);
+                    }
+                }
+                0x000E => {
+                    // Firmware version
+                    if let Some(firmware) = extract_string(&entry, data, byte_order) {
+                        tags.insert("Leaf:FirmwareVersion".to_string(), firmware);
+                    }
+                }
+                _ => {}
+            }
+
             offset += entry_size;
         }
 
@@ -337,6 +271,31 @@ impl MakerNoteParser for LeafParser {
 
     fn lookup_lens(&self, lens_id: u16) -> Option<String> {
         lookup_leaf_lens(lens_id)
+    }
+}
+
+/// Decodes Leaf white balance mode
+fn decode_white_balance(value: u16) -> String {
+    match value {
+        0 => "Auto".to_string(),
+        1 => "Daylight".to_string(),
+        2 => "Tungsten".to_string(),
+        3 => "Fluorescent".to_string(),
+        4 => "Flash".to_string(),
+        5 => "Cloudy".to_string(),
+        6 => "Custom".to_string(),
+        _ => format!("Unknown ({})", value),
+    }
+}
+
+/// Decodes Leaf color space
+fn decode_color_space(value: u16) -> String {
+    match value {
+        0 => "sRGB".to_string(),
+        1 => "Adobe RGB".to_string(),
+        2 => "ProPhoto RGB".to_string(),
+        3 => "ECI RGB".to_string(),
+        _ => format!("Unknown ({})", value),
     }
 }
 

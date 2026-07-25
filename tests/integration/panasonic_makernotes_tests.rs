@@ -224,13 +224,15 @@ fn test_panasonic_parse_basic_tags() {
     // IFD: entry count (little-endian)
     data.extend_from_slice(&[0x02, 0x00]); // 2 entries
 
-    // Entry 1: Quality Mode (tag 0x0003) = Fine (value 3)
+    // Entry 1: WhiteBalance (tag 0x0003) = Cloudy (value 3)
+    // Registry: 0x0003 = WhiteBalance with WHITE_BALANCE decoder
     data.extend_from_slice(&[0x03, 0x00]); // Tag ID
     data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
-    data.extend_from_slice(&[0x03, 0x00, 0x00, 0x00]); // Value: 3 (Fine)
+    data.extend_from_slice(&[0x03, 0x00, 0x00, 0x00]); // Value: 3 (Cloudy)
 
-    // Entry 2: Macro Mode (tag 0x001C) = On (value 1)
+    // Entry 2: MacroMode (tag 0x001C) = On (value 1)
+    // Registry: 0x001C = MacroMode with MACRO_MODE decoder
     data.extend_from_slice(&[0x1C, 0x00]); // Tag ID
     data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
@@ -242,9 +244,12 @@ fn test_panasonic_parse_basic_tags() {
     let mut tags = HashMap::new();
     parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
 
-    // Verify extracted tags
-    assert!(tags.contains_key("Panasonic:QualityMode"));
-    assert_eq!(tags.get("Panasonic:QualityMode"), Some(&"Fine".to_string()));
+    // Verify extracted tags using correct registry tag names
+    assert!(tags.contains_key("Panasonic:WhiteBalance"));
+    assert_eq!(
+        tags.get("Panasonic:WhiteBalance"),
+        Some(&"Cloudy".to_string())
+    );
 
     assert!(tags.contains_key("Panasonic:MacroMode"));
     assert_eq!(tags.get("Panasonic:MacroMode"), Some(&"On".to_string()));
@@ -264,25 +269,29 @@ fn test_panasonic_parse_enumerated_values() {
     // IFD: 4 entries
     data.extend_from_slice(&[0x04, 0x00]);
 
-    // Entry 1: White Balance (tag 0x0007) = Daylight (value 2)
-    data.extend_from_slice(&[0x07, 0x00]); // Tag
+    // Entry 1: WhiteBalance (tag 0x0003) = Daylight (value 2)
+    // Registry: 0x0003 = WhiteBalance, WHITE_BALANCE decoder: 2 = "Daylight"
+    data.extend_from_slice(&[0x03, 0x00]); // Tag ID = 0x0003
     data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
     data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // Value: 2 (Daylight)
 
-    // Entry 2: Focus Mode (tag 0x000F) = AF-S (value 4)
-    data.extend_from_slice(&[0x0F, 0x00]);
+    // Entry 2: FocusMode (tag 0x0007) = AF-S (value 4)
+    // Registry: 0x0007 = FocusMode, FOCUS_MODE decoder: 4 = "AF-S (Single)"
+    data.extend_from_slice(&[0x07, 0x00]); // Tag ID = 0x0007
     data.extend_from_slice(&[0x03, 0x00]);
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
     data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]); // AF-S
 
-    // Entry 3: Shooting Mode (tag 0x001F) = Aperture Priority (value 7)
+    // Entry 3: ShootingMode (tag 0x001F) = Aperture Priority (value 7)
+    // Registry: 0x001F = ShootingMode
     data.extend_from_slice(&[0x1F, 0x00]);
     data.extend_from_slice(&[0x03, 0x00]);
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
     data.extend_from_slice(&[0x07, 0x00, 0x00, 0x00]);
 
-    // Entry 4: Film Mode (tag 0x0042) = Cinelike D (value 22)
+    // Entry 4: FilmMode (tag 0x0042) = Cinelike D (value 22)
+    // Registry: 0x0042 = FilmMode
     data.extend_from_slice(&[0x42, 0x00]);
     data.extend_from_slice(&[0x03, 0x00]);
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
@@ -359,17 +368,19 @@ fn test_panasonic_parse_photo_style() {
     // IFD: 2 entries
     data.extend_from_slice(&[0x02, 0x00]);
 
-    // Entry 1: Photo Style (tag 0x0061) = V-Log (value 10)
-    data.extend_from_slice(&[0x61, 0x00]);
-    data.extend_from_slice(&[0x03, 0x00]);
+    // Entry 1: PhotoStyle (tag 0x0089) = V-Log (value 10)
+    // Registry: 0x0089 = PhotoStyle with PHOTO_STYLE decoder
+    data.extend_from_slice(&[0x89, 0x00]); // Tag ID = 0x0089
+    data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
     data.extend_from_slice(&[0x0A, 0x00, 0x00, 0x00]); // 10 (V-Log)
 
-    // Entry 2: HDR (tag 0x0079) = HDR Auto (value 100)
-    data.extend_from_slice(&[0x79, 0x00]);
+    // Entry 2: HDR (tag 0x009E) = HDR Auto (value 100)
+    // Registry: 0x009E = HDR with HDR decoder
+    data.extend_from_slice(&[0x9E, 0x00]); // Tag ID = 0x009E
     data.extend_from_slice(&[0x03, 0x00]);
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x64, 0x00, 0x00, 0x00]); // 100
+    data.extend_from_slice(&[0x64, 0x00, 0x00, 0x00]); // 100 (HDR Auto)
 
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
 
@@ -412,18 +423,22 @@ fn test_panasonic_parser_big_endian() {
     // IFD: 1 entry (big-endian)
     data.extend_from_slice(&[0x00, 0x01]); // Entry count (BE)
 
-    // Entry: Quality Mode (tag 0x0003) = RAW (value 6)
-    data.extend_from_slice(&[0x00, 0x03]); // Tag ID (BE)
+    // Entry: WhiteBalance (tag 0x0003) = Daylight (value 2)
+    // Registry: 0x0003 = WhiteBalance, WHITE_BALANCE decoder: 2 = "Daylight"
+    data.extend_from_slice(&[0x00, 0x03]); // Tag ID (BE) = 0x0003
     data.extend_from_slice(&[0x00, 0x03]); // Type: SHORT (BE)
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Count: 1 (BE)
-    data.extend_from_slice(&[0x00, 0x00, 0x00, 0x06]); // Value: 6 (BE)
+    data.extend_from_slice(&[0x00, 0x00, 0x00, 0x02]); // Value: 2 (BE) = Daylight
 
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD (BE)
 
     let mut tags = HashMap::new();
     parse_panasonic_makernotes(&data, ByteOrder::BigEndian, &mut tags);
 
-    assert_eq!(tags.get("Panasonic:QualityMode"), Some(&"RAW".to_string()));
+    assert_eq!(
+        tags.get("Panasonic:WhiteBalance"),
+        Some(&"Daylight".to_string())
+    );
 }
 
 #[test]
@@ -460,23 +475,26 @@ fn test_panasonic_intelligent_features() {
     // IFD: 3 entries
     data.extend_from_slice(&[0x03, 0x00]);
 
-    // Entry 1: Intelligent Auto (tag 0x0080) = On (value 1)
-    data.extend_from_slice(&[0x80, 0x00]);
-    data.extend_from_slice(&[0x03, 0x00]);
+    // Entry 1: IntelligentExposure (tag 0x005D) = Standard (value 2)
+    // Registry: 0x005D = IntelligentExposure with INTELLIGENT_EXPOSURE decoder
+    data.extend_from_slice(&[0x5D, 0x00]); // Tag ID = 0x005D
+    data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+    data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // Value: 2 (Standard)
 
-    // Entry 2: Intelligent Exposure (tag 0x0059) = Standard (value 2)
-    data.extend_from_slice(&[0x59, 0x00]);
+    // Entry 2: IntelligentResolution (tag 0x0070) = High (value 3)
+    // Registry: 0x0070 = IntelligentResolution with INTELLIGENT_RESOLUTION decoder
+    data.extend_from_slice(&[0x70, 0x00]); // Tag ID = 0x0070
     data.extend_from_slice(&[0x03, 0x00]);
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]);
+    data.extend_from_slice(&[0x03, 0x00, 0x00, 0x00]); // Value: 3 (High)
 
-    // Entry 3: Intelligent Resolution (tag 0x005D) = High (value 3)
-    data.extend_from_slice(&[0x5D, 0x00]);
+    // Entry 3: IntelligentD-Range (tag 0x0079) = Low (value 1)
+    // Registry: 0x0079 = IntelligentD-Range with INTELLIGENT_D_RANGE decoder
+    data.extend_from_slice(&[0x79, 0x00]); // Tag ID = 0x0079
     data.extend_from_slice(&[0x03, 0x00]);
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x03, 0x00, 0x00, 0x00]);
+    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1 (Low)
 
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
 
@@ -484,15 +502,15 @@ fn test_panasonic_intelligent_features() {
     parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
 
     assert_eq!(
-        tags.get("Panasonic:IntelligentAuto"),
-        Some(&"On".to_string())
-    );
-    assert_eq!(
         tags.get("Panasonic:IntelligentExposure"),
         Some(&"Standard".to_string())
     );
     assert_eq!(
         tags.get("Panasonic:IntelligentResolution"),
         Some(&"High".to_string())
+    );
+    assert_eq!(
+        tags.get("Panasonic:IntelligentD-Range"),
+        Some(&"Low".to_string())
     );
 }

@@ -8,6 +8,7 @@
 //! The parser extracts metadata from:
 //! - **Info dictionary**: Standard PDF metadata fields (Title, Author, Subject, etc.)
 //! - **XMP packets**: Extensible Metadata Platform XML data
+//! - **Encrypt dictionary**: Encryption and security information
 //!
 //! # PDF Structure
 //!
@@ -44,14 +45,24 @@
 
 #![allow(dead_code)]
 
+pub mod embedded_files_parser;
+pub mod encryption_parser;
+pub mod font_parser;
 pub mod info_parser;
+pub mod permissions_parser;
+pub mod resources_parser;
+pub mod root_parser;
+pub mod shared;
+pub mod signature_parser;
+pub mod structure_parser;
 pub mod xmp_extractor;
 
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
-use crate::parsers::icc_parser::extract_icc_profile;
-use info_parser::parse_info_dict;
-use xmp_extractor::extract_xmp_metadata;
+use crate::parsers::icc::extract_icc_profile;
+use encryption_parser::parse_encryption_metadata;
+// use root_parser::parse_root_metadata;
+// use structure_parser::parse_structure_metadata;
 
 /// PDF signature/magic bytes
 const PDF_SIGNATURE: &[u8] = b"%PDF-";
@@ -130,15 +141,15 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     let first_line = &header_data[..first_line_end];
 
     // The first line should be ASCII: %PDF-X.Y
-    if let Ok(header_str) = std::str::from_utf8(first_line) {
-        if let Some(version_str) = header_str.strip_prefix("%PDF-") {
-            let version = version_str.trim();
-            // Store as string to preserve exact version format (e.g., "1.3", "1.4", "2.0")
-            metadata.insert(
-                "PDF:PDFVersion".to_string(),
-                crate::core::TagValue::new_string(version.to_string()),
-            );
-        }
+    if let Ok(header_str) = std::str::from_utf8(first_line)
+        && let Some(version_str) = header_str.strip_prefix("%PDF-")
+    {
+        let version = version_str.trim();
+        // Store as string to preserve exact version format (e.g., "1.3", "1.4", "2.0")
+        let version_string = crate::core::TagValue::new_string(version.to_string());
+        metadata.insert("PDF:PDFVersion".to_string(), version_string.clone());
+        // Add PDF:Version as alias for ExifTool compatibility
+        metadata.insert("PDF:Version".to_string(), version_string);
     }
 
     // Check for linearization (optimize for web display)
@@ -159,7 +170,7 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     );
 
     // Extract Info dictionary metadata
-    match parse_info_dict(reader) {
+    match info_parser::parse_info_dict(reader) {
         Ok(info_metadata) => {
             // Merge Info dictionary tags into main metadata
             for (key, value) in info_metadata.iter() {
@@ -173,7 +184,7 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     }
 
     // Extract XMP metadata
-    match extract_xmp_metadata(reader) {
+    match xmp_extractor::extract_xmp_metadata(reader) {
         Ok(xmp_metadata) => {
             // Merge XMP tags into main metadata
             for (key, value) in xmp_metadata.iter() {
@@ -189,7 +200,6 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     // Extract ICC profile metadata
     match extract_icc_profile(reader) {
         Ok(icc_metadata) => {
-            // Merge ICC profile tags into main metadata
             for (key, value) in icc_metadata.iter() {
                 metadata.insert(key.clone(), value.clone());
             }
@@ -199,52 +209,314 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         }
     }
 
+    // Extract root dictionary metadata (Language, PageLayout, PageMode, JavaScript, Outlines, Names)
+    if let Ok(root_meta) = root_parser::parse_root_metadata(reader) {
+        for (key, value) in root_meta.iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
+
+    // Extract encryption metadata
+    if let Ok(enc_meta) = encryption_parser::parse_encryption_metadata(reader) {
+        for (key, value) in enc_meta.iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
+
+    // Extract digital signature metadata
+    if let Ok(sig_meta) = signature_parser::parse_signature_metadata(reader) {
+        for (key, value) in sig_meta.iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
+
+    // Extract permissions metadata
+    if let Ok(perm_meta) = permissions_parser::parse_permissions_metadata(reader) {
+        for (key, value) in perm_meta.iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
+
+    // Extract embedded resources metadata
+    if let Ok(res_meta) = resources_parser::parse_resources_metadata(reader) {
+        for (key, value) in res_meta.iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
+
+    // Extract font metadata
+    if let Ok(font_meta) = font_parser::parse_font_metadata(reader) {
+        for (key, value) in font_meta.iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
+
+    // Extract embedded file metadata
+    if let Ok(embedded_meta) = embedded_files_parser::parse_embedded_files_metadata(reader) {
+        for (key, value) in embedded_meta.iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
+
+    // Extract encryption metadata
+    match parse_encryption_metadata(reader) {
+        Ok(encryption_metadata) => {
+            // Merge encryption tags into main metadata
+            for (key, value) in encryption_metadata.iter() {
+                metadata.insert(key.clone(), value.clone());
+            }
+        }
+        Err(e) => {
+            // Log warning but continue - encryption might not be parseable
+            eprintln!("Warning: Failed to parse PDF encryption metadata: {}", e);
+        }
+    }
+
+    // Extract Root/Catalog metadata
+    // TODO: Implement root_parser
+    // match parse_root_metadata(reader) {
+    //     Ok(root_metadata) => {
+    //         // Merge Root tags into main metadata
+    //         for (key, value) in root_metadata.iter() {
+    //             metadata.insert(key.clone(), value.clone());
+    //         }
+    //     }
+    //     Err(e) => {
+    //         // Log warning but continue - Root metadata might not be parseable
+    //         eprintln!("Warning: Failed to parse PDF Root metadata: {}", e);
+    //     }
+    // }
+
+    // Extract structure and features metadata
+    // TODO: Implement structure_parser
+    // match parse_structure_metadata(reader) {
+    //     Ok(structure_metadata) => {
+    //         // Merge structure tags into main metadata
+    //         for (key, value) in structure_metadata.iter() {
+    //             metadata.insert(key.clone(), value.clone());
+    //         }
+    //     }
+    //     Err(e) => {
+    //         // Log warning but continue - structure metadata might not be parseable
+    //         eprintln!("Warning: Failed to parse PDF structure metadata: {}", e);
+    //     }
+    // }
+
+    // PDF image streams may contain complete TIFF/EXIF payloads. Extract
+    // metadata from these payloads after the PDF-level resource parsers have
+    // run so the standard IFD tag database determines the canonical key.
+    if let Ok(exif_metadata) = extract_embedded_exif_metadata(reader) {
+        for (key, value) in exif_metadata.iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
+
     // If we didn't extract any metadata at all, return error
     if metadata.is_empty() {
         return Err(ExifToolError::parse_error(
-            "No metadata found in PDF (no Info dictionary, XMP, or ICC profile)",
+            "No metadata found in PDF (no Info dictionary, XMP, ICC profile, encryption, Root, or structure)",
         ));
     }
 
     Ok(metadata)
 }
 
+const TIFF_ARTIST_TAG: u16 = 0x013b;
+
+#[derive(Clone, Copy)]
+enum EmbeddedTiffByteOrder {
+    Little,
+    Big,
+}
+
+/// Extracts the standard IFD0 Artist tag from TIFF/EXIF payloads embedded in
+/// PDF image streams.
+///
+/// DCT-encoded PDF image streams retain their JPEG APP1 payload byte-for-byte,
+/// so the TIFF byte-order marker can be located without interpreting the PDF
+/// data as text. TIFF offsets remain relative to the located TIFF header.
+fn extract_embedded_exif_metadata(
+    reader: &dyn crate::core::FileReader,
+) -> crate::error::Result<crate::core::MetadataMap> {
+    let mut metadata = crate::core::MetadataMap::with_capacity(1);
+    let file_size = usize::try_from(reader.size()).map_err(|_| {
+        crate::error::ExifToolError::parse_error(
+            "PDF is too large to scan for embedded EXIF metadata",
+        )
+    })?;
+    let data = reader.read(0, file_size)?;
+
+    let Some(artist) = find_embedded_exif_artist(data) else {
+        return Ok(metadata);
+    };
+
+    // Artist is tag 0x013b in IFD0. The tag database supplies the canonical
+    // group-qualified key for this directory instead of assigning a prefix
+    // based on the containing PDF.
+    let tag_key = crate::tag_db::lookup_tag_name(TIFF_ARTIST_TAG, "IFD0");
+    metadata.insert(tag_key, crate::core::TagValue::new_string(artist));
+
+    Ok(metadata)
+}
+
+/// Searches raw PDF bytes for embedded TIFF headers and returns the first
+/// valid IFD0 Artist value.
+fn find_embedded_exif_artist(data: &[u8]) -> Option<String> {
+    let mut cursor = 0usize;
+
+    while cursor < data.len() {
+        let remaining = data.get(cursor..)?;
+        let Some(relative_offset) = remaining
+            .windows(4)
+            .position(|window| window == b"II\x2a\x00" || window == b"MM\x00\x2a")
+        else {
+            break;
+        };
+
+        let tiff_offset = cursor.checked_add(relative_offset)?;
+        if let Some(artist) = parse_ifd0_ascii_tag(data.get(tiff_offset..)?, TIFF_ARTIST_TAG) {
+            return Some(artist);
+        }
+
+        // Advance one byte rather than trusting any offsets in a malformed
+        // candidate, allowing a later valid TIFF payload to be considered.
+        cursor = tiff_offset.checked_add(1)?;
+    }
+
+    None
+}
+
+/// Parses one ASCII tag from the first TIFF IFD.
+fn parse_ifd0_ascii_tag(data: &[u8], wanted_tag: u16) -> Option<String> {
+    let byte_order = if data.get(0..2)? == b"II" {
+        EmbeddedTiffByteOrder::Little
+    } else if data.get(0..2)? == b"MM" {
+        EmbeddedTiffByteOrder::Big
+    } else {
+        return None;
+    };
+
+    if read_embedded_tiff_u16(data, 2, byte_order)? != 42 {
+        return None;
+    }
+
+    let ifd_offset = usize::try_from(read_embedded_tiff_u32(data, 4, byte_order)?).ok()?;
+    let entry_count = usize::from(read_embedded_tiff_u16(data, ifd_offset, byte_order)?);
+    let entries_offset = ifd_offset.checked_add(2)?;
+    let entries_len = entry_count.checked_mul(12)?;
+    let entries_end = entries_offset.checked_add(entries_len)?;
+
+    // Validate the complete entry array before iterating over file-controlled
+    // entry counts.
+    data.get(entries_offset..entries_end)?;
+
+    for entry_index in 0..entry_count {
+        let entry_offset = entries_offset.checked_add(entry_index.checked_mul(12)?)?;
+
+        if read_embedded_tiff_u16(data, entry_offset, byte_order)? != wanted_tag {
+            continue;
+        }
+
+        let field_type = read_embedded_tiff_u16(data, entry_offset.checked_add(2)?, byte_order)?;
+        if field_type != 2 {
+            return None;
+        }
+
+        let value_len = usize::try_from(read_embedded_tiff_u32(
+            data,
+            entry_offset.checked_add(4)?,
+            byte_order,
+        )?)
+        .ok()?;
+        if value_len == 0 {
+            return None;
+        }
+
+        let value_offset = if value_len <= 4 {
+            entry_offset.checked_add(8)?
+        } else {
+            usize::try_from(read_embedded_tiff_u32(
+                data,
+                entry_offset.checked_add(8)?,
+                byte_order,
+            )?)
+            .ok()?
+        };
+        let value_end = value_offset.checked_add(value_len)?;
+        let raw_value = data.get(value_offset..value_end)?;
+        let text_len = raw_value
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(raw_value.len());
+        let value = String::from_utf8_lossy(raw_value.get(..text_len)?).into_owned();
+
+        if !value.is_empty() {
+            return Some(value);
+        }
+        return None;
+    }
+
+    None
+}
+
+fn read_embedded_tiff_u16(
+    data: &[u8],
+    offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<u16> {
+    let end = offset.checked_add(2)?;
+    let bytes: [u8; 2] = data.get(offset..end)?.try_into().ok()?;
+
+    Some(match byte_order {
+        EmbeddedTiffByteOrder::Little => u16::from_le_bytes(bytes),
+        EmbeddedTiffByteOrder::Big => u16::from_be_bytes(bytes),
+    })
+}
+
+fn read_embedded_tiff_u32(
+    data: &[u8],
+    offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let bytes: [u8; 4] = data.get(offset..end)?.try_into().ok()?;
+
+    Some(match byte_order {
+        EmbeddedTiffByteOrder::Little => u32::from_le_bytes(bytes),
+        EmbeddedTiffByteOrder::Big => u32::from_be_bytes(bytes),
+    })
+}
+
+#[cfg(test)]
+mod embedded_exif_tests {
+    use super::find_embedded_exif_artist;
+
+    #[test]
+    fn extracts_artist_from_embedded_little_endian_tiff() {
+        let mut pdf = b"%PDF-1.4\nstream\nExif\0\0".to_vec();
+
+        // TIFF header with IFD0 at offset 8.
+        pdf.extend_from_slice(b"II\x2a\x00\x08\x00\x00\x00");
+        // One IFD entry.
+        pdf.extend_from_slice(b"\x01\x00");
+        // Artist (0x013b), ASCII, 12 bytes, value at TIFF offset 26.
+        pdf.extend_from_slice(b"\x3b\x01\x02\x00\x0c\x00\x00\x00\x1a\x00\x00\x00");
+        // No next IFD, followed by the Artist string.
+        pdf.extend_from_slice(b"\x00\x00\x00\x00Phil Harvey\0");
+        pdf.extend_from_slice(b"\nendstream\n%%EOF");
+
+        assert_eq!(
+            find_embedded_exif_artist(&pdf).as_deref(),
+            Some("Phil Harvey")
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::tag_value::TagValue;
-    use std::io;
-
-    /// Simple in-memory FileReader for testing
-    struct TestReader {
-        data: Vec<u8>,
-    }
-
-    impl TestReader {
-        fn new(data: Vec<u8>) -> Self {
-            Self { data }
-        }
-    }
-
-    impl FileReader for TestReader {
-        fn read(&self, offset: u64, length: usize) -> io::Result<&[u8]> {
-            let start = offset as usize;
-            let end = start + length;
-
-            if end > self.data.len() {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "read beyond end of file",
-                ));
-            }
-
-            Ok(&self.data[start..end])
-        }
-
-        fn size(&self) -> u64 {
-            self.data.len() as u64
-        }
-    }
+    use crate::test_support::TestReader;
 
     /// Creates a minimal valid PDF with Info dictionary
     fn create_test_pdf_with_info() -> Vec<u8> {
@@ -337,10 +609,12 @@ startxref
 
         let result = parse_pdf_metadata(&reader);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid PDF signature"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid PDF signature")
+        );
     }
 
     #[test]

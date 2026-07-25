@@ -91,6 +91,9 @@ mod phaseone_makernotes_tests;
 #[path = "integration/format_detection.rs"]
 mod format_detection;
 
+#[path = "integration/production_wiring_tests.rs"]
+mod production_wiring_tests;
+
 #[path = "integration/pe_tests.rs"]
 mod pe_tests;
 
@@ -98,3 +101,18 @@ mod pe_tests;
 #[cfg(feature = "magika")]
 #[path = "integration/magika_detection_tests.rs"]
 mod magika_detection_tests;
+
+#[path = "integration/pe_import_test.rs"]
+mod pe_import_test;
+
+#[path = "integration/makernote_integration.rs"]
+mod makernote_integration;
+
+#[path = "integration/cli_feature_tests.rs"]
+mod cli_feature_tests;
+
+#[path = "integration/cli_batch_wiring_tests.rs"]
+mod cli_batch_wiring_tests;
+
+#[path = "forensic/mod.rs"]
+mod forensic;

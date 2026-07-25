@@ -171,6 +171,17 @@ macro_rules! simple_decoder_custom {
 /// ```
 #[macro_export]
 macro_rules! const_decoder {
+    // Public decoder variant
+    (pub $name:ident, $type:ty, [ $( ($val:expr, $str:expr) ),* $(,)? ]) => {
+        #[doc = concat!("Value decoder for ", stringify!($name))]
+        pub const $name: $crate::parsers::tiff::makernotes::shared::generic_decoders::SimpleValueDecoder<$type> =
+            $crate::parsers::tiff::makernotes::shared::generic_decoders::SimpleValueDecoder::new(&[
+                $(
+                    ($val, $str),
+                )*
+            ]);
+    };
+    // Private decoder variant (original behavior)
     ($name:ident, $type:ty, [ $( ($val:expr, $str:expr) ),* $(,)? ]) => {
         const $name: $crate::parsers::tiff::makernotes::shared::generic_decoders::SimpleValueDecoder<$type> =
             $crate::parsers::tiff::makernotes::shared::generic_decoders::SimpleValueDecoder::new(&[
@@ -206,6 +217,17 @@ macro_rules! const_decoder {
 /// ```
 #[macro_export]
 macro_rules! bitfield_decoder {
+    // Public decoder variant
+    (pub $name:ident, [ $( ($mask:expr, $str:expr) ),* $(,)? ]) => {
+        #[doc = concat!("Bitfield decoder for ", stringify!($name))]
+        pub const $name: $crate::parsers::tiff::makernotes::shared::generic_decoders::BitfieldDecoder =
+            $crate::parsers::tiff::makernotes::shared::generic_decoders::BitfieldDecoder::new(&[
+                $(
+                    ($mask, $str),
+                )*
+            ]);
+    };
+    // Private decoder variant (original behavior)
     ($name:ident, [ $( ($mask:expr, $str:expr) ),* $(,)? ]) => {
         const $name: $crate::parsers::tiff::makernotes::shared::generic_decoders::BitfieldDecoder =
             $crate::parsers::tiff::makernotes::shared::generic_decoders::BitfieldDecoder::new(&[

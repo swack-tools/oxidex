@@ -48,6 +48,7 @@
 //! let decoded = registry.decode_i16(0x0001, value);
 //! ```
 
+use super::array_schemas::ArraySchema;
 use super::generic_decoders::SimpleValueDecoder;
 use std::collections::HashMap;
 
@@ -101,6 +102,8 @@ pub enum TagDecoder {
     SimpleU16(&'static SimpleValueDecoder<u16>),
     /// Decoder using SimpleValueDecoder<u32>
     SimpleU32(&'static SimpleValueDecoder<u32>),
+    /// Array schema for processing array-type tags
+    ArraySchema(&'static ArraySchema),
 }
 
 /// A registry that maps tag IDs to their definitions and decoders
@@ -378,6 +381,183 @@ impl TagRegistry {
         self
     }
 
+    /// Register a string tag (no decoder)
+    ///
+    /// String tags contain text values extracted directly from the MakerNote data.
+    /// They require special handling in the parser because the value_offset field
+    /// contains either inline data (≤4 bytes) or an offset to external data.
+    ///
+    /// # Arguments
+    /// * `id` - The tag ID
+    /// * `name` - Human-readable tag name
+    ///
+    /// # Returns
+    /// Self for method chaining
+    pub fn register_string_tag(mut self, id: u16, name: &'static str) -> Self {
+        self.tags.insert(
+            id,
+            TagDefinition {
+                id,
+                name,
+                decoder: None,
+            },
+        );
+        self
+    }
+
+    /// Register an enumerated tag with an i32 decoder
+    ///
+    /// Enumerated tags use const_decoder! macros to map numeric values to
+    /// human-readable strings (e.g., 1="Auto", 2="Manual").
+    ///
+    /// # Arguments
+    /// * `id` - The tag ID
+    /// * `name` - Human-readable tag name
+    /// * `decoder` - Optional reference to a static SimpleValueDecoder<i32>
+    ///
+    /// # Returns
+    /// Self for method chaining
+    pub fn register_enum_tag(
+        mut self,
+        id: u16,
+        name: &'static str,
+        decoder: Option<&'static SimpleValueDecoder<i32>>,
+    ) -> Self {
+        let tag_decoder = decoder.map(TagDecoder::SimpleI32);
+        self.tags.insert(
+            id,
+            TagDefinition {
+                id,
+                name,
+                decoder: tag_decoder,
+            },
+        );
+        self
+    }
+
+    /// Register an enumerated tag with an i32 decoder (non-optional variant)
+    ///
+    /// This is a convenience method for tags that always have a decoder.
+    ///
+    /// # Arguments
+    /// * `id` - The tag ID
+    /// * `name` - Human-readable tag name
+    /// * `decoder` - Reference to a static SimpleValueDecoder<i32>
+    ///
+    /// # Returns
+    /// Self for method chaining
+    pub fn register_enum_tag_required(
+        mut self,
+        id: u16,
+        name: &'static str,
+        decoder: &'static SimpleValueDecoder<i32>,
+    ) -> Self {
+        self.tags.insert(
+            id,
+            TagDefinition {
+                id,
+                name,
+                decoder: Some(TagDecoder::SimpleI32(decoder)),
+            },
+        );
+        self
+    }
+
+    /// Register an integer/numeric tag (optionally with decoder)
+    ///
+    /// Integer tags contain numeric values that might be used directly or
+    /// decoded through an optional decoder function.
+    ///
+    /// # Arguments
+    /// * `id` - The tag ID
+    /// * `name` - Human-readable tag name
+    /// * `decoder` - Optional reference to a static SimpleValueDecoder<i32>
+    ///
+    /// # Returns
+    /// Self for method chaining
+    pub fn register_integer_tag(
+        mut self,
+        id: u16,
+        name: &'static str,
+        decoder: Option<&'static SimpleValueDecoder<i32>>,
+    ) -> Self {
+        let tag_decoder = decoder.map(TagDecoder::SimpleI32);
+        self.tags.insert(
+            id,
+            TagDefinition {
+                id,
+                name,
+                decoder: tag_decoder,
+            },
+        );
+        self
+    }
+
+    /// Register an integer/numeric tag with an i32 decoder (non-optional variant)
+    ///
+    /// This is a convenience method for integer tags that always have a decoder.
+    ///
+    /// # Arguments
+    /// * `id` - The tag ID
+    /// * `name` - Human-readable tag name
+    /// * `decoder` - Reference to a static SimpleValueDecoder<i32>
+    ///
+    /// # Returns
+    /// Self for method chaining
+    pub fn register_integer_tag_required(
+        mut self,
+        id: u16,
+        name: &'static str,
+        decoder: &'static SimpleValueDecoder<i32>,
+    ) -> Self {
+        self.tags.insert(
+            id,
+            TagDefinition {
+                id,
+                name,
+                decoder: Some(TagDecoder::SimpleI32(decoder)),
+            },
+        );
+        self
+    }
+
+    /// Register an array-based tag that uses an ArraySchema
+    ///
+    /// This method allows registration of tags that represent arrays of values,
+    /// where each array index has specific meaning defined by the schema.
+    ///
+    /// # Arguments
+    /// * `tag_id` - The tag ID
+    /// * `schema` - Reference to a static ArraySchema defining the array structure
+    ///
+    /// # Returns
+    /// Self for method chaining
+    ///
+    /// # Example
+    /// ```ignore
+    /// static CAMERA_SETTINGS: ArraySchema = ArraySchema {
+    ///     name: "CameraSettings",
+    ///     indices: &[
+    ///         ArrayIndexDef::with_i16_decoder(1, "Quality", &QUALITY_DECODER),
+    ///         ArrayIndexDef::raw(2, "ISO"),
+    ///     ],
+    /// };
+    ///
+    /// let registry = TagRegistry::new()
+    ///     .register_array_schema(0x0001, &CAMERA_SETTINGS);
+    /// ```
+    pub fn register_array_schema(mut self, tag_id: u16, schema: &'static ArraySchema) -> Self {
+        self.tags.insert(
+            tag_id,
+            TagDefinition {
+                id: tag_id,
+                name: schema.name,
+                decoder: Some(TagDecoder::ArraySchema(schema)),
+            },
+        );
+        self
+    }
+
     /// Gets the human-readable name for a tag ID
     ///
     /// # Arguments
@@ -484,6 +664,142 @@ impl TagRegistry {
                 _ => value.to_string(),
             },
             None => value.to_string(),
+        }
+    }
+
+    /// Decode and insert an i16 array tag using its schema
+    ///
+    /// This method processes an array of i16 values according to the ArraySchema
+    /// registered for the given tag ID. Each array index defined in the schema
+    /// will be extracted and inserted into the tags map with appropriate decoding.
+    ///
+    /// # Arguments
+    /// * `tag_id` - The tag ID to look up in the registry
+    /// * `array` - The i16 array to process
+    /// * `prefix` - Prefix for tag names (e.g., "Canon", "Nikon")
+    /// * `tags` - HashMap to insert the decoded values into
+    ///
+    /// # Behavior
+    /// - If the tag is not registered, no action is taken
+    /// - If the tag is registered but not with an ArraySchema, no action is taken
+    /// - Only indices present in the array are processed (missing indices are skipped)
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut tags = HashMap::new();
+    /// let settings = vec![0i16, 2, 400]; // index 0 unused, 1=quality, 2=ISO
+    /// registry.decode_array_i16(0x0001, &settings, "Canon", &mut tags);
+    /// // tags now contains "Canon:CameraSettings:Quality" and "Canon:CameraSettings:ISO"
+    /// ```
+    pub fn decode_array_i16(
+        &self,
+        tag_id: u16,
+        array: &[i16],
+        prefix: &str,
+        tags: &mut HashMap<String, String>,
+    ) {
+        if let Some(def) = self.tags.get(&tag_id)
+            && let Some(TagDecoder::ArraySchema(schema)) = def.decoder
+        {
+            schema.process_i16_array(array, prefix, tags);
+        }
+    }
+
+    /// Decode and insert a u16 array tag using its schema
+    ///
+    /// This method processes an array of u16 values according to the ArraySchema
+    /// registered for the given tag ID. Each array index defined in the schema
+    /// will be extracted and inserted into the tags map with appropriate decoding.
+    ///
+    /// # Arguments
+    /// * `tag_id` - The tag ID to look up in the registry
+    /// * `array` - The u16 array to process
+    /// * `prefix` - Prefix for tag names (e.g., "Canon", "Nikon")
+    /// * `tags` - HashMap to insert the decoded values into
+    ///
+    /// # Behavior
+    /// - If the tag is not registered, no action is taken
+    /// - If the tag is registered but not with an ArraySchema, no action is taken
+    /// - Only indices present in the array are processed (missing indices are skipped)
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut tags = HashMap::new();
+    /// let settings = vec![0u16, 2, 400]; // index 0 unused, 1=quality, 2=ISO
+    /// registry.decode_array_u16(0x0001, &settings, "Canon", &mut tags);
+    /// // tags now contains "Canon:CameraSettings:Quality" and "Canon:CameraSettings:ISO"
+    /// ```
+    pub fn decode_array_u16(
+        &self,
+        tag_id: u16,
+        array: &[u16],
+        prefix: &str,
+        tags: &mut HashMap<String, String>,
+    ) {
+        if let Some(def) = self.tags.get(&tag_id)
+            && let Some(TagDecoder::ArraySchema(schema)) = def.decoder
+        {
+            schema.process_u16_array(array, prefix, tags);
+        }
+    }
+
+    /// Decode and insert an i32 array tag using its schema
+    ///
+    /// This method processes an array of i32 values according to the ArraySchema
+    /// registered for the given tag ID. Each array index defined in the schema
+    /// will be extracted and inserted into the tags map with appropriate decoding.
+    ///
+    /// # Arguments
+    /// * `tag_id` - The tag ID to look up in the registry
+    /// * `array` - The i32 array to process
+    /// * `prefix` - Prefix for tag names (e.g., "Olympus", "Panasonic")
+    /// * `tags` - HashMap to insert the decoded values into
+    ///
+    /// # Behavior
+    /// - If the tag is not registered, no action is taken
+    /// - If the tag is registered but not with an ArraySchema, no action is taken
+    /// - Only indices present in the array are processed (missing indices are skipped)
+    pub fn decode_array_i32(
+        &self,
+        tag_id: u16,
+        array: &[i32],
+        prefix: &str,
+        tags: &mut HashMap<String, String>,
+    ) {
+        if let Some(def) = self.tags.get(&tag_id)
+            && let Some(TagDecoder::ArraySchema(schema)) = def.decoder
+        {
+            schema.process_i32_array(array, prefix, tags);
+        }
+    }
+
+    /// Decode and insert a u32 array tag using its schema
+    ///
+    /// This method processes an array of u32 values according to the ArraySchema
+    /// registered for the given tag ID. Each array index defined in the schema
+    /// will be extracted and inserted into the tags map with appropriate decoding.
+    ///
+    /// # Arguments
+    /// * `tag_id` - The tag ID to look up in the registry
+    /// * `array` - The u32 array to process
+    /// * `prefix` - Prefix for tag names (e.g., "Olympus", "Panasonic")
+    /// * `tags` - HashMap to insert the decoded values into
+    ///
+    /// # Behavior
+    /// - If the tag is not registered, no action is taken
+    /// - If the tag is registered but not with an ArraySchema, no action is taken
+    /// - Only indices present in the array are processed (missing indices are skipped)
+    pub fn decode_array_u32(
+        &self,
+        tag_id: u16,
+        array: &[u32],
+        prefix: &str,
+        tags: &mut HashMap<String, String>,
+    ) {
+        if let Some(def) = self.tags.get(&tag_id)
+            && let Some(TagDecoder::ArraySchema(schema)) = def.decoder
+        {
+            schema.process_u32_array(array, prefix, tags);
         }
     }
 

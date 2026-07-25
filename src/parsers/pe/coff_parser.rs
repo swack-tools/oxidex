@@ -2,9 +2,9 @@
 
 use crate::parsers::pe::structures::CoffHeader;
 use nom::{
+    IResult,
     bytes::complete::tag,
     number::complete::{le_u16, le_u32},
-    IResult,
 };
 
 /// Parse COFF header from PE file (after PE signature)

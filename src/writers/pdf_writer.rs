@@ -42,7 +42,7 @@ use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::writers::atomic_writer::write_atomic;
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, Timelike, Utc};
-use std::collections::{btree_map::Entry, BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, btree_map::Entry};
 use std::path::Path;
 use std::str;
 
@@ -186,6 +186,17 @@ fn parse_pdf_structure(reader: &dyn FileReader) -> Result<PdfStructure> {
     let xref_size = std::cmp::min(8192, (file_size - xref_offset) as usize);
     let xref_data = reader.read(xref_offset, xref_size)?;
 
+    // The writer only rebuilds a single classic xref section. An incremental
+    // update chains earlier revisions via the trailer's /Prev key, and the
+    // final section lists only the objects that revision changed; rewriting
+    // from it alone would drop the Catalog/Pages/Page objects and corrupt the
+    // document. Reject rather than silently destroy it.
+    if trailer_has_prev(xref_data) {
+        return Err(ExifToolError::unsupported_format(
+            "PDF write operations are not yet supported for incrementally-updated PDFs (trailer /Prev)",
+        ));
+    }
+
     // Parse trailer to find Info reference and Root reference
     let (info_ref, root_ref, size) = parse_trailer_refs(xref_data)?;
 
@@ -221,6 +232,23 @@ fn find_xref_offset(tail_data: &[u8]) -> Result<u64> {
         .ok_or_else(|| ExifToolError::parse_error("Invalid xref offset after startxref"))?;
 
     Ok(offset)
+}
+
+/// Reports whether the final trailer references an earlier revision via /Prev.
+///
+/// Such incrementally-updated PDFs cannot be safely rewritten from the final
+/// xref section alone (it lists only the last revision's objects).
+fn trailer_has_prev(xref_data: &[u8]) -> bool {
+    let Ok(xref_str) = str::from_utf8(xref_data) else {
+        // Non-UTF-8 xref region implies a cross-reference stream, which this
+        // writer also cannot rebuild; treat it as unsupported too.
+        return true;
+    };
+    let Some(trailer_pos) = xref_str.find("trailer") else {
+        // No classic trailer keyword: likely a cross-reference stream.
+        return true;
+    };
+    xref_str[trailer_pos..].contains("/Prev")
 }
 
 /// Parses trailer to extract Info reference, Root reference, and Size
@@ -328,19 +356,19 @@ fn parse_xref_table(xref_data: &[u8]) -> Result<HashMap<u32, u64>> {
 
         // Parse subsection header: "start_obj_num count"
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() == 2 {
-            if let (Ok(start_num), Ok(count)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
-                // Parse each entry in this subsection
-                for i in 0..count {
-                    if let Some(entry_line) = lines.next() {
-                        let entry_parts: Vec<&str> = entry_line.split_whitespace().collect();
-                        if entry_parts.len() >= 3 {
-                            if let Ok(offset) = entry_parts[0].parse::<u64>() {
-                                let in_use = entry_parts[2];
-                                if in_use == "n" {
-                                    object_offsets.insert(start_num + i, offset);
-                                }
-                            }
+        if parts.len() == 2
+            && let (Ok(start_num), Ok(count)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+        {
+            // Parse each entry in this subsection
+            for i in 0..count {
+                if let Some(entry_line) = lines.next() {
+                    let entry_parts: Vec<&str> = entry_line.split_whitespace().collect();
+                    if entry_parts.len() >= 3
+                        && let Ok(offset) = entry_parts[0].parse::<u64>()
+                    {
+                        let in_use = entry_parts[2];
+                        if in_use == "n" {
+                            object_offsets.insert(start_num + i, offset);
                         }
                     }
                 }
@@ -426,16 +454,16 @@ fn write_info_object(
     let mut entries: BTreeMap<String, (&TagValue, FieldSource)> = BTreeMap::new();
 
     for (key, value) in metadata.iter() {
-        if let Some(field) = key.strip_prefix("PDF:") {
-            if let Some((canonical, source)) = canonicalize_pdf_field(field) {
-                match entries.entry(canonical) {
-                    Entry::Vacant(entry) => {
+        if let Some(field) = key.strip_prefix("PDF:")
+            && let Some((canonical, source)) = canonicalize_pdf_field(field)
+        {
+            match entries.entry(canonical) {
+                Entry::Vacant(entry) => {
+                    entry.insert((value, source));
+                }
+                Entry::Occupied(mut entry) => {
+                    if matches!(source, FieldSource::Canonical) {
                         entry.insert((value, source));
-                    }
-                    Entry::Occupied(mut entry) => {
-                        if matches!(source, FieldSource::Canonical) {
-                            entry.insert((value, source));
-                        }
                     }
                 }
             }
@@ -462,13 +490,13 @@ fn serialize_pdf_field(buffer: &mut Vec<u8>, field_name: &str, value: &TagValue)
     // Write field value based on type
     match value {
         TagValue::String(s) => {
-            if matches!(field_name, "CreationDate" | "ModDate") {
-                if let Some(pdf_date) = convert_exif_string_to_pdf_date(s) {
-                    buffer.extend_from_slice(b"(D:");
-                    buffer.extend_from_slice(pdf_date.as_bytes());
-                    buffer.extend_from_slice(b")\n");
-                    return Ok(());
-                }
+            if matches!(field_name, "CreationDate" | "ModDate")
+                && let Some(pdf_date) = convert_exif_string_to_pdf_date(s)
+            {
+                buffer.extend_from_slice(b"(D:");
+                buffer.extend_from_slice(pdf_date.as_bytes());
+                buffer.extend_from_slice(b")\n");
+                return Ok(());
             }
             serialize_pdf_text_string(buffer, s);
         }
@@ -696,6 +724,20 @@ mod tests {
         let result = find_xref_offset(tail);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 1234);
+    }
+
+    #[test]
+    fn test_trailer_has_prev() {
+        // Incremental update: trailer references an earlier revision.
+        assert!(trailer_has_prev(
+            b"xref\n0 1\ntrailer<</Size 5/Root 1 0 R/Prev 116>>\nstartxref\n"
+        ));
+        // Classic single-revision trailer: safe to rebuild.
+        assert!(!trailer_has_prev(
+            b"xref\n0 5\ntrailer<</Size 5/Root 1 0 R/Info 4 0 R>>\nstartxref\n"
+        ));
+        // Cross-reference stream (no `trailer` keyword): also unsupported.
+        assert!(trailer_has_prev(b"5 0 obj<</Type/XRef/Size 6>>stream\n"));
     }
 
     #[test]

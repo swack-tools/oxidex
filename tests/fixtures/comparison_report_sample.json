@@ -1,0 +1,56 @@
+{
+  "generated_at": "2026-07-19T00:00:00Z",
+  "exiftool_version": "13.55",
+  "oxidex_version": "1.2.1",
+  "by_format": {
+    "PNG": {
+      "format": "PNG",
+      "files_tested": 3,
+      "matched_tags": ["PNG:Width", "PNG:Height"],
+      "missing_in_oxidex": [],
+      "extra_in_oxidex": [],
+      "value_differences": [],
+      "regressions": [],
+      "coverage_percentage": 100.0,
+      "total_exiftool_tags": 2,
+      "timestamp": "2026-07-19T00:00:00Z"
+    },
+    "JPEG": {
+      "format": "JPEG",
+      "files_tested": 5,
+      "matched_tags": ["EXIF:Make"],
+      "missing_in_oxidex": [
+        {"name": "LensModel", "family": "EXIF", "value": "50mm f/1.8", "tag_id": "0xA434", "source_file": "t/images/Canon.jpg"}
+      ],
+      "extra_in_oxidex": [],
+      "value_differences": [
+        {"tag_key": "EXIF:ISO", "exiftool_value": "100", "oxidex_value": "0", "source_file": "t/images/Canon.jpg"}
+      ],
+      "regressions": [],
+      "coverage_percentage": 50.0,
+      "total_exiftool_tags": 2,
+      "timestamp": "2026-07-19T00:00:00Z"
+    },
+    "NEF": {
+      "format": "NEF",
+      "files_tested": 4,
+      "matched_tags": [],
+      "missing_in_oxidex": [
+        {"name": "LensModel", "family": "EXIF", "value": "50mm", "tag_id": null, "source_file": "t/images/Nikon.nef"},
+        {"name": "FocusDistance", "family": "MakerNotes", "value": "1.2 m", "tag_id": null, "source_file": "t/images/Nikon.nef"},
+        {"name": "ShutterCount", "family": "MakerNotes", "value": "12345", "tag_id": null, "source_file": "t/images/Nikon.nef"}
+      ],
+      "extra_in_oxidex": [],
+      "value_differences": [
+        {"tag_key": "EXIF:ISO", "exiftool_value": "400", "oxidex_value": "0", "source_file": "t/images/Nikon.nef"}
+      ],
+      "regressions": [],
+      "coverage_percentage": 0.0,
+      "total_exiftool_tags": 4,
+      "timestamp": "2026-07-19T00:00:00Z"
+    }
+  },
+  "overall_coverage": 37.5,
+  "total_regressions": 0,
+  "summary": "Analyzed 3 formats: 3/8 tags (37.5% overall coverage)"
+}

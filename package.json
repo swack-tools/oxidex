@@ -1,0 +1,8 @@
+{
+  "devDependencies": {
+    "claude-flow": "^2.7.41"
+  },
+  "dependencies": {
+    "better-ccflare": "^3.0.3"
+  }
+}

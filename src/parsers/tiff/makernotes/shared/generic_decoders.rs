@@ -295,6 +295,11 @@ where
 /// ```
 pub const ON_OFF: SimpleValueDecoder<i16> = SimpleValueDecoder::new(&[(0, "Off"), (1, "On")]);
 
+/// Pre-built decoder for binary On/Off values (0=Off, 1=On) - i32 version
+///
+/// Used by parsers that process i32 arrays (e.g., Olympus CameraSettings)
+pub const ON_OFF_I32: SimpleValueDecoder<i32> = SimpleValueDecoder::new(&[(0, "Off"), (1, "On")]);
+
 /// Pre-built decoder for binary Yes/No values (0=No, 1=Yes)
 ///
 /// # Example

@@ -1,0 +1,11 @@
+# Rust 1.90+ can link the x86_64-unknown-linux-gnu target with the bundled
+# rust-lld linker. Under this crate's fat-LTO release profile and the
+# lib/staticlib/cdylib crate-type mix, rust-lld fails to resolve std
+# monomorphizations (e.g. core::slice::sort::stable::driftsort_main) and the
+# crate's own symbols when linking the release and tag-comparison artifacts.
+# This only surfaced after CI moved from the self-hosted runner (older stable,
+# GNU ld) to GitHub-hosted runners on newer stable. Fall back to the system
+# GNU linker for this target, matching the previously-green build. Scoped to
+# the GNU target so musl and macOS builds are unaffected.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "linker-features=-lld"]

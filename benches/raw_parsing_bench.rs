@@ -24,8 +24,8 @@
 //! start target/criterion/report/index.html
 //! ```
 
-use criterion::{criterion_group, criterion_main, Criterion};
-use oxidex::parsers::raw::{detect_raw_format, parse_raw_metadata, RawFormat};
+use criterion::{Criterion, criterion_group, criterion_main};
+use oxidex::parsers::raw::{RawFormat, detect_raw_format, parse_raw_metadata};
 use std::hint::black_box;
 
 /// Benchmark for raw format detection

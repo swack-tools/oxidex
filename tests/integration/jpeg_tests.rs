@@ -3,11 +3,15 @@
 //! This test validates the entire parsing pipeline from file reading through
 //! format detection, segment parsing, and EXIF tag extraction.
 
+#[path = "../common/mod.rs"]
+mod common;
+
+use common::TestReader;
 use oxidex::core::{FileFormat, FileReader};
 use oxidex::io::MMapReader;
-use oxidex::parsers::format_detector::detect_format;
+use oxidex::parsers::detection::detect_format;
 use oxidex::parsers::jpeg::segment_parser::parse_segments;
-use oxidex::parsers::tiff::ifd_parser::{parse_ifd, ByteOrder};
+use oxidex::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
@@ -574,63 +578,59 @@ fn test_jpeg_xmp_extraction_end_to_end() {
     // Check for Creator
     let creator_tags: Vec<_> = xmp_tags
         .iter()
-        .filter(|(name, _)| name == "XMP-xmp:Creator")
+        .filter(|(name, _)| name == "XMP:Creator")
         .collect();
     assert_eq!(
         creator_tags.len(),
         1,
-        "Should have exactly one XMP-xmp:Creator tag"
+        "Should have exactly one XMP:Creator tag"
     );
     assert_eq!(
         creator_tags[0].1, "John Doe",
-        "XMP-xmp:Creator should be 'John Doe'"
+        "XMP:Creator should be 'John Doe'"
     );
-    println!("  ✓ XMP-xmp:Creator: {}", creator_tags[0].1);
+    println!("  ✓ XMP:Creator: {}", creator_tags[0].1);
 
     // Check for Rating
     let rating_tags: Vec<_> = xmp_tags
         .iter()
-        .filter(|(name, _)| name == "XMP-xmp:Rating")
+        .filter(|(name, _)| name == "XMP:Rating")
         .collect();
     assert_eq!(
         rating_tags.len(),
         1,
-        "Should have exactly one XMP-xmp:Rating tag"
+        "Should have exactly one XMP:Rating tag"
     );
-    assert_eq!(rating_tags[0].1, "5", "XMP-xmp:Rating should be '5'");
-    println!("  ✓ XMP-xmp:Rating: {}", rating_tags[0].1);
+    assert_eq!(rating_tags[0].1, "5", "XMP:Rating should be '5'");
+    println!("  ✓ XMP:Rating: {}", rating_tags[0].1);
 
     // Check for title (dc:title)
     let title_tags: Vec<_> = xmp_tags
         .iter()
-        .filter(|(name, _)| name == "XMP-dc:Title")
+        .filter(|(name, _)| name == "XMP:Title")
         .collect();
-    assert_eq!(
-        title_tags.len(),
-        1,
-        "Should have exactly one XMP-dc:Title tag"
-    );
+    assert_eq!(title_tags.len(), 1, "Should have exactly one XMP:Title tag");
     assert_eq!(
         title_tags[0].1, "Sample Photo",
-        "XMP-dc:Title should be 'Sample Photo'"
+        "XMP:Title should be 'Sample Photo'"
     );
-    println!("  ✓ XMP-dc:Title: {}", title_tags[0].1);
+    println!("  ✓ XMP:Title: {}", title_tags[0].1);
 
     // Check for rights (dc:rights)
     let rights_tags: Vec<_> = xmp_tags
         .iter()
-        .filter(|(name, _)| name == "XMP-dc:Rights")
+        .filter(|(name, _)| name == "XMP:Rights")
         .collect();
     assert_eq!(
         rights_tags.len(),
         1,
-        "Should have exactly one XMP-dc:Rights tag"
+        "Should have exactly one XMP:Rights tag"
     );
     assert_eq!(
         rights_tags[0].1, "Copyright 2024",
-        "XMP-dc:Rights should be 'Copyright 2024'"
+        "XMP:Rights should be 'Copyright 2024'"
     );
-    println!("  ✓ XMP-dc:Rights: {}", rights_tags[0].1);
+    println!("  ✓ XMP:Rights: {}", rights_tags[0].1);
 
     // === Step 8: Verify both EXIF and XMP can coexist ===
     println!("\nStep 8: Verifying EXIF and XMP coexistence...");
@@ -685,37 +685,6 @@ fn test_jpeg_xmp_extraction_end_to_end() {
     println!("\n✓ All integration test assertions passed!\n");
 }
 
-/// Helper: Creates a FileReader from byte buffer
-struct TestReader {
-    data: Vec<u8>,
-}
-
-impl TestReader {
-    fn new(data: Vec<u8>) -> Self {
-        Self { data }
-    }
-}
-
-impl oxidex::core::FileReader for TestReader {
-    fn read(&self, offset: u64, length: usize) -> std::io::Result<&[u8]> {
-        let start = offset as usize;
-        let end = start + length;
-
-        if end > self.data.len() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "read beyond end of file",
-            ));
-        }
-
-        Ok(&self.data[start..end])
-    }
-
-    fn size(&self) -> u64 {
-        self.data.len() as u64
-    }
-}
-
 #[test]
 fn test_jpeg_with_iptc_metadata() {
     use oxidex::parsers::jpeg::iptc_parser::extract_iptc_from_segments;
@@ -767,4 +736,306 @@ fn test_jpeg_with_iptc_metadata() {
     assert_eq!(iptc_tags.len(), 1);
     assert_eq!(iptc_tags[0].0, "IPTC:ObjectName");
     assert_eq!(iptc_tags[0].1, "IPTC Title");
+}
+
+/// Creates a minimal valid 128-byte ICC profile header for testing.
+///
+/// This creates a minimal sRGB-like display profile with just the header.
+/// The header contains:
+/// - Profile size (128 bytes - header only)
+/// - CMM type: "none"
+/// - Version: 2.1.0
+/// - Profile class: Display Device Profile ("mntr")
+/// - Color space: RGB
+/// - PCS: XYZ
+/// - Date/time: 2024-01-01 00:00:00
+/// - Signature: "acsp"
+/// - Platform: Apple ("APPL")
+/// - Rendering intent: Perceptual
+fn create_minimal_icc_profile() -> Vec<u8> {
+    let mut profile = vec![0u8; 128];
+
+    // Profile size (128 bytes) at offset 0 - big-endian u32
+    profile[0..4].copy_from_slice(&128u32.to_be_bytes());
+
+    // CMM Type at offset 4: "none" (4 bytes)
+    profile[4..8].copy_from_slice(b"none");
+
+    // Profile version at offset 8: 2.1.0
+    // Byte 8: major version (2)
+    // Byte 9: minor.bugfix (0x10 = 1.0)
+    profile[8] = 2;
+    profile[9] = 0x10;
+    profile[10] = 0;
+    profile[11] = 0;
+
+    // Profile class at offset 12: Display Device Profile ("mntr")
+    profile[12..16].copy_from_slice(b"mntr");
+
+    // Color space at offset 16: RGB ("RGB ")
+    profile[16..20].copy_from_slice(b"RGB ");
+
+    // Profile Connection Space at offset 20: XYZ ("XYZ ")
+    profile[20..24].copy_from_slice(b"XYZ ");
+
+    // Date/time at offset 24 (12 bytes):
+    // Year (2024), Month (1), Day (1), Hour (0), Minute (0), Second (0)
+    profile[24..26].copy_from_slice(&2024u16.to_be_bytes()); // Year
+    profile[26..28].copy_from_slice(&1u16.to_be_bytes()); // Month
+    profile[28..30].copy_from_slice(&1u16.to_be_bytes()); // Day
+    profile[30..32].copy_from_slice(&0u16.to_be_bytes()); // Hour
+    profile[32..34].copy_from_slice(&0u16.to_be_bytes()); // Minute
+    profile[34..36].copy_from_slice(&0u16.to_be_bytes()); // Second
+
+    // Profile file signature at offset 36: "acsp" (required)
+    profile[36..40].copy_from_slice(b"acsp");
+
+    // Primary platform at offset 40: Apple ("APPL")
+    profile[40..44].copy_from_slice(b"APPL");
+
+    // CMM flags at offset 44: 0 (not embedded, independent)
+    profile[44..48].copy_from_slice(&0u32.to_be_bytes());
+
+    // Device manufacturer at offset 48: "TEST"
+    profile[48..52].copy_from_slice(b"TEST");
+
+    // Device model at offset 52: "MOD1"
+    profile[52..56].copy_from_slice(b"MOD1");
+
+    // Device attributes at offset 56 (8 bytes): 0 (reflective, glossy, positive, color)
+    profile[56..64].copy_from_slice(&0u64.to_be_bytes());
+
+    // Rendering intent at offset 64: 0 (Perceptual)
+    profile[64..68].copy_from_slice(&0u32.to_be_bytes());
+
+    // Connection space illuminant at offset 68 (12 bytes - XYZ s15.16 fixed-point)
+    // D50 illuminant: X=0.9642, Y=1.0, Z=0.8249
+    // s15.16 format: integer part in high 16 bits, fraction in low 16 bits
+    // 0.9642 * 65536 = 63189.7 -> 0x0000F6D5
+    // 1.0 * 65536 = 65536 -> 0x00010000
+    // 0.8249 * 65536 = 54061.7 -> 0x0000D32D
+    profile[68..72].copy_from_slice(&0x0000F6D5u32.to_be_bytes()); // X
+    profile[72..76].copy_from_slice(&0x00010000u32.to_be_bytes()); // Y
+    profile[76..80].copy_from_slice(&0x0000D32Du32.to_be_bytes()); // Z
+
+    // Profile creator at offset 80: "TEST"
+    profile[80..84].copy_from_slice(b"TEST");
+
+    // Profile ID at offset 84 (16 bytes): zeros (not computed)
+    // Already zeros from initialization
+
+    // Tag count at offset 128 would normally be here, but for minimal profile
+    // we just have the header (0 tags)
+
+    profile
+}
+
+#[test]
+fn test_jpeg_with_icc_profile() {
+    use oxidex::core::MetadataMap;
+    use oxidex::core::jpeg_helpers::process_icc_segments;
+    use oxidex::parsers::jpeg::segment_parser::parse_segments;
+
+    // Create minimal JPEG with APP2 (ICC) segment
+    let mut jpeg_data = Vec::new();
+
+    // SOI marker
+    jpeg_data.extend_from_slice(&[0xFF, 0xD8]);
+
+    // APP2 marker (ICC Profile)
+    jpeg_data.extend_from_slice(&[0xFF, 0xE2]);
+
+    // Create ICC profile payload
+    let mut icc_payload = Vec::new();
+    icc_payload.extend_from_slice(b"ICC_PROFILE\0"); // 12 bytes identifier
+    icc_payload.push(1); // Chunk number (1)
+    icc_payload.push(1); // Total chunks (1)
+
+    // Add minimal ICC profile data
+    let icc_profile = create_minimal_icc_profile();
+    icc_payload.extend_from_slice(&icc_profile);
+
+    // APP2 length (includes length field itself)
+    let app2_length = (icc_payload.len() + 2) as u16;
+    jpeg_data.extend_from_slice(&app2_length.to_be_bytes());
+    jpeg_data.extend_from_slice(&icc_payload);
+
+    // EOI marker
+    jpeg_data.extend_from_slice(&[0xFF, 0xD9]);
+
+    // Parse segments
+    let reader = TestReader::new(jpeg_data);
+    let segments = parse_segments(&reader).expect("Failed to parse segments");
+
+    // Verify we found the APP2 segment
+    let app2_segments: Vec<_> = segments.iter().filter(|s| s.marker == 0xFFE2).collect();
+    assert_eq!(
+        app2_segments.len(),
+        1,
+        "Should have exactly one APP2 segment"
+    );
+
+    // Verify segment has ICC_PROFILE identifier
+    assert!(
+        app2_segments[0].data.starts_with(b"ICC_PROFILE\0"),
+        "APP2 segment should start with ICC_PROFILE identifier"
+    );
+
+    // Extract ICC metadata using the process_icc_segments function
+    let mut metadata = MetadataMap::new();
+    process_icc_segments(&segments, &mut metadata);
+
+    // Verify ICC tags were extracted
+    println!("Extracted ICC tags:");
+    for (key, value) in metadata.iter() {
+        println!("  {}: {:?}", key, value);
+    }
+
+    // Check for expected ICC profile header fields
+    assert!(
+        metadata.contains_key("ICC_Profile:ProfileVersion"),
+        "Should have ICC_Profile:ProfileVersion tag"
+    );
+    assert!(
+        metadata.contains_key("ICC_Profile:ProfileClass"),
+        "Should have ICC_Profile:ProfileClass tag"
+    );
+    assert!(
+        metadata.contains_key("ICC_Profile:ColorSpaceData"),
+        "Should have ICC_Profile:ColorSpaceData tag"
+    );
+    assert!(
+        metadata.contains_key("ICC_Profile:RenderingIntent"),
+        "Should have ICC_Profile:RenderingIntent tag"
+    );
+
+    // Verify specific values
+    let version = metadata.get("ICC_Profile:ProfileVersion").unwrap();
+    assert!(
+        format!("{:?}", version).contains("2.1"),
+        "Profile version should be 2.1.0"
+    );
+
+    let profile_class = metadata.get("ICC_Profile:ProfileClass").unwrap();
+    assert!(
+        format!("{:?}", profile_class).contains("Display Device"),
+        "Profile class should be Display Device"
+    );
+
+    let color_space = metadata.get("ICC_Profile:ColorSpaceData").unwrap();
+    assert!(
+        format!("{:?}", color_space).contains("RGB"),
+        "Color space should be RGB"
+    );
+
+    println!("\nICC profile extraction test passed!");
+}
+
+#[test]
+fn test_xmp_flows_to_metadata_map_via_read_metadata() {
+    use oxidex::core::read_metadata;
+
+    // === Setup ===
+    ensure_test_fixtures().expect("Failed to create test fixtures");
+    let path = Path::new("tests/fixtures/jpeg/sample_with_exif_xmp.jpg");
+
+    println!("\n=== XMP Flow to MetadataMap Test ===\n");
+    println!("Testing that XMP tags flow through read_metadata() API to final MetadataMap");
+
+    // === Execute ===
+    println!("\nStep 1: Calling read_metadata()...");
+    let metadata = read_metadata(path).expect("Failed to read metadata");
+    println!("  ✓ Successfully read metadata");
+    println!("  Total tags: {}", metadata.len());
+
+    // === Analyze ===
+    println!("\nStep 2: Analyzing MetadataMap contents...");
+
+    let mut xmp_tags = Vec::new();
+    let mut exif_tags = Vec::new();
+    let mut file_tags = Vec::new();
+    let mut other_tags = Vec::new();
+
+    for (key, value) in metadata.iter() {
+        // XMP tags can be XMP: (simplified) or XMP-namespace: (specific)
+        if key.starts_with("XMP-") || key.starts_with("XMP:") {
+            xmp_tags.push((key, value));
+        } else if key.starts_with("IFD0:") || key.starts_with("EXIF:") {
+            exif_tags.push((key, value));
+        } else if key.starts_with("File:") {
+            file_tags.push((key, value));
+        } else {
+            other_tags.push((key, value));
+        }
+    }
+
+    println!("  - File tags: {}", file_tags.len());
+    println!("  - EXIF tags: {}", exif_tags.len());
+    println!("  - XMP tags:  {}", xmp_tags.len());
+    println!("  - Other tags: {}", other_tags.len());
+
+    // === Verify XMP tags present ===
+    println!("\nStep 3: Verifying XMP tags are present...");
+
+    assert!(
+        !xmp_tags.is_empty(),
+        "❌ CRITICAL FAILURE: No XMP tags found in MetadataMap!\n\
+         This indicates XMP data is extracted but NOT flowing to final output.\n\
+         Check process_xmp_segments() integration in parse_jpeg_metadata()."
+    );
+
+    println!("  ✓ Found {} XMP tags", xmp_tags.len());
+
+    // === Display XMP tags ===
+    println!("\nStep 4: XMP tags found in MetadataMap:");
+    for (key, value) in &xmp_tags {
+        println!("  {}: {:?}", key, value);
+    }
+
+    // === Verify specific expected XMP tags ===
+    println!("\nStep 5: Verifying specific XMP tag values...");
+
+    // Stream 6 changed to use simplified XMP: prefix for common namespaces
+    assert!(
+        metadata.contains_key("XMP:Creator"),
+        "Missing XMP:Creator tag"
+    );
+    let creator = metadata.get("XMP:Creator").unwrap();
+    assert!(
+        format!("{:?}", creator).contains("John Doe"),
+        "XMP:Creator should be 'John Doe', got {:?}",
+        creator
+    );
+    println!("  ✓ XMP:Creator: {:?}", creator);
+
+    assert!(
+        metadata.contains_key("XMP:Rating"),
+        "Missing XMP:Rating tag"
+    );
+    let rating = metadata.get("XMP:Rating").unwrap();
+    println!("  ✓ XMP:Rating: {:?}", rating);
+
+    assert!(metadata.contains_key("XMP:Title"), "Missing XMP:Title tag");
+    let title = metadata.get("XMP:Title").unwrap();
+    assert!(
+        format!("{:?}", title).contains("Sample Photo"),
+        "XMP:Title should be 'Sample Photo', got {:?}",
+        title
+    );
+    println!("  ✓ XMP:Title: {:?}", title);
+
+    assert!(
+        metadata.contains_key("XMP:Rights"),
+        "Missing XMP:Rights tag"
+    );
+    let rights = metadata.get("XMP:Rights").unwrap();
+    println!("  ✓ XMP:Rights: {:?}", rights);
+
+    // === Final verification ===
+    println!("\n=== Test Summary ===");
+    println!("✅ SUCCESS: XMP tags are flowing correctly through read_metadata() API!");
+    println!("   XMP tags found: {}", xmp_tags.len());
+    println!("   EXIF tags found: {}", exif_tags.len());
+    println!("   Total tags: {}", metadata.len());
+    println!("\n✅ Data flow verified: JPEG → Segments → XMP Parser → MetadataMap");
 }

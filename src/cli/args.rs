@@ -60,6 +60,13 @@ pub struct CliArgs {
     /// measure to prevent accidental modifications.
     pub readonly: bool,
 
+    /// Format output for ExifTool compatibility.
+    /// When enabled, tag values are formatted to match ExifTool's output format,
+    /// including enum descriptions, unit suffixes, and precision formatting.
+    /// This is useful for comparing OxiDex output with ExifTool or for scripts
+    /// that expect ExifTool-compatible output.
+    pub exiftool_compat: bool,
+
     /// Copy metadata from source file (ExifTool -TagsFromFile syntax).
     /// Use with optional tag names to copy specific tags, or without to copy all tags.
     /// Example: oxidex -TagsFromFile src.jpg dest.jpg (copy all)
@@ -79,6 +86,72 @@ pub struct CliArgs {
     /// Example: -EXIF:Artist="John Doe" -EXIF:Copyright=2025 photo.jpg
     /// The last argument must be the file path.
     pub args: Vec<String>,
+}
+
+fn normalize_exiftool_option(arg: String) -> String {
+    if let Some(value) = arg.strip_prefix("-TagsFromFile=") {
+        return format!("--TagsFromFile={value}");
+    }
+
+    match arg.as_str() {
+        "-json" => "--json".to_string(),
+        "-csv" => "--csv".to_string(),
+        "-preserve-file-times" => "--preserve-file-times".to_string(),
+        "-backup" => "--backup".to_string(),
+        "-readonly" => "--readonly".to_string(),
+        "-exiftool-compat" => "--exiftool-compat".to_string(),
+        "-TagsFromFile" => "--TagsFromFile".to_string(),
+        _ => arg,
+    }
+}
+
+fn is_flag_short_option(ch: char) -> bool {
+    matches!(ch, 'h' | 'V' | 'j' | 's' | 'a' | 'r' | 'e' | 'n')
+}
+
+fn is_lexopt_short_arg(arg: &str) -> bool {
+    let Some(body) = arg.strip_prefix('-') else {
+        return false;
+    };
+    if body.is_empty() || body.starts_with('-') {
+        return false;
+    }
+    // Assignment-shaped args are tag modifications (e.g. -description=x), never
+    // short-option clusters, even when they start with a valid cluster prefix.
+    if body.contains('=') {
+        return false;
+    }
+
+    for (index, ch) in body.char_indices() {
+        if ch == 'd' {
+            // Everything before 'd' was already confirmed to be a flag option.
+            // 'd' is the date-format option only when it ends the cluster
+            // (`-d`, `-srd`; format is the next argument) or is immediately
+            // followed by a strftime directive (`-d%Y%m%d`). Otherwise the arg
+            // is a tag name that merely starts with cluster letters
+            // (`-description`, `-date`, `-shadows`) and must not be swallowed.
+            let remainder = &body[index + 1..];
+            return remainder.is_empty() || remainder.starts_with('%');
+        }
+        if !is_flag_short_option(ch) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn lexopt_arg_requires_next_value(arg: &str) -> bool {
+    if arg == "--TagsFromFile" {
+        return true;
+    }
+
+    let Some(body) = arg.strip_prefix('-') else {
+        return false;
+    };
+    !body.starts_with('-')
+        && body.ends_with('d')
+        && body[..body.len() - 1].chars().all(is_flag_short_option)
 }
 
 impl CliArgs {
@@ -111,6 +184,7 @@ impl CliArgs {
         let mut preserve_file_times = false;
         let mut backup = false;
         let mut readonly = false;
+        let mut exiftool_compat = false;
         let mut tags_from_file = None;
         let mut date_format = None;
         let mut dry_run = false;
@@ -121,17 +195,32 @@ impl CliArgs {
         let raw_args: Vec<String> = std::env::args().skip(1).collect();
         let mut lexopt_args = Vec::new();
         let mut tag_modifications = Vec::new();
+        let mut next_arg_is_lexopt_value = false;
 
-        for arg in raw_args {
-            // Check if this looks like a tag modification or date shift
-            // These start with '-' but aren't double-dash flags, and contain '='
+        for raw_arg in raw_args {
+            if next_arg_is_lexopt_value {
+                lexopt_args.push(raw_arg);
+                next_arg_is_lexopt_value = false;
+                continue;
+            }
+
+            let arg = normalize_exiftool_option(raw_arg);
+
+            // Keep tag modifications, date shifts, and specific tag extraction out of lexopt.
+            // Supported short options and clusters still flow through lexopt.
             if arg.starts_with('-')
                 && !arg.starts_with("--")
-                && (arg.contains('=') || arg.ends_with("+=") || arg.ends_with("-="))
+                && !is_lexopt_short_arg(&arg)
+                && (arg.contains('=')
+                    || arg.ends_with("+=")
+                    || arg.ends_with("-=")
+                    || arg.contains(':')
+                    || arg.len() > 1)
             {
-                // This is a tag modification or date shift - don't pass to lexopt
+                // This is a tag modification, date shift, or specific tag - don't pass to lexopt
                 tag_modifications.push(arg);
             } else {
+                next_arg_is_lexopt_value = lexopt_arg_requires_next_value(&arg);
                 // Regular argument - pass to lexopt
                 lexopt_args.push(arg);
             }
@@ -220,6 +309,10 @@ impl CliArgs {
                 Long("readonly") => {
                     readonly = true;
                 }
+                // ExifTool compatibility mode
+                Short('e') | Long("exiftool-compat") => {
+                    exiftool_compat = true;
+                }
                 // TagsFromFile (copy metadata from source file)
                 Long("TagsFromFile") => {
                     tags_from_file = Some(parser.value()?.string()?);
@@ -296,6 +389,7 @@ impl CliArgs {
             preserve_file_times,
             backup,
             readonly,
+            exiftool_compat,
             tags_from_file,
             date_format,
             dry_run,
@@ -387,6 +481,85 @@ impl CliArgs {
         // Return empty vec if no tags specified (means copy all)
         // Return vec with tag names if specific tags were specified
         Some(tag_names)
+    }
+
+    /// Extracts specific tag names to display when reading metadata.
+    /// Returns None if no specific tags are requested (show all tags).
+    /// Returns Some(Vec) of tag names if specific tags are requested.
+    ///
+    /// This enables `-TAG` syntax for filtering output:
+    /// - `oxidex -Make photo.jpg` → shows only Make tag
+    /// - `oxidex -Make -Model photo.jpg` → shows Make and Model tags
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use oxidex::cli::args::CliArgs;
+    /// // If args are: ["-Make", "-Model", "photo.jpg"]
+    /// // Returns: Some(vec!["Make", "Model"])
+    /// ```
+    pub fn specific_tags(&self) -> Option<Vec<String>> {
+        // Don't apply in copy mode (tags_from_file handles its own filtering)
+        if self.tags_from_file.is_some() {
+            return None;
+        }
+
+        // Don't apply in write mode (has tag modifications with '=')
+        let has_modifications = self.args.iter().any(|arg| arg.contains('='));
+        if has_modifications {
+            return None;
+        }
+
+        // If only file argument present, show all tags
+        if self.args.len() <= 1 {
+            return None;
+        }
+
+        let mut tag_names = Vec::new();
+
+        // Process all arguments except the last one (file path)
+        for arg in &self.args[..self.args.len() - 1] {
+            // Tag extraction: starts with '-', does NOT contain '='
+            if arg.starts_with('-') && !arg.contains('=') {
+                let tag_name = arg.trim_start_matches('-').to_string();
+                tag_names.push(tag_name);
+            }
+        }
+
+        if tag_names.is_empty() {
+            None
+        } else {
+            Some(tag_names)
+        }
+    }
+
+    /// Checks if the user wants to clear all metadata (`-all=` syntax).
+    ///
+    /// This implements the ExifTool `-all=` command for removing all metadata
+    /// from a file for privacy purposes.
+    ///
+    /// # Examples
+    ///
+    /// - `oxidex -all= photo.jpg` → clears all metadata
+    /// - `oxidex -ALL= photo.jpg` → clears all metadata (case-insensitive)
+    pub fn is_clear_all_metadata(&self) -> bool {
+        self.args.iter().any(|arg| {
+            let lower = arg.to_lowercase();
+            lower == "-all=" || lower == "--all="
+        })
+    }
+
+    /// Returns whether ExifTool compatibility mode is enabled.
+    ///
+    /// When enabled, tag values are formatted to match ExifTool's output format,
+    /// including enum descriptions, unit suffixes, and precision formatting.
+    ///
+    /// # Examples
+    ///
+    /// - `oxidex -e photo.jpg` → ExifTool-compatible output
+    /// - `oxidex --exiftool-compat photo.jpg` → ExifTool-compatible output
+    pub fn exiftool_compat(&self) -> bool {
+        self.exiftool_compat
     }
 
     /// Extracts the filename pattern from -FileName<pattern> argument.
@@ -518,35 +691,35 @@ fn extract_arg_from_error(error_msg: &str) -> Option<String> {
     // This occurs when lexopt parses "-EXIF:Artist=value" as "-E" with unexpected value
     if error_msg.contains("unexpected argument for option") {
         // Extract the option part (e.g., '-E')
-        if let Some(start) = error_msg.find('\'') {
-            if let Some(end) = error_msg[start + 1..].find('\'') {
-                let option = &error_msg[start + 1..start + 1 + end];
+        if let Some(start) = error_msg.find('\'')
+            && let Some(end) = error_msg[start + 1..].find('\'')
+        {
+            let option = &error_msg[start + 1..start + 1 + end];
 
-                // Extract the value part (after the colon and space, between quotes)
-                if let Some(value_start) = error_msg.find(": \"") {
-                    if let Some(value_end) = error_msg[value_start + 3..].find('"') {
-                        let value = &error_msg[value_start + 3..value_start + 3 + value_end];
-                        // Reconstruct the full argument by combining option and value
-                        // e.g., '-E' + 'XIF:Artist=value' = '-EXIF:Artist=value'
-                        return Some(format!("{}{}", option, value));
-                    }
-                }
+            // Extract the value part (after the colon and space, between quotes)
+            if let Some(value_start) = error_msg.find(": \"")
+                && let Some(value_end) = error_msg[value_start + 3..].find('"')
+            {
+                let value = &error_msg[value_start + 3..value_start + 3 + value_end];
+                // Reconstruct the full argument by combining option and value
+                // e.g., '-E' + 'XIF:Artist=value' = '-EXIF:Artist=value'
+                return Some(format!("{}{}", option, value));
             }
         }
     }
 
     // Try to find quoted text in the error message
-    if let Some(start) = error_msg.find('\'') {
-        if let Some(end) = error_msg[start + 1..].find('\'') {
-            return Some(error_msg[start + 1..start + 1 + end].to_string());
-        }
+    if let Some(start) = error_msg.find('\'')
+        && let Some(end) = error_msg[start + 1..].find('\'')
+    {
+        return Some(error_msg[start + 1..start + 1 + end].to_string());
     }
 
     // Try double quotes as fallback
-    if let Some(start) = error_msg.find('"') {
-        if let Some(end) = error_msg[start + 1..].find('"') {
-            return Some(error_msg[start + 1..start + 1 + end].to_string());
-        }
+    if let Some(start) = error_msg.find('"')
+        && let Some(end) = error_msg[start + 1..].find('"')
+    {
+        return Some(error_msg[start + 1..start + 1 + end].to_string());
     }
 
     None
@@ -582,6 +755,7 @@ fn print_help() {
     );
     println!("        --readonly              Enable read-only mode to prevent file modifications");
     println!("        --detector VALUE        File detection mode: signature (default) or magika (AI-powered)");
+    println!("    -e, --exiftool-compat       Format output for ExifTool compatibility");
     println!("        --TagsFromFile VALUE    Copy metadata from source file");
     println!(
         "    -d VALUE                    Date format string for DateTime tags in filename patterns"
@@ -614,4 +788,59 @@ fn print_help() {
 /// Displays the application name and version number from Cargo package metadata.
 fn print_version() {
     println!("oxidex {}", env!("CARGO_PKG_VERSION"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_option_clusters_are_lexopt_args() {
+        assert!(is_lexopt_short_arg("-s"));
+        assert!(is_lexopt_short_arg("-sr"));
+        assert!(is_lexopt_short_arg("-d"));
+        // Attached date-format values stay with lexopt's -d option.
+        assert!(is_lexopt_short_arg("-d%Y%m%d"));
+        assert!(is_lexopt_short_arg("-srd%Y"));
+    }
+
+    #[test]
+    fn assignment_shaped_args_are_never_lexopt_short_args() {
+        // Regression: these were consumed as `-d` with an attached value,
+        // silently dropping the requested tag write.
+        assert!(!is_lexopt_short_arg("-description=test"));
+        assert!(!is_lexopt_short_arg(
+            "-datetimeoriginal=2020:01:01 10:00:00"
+        ));
+        assert!(!is_lexopt_short_arg("-d=broken"));
+    }
+
+    #[test]
+    fn non_cluster_args_are_not_lexopt_short_args() {
+        assert!(!is_lexopt_short_arg("--json"));
+        assert!(!is_lexopt_short_arg("-EXIF:Model"));
+        assert!(!is_lexopt_short_arg("photo.jpg"));
+        assert!(!is_lexopt_short_arg("-"));
+    }
+
+    #[test]
+    fn tag_names_starting_with_cluster_letters_are_not_swallowed() {
+        // Regression: these bare (no '=') filter/extraction args start with
+        // valid cluster letters but are tag names, not option clusters. The
+        // 'd'-prefixed ones were parsed as `-d` with an attached value.
+        assert!(!is_lexopt_short_arg("-description"));
+        assert!(!is_lexopt_short_arg("-datetimeoriginal"));
+        assert!(!is_lexopt_short_arg("-date"));
+        assert!(!is_lexopt_short_arg("-shadows")); // s,h,a all flags, then 'd'
+        assert!(!is_lexopt_short_arg("-redbalance")); // r,e flags, then 'd'
+        assert!(!is_lexopt_short_arg("-address")); // a flag, then 'd'
+    }
+
+    #[test]
+    fn genuine_date_option_forms_still_reach_lexopt() {
+        assert!(is_lexopt_short_arg("-d")); // format is the next argument
+        assert!(is_lexopt_short_arg("-d%Y%m%d")); // attached strftime format
+        assert!(is_lexopt_short_arg("-srd")); // cluster ending in -d
+        assert!(is_lexopt_short_arg("-nd%H%M")); // cluster + attached format
+    }
 }

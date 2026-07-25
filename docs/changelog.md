@@ -1,0 +1,264 @@
+# Changelog
+
+> **Note**: This project was renamed from `exiftool-rs` to `oxidex`. Historical entries below use the old name.
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- **Weekly ExifTool tag sync**: New CI workflow (`sync-exiftool-tags.yml`) automatically checks ExifTool master branch every Sunday and creates `[BETA]` PRs when updates are available
+- **Documentation improvements**:
+  - Added missing sidebar pages (tag-domains, contributing/testing, contributing/development)
+  - Added Camera RAW format documentation
+  - Added performance historical data section
+
+### Changed
+- **CI/CD optimizations**: Consolidated 7 CI jobs into 4, added Rust caching for 40-60% faster builds
+- **Documentation sync**: Benchmark metadata now auto-updates on each deployment
+
+### Removed
+- Removed `test.yml` workflow (redundant with `ci.yml`)
+- Removed VitePress build artifacts from repository (now built by CI only)
+- Removed `sync-exiftool-tags.yml` workflow (unreliable; tag database now synced manually, see [Tag Database docs](reference/tag-database.md#synchronization))
+
+### Fixed
+- Fixed sidebar links pointing to non-existent documentation pages
+- Fixed panic strategy conflict in CI doc tests
+
+## [1.2.1] - 2025-11-19
+
+### Added
+- **CI/CD Automation**: GitHub Pages changelog now updates automatically when a release is created
+  - New `update-docs` job in release workflow extracts changelog entry from main branch
+  - Automatically commits and pushes to gh-pages branch after successful release
+  - Eliminates manual documentation updates for releases
+
+## [1.2.0] - 2025-11-19
+
+### Changed
+- **CI/CD Infrastructure**: Migrated release workflow from GitHub-hosted runners to self-hosted runners
+  - Moved create-release job from `ubuntu-latest` to `arc-runner-set`
+  - Migrated Windows builds from `windows-latest` to `arc-runner-set` with MinGW cross-compilation
+  - Changed Windows target from `x86_64-pc-windows-msvc` to `x86_64-pc-windows-gnu`
+  - Configured cross-compilation linker for Windows builds from Linux
+  - All release artifacts now built on self-hosted infrastructure except macOS (warp-macos-15-arm64-6x)
+
+## [1.1.0] - 2025-11-17
+
+### Added
+- **Phase 1: Video/Audio Format Support** - Complete parser implementation for 12 new multimedia formats
+  - **Video Formats (5)**:
+    - MKV (Matroska) - Container metadata extraction
+    - WebM - Web-optimized Matroska variant
+    - FLV - Flash Video format
+    - AVI - RIFF-based video container
+    - MTS/M2TS - AVCHD/Blu-ray MPEG transport streams
+  - **Audio Formats (7)**:
+    - MP3 - ID3v2 tag parsing
+    - FLAC - Native metadata blocks
+    - AAC - ADTS header parsing
+    - WAV - RIFF INFO chunks
+    - OGG Vorbis - Vorbis comments
+    - Opus - Ogg Opus metadata
+    - APE - Monkey's Audio format
+  - **Features**:
+    - ExifTool tag namespace parity (Matroska, FLV, RIFF, ID3, FLAC, AAC, Vorbis, Opus, APE)
+    - Comprehensive integration tests for all formats (requires ExifTool)
+    - Full benchmark suite (audio_benchmarks.rs, video_benchmarks.rs)
+    - Format detection support for all 12 new types
+  - **Performance**: Pure Rust parsing with memory-mapped I/O
+- **Canon MakerNotes Phase 1**: Basic Canon-specific metadata extraction from EXIF MakerNote tags
+  - **Supported Tags:**
+    - `Canon:ImageType` - Image type identifier (e.g., "IMG:EOS R5")
+    - `Canon:FirmwareVersion` - Camera firmware version
+    - `Canon:OwnerName` - Camera owner name
+    - `Canon:SerialNumber` - Camera serial number
+    - `Canon:CanonModelID` - Canon-specific model identifier
+    - `Canon:FileNumber` - Internal file number assigned by camera
+  - **Implementation Details:**
+    - Parses Canon MakerNote IFD structure (TIFF-based format)
+    - Supports both little-endian and big-endian byte orders
+    - Handles both inline values (≤4 bytes) and offset-based values (>4 bytes)
+    - Gracefully handles missing or invalid MakerNote data
+  - **Phase 2 Preview:** Complex array tags (CameraSettings, ShotInfo, AFInfo, LensInfo) planned for next phase
+  - **Files Added:**
+    - `src/parsers/tiff/makernotes/mod.rs` - MakerNotes module structure
+    - `src/parsers/tiff/makernotes/canon.rs` - Canon MakerNote parser with comprehensive documentation
+  - **Integration:** Canon MakerNotes are automatically extracted from JPEG EXIF data when present
+- **Canon MakerNotes Phase 2**: Complex array tag support for camera settings and shot information
+  - **CameraSettings Array (tag 0x0001) - 8 tags:**
+    - `Canon:MacroMode` - Macro mode setting (Macro, Normal)
+    - `Canon:Quality` - Image quality (Economy, Normal, Fine, Superfine, RAW, CRAW)
+    - `Canon:FlashMode` - Flash mode (Off, Auto, On, Red-eye Reduction, etc.)
+    - `Canon:DriveMode` - Drive mode (Single, Continuous, Movie, etc.)
+    - `Canon:FocusMode` - Focus mode (One-shot AF, AI Servo AF, Manual, etc.)
+    - `Canon:ISO` - ISO speed setting
+    - `Canon:MeteringMode` - Metering mode (Evaluative, Partial, Center-weighted)
+    - `Canon:ExposureMode` - Exposure mode (Program, Av, Tv, Manual, Bulb, etc.)
+  - **ShotInfo Array (tag 0x0004) - 6 tags:**
+    - `Canon:AutoISO` - Auto ISO value
+    - `Canon:BaseISO` - Base ISO value
+    - `Canon:MeasuredEV` - Measured exposure value
+    - `Canon:TargetAperture` - Target aperture value
+    - `Canon:TargetShutterSpeed` - Target shutter speed
+    - `Canon:SubjectDistance` - Subject distance in mm
+  - **FocalLength Array (tag 0x0002) - 2 tags:**
+    - `Canon:FocalType` - Focal length type
+    - `Canon:FocalLength` - Focal length in mm
+  - **Implementation Details:**
+    - Added `extract_i16_array()` helper for Canon's integer array tags
+    - Supports both inline (≤2 values) and offset-based (>2 values) arrays
+    - Value decoders convert numeric codes to human-readable strings
+    - Based on ExifTool Canon.pm reference implementation
+    - All values gracefully handle missing/invalid data
+  - **Files Modified:**
+    - `src/parsers/tiff/makernotes/canon.rs` (+400 lines of tests and implementation)
+- **CI/CD**: New `cross-compile` job in CI workflow that tests both ARM64 (`aarch64-unknown-linux-musl`) and x86_64 (`x86_64-unknown-linux-musl`) Linux builds using the `cross` tool with QEMU emulation support
+
+### Changed
+- **BREAKING**: Project renamed from `exiftool-rs` to `oxidex`
+  - Binary renamed: `exiftool-rs` → `oxidex`
+  - Library renamed: `exiftool_rs` → `oxidex`
+  - All crates renamed: `exiftool-tags*` → `oxidex-tags*`
+  - Install with: `cargo install oxidex`
+  - GitHub repository: `swack-tools/oxidex`
+- **Dependency Upgrades**: Updated all major dependencies to latest versions for improved performance and security
+  - `criterion` 0.5 → 0.7 - Modern benchmarking framework with improved measurement accuracy
+  - `indicatif` 0.17 → 0.18 - Enhanced progress bar library with better terminal compatibility
+  - `nom` 7.1 → 8.0 - Binary parser combinator with refined error handling and improved performance
+  - `quick-xml` 0.31 → 0.38 - XML parser for XMP metadata with enhanced API and better namespace support
+  - `bincode` 1.3 → 2.0 - Binary serialization across all tag workspace crates with new encoding API
+  - **Breaking Changes Addressed:**
+    - Bincode: Migrated from `serialize`/`deserialize` to `encode`/`decode` API across 6 workspace crates
+    - Bincode: Regenerated all tag database binary files with new format
+    - Nom: Updated parser error types and combinator APIs
+    - Quick-xml: Migrated Reader and Event APIs to 0.38 interface
+  - **Verification:**
+    - All 800+ unit tests passing
+    - Benchmarks compile successfully (note: `criterion::black_box` deprecation warnings present)
+    - CLI tested and verified with JPEG, PNG, PDF, and TIFF formats
+    - Clean build from scratch successful
+
+### Fixed
+- **CI/CD**: Fixed ARM64 cross-compilation in GitHub Actions by implementing QEMU emulation. Previously, attempting to run ARM64 Docker images (`ghcr.io/cross-rs/aarch64-unknown-linux-musl`) on x86_64 runners resulted in "exec format error". The fix adds `docker/setup-qemu-action` and `docker/setup-buildx-action` to enable multi-platform builds on x86_64 runners.
+
+## [1.0.0] - 2025-10-30
+
+### Added
+
+#### Core Features
+- **Multi-format metadata extraction** supporting 50+ file formats:
+  - JPEG (EXIF, JFIF, XMP, IPTC, Photoshop)
+  - PNG (eXIf, tEXt, zTXt, iTXt chunks)
+  - TIFF (multi-page support, sub-IFDs)
+  - PDF (Info dictionary, XMP metadata)
+  - MP4/QuickTime (atoms and metadata tracks)
+  - RAW formats and camera maker notes
+- **Comprehensive tag database** with 700+ metadata tags automatically generated from ExifTool source
+- **Format families support**: EXIF (244 tags), GPS (32 tags), IPTC (122 tags), QuickTime (143 tags), RIFF (46 tags), ICC_Profile (42 tags), Photoshop (35 tags), PNG (30 tags), JPEG (30 tags), XMP, and more
+
+#### CLI Application
+- **Full CLI implementation** with backward compatibility for 90% of common ExifTool usage patterns
+- **Batch processing** with parallel execution using Rayon for multi-core performance
+- **Recursive directory traversal** with `-r` flag for processing entire folder structures
+- **Flexible output formats**: human-readable, JSON, CSV
+- **File preservation options**: backup originals, preserve timestamps
+- **Advanced metadata operations**:
+  - Read and display metadata (`exiftool-rs file.jpg`)
+  - Write and modify metadata (`exiftool-rs -Artist="Name" file.jpg`)
+  - Copy metadata between files (`-TagsFromFile` support)
+  - Date/time shifting for batch timestamp corrections
+  - File renaming based on metadata patterns
+
+#### Library API
+- **Clean Rust library API** with hexagonal architecture design
+- **Zero-copy parsing** for efficient memory usage
+- **Type-safe metadata operations** with comprehensive tag validation
+- **Extensible parser system** for adding new format support
+- **Memory-mapped I/O** for handling large files efficiently
+
+#### Cross-Language Integration
+- **C FFI bindings** (`staticlib` and `cdylib` crate types) for integration with C/C++, Python, Node.js, and other languages
+- **Auto-generated C headers** using cbindgen with CI verification
+- **Python ctypes bindings** with comprehensive examples and documentation
+- **FFI safety guarantees** with proper error handling across language boundaries
+
+#### Build & Distribution
+- **Automated tag database generation** from ExifTool Perl source during build
+- **Cross-compilation support** for Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), Windows (x86_64)
+- **Automated release pipeline** with GitHub Actions building binaries on git tag push
+- **Package formats**:
+  - Debian packages (.deb) for Ubuntu/Debian
+  - RPM packages for Fedora/RHEL/CentOS
+  - Homebrew formula for macOS
+  - Static binaries (musl libc) with no runtime dependencies
+- **Release profile optimizations**: LTO, codegen-units=1, strip=true for maximum performance
+
+#### Testing & Quality
+- **Comprehensive test suite** with 100+ integration tests
+- **Automated ExifTool comparison tests** validating parity with Perl ExifTool
+- **102-image test corpus** covering diverse real-world scenarios
+- **Continuous fuzzing** infrastructure for PDF and MP4 parsers with libFuzzer
+- **Performance benchmarks** using Criterion and hyperfine
+- **CI/CD pipeline** with automated testing, linting, and formatting checks
+
+#### Documentation
+- **Comprehensive user guide** (mdBook) with GitHub Pages deployment at `docs/book/`:
+  - Installation instructions for all platforms
+  - CLI usage guide with examples
+  - Library API documentation with code samples
+  - FFI integration guide for C and Python
+  - Supported formats and tag reference
+  - Architecture overview and design rationale
+- **API documentation**: Rust library API reference and C FFI API specification
+- **Migration guide** from Perl ExifTool with compatibility notes
+
+### Performance
+
+OxiDex delivers exceptional performance improvements over Perl ExifTool (version 13.36) on Apple M4 hardware:
+
+| Operation | Perl ExifTool | OxiDex | Speedup |
+|-----------|---------------|--------|---------|
+| Single JPEG read | 37.5ms ± 0.5ms | 2.3ms ± 0.1ms | **16.1x faster** |
+| Batch processing (1000 files) | 916.4ms ± 8.0ms | 14.1ms ± 0.3ms | **64.9x faster** |
+| Write operation (modify EXIF) | 96.8ms ± 1.3ms | 7.3ms ± 0.6ms | **13.3x faster** |
+| Format detection | 39.3ms ± 0.4ms | 2.8ms ± 0.1ms | **14.2x faster** |
+
+**Key optimizations:**
+- Zero-cost abstractions and compiled code eliminate interpreter overhead
+- Parallel processing with Rayon leverages all CPU cores for batch operations
+- Memory-mapped I/O and efficient binary manipulation
+- SIMD-friendly data layouts for future vectorization
+
+### Security
+
+- **Memory safety** guaranteed by Rust's ownership system (zero buffer overflows, use-after-free, or data races)
+- **Continuous fuzzing** with libFuzzer detecting crashes, hangs, and undefined behavior
+- **Safe parser design** with explicit bounds checking and error propagation
+- **No unsafe code** in critical parsing paths (FFI layer uses minimal `unsafe` with safety invariants)
+
+### Known Limitations
+
+These features are planned for future releases (v1.1+):
+
+- **Array type validation**: ValueType::Array not yet supported in validation system (src/core/validation.rs:167)
+  - Current impact: Array-valued metadata can bypass type checking
+  - Workaround: Manual validation for array-valued tags
+- **TIFF writer limitations**: Float, Struct, and Array tag values not yet implemented in TIFF writer (src/writers/tiff_writer.rs:474-477)
+  - Current impact: These value types are silently skipped during TIFF write operations
+  - Workaround: Use supported types (Integer, Text, Binary, Rational)
+- **Rational round-trip parsing**: TIFF parser may convert Rational values to Integer/Binary when type information is unavailable (tests/integration/write_operations_tests.rs:362)
+  - Current impact: Rational value precision may be lost in some round-trip scenarios
+  - Workaround: Ensure EXIF type information is present
+
+---
+
+[Unreleased]: https://github.com/swack-tools/oxidex/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/swack-tools/oxidex/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/swack-tools/oxidex/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/swack-tools/oxidex/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/swack-tools/oxidex/releases/tag/v1.0.0

@@ -4,6 +4,7 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::io::EndianReader;
 
 /// BMP signature: "BM" (0x42 0x4D)
 const BMP_SIGNATURE: &[u8] = b"BM";
@@ -27,20 +28,10 @@ impl BMPParser {
         if reader.size() < 26 {
             return Ok((0, 0));
         }
-        let width_bytes = reader.read(18, 4)?;
-        let height_bytes = reader.read(22, 4)?;
-        let width = i32::from_le_bytes([
-            width_bytes[0],
-            width_bytes[1],
-            width_bytes[2],
-            width_bytes[3],
-        ]);
-        let height = i32::from_le_bytes([
-            height_bytes[0],
-            height_bytes[1],
-            height_bytes[2],
-            height_bytes[3],
-        ]);
+        let header_data = reader.read(18, 8)?;
+        let endian_reader = EndianReader::little_endian(header_data);
+        let width = endian_reader.i32_at(0).unwrap_or(0);
+        let height = endian_reader.i32_at(4).unwrap_or(0);
         Ok((width, height))
     }
 
@@ -50,7 +41,60 @@ impl BMPParser {
             return Ok(0);
         }
         let bits = reader.read(28, 2)?;
-        Ok(u16::from_le_bytes([bits[0], bits[1]]))
+        let endian_reader = EndianReader::little_endian(bits);
+        Ok(endian_reader.u16_at(0).unwrap_or(0))
+    }
+
+    /// Reads compression method from BMP header (offset 30, 4 bytes)
+    pub fn read_compression(reader: &dyn FileReader) -> Result<u32> {
+        if reader.size() < 34 {
+            return Ok(0);
+        }
+        let comp = reader.read(30, 4)?;
+        let endian_reader = EndianReader::little_endian(comp);
+        Ok(endian_reader.u32_at(0).unwrap_or(0))
+    }
+
+    /// Reads horizontal resolution from BMP header (offset 38, 4 bytes)
+    /// Returns pixels per meter
+    pub fn read_h_resolution(reader: &dyn FileReader) -> Result<i32> {
+        if reader.size() < 42 {
+            return Ok(0);
+        }
+        let res = reader.read(38, 4)?;
+        let endian_reader = EndianReader::little_endian(res);
+        Ok(endian_reader.i32_at(0).unwrap_or(0))
+    }
+
+    /// Reads vertical resolution from BMP header (offset 42, 4 bytes)
+    /// Returns pixels per meter
+    pub fn read_v_resolution(reader: &dyn FileReader) -> Result<i32> {
+        if reader.size() < 46 {
+            return Ok(0);
+        }
+        let res = reader.read(42, 4)?;
+        let endian_reader = EndianReader::little_endian(res);
+        Ok(endian_reader.i32_at(0).unwrap_or(0))
+    }
+
+    /// Reads number of colors in palette (offset 46, 4 bytes)
+    pub fn read_num_colors(reader: &dyn FileReader) -> Result<u32> {
+        if reader.size() < 50 {
+            return Ok(0);
+        }
+        let colors = reader.read(46, 4)?;
+        let endian_reader = EndianReader::little_endian(colors);
+        Ok(endian_reader.u32_at(0).unwrap_or(0))
+    }
+
+    /// Reads number of important colors (offset 50, 4 bytes)
+    pub fn read_num_important_colors(reader: &dyn FileReader) -> Result<u32> {
+        if reader.size() < 54 {
+            return Ok(0);
+        }
+        let colors = reader.read(50, 4)?;
+        let endian_reader = EndianReader::little_endian(colors);
+        Ok(endian_reader.u32_at(0).unwrap_or(0))
     }
 }
 
@@ -69,13 +113,23 @@ impl FormatParser for BMPParser {
         );
 
         let (width, height) = Self::read_dimensions(reader)?;
+        let abs_width = width.abs() as u64;
+        let abs_height = height.abs() as u64;
+
         metadata.insert(
             "ImageWidth".to_string(),
-            TagValue::String(width.abs().to_string()),
+            TagValue::String(abs_width.to_string()),
         );
         metadata.insert(
             "ImageHeight".to_string(),
-            TagValue::String(height.abs().to_string()),
+            TagValue::String(abs_height.to_string()),
+        );
+
+        // Add BMP: prefixed versions for format-specific tagging
+        metadata.insert("BMP:Width".to_string(), TagValue::Integer(abs_width as i64));
+        metadata.insert(
+            "BMP:Height".to_string(),
+            TagValue::Integer(abs_height as i64),
         );
 
         let bit_depth = Self::read_bit_depth(reader)?;
@@ -83,6 +137,90 @@ impl FormatParser for BMPParser {
             "BitDepth".to_string(),
             TagValue::String(bit_depth.to_string()),
         );
+        // Add BMP: prefixed version for format-specific tagging
+        metadata.insert(
+            "BMP:BitDepth".to_string(),
+            TagValue::Integer(bit_depth as i64),
+        );
+
+        // Compression method
+        let compression = Self::read_compression(reader)?;
+        let compression_str = match compression {
+            0 => "None",
+            1 => "RLE 8-bit",
+            2 => "RLE 4-bit",
+            3 => "Bitfields",
+            4 => "JPEG",
+            5 => "PNG",
+            _ => "Unknown",
+        };
+        metadata.insert(
+            "Compression".to_string(),
+            TagValue::String(compression_str.to_string()),
+        );
+        // Add BMP: prefixed version for format-specific tagging
+        metadata.insert(
+            "BMP:Compression".to_string(),
+            TagValue::String(compression_str.to_string()),
+        );
+
+        // Resolution
+        let h_res = Self::read_h_resolution(reader)?;
+        let v_res = Self::read_v_resolution(reader)?;
+        if h_res > 0 {
+            metadata.insert(
+                "XResolution".to_string(),
+                TagValue::String(format!("{} pixels/meter", h_res)),
+            );
+            // Add BMP: prefixed version for format-specific tagging
+            metadata.insert(
+                "BMP:XResolution".to_string(),
+                TagValue::String(format!("{} pixels/meter", h_res)),
+            );
+        }
+        if v_res > 0 {
+            metadata.insert(
+                "YResolution".to_string(),
+                TagValue::String(format!("{} pixels/meter", v_res)),
+            );
+            // Add BMP: prefixed version for format-specific tagging
+            metadata.insert(
+                "BMP:YResolution".to_string(),
+                TagValue::String(format!("{} pixels/meter", v_res)),
+            );
+        }
+
+        // Color palette information
+        let num_colors = Self::read_num_colors(reader)?;
+        if num_colors > 0 {
+            metadata.insert(
+                "NumColors".to_string(),
+                TagValue::Integer(num_colors as i64),
+            );
+            // Add BMP: prefixed version for format-specific tagging
+            metadata.insert(
+                "BMP:ColorCount".to_string(),
+                TagValue::Integer(num_colors as i64),
+            );
+        }
+
+        // Calculate image size (file size - header size, approximately)
+        // DIB header is typically at offset 14, and image data follows the color table
+        let image_data_size = reader.size().saturating_sub(14);
+        if image_data_size > 0 {
+            metadata.insert(
+                "BMP:ImageSize".to_string(),
+                TagValue::Integer(image_data_size as i64),
+            );
+        }
+
+        let important_colors = Self::read_num_important_colors(reader)?;
+        if important_colors > 0 {
+            metadata.insert(
+                "NumImportantColors".to_string(),
+                TagValue::Integer(important_colors as i64),
+            );
+        }
 
         Ok(metadata)
     }

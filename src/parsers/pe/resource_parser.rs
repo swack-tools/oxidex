@@ -4,8 +4,8 @@ use crate::parsers::pe::structures::{
     ResourceDataEntry, ResourceDirectory, ResourceDirectoryEntry,
 };
 use nom::{
-    number::complete::{le_u16, le_u32},
     IResult,
+    number::complete::{le_u16, le_u32},
 };
 
 /// Parse Resource Directory structure (16 bytes)

@@ -31,7 +31,7 @@ fn test_canon_makernote_extraction() {
     // === TIFF Header (8 bytes) ===
     // Byte order: "II" (little-endian)
     tiff_data.extend_from_slice(&[0x49, 0x49]); // "II"
-                                                // Magic number: 42
+    // Magic number: 42
     tiff_data.extend_from_slice(&[0x2A, 0x00]);
     // First IFD offset: 8 (points right after header)
     tiff_data.extend_from_slice(&[0x08, 0x00, 0x00, 0x00]);

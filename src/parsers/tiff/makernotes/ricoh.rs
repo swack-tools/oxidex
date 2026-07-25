@@ -22,63 +22,49 @@
 #![allow(dead_code)]
 
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
+use super::registries::ricoh::ricoh_registry;
 use super::shared::MakerNoteParser;
+use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::tag_registry::TagRegistry;
 
-// Ricoh MakerNote Tag IDs
-const RICOH_MODEL: u16 = 0x0001;
-const RICOH_FIRMWARE: u16 = 0x0002;
-const RICOH_SHOOTING_MODE: u16 = 0x0005;
-const RICOH_FLASH_MODE: u16 = 0x000C;
+// ============================================================================
+// Ricoh MakerNote Tag IDs (for parsing reference)
+// ============================================================================
+// Tag definitions are centralized in the registry (registries/ricoh.rs)
+// These constants are retained for parse_entry() to identify special handling
+
 const RICOH_FOCUS_MODE: u16 = 0x001D;
-const RICOH_WHITE_BALANCE: u16 = 0x001E;
 const RICOH_ISO_SETTING: u16 = 0x0022;
-const RICOH_COLOR_MODE: u16 = 0x0034;
 const RICOH_SHARPNESS: u16 = 0x0035;
 
-fn decode_shooting_mode(value: u16) -> String {
-    match value {
-        0 => "Auto".to_string(),
-        1 => "Program".to_string(),
-        2 => "Aperture Priority".to_string(),
-        3 => "Manual".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
+// Static registry instance for efficient tag lookup and decoding
+static TAG_REGISTRY: Lazy<TagRegistry> = Lazy::new(ricoh_registry);
 
-fn decode_flash_mode(value: u16) -> String {
-    match value {
-        0 => "Auto".to_string(),
-        1 => "On".to_string(),
-        2 => "Off".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
-fn decode_white_balance(value: u16) -> String {
-    match value {
-        0 => "Auto".to_string(),
-        1 => "Daylight".to_string(),
-        2 => "Shade".to_string(),
-        3 => "Fluorescent".to_string(),
-        4 => "Tungsten".to_string(),
-        _ => format!("Unknown ({})", value),
-    }
-}
-
+/// Extracts a 16-bit unsigned value from IFD entry
+///
+/// # Arguments
+/// * `entry` - IFD entry containing the value
+/// * `byte_order` - Byte order for interpreting multi-byte values
+///
+/// # Returns
+/// The extracted u16 value, or None if the entry doesn't contain exactly one value
 fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> Option<u16> {
     if entry.value_count != 1 {
         return None;
     }
+
     let value = match byte_order {
         ByteOrder::LittleEndian => (entry.value_offset & 0xFFFF) as u16,
         ByteOrder::BigEndian => ((entry.value_offset >> 16) & 0xFFFF) as u16,
     };
+
     Some(value)
 }
 
-/// Parser for Ricoh camera MakerNotes
+/// Ricoh MakerNote parser implementation
 pub struct RicohParser;
 
 impl Default for RicohParser {
@@ -88,11 +74,18 @@ impl Default for RicohParser {
 }
 
 impl RicohParser {
-    /// Creates a new Ricoh parser instance
+    /// Creates a new RicohParser instance
     pub fn new() -> Self {
         RicohParser
     }
 
+    /// Parse a single IFD entry and extract tag value
+    ///
+    /// # Arguments
+    /// * `entry` - IFD entry to parse
+    /// * `data` - Full MakerNote data buffer
+    /// * `byte_order` - Byte order for multi-byte values
+    /// * `tags` - HashMap to insert extracted tags into
     fn parse_entry(
         &self,
         entry: &IfdEntry,
@@ -100,46 +93,40 @@ impl RicohParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) {
-        match entry.tag_id {
-            RICOH_SHOOTING_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert(
-                        "Ricoh:ShootingMode".to_string(),
-                        decode_shooting_mode(value),
-                    );
-                }
-            }
-            RICOH_FLASH_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Ricoh:FlashMode".to_string(), decode_flash_mode(value));
-                }
-            }
-            RICOH_WHITE_BALANCE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert(
-                        "Ricoh:WhiteBalance".to_string(),
-                        decode_white_balance(value),
-                    );
-                }
-            }
+        // Get tag name from registry
+        let tag_name = match TAG_REGISTRY.get_tag_name(entry.tag_id) {
+            Some(name) => name,
+            None => return, // Unknown tag, skip it
+        };
+
+        // Extract u16 value for all registered tags
+        let value = match extract_u16_value(entry, data, byte_order) {
+            Some(v) => v,
+            None => return,
+        };
+
+        // Format value based on tag type and registered decoders
+        let formatted_value = match entry.tag_id {
+            // Tags with registry-based decoders (shooting mode, flash mode, white balance)
+            0x0005 | 0x000C | 0x001E => TAG_REGISTRY.decode_u16(entry.tag_id, value),
+
+            // Focus mode: manual binary decode
             RICOH_FOCUS_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    let mode = if value == 0 { "Auto" } else { "Manual" };
-                    tags.insert("Ricoh:FocusMode".to_string(), mode.to_string());
+                if value == 0 {
+                    "Auto".to_string()
+                } else {
+                    "Manual".to_string()
                 }
             }
-            RICOH_ISO_SETTING => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Ricoh:ISO".to_string(), value.to_string());
-                }
-            }
-            RICOH_SHARPNESS => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    tags.insert("Ricoh:Sharpness".to_string(), value.to_string());
-                }
-            }
-            _ => {}
-        }
+
+            // Numeric tags: ISO, Sharpness
+            RICOH_ISO_SETTING | RICOH_SHARPNESS => value.to_string(),
+
+            // Unknown tag handling (shouldn't reach here due to registry check)
+            _ => return,
+        };
+
+        tags.insert(format!("Ricoh:{}", tag_name), formatted_value);
     }
 }
 
@@ -158,92 +145,25 @@ impl MakerNoteParser for RicohParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        if data.len() < 2 {
-            return Err("Ricoh MakerNote data too short".to_string());
-        }
-
-        let ifd_offset = 0;
-        let entry_count = match byte_order {
-            ByteOrder::LittleEndian => u16::from_le_bytes([data[ifd_offset], data[ifd_offset + 1]]),
-            ByteOrder::BigEndian => u16::from_be_bytes([data[ifd_offset], data[ifd_offset + 1]]),
+        let config = IfdParserConfig {
+            signature: None,
+            signature_offset: 0,
+            max_entries: 500,
         };
 
-        if entry_count == 0 || entry_count > 500 {
-            return Err(format!("Invalid entry count: {}", entry_count));
-        }
-
-        let entry_size = 12;
-        let mut offset = ifd_offset + 2;
-
-        for _ in 0..entry_count {
-            if offset + entry_size > data.len() {
-                break;
-            }
-
-            let tag = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([data[offset], data[offset + 1]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([data[offset], data[offset + 1]]),
-            };
-
-            let field_type = match byte_order {
-                ByteOrder::LittleEndian => u16::from_le_bytes([data[offset + 2], data[offset + 3]]),
-                ByteOrder::BigEndian => u16::from_be_bytes([data[offset + 2], data[offset + 3]]),
-            };
-
-            let count = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                ]),
-            };
-
-            let value_offset = match byte_order {
-                ByteOrder::LittleEndian => u32::from_le_bytes([
-                    data[offset + 8],
-                    data[offset + 9],
-                    data[offset + 10],
-                    data[offset + 11],
-                ]),
-                ByteOrder::BigEndian => u32::from_be_bytes([
-                    data[offset + 8],
-                    data[offset + 9],
-                    data[offset + 10],
-                    data[offset + 11],
-                ]),
-            };
-
-            let entry = IfdEntry {
-                tag_id: tag,
-                field_type,
-                value_count: count,
-                value_offset,
-            };
-
-            self.parse_entry(&entry, data, byte_order, tags);
-            offset += entry_size;
-        }
-
-        Ok(())
+        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
+            self.parse_entry(entry, parse_data, byte_order, tags);
+        })
     }
 }
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_decode_shooting_mode() {
-        assert_eq!(decode_shooting_mode(0), "Auto");
-        assert_eq!(decode_shooting_mode(1), "Program");
-    }
 
     #[test]
     fn test_ricoh_parser_trait() {
@@ -256,15 +176,38 @@ mod tests {
     fn test_parse_shooting_mode() {
         let parser = RicohParser::new();
         let mut data = Vec::new();
-        data.extend_from_slice(&[0x01, 0x00]);
-        data.extend_from_slice(&[0x05, 0x00]);
-        data.extend_from_slice(&[0x03, 0x00]);
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x05, 0x00]); // Tag: ShootingMode (0x0005)
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1
 
         let mut tags = HashMap::new();
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
         assert!(result.is_ok());
         assert_eq!(tags.get("Ricoh:ShootingMode"), Some(&"Program".to_string()));
+    }
+
+    #[test]
+    fn test_parse_focus_mode() {
+        let parser = RicohParser::new();
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x1D, 0x00]); // Tag: FocusMode (0x001D)
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1 (Manual)
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+        assert!(result.is_ok());
+        assert_eq!(tags.get("Ricoh:FocusMode"), Some(&"Manual".to_string()));
+    }
+
+    #[test]
+    fn test_tag_registry() {
+        assert_eq!(TAG_REGISTRY.get_tag_name(0x0005), Some("ShootingMode"));
+        assert!(TAG_REGISTRY.has_tag(0x000C));
+        assert_eq!(TAG_REGISTRY.get_tag_name(0x001E), Some("WhiteBalance"));
     }
 }

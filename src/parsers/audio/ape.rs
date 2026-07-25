@@ -40,6 +40,7 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::io::EndianReader;
 use encoding_rs::UTF_8;
 
 /// MAC file signature
@@ -134,33 +135,35 @@ fn parse_mac_header(header: &[u8], metadata: &mut MetadataMap) -> Result<()> {
         return Err(ExifToolError::parse_error("MAC header too small"));
     }
 
+    let reader = EndianReader::little_endian(header);
+
     // Version (bytes 4-5, little-endian)
-    let version = u16::from_le_bytes([header[4], header[5]]);
+    let version = reader.u16_at(4).unwrap_or(0);
 
     // Compression level (bytes 6-7, little-endian)
-    let compression_level = u16::from_le_bytes([header[6], header[7]]);
+    let compression_level = reader.u16_at(6).unwrap_or(0);
 
     // Sample rate (bytes 16-19, little-endian) - offset depends on version
     // For v3.98+ (version >= 3980)
     let sample_rate = if version >= 3980 {
-        u32::from_le_bytes([header[16], header[17], header[18], header[19]])
+        reader.u32_at(16).unwrap_or(0)
     } else {
         // Older versions have different layout
-        u32::from_le_bytes([header[12], header[13], header[14], header[15]])
+        reader.u32_at(12).unwrap_or(0)
     };
 
     // Channels (bytes 22-23, little-endian) - varies by version
     let channels = if version >= 3980 {
-        u16::from_le_bytes([header[22], header[23]])
+        reader.u16_at(22).unwrap_or(0)
     } else {
-        u16::from_le_bytes([header[18], header[19]])
+        reader.u16_at(18).unwrap_or(0)
     };
 
     // Bits per sample (bytes 24-25, little-endian) - varies by version
     let bits_per_sample = if version >= 3980 {
-        u16::from_le_bytes([header[24], header[25]])
+        reader.u16_at(24).unwrap_or(0)
     } else {
-        u16::from_le_bytes([header[20], header[21]])
+        reader.u16_at(20).unwrap_or(0)
     };
 
     metadata.insert(
@@ -209,14 +212,16 @@ fn parse_apev2_footer(footer: &[u8]) -> Result<u32> {
         return Err(ExifToolError::parse_error("Invalid APEv2 footer"));
     }
 
+    let reader = EndianReader::little_endian(footer);
+
     // Version (bytes 8-11, little-endian)
-    let version = u32::from_le_bytes([footer[8], footer[9], footer[10], footer[11]]);
+    let version = reader.u32_at(8).unwrap_or(0);
     if version != APEV2_VERSION {
         return Err(ExifToolError::parse_error("Unsupported APEv2 version"));
     }
 
     // Tag size excluding footer (bytes 12-15, little-endian)
-    let tag_size = u32::from_le_bytes([footer[12], footer[13], footer[14], footer[15]]);
+    let tag_size = reader.u32_at(12).unwrap_or(0);
 
     Ok(tag_size)
 }
@@ -232,8 +237,10 @@ fn parse_apev2_tag(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
         return Ok(());
     }
 
+    let reader = EndianReader::little_endian(data);
+
     // Item count (bytes 16-19, little-endian)
-    let item_count = u32::from_le_bytes([data[16], data[17], data[18], data[19]]);
+    let item_count = reader.u32_at(16).unwrap_or(0);
 
     // Safety limit
     const MAX_ITEMS: u32 = 1000;
@@ -248,20 +255,10 @@ fn parse_apev2_tag(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
         }
 
         // Item value size (4 bytes, little-endian)
-        let value_size = u32::from_le_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]) as usize;
+        let value_size = reader.u32_at(offset).unwrap_or(0) as usize;
 
         // Item flags (4 bytes, little-endian)
-        let _flags = u32::from_le_bytes([
-            data[offset + 4],
-            data[offset + 5],
-            data[offset + 6],
-            data[offset + 7],
-        ]);
+        let _flags = reader.u32_at(offset + 4).unwrap_or(0);
 
         offset += 8;
 
@@ -305,39 +302,7 @@ fn parse_apev2_tag(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io;
-
-    struct TestReader {
-        data: Vec<u8>,
-    }
-
-    impl TestReader {
-        fn new(data: &[u8]) -> Self {
-            Self {
-                data: data.to_vec(),
-            }
-        }
-    }
-
-    impl crate::core::FileReader for TestReader {
-        fn read(&self, offset: u64, length: usize) -> io::Result<&[u8]> {
-            let start = offset as usize;
-            let end = start.saturating_add(length).min(self.data.len());
-
-            if start > self.data.len() {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "offset beyond data",
-                ));
-            }
-
-            Ok(&self.data[start..end])
-        }
-
-        fn size(&self) -> u64 {
-            self.data.len() as u64
-        }
-    }
+    use crate::test_support::TestReader;
 
     #[test]
     fn test_ape_signature_valid() {
@@ -350,7 +315,7 @@ mod tests {
         data[22..24].copy_from_slice(&2u16.to_le_bytes()); // stereo
         data[24..26].copy_from_slice(&16u16.to_le_bytes()); // 16-bit
 
-        let reader = TestReader::new(&data);
+        let reader = TestReader::new(data);
         let parser = ApeParser;
         let result = parser.parse(&reader);
         assert!(result.is_ok());
@@ -365,7 +330,7 @@ mod tests {
     #[test]
     fn test_ape_signature_invalid() {
         let data = b"INVALID DATA";
-        let reader = TestReader::new(data);
+        let reader = TestReader::from_slice(data);
         let parser = ApeParser;
         let result = parser.parse(&reader);
         assert!(result.is_err());
@@ -374,7 +339,7 @@ mod tests {
     #[test]
     fn test_ape_file_too_small() {
         let data = b"MAC ";
-        let reader = TestReader::new(data);
+        let reader = TestReader::from_slice(data);
         let parser = ApeParser;
         let result = parser.parse(&reader);
         assert!(result.is_err());

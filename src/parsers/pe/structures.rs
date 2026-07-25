@@ -509,3 +509,95 @@ pub struct CodeViewNB10 {
     /// Path to the PDB file
     pub pdb_file_name: String,
 }
+
+/// IMAGE_EXPORT_DIRECTORY structure (40 bytes)
+#[derive(Debug, Clone)]
+pub struct ImageExportDirectory {
+    /// Export flags (reserved, must be 0)
+    pub characteristics: u32,
+    /// Time/date stamp
+    pub time_date_stamp: u32,
+    /// Major version
+    pub major_version: u16,
+    /// Minor version
+    pub minor_version: u16,
+    /// RVA of DLL name
+    pub name: u32,
+    /// Starting ordinal number
+    pub base: u32,
+    /// Number of entries in the Export Address Table
+    pub number_of_functions: u32,
+    /// Number of entries in the Name Pointer Table
+    pub number_of_names: u32,
+    /// RVA of Export Address Table
+    pub address_of_functions: u32,
+    /// RVA of Export Name Pointer Table
+    pub address_of_names: u32,
+    /// RVA of Export Ordinal Table
+    pub address_of_name_ordinals: u32,
+}
+
+/// IMAGE_IMPORT_DESCRIPTOR (20 bytes)
+#[derive(Debug, Clone, Copy)]
+pub struct ImageImportDescriptor {
+    /// RVA to Import Lookup Table (array of RVAs to import names)
+    pub original_first_thunk: u32,
+    /// Time/date stamp (usually 0 unless bound)
+    pub time_date_stamp: u32,
+    /// Forwarder chain (usually 0)
+    pub forwarder_chain: u32,
+    /// RVA to DLL name string
+    pub name: u32,
+    /// RVA to Import Address Table (array of addresses)
+    pub first_thunk: u32,
+}
+
+impl ImageImportDescriptor {
+    /// Returns true if this is a null descriptor (end of import table)
+    pub fn is_null(&self) -> bool {
+        self.original_first_thunk == 0
+            && self.time_date_stamp == 0
+            && self.forwarder_chain == 0
+            && self.name == 0
+            && self.first_thunk == 0
+    }
+}
+
+/// Import information for a single DLL
+#[derive(Debug, Clone)]
+pub struct ImportInfo {
+    /// Name of the imported DLL
+    pub dll_name: String,
+    /// List of imported functions (name or ordinal)
+    pub functions: Vec<ImportFunction>,
+}
+
+/// Information about an imported function
+#[derive(Debug, Clone)]
+pub enum ImportFunction {
+    /// Import by name
+    ByName {
+        /// Hint (index into export name pointer table)
+        hint: u16,
+        /// Function name
+        name: String,
+    },
+    /// Import by ordinal
+    ByOrdinal {
+        /// Ordinal number
+        ordinal: u16,
+    },
+}
+
+/// Parsed export information
+#[derive(Debug, Clone)]
+pub struct ExportInfo {
+    /// Export directory table
+    pub directory: ImageExportDirectory,
+    /// DLL name
+    pub dll_name: String,
+    /// List of exported function names (limited to first 30)
+    pub function_names: Vec<String>,
+    /// Number of forwarded exports
+    pub forwarded_count: u32,
+}

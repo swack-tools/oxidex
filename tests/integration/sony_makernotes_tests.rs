@@ -314,44 +314,53 @@ fn test_sony_parse_camera_settings_array() {
 
     // Verify decoded settings
     assert_eq!(
-        result.get("Sony:DriveMode"),
+        result.get("Sony:CameraSettings:DriveMode"),
         Some(&"Continuous High".to_string())
     );
     assert_eq!(
-        result.get("Sony:WhiteBalanceMode"),
+        result.get("Sony:CameraSettings:WhiteBalanceMode"),
         Some(&"Auto".to_string())
     );
     assert_eq!(
-        result.get("Sony:FocusMode"),
+        result.get("Sony:CameraSettings:FocusMode"),
         Some(&"AF-C (Continuous)".to_string())
     );
     assert_eq!(
-        result.get("Sony:AFAreaMode"),
+        result.get("Sony:CameraSettings:AFAreaMode"),
         Some(&"Flexible Spot".to_string())
     );
     assert_eq!(
-        result.get("Sony:MeteringMode"),
+        result.get("Sony:CameraSettings:MeteringMode"),
         Some(&"Multi-segment".to_string())
     );
-    assert_eq!(result.get("Sony:ISO"), Some(&"100".to_string()));
     assert_eq!(
-        result.get("Sony:DynamicRangeOptimizer"),
+        result.get("Sony:CameraSettings:ISO"),
+        Some(&"100".to_string())
+    );
+    assert_eq!(
+        result.get("Sony:CameraSettings:DynamicRangeOptimizer"),
         Some(&"DRO Auto".to_string())
     );
     assert_eq!(
-        result.get("Sony:ImageStabilization"),
+        result.get("Sony:CameraSettings:ImageStabilization"),
         Some(&"On".to_string())
     );
-    assert_eq!(result.get("Sony:ColorMode"), Some(&"Vivid".to_string()));
     assert_eq!(
-        result.get("Sony:LongExposureNoiseReduction"),
+        result.get("Sony:CameraSettings:ColorMode"),
+        Some(&"Vivid".to_string())
+    );
+    assert_eq!(
+        result.get("Sony:CameraSettings:LongExposureNoiseReduction"),
         Some(&"Normal".to_string())
     );
     assert_eq!(
-        result.get("Sony:HighISONoiseReduction"),
+        result.get("Sony:CameraSettings:HighISONoiseReduction"),
         Some(&"High".to_string())
     );
-    assert_eq!(result.get("Sony:AutoHDR"), Some(&"Auto".to_string()));
+    assert_eq!(
+        result.get("Sony:CameraSettings:AutoHDR"),
+        Some(&"Auto".to_string())
+    );
 }
 
 #[test]
@@ -390,10 +399,22 @@ fn test_sony_parse_af_info_array() {
     let mut result = HashMap::new();
     parse_sony_makernote(&data, ByteOrder::LittleEndian, &mut result);
 
-    assert_eq!(result.get("Sony:AFPointSelected"), Some(&"5".to_string()));
-    assert_eq!(result.get("Sony:AFPointsInFocus"), Some(&"3".to_string()));
-    assert_eq!(result.get("Sony:FaceDetection"), Some(&"Yes".to_string()));
-    assert_eq!(result.get("Sony:NumFacesDetected"), Some(&"2".to_string()));
+    assert_eq!(
+        result.get("Sony:AFInfo:AFPointSelected"),
+        Some(&"5".to_string())
+    );
+    assert_eq!(
+        result.get("Sony:AFInfo:AFPointsInFocus"),
+        Some(&"3".to_string())
+    );
+    assert_eq!(
+        result.get("Sony:AFInfo:FaceDetection"),
+        Some(&"On".to_string())
+    );
+    assert_eq!(
+        result.get("Sony:AFInfo:NumFacesDetected"),
+        Some(&"2".to_string())
+    );
 }
 
 #[test]
@@ -437,15 +458,15 @@ fn test_sony_parse_shot_info_array() {
     parse_sony_makernote(&data, ByteOrder::LittleEndian, &mut result);
 
     assert_eq!(
-        result.get("Sony:ShotInfoWhiteBalance"),
+        result.get("Sony:ShotInfo:WhiteBalance"),
         Some(&"Daylight".to_string())
     );
     assert_eq!(
-        result.get("Sony:ColorTemperature"),
-        Some(&"5500 K".to_string())
+        result.get("Sony:ShotInfo:ColorTemperature"),
+        Some(&"5500".to_string())
     );
     assert_eq!(
-        result.get("Sony:ShotInfoFlashMode"),
+        result.get("Sony:ShotInfo:FlashMode"),
         Some(&"Fill-flash".to_string())
     );
 }

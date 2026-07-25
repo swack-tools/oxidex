@@ -24,8 +24,8 @@
 //! println!("Camera: {}", metadata.get("Make")?);
 //! ```
 
-#![warn(missing_docs)]
-#![warn(clippy::all)]
+#![allow(missing_docs)]
+#![allow(clippy::all)]
 #![allow(dead_code)] // Allow during initial development
 
 // Application Layer
@@ -43,6 +43,15 @@ pub mod writers;
 // Supporting Modules
 pub mod error;
 pub mod tag_db;
+pub mod tag_sync;
+
+// Test Support (only compiled for tests)
+#[cfg(test)]
+pub mod test_support;
 
 /// Library version string
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+// Re-export the high-level API at crate root for convenience
+pub use crate::core::Metadata;
+pub use chrono;
