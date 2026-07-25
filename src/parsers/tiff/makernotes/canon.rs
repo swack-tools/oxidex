@@ -290,6 +290,44 @@ fn extract_canon_string(entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) ->
     }
 }
 
+/// Extracts raw bytes from a Canon MakerNote IFD entry without string conversion.
+///
+/// This is like `extract_canon_string` but returns the raw bytes instead of a
+/// trimmed UTF-8 string. Used for tags like BatteryType where the value needs
+/// custom byte-level parsing (e.g. skipping a fixed header before the string).
+fn extract_canon_raw_bytes(
+    entry: &IfdEntry,
+    data: &[u8],
+    byte_order: ByteOrder,
+) -> Option<Vec<u8>> {
+    if entry.field_type != 2 {
+        return None;
+    }
+    let byte_count = entry.value_count as usize;
+    if byte_count == 0 {
+        return None;
+    }
+
+    if byte_count <= 4 {
+        let bytes = match byte_order {
+            ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+            ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+        };
+        return Some(bytes[..byte_count].to_vec());
+    }
+
+    let base = calculate_makernote_base(data, byte_order).unwrap_or(0);
+    let tiff_offset = entry.value_offset;
+    if tiff_offset < base {
+        return None;
+    }
+    let relative_offset = (tiff_offset - base) as usize;
+    if relative_offset + byte_count > data.len() {
+        return None;
+    }
+    Some(data[relative_offset..relative_offset + byte_count].to_vec())
+}
+
 // Canon MakerNote Tag IDs
 const CANON_CAMERA_SETTINGS: u16 = 0x0001;
 const CANON_FOCAL_LENGTH: u16 = 0x0002;
@@ -315,6 +353,8 @@ const CANON_PROCESSING_INFO: u16 = 0x00A0;
 const CANON_MEASURED_COLOR: u16 = 0x00AA;
 const CANON_COLOR_SPACE: u16 = 0x00B4;
 const CANON_VRD_OFFSET: u16 = 0x00D0;
+const CANON_BATTERY_TYPE: u16 = 0x0038;
+const CANON_SENSOR_INFO: u16 = 0x00E0;
 
 // Canon signature (not always present)
 const CANON_SIGNATURE: &[u8] = b"Canon";
@@ -384,14 +424,22 @@ const SHOT_INFO_FOCUS_DISTANCE_UPPER: usize = 19;
 const SHOT_INFO_SUBJECT_DISTANCE: usize = 19;
 const SHOT_INFO_FOCUS_DISTANCE_LOWER: usize = 20;
 const SHOT_INFO_BULB_DURATION: usize = 24;
+const SHOT_INFO_AUTO_ROTATE: usize = 27;
 
 // FileInfo array indices (tag 0x0093)
+const FILE_INFO_BRACKET_SHOT_NUMBER: usize = 0;
 const FILE_INFO_FILE_NUMBER: usize = 1;
 const FILE_INFO_SHUTTER_COUNT_LOW: usize = 2;
 const FILE_INFO_SHUTTER_COUNT_HIGH: usize = 3;
 const FILE_INFO_BRACKET_MODE: usize = 4;
 const FILE_INFO_BRACKET_VALUE: usize = 5;
 const FILE_INFO_LENS_ID: usize = 6;
+
+// SensorInfo array indices (tag 0x00E0)
+const SENSOR_INFO_BLACK_MASK_LEFT_BORDER: usize = 6;
+const SENSOR_INFO_BLACK_MASK_TOP_BORDER: usize = 7;
+const SENSOR_INFO_BLACK_MASK_RIGHT_BORDER: usize = 8;
+const SENSOR_INFO_BLACK_MASK_BOTTOM_BORDER: usize = 9;
 
 // AFInfo array indices
 const AF_INFO_NUM_AF_POINTS: usize = 1;
@@ -1983,6 +2031,21 @@ fn parse_canon_makernote_impl(
                             );
                         }
                     }
+
+                    // AutoRotate (index 27) - auto rotate setting
+                    if array.len() > SHOT_INFO_AUTO_ROTATE {
+                        let auto_rotate = array[SHOT_INFO_AUTO_ROTATE];
+                        if auto_rotate >= 0 {
+                            let auto_rotate_str = match auto_rotate {
+                                0 => "None",
+                                1 => "Rotate 90 CW",
+                                2 => "Rotate 180",
+                                3 => "Rotate 270 CW",
+                                _ => "Unknown",
+                            };
+                            tags.insert("Canon:AutoRotate".to_string(), auto_rotate_str.to_string());
+                        }
+                    }
                 }
             }
 
@@ -2070,6 +2133,22 @@ fn parse_canon_makernote_impl(
                                 shutter_count.to_string(),
                             );
                         }
+                    }
+
+                    // BracketShotNumber (index 0) - bracket shot sequence number
+                    if let Some(&bracket_shot) = array.get(FILE_INFO_BRACKET_SHOT_NUMBER) {
+                        tags.insert("Canon:BracketShotNumber".to_string(), bracket_shot.to_string());
+                    }
+
+                    // BracketMode (index 4) - bracket mode setting
+                    if let Some(&bracket_mode) = array.get(FILE_INFO_BRACKET_MODE) {
+                        let bracket_str = match bracket_mode {
+                            0 => "Off",
+                            1 => "AEB",
+                            2 => "FEB",
+                            _ => "Unknown",
+                        };
+                        tags.insert("Canon:BracketMode".to_string(), bracket_str.to_string());
                     }
                 }
             }
@@ -2208,6 +2287,53 @@ fn parse_canon_makernote_impl(
                         tags.insert(
                             "Canon:AutoLightingOptimizer".to_string(),
                             optimizer_str.to_string(),
+                        );
+                    }
+                }
+            }
+
+            // BatteryType (tag 0x0038) - battery type string
+            CANON_BATTERY_TYPE => {
+                if entry.value_count == 76 {
+                    if let Some(bytes) = extract_canon_raw_bytes(entry, ifd_data, byte_order) {
+                        if bytes.len() >= 4 {
+                            let suffix = &bytes[4..];
+                            let end = suffix.iter().position(|&b| b == 0).unwrap_or(suffix.len());
+                            if end > 0 {
+                                if let Ok(battery_type) = std::str::from_utf8(&suffix[..end]) {
+                                    tags.insert("Canon:BatteryType".to_string(), battery_type.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // SensorInfo (tag 0x00E0) - sensor information array
+            CANON_SENSOR_INFO => {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                    if array.len() > SENSOR_INFO_BLACK_MASK_LEFT_BORDER {
+                        tags.insert(
+                            "Canon:BlackMaskLeftBorder".to_string(),
+                            array[SENSOR_INFO_BLACK_MASK_LEFT_BORDER].to_string(),
+                        );
+                    }
+                    if array.len() > SENSOR_INFO_BLACK_MASK_TOP_BORDER {
+                        tags.insert(
+                            "Canon:BlackMaskTopBorder".to_string(),
+                            array[SENSOR_INFO_BLACK_MASK_TOP_BORDER].to_string(),
+                        );
+                    }
+                    if array.len() > SENSOR_INFO_BLACK_MASK_RIGHT_BORDER {
+                        tags.insert(
+                            "Canon:BlackMaskRightBorder".to_string(),
+                            array[SENSOR_INFO_BLACK_MASK_RIGHT_BORDER].to_string(),
+                        );
+                    }
+                    if array.len() > SENSOR_INFO_BLACK_MASK_BOTTOM_BORDER {
+                        tags.insert(
+                            "Canon:BlackMaskBottomBorder".to_string(),
+                            array[SENSOR_INFO_BLACK_MASK_BOTTOM_BORDER].to_string(),
                         );
                     }
                 }
