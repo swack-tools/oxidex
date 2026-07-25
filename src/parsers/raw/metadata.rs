@@ -69,19 +69,17 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
         // Some DNG tags are not yet in the generated oxidex-tags database.
         // Use hardcoded names to avoid emitting hex fallbacks like EXIF:0x828D.
         match tag_id {
-            0x0111 => "EXIF:PreviewImageStart".to_string(),
-            0x0111 if !ifd_name.starts_with("SubIFD") => {
-                lookup_tag_name(tag_id, ifd_name)
-            }
-            0x0117 => "EXIF:PreviewImageLength".to_string(),
-            0x0117 if !ifd_name.starts_with("SubIFD") => {
-                lookup_tag_name(tag_id, ifd_name)
-            }
+            0x0111 if ifd_name.starts_with("SubIFD") => "EXIF:PreviewImageStart".to_string(),
+            0x0117 if ifd_name.starts_with("SubIFD") => "EXIF:PreviewImageLength".to_string(),
+            0x0111 | 0x0117 => lookup_tag_name(tag_id, "EXIF"),
             0x0143 => "EXIF:TileLength".to_string(),
             0x0142 => lookup_tag_name(tag_id, "EXIF"),
             0x0144 => lookup_tag_name(tag_id, "EXIF"),
             0x0145 => "EXIF:TileByteCounts".to_string(),
             0x0214 => "EXIF:ReferenceBlackWhite".to_string(),
+            0xC61D => lookup_tag_name(tag_id, "EXIF"),
+            0xC61E => lookup_tag_name(tag_id, "EXIF"),
+            0xC68E => lookup_tag_name(tag_id, "EXIF"),
             0x828D => "EXIF:CFARepeatPatternDim".to_string(),
             0x828E => "EXIF:CFAPattern2".to_string(),
             0xC616 => "EXIF:CFAPlaneColor".to_string(),
@@ -89,9 +87,6 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
             0xC61F => "EXIF:DefaultCropOrigin".to_string(),
             0xC620 => "EXIF:DefaultCropSize".to_string(),
             _ => lookup_tag_name(tag_id, "EXIF"),
-            0xC61D => lookup_tag_name(tag_id, "EXIF"),
-            0xC61E => lookup_tag_name(tag_id, "EXIF"),
-            0xC68E => lookup_tag_name(tag_id, "EXIF"),
         }
     } else {
         lookup_tag_name(tag_id, ifd_name)
@@ -864,20 +859,19 @@ fn format_dng_display_value(
         0xC619 if field_type == 3 => format_short_array(bytes, value_count, byte_order),
         // ActiveArea: LONG[4]
         0xC68D if field_type == 4 => format_long_array(bytes, value_count, byte_order),
-        _ => return None,
-        // DefaultScale: rational64u[2]
+        // DefaultScale: RATIONAL[2] or LONG[2] (some writers use LONG incorrectly)
         0xC61E => match field_type {
             5 => format_rational_array(bytes, value_count, byte_order),
-            // Some DNG writers use LONG for DefaultScale erroneously
             4 => format_long_array(bytes, value_count, byte_order),
             _ => None,
         },
-        // MaskedAreas: LONG[4]
+        // MaskedAreas: LONG[4] or SHORT[4]
         0xC68E => match field_type {
             4 => format_long_array(bytes, value_count, byte_order),
             3 => format_short_array(bytes, value_count, byte_order),
             _ => None,
         },
+        _ => return None,
     }
 }
 
