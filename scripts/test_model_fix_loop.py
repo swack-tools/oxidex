@@ -2751,6 +2751,57 @@ class ExtractReviewVerdictFullTests(unittest.TestCase):
         self.assertEqual(verdict, "reject")
         self.assertIn("unparseable review verdict", reason)
 
+    def test_trailing_approve_after_checklist_is_honored(self):
+        # The review prompt says "answer each checklist item briefly, THEN
+        # give your verdict" -- a model that OBEYS puts APPROVE last. The
+        # first-line-only match scored these unparseable -> REJECT,
+        # measured at 7/209 real reviews and destroying already-built,
+        # already-gap-verified fixes.
+        from model_fix_loop import extract_review_verdict_full
+        reply = (
+            "C1: exact tag ID match confirmed (0x0112).\n"
+            "C2: PrintConv strings are byte-identical to Exif.pm.\n"
+            "C3: single reachable emitter.\n"
+            "C4: test asserts against a real sample.\n"
+            "C5: no hardcoded values.\n"
+            "\n"
+            "APPROVE"
+        )
+        self.assertEqual(extract_review_verdict_full(reply), ("approve", ""))
+
+    def test_trailing_verdict_label_and_markdown_emphasis_are_tolerated(self):
+        from model_fix_loop import extract_review_verdict_full
+        self.assertEqual(
+            extract_review_verdict_full("C1: fine.\n\n**Final Verdict:** APPROVE"),
+            ("approve", ""),
+        )
+        verdict, reason = extract_review_verdict_full(
+            "C2: paraphrased.\n\nVerdict: REJECT: C2 paraphrased PrintConv")
+        self.assertEqual(verdict, "reject")
+        self.assertEqual(reason, "C2 paraphrased PrintConv")
+
+    def test_last_verdict_line_wins_over_criteria_discussion(self):
+        # Checklist bodies routinely mention the words approve/reject while
+        # discussing criteria; the model's real conclusion is the LAST one,
+        # which is why the rescan runs bottom-up rather than top-down.
+        from model_fix_loop import extract_review_verdict_full
+        reply = (
+            "I would normally approve a change like this, but:\n"
+            "C2: the PrintConv string was paraphrased.\n"
+            "\n"
+            "REJECT: C2 paraphrased PrintConv"
+        )
+        verdict, reason = extract_review_verdict_full(reply)
+        self.assertEqual(verdict, "reject")
+        self.assertEqual(reason, "C2 paraphrased PrintConv")
+
+    def test_no_verdict_anywhere_still_fails_safe_to_reject(self):
+        from model_fix_loop import extract_review_verdict_full
+        verdict, reason = extract_review_verdict_full(
+            "C1: looks plausible.\nC2: I am not sure about the table.\nHmm.")
+        self.assertEqual(verdict, "reject")
+        self.assertIn("unparseable review verdict", reason)
+
     def test_extract_review_verdict_delegates_and_folds_unverifiable_to_not_approved(self):
         # The preserved two-tuple contract can't represent a third state,
         # so UNVERIFIABLE degrades to "not approved" here -- callers that
