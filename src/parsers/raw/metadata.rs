@@ -894,6 +894,60 @@ fn format_exif_display_value(
             7 => Some("Recommended Exposure Index and ISO Speed".to_string()),
             _ => None,
         },
+        // RecommendedExposureIndex: SHORT[1] or LONG[1].
+        0x8832 if (field_type == 3 || field_type == 4) && value_count >= 1 => {
+            if field_type == 3 {
+                read_tiff_u16(bytes, byte_order).map(|v| v.to_string())
+            } else {
+                read_tiff_u32(bytes, byte_order).map(|v| v.to_string())
+            }
+        }
+        // ApertureValue: RATIONAL[1] -- APEX to f-number conversion.
+        0x9202 if (field_type == 5 || field_type == 10) && value_count >= 1 => {
+            if bytes.len() < 8 {
+                return None;
+            }
+            let num = read_tiff_u32(&bytes[0..4], byte_order)?;
+            let denom = read_tiff_u32(&bytes[4..8], byte_order)?;
+            if denom == 0 {
+                return None;
+            }
+            let apex = num as f64 / denom as f64;
+            let f_number = 2.0_f64.powf(apex / 2.0);
+            Some(format!("{:.1}", f_number))
+        }
+        // LensInfo: rational64u[4] -- format as "15-45mm f/3.5-6.3".
+        0xA432 if (field_type == 5 || field_type == 10) && value_count >= 4 => {
+            if bytes.len() < 32 {
+                return None;
+            }
+            let mut values = [0.0f64; 4];
+            for i in 0..4 {
+                let off = i * 8;
+                let num = read_tiff_u32(bytes.get(off..off + 4)?, byte_order)?
+                    as f64;
+                let denom = read_tiff_u32(
+                    bytes.get(off + 4..off + 8)?,
+                    byte_order,
+                )? as f64;
+                values[i] = if denom == 0.0 { 0.0 } else { num / denom };
+            }
+            let focal_str = if values[1] == 0.0
+                || (values[0] - values[1]).abs() < 0.01
+            {
+                format!("{:.0}mm", values[0])
+            } else {
+                format!("{:.0}-{:.0}mm", values[0], values[1])
+            };
+            let aperture_str = if values[3] == 0.0
+                || (values[2] - values[3]).abs() < 0.01
+            {
+                format!("f/{:.1}", values[2])
+            } else {
+                format!("f/{:.1}-{:.1}", values[2], values[3])
+            };
+            Some(format!("{} {}", focal_str, aperture_str))
+        }
         // Contrast: SHORT[1].
         0xA408 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
             0 => Some("Normal".to_string()),
@@ -1580,7 +1634,41 @@ fn find_cr3_cmt1_tiff(data: &[u8]) -> Option<&[u8]> {
     None
 }
 
-/// Read an IFD0 tag from a CMT1 TIFF payload.
+/// Locate the CMT2 TIFF payload inside a Canon CR3.
+fn find_cr3_cmt2_tiff(data: &[u8]) -> Option<&[u8]> {
+    find_cr3_cmt_tiff_box(data, b"CMT2")
+}
+
+/// Scan for a CMT TIFF box by 4-byte type tag and return its payload.
+fn find_cr3_cmt_tiff_box<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
+    let mut cursor = 0;
+    while cursor + 8 <= data.len() {
+        let rel = data[cursor..]
+            .windows(4)
+            .position(|w| w == *box_type)?;
+        let type_offset = cursor + rel;
+        cursor = type_offset + 4;
+        if type_offset < 4 {
+            continue;
+        }
+
+        let box_start = type_offset - 4;
+        let box_size =
+            u32::from_be_bytes([data[box_start], data[box_start + 1], data[box_start + 2], data[box_start + 3]])
+                as usize;
+        let payload_start = type_offset + 4;
+        let box_end = match box_start.checked_add(box_size) {
+            Some(end) if box_size >= 8 && end <= data.len() && end > payload_start => end,
+            _ => continue,
+        };
+
+        let payload = &data[payload_start..box_end];
+        if payload.starts_with(b"II*\0") || payload.starts_with(b"MM\x00*") {
+            return Some(payload);
+        }
+    }
+    None
+}
 ///
 /// An entry that is present but contains an empty ASCII string still yields an
 /// empty-string value, distinct from an absent tag.
@@ -1605,44 +1693,53 @@ fn extract_cr3_cmt1_ifd0_tag(tiff: &[u8], wanted_tag_id: u16) -> Option<TagValue
     None
 }
 
-/// Read a specific tag from the ExifIFD inside a CMT1 TIFF payload.
-fn extract_cr3_cmt1_exif_tag(tiff: &[u8], wanted_tag_id: u16) -> Option<TagValue> {
+/// Extract specific ExifIFD tags from a CMT2 TIFF payload.
+///
+/// CMT2 holds ExifIFD tags directly in its top-level IFD (not a sub-IFD).
+/// Only well-known EXIF tag IDs are extracted to avoid emitting Canon-
+/// proprietary tags or MakerNote entries from unrelated CMT boxes.
+fn extract_cmt2_exif_tags(tiff: &[u8], group: &str, metadata: &mut MetadataMap) {
     if tiff.len() < 8 {
-        return None;
+        return;
     }
-    let byte_order = detect_byte_order(tiff).ok()?;
+    let byte_order = match detect_byte_order(tiff) {
+        Ok(bo) => bo,
+        Err(_) => return,
+    };
     let ifd0_offset = read_u32(&tiff[4..8], byte_order) as u64;
     let reader = SliceReader::new(tiff);
-    let ifd0_tags = parse_ifd(&reader, ifd0_offset, byte_order).ok()?;
+    let tags = match parse_ifd(&reader, ifd0_offset, byte_order) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
 
-    let exif_ifd_offset =
-        ifd0_tags
-            .iter()
-            .find_map(|(tag_id, field_type, value_count, raw_bytes)| {
-                if *tag_id == 0x8769 && *field_type == 4 && *value_count >= 1 {
-                    read_tiff_u32(raw_bytes.as_ref(), byte_order).map(u64::from)
-                } else {
-                    None
-                }
-            })?;
+    // Only emit tags that ExifTool reports for a standard EXIF block.
+    let wanted: &[u16] = &[
+        0x8830, // SensitivityType
+        0x8832, // RecommendedExposureIndex
+        0x9010, // OffsetTime
+        0x9202, // ApertureValue
+        0xA430, // OwnerName
+        0xA432, // LensInfo
+        0xA434, // LensModel
+        0xA435, // LensSerialNumber
+    ];
 
-    let exif_tags = parse_ifd(&reader, exif_ifd_offset, byte_order).ok()?;
-    for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
-        if *tag_id == wanted_tag_id {
-            let bytes = raw_bytes.as_ref();
-            if let Some(value) = format_exif_display_value(
-                *tag_id,
-                bytes,
-                *field_type,
-                *value_count,
-                byte_order,
-            ) {
-                return Some(TagValue::new_string(value));
-            }
-            return Some(raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order));
+    for (tag_id, field_type, value_count, raw_bytes) in &tags {
+        if !wanted.contains(tag_id) {
+            continue;
         }
+        let bytes = raw_bytes.as_ref();
+        let tag_name = lookup_tag_name(*tag_id, group);
+        let tag_value = if let Some(value) =
+            format_exif_display_value(*tag_id, bytes, *field_type, *value_count, byte_order)
+        {
+            TagValue::new_string(value)
+        } else {
+            raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
+        };
+        metadata.insert(tag_name, tag_value);
     }
-    None
 }
 
 fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
@@ -1656,22 +1753,16 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     // a QuickTime-style box/atom parser will replace this). For now, extract
     // standard IFD0 metadata from the CMT1 TIFF payload.
     if let Some(tiff) = find_cr3_cmt1_tiff(data) {
-        // ExifTool reports Artist even when its stored ASCII value is empty.
         if let Some(artist) = extract_cr3_cmt1_ifd0_tag(tiff, 0x013B) {
             metadata.insert(lookup_tag_name(0x013B, "IFD0"), artist);
         }
         if let Some(copyright) = extract_cr3_cmt1_ifd0_tag(tiff, 0x8298) {
             metadata.insert(lookup_tag_name(0x8298, "IFD0"), copyright);
         }
-        if let Some(owner_name) = extract_cr3_cmt1_exif_tag(tiff, 0xA430) {
-            metadata.insert(lookup_tag_name(0xA430, "ExifIFD"), owner_name);
-        }
-        if let Some(sensitivity_type) = extract_cr3_cmt1_exif_tag(tiff, 0x8830) {
-            metadata.insert(
-                lookup_tag_name(0x8830, "ExifIFD"),
-                sensitivity_type,
-            );
-        }
+    }
+
+    if let Some(tiff) = find_cr3_cmt2_tiff(data) {
+        extract_cmt2_exif_tags(tiff, "ExifIFD", &mut metadata);
     }
 
     Ok(metadata)
