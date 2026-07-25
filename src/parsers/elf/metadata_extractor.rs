@@ -319,6 +319,12 @@ fn extract_header_metadata(header: &ElfHeader, metadata: &mut MetadataMap) {
         TagValue::Integer(header.e_ident[8] as i64),
     );
 
+    // ExifTool-compatible ObjectFileType (PrintConv strings)
+    metadata.insert(
+        "EXE:ObjectFileType".to_string(),
+        TagValue::String(header.object_file_type_str().to_string()),
+    );
+
     // Object type
     let type_str = header.type_str().to_string();
     metadata.insert(
@@ -330,6 +336,12 @@ fn extract_header_metadata(header: &ElfHeader, metadata: &mut MetadataMap) {
     metadata.insert("EXE:Type".to_string(), TagValue::String(type_str));
 
     // Machine architecture
+    // ExifTool-compatible CPUType (PrintConv strings)
+    metadata.insert(
+        "EXE:CPUType".to_string(),
+        TagValue::String(header.cpu_type_str().to_string()),
+    );
+
     metadata.insert(
         "EXE:Machine".to_string(),
         TagValue::String(header.machine_str().to_string()),
