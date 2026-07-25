@@ -42,7 +42,12 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0x828D // CFARepeatPatternDim
+            0x0111 // PreviewImageStart (StripOffsets)
+                | 0x0117 // PreviewImageLength (StripByteCounts)
+                | 0x0143 // TileLength
+                | 0x0145 // TileByteCounts
+                | 0x0214 // ReferenceBlackWhite
+                | 0x828D // CFARepeatPatternDim
                 | 0x828E // CFAPattern2
                 | 0xC616 // CFAPlaneColor
                 | 0xC617 // CFALayout
@@ -59,6 +64,11 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
         // Some DNG tags are not yet in the generated oxidex-tags database.
         // Use hardcoded names to avoid emitting hex fallbacks like EXIF:0x828D.
         match tag_id {
+            0x0111 => "EXIF:PreviewImageStart".to_string(),
+            0x0117 => "EXIF:PreviewImageLength".to_string(),
+            0x0143 => "EXIF:TileLength".to_string(),
+            0x0145 => "EXIF:TileByteCounts".to_string(),
+            0x0214 => "EXIF:ReferenceBlackWhite".to_string(),
             0x828D => "EXIF:CFARepeatPatternDim".to_string(),
             0x828E => "EXIF:CFAPattern2".to_string(),
             0xC616 => "EXIF:CFAPlaneColor".to_string(),
@@ -270,6 +280,18 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 let mut makernote_data: Option<Vec<u8>> = None;
                 let mut camera_make: Option<String> = None;
 
+                // Thumbnail parameters for DNG ThumbnailTIFF construction
+                let mut thumb_width = None;
+                let mut thumb_height = None;
+                let mut thumb_bits_per_sample = None;
+                let mut thumb_compression = None;
+                let mut thumb_photometric = None;
+                let mut thumb_strip_offsets = None;
+                let mut thumb_samples_per_pixel = None;
+                let mut thumb_rows_per_strip = None;
+                let mut thumb_strip_byte_counts = None;
+                let mut thumb_planar_config = None;
+
                 // Convert tags to metadata
                 for (tag_id, field_type, value_count, raw_bytes) in &tags {
                     let bytes = raw_bytes.as_ref();
@@ -324,6 +346,23 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // Extract camera make for MakerNote parsing (ASCII type)
                         let make_str = String::from_utf8_lossy(bytes);
                         camera_make = Some(make_str.trim_end_matches('\0').trim().to_string());
+                    }
+
+                    // Collect DNG IFD1 thumbnail parameters for ThumbnailTIFF
+                    if format == RawFormat::AdobeDNG && ifd_index == 1 {
+                        match *tag_id {
+                            0x0100 => thumb_width = read_tiff_u32(bytes, byte_order),
+                            0x0101 => thumb_height = read_tiff_u32(bytes, byte_order),
+                            0x0102 => thumb_bits_per_sample = Some(bytes.to_vec()),
+                            0x0103 => thumb_compression = read_tiff_u16(bytes, byte_order),
+                            0x0106 => thumb_photometric = read_tiff_u16(bytes, byte_order),
+                            0x0111 => thumb_strip_offsets = read_tiff_u32(bytes, byte_order),
+                            0x0115 => thumb_samples_per_pixel = read_tiff_u16(bytes, byte_order),
+                            0x0116 => thumb_rows_per_strip = read_tiff_u32(bytes, byte_order),
+                            0x0117 => thumb_strip_byte_counts = read_tiff_u32(bytes, byte_order),
+                            0x011C => thumb_planar_config = read_tiff_u16(bytes, byte_order),
+                            _ => {}
+                        }
                     }
 
                     // Convert tag to metadata
@@ -555,6 +594,26 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     }
                 }
 
+                // Build DNG ThumbnailTIFF from IFD1
+                if format == RawFormat::AdobeDNG && ifd_index == 1 {
+                    if let Some(tiff) = build_thumbnail_tiff(
+                        &reader,
+                        byte_order,
+                        thumb_width,
+                        thumb_height,
+                        thumb_bits_per_sample.as_deref(),
+                        thumb_compression,
+                        thumb_photometric,
+                        thumb_strip_offsets,
+                        thumb_samples_per_pixel,
+                        thumb_rows_per_strip,
+                        thumb_strip_byte_counts,
+                        thumb_planar_config,
+                    ) {
+                        metadata.insert("EXIF:ThumbnailTIFF".to_string(), TagValue::Binary(tiff));
+                    }
+                }
+
                 // Read next IFD offset
                 let entry_count = tags.len();
                 let next_offset_location = ifd_offset + 2 + (entry_count as u64 * 12);
@@ -730,6 +789,10 @@ fn format_dng_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // ReferenceBlackWhite: RATIONAL[6]
+        0x0214 if field_type == 5 => format_rational_array(bytes, value_count, byte_order),
+        // PreviewImageStart/Length, TileLength/TileByteCounts: use default scalar formatting
+        0x0111 | 0x0117 | 0x0143 | 0x0145 => None,
         // CFARepeatPatternDim: SHORT[2]
         0x828D if field_type == 3 => format_short_array(bytes, value_count, byte_order),
         // CFAPattern2: BYTE[n]
@@ -845,6 +908,125 @@ fn read_tiff_u32(bytes: &[u8], byte_order: ByteOrder) -> Option<u32> {
         ByteOrder::LittleEndian => u32::from_le_bytes(bytes),
         ByteOrder::BigEndian => u32::from_be_bytes(bytes),
     })
+}
+
+/// Write a u16 to a buffer in the specified byte order.
+fn tiff_write_u16(buf: &mut Vec<u8>, value: u16, byte_order: ByteOrder) {
+    match byte_order {
+        ByteOrder::LittleEndian => buf.extend_from_slice(&value.to_le_bytes()),
+        ByteOrder::BigEndian => buf.extend_from_slice(&value.to_be_bytes()),
+    }
+}
+
+/// Write a u32 to a buffer in the specified byte order.
+fn tiff_write_u32(buf: &mut Vec<u8>, value: u32, byte_order: ByteOrder) {
+    match byte_order {
+        ByteOrder::LittleEndian => buf.extend_from_slice(&value.to_le_bytes()),
+        ByteOrder::BigEndian => buf.extend_from_slice(&value.to_be_bytes()),
+    }
+}
+
+/// Build a minimal standalone TIFF from DNG IFD1 thumbnail parameters.
+///
+/// Reads the image data from the source file and repackages it with a new
+/// TIFF header and IFD, producing a valid standalone TIFF file.
+fn build_thumbnail_tiff<R: FileReader>(
+    reader: &R,
+    byte_order: ByteOrder,
+    width: Option<u32>,
+    height: Option<u32>,
+    bits_per_sample: Option<&[u8]>,
+    compression: Option<u16>,
+    photometric: Option<u16>,
+    strip_offsets: Option<u32>,
+    samples_per_pixel: Option<u16>,
+    rows_per_strip: Option<u32>,
+    strip_byte_counts: Option<u32>,
+    planar_config: Option<u16>,
+) -> Option<Vec<u8>> {
+    let width = width?;
+    let height = height?;
+    let photometric = photometric?;
+    let strip_offsets = strip_offsets?;
+    let strip_byte_counts = strip_byte_counts?;
+    let samples_per_pixel = samples_per_pixel.unwrap_or(1);
+    let compression = compression.unwrap_or(1);
+
+    // Read the image data from the source file
+    let image_data = reader.read(strip_offsets as u64, strip_byte_counts as usize).ok()?;
+
+    // Build IFD entries in tag order
+    let mut entries: Vec<(u16, u16, u32, u32)> = Vec::new();
+    entries.push((0x0100, 3, 1, width));      // ImageWidth
+    entries.push((0x0101, 3, 1, height));     // ImageLength
+    entries.push((0x0103, 3, 1, compression as u32)); // Compression
+    entries.push((0x0106, 3, 1, photometric as u32)); // PhotometricInterpretation
+    entries.push((0x0115, 3, 1, samples_per_pixel as u32)); // SamplesPerPixel
+
+    if let Some(rows) = rows_per_strip {
+        entries.push((0x0116, 4, 1, rows));   // RowsPerStrip
+    }
+    if let Some(config) = planar_config {
+        entries.push((0x011C, 3, 1, config as u32)); // PlanarConfiguration
+    }
+
+    // BitsPerSample: inline for 1 sample, offset for multiple
+    let mut extra_data = Vec::new();
+    if samples_per_pixel == 1 {
+        let bps = bits_per_sample.and_then(|b| read_tiff_u16(b, byte_order)).unwrap_or(8);
+        entries.push((0x0102, 3, 1, bps as u32));
+    } else {
+        let bps_values: Vec<u16> = bits_per_sample
+            .unwrap_or(&[])
+            .chunks_exact(2)
+            .filter_map(|chunk| read_tiff_u16(chunk, byte_order))
+            .take(samples_per_pixel as usize)
+            .collect();
+        if bps_values.len() == samples_per_pixel as usize {
+            for v in &bps_values {
+                tiff_write_u16(&mut extra_data, *v, byte_order);
+            }
+            entries.push((0x0102, 3, samples_per_pixel as u32, 0)); // offset patched later
+        } else {
+            entries.push((0x0102, 3, 1, 8)); // fallback
+        }
+    }
+
+    entries.sort_by_key(|e| e.0);
+
+    // Calculate final IFD size including StripOffsets and StripByteCounts
+    let final_entry_count = entries.len() + 2;
+    let ifd_size = 2 + final_entry_count * 12 + 4;
+    let data_start = 8 + ifd_size as u32;
+
+    // Patch BitsPerSample offset if needed
+    if let Some(idx) = entries.iter().position(|e| e.0 == 0x0102 && e.3 == 0) {
+        entries[idx].3 = data_start as u32;
+    }
+
+    let image_data_offset = data_start + extra_data.len() as u32;
+    entries.push((0x0111, 4, 1, image_data_offset)); // StripOffsets
+    entries.push((0x0117, 4, 1, strip_byte_counts)); // StripByteCounts
+    entries.sort_by_key(|e| e.0);
+
+    let mut tiff = Vec::new();
+    match byte_order {
+        ByteOrder::LittleEndian => tiff.extend_from_slice(b"II\x2a\x00"),
+        ByteOrder::BigEndian => tiff.extend_from_slice(b"MM\x00\x2a"),
+    }
+    tiff_write_u32(&mut tiff, 8, byte_order); // IFD offset
+    tiff_write_u16(&mut tiff, entries.len() as u16, byte_order);
+    for (tag, typ, count, value) in &entries {
+        tiff_write_u16(&mut tiff, *tag, byte_order);
+        tiff_write_u16(&mut tiff, *typ, byte_order);
+        tiff_write_u32(&mut tiff, *count, byte_order);
+        tiff_write_u32(&mut tiff, *value, byte_order);
+    }
+    tiff_write_u32(&mut tiff, 0, byte_order); // next IFD
+    tiff.extend_from_slice(&extra_data);
+    tiff.extend_from_slice(&image_data);
+
+    Some(tiff)
 }
 
 /// Format EXIF values whose raw TIFF representation differs from ExifTool's
@@ -1127,6 +1309,22 @@ mod dng_integer_array_tests {
         assert_eq!(
             format_dng_display_value(0xC61F, &rational_bytes, 5, 2, ByteOrder::LittleEndian),
             Some("10 5".to_string())
+        );
+    }
+
+    #[test]
+    fn formats_dng_reference_black_white() {
+        let rational_bytes: Vec<u8> = [
+            0, 0, 0, 0, 1, 0, 0, 0,   // 0/1
+            255, 0, 0, 0, 1, 0, 0, 0,  // 255/1
+            128, 0, 0, 0, 1, 0, 0, 0,  // 128/1
+            255, 0, 0, 0, 1, 0, 0, 0,  // 255/1
+            128, 0, 0, 0, 1, 0, 0, 0,  // 128/1
+            255, 0, 0, 0, 1, 0, 0, 0,  // 255/1
+        ].to_vec();
+        assert_eq!(
+            format_dng_display_value(0x0214, &rational_bytes, 5, 6, ByteOrder::LittleEndian),
+            Some("0 255 128 255 128 255".to_string())
         );
     }
 }
