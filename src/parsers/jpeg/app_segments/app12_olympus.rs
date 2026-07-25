@@ -66,6 +66,10 @@ const KNOWN_TAGS: &[&str] = &[
     "DriveMode",
     "ContTake",
     "FocalLength",
+    "WB2",
+    "WB3",
+    "WB4",
+    "WB5",
     "DigitalZoom",
     "Manufacturer",
     "Model",
@@ -257,8 +261,16 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             // ExifTool exposes it in the APP12 group as CameraType. This
             // parser handles identifier-less Picture Info records (including
             // Agfa SR84 data), so the canonical tag must be emitted here
-            // rather than only by the AGFA-identified parser.
-            if tag_name == "CameraType" {
+            // rather than only by the AGFA-identified parser. If both Type
+            // and a separate CameraType field are present, preserve the Type
+            // value for APP12:CameraType because that is what ExifTool reports
+            // for legacy records such as ExifTool.jpg.
+            if key.eq_ignore_ascii_case("Type") {
+                metadata.insert(
+                    "APP12:CameraType".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            } else if tag_name == "CameraType" && metadata.get("APP12:CameraType").is_none() {
                 metadata.insert(
                     "APP12:CameraType".to_string(),
                     TagValue::String(value.clone()),
@@ -331,6 +343,22 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             // such as "Off", while retaining the Olympus compatibility tag.
             if key.eq_ignore_ascii_case("Flash") {
                 metadata.insert("APP12:Flash".to_string(), TagValue::String(value.clone()));
+            }
+
+            // ExifTool exposes these Picture Info WB fields verbatim in the
+            // APP12 group. Preserve comma-delimited values like "188,4"
+            // exactly as displayed by exiftool text output.
+            if matches!(key.as_str(), "WB2" | "WB3" | "WB4" | "WB5") {
+                metadata.insert(
+                    format!("APP12:{}", key),
+                    TagValue::String(value.clone()),
+                );
+            }
+
+            // Picture Info Zoom is already stored in display form (for
+            // example, "2.1"), so expose it verbatim in the APP12 group.
+            if key.eq_ignore_ascii_case("Zoom") {
+                metadata.insert("APP12:Zoom".to_string(), TagValue::String(value.clone()));
             }
 
             // The source field in JPEG Picture Info records is normally named
@@ -798,6 +826,16 @@ mod camera_type_tests {
     }
 
     #[test]
+    fn test_legacy_picture_info_type_wins_for_camera_type() {
+        let metadata =
+            parse_app12_olympus(b"Type=SR84\r\nCameraType=DCHT\r\nID=AGFA DIGITAL CAMERA\r\n")
+                .expect("legacy Picture Info should parse");
+
+        assert_eq!(metadata.get_string("APP12:CameraType"), Some("SR84"));
+    }
+
+    #[test]
+    #[test]
     fn test_picture_info_fcs3_app12_tag() {
         let metadata =
             parse_app12_olympus(b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nFCS3=2200\r\n")
@@ -909,6 +947,28 @@ mod camera_type_tests {
         assert_eq!(metadata.get_integer("APP12:LightS"), Some(1));
     }
 
+    #[test]
+    fn test_picture_info_zoom_app12_tag() {
+        let metadata = parse_app12_olympus(b"[picture info]\r\nZoom=2.1\r\n")
+            .expect("Picture Info should parse");
+
+        assert_eq!(metadata.get_string("APP12:Zoom"), Some("2.1"));
+    }
+
+    #[test]
+    fn test_picture_info_wb2_through_wb5_app12_tags() {
+        let metadata = parse_app12_olympus(
+            b"OLYMPUS OPTICAL CO.,LTD.\0[diag info]\r\nWB2=30\r\nWB3=188,4\r\nWB4=380,5\r\nWB5=0\r\n",
+        )
+        .expect("Olympus Picture Info should parse");
+
+        assert_eq!(metadata.get_string("APP12:WB2"), Some("30"));
+        assert_eq!(metadata.get_string("APP12:WB3"), Some("188,4"));
+        assert_eq!(metadata.get_string("APP12:WB4"), Some("380,5"));
+        assert_eq!(metadata.get_string("APP12:WB5"), Some("0"));
+    }
+
+    #[test]
     #[test]
     fn test_olympus_mode3_through_mode6_app12_tags() {
         // MODE1/MODE2 were already exposed under the APP12 group; MODE3..MODE6
