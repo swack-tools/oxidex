@@ -339,10 +339,21 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             }
 
             // Flash is part of ExifTool's JPEG Picture Info table and belongs
-            // to the APP12 group. Preserve its display-ready textual value,
-            // such as "Off", while retaining the Olympus compatibility tag.
+            // to the APP12 group. ExifTool maps numeric flash values with a
+            // PrintConv (0->Off, 1->On, etc.). Preserve the textual value
+            // for non-numeric strings.
             if key.eq_ignore_ascii_case("Flash") {
-                metadata.insert("APP12:Flash".to_string(), TagValue::String(value.clone()));
+                let flash_str = match value.parse::<i64>() {
+                    Ok(0) => "Off",
+                    Ok(1) => "On",
+                    Ok(2) => "Auto",
+                    Ok(3) => "Auto, Fired",
+                    _ => value.as_str(),
+                };
+                metadata.insert(
+                    "APP12:Flash".to_string(),
+                    TagValue::String(flash_str.to_string()),
+                );
             }
 
             // ExifTool exposes these Picture Info WB fields verbatim in the
@@ -355,10 +366,56 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 );
             }
 
-            // Picture Info Zoom is already stored in display form (for
-            // example, "2.1"), so expose it verbatim in the APP12 group.
+            // Picture Info Zoom is exposed in the APP12 group. Legacy
+            // formats store it as a hex rational (e.g. "0x21/0x10").
+            // ExifTool evaluates the rational, rounds to one decimal
+            // place, and displays it; plain numeric values are stored
+            // verbatim.
             if key.eq_ignore_ascii_case("Zoom") {
-                metadata.insert("APP12:Zoom".to_string(), TagValue::String(value.clone()));
+                let zoom_str = if value.contains('/') {
+                    let parts: Vec<&str> = value.split('/').collect();
+                    if parts.len() == 2 {
+                        let num = if parts[0].len() > 2
+                            && parts[0][..2].eq_ignore_ascii_case("0x")
+                        {
+                            i64::from_str_radix(&parts[0][2..], 16).ok()
+                        } else {
+                            parts[0].trim().parse::<i64>().ok()
+                        };
+                        let den = if parts[1].len() > 2
+                            && parts[1][..2].eq_ignore_ascii_case("0x")
+                        {
+                            i64::from_str_radix(&parts[1][2..], 16).ok()
+                        } else {
+                            parts[1].trim().parse::<i64>().ok()
+                        };
+                        match (num, den) {
+                            (Some(n), Some(d)) if d != 0 => {
+                                format!("{:.1}", n as f64 / d as f64)
+                            }
+                            _ => value.clone(),
+                        }
+                    } else {
+                        value.clone()
+                    }
+                } else {
+                    value.clone()
+                };
+                metadata.insert("APP12:Zoom".to_string(), TagValue::String(zoom_str));
+            }
+
+            // ExifTool exposes the Olympus STB1..STB6 diagnostic fields
+            // in the APP12 group using their original names. Values are
+            // small integers (typically 0).
+            if matches!(
+                key.as_str(),
+                "STB1" | "STB2" | "STB3" | "STB4" | "STB5" | "STB6"
+            ) {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert(format!("APP12:{}", key), app12_value);
             }
 
             // The source field in JPEG Picture Info records is normally named
