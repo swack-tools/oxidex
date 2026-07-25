@@ -754,7 +754,9 @@ fn print_help() {
         "        --backup                Create backup copy before modifying file (.bak extension)"
     );
     println!("        --readonly              Enable read-only mode to prevent file modifications");
-    println!("        --detector VALUE        File detection mode: signature (default) or magika (AI-powered)");
+    println!(
+        "        --detector VALUE        File detection mode: signature (default) or magika (AI-powered)"
+    );
     println!("    -e, --exiftool-compat       Format output for ExifTool compatibility");
     println!("        --TagsFromFile VALUE    Copy metadata from source file");
     println!(

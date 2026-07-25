@@ -2,7 +2,7 @@
 //!
 //! Run with: `cargo bench --features magika --bench detection_comparison`
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use oxidex::core::operations::read_metadata_with_detector;
 use oxidex::parsers::DetectorMode;
 use std::path::Path;
