@@ -881,6 +881,77 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_olympus_app12_wb2() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nWB2=30\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:WB2"), Some(30));
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_wb3() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nWB3=188,4\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:WB3"), Some("188,4"));
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_wb5() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nWB5=0\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:WB5"), Some(0));
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_flash_off_numeric() {
+        let data = b"[picture info]\r\nFlash=0\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:Flash"),
+            Some("Off"),
+            "Flash=0 should be PrintConv'd to Off"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_flash_on_numeric() {
+        let data = b"[picture info]\r\nFlash=1\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:Flash"),
+            Some("On"),
+            "Flash=1 should be PrintConv'd to On"
+        );
+    }
+
+    #[test]
+    fn test_parse_picture_info_image_size_from_resolution() {
+        // When both Resolution and ImageSize keys are present, ExifTool
+        // derives ImageSize from Resolution.
+        let data = b"[picture info]\r\nResolution=1280x960\r\nImageSize=1280-1024\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:Resolution"), Some("1280x960"));
+        assert_eq!(metadata.get_string("APP12:ImageSize"), Some("1280x960"));
+    }
+
+    #[test]
     fn test_parse_olympus_app12_imrb() {
         // Diagnostic data from OlympusD620L.jpg.
         let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMrb=32721\r\n";
