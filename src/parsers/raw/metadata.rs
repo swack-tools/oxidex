@@ -39,9 +39,9 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
         // EXIF CFAPattern name is registered under tag 0xA302. ExifTool
         // assigns the Panasonic tag to its EXIF group.
         lookup_tag_name(0xA302, "EXIF")
-    } else if format == RawFormat::AdobeDNG && tag_id == 0x0111 {
+    } else if format == RawFormat::AdobeDNG && tag_id == 0x0111 && ifd_name == "IFD0" {
         "EXIF:PreviewImageStart".to_string()
-    } else if format == RawFormat::AdobeDNG && tag_id == 0x0117 {
+    } else if format == RawFormat::AdobeDNG && tag_id == 0x0117 && ifd_name == "IFD0" {
         "EXIF:PreviewImageLength".to_string()
     } else if format == RawFormat::AdobeDNG
         && matches!(
@@ -526,6 +526,22 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+                            // DNG: PreviewImageStart/Length are only valid in IFD0
+                            if format == RawFormat::AdobeDNG
+                                && (tag_id == 0x0111 || tag_id == 0x0117)
+                            {
+                                continue;
+                            }
+
+                            // DNG: BitsPerSample from the primary SubIFD (index 0)
+                            // should be reported as EXIF:BitsPerSample; secondary
+                            // SubIFDs must not overwrite it.
+                            if format == RawFormat::AdobeDNG && tag_id == 0x0102 {
+                                if sub_index > 0 {
+                                    continue;
+                                }
+                            }
+
                             // DNG-specific: SubIFD-resident CFA tags that
                             // ExifTool reports under the EXIF group.
                             if format == RawFormat::AdobeDNG
@@ -580,7 +596,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 continue;
                             }
 
-                            let tag_name = lookup_raw_tag_name(tag_id, sub_ifd_name, format);
+                            let tag_name = if format == RawFormat::AdobeDNG && tag_id == 0x0102 {
+                                // Primary SubIFD BitsPerSample goes under EXIF group
+                                "EXIF:BitsPerSample".to_string()
+                            } else {
+                                lookup_raw_tag_name(tag_id, sub_ifd_name, format)
+                            };
                             let bytes = raw_bytes.as_ref();
                             let tag_value = if format == RawFormat::AdobeDNG {
                                 if let Some(value) = format_exif_display_value(
