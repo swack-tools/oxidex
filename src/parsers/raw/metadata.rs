@@ -1723,10 +1723,21 @@ fn extract_cmt2_exif_tags(tiff: &[u8], group: &str, metadata: &mut MetadataMap) 
 
     // Only emit tags that ExifTool reports for a standard EXIF block.
     let wanted: &[u16] = &[
+        0x829A, // ExposureTime
+        0x829D, // FNumber
+        0x8822, // ExposureProgram
+        0x8827, // ISO
         0x8830, // SensitivityType
         0x8832, // RecommendedExposureIndex
+        0x9003, // DateTimeOriginal
+        0x9004, // CreateDate
         0x9010, // OffsetTime
+        0x9101, // ComponentsConfiguration
+        0x9209, // Flash
         0x9202, // ApertureValue
+        0xA001, // ColorSpace
+        0xA002, // ExifImageWidth
+        0xA003, // ExifImageHeight
         0xA430, // OwnerName
         0xA432, // LensInfo
         0xA434, // LensModel
