@@ -480,7 +480,6 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
                 "QuickTime:MediaDataOffset".to_string(),
                 TagValue::Integer((offset + atom.header_size as u64) as i64),
             );
-            break;
         }
         // Calculate atom size (header + data length), accounting for extended headers
         offset += atom.header_size as u64 + atom.data.len() as u64;
