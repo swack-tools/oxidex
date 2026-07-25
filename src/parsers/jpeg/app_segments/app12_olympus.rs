@@ -40,6 +40,7 @@ const KNOWN_TAGS: &[&str] = &[
     "ID",
     "Type",
     "CameraType",
+    "Protect",
     "Version",
     "SerialNumber",
     "InternalSerialNumber",
@@ -62,6 +63,7 @@ const KNOWN_TAGS: &[&str] = &[
     "Contrast",
     "Saturation",
     "ISOSetting",
+    "REV",
     "ColorMode",
     "DriveMode",
     "ContTake",
@@ -87,6 +89,8 @@ const KNOWN_TAGS: &[&str] = &[
     "MTR2",
     "MTRX1",
     "FCS1",
+    "STB1",
+    "STB2",
     "FCS2",
     "FCS3",
     "FCS4",
@@ -101,6 +105,11 @@ const KNOWN_TAGS: &[&str] = &[
     "IMbg",
     "IMgb",
     "IMgr",
+    "WB2",
+    "WB3",
+    "WB4",
+    "WB5",
+    "WB6",
     "IMrg",
     "IMbr",
     "IMgg",
@@ -669,6 +678,35 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:ContTake".to_string(), app12_value);
             }
 
+            // ExifTool exposes Protect in the APP12 group for legacy
+            // Picture Info records.
+            if key.eq_ignore_ascii_case("Protect") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:Protect".to_string(), app12_value);
+            }
+
+            // REV is a text field (e.g., "DCPT") exposed by ExifTool
+            // in the APP12 Picture Info group.
+            if key.eq_ignore_ascii_case("REV") {
+                metadata.insert(
+                    "APP12:REV".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
+            // ExifTool exposes STB1 in the APP12 group using its original
+            // name.  OlympusD620L.jpg carries STB1=0.
+            if key.eq_ignore_ascii_case("STB1") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:STB1".to_string(), app12_value);
+            }
+
             // MTR1 is an Olympus Picture Info diagnostic field. ExifTool
             // exposes it in the JPEG APP12 group using its original name.
             // Keep unexpected non-numeric values rather than dropping a
@@ -681,6 +719,46 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
 
                 metadata.insert("APP12:MTR1".to_string(), app12_value);
             }
+
+            // ExifTool exposes WB2-WB6 in the APP12 group, preserving the
+            // exact textual representation (some values contain commas, e.g.
+            // "188,4" for WB3 in OlympusD620L.jpg).
+            for wb_tag in ["WB2", "WB3", "WB4", "WB5", "WB6"] {
+                if key.eq_ignore_ascii_case(wb_tag) {
+                    metadata.insert(
+                        format!("APP12:{}", wb_tag),
+                        TagValue::String(value.clone()),
+                    );
+                }
+            }
+
+            // ExifTool exposes STB2 in the APP12 group using its original
+            // name.  Retain unexpected non-numeric values for robustness.
+            if key.eq_ignore_ascii_case("STB2") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:STB2".to_string(), app12_value);
+            }
+
+            // The generic Olympus fallback (with Olympus: prefix) for every
+            // parsed field.  Keep this after all APP12-specific handlers so
+            // that callers can still obtain the Olympus-namespaced value.
+            // (No code change – this block already exists.)
+
+            // ExifTool exposes the Olympus diagnostic CAM1 field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("CAM1") {
+                let app12_value = match value.parse::<i64>() {
+                    Ok(number) => TagValue::Integer(number),
+                    Err(_) => TagValue::String(value.clone()),
+                };
+                metadata.insert("APP12:CAM1".to_string(), app12_value);
+            }
+
+            // (The existing "Olympus:" insert follows immediately after
+            //  this block, preserving backward compatibility.)
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
 
