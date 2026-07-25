@@ -866,9 +866,12 @@ fn format_exif_display_value(
         },
         // OffsetTime: ASCII string.
         0x9010 if field_type == 2 && value_count >= 1 => read_ascii(),
-        // ApertureValue: RATIONAL[1], printed as the stored APEX value.
+        // ApertureValue: RATIONAL[1], stored as APEX but displayed as an
+        // F number per ExifTool's ValueConv '2 ** ($val / 2)' and
+        // PrintConv 'sprintf("%.1f",$val)'.
         0x9202 if field_type == 5 && value_count >= 1 => {
-            Some(format_trimmed_decimal(read_tiff_rational(bytes, byte_order)?))
+            let apex = read_tiff_rational(bytes, byte_order)?;
+            Some(format!("{:.1}", 2.0f64.powf(apex / 2.0)))
         }
         // LensInfo / LensSpecification: RATIONAL[4].
         0xA432 if field_type == 5 && value_count >= 4 => {
@@ -1040,9 +1043,11 @@ mod exif_display_value_tests {
             Some("15-45mm f/0")
         );
         let aperture_value = [7u32.to_le_bytes(), 2u32.to_le_bytes()].concat();
+        // APEX value 3.5 (7/2) converts to F-number 2^(3.5/2) ≈ 3.36,
+        // which ExifTool formats as "3.4" via sprintf("%.1f", ...).
         assert_eq!(
             format_exif_display_value(0x9202, &aperture_value, 5, 1, ByteOrder::LittleEndian).as_deref(),
-            Some("3.5")
+            Some("3.4")
         );
     }
 }
