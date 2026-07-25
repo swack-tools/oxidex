@@ -307,6 +307,7 @@ const CANON_FLASH_INFO: u16 = 0x0003;
 const CANON_AF_INFO: u16 = 0x0012;
 const CANON_SERIAL_NUMBER_FORMAT: u16 = 0x0015;
 const CANON_AF_INFO2: u16 = 0x0026;
+const CANON_ASPECT_INFO: u16 = 0x009A;
 const CANON_FILE_INFO: u16 = 0x0093;
 const CANON_LENS_MODEL: u16 = 0x0095;
 const CANON_INTERNAL_SERIAL_NUMBER: u16 = 0x0096;
@@ -2073,8 +2074,8 @@ fn parse_canon_makernote_impl(
                 }
             }
 
-            // AFInfo array (Phase 3) - autofocus point information
-            CANON_AF_INFO | CANON_AF_INFO2 => {
+            // AFInfo (tag 0x0012) - autofocus point information for older cameras
+            CANON_AF_INFO => {
                 // AFInfo is a SHORT array
                 if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
                     // Number of AF points
@@ -2096,6 +2097,14 @@ fn parse_canon_makernote_impl(
                         tags.insert("Canon:AFImageHeight".to_string(), height.to_string());
                     }
 
+                    // AFAreaWidth and AFAreaHeight (indices 6 and 7 per ExifTool Canon::AFInfo)
+                    if let Some(&area_width) = array.get(6) {
+                        tags.insert("Canon:AFAreaWidth".to_string(), area_width.to_string());
+                    }
+                    if let Some(&area_height) = array.get(7) {
+                        tags.insert("Canon:AFAreaHeight".to_string(), area_height.to_string());
+                    }
+
                     // AF points in focus (bitmask)
                     if let Some(&points_in_focus) = array.get(AF_INFO_POINTS_IN_FOCUS) {
                         tags.insert(
@@ -2109,6 +2118,96 @@ fn parse_canon_makernote_impl(
                         tags.insert(
                             "Canon:AFPointsSelected".to_string(),
                             points_selected.to_string(),
+                        );
+                    }
+                }
+            }
+
+            // AFInfo2 (tag 0x0026) - autofocus point information for newer cameras
+            CANON_AF_INFO2 => {
+                // AFInfo2 is a SHORT array with a different layout than AFInfo
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                    // Number of AF points
+                    if let Some(&num_points) = array.get(AF_INFO_NUM_AF_POINTS)
+                        && num_points > 0
+                    {
+                        tags.insert("Canon:NumAFPoints".to_string(), num_points.to_string());
+                    }
+
+                    // AF image dimensions
+                    if let Some(&width) = array.get(AF_INFO_IMAGE_WIDTH)
+                        && width > 0
+                    {
+                        tags.insert("Canon:AFImageWidth".to_string(), width.to_string());
+                    }
+                    if let Some(&height) = array.get(AF_INFO_IMAGE_HEIGHT)
+                        && height > 0
+                    {
+                        tags.insert("Canon:AFImageHeight".to_string(), height.to_string());
+                    }
+
+                    // AFAreaWidth and AFAreaHeight (indices 4 and 5 per ExifTool Canon::AFInfo2)
+                    if let Some(&area_width) = array.get(AF_INFO_AREA_WIDTH) {
+                        tags.insert("Canon:AFAreaWidth".to_string(), area_width.to_string());
+                    }
+                    if let Some(&area_height) = array.get(AF_INFO_AREA_HEIGHT) {
+                        tags.insert("Canon:AFAreaHeight".to_string(), area_height.to_string());
+                    }
+
+                    // AF points in focus (bitmask)
+                    if let Some(&points_in_focus) = array.get(AF_INFO_POINTS_IN_FOCUS) {
+                        tags.insert(
+                            "Canon:AFPointsInFocus".to_string(),
+                            points_in_focus.to_string(),
+                        );
+                    }
+
+                    // AF points selected (bitmask)
+                    if let Some(&points_selected) = array.get(AF_INFO_POINTS_SELECTED) {
+                        tags.insert(
+                            "Canon:AFPointsSelected".to_string(),
+                            points_selected.to_string(),
+                        );
+                    }
+                }
+            }
+
+            // AspectInfo (tag 0x009A) - aspect ratio setting
+            CANON_ASPECT_INFO => {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                    if let Some(&value) = array.first() {
+                        let aspect_str = match value {
+                            0 => "3:2",
+                            1 => "1:1",
+                            2 => "4:3",
+                            7 => "16:9",
+                            8 => "4:5",
+                            12 => "3:2 (APS-H crop)",
+                            13 => "3:2 (APS-C crop)",
+                            258 => "4:3 crop",
+                            _ => "Unknown",
+                        };
+                        tags.insert("Canon:AspectRatio".to_string(), aspect_str.to_string());
+                    }
+                }
+            }
+
+            // CameraInfo (tag 0x000D) - camera-specific settings array
+            CANON_CAMERA_INFO => {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                    // AutoLightingOptimizer (index 0xBF = 191) for 5DmkII-like models
+                    if array.len() > 191 {
+                        let optimizer = array[191];
+                        let optimizer_str = match optimizer {
+                            0 => "Standard",
+                            1 => "Low",
+                            2 => "Strong",
+                            3 => "Off",
+                            _ => "Unknown",
+                        };
+                        tags.insert(
+                            "Canon:AutoLightingOptimizer".to_string(),
+                            optimizer_str.to_string(),
                         );
                     }
                 }
