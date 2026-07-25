@@ -51,6 +51,25 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
         )
     {
         lookup_tag_name(tag_id, "EXIF")
+    } else if format == RawFormat::CanonCR2 {
+        // CR2 uses standard TIFF tag IDs with CR2-specific semantics in IFD0/IFD1.
+        // ExifTool renames these based on the TIFF type; mirror that here.
+        match (ifd_name, tag_id) {
+            // IFD0: preview image (normally StripOffsets / StripByteCounts)
+            ("IFD0", 0x0111) => "EXIF:PreviewImageStart".to_string(),
+            ("IFD0", 0x0117) => "EXIF:PreviewImageLength".to_string(),
+            // IFD1: thumbnail image (normally JpegIFOffset / JpegIFByteCount)
+            ("IFD1", 0x0201) => "EXIF:ThumbnailOffset".to_string(),
+            ("IFD1", 0x0202) => "EXIF:ThumbnailLength".to_string(),
+            // CanonRaw tags in IFD0 — ExifTool places them in the EXIF group.
+            (_, 0x080a) => lookup_tag_name(tag_id, "EXIF"),
+            (_, 0x080b) => lookup_tag_name(tag_id, "EXIF"),
+            (_, 0x080c) => lookup_tag_name(tag_id, "EXIF"),
+            (_, 0x080d) => lookup_tag_name(tag_id, "EXIF"),
+            // 0x0805 is the CanonRaw directory itself; handled separately.
+            (_, 0x0805) => "CanonRaw:CanonRaw".to_string(),
+            _ => lookup_tag_name(tag_id, ifd_name),
+        }
     } else {
         lookup_tag_name(tag_id, ifd_name)
     }
@@ -310,6 +329,15 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         camera_make = Some(make_str.trim_end_matches('\0').trim().to_string());
                     }
 
+                    // CR2: tag 0x0805 is the CanonRaw directory — parse it inline.
+                    if format == RawFormat::CanonCR2 && *tag_id == 0x0805 {
+                        parse_canon_raw_directory(bytes, byte_order, &mut metadata);
+                        // Don't add the raw directory bytes as a tag.
+                        // (The lookup_raw_tag_name override above still produces a
+                        // name, but we skip insertion here.)
+                        continue;
+                    }
+
                     // Convert tag to metadata
                     // Panasonic RW2 stores BitsPerSample in its proprietary
                     // IFD0 tag 0x000A and Compression in tag 0x000B instead
@@ -368,6 +396,21 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 byte_order,
                             )
                         })
+                    } else if format == RawFormat::CanonCR2
+                        && ifd_index == 0
+                        && matches!(*tag_id, 0x080a | 0x080b | 0x080c | 0x080d)
+                    {
+                        // CanonRaw int16u arrays: join all values with spaces.
+                        format_int16u_array(bytes, *field_type, *value_count, byte_order)
+                            .map(TagValue::new_string)
+                            .unwrap_or_else(|| {
+                                raw_bytes_to_simple_tag_value(
+                                    bytes,
+                                    *field_type,
+                                    *value_count,
+                                    byte_order,
+                                )
+                            })
                     } else if let Some(value) = format_exif_display_value(
                         *tag_id,
                         bytes,
@@ -586,7 +629,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
             extract_dng_tags(&mut metadata);
         }
         RawFormat::CanonCR2 => {
-            extract_cr2_tags(&mut metadata);
+            extract_cr2_tags(&mut metadata, data);
         }
         RawFormat::NikonNEF | RawFormat::NikonNRW => {
             extract_nef_tags(&mut metadata);
@@ -820,6 +863,18 @@ fn format_exif_display_value(
         )
     };
     match tag_id {
+        // BitsPerSample: SHORT[n] — join all values with spaces.
+        0x0102 if field_type == 3 && value_count >= 1 => {
+            let count = usize::try_from(value_count).ok()?;
+            let byte_len = count.checked_mul(2)?;
+            let values = bytes.get(..byte_len)?;
+            let formatted = values
+                .chunks_exact(2)
+                .map(|chunk| read_tiff_u16(chunk, byte_order).map(|v| v.to_string()))
+                .collect::<Option<Vec<_>>>()?
+                .join(" ");
+            Some(formatted)
+        }
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -953,6 +1008,79 @@ fn format_panasonic_raw_compression(
     match read_tiff_u16(bytes, byte_order)? {
         34316 => Some("Panasonic RAW 1".to_string()),
         _ => None,
+    }
+}
+
+/// Format a TIFF int16u array as space-separated decimal values.
+/// Used for CanonRaw tags like RawImageSegmentation (0x080a).
+fn format_int16u_array(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    if field_type != 3 || value_count == 0 {
+        return None;
+    }
+    let count = usize::try_from(value_count).ok()?;
+    let byte_len = count.checked_mul(2)?;
+    let values = bytes.get(..byte_len)?;
+    let formatted = values
+        .chunks_exact(2)
+        .map(|chunk| read_tiff_u16(chunk, byte_order).map(|v| v.to_string()))
+        .collect::<Option<Vec<_>>>()?
+        .join(" ");
+    Some(formatted)
+}
+
+/// Parse the CanonRaw directory stored in the bytes of IFD0 tag 0x0805.
+///
+/// The directory consists of repeated entries: [u16 tag][u16 length][value bytes].
+/// This function extracts CR2CFAPattern (tag 0x0000) and inserts it into metadata.
+fn parse_canon_raw_directory(
+    data: &[u8],
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let mut pos = 0usize;
+    while pos + 4 <= data.len() {
+        let tag = read_tiff_u16(&data[pos..pos+2], byte_order).unwrap_or(0);
+        let len = read_tiff_u16(&data[pos+2..pos+4], byte_order).unwrap_or(0) as usize;
+        pos += 4;
+        if len == 0 || pos + len > data.len() {
+            break;
+        }
+        let value = &data[pos..pos + len];
+        pos += len;
+
+        match tag {
+            0x0000 if len >= 8 => {
+                // CR2CFAPattern: int16u[4] — format as "[Red,Green][Green,Blue]".
+                let vals: Vec<u16> = (0..4)
+                    .filter_map(|i| read_tiff_u16(&value[i*2..i*2+2], byte_order))
+                    .collect();
+                if vals.len() == 4 {
+                    let color_name = |v: u16| match v {
+                        0 => "Red",
+                        1 => "Green",
+                        2 => "Blue",
+                        _ => "?",
+                    };
+                    let formatted = format!(
+                        "[{},{}][{},{}]",
+                        color_name(vals[0]),
+                        color_name(vals[1]),
+                        color_name(vals[2]),
+                        color_name(vals[3]),
+                    );
+                    metadata.insert(
+                        "EXIF:CR2CFAPattern".to_string(),
+                        TagValue::new_string(formatted),
+                    );
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1396,7 +1524,7 @@ fn extract_dng_tags(metadata: &mut MetadataMap) {
 /// # Arguments
 ///
 /// * `metadata` - Mutable reference to MetadataMap to enrich
-fn extract_cr2_tags(metadata: &mut MetadataMap) {
+fn extract_cr2_tags(metadata: &mut MetadataMap, data: &[u8]) {
     // CR2 files have multiple image layers:
     // - IFD0: Typically a small thumbnail
     // - IFD1: Full-size JPEG preview
@@ -1456,6 +1584,58 @@ fn extract_cr2_tags(metadata: &mut MetadataMap) {
             "CR2:HasJPEGPreview".to_string(),
             TagValue::new_string("true".to_string()),
         );
+    }
+
+    // Extract PreviewImage binary data from offset/length pair.
+    if let (Some(start_val), Some(length_val)) = (
+        metadata.get("EXIF:PreviewImageStart"),
+        metadata.get("EXIF:PreviewImageLength"),
+    ) {
+        let start = match start_val {
+            TagValue::Integer(i) => *i as usize,
+            TagValue::String(s) => s.parse::<usize>().unwrap_or(0),
+            _ => 0,
+        };
+        let length = match length_val {
+            TagValue::Integer(i) => *i as usize,
+            TagValue::String(s) => s.parse::<usize>().unwrap_or(0),
+            _ => 0,
+        };
+        if let Some(end) = start.checked_add(length) {
+            if end <= data.len() {
+                let image_data = data[start..end].to_vec();
+                metadata.insert(
+                    "EXIF:PreviewImage".to_string(),
+                    TagValue::Binary(image_data),
+                );
+            }
+        }
+    }
+
+    // Extract ThumbnailImage binary data from offset/length pair.
+    if let (Some(start_val), Some(length_val)) = (
+        metadata.get("EXIF:ThumbnailOffset"),
+        metadata.get("EXIF:ThumbnailLength"),
+    ) {
+        let start = match start_val {
+            TagValue::Integer(i) => *i as usize,
+            TagValue::String(s) => s.parse::<usize>().unwrap_or(0),
+            _ => 0,
+        };
+        let length = match length_val {
+            TagValue::Integer(i) => *i as usize,
+            TagValue::String(s) => s.parse::<usize>().unwrap_or(0),
+            _ => 0,
+        };
+        if let Some(end) = start.checked_add(length) {
+            if end <= data.len() {
+                let image_data = data[start..end].to_vec();
+                metadata.insert(
+                    "EXIF:ThumbnailImage".to_string(),
+                    TagValue::Binary(image_data),
+                );
+            }
+        }
     }
 }
 
