@@ -161,23 +161,23 @@ fn test_pe_with_imports() {
 
     // Verify import metadata
     let imported_dlls = metadata
-        .get_string("PE:ImportedDLLs")
-        .expect("PE:ImportedDLLs not found");
+        .get_string("EXE:ImportedDLLs")
+        .expect("EXE:ImportedDLLs not found");
     assert!(imported_dlls.contains("kernel32.dll"));
     assert!(imported_dlls.contains("user32.dll"));
 
     // Verify import count (3 functions total)
-    assert_eq!(metadata.get_integer("PE:ImportCount").unwrap(), 3);
+    assert_eq!(metadata.get_integer("EXE:ImportCount").unwrap(), 3);
 
     // Verify DLL count
-    assert_eq!(metadata.get_integer("PE:ImportedDLLCount").unwrap(), 2);
+    assert_eq!(metadata.get_integer("EXE:ImportedDLLCount").unwrap(), 2);
 
     // Verify imported functions
-    let imported_functions = metadata.get_string("PE:ImportedFunctions").unwrap();
+    let imported_functions = metadata.get_string("EXE:ImportedFunctions").unwrap();
     assert!(imported_functions.contains("kernel32.dll:VirtualAlloc"));
     assert!(imported_functions.contains("kernel32.dll:CreateFileW"));
     assert!(imported_functions.contains("user32.dll:MessageBoxW"));
 
     // Verify suspicious imports flag (VirtualAlloc is suspicious)
-    assert_eq!(metadata.get_integer("PE:HasSuspiciousImports").unwrap(), 1);
+    assert_eq!(metadata.get_integer("EXE:HasSuspiciousImports").unwrap(), 1);
 }

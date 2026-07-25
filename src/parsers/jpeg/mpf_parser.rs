@@ -278,8 +278,10 @@ fn parse_mp_index_ifd(
     if let Some(attr_ifd_offset) = reader.u32_at(next_ifd_offset_pos)
         && attr_ifd_offset > 0
     {
-        // Parse MP Attribute IFD (IFD 1)
-        parse_mp_attribute_ifd(reader, attr_ifd_offset as usize, metadata)?;
+        // Parse MP Attribute IFD (IFD 1). This is optional/supplementary data;
+        // some cameras (e.g. Fujifilm) write a malformed or absent Attribute IFD,
+        // so a failure here should not invalidate the Index IFD data already parsed.
+        let _ = parse_mp_attribute_ifd(reader, attr_ifd_offset as usize, metadata);
     }
 
     Ok(())

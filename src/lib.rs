@@ -43,6 +43,7 @@ pub mod writers;
 // Supporting Modules
 pub mod error;
 pub mod tag_db;
+pub mod tag_sync;
 
 // Test Support (only compiled for tests)
 #[cfg(test)]

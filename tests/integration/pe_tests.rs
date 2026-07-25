@@ -20,12 +20,12 @@ fn test_parse_real_pe_file() {
     let metadata = parse_pe_metadata(&reader).expect("Failed to parse PE metadata");
 
     // Verify basic metadata is present
-    assert!(metadata.contains_key("PE:DOSSignature"));
-    assert!(metadata.contains_key("PE:MachineType"));
-    assert!(metadata.contains_key("PE:NumberOfSections"));
-    assert!(metadata.contains_key("PE:CompileTime"));
-    assert!(metadata.contains_key("PE:FileType"));
-    assert!(metadata.contains_key("PE:Subsystem"));
+    assert!(metadata.contains_key("EXE:DOSSignature"));
+    assert!(metadata.contains_key("EXE:MachineType"));
+    assert!(metadata.contains_key("EXE:NumberOfSections"));
+    assert!(metadata.contains_key("EXE:CompileTime"));
+    assert!(metadata.contains_key("EXE:FileType"));
+    assert!(metadata.contains_key("EXE:Subsystem"));
 
     // Print all metadata for manual verification
     for (key, value) in metadata.iter() {
@@ -106,14 +106,14 @@ fn test_parse_minimal_pe_structure() {
     let metadata = parse_pe_metadata(&reader).expect("Failed to parse minimal PE");
 
     // Verify metadata
-    assert_eq!(metadata.get_string("PE:MachineType").unwrap(), "Intel 386");
-    assert_eq!(metadata.get_integer("PE:NumberOfSections").unwrap(), 3);
-    assert_eq!(metadata.get_string("PE:FileType").unwrap(), "Executable");
+    assert_eq!(metadata.get_string("EXE:MachineType").unwrap(), "Intel 386");
+    assert_eq!(metadata.get_integer("EXE:NumberOfSections").unwrap(), 3);
+    assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
     assert_eq!(
-        metadata.get_string("PE:Subsystem").unwrap(),
+        metadata.get_string("EXE:Subsystem").unwrap(),
         "Windows Console"
     );
-    assert_eq!(metadata.get_string("PE:ImageFormat").unwrap(), "PE32");
+    assert_eq!(metadata.get_string("EXE:ImageFormat").unwrap(), "PE32");
 }
 
 #[test]
@@ -189,8 +189,8 @@ fn test_pe_header_characteristics_decoded() {
     let metadata = parse_pe_metadata(&reader).expect("Failed to parse minimal PE");
 
     // Should have ImageFileCharacteristics as decoded string
-    assert!(metadata.contains_key("PE:ImageFileCharacteristics"));
-    let chars_str = metadata.get_string("PE:ImageFileCharacteristics").unwrap();
+    assert!(metadata.contains_key("EXE:ImageFileCharacteristics"));
+    let chars_str = metadata.get_string("EXE:ImageFileCharacteristics").unwrap();
     // Should contain flags like "Executable" and "32-bit"
     assert!(chars_str.contains("Executable"));
     assert!(chars_str.contains("32-bit"));
@@ -266,8 +266,8 @@ fn test_pe_type_tag() {
     let metadata = parse_pe_metadata(&reader).expect("Failed to parse minimal PE");
 
     // Should have PEType tag
-    assert!(metadata.contains_key("PE:PEType"));
-    let pe_type_str = metadata.get_string("PE:PEType").unwrap();
+    assert!(metadata.contains_key("EXE:PEType"));
+    let pe_type_str = metadata.get_string("EXE:PEType").unwrap();
     // Should be "PE32" or "PE32+"
     assert!(pe_type_str == "PE32" || pe_type_str == "PE32+");
 }
@@ -413,24 +413,27 @@ fn test_pe_with_exports() {
     let metadata = parse_pe_metadata(&reader).expect("Failed to parse PE with exports");
 
     // Verify export metadata
-    assert!(metadata.contains_key("PE:HasExports"));
-    assert_eq!(metadata.get_integer("PE:HasExports").unwrap(), 1);
+    assert!(metadata.contains_key("EXE:HasExports"));
+    assert_eq!(metadata.get_integer("EXE:HasExports").unwrap(), 1);
 
-    assert_eq!(metadata.get_string("PE:ExportDLLName").unwrap(), "test.dll");
-    assert_eq!(metadata.get_integer("PE:ExportCount").unwrap(), 3);
-    assert_eq!(metadata.get_integer("PE:ExportNameCount").unwrap(), 2);
-    assert_eq!(metadata.get_integer("PE:ExportBase").unwrap(), 1);
     assert_eq!(
-        metadata.get_integer("PE:ExportTimestamp").unwrap(),
+        metadata.get_string("EXE:ExportDLLName").unwrap(),
+        "test.dll"
+    );
+    assert_eq!(metadata.get_integer("EXE:ExportCount").unwrap(), 3);
+    assert_eq!(metadata.get_integer("EXE:ExportNameCount").unwrap(), 2);
+    assert_eq!(metadata.get_integer("EXE:ExportBase").unwrap(), 1);
+    assert_eq!(
+        metadata.get_integer("EXE:ExportTimestamp").unwrap(),
         1609459200
     );
-    assert!(metadata.contains_key("PE:ExportCreateDate"));
+    assert!(metadata.contains_key("EXE:ExportCreateDate"));
 
     // Verify forwarded export count
-    assert_eq!(metadata.get_integer("PE:ForwardedExportCount").unwrap(), 1);
+    assert_eq!(metadata.get_integer("EXE:ForwardedExportCount").unwrap(), 1);
 
     // Verify exported function names
-    let exported_functions = metadata.get_string("PE:ExportedFunctions").unwrap();
+    let exported_functions = metadata.get_string("EXE:ExportedFunctions").unwrap();
     assert!(exported_functions.contains("Function1"));
     assert!(exported_functions.contains("Function2"));
 }

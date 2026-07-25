@@ -10,6 +10,12 @@ node_modules
 .env.local
 .env.*.local
 
+# Driver B model config (holds API keys) -- see config.example.toml
+config.toml
+
+# Driver B parallel-run worker logs (default --log-dir)
+/logs/
+
 # OS files
 .DS_Store
 Thumbs.db
@@ -46,7 +52,14 @@ fuzz/corpus/*/*
 benches/target/
 
 # Claude Code config
-.claude/
+# A directory pattern ending in "/" prunes the directory from traversal
+# entirely, so per-file "!" negations below it never get evaluated -- hence
+# ".claude/*" (matching only direct entries) rather than ".claude/", so the
+# workflows negation below actually takes effect.
+.claude/*
+# ...except saved Workflow scripts, which are checked-in tooling, not local config
+!.claude/workflows/
+!.claude/workflows/**
 
 # Git worktrees
 .worktrees/
@@ -58,9 +71,6 @@ exif_additional.txt
 new_tags.txt
 test_tag_lookup
 test_tag_lookup.rs
-
-# MCP config (if not needed in repo)
-.mcp.json
 
 # Codemachine temporary/draft files
 .codemachine/inputs/*.3.md

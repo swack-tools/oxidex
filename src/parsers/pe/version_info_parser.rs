@@ -88,8 +88,8 @@ pub fn parse_version_info(data: &[u8]) -> Option<(VsFixedFileInfo, HashMap<Strin
 
     // VERSION_INFO can have multiple children (StringFileInfo, VarFileInfo)
     // We need to search for StringFileInfo specifically
-    let strings =
-        find_string_file_info(&data[offset..], w_length as usize - offset).unwrap_or_default();
+    let children_length = (w_length as usize).checked_sub(offset)?;
+    let strings = find_string_file_info(&data[offset..], children_length).unwrap_or_default();
 
     Some((fixed_info, strings))
 }
@@ -161,6 +161,8 @@ fn parse_string_table(data: &[u8]) -> Option<HashMap<String, String>> {
     // Read the language ID string to find actual offset
     let lang_id = read_wide_string(&data[6..])?;
 
+    let language_code = language_code_from_string_table_key(&lang_id);
+    let character_set = character_set_from_string_table_key(&lang_id);
     // Skip header (6 bytes) + language ID string (including null terminator)
     let mut offset = 6 + (lang_id.len() + 1) * 2; // +1 for null terminator
     offset = (offset + 3) & !3;
@@ -179,7 +181,34 @@ fn parse_string_table(data: &[u8]) -> Option<HashMap<String, String>> {
         }
     }
 
+    // A StringTable key consists of a four-digit hexadecimal Windows
+    // language ID followed by a four-digit code-page ID. Version strings are
+    // already emitted through the EXE metadata path, so expose the decoded
+    // language alongside them without hard-coding a group prefix here.
+    if let Some(language_code) = language_code {
+        strings.insert("LanguageCode".to_string(), language_code.to_string());
+    }
+
+    if let Some(character_set) = character_set {
+        strings.insert("CharacterSet".to_string(), character_set.to_string());
+    }
+
     Some(strings)
+}
+
+fn language_code_from_string_table_key(key: &str) -> Option<&'static str> {
+    let language_id = u16::from_str_radix(key.get(..4)?, 16).ok()?;
+    match language_id {
+        0x0409 => Some("English (U.S.)"),
+        _ => None,
+    }
+}
+
+fn character_set_from_string_table_key(key: &str) -> Option<&'static str> {
+    match u16::from_str_radix(key.get(4..8)?, 16).ok()? {
+        0x04b0 => Some("Unicode"),
+        _ => None,
+    }
 }
 
 /// Parse a single String entry (key-value pair)
@@ -255,4 +284,25 @@ fn read_wide_string_length(data: &[u8], byte_length: usize) -> Option<String> {
     }
 
     String::from_utf16(&chars).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_us_english_string_table_language() {
+        assert_eq!(
+            language_code_from_string_table_key("040904B0"),
+            Some("English (U.S.)")
+        );
+        assert_eq!(language_code_from_string_table_key("invalid"), None);
+        assert_eq!(language_code_from_string_table_key("040"), None);
+
+        assert_eq!(
+            character_set_from_string_table_key("040904B0"),
+            Some("Unicode")
+        );
+        assert_eq!(character_set_from_string_table_key("04090000"), None);
+    }
 }

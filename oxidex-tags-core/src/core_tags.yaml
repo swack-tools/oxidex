@@ -1,4 +1,32 @@
 tables:
+  # TIFF/EP DNG tags. These belong to ExifTool's EXIF group even when their
+  # storage location is a RAW SubIFD.
+  - name: Exif::DNG
+    tags:
+      - id: "0xC619"
+        name: "BlackLevelRepeatDim"
+        writable: false
+        description: "Black level repeat dimensions"
+      - id: "0xC61A"
+        name: "BlackLevel"
+        writable: false
+        description: "Black level"
+      - id: "0xC62D"
+        name: "BayerGreenSplit"
+        writable: false
+        description: "Bayer green split"
+      - id: "0xC632"
+        name: "AntiAliasStrength"
+        writable: false
+        description: "Anti-alias strength"
+      - id: "0xC65C"
+        name: "BestQualityScale"
+        writable: false
+        description: "Best quality scale"
+      - id: "0xC68D"
+        name: "ActiveArea"
+        writable: false
+        description: "Active sensor area"
   - name: APP12::Ducky
     tags:
       - id: "0x0001"

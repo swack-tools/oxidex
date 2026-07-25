@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<taginfo>
+ <table name="Exif::Main" g0="EXIF" g1="ExifIFD">
+  <tag name="ISO" g1="ExifIFD" type="int16u" writable="true" count="1"/>
+ </table>
+</taginfo>

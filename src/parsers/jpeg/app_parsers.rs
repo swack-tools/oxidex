@@ -115,6 +115,50 @@ pub fn parse_app0_extended(data: &[u8], metadata: &mut MetadataMap) -> Result<()
         return Err("APP0 segment too short".to_string());
     }
 
+    // AVI1 (Motion JPEG) APP0 segment
+    //
+    // ExifTool exposes the byte after the "AVI1\0" signature as
+    // APP0:InterleavedField.
+    if data.len() >= 6 && &data[0..5] == b"AVI1\0" {
+        let interleaved = data[5];
+        let interleaved_str = match interleaved {
+            0 => "Not Interleaved",
+            1 => "Odd",
+            2 => "Even",
+            _ => "Unknown",
+        };
+        metadata.insert(
+            "APP0:InterleavedField".to_string(),
+            TagValue::String(interleaved_str.to_string()),
+        );
+        return Ok(());
+    }
+
+    // OCAD APP0 segment
+    //
+    // OCAD writes an ASCII revision header of the form
+    // "Ocad$Rev: <decimal revision> $", followed by padding and other data.
+    const OCAD_REVISION_PREFIX: &[u8] = b"Ocad$Rev: ";
+    if data.starts_with(OCAD_REVISION_PREFIX) {
+        let revision_data = &data[OCAD_REVISION_PREFIX.len()..];
+        let digit_count = revision_data
+            .iter()
+            .position(|byte| !byte.is_ascii_digit())
+            .unwrap_or(revision_data.len());
+
+        if digit_count == 0 {
+            return Err("OCAD APP0 segment has no revision number".to_string());
+        }
+
+        let revision = std::str::from_utf8(&revision_data[..digit_count])
+            .map_err(|_| "OCAD revision is not valid ASCII".to_string())?
+            .parse::<i64>()
+            .map_err(|_| "OCAD revision is outside the supported integer range".to_string())?;
+
+        metadata.insert("APP0:OcadRevision".to_string(), TagValue::Integer(revision));
+        return Ok(());
+    }
+
     // Check JFIF identifier
     if &data[0..5] == b"JFIF\x00" {
         // Already parsed by jfif_parser, but we can add JFXX extension support
@@ -466,7 +510,11 @@ pub fn parse_jpeg_hdr_segment(data: &[u8], metadata: &mut MetadataMap) -> Result
     }
 
     // Delegate to specialized HDR parser if available and data looks valid
-    let _ = crate::parsers::jpeg::app_segments::parse_app11_jpeg_hdr(data);
+    if let Ok(hdr_metadata) = crate::parsers::jpeg::app_segments::parse_app11_jpeg_hdr(data) {
+        for (key, value) in hdr_metadata {
+            metadata.insert(key, value);
+        }
+    }
 
     Ok(())
 }
@@ -493,6 +541,18 @@ mod tests {
             metadata.get("File:Comment"),
             Some(&TagValue::Binary(vec![0xFF, 0xFE, 0x00, 0x41]))
         );
+    }
+
+    #[test]
+    fn test_parse_app0_ocad_revision() {
+        // Exact APP0 payload layout used by SonyDCR-DVD710.jpg.
+        let data = b"Ocad$Rev: 14797 $\0\0\0\0\0\0\0\x01\x10";
+        let mut metadata = MetadataMap::new();
+
+        let result = parse_app0_extended(data, &mut metadata);
+
+        assert!(result.is_ok());
+        assert_eq!(metadata.get_integer("APP0:OcadRevision"), Some(14797));
     }
 
     #[test]
@@ -580,6 +640,259 @@ mod tests {
         let mut metadata = MetadataMap::new();
         assert!(parse_spiff_segment(&payload, &mut metadata).is_err());
         assert!(metadata.get("SPIFF:SPIFFVersion").is_none());
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_f_number() {
+        let data = b"[picture info]\r\nFNumber=11.0\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert!(
+            metadata.get("APP12:FNumber").is_some(),
+            "FNumber should be exposed in ExifTool's APP12 group"
+        );
+        assert_eq!(
+            metadata.get("APP12:FNumber"),
+            metadata.get("Olympus:FNumber"),
+            "APP12 FNumber should retain the parsed decimal value"
+        );
+    }
+
+    #[test]
+    fn test_parse_picture_info_resolution() {
+        // ExifTool's APP12 Picture Info table exposes Resolution verbatim
+        // as its own tag (Image::ExifTool::APP12::PictureInfo has no
+        // PrintConv for it) -- it is not renamed to ImageSize.
+        let data = b"[picture info]\r\nResolution=1280x960\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:Resolution"), Some("1280x960"));
+    }
+
+    #[test]
+    fn test_parse_picture_info_image_size() {
+        // ExifTool's ImageSize tag stores a dash-delimited width-height pair
+        // and its PrintConv (`$val=~tr/-/x/;$val`) converts every '-' to 'x'
+        // for display, distinct from the verbatim Resolution tag above.
+        let data = b"[picture info]\r\nImageSize=1280-1024\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:ImageSize"), Some("1280x1024"));
+    }
+
+    #[test]
+    fn test_parse_legacy_picture_info_resolution() {
+        // Identifier-less legacy Picture Info records (including Agfa SR84)
+        // are routed through the same key=value parser as the "[picture
+        // info]" format, so Resolution/ImageSize behave identically here.
+        let data = b"Type=SR84\r\nResolution=1280x960\r\nID=AGFA DIGITAL CAMERA\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid legacy Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:Resolution"), Some("1280x960"));
+    }
+
+    #[test]
+    fn test_parse_legacy_picture_info_image_size() {
+        let data = b"Type=SR84\r\nImageSize=1280-1024\r\nID=AGFA DIGITAL CAMERA\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid legacy Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:ImageSize"), Some("1280x1024"));
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_flash() {
+        let data = b"[picture info]\r\nFlash=Off\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:Flash"),
+            Some("Off"),
+            "Flash should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_legacy_agfa_app12_id() {
+        // Identifier-less Agfa Picture Info is recognized by the generic
+        // Olympus/Picture Info parser used by APP12 dispatch.
+        let data = b"Type=SR84\r\nVersion=v84-71\r\nID=AGFA DIGITAL CAMERA\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid legacy Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:ID"), Some("AGFA DIGITAL CAMERA"));
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_fcs7() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nFCS6=3\r\nFCS7=3\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:FCS6"), Some(3));
+        assert_eq!(
+            metadata.get_integer("APP12:FCS7"),
+            Some(3),
+            "FCS7 should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imbb() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMbb=35761\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:IMbb"),
+            Some(35761),
+            "IMbb should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imbg() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMbg=33709\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:IMbg"), Some(33709));
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imgb() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMgb=33346\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:IMgb"),
+            Some(33346),
+            "IMgb should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imgr() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMgr=33122\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:IMgr"),
+            Some(33122),
+            "IMgr should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imrg() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMrg=33975\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:IMrg"),
+            Some(33975),
+            "IMrg should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imbr() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMbr=32929\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:IMbr"),
+            Some(32929),
+            "IMbr should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_jpeg1() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nJPEG1=696880\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:JPEG1"),
+            Some(696880),
+            "JPEG1 should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_mode1() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nMODE1=0\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:MODE1"),
+            Some(0),
+            "MODE1 should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_mode2() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nMODE2=0\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:MODE2"),
+            Some(0),
+            "MODE2 should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imrb() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMrb=32721\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:IMrb"),
+            Some(32721),
+            "IMrb should be exposed in ExifTool's APP12 group"
+        );
     }
 
     #[test]

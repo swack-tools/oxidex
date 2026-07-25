@@ -3,20 +3,20 @@
 This document details OxiDex's coverage of ExifTool's tag database and analyzes parser implementation status.
 
 ::: info Auto-Generated
-This document is automatically updated on each push to `main`. Last updated: **2026-07-19**
+This document is automatically updated on each push to `main`. Last updated: **2026-07-24**
 :::
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
-| Total Tags | 32,684 |
-| Tag Tables | 979 |
+| Total Tags | 32,690 |
+| Tag Tables | 980 |
 | Domains | 6 |
 | Format Parsers | 38 |
 | ExifTool Parity | 113%* |
 
-*ExifTool officially documents ~28,853 unique tags. OxiDex defines 32,684 tags (including variant definitions).
+*ExifTool officially documents ~28,853 unique tags. OxiDex defines 32,690 tags (including variant definitions).
 
 ::: tip Empirical JPEG comparison
 The counts on this page are derived statically from the tag database. For JPEG
@@ -33,12 +33,12 @@ round-trips, regression-gated in CI) is available:
 | Domain | Tables | Tags | Description |
 |--------|--------|------|-------------|
 | Camera | 599 | 17,432 | MakerNotes from 40+ manufacturers |
-| Core | 118 | 4,167 | EXIF, GPS, XMP, IPTC standards |
+| Core | 119 | 4,173 | EXIF, GPS, XMP, IPTC standards |
 | Document | 55 | 746 | PDF, Office, HTML metadata |
 | Image | 64 | 1,083 | PNG, GIF, BMP, WebP, etc. |
 | Media | 125 | 5,537 | Audio/video containers |
 | Specialty | 18 | 3,719 | FLIR, DICOM, DJI, etc. |
-| **Total** | **979** | **32,684** | |
+| **Total** | **980** | **32,690** | |
 
 ---
 
@@ -88,32 +88,32 @@ MakerNote parsers for 39+ camera manufacturers are **fully implemented and conne
 | Opus | 100% | ✅ Complete |
 | OGG | 100% | ✅ Complete |
 | WAV | 100% | ✅ Complete |
-| BMP | 90% | ✅ Good |
-| GIF | 90% | ✅ Good |
-| WebP | 90% | ✅ Good |
-| ZIP | 90% | ✅ Good |
-| TTF | 90% | ✅ Good |
-| OTF | 90% | ✅ Good |
-| PE | 90% | ✅ Good |
+| ICC | 90% | ✅ Good |
 | TIFF | 90% | ✅ Good |
 | EXIF | 90% | ✅ Good |
+| TTF | 90% | ✅ Good |
+| OTF | 90% | ✅ Good |
+| SPECIALIZED | 90% | ✅ Good |
 | MKV | 90% | ✅ Good |
 | AVI | 90% | ✅ Good |
 | RIFF | 90% | ✅ Good |
+| PE | 90% | ✅ Good |
 | QuickTime | 90% | ✅ Good |
 | MP4 | 90% | ✅ Good |
 | MOV | 90% | ✅ Good |
-| ICC | 90% | ✅ Good |
-| SPECIALIZED | 90% | ✅ Good |
+| ZIP | 90% | ✅ Good |
+| BMP | 90% | ✅ Good |
+| GIF | 90% | ✅ Good |
+| WebP | 90% | ✅ Good |
 | Mach-O | 75% | ✅ Good |
+| TEXT | 75% | ✅ Good |
 | DNG | 75% | ✅ Good |
 | CR2 | 75% | ✅ Good |
 | NEF | 75% | ✅ Good |
-| PDF | 75% | ✅ Good |
 | ELF | 75% | ✅ Good |
+| PDF | 75% | ✅ Good |
 | DOCX | 75% | ✅ Good |
 | XLSX | 75% | ✅ Good |
-| TEXT | 75% | ✅ Good |
 | JPEG | 60% | ✅ Good |
 | PNG | 60% | ✅ Good |
 | IPTC | 60% | ✅ Good |

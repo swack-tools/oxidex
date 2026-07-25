@@ -62,56 +62,14 @@ pub fn format_light_source(value: i64) -> String {
 
 /// Format Flash enum value (complex bitfield)
 /// EXIF tag 0x9209
+///
+/// Delegates to [`crate::core::exif_enums::decode_flash`], which correctly
+/// orders the flash mode ("On"/"Off"/"Auto") before the fired status (e.g.
+/// "Off, Did not fire") to match ExifTool's output. A previous, independent
+/// implementation here produced the wrong word order (e.g. "No Flash, Off"
+/// instead of "Off, Did not fire") for compulsory-suppression mode.
 pub fn format_flash(value: i64) -> String {
-    let fired = (value & 0x01) != 0;
-    let return_detected = (value >> 1) & 0x03;
-    let mode = (value >> 3) & 0x03;
-    let function_present = (value & 0x20) == 0;
-    let red_eye = (value & 0x40) != 0;
-
-    let mut parts = Vec::new();
-
-    // Flash fired status
-    if fired {
-        parts.push("Fired");
-    } else {
-        parts.push("No Flash");
-        // If flash didn't fire, just return simple status
-        if value == 0 {
-            return "No Flash".to_string();
-        }
-    }
-
-    // Return detection
-    match return_detected {
-        2 => parts.push("Return not detected"),
-        3 => parts.push("Return detected"),
-        _ => {}
-    }
-
-    // Flash mode
-    match mode {
-        1 => parts.push("On"),
-        2 => parts.push("Off"),
-        3 => parts.push("Auto"),
-        _ => {}
-    }
-
-    // Function present
-    if !function_present {
-        parts.push("No flash function");
-    }
-
-    // Red-eye reduction
-    if red_eye {
-        parts.push("Red-eye reduction");
-    }
-
-    if parts.is_empty() {
-        format!("Unknown ({})", value)
-    } else {
-        parts.join(", ")
-    }
+    crate::core::exif_enums::decode_flash(value.max(0) as u32)
 }
 
 /// Format ExposureMode enum value
