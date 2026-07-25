@@ -39,9 +39,9 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
         // EXIF CFAPattern name is registered under tag 0xA302. ExifTool
         // assigns the Panasonic tag to its EXIF group.
         lookup_tag_name(0xA302, "EXIF")
-    } else if format == RawFormat::AdobeDNG && tag_id == 0x0111 && ifd_name == "IFD0" {
+    } else if format == RawFormat::AdobeDNG && tag_id == 0x0111 {
         "EXIF:PreviewImageStart".to_string()
-    } else if format == RawFormat::AdobeDNG && tag_id == 0x0117 && ifd_name == "IFD0" {
+    } else if format == RawFormat::AdobeDNG && tag_id == 0x0117 {
         "EXIF:PreviewImageLength".to_string()
     } else if format == RawFormat::AdobeDNG
         && matches!(
@@ -515,29 +515,38 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 // Parse SubIFD(s) if present - crucial for RAW formats
                 // SubIFDs contain RAW image data, compression info, and RAW-specific tags
                 for (sub_index, sub_offset) in sub_ifd_offsets.iter().enumerate() {
-                    // Use SubIFD0, SubIFD1, etc. for tag naming
-                    let sub_ifd_name = if sub_index == 0 {
-                        "SubIFD0"
-                    } else {
-                        // Multiple SubIFDs are rare but possible
-                        eprintln!("Warning: Found SubIFD{} which is unusual", sub_index);
-                        "SubIFD0" // Use SubIFD0 as fallback for consistency
-                    };
+                    // Use SubIFD0 as the generic group for all SubIFDs to match
+                    // ExifTool's output; only specific whitelisted tags from
+                    // secondary SubIFDs are emitted.
+                    let sub_ifd_name = "SubIFD0";
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
-                            // DNG: PreviewImageStart/Length are only valid in IFD0
-                            if format == RawFormat::AdobeDNG
-                                && (tag_id == 0x0111 || tag_id == 0x0117)
-                            {
-                                continue;
-                            }
-
                             // DNG: BitsPerSample from the primary SubIFD (index 0)
                             // should be reported as EXIF:BitsPerSample; secondary
                             // SubIFDs must not overwrite it.
                             if format == RawFormat::AdobeDNG && tag_id == 0x0102 {
                                 if sub_index > 0 {
+                                    continue;
+                                }
+                            }
+
+                            // DNG: SubIFD2 uses JpgFromRawStart/JpgFromRawLength;
+                            // other SubIFDs (and IFD0) use PreviewImageStart/Length.
+                            if format == RawFormat::AdobeDNG && sub_index == 2 {
+                                if tag_id == 0x0111 {
+                                    let bytes = raw_bytes.as_ref();
+                                    let tag_value = raw_bytes_to_simple_tag_value(
+                                        bytes, field_type, value_count, byte_order,
+                                    );
+                                    metadata.insert("EXIF:JpgFromRawStart".to_string(), tag_value);
+                                    continue;
+                                } else if tag_id == 0x0117 {
+                                    let bytes = raw_bytes.as_ref();
+                                    let tag_value = raw_bytes_to_simple_tag_value(
+                                        bytes, field_type, value_count, byte_order,
+                                    );
+                                    metadata.insert("EXIF:JpgFromRawLength".to_string(), tag_value);
                                     continue;
                                 }
                             }
