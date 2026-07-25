@@ -323,10 +323,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 let mut thumb_bits_per_sample = None;
                 let mut thumb_compression = None;
                 let mut thumb_photometric = None;
-                let mut thumb_strip_offsets = None;
+                let mut thumb_strip_offsets: Vec<u32> = Vec::new();
                 let mut thumb_samples_per_pixel = None;
                 let mut thumb_rows_per_strip = None;
-                let mut thumb_strip_byte_counts = None;
+                let mut thumb_strip_byte_counts: Vec<u32> = Vec::new();
                 let mut thumb_planar_config = None;
 
                 // Convert tags to metadata
@@ -393,10 +393,30 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             0x0102 => thumb_bits_per_sample = Some(bytes.to_vec()),
                             0x0103 => thumb_compression = read_tiff_u16(bytes, byte_order),
                             0x0106 => thumb_photometric = read_tiff_u16(bytes, byte_order),
-                            0x0111 => thumb_strip_offsets = read_tiff_u32(bytes, byte_order),
+                            0x0111 => {
+                                let count = *value_count as usize;
+                                for i in 0..count {
+                                    let start = i * 4;
+                                    if start + 4 <= bytes.len() {
+                                        if let Some(val) = read_tiff_u32(&bytes[start..start+4], byte_order) {
+                                            thumb_strip_offsets.push(val);
+                                        }
+                                    }
+                                }
+                            }
                             0x0115 => thumb_samples_per_pixel = read_tiff_u16(bytes, byte_order),
                             0x0116 => thumb_rows_per_strip = read_tiff_u32(bytes, byte_order),
-                            0x0117 => thumb_strip_byte_counts = read_tiff_u32(bytes, byte_order),
+                            0x0117 => {
+                                let count = *value_count as usize;
+                                for i in 0..count {
+                                    let start = i * 4;
+                                    if start + 4 <= bytes.len() {
+                                        if let Some(val) = read_tiff_u32(&bytes[start..start+4], byte_order) {
+                                            thumb_strip_byte_counts.push(val);
+                                        }
+                                    }
+                                }
+                            }
                             0x011C => thumb_planar_config = read_tiff_u16(bytes, byte_order),
                             _ => {}
                         }
@@ -592,36 +612,8 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     let is_raw_subifd = sub_index == 0;
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
-                        // Collect thumbnail parameters from non-raw SubIFDs for DNG
-                        let mut sub_thumb_width = None;
-                        let mut sub_thumb_height = None;
-                        let mut sub_thumb_bits_per_sample = None;
-                        let mut sub_thumb_compression = None;
-                        let mut sub_thumb_photometric = None;
-                        let mut sub_thumb_strip_offsets = None;
-                        let mut sub_thumb_samples_per_pixel = None;
-                        let mut sub_thumb_rows_per_strip = None;
-                        let mut sub_thumb_strip_byte_counts = None;
-                        let mut sub_thumb_planar_config = None;
-
-                        if format == RawFormat::AdobeDNG && !is_raw_subifd {
-                            for (tag_id, _field_type, _value_count, raw_bytes) in &sub_tags {
-                                let bytes = raw_bytes.as_ref();
-                                match *tag_id {
-                                    0x0100 => sub_thumb_width = read_tiff_u32(bytes, byte_order),
-                                    0x0101 => sub_thumb_height = read_tiff_u32(bytes, byte_order),
-                                    0x0102 => sub_thumb_bits_per_sample = Some(bytes.to_vec()),
-                                    0x0103 => sub_thumb_compression = read_tiff_u16(bytes, byte_order),
-                                    0x0106 => sub_thumb_photometric = read_tiff_u16(bytes, byte_order),
-                                    0x0111 => sub_thumb_strip_offsets = read_tiff_u32(bytes, byte_order),
-                                    0x0115 => sub_thumb_samples_per_pixel = read_tiff_u16(bytes, byte_order),
-                                    0x0116 => sub_thumb_rows_per_strip = read_tiff_u32(bytes, byte_order),
-                                    0x0117 => sub_thumb_strip_byte_counts = read_tiff_u32(bytes, byte_order),
-                                    0x011C => sub_thumb_planar_config = read_tiff_u16(bytes, byte_order),
-                                    _ => {}
-                                }
-                            }
-                        }
+                        // ThumbnailTIFF is built from IFD1; SubIFD previews are
+                        // extracted as JpgFromRaw/PreviewImage.
 
                         if format == RawFormat::AdobeDNG && !is_raw_subifd {
                             if let Some(image_data) = extract_subifd_image(&reader, &sub_tags, byte_order) {
@@ -682,25 +674,6 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             metadata.insert(tag_name, tag_value);
                         }
 
-                        // Build ThumbnailTIFF from SubIFD if not already built from IFD1
-                        if format == RawFormat::AdobeDNG && !is_raw_subifd && !metadata.contains_key("EXIF:ThumbnailTIFF") {
-                            if let Some(tiff) = build_thumbnail_tiff(
-                                &reader,
-                                byte_order,
-                                sub_thumb_width,
-                                sub_thumb_height,
-                                sub_thumb_bits_per_sample.as_deref(),
-                                sub_thumb_compression,
-                                sub_thumb_photometric,
-                                sub_thumb_strip_offsets,
-                                sub_thumb_samples_per_pixel,
-                                sub_thumb_rows_per_strip,
-                                sub_thumb_strip_byte_counts,
-                                sub_thumb_planar_config,
-                            ) {
-                                metadata.insert("EXIF:ThumbnailTIFF".to_string(), TagValue::Binary(tiff));
-                            }
-                        }
                     }
                 }
 
@@ -714,10 +687,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         thumb_bits_per_sample.as_deref(),
                         thumb_compression,
                         thumb_photometric,
-                        thumb_strip_offsets,
+                        &thumb_strip_offsets,
                         thumb_samples_per_pixel,
                         thumb_rows_per_strip,
-                        thumb_strip_byte_counts,
+                        &thumb_strip_byte_counts,
                         thumb_planar_config,
                     ) {
                         metadata.insert("EXIF:ThumbnailTIFF".to_string(), TagValue::Binary(tiff));
@@ -1122,22 +1095,29 @@ fn build_thumbnail_tiff<R: FileReader>(
     bits_per_sample: Option<&[u8]>,
     compression: Option<u16>,
     photometric: Option<u16>,
-    strip_offsets: Option<u32>,
+    strip_offsets: &[u32],
     samples_per_pixel: Option<u16>,
     rows_per_strip: Option<u32>,
-    strip_byte_counts: Option<u32>,
+    strip_byte_counts: &[u32],
     planar_config: Option<u16>,
 ) -> Option<Vec<u8>> {
     let width = width?;
     let height = height?;
     let photometric = photometric?;
-    let strip_offsets = strip_offsets?;
-    let strip_byte_counts = strip_byte_counts?;
+    if strip_offsets.is_empty() || strip_byte_counts.is_empty() || strip_offsets.len() != strip_byte_counts.len() {
+        return None;
+    }
     let samples_per_pixel = samples_per_pixel.unwrap_or(1);
     let compression = compression.unwrap_or(1);
 
-    // Read the image data from the source file
-    let image_data = reader.read(strip_offsets as u64, strip_byte_counts as usize).ok()?;
+    // Read all strips and concatenate
+    let mut image_data = Vec::new();
+    for (i, &offset) in strip_offsets.iter().enumerate() {
+        let byte_count = strip_byte_counts[i] as usize;
+        let strip_data = reader.read(offset as u64, byte_count).ok()?;
+        image_data.extend_from_slice(&strip_data);
+    }
+    let total_byte_count = image_data.len() as u32;
 
     // Build IFD entries in tag order
     let mut entries: Vec<(u16, u16, u32, u32)> = Vec::new();
@@ -1190,7 +1170,7 @@ fn build_thumbnail_tiff<R: FileReader>(
 
     let image_data_offset = data_start + extra_data.len() as u32;
     entries.push((0x0111, 4, 1, image_data_offset)); // StripOffsets
-    entries.push((0x0117, 4, 1, strip_byte_counts)); // StripByteCounts
+    entries.push((0x0117, 4, 1, total_byte_count)); // StripByteCounts
     entries.sort_by_key(|e| e.0);
 
     let mut tiff = Vec::new();

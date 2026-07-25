@@ -1,0 +1,163 @@
+[worker]
+base_url = "https://pass.wafer.ai/v1"
+api_key = "wfr_f89986628164f6316916a0f63706cda801067f73df2e8d7ae87b86bacb5df5bb"
+# EXPERIMENT 8 -- 2026-07-24T23:45: found the SAME truncation bug fixed for
+# the reviewer (experiment 4) also hits the FIXER phase -- 302 of a sampled
+# set of fixer-response files contained literally "[Wafer: response was
+# truncated before the model finished its internal reasoning...]". Thinking-
+# enabled wafer models (GLM-5.2/Kimi-K2.6/DeepSeek-V4-Pro) spend part of a
+# 4096-token budget on hidden reasoning before ever emitting the actual
+# REQUEST/VERIFY/diff content, so a real fraction of "no diff in model
+# response" failures all session were this, not genuinely hard tags.
+# 16384 cut truncation from 317 accumulated cases to 7 in the ~15 min after
+# the fix -- real but residual (still-heavy reasoning on the hardest
+# prompts). Raising further per user request; this is network/API-side
+# cost, not local host resource pressure, so safe to push higher.
+max_tokens = 32768
+# EXPERIMENT 7 -- 2026-07-24T23:00 (user observation): a real fixer prompt
+# (nikon-1, JPEG:APP12:STB2) measured 90KB/~22K tokens total across the
+# conversation, but the INITIAL context was truncated to exactly 8192
+# tokens (32756 chars) -- confirmed the cap was binding, not slack. The
+# model then spent many turns REQUESTing large files piece by piece
+# (7-20K chars each) it could have been shown upfront. gpt-5.5 has a
+# 1.05M-token context window; raising this 8192->20000 gives real headroom
+# for more parser-file content, more real samples, and (once
+# parser_floor_tokens/learning_budget_tokens below keep their reserved
+# share) less truncation pressure overall -- fewer wasted REQUEST
+# round-trips, hopefully faster convergence to a correct diff.
+# Raised 20000 -> 30000 alongside EXPERIMENT 11's cluster cap (6 -> 12):
+# a 12-member cluster needs room for twice the per-tag evidence before
+# truncation starts evicting the parser source the fixer needs, which
+# would convert the cluster win into more REQUEST round-trips. Model
+# context is ~1M tokens, so this is nowhere near the provider ceiling.
+max_prompt_tokens = 30000
+learning_budget_tokens = 1200
+parser_floor_tokens = 2000
+lessons_tail_kb = 256
+# Dropped 5->3->2: this host runs a SECOND, independent Claude Code session
+# concurrently (confirmed via `top -o mem` process args) doing its own cargo
+# builds on the same repo -- memory pressure recurred even at 15 slots +
+# semaphore=3 because that other session's load is uncontrolled and variable.
+# Being conservative to leave real headroom rather than chasing a precise
+# ceiling against a variable this fleet cannot see or control.
+# User confirmed excess CPU capacity available (2026-07-24 23:52) and
+# memory has recovered to 2.8GB free / 40% CPU idle at 10 slots -- scaling
+# back toward 5 while watching swap deltas closely (not just point free-RAM).
+build_semaphore = 5
+reasoning_effort = "max"
+stream = true
+prompt_cache = "auto"
+thinking = true
+temperature = 0.4
+max_prompt_tags = 1
+timeout = 1200
+max_request_turns = 10
+max_request_repeats = 3
+max_verify_turns = 10
+# EXPERIMENT 6 -- 2026-07-24T22:30: default is 5. Repeated observation this
+# session: workers spend 60-90+ min on a single stubborn tag (JPEG:APP12:*
+# cluster especially), each repair round costing a full model round-trip
+# plus critique plus rebuild/retest. Lowering to trade some persistence on
+# hard-but-maybe-solvable tags for more distinct tags attempted per hour --
+# a tag that failed the same way 2-3 times in a row is unlikely to succeed
+# on round 4-5 without a genuinely different approach anyway (the K1 lessons
+# ledger / cross-attempt critique already carries that context forward).
+max_repair_rounds = 3
+compaction_trigger_tokens = 150000
+compaction_keep_recent_turns = 10
+compaction_min_elide_tokens = 3000
+# EXPERIMENT 4 -- 2026-07-24T19:10: governor_calls_per_minute is ONE shared
+# bucket regardless of which provider a call targets (see governor_acquire) --
+# with ~1/3-1/2 of calls now going to wafer.ai (an independent account/limit),
+# the 30/min cap tuned solely for clawbay's rate limit is needlessly
+# throttling wafer-bound calls too. Raising to 60 (also exactly the spec's
+# scale-gate threshold for the 50-lane step) and watching consecutive_limited
+# in rate-governor.json as the real safety signal -- if it climbs, this was
+# too aggressive and gets reverted.
+governor_calls_per_minute = 40
+governor_burst = 8
+governor_cooldown_seconds = 30
+governor_max_cooldown_seconds = 300
+# EXPERIMENT 11 -- 2026-07-25T06:10: measured multiplier is 2.83 gaps per
+# LANDED attempt (34 gaps / 12 fixes), and at least one attempt closed
+# exactly 6 -- i.e. the cap binds, it is not slack. The expensive parts of
+# an attempt (context assembly, cargo build, targeted+workspace test, the
+# ~60s reviewer call) are paid PER ATTEMPT, not per tag, and cluster_key
+# already restricts members to the same format+family+parser files, so
+# sibling tags in one table are usually one generalized branch apart.
+# Raising the cap therefore multiplies gaps/hour at roughly fixed cost.
+# Watching BOTH terms: if the landed-fix RATE drops (bigger diffs = harder
+# to get right) more than the multiplier rises, this reverts to 6.
+max_cluster_tags = 12
+use_sccache = true
+max_retries = 10
+retry_backoff_seconds = 30
+max_retry_backoff_seconds = 120
+
+# EXPERIMENT 10 -- 2026-07-25T03:50 (user request "use deepseek v4 pro for
+# all models"): manifest.log reliability data across 46k+ logged calls
+# this session showed a stark, consistent gap -- DeepSeek-V4-Pro/Kimi-K2.6/
+# GLM-5.2 (wafer.ai) all sit at 99-99.9% successful-call rate for the
+# fixer phase, vs 72.1% (gpt-5.5), 53.0% (gpt-5.6-terra), 25.3%
+# (gpt-5.6-sol) for clawbay models -- and DeepSeek-V4-Pro alone hit 100%
+# for the reviewer phase vs 66.7%/25.0%. Consolidating the whole pool
+# (explore + patch + reviewer + table_job) onto DeepSeek-V4-Pro/wafer.ai
+# per that data plus explicit user instruction. Watching whether this
+# trades away useful model-diversity-driven correctness for pure
+# reliability -- infra reliability isn't the same as fix quality, and this
+# removes the only real multi-model cross-check the pipeline had.
+# EXPERIMENT 13 -- 2026-07-25T06:35 (user request): same model, different
+# provider -- DeepSeek-V4-Pro via clawbay instead of wafer.ai. No per-model
+# base_url/api_key override, so these inherit the [worker] section's
+# clawbay endpoint above.
+#
+# Context worth keeping: clawbay returned 503 on EVERY model (including
+# gpt-5.5 and all gpt-5.6 variants) at ~06:25 and recovered by ~06:35.
+# Verified DeepSeek-V4-Pro answers 200 on clawbay before switching. If
+# clawbay 503s again, the whole fleet stalls -- with wafer there was a
+# second provider to fall back on, and this consolidates onto one. Revert
+# by restoring the two base_url/api_key lines to the wafer values.
+[[worker.models]]
+name = "Kimi-K2.6"
+phase = "explore"
+
+[[worker.models]]
+name = "DeepSeek-V4-Pro"
+phase = "patch"
+
+[reviewer]
+base_url = "https://pass.wafer.ai/v1"
+api_key = "wfr_f89986628164f6316916a0f63706cda801067f73df2e8d7ae87b86bacb5df5bb"
+# 4096 truncated DeepSeek-V4-Pro's thinking mid-reasoning before it reached
+# an APPROVE/REJECT verdict ("response was truncated before the model
+# finished its internal reasoning" -- Wafer's own error message), which the
+# fail-safe correctly treated as a rejection rather than crashing, but wasted
+# a real gaps-2->0 landing. Raised to give thinking models room to finish.
+# Matching the worker-side bump (experiment 8) for consistency.
+max_tokens = 32768
+max_prompt_tokens = 8192
+reviewer_max_prompt_tokens = 8192
+reasoning_effort = "xhigh"
+stream = true
+prompt_cache = "auto"
+thinking = true
+temperature = 0
+timeout = 1200
+max_retries = 10
+retry_backoff_seconds = 30
+max_retry_backoff_seconds = 120
+
+[[reviewer.models]]
+name = "DeepSeek-V4-Pro"
+
+[table_job]
+max_prompt_tokens = 16384
+max_repair_rounds = 8
+
+[[table_job.models]]
+name = "DeepSeek-V4-Pro"
+phase = "table"
+
+[parallel]
+workers = 4
+max_tags_per_process = 1
