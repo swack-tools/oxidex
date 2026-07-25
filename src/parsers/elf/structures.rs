@@ -774,6 +774,22 @@ impl ElfHeader {
         }
     }
 
+    /// Returns the object file type using ExifTool's PrintConv strings
+    pub fn object_file_type_str(&self) -> &'static str {
+        match self.e_type {
+            elf_type::ET_NONE => "None",
+            elf_type::ET_REL => "Relocatable file",
+            elf_type::ET_EXEC => "Executable file",
+            elf_type::ET_DYN => "Shared object file",
+            elf_type::ET_CORE => "Core file",
+            _ => "Unknown",
+        }
+    }
+
+    /// Returns the object type as a human-readable string
+    ///
+    /// This is retained for existing oxidex metadata fields. For ExifTool-compatible
+    /// output, prefer `object_file_type_str()`.
     /// Returns the object type as a human-readable string
     pub fn type_str(&self) -> &'static str {
         match self.e_type {
@@ -786,6 +802,67 @@ impl ElfHeader {
                 "OS-specific"
             }
             _ if self.e_type >= elf_type::ET_LOPROC => "Processor-specific",
+            _ => "Unknown",
+        }
+    }
+
+    /// Returns the CPU type using ExifTool's PrintConv strings
+    pub fn cpu_type_str(&self) -> &'static str {
+        match self.e_machine {
+            machine_types::EM_NONE => "None",
+            machine_types::EM_M32 => "AT&T WE 32100",
+            machine_types::EM_SPARC => "SPARC",
+            machine_types::EM_386 => "i386",
+            machine_types::EM_68K => "Motorola 68000",
+            machine_types::EM_88K => "Motorola 88000",
+            machine_types::EM_IAMCU => "i486",
+            machine_types::EM_860 => "i860",
+            machine_types::EM_MIPS => "MIPS R3000",
+            machine_types::EM_S370 => "IBM System/370",
+            machine_types::EM_MIPS_RS3_LE => "MIPS R4000",
+            machine_types::EM_PARISC => "HP PA-RISC",
+            machine_types::EM_SPARC32PLUS => "Sun v8plus",
+            machine_types::EM_960 => "Intel 80960",
+            machine_types::EM_PPC => "PowerPC",
+            machine_types::EM_PPC64 => "PowerPC 64-bit",
+            machine_types::EM_S390 => "IBM S/390",
+            machine_types::EM_SPU => "Cell BE SPU",
+            machine_types::EM_V800 => "NEC V800",
+            machine_types::EM_FR20 => "Fujitsu FR20",
+            machine_types::EM_RH32 => "TRW RH-32",
+            machine_types::EM_RCE => "Motorola RCE",
+            machine_types::EM_ARM => "Arm (up to Armv7/AArch32)",
+            machine_types::EM_ALPHA => "Digital Alpha",
+            machine_types::EM_SH => "SuperH",
+            machine_types::EM_SPARCV9 => "SPARC v9 64-bit",
+            machine_types::EM_TRICORE => "Siemens TriCore",
+            machine_types::EM_ARC => "Argonaut RISC Core",
+            machine_types::EM_H8_300 => "Renesas H8/300,300H,H8S",
+            machine_types::EM_H8_300H => "Hitachi H8/300H",
+            machine_types::EM_H8S => "Hitachi H8S",
+            machine_types::EM_H8_500 => "Hitachi H8/500",
+            machine_types::EM_IA_64 => "HP/Intel IA-64",
+            machine_types::EM_MIPS_X => "Stanford MIPS-X",
+            machine_types::EM_COLDFIRE => "Motorola ColdFire",
+            machine_types::EM_68HC12 => "Motorola M68HC12",
+            54 => "Fujitsu MMA Multimedia Accelerator",
+            55 => "Siemens PCP",
+            56 => "Sony nCPU embedded RISC processor",
+            57 => "Denso NDR1 microprocessor",
+            58 => "Motorola Star*Core processor",
+            59 => "Toyota ME16 processor",
+            60 => "STMicroelectronics ST100 processor",
+            61 => "Advanced Logic Corp. TinyJ embedded processor family",
+            machine_types::EM_X86_64 => "AMD x86-64",
+            63 => "Sony DSP Processor",
+            64 => "Digital Equipment Corp. PDP-10",
+            65 => "Digital Equipment Corp. PDP-11",
+            66 => "Siemens FX66 microcontroller",
+            67 => "STMicroelectronics ST9+ 8/16 bit microcontroller",
+            68 => "STMicroelectronics ST7 8-bit microcontroller",
+            69 => "Motorola MC68HC16 Microcontroller",
+            70 => "Motorola MC68HC11 Microcontroller",
+            71 => "Motorola MC68HC08 Microcontroller",
             _ => "Unknown",
         }
     }
