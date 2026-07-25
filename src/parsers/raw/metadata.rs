@@ -39,10 +39,16 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
         // EXIF CFAPattern name is registered under tag 0xA302. ExifTool
         // assigns the Panasonic tag to its EXIF group.
         lookup_tag_name(0xA302, "EXIF")
+    } else if format == RawFormat::AdobeDNG && tag_id == 0x0111 {
+        "EXIF:PreviewImageStart".to_string()
+    } else if format == RawFormat::AdobeDNG && tag_id == 0x0117 {
+        "EXIF:PreviewImageLength".to_string()
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0x0143 // TileLength
+            0x0142 // TileWidth
+                | 0x0143 // TileLength
+                | 0x0144 // TileOffsets
                 | 0x0145 // TileByteCounts
                 | 0x0211 // YCbCrCoefficients
                 | 0x0212 // YCbCrSubSampling
@@ -52,12 +58,19 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
                 | 0xC617 // CFALayout
                 | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
+                | 0xC61D // WhiteLevel
+                | 0xC61E // DefaultScale
                 | 0xC61F // DefaultCropOrigin
                 | 0xC620 // DefaultCropSize
+                | 0xC627 // AnalogBalance
+                | 0xC628 // AsShotNeutral
                 | 0xC62D // BayerGreenSplit
                 | 0xC632 // AntiAliasStrength
+                | 0xC65A // CalibrationIlluminant1
+                | 0xC65B // CalibrationIlluminant2
                 | 0xC65C // BestQualityScale
                 | 0xC68D // ActiveArea
+                | 0xC68E // MaskedAreas
                 | 0x828E // CFAPattern2
         )
     {
@@ -901,6 +914,22 @@ fn format_exif_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // PreviewImageStart: int16u or int32u
+        0x0111 if (field_type == 3 || field_type == 4) && value_count >= 1 => {
+            format_unsigned_integer_array(bytes, field_type, value_count, byte_order)
+        }
+        // PreviewImageLength: int16u or int32u
+        0x0117 if (field_type == 3 || field_type == 4) && value_count >= 1 => {
+            format_unsigned_integer_array(bytes, field_type, value_count, byte_order)
+        }
+        // TileWidth: int16u or int32u
+        0x0142 if (field_type == 3 || field_type == 4) && value_count >= 1 => {
+            format_unsigned_integer_array(bytes, field_type, value_count, byte_order)
+        }
+        // TileOffsets: int16u or int32u array
+        0x0144 if (field_type == 3 || field_type == 4) && value_count >= 1 => {
+            format_unsigned_integer_array(bytes, field_type, value_count, byte_order)
+        }
         // TileLength: int16u/int32u
         0x0143 if (field_type == 3 || field_type == 4) && value_count >= 1 => {
             format_unsigned_integer_array(bytes, field_type, value_count, byte_order)
@@ -1050,6 +1079,34 @@ fn format_exif_display_value(
         0xC620 if (field_type == 3 || field_type == 4) && value_count >= 2 => {
             format_unsigned_integer_array(bytes, field_type, value_count, byte_order)
         }
+        // WhiteLevel: int16u or int32u
+        0xC61D if (field_type == 3 || field_type == 4) && value_count >= 1 => {
+            format_unsigned_integer_array(bytes, field_type, value_count, byte_order)
+        }
+        // DefaultScale: rational64u array
+        0xC61E if field_type == 5 && value_count >= 1 => {
+            format_rational_array(bytes, value_count, byte_order)
+        }
+        // AnalogBalance: rational64u array
+        0xC627 if field_type == 5 && value_count >= 1 => {
+            format_rational_array(bytes, value_count, byte_order)
+        }
+        // AsShotNeutral: rational64u array
+        0xC628 if field_type == 5 && value_count >= 1 => {
+            format_rational_array(bytes, value_count, byte_order)
+        }
+        // CalibrationIlluminant1: SHORT[1]
+        0xC65A if field_type == 3 && value_count >= 1 => {
+            decode_calibration_illuminant(read_tiff_u16(bytes, byte_order)?)
+        }
+        // CalibrationIlluminant2: SHORT[1]
+        0xC65B if field_type == 3 && value_count >= 1 => {
+            decode_calibration_illuminant(read_tiff_u16(bytes, byte_order)?)
+        }
+        // MaskedAreas: int32u array (also accept SHORT for robustness)
+        0xC68E if (field_type == 3 || field_type == 4) && value_count >= 1 => {
+            format_unsigned_integer_array(bytes, field_type, value_count, byte_order)
+        }
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -1144,6 +1201,59 @@ fn format_panasonic_raw_compression(
         34316 => Some("Panasonic RAW 1".to_string()),
         _ => None,
     }
+}
+
+/// Format a TIFF RATIONAL array as space-separated decimal strings.
+fn format_rational_array(bytes: &[u8], value_count: u32, byte_order: ByteOrder) -> Option<String> {
+    let count = usize::try_from(value_count).ok()?;
+    let values = bytes.get(..count * 8)?;
+    Some(
+        values
+            .chunks_exact(8)
+            .map(|chunk| {
+                let num = read_tiff_u32(&chunk[..4], byte_order)?;
+                let denom = read_tiff_u32(&chunk[4..], byte_order)?;
+                if denom == 0 {
+                    return None;
+                }
+                if denom == 1 {
+                    Some(num.to_string())
+                } else {
+                    Some(format!("{}", f64::from(num) / f64::from(denom)))
+                }
+            })
+            .collect::<Option<Vec<_>>>()?
+            .join(" "),
+    )
+}
+
+/// Decode CalibrationIlluminant1/2 values to human-readable strings.
+fn decode_calibration_illuminant(value: u16) -> Option<String> {
+    Some(match value {
+        0 => "Unknown".to_string(),
+        1 => "Daylight".to_string(),
+        2 => "Fluorescent".to_string(),
+        3 => "Tungsten (incandescent light)".to_string(),
+        4 => "Flash".to_string(),
+        9 => "Fine weather".to_string(),
+        10 => "Cloudy weather".to_string(),
+        11 => "Shade".to_string(),
+        12 => "Daylight fluorescent (D 5700 – 7100K)".to_string(),
+        13 => "Day white fluorescent (N 4600 – 5400K)".to_string(),
+        14 => "Cool white fluorescent (W 3900 – 4500K)".to_string(),
+        15 => "White fluorescent (WW 3200 – 3700K)".to_string(),
+        16 => "Warm white fluorescent (L 2600 – 3250K)".to_string(),
+        17 => "Standard Light A".to_string(),
+        18 => "Standard Light B".to_string(),
+        19 => "Standard Light C".to_string(),
+        20 => "D55".to_string(),
+        21 => "D65".to_string(),
+        22 => "D75".to_string(),
+        23 => "D50".to_string(),
+        24 => "ISO studio tungsten".to_string(),
+        255 => "Other light source".to_string(),
+        _ => return None,
+    })
 }
 
 /// Decode EXIF tag 0xA302 (CFAPattern).
