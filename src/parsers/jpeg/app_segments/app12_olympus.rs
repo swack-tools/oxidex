@@ -93,6 +93,10 @@ const KNOWN_TAGS: &[&str] = &[
     "FCS5",
     "FCS6",
     "FCS7",
+    "STB3",
+    "STB4",
+    "STB5",
+    "STB6",
     "IMbb",
     "IMbg",
     "IMgb",
@@ -273,6 +277,15 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:ID".to_string(), TagValue::String(value.clone()));
             }
 
+            // ExifTool exposes SerialNumber in the APP12 group for legacy
+            // Picture Info records (including Agfa variants).
+            if key.eq_ignore_ascii_case("SerialNumber") {
+                metadata.insert(
+                    "APP12:SerialNumber".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
             // Olympus Picture Info calls this field ExposureBias. ExifTool
             // exposes it as APP12:ExposureCompensation. Preserve the textual
             // representation because these records include the explicit sign
@@ -329,8 +342,18 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             // Flash is part of ExifTool's JPEG Picture Info table and belongs
             // to the APP12 group. Preserve its display-ready textual value,
             // such as "Off", while retaining the Olympus compatibility tag.
+            // ExifTool's PrintConv maps numeric values: 0 => "Off", 1 => "On".
             if key.eq_ignore_ascii_case("Flash") {
-                metadata.insert("APP12:Flash".to_string(), TagValue::String(value.clone()));
+                let flash_value = if let Ok(num) = value.parse::<i64>() {
+                    match num {
+                        0 => TagValue::String("Off".to_string()),
+                        1 => TagValue::String("On".to_string()),
+                        _ => TagValue::Integer(num),
+                    }
+                } else {
+                    TagValue::String(value.clone())
+                };
+                metadata.insert("APP12:Flash".to_string(), flash_value);
             }
 
             // The source field in JPEG Picture Info records is normally named
@@ -611,6 +634,30 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert(app12_tag.to_string(), app12_value);
             }
 
+            // ExifTool exposes the Olympus STB3-STB6 diagnostic fields in the
+            // APP12 group using their original names.
+            if key.eq_ignore_ascii_case("STB3")
+                || key.eq_ignore_ascii_case("STB4")
+                || key.eq_ignore_ascii_case("STB5")
+                || key.eq_ignore_ascii_case("STB6")
+            {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                let app12_tag = if key.eq_ignore_ascii_case("STB3") {
+                    "APP12:STB3"
+                } else if key.eq_ignore_ascii_case("STB4") {
+                    "APP12:STB4"
+                } else if key.eq_ignore_ascii_case("STB5") {
+                    "APP12:STB5"
+                } else {
+                    "APP12:STB6"
+                };
+
+                metadata.insert(app12_tag.to_string(), app12_value);
+            }
+
             // ExifTool exposes the continuous-take diagnostic field in the
             // APP12 group using its original name.
             if key.eq_ignore_ascii_case("ContTake") {
@@ -786,6 +833,43 @@ mod fcs_tests {
 #[cfg(test)]
 mod camera_type_tests {
     use super::*;
+
+    #[test]
+    fn test_parse_olympus_app12_stb3() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nSTB3=0\r\n";
+
+        let metadata = parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:STB3"),
+            Some(0),
+            "STB3 should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_picture_info_serial_number() {
+        // ExifTool.jpg contains a legacy Picture Info SerialNumber field.
+        let data = b"Type=SR84\r\nSerialNumber=#00000001\r\n";
+
+        let metadata = parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:SerialNumber"), Some("#00000001"));
+    }
+
+    #[test]
+    fn test_parse_picture_info_flash_off_numeric() {
+        // ExifTool's APP12 Flash PrintConv maps 0 to "Off".
+        let data = b"[picture info]\r\nFlash=0\r\n";
+
+        let metadata = parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:Flash"), Some("Off"));
+    }
 
     #[test]
     fn test_legacy_picture_info_camera_type() {
