@@ -2885,7 +2885,13 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
 
 
 DEFAULT_MAX_REPAIR_ROUNDS = 5
-DEFAULT_MAX_TEST_OUTPUT_CHARS = 3000
+# 3000 was observed live keeping only leading compiler warnings for a
+# workspace with many test binaries, cutting off before the actual
+# "FAILURES:" section / panic detail cargo prints near the end -- the
+# critique model (and a human debugging alongside it) never saw the real
+# failure reason, just noise. Raised for more headroom; still a blunt
+# tail-keep, not smart extraction around FAILED/error[ markers.
+DEFAULT_MAX_TEST_OUTPUT_CHARS = 8000
 
 # Spec S3 [table_job] defaults: T3 TABLE-PORT / T4 FOUNDATION-UNLOCK jobs
 # are scoped to a whole %table/module rather than one tag, so they get a
