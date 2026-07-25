@@ -1752,6 +1752,8 @@ def build_reply_shape_manifest(max_prompt_tokens):
     survives truncate_to_token_budget, which keeps the head)."""
     return f"""You are operating in an ephemeral, isolated git worktree; broken builds during investigation are expected and cost nothing -- probe aggressively with VERIFY rather than guessing.
 
+STRATEGY: bias toward attempting a real patch early rather than open-ended exploration. If the parser file(s) shown below already give you enough to sketch a plausible fix, send a VERIFY of your best-guess diff on turn 1 or 2 -- do not chain many REQUESTs first "just to be thorough" when you already have a workable hypothesis. Use the `cargo check` feedback from each VERIFY to correct course, and expect to iterate 2-3 VERIFY rounds (wrong field offset, wrong PrintConv string, missing import, etc.) before your final Plan + diff -- that loop is cheap and expected, and converges faster than exhaustive REQUEST-based investigation up front. Only REQUEST when you are genuinely missing information a VERIFY attempt can't surface (e.g. you don't know a sample's raw byte layout at all, or the relevant source file wasn't included below).
+
 Every reply must be exactly one of these four shapes:
 
 1. REQUEST: <path> -- see a source file or a sample file (a bare line, nothing else in the reply). Add :<start>-<end> after a source path (e.g. REQUEST: src/parsers/x.rs:40-120) to get just that 1-indexed line range -- prefer a range for anything large.
