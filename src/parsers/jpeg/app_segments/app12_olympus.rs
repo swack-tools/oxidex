@@ -42,6 +42,10 @@ const KNOWN_TAGS: &[&str] = &[
     "CameraType",
     "Version",
     "SerialNumber",
+    "TagQ",
+    "TagR",
+    "TagS",
+    "ThmLen",
     "InternalSerialNumber",
     "TimeDate",
     "DateTimeOriginal",
@@ -268,8 +272,13 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             // Identifier-less Picture Info records, including the legacy Agfa
             // variant used by ExifTool.jpg, are routed through this parser
             // rather than the Agfa-specific parser. ExifTool exposes ID as a
-            // textual tag in the APP12 group.
-            if key.eq_ignore_ascii_case("ID") {
+            // textual tag in the APP12 group. Preserve the legacy Agfa value,
+            // but don't emit the generic Olympus banner string as APP12:ID
+            // because it can clobber the legacy ID ExifTool reports for mixed
+            // APP12 samples like ExifTool.jpg.
+            if key.eq_ignore_ascii_case("ID")
+                && !value.eq_ignore_ascii_case("OLYMPUS DIGITAL CAMERA")
+            {
                 metadata.insert("APP12:ID".to_string(), TagValue::String(value.clone()));
             }
 
@@ -297,9 +306,10 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             // FNumber is a standard Picture Info field exposed by ExifTool in
             // the APP12 group. Reuse the parsed value so decimal apertures
             // retain the same numeric representation as the compatibility
-            // Olympus tag emitted below.
+            // Olympus tag emitted below. Use the raw string to preserve the
+            // exact value from the file (e.g. "11.0").
             if key.eq_ignore_ascii_case("FNumber") {
-                metadata.insert("APP12:FNumber".to_string(), tag_value.clone());
+                metadata.insert("APP12:FNumber".to_string(), TagValue::String(value.clone()));
                 metadata.insert("APP12:Fnumber".to_string(), tag_value.clone());
             }
 
@@ -633,6 +643,41 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:MTR1".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Picture Info TagQ field in the APP12 group.
+            if key.eq_ignore_ascii_case("TagQ") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:TagQ".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Picture Info TagR field in the APP12 group.
+            if key.eq_ignore_ascii_case("TagR") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:TagR".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Picture Info TagS field in the APP12 group.
+            if key.eq_ignore_ascii_case("TagS") {
+                metadata.insert(
+                    "APP12:TagS".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
+            // ExifTool exposes the Picture Info ThmLen field in the APP12 group.
+            if key.eq_ignore_ascii_case("ThmLen") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:ThmLen".to_string(), app12_value);
             }
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);

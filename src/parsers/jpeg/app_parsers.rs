@@ -654,9 +654,9 @@ mod tests {
             "FNumber should be exposed in ExifTool's APP12 group"
         );
         assert_eq!(
-            metadata.get("APP12:FNumber"),
-            metadata.get("Olympus:FNumber"),
-            "APP12 FNumber should retain the parsed decimal value"
+            metadata.get_string("APP12:FNumber"),
+            Some("11.0"),
+            "APP12 FNumber should preserve the exact decimal value from the file"
         );
     }
 
@@ -912,6 +912,59 @@ mod tests {
             metadata.get_string("APP11:RenderingIntent"),
             Some("Relative Colorimetric"),
             "Should parse rendering intent"
+        );
+    }
+
+    #[test]
+    fn test_parse_app12_tag_q() {
+        let data = b"[picture info]\r\nTagQ=96\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:TagQ"), Some(96));
+    }
+
+    #[test]
+    fn test_parse_app12_tag_r() {
+        let data = b"[picture info]\r\nTagR=293\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:TagR"), Some(293));
+    }
+
+    #[test]
+    fn test_parse_app12_tag_s() {
+        let data = b"[picture info]\r\nTagS=v\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:TagS"), Some("v"));
+    }
+
+    #[test]
+    fn test_parse_app12_thm_len() {
+        let data = b"[picture info]\r\nThmLen=3802\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:ThmLen"), Some(3802));
+    }
+
+    #[test]
+    fn test_app12_id_skips_olympus_banner() {
+        let data = b"Type=SR84\r\nID=OLYMPUS DIGITAL CAMERA\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid legacy Picture Info APP12 data should parse");
+
+        assert!(
+            metadata.get("APP12:ID").is_none(),
+            "Generic Olympus banner should not be emitted as APP12:ID"
         );
     }
 }
