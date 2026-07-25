@@ -189,29 +189,31 @@ pub fn read_metadata(path: &Path) -> Result<MetadataMap> {
 ///
 /// Tags not in the registry are skipped during validation (allows custom tags).
 pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
-    // PHASE 1: VALIDATION (fail fast before any file operations)
-    // Iterate through all tags and validate each one against its descriptor
-    for (tag_name, tag_value) in metadata.iter() {
-        // Look up tag descriptor in registry
-        if let Some(descriptor) = get_tag_descriptor(tag_name) {
-            if has_reliable_value_type(tag_name) {
-                // Pass the original tag_name (e.g., "IFD0:Make") for error messages.
-                validate_tag_value_with_name(tag_name, descriptor, tag_value)?;
-            } else {
-                validate_tag_value_intrinsics(tag_name, tag_value)?;
-            }
-        }
-        // If tag is not in registry, skip validation (allows custom/rare tags)
-    }
-
-    // PHASE 2: READ ORIGINAL FILE
-    // Open file with MMapReader for zero-copy access
+    // PHASE 1: VALIDATION
+    // JPEG is validated inside the surgical writer, which distinguishes
+    // caller-changed values (strict validation) from unchanged originals
+    // (raw carry-over that never re-enters through TagValue). Whole-map
+    // validation here would wrongly reject unchanged display-form tags
+    // (issue #20). Other formats keep the original whole-map validation.
     let reader = MMapReader::new(path)?;
-
-    // PHASE 3: DETECT FORMAT
     let format = detect_format(&reader)?;
 
-    // PHASE 4: ROUTE TO APPROPRIATE WRITER
+    if format != FileFormat::JPEG {
+        for (tag_name, tag_value) in metadata.iter() {
+            // Look up tag descriptor in registry
+            if let Some(descriptor) = get_tag_descriptor(tag_name) {
+                if has_reliable_value_type(tag_name) {
+                    // Pass the original tag_name (e.g., "IFD0:Make") for error messages.
+                    validate_tag_value_with_name(tag_name, descriptor, tag_value)?;
+                } else {
+                    validate_tag_value_intrinsics(tag_name, tag_value)?;
+                }
+            }
+            // If tag is not in registry, skip validation (allows custom/rare tags)
+        }
+    }
+
+    // PHASE 2: ROUTE TO APPROPRIATE WRITER
     match format {
         FileFormat::JPEG => {
             // Use JPEG writer to serialize metadata

@@ -57,7 +57,7 @@ const INTEROPERABILITY_IFD_POINTER: u16 = 0xA005;
 /// # Returns
 ///
 /// A static string with the tag name (e.g., "InteropIndex", "InteropVersion")
-fn interop_tag_to_name(tag_id: u16) -> &'static str {
+pub(crate) fn interop_tag_to_name(tag_id: u16) -> &'static str {
     match tag_id {
         INTEROP_INDEX => "InteropIndex",
         INTEROP_VERSION => "InteropVersion",

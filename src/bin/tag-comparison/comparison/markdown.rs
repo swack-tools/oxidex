@@ -55,6 +55,16 @@ fn generate_index(
     }
     content.push_str("\n\n");
 
+    content.push_str(
+        "::: tip Empirical JPEG tag matrix\n\
+         These reports sample real fixture files per format. For JPEG, a \
+         complete per-tag read/write matrix against ExifTool (every writable \
+         tag, with a CI regression gate) is also available: \
+         [JPEG Tag Support](/reference/jpeg-tag-support) · \
+         [JPEG Tag Matrix](/reference/jpeg-tag-matrix)\n\
+         :::\n\n",
+    );
+
     // Summary table for tested formats
     content.push_str("## Coverage by Format\n\n");
     content

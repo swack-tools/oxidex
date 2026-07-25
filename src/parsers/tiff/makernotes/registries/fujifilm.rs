@@ -9,9 +9,9 @@ use super::super::shared::tag_registry::TagRegistry;
 // Re-export decoders from fujifilm.rs
 // These decoders are defined using const_decoder! macros in the main parser
 use super::super::fujifilm::{
-    DECODE_BURST_MODE, DECODE_DRIVE_MODE, DECODE_DYNAMIC_RANGE, DECODE_EXR_MODE, DECODE_FILM_MODE,
-    DECODE_FLASH_MODE, DECODE_FOCUS_MODE, DECODE_OFF_ON, DECODE_PICTURE_MODE, DECODE_QUALITY,
-    DECODE_SHUTTER_TYPE, DECODE_WHITE_BALANCE,
+    DECODE_DRIVE_MODE, DECODE_DYNAMIC_RANGE, DECODE_DYNAMIC_RANGE_SETTING, DECODE_EXR_MODE,
+    DECODE_FILM_MODE, DECODE_FLASH_MODE, DECODE_FOCUS_MODE, DECODE_OFF_ON, DECODE_PICTURE_MODE,
+    DECODE_QUALITY, DECODE_WHITE_BALANCE,
 };
 
 // ============================================================================
@@ -48,16 +48,14 @@ pub fn fujifilm_registry() -> TagRegistry {
         .register_enum_tag(0x1033, "EXRAuto", None)
         .register_enum_tag_required(0x1034, "EXRMode", &DECODE_EXR_MODE)
         .register_enum_tag_required(0x1039, "DriveMode", &DECODE_DRIVE_MODE)
-        .register_enum_tag_required(0x1100, "ShutterType", &DECODE_SHUTTER_TYPE)
-        .register_enum_tag_required(0x1101, "BurstMode", &DECODE_BURST_MODE)
         .register_enum_tag(0x1300, "BlurWarning", None)
         .register_enum_tag(0x1301, "FocusWarning", None)
         .register_enum_tag(0x1302, "ExposureWarning", None)
         .register_enum_tag(0x1304, "DynamicRangeWarning", None)
         .register_enum_tag_required(0x1401, "FilmMode", &DECODE_FILM_MODE)
-        .register_enum_tag_required(0x1402, "DynamicRange", &DECODE_DYNAMIC_RANGE)
-        .register_enum_tag_required(0x1403, "DynamicRangeSetting", &DECODE_DYNAMIC_RANGE)
-        .register_enum_tag_required(0x1404, "DevelopmentDynamicRange", &DECODE_DYNAMIC_RANGE)
+        .register_enum_tag_required(0x1400, "DynamicRange", &DECODE_DYNAMIC_RANGE)
+        .register_enum_tag_required(0x1402, "DynamicRangeSetting", &DECODE_DYNAMIC_RANGE_SETTING)
+        .register_integer_tag(0x1403, "DevelopmentDynamicRange", None)
         .register_enum_tag(0x140B, "AutoDynamicRange", None)
         // Simple integer/numeric tags
         .register_integer_tag(0x1005, "ColorTemperature", None)
@@ -68,11 +66,13 @@ pub fn fujifilm_registry() -> TagRegistry {
         .register_integer_tag(0x1041, "HighlightTone", None)
         .register_integer_tag(0x1044, "DigitalZoom", None)
         .register_integer_tag(0x1047, "ImageGeneration", None)
-        .register_integer_tag(0x1103, "SequenceNumber", None)
-        .register_integer_tag(0x1405, "MinFocalLength", None)
-        .register_integer_tag(0x1406, "MaxFocalLength", None)
-        .register_integer_tag(0x1407, "MaxApertureAtMinFocal", None)
-        .register_integer_tag(0x1408, "MaxApertureAtMaxFocal", None)
+        .register_integer_tag(0x1100, "AutoBracketing", None)
+        .register_integer_tag(0x1101, "SequenceNumber", None)
+        .register_integer_tag(0x1032, "ExposureCount", None)
+        .register_integer_tag(0x1404, "MinFocalLength", None)
+        .register_integer_tag(0x1405, "MaxFocalLength", None)
+        .register_integer_tag(0x1406, "MaxApertureAtMinFocal", None)
+        .register_integer_tag(0x1407, "MaxApertureAtMaxFocal", None)
         .register_integer_tag(0x1431, "Rating", None)
         .register_integer_tag(0x1438, "ImageCount", None)
         .register_integer_tag(0x4100, "FacesDetected", None)

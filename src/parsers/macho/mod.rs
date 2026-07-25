@@ -73,10 +73,10 @@ use structures::{MachOInfo, cpu_type};
 ///     let parser = MachOParser;
 ///     let metadata = parser.parse(reader)?;
 ///
-///     if let Some(cpu_type) = metadata.get_string("MachO:CPUType") {
+///     if let Some(cpu_type) = metadata.get_string("EXE:CPUType") {
 ///         println!("CPU Type: {}", cpu_type);
 ///     }
-///     if let Some(uuid) = metadata.get_string("MachO:UUID") {
+///     if let Some(uuid) = metadata.get_string("EXE:UUID") {
 ///         println!("UUID: {}", uuid);
 ///     }
 ///     Ok(())
@@ -228,9 +228,18 @@ impl FormatParser for MachOParser {
         // Extract metadata
         let mut metadata = extract_macho_metadata(&info);
 
+        // Match ExifTool's CPUArchitecture tag, which describes the Mach-O
+        // object class rather than the specific CPU type.
+        if let Some(header) = &info.header {
+            metadata.insert(
+                "EXE:CPUArchitecture".to_string(),
+                TagValue::String(if header.is_64bit { "64 bit" } else { "32 bit" }.to_string()),
+            );
+        }
+
         // Add file size
         metadata.insert(
-            "MachO:FileSize".to_string(),
+            "EXE:FileSize".to_string(),
             TagValue::Integer(reader.size() as i64),
         );
 
@@ -343,12 +352,16 @@ mod tests {
         let metadata = result.unwrap();
 
         // Check basic fields
-        assert_eq!(metadata.get_string("MachO:CPUType").unwrap(), "ARM64");
-        assert_eq!(metadata.get_string("MachO:FileType").unwrap(), "Executable");
-        assert_eq!(metadata.get_integer("MachO:Is64Bit").unwrap(), 1);
-        assert_eq!(metadata.get_integer("MachO:IsPIE").unwrap(), 1);
+        assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM64");
+        assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
         assert_eq!(
-            metadata.get_string("MachO:UUID").unwrap(),
+            metadata.get_string("EXE:CPUArchitecture").unwrap(),
+            "64 bit"
+        );
+        assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
+        assert_eq!(metadata.get_integer("EXE:IsPIE").unwrap(), 1);
+        assert_eq!(
+            metadata.get_string("EXE:UUID").unwrap(),
             "550E8400-E29B-41D4-A716-446655440000"
         );
     }

@@ -7,6 +7,11 @@
 
 #![allow(dead_code)]
 
+use crate::core::tag_conversion::parse_string_to_tag_value;
+use crate::core::value_formatter::{
+    format_iptc_coded_charset, format_iptc_date, format_iptc_record_version, format_iptc_time,
+    format_iptc_urgency,
+};
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::jpeg::iptc_parser::{
@@ -51,11 +56,57 @@ impl EPSParser {
         let mut version: Option<String> = None;
         let mut pages: Option<String> = None;
 
-        for line in text.lines() {
+        // EPS files may use bare CR (old Mac style) line endings, which
+        // `str::lines()` does not split on. Normalize all line ending
+        // styles to `\n` first so DSC comments are found regardless of
+        // the source application's newline convention.
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+
+        // ExifTool only reads DSC comments from the top-level document by
+        // default; content nested inside %%BeginDocument/%%EndDocument
+        // (embedded files) is skipped unless the -ee (ExtractEmbedded)
+        // option is used. Track nesting depth so embedded document comments
+        // don't clobber the outer document's metadata.
+        let mut doc_depth: u32 = 0;
+
+        // Helper: only the first occurrence of each DSC-comment tag counts
+        // (ExifTool marks these tags Priority 0, "first found wins").
+        macro_rules! insert_first {
+            ($map:expr, $key:expr, $val:expr) => {
+                if !$map.contains_key($key) {
+                    $map.insert($key.to_string(), $val);
+                }
+            };
+        }
+
+        for line in normalized.lines() {
             let line = line.trim();
 
-            // DSC comments start with %%
+            if line.starts_with("%%BeginDocument") {
+                doc_depth += 1;
+                continue;
+            }
+            if line.starts_with("%%EndDocument") {
+                doc_depth = doc_depth.saturating_sub(1);
+                continue;
+            }
+            if doc_depth > 0 {
+                // Inside an embedded document; skip its DSC comments.
+                continue;
+            }
+
+            // DSC comments start with %%, except for a small set of tags
+            // (notably ImageData) that some applications write with only a
+            // single leading '%'. Match ExifTool's PostScript.pm behavior by
+            // special-casing "%ImageData:" here before requiring "%%".
             if !line.starts_with("%%") {
+                if let Some(value) = line.strip_prefix("%ImageData:") {
+                    insert_first!(
+                        metadata,
+                        "PostScript:ImageData",
+                        TagValue::String(value.trim().to_string())
+                    );
+                }
                 continue;
             }
 
@@ -63,45 +114,48 @@ impl EPSParser {
             if let Some(value) = line.strip_prefix("%%BoundingBox:") {
                 let value = value.trim();
                 if value != "(atend)" {
-                    metadata.insert(
-                        "PostScript:BoundingBox".to_string(),
-                        TagValue::String(value.to_string()),
+                    insert_first!(
+                        metadata,
+                        "PostScript:BoundingBox",
+                        TagValue::String(value.to_string())
                     );
                     // Also add EPS:BoundingBox for consistency with Worker 24 requirements
-                    metadata.insert(
-                        "EPS:BoundingBox".to_string(),
-                        TagValue::new_string(value.to_string()),
+                    insert_first!(
+                        metadata,
+                        "EPS:BoundingBox",
+                        TagValue::new_string(value.to_string())
                     );
                 }
             } else if let Some(value) = line.strip_prefix("%%HiResBoundingBox:") {
                 let value = value.trim();
                 if value != "(atend)" {
-                    metadata.insert(
-                        "PostScript:HiResBoundingBox".to_string(),
-                        TagValue::String(value.to_string()),
+                    insert_first!(
+                        metadata,
+                        "PostScript:HiResBoundingBox",
+                        TagValue::String(value.to_string())
                     );
                 }
             } else if let Some(value) = line.strip_prefix("%%Creator:") {
                 let trimmed_value = value.trim().to_string();
-                metadata.insert(
-                    "PostScript:Creator".to_string(),
-                    TagValue::String(trimmed_value.clone()),
+                insert_first!(
+                    metadata,
+                    "PostScript:Creator",
+                    TagValue::String(trimmed_value.clone())
                 );
                 // Add EPS:Creator as per Worker 24 requirements
-                metadata.insert(
-                    "EPS:Creator".to_string(),
-                    TagValue::new_string(trimmed_value),
-                );
+                insert_first!(metadata, "EPS:Creator", TagValue::new_string(trimmed_value));
             } else if let Some(value) = line.strip_prefix("%%CreationDate:") {
                 let trimmed_value = value.trim().to_string();
-                metadata.insert(
-                    "PostScript:CreateDate".to_string(),
-                    TagValue::String(trimmed_value.clone()),
+                insert_first!(
+                    metadata,
+                    "PostScript:CreateDate",
+                    TagValue::String(trimmed_value.clone())
                 );
                 // Add EPS:CreationDate as per Worker 24 requirements
-                metadata.insert(
-                    "EPS:CreationDate".to_string(),
-                    TagValue::new_string(trimmed_value),
+                insert_first!(
+                    metadata,
+                    "EPS:CreationDate",
+                    TagValue::new_string(trimmed_value)
                 );
             } else if let Some(value) = line.strip_prefix("%%Title:") {
                 // Remove surrounding parentheses if present
@@ -112,43 +166,49 @@ impl EPSParser {
                     value
                 };
                 let value_str = value.to_string();
-                metadata.insert(
-                    "PostScript:Title".to_string(),
-                    TagValue::String(value_str.clone()),
+                insert_first!(
+                    metadata,
+                    "PostScript:Title",
+                    TagValue::String(value_str.clone())
                 );
                 // Add EPS:Title as per Worker 24 requirements
-                metadata.insert("EPS:Title".to_string(), TagValue::new_string(value_str));
+                insert_first!(metadata, "EPS:Title", TagValue::new_string(value_str));
             } else if let Some(value) = line.strip_prefix("%%For:") {
                 let trimmed_value = value.trim().to_string();
-                metadata.insert(
-                    "PostScript:For".to_string(),
-                    TagValue::String(trimmed_value.clone()),
+                insert_first!(
+                    metadata,
+                    "PostScript:For",
+                    TagValue::String(trimmed_value.clone())
                 );
                 // Add EPS:For as per Worker 24 requirements
-                metadata.insert("EPS:For".to_string(), TagValue::new_string(trimmed_value));
+                insert_first!(metadata, "EPS:For", TagValue::new_string(trimmed_value));
             } else if let Some(value) = line.strip_prefix("%%DocumentData:") {
-                metadata.insert(
-                    "PostScript:DocumentData".to_string(),
-                    TagValue::String(value.trim().to_string()),
+                insert_first!(
+                    metadata,
+                    "PostScript:DocumentData",
+                    TagValue::String(value.trim().to_string())
                 );
             } else if let Some(value) = line.strip_prefix("%%LanguageLevel:") {
-                metadata.insert(
-                    "PostScript:LanguageLevel".to_string(),
-                    TagValue::String(value.trim().to_string()),
+                insert_first!(
+                    metadata,
+                    "PostScript:LanguageLevel",
+                    TagValue::String(value.trim().to_string())
                 );
             } else if let Some(value) = line.strip_prefix("%%Pages:") {
                 let value = value.trim();
                 if value != "(atend)" {
                     pages = Some(value.to_string());
-                    metadata.insert(
-                        "PostScript:Pages".to_string(),
-                        TagValue::String(value.to_string()),
+                    insert_first!(
+                        metadata,
+                        "PostScript:Pages",
+                        TagValue::String(value.to_string())
                     );
                 }
             } else if let Some(value) = line.strip_prefix("%%ImageData:") {
-                metadata.insert(
-                    "PostScript:ImageData".to_string(),
-                    TagValue::String(value.trim().to_string()),
+                insert_first!(
+                    metadata,
+                    "PostScript:ImageData",
+                    TagValue::String(value.trim().to_string())
                 );
             }
 
@@ -199,6 +259,27 @@ impl EPSParser {
                         }
                     }
 
+                    // The shared XMP parser flattens list-type properties
+                    // (rdf:Bag/Seq/Alt, e.g. dc:subject) into a single
+                    // comma-joined string. ExifTool reports these as arrays,
+                    // so re-expand the known list-type XMP tags here into
+                    // TagValue::Array for correct multi-value representation.
+                    for list_tag in [
+                        "XMP:Subject",
+                        "XMP:SupplementalCategories",
+                        "XMP-photoshop:SupplementalCategories",
+                    ] {
+                        if let Some(TagValue::String(joined)) = metadata.get(list_tag) {
+                            let items: Vec<TagValue> = joined
+                                .split(", ")
+                                .map(|s| TagValue::new_string(s.to_string()))
+                                .collect();
+                            if items.len() > 1 {
+                                metadata.insert(list_tag.to_string(), TagValue::Array(items));
+                            }
+                        }
+                    }
+
                     // Parse XMP history for forensic metadata
                     if let Ok(xml_str) = std::str::from_utf8(xmp_data) {
                         if let Ok(history_tags) = parse_xmp_history(xml_str) {
@@ -206,10 +287,77 @@ impl EPSParser {
                                 metadata.insert(key, TagValue::new_string(value));
                             }
                         }
+
+                        // A handful of properties from older (pre-RDF-namespace)
+                        // XMP toolkit output aren't covered by the general-purpose
+                        // shared RDF parser: the bare (non-"rdf:"-prefixed) `about`
+                        // attribute, the toolkit version attribute on the root
+                        // wrapper element, and the nested stJob:name struct field
+                        // inside xmpBJ:JobRef. Extract them directly here.
+                        if !metadata.contains_key("XMP:About") {
+                            if let Some(about) = extract_xml_attribute(xml_str, "about") {
+                                metadata
+                                    .insert("XMP:About".to_string(), TagValue::new_string(about));
+                            }
+                        }
+                        if !metadata.contains_key("XMP:XMPToolkit") {
+                            if let Some(toolkit) = extract_xml_attribute(xml_str, "x:xaptk")
+                                .or_else(|| extract_xml_attribute(xml_str, "xmptk"))
+                            {
+                                metadata.insert(
+                                    "XMP:XMPToolkit".to_string(),
+                                    TagValue::new_string(toolkit),
+                                );
+                            }
+                        }
+                        if !metadata.contains_key("XMP:JobRefName") {
+                            if let Some(job_name) = extract_xml_element_text(xml_str, "stJob:name")
+                            {
+                                metadata.insert(
+                                    "XMP:JobRefName".to_string(),
+                                    TagValue::new_string(job_name),
+                                );
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    /// Extracts and hex-decodes an embedded `%%BeginPhotoshop`/`%%EndPhotoshop`
+    /// (or single-`%` variant) DSC block, returning the raw Photoshop resource
+    /// bytes (which normally start with an "8BIM" signature).
+    ///
+    /// ASCII EPS files embed Photoshop's binary 8BIM resource data (which
+    /// includes IPTC and the IPTC digest) as ASCII-hex text wrapped in a
+    /// `%%BeginPhotoshop: <len>` / `%%EndPhotoshop` block, one line of hex
+    /// digits per line (each line commented out with a leading `%`). This
+    /// mirrors ExifTool's `PostScript.pm` handling of the same block.
+    fn extract_photoshop_block(data: &[u8]) -> Option<Vec<u8>> {
+        const BEGIN_MARKER: &[u8] = b"BeginPhotoshop";
+        const END_MARKER: &[u8] = b"EndPhotoshop";
+
+        let begin_pos = find_subsequence(data, BEGIN_MARKER)?;
+        let after_begin = &data[begin_pos + BEGIN_MARKER.len()..];
+        let end_pos = find_subsequence(after_begin, END_MARKER)?;
+        let block = &after_begin[..end_pos];
+
+        let block_str = String::from_utf8_lossy(block);
+        let mut hex_chars = String::new();
+        for (i, line) in block_str.split(['\r', '\n']).enumerate() {
+            if i == 0 {
+                // First "line" is the ": <length>" declaration, not data.
+                continue;
+            }
+            for c in line.chars() {
+                if c.is_ascii_hexdigit() {
+                    hex_chars.push(c);
+                }
+            }
+        }
+
+        hex::decode(hex_chars).ok()
     }
 
     /// Extracts IPTC metadata from Photoshop 8BIM blocks in EPS data
@@ -264,11 +412,39 @@ impl EPSParser {
 
                     // Parse IPTC records
                     if let Ok(records) = parse_all_iptc_records(iptc_data) {
+                        // List-type IPTC datasets (Keywords, SupplementalCategories)
+                        // can legitimately repeat; accumulate instead of
+                        // overwriting so all values are preserved.
+                        let mut keywords: Vec<String> = Vec::new();
+                        let mut supplemental_categories: Vec<String> = Vec::new();
+
                         for record in records {
                             let tag_name =
                                 dataset_to_tag_name(record.record_number, record.dataset_number);
-                            let value = decode_iptc_string(&record.data);
-                            metadata.insert(tag_name, TagValue::String(value));
+                            let value = format_iptc_record_value(
+                                record.record_number,
+                                record.dataset_number,
+                                &record.data,
+                            );
+
+                            match (record.record_number, record.dataset_number) {
+                                (2, 25) => keywords.push(value),
+                                (2, 20) => supplemental_categories.push(value),
+                                _ => {
+                                    metadata.insert(tag_name, parse_string_to_tag_value(&value));
+                                }
+                            }
+                        }
+
+                        if !keywords.is_empty() {
+                            insert_iptc_list(metadata, "IPTC:Keywords", keywords);
+                        }
+                        if !supplemental_categories.is_empty() {
+                            insert_iptc_list(
+                                metadata,
+                                "IPTC:SupplementalCategories",
+                                supplemental_categories,
+                            );
                         }
                     }
                 }
@@ -385,8 +561,16 @@ impl FormatParser for EPSParser {
         // Extract XMP metadata
         Self::extract_xmp(data, &mut metadata);
 
-        // Extract IPTC metadata
+        // Extract IPTC metadata from raw binary 8BIM blocks, if present
         Self::extract_iptc(data, &mut metadata);
+
+        // ASCII EPS files typically embed the Photoshop 8BIM resource data
+        // (IPTC + IPTC digest) as a hex-encoded %%BeginPhotoshop block rather
+        // than raw binary, since PostScript is a text format. Decode that
+        // block, if present, and extract IPTC from it too.
+        if let Some(photoshop_data) = Self::extract_photoshop_block(data) {
+            Self::extract_iptc(&photoshop_data, &mut metadata);
+        }
 
         Ok(metadata)
     }
@@ -430,6 +614,91 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
+}
+
+/// Extracts the value of an XML attribute of the form `name='value'` or
+/// `name="value"` from raw XML text. This is a lightweight, targeted lookup
+/// (not a general XML attribute parser) used only for the handful of
+/// legacy XMP attributes not handled by the shared RDF parser.
+fn extract_xml_attribute(text: &str, attr_name: &str) -> Option<String> {
+    for quote in ['\'', '"'] {
+        let needle = format!("{attr_name}={quote}");
+        if let Some(pos) = text.find(&needle) {
+            let after = &text[pos + needle.len()..];
+            if let Some(end) = after.find(quote) {
+                return Some(after[..end].to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extracts the text content of the first `<tag_name>...</tag_name>` element
+/// found in raw XML text. This is a lightweight, targeted lookup (not a
+/// general XML parser) used only for simple leaf elements nested inside
+/// structures the shared RDF parser doesn't flatten.
+fn extract_xml_element_text(text: &str, tag_name: &str) -> Option<String> {
+    let open = format!("<{tag_name}>");
+    let close = format!("</{tag_name}>");
+    let start = text.find(&open)? + open.len();
+    let relative_end = text[start..].find(&close)?;
+    Some(text[start..start + relative_end].trim().to_string())
+}
+
+/// Converts a raw IPTC IIM record payload to its string representation,
+/// applying the same record/dataset-specific formatting ExifTool uses
+/// (binary version numbers, date/time reformatting, and Urgency's
+/// human-readable suffix).
+fn format_iptc_record_value(record_number: u8, dataset_number: u8, data: &[u8]) -> String {
+    if record_number == 1 {
+        return match dataset_number {
+            0 => format_iptc_record_version(data), // EnvelopeRecordVersion
+            70 => format_iptc_date(&decode_iptc_string(data)), // DateSent
+            80 => format_iptc_time(&decode_iptc_string(data)), // TimeSent
+            90 => format_iptc_coded_charset(data), // CodedCharacterSet
+            _ => decode_iptc_string(data),
+        };
+    }
+
+    if record_number == 2 {
+        return match dataset_number {
+            0 => format_iptc_record_version(data), // ApplicationRecordVersion
+            10 => format_iptc_urgency(&decode_iptc_string(data)),
+            30 | 37 | 47 | 55 | 62 => format_iptc_date(&decode_iptc_string(data)),
+            35 | 38 | 60 | 63 => format_iptc_time(&decode_iptc_string(data)),
+            _ => decode_iptc_string(data),
+        };
+    }
+
+    decode_iptc_string(data)
+}
+
+/// Inserts a possibly multi-valued IPTC tag (e.g. Keywords,
+/// SupplementalCategories) into the metadata map. If the tag already has a
+/// value (from a prior 8BIM block, e.g. raw-binary vs. hex-decoded
+/// Photoshop data), the new values are merged rather than overwriting.
+/// Single-valued results are stored as a plain string; multi-valued results
+/// are stored as a `TagValue::Array` so downstream formatting matches
+/// ExifTool's List-type tag representation.
+fn insert_iptc_list(metadata: &mut MetadataMap, key: &str, mut values: Vec<String>) {
+    let mut all_values: Vec<String> = match metadata.get(key) {
+        Some(TagValue::Array(existing)) => existing
+            .iter()
+            .filter_map(|v| v.as_string().map(|s| s.to_string()))
+            .collect(),
+        Some(TagValue::String(s)) => vec![s.clone()],
+        _ => Vec::new(),
+    };
+    all_values.append(&mut values);
+
+    if all_values.len() == 1 {
+        metadata.insert(key.to_string(), TagValue::new_string(all_values.remove(0)));
+    } else {
+        metadata.insert(
+            key.to_string(),
+            TagValue::Array(all_values.into_iter().map(TagValue::new_string).collect()),
+        );
+    }
 }
 
 /// Parses metadata from EPS files.

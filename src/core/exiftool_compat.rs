@@ -329,6 +329,14 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         }
     }
 
+    // GPSVersionID uses a different format than the ASCII-digit version tags:
+    // the 4 raw bytes are joined as dot-separated decimal values (e.g. "2.2.0.0").
+    if is_gps_version_id(base_name)
+        && let TagValue::Binary(data) = value
+    {
+        return TagValue::String(format_gps_version_id(data));
+    }
+
     // ---------------------------------------------------------------------
     // Rule 8: APP14 Flags (APP14Flags0, APP14Flags1)
     // ExifTool shows "(none)" for value 0, otherwise shows the value
@@ -579,7 +587,13 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     // Note: MeasurementFlare is also handled in the ICC matrix rule above,
     // but Quality (from Ducky segment) is handled here for integer values.
     // ---------------------------------------------------------------------
-    if is_percentage_tag(base_name) {
+    // Note: only Ducky's "Quality" tag (or a bare, family-less "Quality")
+    // gets a "%" suffix -- other formats that happen to share the tag name
+    // (e.g. RIFF/AVI's numeric stream Quality, unrelated to percentages)
+    // must NOT be reformatted here.
+    let quality_percentage_applies =
+        base_name == "MeasurementFlare" || tag_name == "Ducky:Quality" || tag_name == "Quality";
+    if quality_percentage_applies && is_percentage_tag(base_name) {
         if let Some(i) = value.as_integer() {
             return TagValue::String(format!("{}%", i));
         }
@@ -1027,7 +1041,11 @@ pub fn is_scene_type(base_name: &str) -> bool {
 /// - InteropVersion
 /// - ExifVersion
 /// - FlashpixVersion
-/// - GPSVersionID
+///
+/// Note: `GPSVersionID` is *not* one of these -- unlike the tags above, its
+/// 4 raw bytes are not ASCII digit characters. ExifTool prints it by joining
+/// the 4 raw byte values with dots (e.g. `[2, 2, 0, 0]` -> `"2.2.0.0"`); see
+/// [`is_gps_version_id`] / [`format_gps_version_id`] for that formatting.
 ///
 /// # Arguments
 ///
@@ -1039,8 +1057,37 @@ pub fn is_scene_type(base_name: &str) -> bool {
 pub fn is_version_tag(base_name: &str) -> bool {
     matches!(
         base_name,
-        "InteropVersion" | "ExifVersion" | "FlashpixVersion" | "GPSVersionID"
+        "InteropVersion" | "ExifVersion" | "FlashpixVersion"
     )
+}
+
+/// Checks if the tag is `GPSVersionID`.
+///
+/// Unlike the ASCII-digit version tags (`ExifVersion`, `InteropVersion`,
+/// `FlashpixVersion`), `GPSVersionID`'s 4 raw bytes are small integers
+/// (typically `[2, 2, 0, 0]`) that ExifTool prints by joining the decimal
+/// byte values with dots, e.g. `"2.2.0.0"`.
+///
+/// # Arguments
+///
+/// * `base_name` - The tag name without family prefix
+///
+/// # Returns
+///
+/// `true` if this tag should be decoded with [`format_gps_version_id`]
+pub fn is_gps_version_id(base_name: &str) -> bool {
+    base_name == "GPSVersionID"
+}
+
+/// Formats `GPSVersionID` raw bytes as dot-separated decimal values.
+///
+/// ExifTool prints the 4 raw bytes (e.g. `[2, 2, 0, 0]`) as `"2.2.0.0"`,
+/// not as a concatenated ASCII digit string like the other EXIF version tags.
+pub fn format_gps_version_id(data: &[u8]) -> String {
+    data.iter()
+        .map(|b| b.to_string())
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// Checks if the tag is an APP14 flags tag (APP14Flags0, APP14Flags1).
@@ -1489,10 +1536,13 @@ mod tests {
         let formatted = format_tag_value("FlashpixVersion", &value);
         assert_eq!(formatted.as_string(), Some("0100"));
 
-        let data = b"0230".to_vec();
+        // GPSVersionID is NOT decoded like the ASCII-digit version tags above:
+        // its 4 raw bytes are small integers joined with dots (e.g. "2.2.0.0"),
+        // not a concatenated ASCII digit string.
+        let data = vec![2u8, 2, 0, 0];
         let value = TagValue::Binary(data);
         let formatted = format_tag_value("GPSVersionID", &value);
-        assert_eq!(formatted.as_string(), Some("0230"));
+        assert_eq!(formatted.as_string(), Some("2.2.0.0"));
     }
 
     // -------------------------------------------------------------------------
@@ -1816,7 +1866,9 @@ mod tests {
         assert!(is_version_tag("InteropVersion"));
         assert!(is_version_tag("ExifVersion"));
         assert!(is_version_tag("FlashpixVersion"));
-        assert!(is_version_tag("GPSVersionID"));
+        // GPSVersionID uses a distinct dot-separated decimal format; see
+        // `is_gps_version_id` / `format_gps_version_id`.
+        assert!(!is_version_tag("GPSVersionID"));
         assert!(!is_version_tag("SomeOtherVersion"));
     }
 

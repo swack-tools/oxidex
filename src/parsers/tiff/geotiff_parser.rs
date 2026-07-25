@@ -128,21 +128,99 @@ pub fn parse_model_transformation(data: &[u8], is_little_endian: bool) -> Option
     Some(
         values
             .iter()
-            .map(|v| {
-                // Format with appropriate precision to match ExifTool output
-                // For integers (like 0.0, 1.0), show without decimals
-                if v.fract() == 0.0 && v.abs() < 1e15 {
-                    format!("{:.0}", v)
-                } else {
-                    // Use Rust's default float formatting which typically uses
-                    // the minimum digits needed to represent the value uniquely.
-                    // This usually matches ExifTool's Perl output better.
-                    format!("{}", v)
-                }
-            })
+            .map(|v| format_exiftool_double(*v))
             .collect::<Vec<_>>()
             .join(" "),
     )
+}
+
+/// Formats an f64 the way ExifTool (Perl) stringifies floating point values.
+///
+/// Perl's default numeric stringification uses roughly `%.15g` semantics
+/// (15 significant digits, fixed vs. scientific notation chosen by
+/// magnitude, trailing zeros stripped). Rust's default `Display` for `f64`
+/// instead prints the shortest string that round-trips exactly, which can
+/// require up to 17 significant digits and therefore diverges from
+/// ExifTool's output (e.g. `33.41791964296692` vs. `33.4179196429669`).
+/// This function reproduces the `%.15g` behavior so numeric TIFF/GeoTiff
+/// values match ExifTool byte-for-byte.
+fn format_exiftool_double(value: f64) -> String {
+    const SIG: usize = 15;
+
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    if value.is_nan() {
+        return "nan".to_string();
+    }
+    if value.is_infinite() {
+        return if value > 0.0 {
+            "inf".to_string()
+        } else {
+            "-inf".to_string()
+        };
+    }
+
+    let neg = value.is_sign_negative();
+    let av = value.abs();
+
+    // Render in scientific notation with SIG significant digits; Rust's
+    // formatter performs correct rounding (including mantissa carry, e.g.
+    // 9.9999999999999996 -> 1.00000000000000e1) for us.
+    let sci = format!("{:.*e}", SIG - 1, av);
+    let mut parts = sci.splitn(2, 'e');
+    let mantissa_str = parts.next().unwrap();
+    let exp: i32 = parts.next().unwrap().parse().unwrap_or(0);
+
+    // All significant digits, without the decimal point.
+    let digits: String = mantissa_str.chars().filter(|c| *c != '.').collect();
+
+    let use_sci = exp < -4 || exp >= SIG as i32;
+    let result = if use_sci {
+        let mut m = String::new();
+        m.push(digits.chars().next().unwrap_or('0'));
+        let rest: String = digits.chars().skip(1).collect();
+        let rest_trimmed = rest.trim_end_matches('0');
+        if !rest_trimmed.is_empty() {
+            m.push('.');
+            m.push_str(rest_trimmed);
+        }
+        let exp_sign = if exp >= 0 { "+" } else { "-" };
+        format!("{}e{}{:02}", m, exp_sign, exp.abs())
+    } else {
+        let point_pos = exp + 1;
+        let mut s = String::new();
+        if point_pos <= 0 {
+            s.push_str("0.");
+            for _ in 0..(-point_pos) {
+                s.push('0');
+            }
+            s.push_str(&digits);
+        } else {
+            let point_pos = point_pos as usize;
+            if point_pos >= digits.len() {
+                s.push_str(&digits);
+                for _ in 0..(point_pos - digits.len()) {
+                    s.push('0');
+                }
+            } else {
+                s.push_str(&digits[..point_pos]);
+                s.push('.');
+                s.push_str(&digits[point_pos..]);
+            }
+        }
+        if s.contains('.') {
+            while s.ends_with('0') {
+                s.pop();
+            }
+            if s.ends_with('.') {
+                s.pop();
+            }
+        }
+        s
+    };
+
+    if neg { format!("-{}", result) } else { result }
 }
 
 /// Reads a u16 from bytes with the specified byte order
@@ -181,7 +259,7 @@ fn extract_double_value(
     for i in 0..count {
         let byte_offset = (offset + i) * 8;
         let value = read_f64(data, byte_offset, is_little_endian);
-        values.push(format!("{}", value));
+        values.push(format_exiftool_double(value));
     }
     values.join(" ")
 }
@@ -378,6 +456,67 @@ mod tests {
     fn test_extract_ascii_value() {
         let ascii = "Hough UTM zone 17N|Other value|";
         assert_eq!(extract_ascii_value(ascii, 0, 18), "Hough UTM zone 17N");
+    }
+
+    #[test]
+    fn test_format_exiftool_double_matches_perl_15_sig_figs() {
+        // Values pulled directly from a real ExifTool ModelTransform output;
+        // ExifTool (Perl) stringifies doubles with ~15 significant digits,
+        // while Rust's default `{}` uses the shortest round-trip
+        // representation (often 16-17 digits). Verify we match ExifTool.
+        assert_eq!(
+            format_exiftool_double(33.417919642966924),
+            "33.4179196429669"
+        );
+        assert_eq!(
+            format_exiftool_double(35.836331379428414),
+            "35.8363313794284"
+        );
+        assert_eq!(
+            format_exiftool_double(691955.1656840311),
+            "691955.165684031"
+        );
+        assert_eq!(
+            format_exiftool_double(2791710.9901260315),
+            "2791710.99012603"
+        );
+        assert_eq!(
+            format_exiftool_double(-33.417919642966924),
+            "-33.4179196429669"
+        );
+        assert_eq!(format_exiftool_double(0.0), "0");
+        assert_eq!(format_exiftool_double(1.0), "1");
+    }
+
+    #[test]
+    fn test_parse_model_transformation_matches_exiftool() {
+        let values: [f64; 16] = [
+            33.417919642966924,
+            35.836331379428414,
+            0.0,
+            691955.1656840311,
+            35.836331379428414,
+            -33.417919642966924,
+            0.0,
+            2791710.9901260315,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ];
+        let mut data = Vec::with_capacity(128);
+        for v in values {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        let result = parse_model_transformation(&data, true).expect("should parse");
+        assert_eq!(
+            result,
+            "33.4179196429669 35.8363313794284 0 691955.165684031 35.8363313794284 -33.4179196429669 0 2791710.99012603 0 0 0 0 0 0 0 1"
+        );
     }
 
     #[test]

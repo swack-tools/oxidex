@@ -21,27 +21,27 @@ fn test_pe_parsing_notepad_plus_plus() {
 
         // Verify key tags are present
         assert!(
-            metadata.get("PE:MachineType").is_some(),
+            metadata.get("EXE:MachineType").is_some(),
             "Missing PE:MachineType"
         );
         assert!(
-            metadata.get("PE:CompanyName").is_some(),
+            metadata.get("EXE:CompanyName").is_some(),
             "Missing PE:CompanyName"
         );
         assert!(
-            metadata.get("PE:FileVersion").is_some(),
+            metadata.get("EXE:FileVersion").is_some(),
             "Missing PE:FileVersion"
         );
         assert!(
-            metadata.get("PE:ProductName").is_some(),
+            metadata.get("EXE:ProductName").is_some(),
             "Missing PE:ProductName"
         );
         assert!(
-            metadata.get("PE:FileDescription").is_some(),
+            metadata.get("EXE:FileDescription").is_some(),
             "Missing PE:FileDescription"
         );
         assert!(
-            metadata.get("PE:LegalCopyright").is_some(),
+            metadata.get("EXE:LegalCopyright").is_some(),
             "Missing PE:LegalCopyright"
         );
 
@@ -70,44 +70,44 @@ fn test_pe_tag_coverage() {
 
     let expected_pe_tags = vec![
         // COFF Header tags
-        "PE:MachineType",
-        "PE:NumberOfSections",
-        "PE:TimeStamp",
-        "PE:CompileTime",
-        "PE:Characteristics",
-        "PE:ImageFileCharacteristics",
+        "EXE:MachineType",
+        "EXE:NumberOfSections",
+        "EXE:TimeStamp",
+        "EXE:CompileTime",
+        "EXE:Characteristics",
+        "EXE:ImageFileCharacteristics",
         // Optional Header tags
-        "PE:ImageFormat",
-        "PE:LinkerVersion",
-        "PE:CodeSize",
-        "PE:InitializedDataSize",
-        "PE:UninitializedDataSize",
-        "PE:EntryPoint",
-        "PE:ImageBase",
-        "PE:OSVersion",
-        "PE:ImageVersion",
-        "PE:Subsystem",
-        "PE:SubsystemVersion",
+        "EXE:ImageFormat",
+        "EXE:LinkerVersion",
+        "EXE:CodeSize",
+        "EXE:InitializedDataSize",
+        "EXE:UninitializedDataSize",
+        "EXE:EntryPoint",
+        "EXE:ImageBase",
+        "EXE:OSVersion",
+        "EXE:ImageVersion",
+        "EXE:Subsystem",
+        "EXE:SubsystemVersion",
         // VERSION_INFO tags
-        "PE:FileVersionNumber",
-        "PE:ProductVersionNumber",
-        "PE:FileFlags",
-        "PE:FileOS",
-        "PE:FileType",
-        "PE:FileSubtype",
-        "PE:ObjectFileType",
-        "PE:CompanyName",
-        "PE:FileDescription",
-        "PE:FileVersion",
-        "PE:InternalName",
-        "PE:LegalCopyright",
-        "PE:OriginalFilename",
-        "PE:ProductName",
-        "PE:ProductVersion",
+        "EXE:FileVersionNumber",
+        "EXE:ProductVersionNumber",
+        "EXE:FileFlags",
+        "EXE:FileOS",
+        "EXE:FileType",
+        "EXE:FileSubtype",
+        "EXE:ObjectFileType",
+        "EXE:CompanyName",
+        "EXE:FileDescription",
+        "EXE:FileVersion",
+        "EXE:InternalName",
+        "EXE:LegalCopyright",
+        "EXE:OriginalFilename",
+        "EXE:ProductName",
+        "EXE:ProductVersion",
         // Debug Directory tags (optional, depending on file)
-        // "PE:PDBFileName",
-        // "PE:PDBGUID",
-        // "PE:PDBAge",
+        // "EXE:PDBFileName",
+        // "EXE:PDBGUID",
+        // "EXE:PDBAge",
     ];
 
     println!("Expected PE tags: {}", expected_pe_tags.len());

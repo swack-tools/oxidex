@@ -235,6 +235,25 @@ fn parse_key_value_pairs(content: &[u8], metadata: &mut MetadataMap) {
             // Attempt to parse as numeric value, falling back to string
             let tag_value = parse_value(value);
 
+            // Picture Info fields are exposed by ExifTool in the APP12 group.
+            // Preserve the display-ready fraction rather than converting it
+            // to a floating-point value.
+            if key.eq_ignore_ascii_case("ExposureTime") {
+                metadata.insert(
+                    "APP12:ExposureTime".to_string(),
+                    TagValue::String(value.to_string()),
+                );
+            }
+
+            // Flash is a standard Picture Info field. ExifTool exposes the
+            // display-ready value (for example, "Off") in the APP12 group.
+            if key.eq_ignore_ascii_case("Flash") {
+                metadata.insert(
+                    "APP12:Flash".to_string(),
+                    TagValue::String(value.to_string()),
+                );
+            }
+
             metadata.insert(tag_name, tag_value);
         }
     }
@@ -350,6 +369,8 @@ mod tests {
 
         let metadata = result.unwrap();
 
+        assert_eq!(metadata.get_string("APP12:ExposureTime"), Some("1/125"));
+
         // ExposureTime should be parsed as a rational
         match metadata.get("Agfa:ExposureTime") {
             Some(TagValue::Rational {
@@ -401,6 +422,7 @@ mod tests {
 
         let metadata = result.unwrap();
         assert_eq!(metadata.get_string("Agfa:Flash"), Some("Fired"));
+        assert_eq!(metadata.get_string("APP12:Flash"), Some("Fired"));
         assert_eq!(metadata.get_string("Agfa:FlashMode"), Some("Auto"));
     }
 

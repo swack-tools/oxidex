@@ -89,16 +89,14 @@ pub fn parse_raf_makernote(
 
     // Read MakerNote tag values at fixed offsets based on Fujifilm specification
     // These offsets are documented in ExifTool's Fujifilm.pm module
-
-    // Tag 0x0010 - Serial Number (offset 0x10, 4 bytes, often BCD encoded)
-    if makernote_data.len() >= 0x14 {
-        let serial_bytes = &makernote_data[0x10..0x14];
-        let serial_num = read_u32_at_offset(serial_bytes, 0, byte_order);
-        tags.insert(
-            "Fujifilm:SerialNumber".to_string(),
-            format!("{:08X}", serial_num),
-        );
-    }
+    //
+    // NOTE: There is no plain "SerialNumber" tag in Fujifilm MakerNotes (only
+    // "InternalSerialNumber" at IFD tag 0x0010, which is handled by the proper
+    // IFD-based parser in `fujifilm.rs`). A previous version of this function
+    // treated byte offset 0x10 in the raw MakerNote blob as if it were the
+    // *value* of IFD tag 0x0010, which conflates two unrelated addressing
+    // schemes and always produced a garbage "SerialNumber" tag; that block
+    // has been removed.
 
     // Tag 0x1000 - Quality (offset varies, typically accessed via tag scanning)
     // Quality: 1=F(Fine), 2=N(Normal), 3=Fine, 4=Normal, 5=Fine+RAW, 6=Normal+RAW
@@ -289,6 +287,231 @@ pub fn parse_raf_makernote(
     }
 
     Ok(tags)
+}
+
+/// Parses metadata from the RAF file's own proprietary container structures,
+/// as distinct from the EXIF/MakerNotes stored in the embedded preview JPEG.
+///
+/// This covers two distinct regions of the raw RAF file, both documented (as
+/// binary layouts, not a formal spec) in ExifTool's `FujiFilm.pm`:
+///
+/// 1. **RAFHeader**: a handful of fields at fixed byte offsets in the 148(+)
+///    byte header that precedes the embedded JPEG/directory data --
+///    `FirmwareVersion` (4 ASCII bytes at offset 0x3c) and `RAFCompression`
+///    (a big-endian `int32u` at offset 0x6c, only valid when the JPEG header
+///    isn't stored there instead).
+/// 2. **RAF directory**: a self-describing, big-endian, tag/length/value
+///    directory (ExifTool's `ProcessFujiDir`) whose offset and length are
+///    stored as big-endian `int32u` at header offsets 0x5c/0x60. Each entry
+///    is `[u16 tag][u16 length][length bytes of value]`; this directory
+///    holds the raw sensor/white-balance tags (`RawImageFullSize`,
+///    `WB_GRGBLevels*`, etc.) that ExifTool reports under the "RAF" family.
+///
+/// Returns an empty map (rather than an error) if the file is too short or
+/// the directory pointers are out of bounds, so that callers can merge this
+/// in as a best-effort supplement to the embedded-JPEG metadata.
+pub fn parse_raf_container_metadata(data: &[u8]) -> HashMap<String, String> {
+    let mut tags = HashMap::new();
+
+    if data.len() < 16 || &data[0..16] != b"FUJIFILMCCD-RAW " {
+        return tags;
+    }
+
+    // --- RAFHeader fixed-offset fields ---
+
+    // FirmwareVersion: 4 ASCII bytes at offset 0x3c.
+    if data.len() >= 0x40
+        && let Ok(version) = std::str::from_utf8(&data[0x3c..0x40])
+    {
+        tags.insert("RAF:FirmwareVersion".to_string(), version.to_string());
+    }
+
+    // RAFCompression: big-endian int32u at offset 0x6c, but only when the
+    // first 3 bytes there are zero (some RAF versions store the JPEG header
+    // at this location instead, per ExifTool's Condition).
+    if data.len() >= 0x70 && data[0x6c..0x6f] == [0, 0, 0] {
+        let compression = be_u32(&data[0x6c..0x70]);
+        let name = match compression {
+            0 => "Uncompressed".to_string(),
+            2 => "Lossless".to_string(),
+            3 => "Lossy".to_string(),
+            other => format!("Unknown ({})", other),
+        };
+        tags.insert("RAF:RAFCompression".to_string(), name);
+    }
+
+    // --- RAF directory (ProcessFujiDir) ---
+
+    if data.len() < 0x60 + 4 {
+        return tags;
+    }
+    let dir_offset = be_u32(&data[0x5c..0x60]) as usize;
+    let dir_length = be_u32(&data[0x60..0x64]) as usize;
+    if dir_offset == 0 || dir_offset.saturating_add(dir_length) > data.len() || dir_length < 4 {
+        return tags;
+    }
+    let dir_data = &data[dir_offset..dir_offset + dir_length];
+
+    let entry_count = be_u32(&dir_data[0..4]) as usize;
+    // Sanity check mirroring ExifTool's `$entries < 256 or return 0`.
+    if entry_count >= 256 {
+        return tags;
+    }
+
+    let mut fuji_layout_doubled = false;
+    let mut pos = 4usize;
+    for _ in 0..entry_count {
+        if pos + 4 > dir_data.len() {
+            break;
+        }
+        let tag = be_u16(&dir_data[pos..pos + 2]);
+        let len = be_u16(&dir_data[pos + 2..pos + 4]) as usize;
+        pos += 4;
+        if pos + len > dir_data.len() {
+            break;
+        }
+        let value = &dir_data[pos..pos + len];
+        pos += len;
+
+        match tag {
+            // RawImageFullSize / RawImageCroppedSize: int16u[2] stored as
+            // (height, width); ExifTool's ValueConv reverses to width first.
+            0x0100 | 0x0111 if len >= 4 => {
+                let h = be_u16(&value[0..2]);
+                let w = be_u16(&value[2..4]);
+                let name = if tag == 0x0100 {
+                    "RawImageFullSize"
+                } else {
+                    "RawImageCroppedSize"
+                };
+                tags.insert(format!("RAF:{}", name), format!("{}x{}", w, h));
+            }
+            // RawImageCropTopLeft: int16u[2], reported as-is (top, then left).
+            0x0110 if len >= 4 => {
+                let top = be_u16(&value[0..2]);
+                let left = be_u16(&value[2..4]);
+                tags.insert(
+                    "RAF:RawImageCropTopLeft".to_string(),
+                    format!("{} {}", top, left),
+                );
+            }
+            // FujiLayout: all bytes in the entry as decimal int8u values.
+            // Also latches whether later RawImageSize (0x121) values need
+            // the FujiLayout width/height adjustment (bit 0x80 of the first
+            // byte), matching ExifTool's RawConv.
+            0x0130 if !value.is_empty() => {
+                fuji_layout_doubled = value[0] & 0x80 != 0;
+                let joined = value
+                    .iter()
+                    .map(|b| b.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                tags.insert("RAF:FujiLayout".to_string(), joined);
+            }
+            // RawImageSize: int16u[2] as (height, width), reversed to width
+            // first, then adjusted if FujiLayout indicated a doubled layout.
+            0x0121 if len >= 4 => {
+                let h = be_u16(&value[0..2]) as f64;
+                let w = be_u16(&value[2..4]) as f64;
+                let (w, h) = if fuji_layout_doubled {
+                    (w / 2.0, h * 2.0)
+                } else {
+                    (w, h)
+                };
+                tags.insert(
+                    "RAF:RawImageSize".to_string(),
+                    format!("{}x{}", w as i64, h as i64),
+                );
+            }
+            // WB_GRGBLevels* tags: int16u, Count=4. Some entries duplicate
+            // the 4 values (e.g. 16 bytes instead of 8); ExifTool's Count=4
+            // means only the first 4 values are used.
+            0x2000 | 0x2100 | 0x2200 | 0x2300 | 0x2301 | 0x2302 | 0x2310 | 0x2311 | 0x2400
+            | 0x2410 | 0x2ff0
+                if len >= 8 =>
+            {
+                let name = match tag {
+                    0x2000 => "WB_GRGBLevelsAuto",
+                    0x2100 => "WB_GRGBLevelsDaylight",
+                    0x2200 => "WB_GRGBLevelsCloudy",
+                    0x2300 => "WB_GRGBLevelsDaylightFluor",
+                    0x2301 => "WB_GRGBLevelsDayWhiteFluor",
+                    0x2302 => "WB_GRGBLevelsWhiteFluorescent",
+                    0x2310 => "WB_GRGBLevelsWarmWhiteFluor",
+                    0x2311 => "WB_GRGBLevelsLivingRoomWarmWhiteFluor",
+                    0x2400 => "WB_GRGBLevelsTungsten",
+                    0x2410 => "WB_GRGBLevelsFlash",
+                    _ => "WB_GRGBLevels", // 0x2ff0: "as shot"
+                };
+                let levels = [
+                    be_u16(&value[0..2]),
+                    be_u16(&value[2..4]),
+                    be_u16(&value[4..6]),
+                    be_u16(&value[6..8]),
+                ];
+                tags.insert(
+                    format!("RAF:{}", name),
+                    levels
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+            }
+            // RelativeExposure / RawExposureBias: rational32s (2x
+            // big-endian int16s: numerator, denominator).
+            0x9200 | 0x9650 if len >= 4 => {
+                let num = be_i16(&value[0..2]) as f64;
+                let denom = be_i16(&value[2..4]) as f64;
+                let name = if tag == 0x9200 {
+                    "RelativeExposure"
+                } else {
+                    "RawExposureBias"
+                };
+                let printed = if denom == 0.0 {
+                    "0".to_string()
+                } else {
+                    let ratio = num / denom;
+                    // ValueConv for RelativeExposure takes log2(ratio); both
+                    // tags share the same PrintConv: "0" for a falsy value.
+                    let val = if tag == 0x9200 { ratio.log2() } else { ratio };
+                    if val == 0.0 {
+                        "0".to_string()
+                    } else {
+                        format!("{:+.1}", val)
+                    }
+                };
+                tags.insert(format!("RAF:{}", name), printed);
+            }
+            _ => {}
+        }
+    }
+
+    tags
+}
+
+/// Reads a big-endian `u16` from a 2-byte slice (returns 0 if too short).
+fn be_u16(bytes: &[u8]) -> u16 {
+    if bytes.len() < 2 {
+        return 0;
+    }
+    u16::from_be_bytes([bytes[0], bytes[1]])
+}
+
+/// Reads a big-endian `i16` from a 2-byte slice (returns 0 if too short).
+fn be_i16(bytes: &[u8]) -> i16 {
+    if bytes.len() < 2 {
+        return 0;
+    }
+    i16::from_be_bytes([bytes[0], bytes[1]])
+}
+
+/// Reads a big-endian `u32` from a 4-byte slice (returns 0 if too short).
+fn be_u32(bytes: &[u8]) -> u32 {
+    if bytes.len() < 4 {
+        return 0;
+    }
+    u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
 /// Decode white balance value to human-readable string

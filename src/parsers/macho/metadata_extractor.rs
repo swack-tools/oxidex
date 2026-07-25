@@ -26,7 +26,7 @@ pub fn extract_macho_metadata(info: &MachOInfo) -> MetadataMap {
 
     // Basic file type indicator
     metadata.insert(
-        "MachO:FileFormat".to_string(),
+        "EXE:FileFormat".to_string(),
         TagValue::String("Mach-O".to_string()),
     );
 
@@ -90,49 +90,49 @@ pub fn extract_macho_metadata(info: &MachOInfo) -> MetadataMap {
 fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
     // CPU type
     metadata.insert(
-        "MachO:CPUType".to_string(),
+        "EXE:CPUType".to_string(),
         TagValue::String(header.cpu_type_name().to_string()),
     );
 
     // CPU type raw value
     metadata.insert(
-        "MachO:CPUTypeRaw".to_string(),
+        "EXE:CPUTypeRaw".to_string(),
         TagValue::Integer(header.cputype as i64),
     );
 
     // CPU subtype
     metadata.insert(
-        "MachO:CPUSubtype".to_string(),
+        "EXE:CPUSubtype".to_string(),
         TagValue::String(header.cpu_subtype_name()),
     );
 
     // CPU subtype raw value
     metadata.insert(
-        "MachO:CPUSubtypeRaw".to_string(),
+        "EXE:CPUSubtypeRaw".to_string(),
         TagValue::Integer(header.cpusubtype as i64),
     );
 
     // File type
     metadata.insert(
-        "MachO:FileType".to_string(),
+        "EXE:FileType".to_string(),
         TagValue::String(header.file_type_name().to_string()),
     );
 
     // File type raw value
     metadata.insert(
-        "MachO:FileTypeRaw".to_string(),
+        "EXE:FileTypeRaw".to_string(),
         TagValue::Integer(header.filetype as i64),
     );
 
     // Is 64-bit
     metadata.insert(
-        "MachO:Is64Bit".to_string(),
+        "EXE:Is64Bit".to_string(),
         TagValue::Integer(if header.is_64bit { 1 } else { 0 }),
     );
 
     // Byte order
     metadata.insert(
-        "MachO:ByteOrder".to_string(),
+        "EXE:ByteOrder".to_string(),
         TagValue::String(
             if header.is_swapped {
                 "Little Endian"
@@ -145,25 +145,25 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
 
     // Is byte swapped (relative to original PPC big-endian format)
     metadata.insert(
-        "MachO:IsByteSwapped".to_string(),
+        "EXE:IsByteSwapped".to_string(),
         TagValue::Integer(if header.is_swapped { 1 } else { 0 }),
     );
 
     // Number of load commands
     metadata.insert(
-        "MachO:LoadCommandCount".to_string(),
+        "EXE:LoadCommandCount".to_string(),
         TagValue::Integer(header.ncmds as i64),
     );
 
     // Size of load commands
     metadata.insert(
-        "MachO:LoadCommandsSize".to_string(),
+        "EXE:LoadCommandsSize".to_string(),
         TagValue::Integer(header.sizeofcmds as i64),
     );
 
     // Flags raw value
     metadata.insert(
-        "MachO:Flags".to_string(),
+        "EXE:Flags".to_string(),
         TagValue::Integer(header.flags as i64),
     );
 
@@ -171,14 +171,14 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
     let flag_names = header.flag_names();
     if !flag_names.is_empty() {
         metadata.insert(
-            "MachO:FlagsDecoded".to_string(),
+            "EXE:FlagsDecoded".to_string(),
             TagValue::String(flag_names.join(", ")),
         );
     }
 
     // Specific flag indicators
     metadata.insert(
-        "MachO:IsPIE".to_string(),
+        "EXE:IsPIE".to_string(),
         TagValue::Integer(if header.flags & super::structures::flags::MH_PIE != 0 {
             1
         } else {
@@ -187,7 +187,7 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
     );
 
     metadata.insert(
-        "MachO:HasTwoLevelNamespace".to_string(),
+        "EXE:HasTwoLevelNamespace".to_string(),
         TagValue::Integer(
             if header.flags & super::structures::flags::MH_TWOLEVEL != 0 {
                 1
@@ -198,7 +198,7 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
     );
 
     metadata.insert(
-        "MachO:AllowStackExecution".to_string(),
+        "EXE:AllowStackExecution".to_string(),
         TagValue::Integer(
             if header.flags & super::structures::flags::MH_ALLOW_STACK_EXECUTION != 0 {
                 1
@@ -217,50 +217,50 @@ fn extract_segment_metadata(
     let stats = SegmentStats::from_segments(segments);
 
     metadata.insert(
-        "MachO:SegmentCount".to_string(),
+        "EXE:SegmentCount".to_string(),
         TagValue::Integer(stats.segment_count as i64),
     );
 
     metadata.insert(
-        "MachO:SectionCount".to_string(),
+        "EXE:SectionCount".to_string(),
         TagValue::Integer(stats.section_count as i64),
     );
 
     if stats.text_size > 0 {
         metadata.insert(
-            "MachO:TextSegmentSize".to_string(),
+            "EXE:TextSegmentSize".to_string(),
             TagValue::Integer(stats.text_size as i64),
         );
     }
 
     if stats.data_size > 0 {
         metadata.insert(
-            "MachO:DataSegmentSize".to_string(),
+            "EXE:DataSegmentSize".to_string(),
             TagValue::Integer(stats.data_size as i64),
         );
     }
 
     if stats.linkedit_size > 0 {
         metadata.insert(
-            "MachO:LinkeditSize".to_string(),
+            "EXE:LinkeditSize".to_string(),
             TagValue::Integer(stats.linkedit_size as i64),
         );
     }
 
     metadata.insert(
-        "MachO:TotalVMSize".to_string(),
+        "EXE:TotalVMSize".to_string(),
         TagValue::Integer(stats.total_vmsize as i64),
     );
 
     metadata.insert(
-        "MachO:HasPagezero".to_string(),
+        "EXE:HasPagezero".to_string(),
         TagValue::Integer(if stats.has_pagezero { 1 } else { 0 }),
     );
 
     // List segment names
     let segment_names: Vec<String> = segments.iter().map(|s| s.segname.clone()).collect();
     metadata.insert(
-        "MachO:SegmentNames".to_string(),
+        "EXE:SegmentNames".to_string(),
         TagValue::String(segment_names.join(", ")),
     );
 }
@@ -276,27 +276,27 @@ fn extract_dylib_metadata(dylibs: &[DylibCommand], metadata: &mut MetadataMap) {
         + stats.lazy_count
         + stats.upward_count;
     metadata.insert(
-        "MachO:DylibCount".to_string(),
+        "EXE:DylibCount".to_string(),
         TagValue::Integer(load_count as i64),
     );
 
     if stats.weak_count > 0 {
         metadata.insert(
-            "MachO:WeakDylibCount".to_string(),
+            "EXE:WeakDylibCount".to_string(),
             TagValue::Integer(stats.weak_count as i64),
         );
     }
 
     if stats.reexport_count > 0 {
         metadata.insert(
-            "MachO:ReexportDylibCount".to_string(),
+            "EXE:ReexportDylibCount".to_string(),
             TagValue::Integer(stats.reexport_count as i64),
         );
     }
 
     // Library ID (if this is a dylib)
     if let Some(ref id) = stats.id_dylib {
-        metadata.insert("MachO:DylibID".to_string(), TagValue::String(id.clone()));
+        metadata.insert("EXE:DylibID".to_string(), TagValue::String(id.clone()));
     }
 
     // List of dylib paths (limited)
@@ -311,7 +311,7 @@ fn extract_dylib_metadata(dylibs: &[DylibCommand], metadata: &mut MetadataMap) {
                 paths.len() - 20
             )
         };
-        metadata.insert("MachO:DylibPaths".to_string(), TagValue::String(paths_str));
+        metadata.insert("EXE:DylibPaths".to_string(), TagValue::String(paths_str));
     }
 
     // List of dylib names (shorter)
@@ -326,7 +326,7 @@ fn extract_dylib_metadata(dylibs: &[DylibCommand], metadata: &mut MetadataMap) {
                 names.len() - 30
             )
         };
-        metadata.insert("MachO:DylibNames".to_string(), TagValue::String(names_str));
+        metadata.insert("EXE:DylibNames".to_string(), TagValue::String(names_str));
     }
 
     // Extract version info from first dylib (if this is a dylib)
@@ -335,11 +335,11 @@ fn extract_dylib_metadata(dylibs: &[DylibCommand], metadata: &mut MetadataMap) {
         .find(|d| d.cmd == super::structures::load_command::LC_ID_DYLIB)
     {
         metadata.insert(
-            "MachO:DylibCurrentVersion".to_string(),
+            "EXE:DylibCurrentVersion".to_string(),
             TagValue::String(dylib.current_version_string()),
         );
         metadata.insert(
-            "MachO:DylibCompatVersion".to_string(),
+            "EXE:DylibCompatVersion".to_string(),
             TagValue::String(dylib.compatibility_version_string()),
         );
     }
@@ -347,10 +347,7 @@ fn extract_dylib_metadata(dylibs: &[DylibCommand], metadata: &mut MetadataMap) {
 
 /// Extract UUID metadata
 fn extract_uuid_metadata(uuid: &UuidCommand, metadata: &mut MetadataMap) {
-    metadata.insert(
-        "MachO:UUID".to_string(),
-        TagValue::String(uuid.uuid_string()),
-    );
+    metadata.insert("EXE:UUID".to_string(), TagValue::String(uuid.uuid_string()));
 }
 
 /// Extract version-related metadata
@@ -365,7 +362,7 @@ fn extract_version_metadata(info: &MachOInfo, metadata: &mut MetadataMap) {
     // Source version
     if let Some(ref sv) = info.source_version {
         metadata.insert(
-            "MachO:SourceVersion".to_string(),
+            "EXE:SourceVersion".to_string(),
             TagValue::String(sv.version_string()),
         );
     }
@@ -377,17 +374,17 @@ fn extract_version_min_metadata(vm: &VersionMinCommand, metadata: &mut MetadataM
     let version = vm.version_string();
 
     metadata.insert(
-        "MachO:Platform".to_string(),
+        "EXE:Platform".to_string(),
         TagValue::String(platform.to_string()),
     );
 
     metadata.insert(
-        "MachO:MinOSVersion".to_string(),
+        "EXE:MinOSVersion".to_string(),
         TagValue::String(format_version_with_name(platform, &version)),
     );
 
     metadata.insert(
-        "MachO:SDKVersion".to_string(),
+        "EXE:SDKVersion".to_string(),
         TagValue::String(vm.sdk_string()),
     );
 }
@@ -398,17 +395,17 @@ fn extract_build_version_metadata(bv: &BuildVersionCommand, metadata: &mut Metad
     let version = bv.minos_string();
 
     metadata.insert(
-        "MachO:Platform".to_string(),
+        "EXE:Platform".to_string(),
         TagValue::String(platform.to_string()),
     );
 
     metadata.insert(
-        "MachO:MinOSVersion".to_string(),
+        "EXE:MinOSVersion".to_string(),
         TagValue::String(format_version_with_name(platform, &version)),
     );
 
     metadata.insert(
-        "MachO:SDKVersion".to_string(),
+        "EXE:SDKVersion".to_string(),
         TagValue::String(bv.sdk_string()),
     );
 
@@ -420,20 +417,20 @@ fn extract_build_version_metadata(bv: &BuildVersionCommand, metadata: &mut Metad
             .map(|t| format!("{} {}", t.tool_name(), t.version_string()))
             .collect::<Vec<_>>()
             .join(", ");
-        metadata.insert("MachO:BuildTools".to_string(), TagValue::String(tools_str));
+        metadata.insert("EXE:BuildTools".to_string(), TagValue::String(tools_str));
     }
 }
 
 /// Extract entry point metadata
 fn extract_entry_point_metadata(entry: &EntryPointCommand, metadata: &mut MetadataMap) {
     metadata.insert(
-        "MachO:EntryPointOffset".to_string(),
+        "EXE:EntryPointOffset".to_string(),
         TagValue::Integer(entry.entryoff as i64),
     );
 
     if entry.stacksize > 0 {
         metadata.insert(
-            "MachO:StackSize".to_string(),
+            "EXE:StackSize".to_string(),
             TagValue::Integer(entry.stacksize as i64),
         );
     }
@@ -448,33 +445,33 @@ fn extract_symbol_metadata(
     let stats = SymbolStats::from_commands(symtab, dysymtab);
 
     metadata.insert(
-        "MachO:SymbolCount".to_string(),
+        "EXE:SymbolCount".to_string(),
         TagValue::Integer(stats.total_symbols as i64),
     );
 
     if stats.local_symbols > 0 {
         metadata.insert(
-            "MachO:LocalSymbolCount".to_string(),
+            "EXE:LocalSymbolCount".to_string(),
             TagValue::Integer(stats.local_symbols as i64),
         );
     }
 
     if stats.external_symbols > 0 {
         metadata.insert(
-            "MachO:ExportedSymbolCount".to_string(),
+            "EXE:ExportedSymbolCount".to_string(),
             TagValue::Integer(stats.external_symbols as i64),
         );
     }
 
     if stats.undefined_symbols > 0 {
         metadata.insert(
-            "MachO:ImportedSymbolCount".to_string(),
+            "EXE:ImportedSymbolCount".to_string(),
             TagValue::Integer(stats.undefined_symbols as i64),
         );
     }
 
     metadata.insert(
-        "MachO:StringTableSize".to_string(),
+        "EXE:StringTableSize".to_string(),
         TagValue::Integer(stats.string_table_size as i64),
     );
 }
@@ -482,13 +479,13 @@ fn extract_symbol_metadata(
 /// Extract rpath metadata
 fn extract_rpath_metadata(rpaths: &[RpathCommand], metadata: &mut MetadataMap) {
     metadata.insert(
-        "MachO:RPathCount".to_string(),
+        "EXE:RPathCount".to_string(),
         TagValue::Integer(rpaths.len() as i64),
     );
 
     let rpath_strs: Vec<String> = rpaths.iter().map(|r| r.path.clone()).collect();
     metadata.insert(
-        "MachO:RPaths".to_string(),
+        "EXE:RPaths".to_string(),
         TagValue::String(rpath_strs.join(", ")),
     );
 }
@@ -499,21 +496,21 @@ fn extract_encryption_metadata(
     metadata: &mut MetadataMap,
 ) {
     metadata.insert(
-        "MachO:IsEncrypted".to_string(),
+        "EXE:IsEncrypted".to_string(),
         TagValue::Integer(if enc.cryptid != 0 { 1 } else { 0 }),
     );
 
     if enc.cryptid != 0 {
         metadata.insert(
-            "MachO:EncryptionType".to_string(),
+            "EXE:EncryptionType".to_string(),
             TagValue::Integer(enc.cryptid as i64),
         );
         metadata.insert(
-            "MachO:EncryptedOffset".to_string(),
+            "EXE:EncryptedOffset".to_string(),
             TagValue::Integer(enc.cryptoff as i64),
         );
         metadata.insert(
-            "MachO:EncryptedSize".to_string(),
+            "EXE:EncryptedSize".to_string(),
             TagValue::Integer(enc.cryptsize as i64),
         );
     }
@@ -525,78 +522,78 @@ fn extract_code_signature_metadata(
     metadata: &mut MetadataMap,
 ) {
     metadata.insert(
-        "MachO:IsSigned".to_string(),
+        "EXE:IsSigned".to_string(),
         TagValue::Integer(if cs_info.is_signed { 1 } else { 0 }),
     );
 
     metadata.insert(
-        "MachO:CodeSignatureSize".to_string(),
+        "EXE:CodeSignatureSize".to_string(),
         TagValue::Integer(cs_info.signature_size as i64),
     );
 
     if let Some(ref ident) = cs_info.identifier {
         metadata.insert(
-            "MachO:CodeSignatureID".to_string(),
+            "EXE:CodeSignatureID".to_string(),
             TagValue::String(ident.clone()),
         );
     }
 
     if let Some(ref team) = cs_info.team_id {
         metadata.insert(
-            "MachO:TeamIdentifier".to_string(),
+            "EXE:TeamIdentifier".to_string(),
             TagValue::String(team.clone()),
         );
     }
 
     if let Some(ref hash) = cs_info.hash_type {
         metadata.insert(
-            "MachO:CodeSignatureHashType".to_string(),
+            "EXE:CodeSignatureHashType".to_string(),
             TagValue::String(hash.clone()),
         );
     }
 
     metadata.insert(
-        "MachO:HasCMSSignature".to_string(),
+        "EXE:HasCMSSignature".to_string(),
         TagValue::Integer(if cs_info.has_cms_signature { 1 } else { 0 }),
     );
 
     metadata.insert(
-        "MachO:IsAdHocSigned".to_string(),
+        "EXE:IsAdHocSigned".to_string(),
         TagValue::Integer(if is_adhoc_signed(cs_info) { 1 } else { 0 }),
     );
 
     metadata.insert(
-        "MachO:HasDeveloperID".to_string(),
+        "EXE:HasDeveloperID".to_string(),
         TagValue::Integer(if has_developer_id(cs_info) { 1 } else { 0 }),
     );
 
     if let Some(ref signer) = cs_info.signer_name {
         metadata.insert(
-            "MachO:SignerName".to_string(),
+            "EXE:SignerName".to_string(),
             TagValue::String(signer.clone()),
         );
     }
 
     if cs_info.n_code_slots > 0 {
         metadata.insert(
-            "MachO:CodeSlotCount".to_string(),
+            "EXE:CodeSlotCount".to_string(),
             TagValue::Integer(cs_info.n_code_slots as i64),
         );
     }
 
     // Entitlements
     metadata.insert(
-        "MachO:HasEntitlements".to_string(),
+        "EXE:HasEntitlements".to_string(),
         TagValue::Integer(if cs_info.has_entitlements { 1 } else { 0 }),
     );
 
     if !cs_info.entitlement_keys.is_empty() {
         metadata.insert(
-            "MachO:EntitlementKeys".to_string(),
+            "EXE:EntitlementKeys".to_string(),
             TagValue::String(cs_info.entitlement_keys.join(", ")),
         );
         metadata.insert(
-            "MachO:EntitlementCount".to_string(),
+            "EXE:EntitlementCount".to_string(),
             TagValue::Integer(cs_info.entitlement_keys.len() as i64),
         );
     }
@@ -605,13 +602,13 @@ fn extract_code_signature_metadata(
 /// Extract FAT/Universal binary metadata
 fn extract_fat_metadata(info: &MachOInfo, metadata: &mut MetadataMap) {
     metadata.insert(
-        "MachO:IsFromUniversalBinary".to_string(),
+        "EXE:IsFromUniversalBinary".to_string(),
         TagValue::Integer(1),
     );
 
     if let Some(ref fat) = info.fat_header {
         metadata.insert(
-            "MachO:UniversalArchCount".to_string(),
+            "EXE:UniversalArchCount".to_string(),
             TagValue::Integer(fat.nfat_arch as i64),
         );
     }
@@ -623,13 +620,13 @@ fn extract_fat_metadata(info: &MachOInfo, metadata: &mut MetadataMap) {
             .map(|a| a.cpu_type_name().to_string())
             .collect();
         metadata.insert(
-            "MachO:UniversalArchitectures".to_string(),
+            "EXE:UniversalArchitectures".to_string(),
             TagValue::String(arch_names.join(", ")),
         );
     }
 
     metadata.insert(
-        "MachO:ArchitectureIndex".to_string(),
+        "EXE:ArchitectureIndex".to_string(),
         TagValue::Integer(info.fat_arch_index as i64),
     );
 }
@@ -725,14 +722,11 @@ mod tests {
 
         extract_header_metadata(&header, &mut metadata);
 
-        assert_eq!(metadata.get_string("MachO:CPUType").unwrap(), "ARM64");
-        assert_eq!(metadata.get_string("MachO:FileType").unwrap(), "Executable");
-        assert_eq!(metadata.get_integer("MachO:Is64Bit").unwrap(), 1);
-        assert_eq!(metadata.get_integer("MachO:IsPIE").unwrap(), 1);
-        assert_eq!(
-            metadata.get_integer("MachO:HasTwoLevelNamespace").unwrap(),
-            1
-        );
+        assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM64");
+        assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
+        assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
+        assert_eq!(metadata.get_integer("EXE:IsPIE").unwrap(), 1);
+        assert_eq!(metadata.get_integer("EXE:HasTwoLevelNamespace").unwrap(), 1);
     }
 
     #[test]
@@ -748,7 +742,7 @@ mod tests {
         extract_uuid_metadata(&uuid, &mut metadata);
 
         assert_eq!(
-            metadata.get_string("MachO:UUID").unwrap(),
+            metadata.get_string("EXE:UUID").unwrap(),
             "550E8400-E29B-41D4-A716-446655440000"
         );
     }
@@ -760,8 +754,8 @@ mod tests {
 
         let metadata = extract_macho_metadata(&info);
 
-        assert!(metadata.contains_key("MachO:FileFormat"));
-        assert!(metadata.contains_key("MachO:CPUType"));
-        assert!(metadata.contains_key("MachO:FileType"));
+        assert!(metadata.contains_key("EXE:FileFormat"));
+        assert!(metadata.contains_key("EXE:CPUType"));
+        assert!(metadata.contains_key("EXE:FileType"));
     }
 }

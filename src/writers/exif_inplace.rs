@@ -87,12 +87,12 @@ fn scan_ifd(
     which: Ifd,
     found: &mut Vec<LocatedDateTag>,
 ) -> Result<Option<usize>> {
-    let entries_start = offset
-        .checked_add(2)
-        .ok_or_else(|| ExifToolError::parse_error("IFD offset overflow"))?;
-    if entries_start > tiff.len() {
-        return Err(ExifToolError::parse_error("IFD offset beyond EXIF data"));
-    }
+    let entries_start = match offset.checked_add(2) {
+        Some(end) if end <= tiff.len() => end,
+        // A corrupt or truncated IFD offset (from untrusted file bytes) stops
+        // this scan gracefully; header-level validation already ran upstream
+        _ => return Ok(None),
+    };
     let entry_count = read_u16(&tiff[offset..entries_start], byte_order) as usize;
     let mut exif_ifd_offset = None;
 
@@ -352,5 +352,25 @@ mod tests {
     fn test_invalid_tiff_errors() {
         assert!(locate_exif_datetimes(&[]).is_err());
         assert!(locate_exif_datetimes(b"XX\x2a\x00\x08\x00\x00\x00").is_err());
+    }
+
+    #[test]
+    fn test_corrupt_ifd0_offset_returns_empty_not_err() {
+        let mut tiff = build_test_tiff(ByteOrder::LittleEndian);
+        // Point the header's IFD0 offset far beyond the buffer
+        tiff[4..8].copy_from_slice(&50_000u32.to_le_bytes());
+        let located = locate_exif_datetimes(&tiff).unwrap();
+        assert!(located.is_empty());
+    }
+
+    #[test]
+    fn test_corrupt_exif_ifd_pointer_keeps_ifd0_results() {
+        let mut tiff = build_test_tiff(ByteOrder::LittleEndian);
+        // ExifIFD pointer entry starts at 22; its value field is at 30..34
+        tiff[30..34].copy_from_slice(&50_000u32.to_le_bytes());
+        let located = locate_exif_datetimes(&tiff).unwrap();
+        // ModifyDate from IFD0 must survive; the two ExifIFD tags are lost
+        assert_eq!(located.len(), 1);
+        assert_eq!(located[0].tag, ExifDateTag::ModifyDate);
     }
 }

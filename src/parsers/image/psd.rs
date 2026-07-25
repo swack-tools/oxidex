@@ -342,6 +342,27 @@ impl PSDParser {
                 }
             }
         }
+
+        // parse_ifd() returns only the entries in the requested directory.
+        // Follow IFD0's next-directory pointer because embedded EXIF commonly
+        // stores thumbnail tags, including Compression, in IFD1.
+        if let Some(ifd1_offset) = next_ifd_offset(data, ifd0_offset, byte_order) {
+            if ifd1_offset != 0 {
+                if let Ok(entries) = parse_ifd(&reader, ifd1_offset as u64, byte_order) {
+                    for (tag_id, field_type, value_count, raw_bytes) in &entries {
+                        let tag_name = lookup_ifd1_tag_name(*tag_id);
+                        let value = raw_bytes_to_tag_value(
+                            raw_bytes.as_ref(),
+                            *field_type,
+                            *value_count,
+                            *tag_id,
+                            byte_order,
+                        );
+                        metadata.insert(tag_name, value);
+                    }
+                }
+            }
+        }
     }
 
     /// Extract metadata from XMP using the proper RDF parser
@@ -416,6 +437,40 @@ pub fn parse_psd_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
     parser.parse(reader).map_err(|e| e.to_string())
 }
 
+/// Returns the offset of the IFD linked after `ifd_offset`.
+///
+/// A TIFF IFD consists of a two-byte entry count, twelve bytes per entry, and
+/// then a four-byte offset to the next IFD.
+fn next_ifd_offset(data: &[u8], ifd_offset: u32, byte_order: ByteOrder) -> Option<u32> {
+    let endian_order = match byte_order {
+        ByteOrder::LittleEndian => EndianByteOrder::Little,
+        ByteOrder::BigEndian => EndianByteOrder::Big,
+    };
+    let reader = EndianReader::new(data, endian_order);
+    let ifd_offset = ifd_offset as usize;
+    let entry_count = reader.u16_at(ifd_offset)? as usize;
+    let entries_size = entry_count.checked_mul(12)?;
+    let next_offset_position = ifd_offset.checked_add(2)?.checked_add(entries_size)?;
+
+    reader.u32_at(next_offset_position)
+}
+
+/// Looks up an IFD1 tag name, accounting for context-dependent EXIF aliases.
+fn lookup_ifd1_tag_name(tag_id: u16) -> String {
+    let database_name = lookup_tag_name(tag_id, "IFD1");
+
+    // ExifTool names 0x0201 ThumbnailOffset when it occurs in IFD1. Keep the
+    // group selected by the tag database rather than hard-coding an EXIF
+    // prefix, since the same numeric ID has other names in other directories.
+    if tag_id == 0x0201 {
+        if let Some((group, _)) = database_name.rsplit_once(':') {
+            return format!("{group}:ThumbnailOffset");
+        }
+    }
+
+    database_name
+}
+
 /// Converts raw bytes to TagValue
 fn raw_bytes_to_tag_value(
     bytes: &[u8],
@@ -441,6 +496,12 @@ fn raw_bytes_to_tag_value(
             }
             ExifType::Short if bytes.len() >= 2 => {
                 let value = reader.u16_at(0).unwrap_or(0);
+
+                // Image::ExifTool::Exif::Main Compression PrintConv.
+                if tag_id == 0x0103 && value == 6 {
+                    return TagValue::String("JPEG (old-style)".to_string());
+                }
+
                 return TagValue::Integer(value as i64);
             }
             ExifType::Long if bytes.len() >= 4 => {
@@ -474,5 +535,75 @@ fn raw_bytes_to_tag_value(
         TagValue::String(text.trim_end_matches('\0').to_string())
     } else {
         TagValue::Binary(bytes.to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_compression_from_embedded_exif_ifd1() {
+        // Minimal little-endian TIFF:
+        // - TIFF header points to an empty IFD0 at offset 8
+        // - IFD0 points to IFD1 at offset 14
+        // - IFD1 contains Compression (SHORT) = 6
+        let mut data = vec![0u8; 32];
+        data[0..2].copy_from_slice(b"II");
+        data[2..4].copy_from_slice(&42u16.to_le_bytes());
+        data[4..8].copy_from_slice(&8u32.to_le_bytes());
+
+        // Empty IFD0 followed by its next-IFD pointer.
+        data[8..10].copy_from_slice(&0u16.to_le_bytes());
+        data[10..14].copy_from_slice(&14u32.to_le_bytes());
+
+        // IFD1 with one entry.
+        data[14..16].copy_from_slice(&1u16.to_le_bytes());
+        data[16..18].copy_from_slice(&0x0103u16.to_le_bytes());
+        data[18..20].copy_from_slice(&3u16.to_le_bytes()); // SHORT
+        data[20..24].copy_from_slice(&1u32.to_le_bytes());
+        data[24..26].copy_from_slice(&6u16.to_le_bytes());
+        // Bytes 26..28 are inline-value padding; 28..32 is next IFD = 0.
+
+        let mut metadata = MetadataMap::new();
+        PSDParser::parse_exif_data(&data, &mut metadata);
+
+        let tag_name = lookup_tag_name(0x0103, "IFD1");
+        assert_eq!(
+            metadata.get(&tag_name),
+            Some(&TagValue::String("JPEG (old-style)".to_string()))
+        );
+    }
+
+    #[test]
+    fn parses_thumbnail_offset_from_embedded_exif_ifd1() {
+        // Minimal little-endian TIFF:
+        // - TIFF header points to an empty IFD0 at offset 8
+        // - IFD0 points to IFD1 at offset 14
+        // - IFD1 contains JPEGInterchangeFormat (LONG) = 390, which ExifTool
+        //   names ThumbnailOffset in this directory
+        let mut data = vec![0u8; 32];
+        data[0..2].copy_from_slice(b"II");
+        data[2..4].copy_from_slice(&42u16.to_le_bytes());
+        data[4..8].copy_from_slice(&8u32.to_le_bytes());
+
+        // Empty IFD0 followed by its next-IFD pointer.
+        data[8..10].copy_from_slice(&0u16.to_le_bytes());
+        data[10..14].copy_from_slice(&14u32.to_le_bytes());
+
+        // IFD1 with one inline LONG entry.
+        data[14..16].copy_from_slice(&1u16.to_le_bytes());
+        data[16..18].copy_from_slice(&0x0201u16.to_le_bytes());
+        data[18..20].copy_from_slice(&4u16.to_le_bytes()); // LONG
+        data[20..24].copy_from_slice(&1u32.to_le_bytes());
+        data[24..28].copy_from_slice(&390u32.to_le_bytes());
+        // Bytes 28..32 are the zero next-IFD pointer.
+
+        let mut metadata = MetadataMap::new();
+        PSDParser::parse_exif_data(&data, &mut metadata);
+
+        let tag_name = lookup_ifd1_tag_name(0x0201);
+        assert!(tag_name.ends_with(":ThumbnailOffset"));
+        assert_eq!(metadata.get(&tag_name), Some(&TagValue::Integer(390)));
     }
 }
