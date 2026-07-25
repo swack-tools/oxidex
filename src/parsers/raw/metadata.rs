@@ -514,6 +514,35 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                 // Parse SubIFD(s) if present - crucial for RAW formats
                 // SubIFDs contain RAW image data, compression info, and RAW-specific tags
+
+                // Pre-scan SubIFDs to locate the main image SubIFD
+                // (the one with PhotometricInterpretation == CFA (32803)).
+                // DNG files often have multiple SubIFDs (preview/thumbnail + raw),
+                // and ExifTool reports BitsPerSample from the main raw image.
+                let mut main_subifd_index = 0usize;
+                if format == RawFormat::AdobeDNG {
+                    for (i, offset) in sub_ifd_offsets.iter().enumerate() {
+                        if let Ok(tags) = parse_ifd(&reader, *offset, byte_order) {
+                            let is_cfa = tags.iter().any(|(t, _, _, bytes)| {
+                                let bytes = bytes.as_ref();
+                                if *t == 0x0106 && bytes.len() >= 2 {
+                                    let val = match byte_order {
+                                        ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
+                                        ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
+                                    };
+                                    val == 32803
+                                } else {
+                                    false
+                                }
+                            });
+                            if is_cfa {
+                                main_subifd_index = i;
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 for (sub_index, sub_offset) in sub_ifd_offsets.iter().enumerate() {
                     // Use SubIFD0 as the generic group for all SubIFDs to match
                     // ExifTool's output; only specific whitelisted tags from
@@ -522,11 +551,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
-                            // DNG: BitsPerSample from the primary SubIFD (index 0)
-                            // should be reported as EXIF:BitsPerSample; secondary
+                            // DNG: BitsPerSample from the main image SubIFD
+                            // (the one with PhotometricInterpretation == CFA)
+                            // should be reported as EXIF:BitsPerSample; other
                             // SubIFDs must not overwrite it.
                             if format == RawFormat::AdobeDNG && tag_id == 0x0102 {
-                                if sub_index > 0 {
+                                if sub_index != main_subifd_index {
                                     continue;
                                 }
                             }
@@ -606,7 +636,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             }
 
                             let tag_name = if format == RawFormat::AdobeDNG && tag_id == 0x0102 {
-                                // Primary SubIFD BitsPerSample goes under EXIF group
+                                // Main image SubIFD BitsPerSample goes under EXIF group
                                 "EXIF:BitsPerSample".to_string()
                             } else {
                                 lookup_raw_tag_name(tag_id, sub_ifd_name, format)
