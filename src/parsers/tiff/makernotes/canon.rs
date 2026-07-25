@@ -308,6 +308,9 @@ const CANON_AF_INFO: u16 = 0x0012;
 const CANON_SERIAL_NUMBER_FORMAT: u16 = 0x0015;
 const CANON_AF_INFO2: u16 = 0x0026;
 const CANON_FILE_INFO: u16 = 0x0093;
+const CANON_AF_MICRO_ADJ: u16 = 0x002a;
+const CANON_AMBIENCE_SELECTION: u16 = 0x4028;
+const CANON_ANTI_FLICKER: u16 = 0x4055;
 const CANON_LENS_MODEL: u16 = 0x0095;
 const CANON_INTERNAL_SERIAL_NUMBER: u16 = 0x0096;
 const CANON_PROCESSING_INFO: u16 = 0x00A0;
@@ -392,14 +395,24 @@ const FILE_INFO_BRACKET_MODE: usize = 4;
 const FILE_INFO_BRACKET_VALUE: usize = 5;
 const FILE_INFO_LENS_ID: usize = 6;
 
-// AFInfo array indices
+// AFInfo array indices (tag 0x0012, older Canon models)
+// Index 0 is array length prefix; Perl table keys are 0‑based including prefix.
 const AF_INFO_NUM_AF_POINTS: usize = 1;
 const AF_INFO_IMAGE_WIDTH: usize = 2;
 const AF_INFO_IMAGE_HEIGHT: usize = 3;
-const AF_INFO_AREA_WIDTH: usize = 4;
-const AF_INFO_AREA_HEIGHT: usize = 5;
+const AF_INFO_AF_AREA_WIDTH: usize = 6;   // single int16s
+const AF_INFO_AF_AREA_HEIGHT: usize = 7;  // single int16s
 const AF_INFO_POINTS_IN_FOCUS: usize = 8;
 const AF_INFO_POINTS_SELECTED: usize = 9;
+const AF_INFO_AF_ASSIST_BEAM: usize = 10; // 0=Emits, 1=Does not emit
+
+// AFInfo2 array indices (tag 0x0026, newer Canon models)
+// No length prefix; 0‑based keys match the Perl %AFInfo2 table.
+const AF_INFO2_AF_AREA_MODE: usize = 1;
+const AF_INFO2_NUM_AF_POINTS: usize = 2;
+const AF_INFO2_AF_IMAGE_WIDTH: usize = 3;
+const AF_INFO2_AF_IMAGE_HEIGHT: usize = 4;
+const AF_INFO2_ARRAYS_START: usize = 8;   // AFAreaWidths at Perl key 8
 
 // FlashInfo array indices (tag 0x0003)
 const FLASH_INFO_FLASH_GUIDE_NUMBER: usize = 0;
@@ -2074,17 +2087,14 @@ fn parse_canon_makernote_impl(
             }
 
             // AFInfo array (Phase 3) - autofocus point information
-            CANON_AF_INFO | CANON_AF_INFO2 => {
+            CANON_AF_INFO => {
                 // AFInfo is a SHORT array
                 if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
-                    // Number of AF points
                     if let Some(&num_points) = array.get(AF_INFO_NUM_AF_POINTS)
                         && num_points > 0
                     {
                         tags.insert("Canon:NumAFPoints".to_string(), num_points.to_string());
                     }
-
-                    // AF area dimensions
                     if let Some(&width) = array.get(AF_INFO_IMAGE_WIDTH)
                         && width > 0
                     {
@@ -2095,21 +2105,150 @@ fn parse_canon_makernote_impl(
                     {
                         tags.insert("Canon:AFImageHeight".to_string(), height.to_string());
                     }
-
-                    // AF points in focus (bitmask)
+                    if let Some(&area_w) = array.get(AF_INFO_AF_AREA_WIDTH) {
+                        tags.insert("Canon:AFAreaWidth".to_string(), area_w.to_string());
+                    }
+                    if let Some(&area_h) = array.get(AF_INFO_AF_AREA_HEIGHT) {
+                        tags.insert("Canon:AFAreaHeight".to_string(), area_h.to_string());
+                    }
                     if let Some(&points_in_focus) = array.get(AF_INFO_POINTS_IN_FOCUS) {
                         tags.insert(
                             "Canon:AFPointsInFocus".to_string(),
                             points_in_focus.to_string(),
                         );
                     }
-
-                    // AF points selected (bitmask)
                     if let Some(&points_selected) = array.get(AF_INFO_POINTS_SELECTED) {
                         tags.insert(
                             "Canon:AFPointsSelected".to_string(),
                             points_selected.to_string(),
                         );
+                    }
+                    if let Some(&beam) = array.get(AF_INFO_AF_ASSIST_BEAM) {
+                        let beam_str = match beam {
+                            0 => "Emits",
+                            1 => "Does not emit",
+                            _ => "Unknown",
+                        };
+                        tags.insert("Canon:AFAssistBeam".to_string(), beam_str.to_string());
+                    }
+                }
+            }
+
+            // AFInfo2 array (tag 0x0026) - newer autofocus info
+            CANON_AF_INFO2 => {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                    if let Some(&mode) = array.get(AF_INFO2_AF_AREA_MODE) {
+                        let mode_str = match mode {
+                            0 => "Off (Manual Focus)",
+                            1 => "AF Point Expansion (surround)",
+                            2 => "Single-point AF",
+                            4 => "Auto",
+                            5 => "Face Detect AF",
+                            6 => "Face + Tracking",
+                            7 => "Zone AF",
+                            8 => "AF Point Expansion (4 point)",
+                            9 => "Spot AF",
+                            10 => "AF Point Expansion (8 point)",
+                            11 => "Flexizone Multi (49 point)",
+                            12 => "Flexizone Multi (9 point)",
+                            13 => "Flexizone Single",
+                            14 => "Large Zone AF",
+                            16 => "Large Zone AF (vertical)",
+                            17 => "Large Zone AF (horizontal)",
+                            19 => "Flexible Zone AF 1",
+                            20 => "Flexible Zone AF 2",
+                            21 => "Flexible Zone AF 3",
+                            22 => "Whole Area AF",
+                            _ => "Unknown",
+                        };
+                        if mode_str != "Unknown" {
+                            tags.insert("Canon:AFAreaMode".to_string(), mode_str.to_string());
+                        }
+                    }
+                    let num_points_opt = array.get(AF_INFO2_NUM_AF_POINTS).copied();
+                    if let Some(num_points) = num_points_opt {
+                        if num_points > 0 {
+                            tags.insert("Canon:NumAFPoints".to_string(), num_points.to_string());
+                        }
+                    }
+                    if let Some(&width) = array.get(AF_INFO2_AF_IMAGE_WIDTH)
+                        && width > 0
+                    {
+                        tags.insert("Canon:AFImageWidth".to_string(), width.to_string());
+                    }
+                    if let Some(&height) = array.get(AF_INFO2_AF_IMAGE_HEIGHT)
+                        && height > 0
+                    {
+                        tags.insert("Canon:AFImageHeight".to_string(), height.to_string());
+                    }
+                    if let Some(num_points) = num_points_opt {
+                        let n = num_points as usize;
+                        if n > 0 && array.len() >= AF_INFO2_ARRAYS_START + 4 * n {
+                            let start_w = AF_INFO2_ARRAYS_START;
+                            let start_h = start_w + n;
+                            let start_x = start_h + n;
+                            let start_y = start_x + n;
+                            let widths: Vec<String> = array[start_w..start_w + n]
+                                .iter().map(|v| v.to_string()).collect();
+                            let heights: Vec<String> = array[start_h..start_h + n]
+                                .iter().map(|v| v.to_string()).collect();
+                            let xpos: Vec<String> = array[start_x..start_x + n]
+                                .iter().map(|v| v.to_string()).collect();
+                            let ypos: Vec<String> = array[start_y..start_y + n]
+                                .iter().map(|v| v.to_string()).collect();
+                            tags.insert("Canon:AFAreaWidths".to_string(), widths.join(" "));
+                            tags.insert("Canon:AFAreaHeights".to_string(), heights.join(" "));
+                            tags.insert("Canon:AFAreaXPositions".to_string(), xpos.join(" "));
+                            tags.insert("Canon:AFAreaYPositions".to_string(), ypos.join(" "));
+                        }
+                    }
+                }
+            }
+
+            // AFMicroAdj (tag 0x002a) — int16s[2]: mode, value
+            CANON_AF_MICRO_ADJ => {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                    if array.len() >= 2 {
+                        let mode_str = match array[0] {
+                            0 => "Disable",
+                            1 => "Adjust by lens",
+                            2 => "Adjust by body",
+                            _ => "Unknown",
+                        };
+                        tags.insert("Canon:AFMicroAdjMode".to_string(), mode_str.to_string());
+                        tags.insert("Canon:AFMicroAdjValue".to_string(), array[1].to_string());
+                    }
+                }
+            }
+
+            // AmbienceSelection (tag 0x4028) — int16u with PrintConv
+            CANON_AMBIENCE_SELECTION => {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                    if let Some(&val) = array.first() {
+                        let val_str = match val {
+                            0 => "Standard",
+                            1 => "Vivid",
+                            2 => "Soft",
+                            3 => "Warm",
+                            4 => "Cool",
+                            _ => "Unknown",
+                        };
+                        tags.insert("Canon:AmbienceSelection".to_string(), val_str.to_string());
+                    }
+                }
+            }
+
+            // AntiFlicker (tag 0x4055) — int16u with PrintConv
+            CANON_ANTI_FLICKER => {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                    if let Some(&val) = array.first() {
+                        let val_str = match val {
+                            0 => "Off",
+                            1 => "On (mode 1)",
+                            2 => "On (mode 2)",
+                            _ => "Unknown",
+                        };
+                        tags.insert("Canon:AntiFlicker".to_string(), val_str.to_string());
                     }
                 }
             }
@@ -2629,8 +2768,8 @@ mod tests {
         data.extend_from_slice(b"Canon");
         data.extend_from_slice(&[0x01, 0x00]); // 1 entry
 
-        // AFInfo tag (0x0012 or 0x0026)
-        data.extend_from_slice(&[0x26, 0x00]); // Tag: AFInfo2
+        // AFInfo tag (0x0012) - older autofocus layout
+        data.extend_from_slice(&[0x12, 0x00]); // Tag: AFInfo
         data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
         data.extend_from_slice(&[0x14, 0x00, 0x00, 0x00]); // Count: 20
         data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23
@@ -2643,13 +2782,14 @@ mod tests {
             45,     // [1] NumAFPoints (e.g., 45-point AF system)
             5568,   // [2] AFImageWidth
             3712,   // [3] AFImageHeight
-            9,      // [4] AFAreaWidth
-            9,      // [5] AFAreaHeight
-            2784,   // [6] AFAreaXPositions (center)
-            1856,   // [7] AFAreaYPositions (center)
+            0,      // [4] unused
+            0,      // [5] unused
+            189,    // [6] AFAreaWidth
+            188,    // [7] AFAreaHeight
             0x0001, // [8] AFPointsInFocus (bit 0 set = center point)
             0x0001, // [9] AFPointsSelected
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // [10-19]
+            0,      // [10] AFAssistBeam: 0 = Emits
+            0, 0, 0, 0, 0, 0, 0, 0, 0, // [11-19]
         ];
 
         for value in af_info {
@@ -2662,6 +2802,59 @@ mod tests {
         assert_eq!(result.get("Canon:AFImageWidth"), Some(&"5568".to_string()));
         assert_eq!(result.get("Canon:AFImageHeight"), Some(&"3712".to_string()));
         assert_eq!(result.get("Canon:AFPointsInFocus"), Some(&"1".to_string()));
+        assert_eq!(result.get("Canon:AFPointsSelected"), Some(&"1".to_string()));
+        assert_eq!(result.get("Canon:AFAreaWidth"), Some(&"189".to_string()));
+        assert_eq!(result.get("Canon:AFAreaHeight"), Some(&"188".to_string()));
+        assert_eq!(result.get("Canon:AFAssistBeam"), Some(&"Emits".to_string()));
+    }
+
+    #[test]
+    fn test_parse_af_info2_array() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+
+        // AFInfo2 tag (0x0026)
+        data.extend_from_slice(&[0x26, 0x00]); // Tag: AFInfo2
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        // index 0 (AFInfoSize) + fixed header indices 1-7 + 4 arrays of NumAFPoints=2
+        // = 1 + 7 + 4*2 = 16 entries
+        data.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // Count: 16
+        data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
+
+        // Layout matches Perl %AFInfo2 table keys (0-based):
+        // 0=AFInfoSize, 1=AFAreaMode, 2=NumAFPoints, 3=AFImageWidth, 4=AFImageHeight,
+        // 5-7=reserved, 8=AFAreaWidths[0..n-1], 9=AFAreaHeights[0..n-1], ...
+        let af_info2: Vec<i16> = vec![
+            16,     // [0] AFInfoSize (record version / size)
+            6,      // [1] AFAreaMode: Face + Tracking
+            2,      // [2] NumAFPoints
+            5568,   // [3] AFImageWidth
+            3712,   // [4] AFImageHeight
+            0,      // [5] reserved
+            0,      // [6] reserved
+            0,      // [7] reserved
+            337, 189, // [8-9] AFAreaWidths
+            299, 188, // [10-11] AFAreaHeights
+            392, 100, // [12-13] AFAreaXPositions
+            -327, 0, // [14-15] AFAreaYPositions
+        ];
+
+        for value in af_info2 {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+
+        assert_eq!(result.get("Canon:AFAreaMode"), Some(&"Face + Tracking".to_string()));
+        assert_eq!(result.get("Canon:NumAFPoints"), Some(&"2".to_string()));
+        assert_eq!(result.get("Canon:AFImageWidth"), Some(&"5568".to_string()));
+        assert_eq!(result.get("Canon:AFImageHeight"), Some(&"3712".to_string()));
+        assert_eq!(result.get("Canon:AFAreaWidths"), Some(&"337 189".to_string()));
+        assert_eq!(result.get("Canon:AFAreaHeights"), Some(&"299 188".to_string()));
+        assert_eq!(result.get("Canon:AFAreaXPositions"), Some(&"392 100".to_string()));
+        assert_eq!(result.get("Canon:AFAreaYPositions"), Some(&"-327 0".to_string()));
     }
 
     #[test]
