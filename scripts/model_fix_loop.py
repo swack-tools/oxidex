@@ -2889,9 +2889,58 @@ DEFAULT_MAX_REPAIR_ROUNDS = 5
 # workspace with many test binaries, cutting off before the actual
 # "FAILURES:" section / panic detail cargo prints near the end -- the
 # critique model (and a human debugging alongside it) never saw the real
-# failure reason, just noise. Raised for more headroom; still a blunt
-# tail-keep, not smart extraction around FAILED/error[ markers.
+# failure reason, just noise. Raised for more headroom, then superseded by
+# _extract_test_failure_context below (a blind tail-keep of any fixed size
+# still loses the real failure when OTHER unrelated test binaries print
+# thousands of lines AFTER it in a workspace run).
 DEFAULT_MAX_TEST_OUTPUT_CHARS = 8000
+
+_TEST_FAILURE_MARKER_RE = re.compile(
+    r"panicked at|assertion[^\n]*failed|^failures:|test result: FAILED|"
+    r"^error(\[E\d+\])?:|\bFAILED\b"
+)
+
+
+def _extract_test_failure_context(output, max_chars=DEFAULT_MAX_TEST_OUTPUT_CHARS):
+    """Pull the lines around real failure markers (panics, failed
+    assertions, FAILED test names, the trailing "failures:" summary) out of
+    a full cargo test run, instead of blindly keeping the last N chars.
+
+    A `cargo test --workspace` run with many test binaries keeps executing
+    binaries after the first failure, so the actual panic/assertion detail
+    for the regression can be thousands of lines before the end of the
+    output -- a tail-keep of ANY fixed size loses it and leaves only cargo's
+    generic "error: test failed, to rerun pass `-p ... --test ...`" line,
+    which names no failing assertion. This scans for marker lines instead
+    and keeps a window of context around each one, plus the trailing chunk
+    (where the real final summary usually is). Falls back to a blind tail
+    if no markers are found, so any output shape this doesn't recognize
+    degrades to the old behavior rather than returning nothing useful.
+    """
+    lines = output.splitlines()
+    if not lines:
+        return output[-max_chars:]
+
+    marker_idx = [i for i, line in enumerate(lines) if _TEST_FAILURE_MARKER_RE.search(line)]
+    if not marker_idx:
+        return output[-max_chars:]
+
+    windows = [(max(0, i - 2), min(len(lines), i + 13)) for i in marker_idx]
+    windows.append((max(0, len(lines) - 30), len(lines)))
+    windows.sort()
+
+    merged = []
+    for start, end in windows:
+        if merged and start <= merged[-1][1] + 2:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    extracted = "\n[...]\n".join("\n".join(lines[start:end]) for start, end in merged)
+    if len(extracted) <= max_chars:
+        return extracted
+    half = max_chars // 2
+    return extracted[:half] + "\n[...]\n" + extracted[-half:]
 
 # Spec S3 [table_job] defaults: T3 TABLE-PORT / T4 FOUNDATION-UNLOCK jobs
 # are scoped to a whole %table/module rather than one tag, so they get a
@@ -3452,7 +3501,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         t_ok, t_out = cargo_test_targeted_fn(repo_root, fmt.lower())
         if not t_ok:
             git_checkout_clean_fn(repo_root)
-            reason = f"targeted tests ({fmt.lower()}) regressed:\n{t_out[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            reason = f"targeted tests ({fmt.lower()}) regressed:\n{_extract_test_failure_context(t_out)}"
             log_fn(f"[{fmt}] targeted tests regressed, reverting")
             lesson("test_regressed", reason, tag_key=_gap_primary_tag_key(gap))
             outcome = critique_and_continue("test_regressed", reason, round_index)
@@ -3488,11 +3537,11 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             tests_passed, test_output = cargo_test_workspace_fn(repo_root)
             if not tests_passed:
                 git_checkout_clean_fn(repo_root)
-                # Failure detail (which assertion, panic message) is usually
-                # near the end, right before the "test result: FAILED" summary
-                # -- the full output can run to thousands of lines for a
-                # 2000+-test workspace run, so only the tail is kept.
-                tail = test_output[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]
+                # Failure detail (which assertion, panic message) can land
+                # anywhere in a 2000+-test workspace run -- other binaries
+                # keep executing after the real failure, so a blind tail
+                # keep can lose it. Scan for FAILED/panic markers instead.
+                tail = _extract_test_failure_context(test_output)
                 reason = f"cargo test --workspace regressed:\n{tail}"
                 log_fn(f"[{fmt}] cargo test --workspace regressed, reverting")
                 lesson("test_regressed", reason, tag_key=_gap_primary_tag_key(gap))
@@ -4506,7 +4555,7 @@ def attempt_foundation_job(job, repo_root, config, *, call_model_fn=call_model,
         t_ok, t_out = cargo_test_targeted_fn(repo_root, targeted_filter)
         if not t_ok:
             git_checkout_clean_fn(repo_root)
-            reason = f"targeted tests ({targeted_filter}) regressed:\n{t_out[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            reason = f"targeted tests ({targeted_filter}) regressed:\n{_extract_test_failure_context(t_out)}"
             log_fn(f"[foundation:{job['name']}] targeted tests regressed, reverting")
             outcome = critique_and_continue("test_regressed", reason, round_index)
             if outcome:
@@ -4535,7 +4584,7 @@ def attempt_foundation_job(job, repo_root, config, *, call_model_fn=call_model,
         tests_passed, test_output = cargo_test_workspace_fn(repo_root)
         if not tests_passed:
             git_checkout_clean_fn(repo_root)
-            reason = f"cargo test --workspace regressed:\n{test_output[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            reason = f"cargo test --workspace regressed:\n{_extract_test_failure_context(test_output)}"
             log_fn(f"[foundation:{job['name']}] cargo test --workspace regressed, reverting")
             outcome = critique_and_continue("test_regressed", reason, round_index)
             if outcome:
@@ -4757,7 +4806,7 @@ def attempt_table_port(table_name, module, repo_root, config, *, call_model_fn=c
         t_ok, t_out = cargo_test_targeted_fn(repo_root, targeted_filter)
         if not t_ok:
             git_checkout_clean_fn(repo_root)
-            reason = f"targeted tests ({targeted_filter}) regressed:\n{t_out[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            reason = f"targeted tests ({targeted_filter}) regressed:\n{_extract_test_failure_context(t_out)}"
             log_fn(f"[table-port:{table_name}] targeted tests regressed, reverting")
             outcome = critique_and_continue("test_regressed", reason, round_index)
             if outcome:
@@ -4803,7 +4852,7 @@ def attempt_table_port(table_name, module, repo_root, config, *, call_model_fn=c
         tests_passed, test_output = cargo_test_workspace_fn(repo_root)
         if not tests_passed:
             git_checkout_clean_fn(repo_root)
-            reason = f"cargo test --workspace regressed:\n{test_output[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            reason = f"cargo test --workspace regressed:\n{_extract_test_failure_context(test_output)}"
             log_fn(f"[table-port:{table_name}] cargo test --workspace regressed, reverting")
             outcome = critique_and_continue("test_regressed", reason, round_index)
             if outcome:

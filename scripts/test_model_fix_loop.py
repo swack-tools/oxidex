@@ -18,6 +18,7 @@ from model_fix_loop import (
     TABLE_JOB_CLAIM_PREFIX,
     _dedupe_machine_entries,
     _entry_is_human,
+    _extract_test_failure_context,
     _is_rejection_entry,
     _normalize_model_config,
     _select_tier,
@@ -334,6 +335,43 @@ class ExtractDiffTests(unittest.TestCase):
         diff = extract_diff(text)
         self.assertIsNotNone(diff)
         self.assertTrue(diff.startswith("--- a/foo.rs"))
+
+
+class ExtractTestFailureContextTests(unittest.TestCase):
+    def test_surfaces_panic_pushed_past_tail_window_by_later_binaries(self):
+        panic_block = (
+            "running 3 tests\n"
+            "test jpeg::app12_stb2 ... FAILED\n\n"
+            "failures:\n\n"
+            "---- jpeg::app12_stb2 stdout ----\n"
+            "thread 'jpeg::app12_stb2' panicked at src/parsers/jpeg/app12.rs:88:9:\n"
+            "assertion `left == right` failed\n"
+            "  left: 3\n"
+            " right: 2\n\n"
+            "failures:\n"
+            "    jpeg::app12_stb2\n\n"
+            "test result: FAILED. 2 passed; 1 failed; 0 ignored\n\n"
+        )
+        # Simulate many unrelated, PASSING test binaries printing after the
+        # real failure -- this is what pushed the panic out of any blind
+        # tail-keep in the observed live regressions (nikon-1, canon-3, etc).
+        noise = "".join(f"running 50 tests\ntest mod{i}::case ... ok\n" * 1 for i in range(2000))
+        output = panic_block + noise
+        self.assertGreater(len(output), 20000)
+
+        extracted = _extract_test_failure_context(output, max_chars=8000)
+
+        self.assertIn("panicked at src/parsers/jpeg/app12.rs:88:9", extracted)
+        self.assertIn("assertion `left == right` failed", extracted)
+        self.assertLessEqual(len(extracted), 8000 + 20)
+
+    def test_falls_back_to_blind_tail_when_no_markers_found(self):
+        output = "line\n" * 5000
+        extracted = _extract_test_failure_context(output, max_chars=100)
+        self.assertEqual(extracted, output[-100:])
+
+    def test_empty_output_returns_empty(self):
+        self.assertEqual(_extract_test_failure_context("", max_chars=100), "")
 
 
 class EstimateTokensTests(unittest.TestCase):
