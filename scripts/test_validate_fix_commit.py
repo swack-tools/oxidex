@@ -158,13 +158,29 @@ class TrailerTests(unittest.TestCase):
             sha = commit_fix(
                 repo,
                 {"src/canon/quality.rs": "pub fn noop() {}\n"},
-                full_trailers(Worker=None, Table=None),
+                full_trailers(Worker=None),
             )
             result = validate_commit(sha, repo)
         self.assertIn("missing-trailer:Worker", result["flags"])
-        self.assertIn("missing-trailer:Table", result["flags"])
         self.assertEqual(result["checks"]["trailers"], "flagged")
         self.assertFalse(result["ok"])
+
+    def test_missing_table_trailer_alone_is_not_flagged(self):
+        # Table is a T3 table-port-job concept; model_fix_loop.py's
+        # ordinary fix_gap commits never populate it (table_name=None at
+        # every regular call site) -- an ordinary fix missing ONLY this
+        # trailer must still validate clean, or no ordinary fix could
+        # ever be auto-consumed.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            sha = commit_fix(
+                repo,
+                {"src/canon/quality.rs": "pub fn noop() {}\n"},
+                full_trailers(Table=None),
+            )
+            result = validate_commit(sha, repo)
+        self.assertNotIn("missing-trailer:Table", result["flags"])
+        self.assertEqual(result["checks"]["trailers"], "pass")
 
 
 class MultiSampleTests(unittest.TestCase):
