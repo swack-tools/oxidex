@@ -509,6 +509,43 @@ fn parse_flir_legacy_format(data: &[u8], metadata: &mut MetadataMap) -> Result<(
         );
     }
 
+    // Extract FieldOfView
+    if let Some(fov) = reader.f32_at(camera_info_offsets::FIELD_OF_VIEW)
+        && fov > 0.0
+        && fov < 180.0
+    {
+        metadata.insert(
+            "FLIR:FieldOfView".to_string(),
+            TagValue::String(format!("{:.1} deg", fov)),
+        );
+    }
+
+    // Extract filter info (emit even when empty)
+    if data.len() >= camera_info_offsets::FILTER_MODEL + 16 {
+        let filter_model = try_read_string(data, camera_info_offsets::FILTER_MODEL, 16)
+            .unwrap_or_default();
+        metadata.insert("FLIR:FilterModel".to_string(), TagValue::String(filter_model));
+    }
+
+    if data.len() >= camera_info_offsets::FILTER_PART_NUMBER + 32 {
+        let filter_part = try_read_string(data, camera_info_offsets::FILTER_PART_NUMBER, 32)
+            .unwrap_or_default();
+        metadata.insert("FLIR:FilterPartNumber".to_string(), TagValue::String(filter_part));
+    }
+
+    if data.len() >= camera_info_offsets::FILTER_SERIAL_NUMBER + 32 {
+        let filter_serial = try_read_string(data, camera_info_offsets::FILTER_SERIAL_NUMBER, 32)
+            .unwrap_or_default();
+        metadata.insert("FLIR:FilterSerialNumber".to_string(), TagValue::String(filter_serial));
+    }
+
+    // Extract DateTimeOriginal
+    if data.len() > camera_info_offsets::DATE_TIME_ORIGINAL + 8 {
+        if let Some(dt) = parse_flir_datetime(data, camera_info_offsets::DATE_TIME_ORIGINAL) {
+            metadata.insert("FLIR:DateTimeOriginal".to_string(), TagValue::String(dt));
+        }
+    }
+
     // Try to read dimensions
     if let Some(width) = reader.u16_at(0x02)
         && (16..=4096).contains(&width)
@@ -913,7 +950,10 @@ fn parse_camera_info_record(data: &[u8], metadata: &mut MetadataMap) {
         && fov > 0.0
         && fov < 180.0
     {
-        metadata.insert("FLIR:FieldOfView".to_string(), TagValue::Float(fov as f64));
+        metadata.insert(
+            "FLIR:FieldOfView".to_string(),
+            TagValue::String(format!("{:.1} deg", fov)),
+        );
     }
 
     // Peak spectral sensitivity (wavelength in micrometers)
@@ -929,28 +969,27 @@ fn parse_camera_info_record(data: &[u8], metadata: &mut MetadataMap) {
 
     // === Filter Information ===
 
-    if let Some(filter_model) = try_read_string(data, camera_info_offsets::FILTER_MODEL, 16)
-        && !filter_model.is_empty()
-    {
+    if data.len() >= camera_info_offsets::FILTER_MODEL + 16 {
+        let filter_model = try_read_string(data, camera_info_offsets::FILTER_MODEL, 16)
+            .unwrap_or_default();
         metadata.insert(
             "FLIR:FilterModel".to_string(),
             TagValue::String(filter_model),
         );
     }
 
-    if let Some(filter_part) = try_read_string(data, camera_info_offsets::FILTER_PART_NUMBER, 32)
-        && !filter_part.is_empty()
-    {
+    if data.len() >= camera_info_offsets::FILTER_PART_NUMBER + 32 {
+        let filter_part = try_read_string(data, camera_info_offsets::FILTER_PART_NUMBER, 32)
+            .unwrap_or_default();
         metadata.insert(
             "FLIR:FilterPartNumber".to_string(),
             TagValue::String(filter_part),
         );
     }
 
-    if let Some(filter_serial) =
-        try_read_string(data, camera_info_offsets::FILTER_SERIAL_NUMBER, 32)
-        && !filter_serial.is_empty()
-    {
+    if data.len() >= camera_info_offsets::FILTER_SERIAL_NUMBER + 32 {
+        let filter_serial = try_read_string(data, camera_info_offsets::FILTER_SERIAL_NUMBER, 32)
+            .unwrap_or_default();
         metadata.insert(
             "FLIR:FilterSerialNumber".to_string(),
             TagValue::String(filter_serial),
@@ -1226,12 +1265,21 @@ fn is_valid_camera_model(model: &str) -> bool {
 ///
 /// FLIR stores dates in various formats. This function attempts to parse
 /// the most common format: seconds since 1970 (Unix timestamp) stored as f64.
+/// Output format matches ExifTool's ConvertDateTime with fractional seconds.
+/// the most common format: seconds since 1970 (Unix timestamp) stored as f64.
 fn parse_flir_datetime(data: &[u8], offset: usize) -> Option<String> {
     if offset + 8 > data.len() {
         return None;
     }
 
     let reader = EndianReader::little_endian(data);
+
+    // First, try reading as a string (some FLIR formats store datetime as text)
+    if let Some(dt_str) = try_read_string(data, offset, 64) {
+        if dt_str.len() >= 10 && dt_str.contains(':') {
+            return Some(dt_str);
+        }
+    }
 
     // FLIR typically stores time as seconds since 1970 (f64)
     if let Some(timestamp) = reader.f64_at(offset)
@@ -1240,30 +1288,65 @@ fn parse_flir_datetime(data: &[u8], offset: usize) -> Option<String> {
     {
         // Valid Unix timestamp range (before ~2096)
         let secs = timestamp as i64;
+        let frac = timestamp - secs as f64;
+        let millis = (frac * 1000.0).round() as i32;
 
-        // Convert to datetime components manually
-        // This is a simplified conversion - for production use chrono crate
-        let days_since_epoch = secs / 86400;
-        let time_of_day = secs % 86400;
+        // Convert to datetime with proper leap year handling
+        let (year, month, day, hours, minutes, seconds) = unix_to_datetime(secs);
 
-        let hours = time_of_day / 3600;
-        let minutes = (time_of_day % 3600) / 60;
-        let seconds = time_of_day % 60;
-
-        // Simplified year calculation (not accounting for leap years precisely)
-        let year = 1970 + (days_since_epoch / 365) as i32;
-        let day_of_year = (days_since_epoch % 365) as i32;
-
-        // Approximate month/day (simplified)
-        let (month, day) = approximate_month_day(day_of_year);
-
-        return Some(format!(
-            "{:04}:{:02}:{:02} {:02}:{:02}:{:02}",
-            year, month, day, hours, minutes, seconds
-        ));
+        if millis > 0 {
+            return Some(format!(
+                "{:04}:{:02}:{:02} {:02}:{:02}:{:02}.{:03}",
+                year, month, day, hours, minutes, seconds, millis
+            ));
+        } else {
+            return Some(format!(
+                "{:04}:{:02}:{:02} {:02}:{:02}:{:02}",
+                year, month, day, hours, minutes, seconds
+            ));
+        }
     }
 
     None
+}
+
+/// Convert Unix timestamp seconds to (year, month, day, hour, minute, second)
+fn unix_to_datetime(secs: i64) -> (i32, i32, i32, i32, i32, i32) {
+    let seconds = (secs % 60) as i32;
+    let minutes = ((secs / 60) % 60) as i32;
+    let hours = ((secs / 3600) % 24) as i32;
+    let mut days = secs / 86400;
+
+    let mut year = 1970;
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+
+    let month_days = if is_leap_year(year) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 1;
+    for &dim in &month_days {
+        if days < dim {
+            break;
+        }
+        days -= dim;
+        month += 1;
+    }
+
+    (year, month, (days + 1) as i32, hours, minutes, seconds)
+}
+
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 /// Approximate month and day from day of year (simplified calculation).
