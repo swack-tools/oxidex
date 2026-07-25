@@ -1988,12 +1988,10 @@ fn parse_canon_makernote_impl(
                     // BulbDuration (index 24) - direct value in seconds
                     if array.len() > SHOT_INFO_BULB_DURATION {
                         let duration = array[SHOT_INFO_BULB_DURATION];
-                        if duration > 0 {
-                            tags.insert(
-                                "Canon:BulbDuration".to_string(),
-                                format!("{} s", duration),
-                            );
-                        }
+                        tags.insert(
+                            "Canon:BulbDuration".to_string(),
+                            duration.to_string(),
+                        );
                     }
                 }
             }
@@ -2068,6 +2066,16 @@ fn parse_canon_makernote_impl(
                             // For compact cameras or fixed lenses, output "n/a"
                             tags.insert("Canon:LensType".to_string(), "n/a".to_string());
                         }
+                    }
+
+                    // BracketMode (index 4)
+                    if let Some(&bracket_mode) = array.get(FILE_INFO_BRACKET_MODE) {
+                        tags.insert("Canon:BracketMode".to_string(), bracket_mode.to_string());
+                    }
+
+                    // BracketValue (index 5)
+                    if let Some(&bracket_value) = array.get(FILE_INFO_BRACKET_VALUE) {
+                        tags.insert("Canon:BracketValue".to_string(), bracket_value.to_string());
                     }
 
                     // Extract shutter count (combine low and high words)
