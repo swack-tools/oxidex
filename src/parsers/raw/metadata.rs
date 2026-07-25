@@ -42,7 +42,13 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0xC616 // CFAPlaneColor
+            0x0143 // TileLength
+                | 0x0145 // TileByteCounts
+                | 0x0211 // YCbCrCoefficients
+                | 0x0212 // YCbCrSubSampling
+                | 0x0213 // YCbCrPositioning
+                | 0x0214 // ReferenceBlackWhite
+                | 0xC616 // CFAPlaneColor
                 | 0xC617 // CFALayout
                 | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
@@ -834,6 +840,57 @@ fn read_tiff_u32(bytes: &[u8], byte_order: ByteOrder) -> Option<u32> {
     })
 }
 
+/// Format unsigned integer arrays (SHORT or LONG) as a space-separated list.
+fn format_unsigned_integer_array(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    let component_size = match field_type {
+        3 => 2, // SHORT
+        4 => 4, // LONG
+        _ => return None,
+    };
+    let value_count = usize::try_from(value_count).ok()?;
+    let byte_len = value_count.checked_mul(component_size)?;
+    let values = bytes.get(..byte_len)?;
+
+    let formatted: Vec<String> = match component_size {
+        2 => values
+            .chunks_exact(2)
+            .map(|chunk| {
+                let val = match byte_order {
+                    ByteOrder::LittleEndian => u16::from_le_bytes([chunk[0], chunk[1]]),
+                    ByteOrder::BigEndian => u16::from_be_bytes([chunk[0], chunk[1]]),
+                };
+                val.to_string()
+            })
+            .collect(),
+        4 => values
+            .chunks_exact(4)
+            .map(|chunk| {
+                let val = match byte_order {
+                    ByteOrder::LittleEndian => {
+                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                    }
+                    ByteOrder::BigEndian => {
+                        u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                    }
+                };
+                val.to_string()
+            })
+            .collect(),
+        _ => return None,
+    };
+
+    if formatted.is_empty() {
+        None
+    } else {
+        Some(formatted.join(" "))
+    }
+}
+
 /// Format EXIF values whose raw TIFF representation differs from ExifTool's
 /// default text output.
 fn format_exif_display_value(
@@ -844,6 +901,76 @@ fn format_exif_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // TileLength: int16u/int32u
+        0x0143 if (field_type == 3 || field_type == 4) && value_count >= 1 => {
+            format_unsigned_integer_array(bytes, field_type, value_count, byte_order)
+        }
+        // TileByteCounts: int16u/int32u
+        0x0145 if (field_type == 3 || field_type == 4) && value_count >= 1 => {
+            format_unsigned_integer_array(bytes, field_type, value_count, byte_order)
+        }
+        // YCbCrCoefficients: rational64u[3]
+        0x0211 if field_type == 5 && value_count >= 3 => {
+            let count = usize::try_from(value_count).ok()?;
+            let values = bytes.get(..count * 8)?;
+            Some(
+                values
+                    .chunks_exact(8)
+                    .map(|chunk| {
+                        let num = read_tiff_u32(&chunk[..4], byte_order)?;
+                        let denom = read_tiff_u32(&chunk[4..], byte_order)?;
+                        if denom == 0 {
+                            return None;
+                        }
+                        Some(format!("{:.3}", f64::from(num) / f64::from(denom)))
+                    })
+                    .take(3) // only three coefficients
+                    .collect::<Option<Vec<_>>>()?
+                    .join(" "),
+            )
+        }
+        // YCbCrSubSampling: SHORT[2]
+        0x0212 if field_type == 3 && value_count >= 2 => {
+            let val1 = read_tiff_u16(bytes, byte_order)?;
+            let val2 = read_tiff_u16(bytes.get(2..)?, byte_order)?;
+            Some(match (val1, val2) {
+                (1, 1) => "YCbCr4:4:4 (1 1)".to_string(),
+                (2, 1) => "YCbCr4:2:2 (2 1)".to_string(),
+                (2, 2) => "YCbCr4:2:0 (2 2)".to_string(),
+                _ => format!("{} {}", val1, val2),
+            })
+        }
+        // YCbCrPositioning: SHORT[1]
+        0x0213 if field_type == 3 && value_count >= 1 => {
+            match read_tiff_u16(bytes, byte_order)? {
+                1 => Some("Centered".to_string()),
+                2 => Some("Co-sited".to_string()),
+                _ => None,
+            }
+        }
+        // ReferenceBlackWhite: rational64u[6]
+        0x0214 if field_type == 5 && value_count >= 6 => {
+            let count = usize::try_from(value_count).ok()?;
+            let values = bytes.get(..count * 8)?;
+            Some(
+                values
+                    .chunks_exact(8)
+                    .map(|chunk| {
+                        let num = read_tiff_u32(&chunk[..4], byte_order)?;
+                        let denom = read_tiff_u32(&chunk[4..], byte_order)?;
+                        if denom == 0 {
+                            return None;
+                        }
+                        if denom == 1 {
+                            Some(num.to_string())
+                        } else {
+                            Some(format!("{:.3}", f64::from(num) / f64::from(denom)))
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>()?
+                    .join(" "),
+            )
+        }
         // CFARepeatPatternDim: SHORT[2] or LONG[2], space-separated.
         0x828D if (field_type == 3 || field_type == 4) && value_count >= 2 => {
             if field_type == 3 {
@@ -860,8 +987,8 @@ fn format_exif_display_value(
         0x828E if field_type == 1 || field_type == 7 => {
             Some(format_cfa_pattern2(bytes, value_count))
         }
-        // CFAPlaneColor: UNDEFINED array, comma-separated color names.
-        0xC616 if field_type == 7 => {
+        // CFAPlaneColor: BYTE or UNDEFINED array, comma-separated color names.
+        0xC616 if field_type == 1 || field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
             let values = bytes.get(..count)?;
             if values.is_empty() {
@@ -914,6 +1041,14 @@ fn format_exif_display_value(
                 }
                 .to_string(),
             )
+        }
+        // DefaultCropOrigin: SHORT[2] or LONG[2]
+        0xC61F if (field_type == 3 || field_type == 4) && value_count >= 2 => {
+            format_unsigned_integer_array(bytes, field_type, value_count, byte_order)
+        }
+        // DefaultCropSize: SHORT[2] or LONG[2]
+        0xC620 if (field_type == 3 || field_type == 4) && value_count >= 2 => {
+            format_unsigned_integer_array(bytes, field_type, value_count, byte_order)
         }
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
