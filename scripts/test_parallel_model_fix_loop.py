@@ -324,13 +324,17 @@ class CreateWorktreeTests(unittest.TestCase):
     def test_refuses_to_reset_a_reused_branch_that_still_carries_unmerged_commits(self, mock_run):
         # No-discard invariant (M5): a previous round's failed merge left
         # 2 commits on the worker branch that are on neither base_ref nor
-        # origin/main -- the reuse path must keep the branch as-is (plain
+        # origin/main, AND neither commit's patch is already present
+        # upstream (cherry says "+" against both refs) -- genuinely novel,
+        # unmerged work. The reuse path must keep the branch as-is (plain
         # checkout), never `checkout -B` it back onto base_ref.
         def fake_run(argv, **kwargs):
             if argv[:4] == ["git", "rev-parse", "--verify", "--quiet"]:
                 return MagicMock(returncode=0, stdout="abc123\n", stderr="")
-            if argv[:3] == ["git", "rev-list", "--count"]:
-                return MagicMock(returncode=0, stdout="2\n", stderr="")
+            if argv[:2] == ["git", "rev-list"]:
+                return MagicMock(returncode=0, stdout="sha1\nsha2\n", stderr="")
+            if argv[:2] == ["git", "cherry"]:
+                return MagicMock(returncode=0, stdout="+ sha1\n+ sha2\n", stderr="")
             return MagicMock(returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = fake_run
@@ -352,8 +356,8 @@ class CreateWorktreeTests(unittest.TestCase):
         def fake_run(argv, **kwargs):
             if argv[:4] == ["git", "rev-parse", "--verify", "--quiet"]:
                 return MagicMock(returncode=0, stdout="abc123\n", stderr="")
-            if argv[:3] == ["git", "rev-list", "--count"]:
-                return MagicMock(returncode=0, stdout="0\n", stderr="")
+            if argv[:2] == ["git", "rev-list"]:
+                return MagicMock(returncode=0, stdout="", stderr="")
             return MagicMock(returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = fake_run
@@ -366,6 +370,37 @@ class CreateWorktreeTests(unittest.TestCase):
 
             argvs = [c.args[0] for c in mock_run.call_args_list]
             self.assertIn(["git", "checkout", "-B", "model-fix-parallel-nef", "main"], argvs)
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_resets_a_branch_whose_only_commits_were_already_squash_merged_upstream(self, mock_run):
+        # A squash merge gives previously-landed work a brand new SHA with
+        # no ancestry link back to the original commit -- so a worker
+        # branch that happens to carry that same (now-duplicate) commit
+        # is "ahead" of base_ref/origin/main by pure ancestry forever,
+        # even though its patch already landed. git cherry catches this
+        # by patch-id ("-" prefix = equivalent patch already upstream),
+        # so the branch must still be treated as safely resettable.
+        def fake_run(argv, **kwargs):
+            if argv[:4] == ["git", "rev-parse", "--verify", "--quiet"]:
+                return MagicMock(returncode=0, stdout="abc123\n", stderr="")
+            if argv[:2] == ["git", "rev-list"]:
+                return MagicMock(returncode=0, stdout="dupe_sha\n", stderr="")
+            if argv[:2] == ["git", "cherry"]:
+                # already-merged-by-patch-id relative to both base_ref and origin/main
+                return MagicMock(returncode=0, stdout="- dupe_sha\n", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = fake_run
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            worktree = tmp / "worktree"
+            worktree.mkdir()
+
+            create_worktree(tmp, worktree, "model-fix-parallel-nef", "main", config_path=tmp / "no-config.toml")
+
+            argvs = [c.args[0] for c in mock_run.call_args_list]
+            self.assertIn(["git", "checkout", "-B", "model-fix-parallel-nef", "main"], argvs)
+            self.assertNotIn(["git", "checkout", "model-fix-parallel-nef"], argvs)
 
     @patch("parallel_model_fix_loop.subprocess.run")
     def test_discards_an_orphaned_branch_whose_worktree_directory_is_already_gone(self, mock_run):
