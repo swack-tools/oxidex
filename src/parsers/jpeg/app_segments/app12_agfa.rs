@@ -245,6 +245,52 @@ fn parse_key_value_pairs(content: &[u8], metadata: &mut MetadataMap) {
                 );
             }
 
+            // ExifTool exposes ID in the APP12 group for legacy Picture Info
+            // records. Skip the generic Olympus banner so it does not clobber
+            // the legacy identifier in mixed APP12 samples.
+            if key.eq_ignore_ascii_case("ID")
+                && !value.eq_ignore_ascii_case("OLYMPUS DIGITAL CAMERA")
+            {
+                metadata.insert("APP12:ID".to_string(), TagValue::String(value.to_string()));
+            }
+
+            // ExifTool exposes the Picture Info TagQ field in the APP12 group.
+            if key.eq_ignore_ascii_case("TagQ") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.to_string()));
+                metadata.insert("APP12:TagQ".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Picture Info TagR field in the APP12 group.
+            if key.eq_ignore_ascii_case("TagR") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.to_string()));
+                metadata.insert("APP12:TagR".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Picture Info TagS field in the APP12 group.
+            if key.eq_ignore_ascii_case("TagS") {
+                metadata.insert("APP12:TagS".to_string(), TagValue::String(value.to_string()));
+            }
+
+            // ExifTool exposes the Picture Info Protect field in the APP12 group.
+            if key.eq_ignore_ascii_case("Protect") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.to_string()));
+                metadata.insert("APP12:Protect".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Picture Info S0 field in the APP12 group.
+            if key.eq_ignore_ascii_case("S0") {
+                metadata.insert("APP12:S0".to_string(), TagValue::String(value.to_string()));
+            }
+
             // Flash is a standard Picture Info field. ExifTool exposes the
             // display-ready value (for example, "Off") in the APP12 group.
             if key.eq_ignore_ascii_case("Flash") {

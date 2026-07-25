@@ -91,6 +91,15 @@ const KNOWN_TAGS: &[&str] = &[
     "MTR2",
     "MTRX1",
     "FCS1",
+    "Protect",
+    "REV",
+    "S0",
+    "STB1",
+    "STB2",
+    "STB3",
+    "STB4",
+    "STB5",
+    "STB6",
     "FCS2",
     "FCS3",
     "FCS4",
@@ -222,9 +231,15 @@ fn is_olympus_picture_info(text: &str) -> bool {
 
     // Also check if it looks like key=value format with known Olympus tags
     // This helps identify Olympus data that might not have an explicit identifier
+    let text_upper = text.to_uppercase();
     let has_known_tags = KNOWN_TAGS.iter().any(|&tag| {
-        let pattern = format!("{}=", tag);
-        text.contains(&pattern)
+        let tag_upper = tag.to_uppercase();
+        // Accept both "Tag=value" and "Tag = value" spellings, matching
+        // identifier-less legacy Picture Info records and mixed APP12
+        // samples like ExifTool.jpg which use spaces around the '='.
+        let exact = format!("{}=", tag_upper);
+        let spaced = format!("{} =", tag_upper);
+        text_upper.contains(&exact) || text_upper.contains(&spaced)
     });
 
     // Must have at least an equals sign and some recognizable structure
@@ -253,6 +268,10 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
 
         // Parse key=value pair
         if let Some((key, value)) = parse_single_pair(line) {
+            // Trim spaces that may surround the key or value in real-world
+            // Picture Info records (e.g. "Protect = 0").
+            let key = key.trim();
+            let value = value.trim().to_string();
             // Normalize the tag name and add to metadata
             let tag_name = normalize_tag_name(&key);
             let tag_value = parse_tag_value(&tag_name, &value);
@@ -678,6 +697,39 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .map(TagValue::Integer)
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
                 metadata.insert("APP12:ThmLen".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Picture Info Protect field in the APP12 group.
+            if key.eq_ignore_ascii_case("Protect") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:Protect".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Picture Info REV field in the APP12 group.
+            if key.eq_ignore_ascii_case("REV") {
+                metadata.insert("APP12:REV".to_string(), TagValue::String(value.clone()));
+            }
+
+            // ExifTool exposes the Picture Info S0 field in the APP12 group.
+            if key.eq_ignore_ascii_case("S0") {
+                metadata.insert("APP12:S0".to_string(), TagValue::String(value.clone()));
+            }
+
+            // ExifTool exposes the Olympus STB1..STB6 diagnostic fields in the
+            // APP12 group using their original names.
+            let stb_upper = key.to_ascii_uppercase();
+            if matches!(
+                stb_upper.as_str(),
+                "STB1" | "STB2" | "STB3" | "STB4" | "STB5" | "STB6"
+            ) {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert(format!("APP12:{}", stb_upper), app12_value);
             }
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
