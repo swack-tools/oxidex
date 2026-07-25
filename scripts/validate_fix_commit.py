@@ -89,6 +89,16 @@ from pathlib import Path
 
 # Trailer keys per spec M1 (shared convention across the fleet scripts:
 # git_commit writes them, this script and overlord_sweep read them).
+#
+# "Table" is deliberately NOT in this list: model_fix_loop.py's
+# _build_fix_gap_trailers only emits it when a table_name is passed in,
+# and every ordinary per-tag fix_gap call site passes table_name=None --
+# it's a T3 table-port-job concept, not evidence a regular tag fix can
+# ever produce. Requiring it unconditionally meant every single ordinary
+# fix commit failed this check forever (confirmed live: 100% of entries
+# in quarantine.jsonl carried a missing-trailer:Table flag, and no
+# ordinary fix_gap commit has ever reached origin/main past this gate) --
+# a real fleet-wide publication blocker, not a quality signal.
 REQUIRED_TRAILERS = (
     "Format",
     "Tag",
@@ -98,7 +108,6 @@ REQUIRED_TRAILERS = (
     "Perl-Ref",
     "Verified",
     "Worker",
-    "Table",
 )
 
 # How much of a mismatched PrintConv value to embed in its flag. Full
