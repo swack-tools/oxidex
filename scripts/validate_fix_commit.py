@@ -131,6 +131,50 @@ _QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
 # checked separately on the right-hand side of the first `=`).
 _CONST_STATIC_RE = re.compile(r"\b(?:const|static)\b")
 
+# A PrintConv value is a human-readable DISPLAY string ("Fine", "AE/AF
+# Lock", "Intel 386 or later, and compatibles"). The strings below are
+# IDENTIFIERS, and are never expected to appear in an ExifTool module's
+# PrintConv tables -- so demanding that they do rejects correct code.
+#
+# Measured live 2026-07-25: after the Table-trailer fix this became the
+# single largest quarantine cause (15 of 27 flags), and it rejected an
+# otherwise-valid DNG fix whose diff was a tag-ID -> tag-NAME registry:
+#     0x0111 => "EXIF:PreviewImageStart".to_string(),
+#     ByteOrder::LittleEndian => tiff.extend_from_slice(b"II\x2a\x00"),
+# Neither line contains a PrintConv value at all.
+#
+# Both rules below are deliberately SHAPE-based and narrow: a genuine
+# display value that merely contains a colon ("Fine: Best") or a space
+# is unaffected, so the fabricated-value check this gate exists for is
+# preserved intact.
+_TAG_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*:[A-Za-z][A-Za-z0-9_]*$")
+
+
+def looks_like_tag_key(value):
+    """True for an oxidex metadata key like "EXIF:PreviewImageStart".
+
+    Requires BOTH halves to be bare identifiers (no spaces, no
+    punctuation beyond the single separating colon), so display strings
+    that happen to contain a colon are not swallowed.
+    """
+    return bool(_TAG_KEY_RE.match(value or ""))
+
+
+def is_identifier_not_printconv(value, code_line):
+    """True when `value` is an identifier/constant rather than a
+    candidate PrintConv display string, and so must not be byte-checked
+    against the Perl module.
+
+    code_line is the source line the value came from -- needed to spot a
+    Rust byte-string literal (b"..."), which carries binary magic such
+    as the TIFF byte-order marks and is never a display string.
+    """
+    if looks_like_tag_key(value):
+        return True
+    if f'b"{value}"' in (code_line or ""):
+        return True
+    return False
+
 # A line that IS nothing but string-literal array element(s) -- one or
 # more quoted strings separated/terminated by commas. This is what a
 # value inserted into the MIDDLE of an existing const table looks like
@@ -366,6 +410,19 @@ def unescape_rust_string(literal):
     return "".join(out)
 
 
+def _keep_printconv_values(raw_matches, code_line):
+    """Unescape each regex match, dropping identifiers/constants that are
+    not candidate PrintConv display strings (see
+    is_identifier_not_printconv)."""
+    out = []
+    for m in raw_matches:
+        value = unescape_rust_string(m)
+        if is_identifier_not_printconv(value, code_line):
+            continue
+        out.append(value)
+    return out
+
+
 def extract_added_map_values(diff_text):
     """Every quoted string VALUE the diff ADDS inside map-like
     structures, plus the added lines whose map value could not be
@@ -410,21 +467,21 @@ def extract_added_map_values(diff_text):
         code = raw[1:]
         if depth > 0:
             if added:
-                values.extend(unescape_rust_string(m) for m in _QUOTED_RE.findall(code))
+                values.extend(_keep_printconv_values(_QUOTED_RE.findall(code), code))
             depth = max(0, depth + code.count("[") - code.count("]"))
             continue
         if _CONST_STATIC_RE.search(code) and "=" in code:
             rhs = code.split("=", 1)[1]
             if "[" in rhs:
                 if added:
-                    values.extend(unescape_rust_string(m) for m in _QUOTED_RE.findall(rhs))
+                    values.extend(_keep_printconv_values(_QUOTED_RE.findall(rhs), code))
                 depth = max(0, rhs.count("[") - rhs.count("]"))
                 continue
         if added and "=>" in code:
             rhs = code.split("=>", 1)[1]
             found = _QUOTED_RE.findall(rhs)
             if found:
-                values.extend(unescape_rust_string(m) for m in found)
+                values.extend(_keep_printconv_values(found, code))
             else:
                 stripped = rhs.strip().rstrip(",;").strip()
                 if stripped and not _BENIGN_MAP_RHS_RE.fullmatch(stripped):
@@ -436,7 +493,7 @@ def extract_added_map_values(diff_text):
             # over-catching a stray string list here is fine (spec open
             # question 6: over-flagging routes to the human queue,
             # under-flagging auto-ships a fabricated value).
-            values.extend(unescape_rust_string(m) for m in _QUOTED_RE.findall(code))
+            values.extend(_keep_printconv_values(_QUOTED_RE.findall(code), code))
     return list(dict.fromkeys(values)), unverifiable
 
 

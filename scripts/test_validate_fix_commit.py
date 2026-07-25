@@ -183,6 +183,78 @@ class TrailerTests(unittest.TestCase):
         self.assertEqual(result["checks"]["trailers"], "pass")
 
 
+class PrintConvIdentifierExclusionTests(unittest.TestCase):
+    """A PrintConv value is a human-readable DISPLAY string. A tag key, a
+    byte-order magic constant, and a tag-name registry entry are
+    identifiers -- they are never expected to appear in an ExifTool
+    module's PrintConv tables, so demanding they do rejects correct code.
+
+    Measured live 2026-07-25: this was the single largest quarantine
+    cause after the Table-trailer fix (15 of 27 flags), and it rejected a
+    valid DNG fix whose diff was a tag-ID -> tag-NAME registry.
+    """
+
+    def test_tag_key_map_values_are_not_treated_as_printconv(self):
+        from validate_fix_commit import extract_added_map_values
+        diff = (
+            "diff --git a/src/x.rs b/src/x.rs\n"
+            "@@ -1 +1 @@\n"
+            '+            0x0111 => "EXIF:PreviewImageStart".to_string(),\n'
+            '+            0x0143 => "EXIF:TileLength".to_string(),\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+
+    def test_byte_string_magic_is_not_treated_as_printconv(self):
+        from validate_fix_commit import extract_added_map_values
+        diff = (
+            "diff --git a/src/x.rs b/src/x.rs\n"
+            "@@ -1 +1 @@\n"
+            '+        ByteOrder::LittleEndian => tiff.extend_from_slice(b"II\\x2a\\x00"),\n'
+            '+        ByteOrder::BigEndian => tiff.extend_from_slice(b"MM\\x00\\x2a"),\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+
+    def test_a_real_printconv_value_is_still_extracted(self):
+        # The gate must keep doing its job: a genuine display string on
+        # the right of => is still checked byte-for-byte.
+        from validate_fix_commit import extract_added_map_values
+        diff = (
+            "diff --git a/src/x.rs b/src/x.rs\n"
+            "@@ -1 +1 @@\n"
+            '+            1 => "Intel 386 or later, and compatibles",\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertIn("Intel 386 or later, and compatibles", values)
+
+    def test_a_fabricated_display_value_is_still_caught_end_to_end(self):
+        from validate_fix_commit import check_printconv
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Path(tmp) / "Image" / "ExifTool"
+            lib.mkdir(parents=True)
+            (lib / "Canon.pm").write_text("package X;\n1 => 'Economy',\n")
+            diff = (
+                "diff --git a/src/x.rs b/src/x.rs\n"
+                "@@ -1 +1 @@\n"
+                '+            1 => "Economy mode",\n'
+            )
+            status, flags = check_printconv(diff, "Canon.pm", Path(tmp))
+        self.assertEqual(status, "flagged")
+        self.assertTrue(any(f.startswith("printconv-mismatch:Economy mode") for f in flags))
+
+    def test_tag_key_shape_requires_both_halves_to_be_identifiers(self):
+        # "Fine: Best" is a plausible display string, not a tag key --
+        # the exclusion must not swallow it.
+        from validate_fix_commit import looks_like_tag_key
+        self.assertTrue(looks_like_tag_key("EXIF:PreviewImageStart"))
+        self.assertTrue(looks_like_tag_key("MakerNotes:AELockButton"))
+        self.assertFalse(looks_like_tag_key("Fine: Best"))
+        self.assertFalse(looks_like_tag_key("Disable; 0; 8; 0"))
+        self.assertFalse(looks_like_tag_key("Normal"))
+        self.assertFalse(looks_like_tag_key("1/250"))
+
+
 class MultiSampleTests(unittest.TestCase):
     def _cache(self, tmp):
         cache = Path(tmp) / "cache"
