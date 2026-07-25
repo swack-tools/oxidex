@@ -253,6 +253,8 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 let mut sub_ifd_offsets = Vec::new();
                 let mut makernote_data: Option<Vec<u8>> = None;
                 let mut camera_make: Option<String> = None;
+                let mut thumbnail_offset: Option<u64> = None;
+                let mut thumbnail_length: Option<usize> = None;
 
                 // Convert tags to metadata
                 for (tag_id, field_type, value_count, raw_bytes) in &tags {
@@ -310,6 +312,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         camera_make = Some(make_str.trim_end_matches('\0').trim().to_string());
                     }
 
+                    // Track CR2 IFD1 thumbnail offset and length
+                    if format == RawFormat::CanonCR2 && ifd_index == 1 {
+                        if *tag_id == 0x0201 && *field_type == 4 && bytes.len() >= 4 {
+                            thumbnail_offset = read_tiff_u32(bytes, byte_order).map(u64::from);
+                        }
+                        if *tag_id == 0x0202 && *field_type == 4 && bytes.len() >= 4 {
+                            thumbnail_length = read_tiff_u32(bytes, byte_order).map(|v| v as usize);
+                        }
+                    }
+
                     // Convert tag to metadata
                     // Panasonic RW2 stores BitsPerSample in its proprietary
                     // IFD0 tag 0x000A and Compression in tag 0x000B instead
@@ -326,6 +338,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     let tag_name = match (format, ifd_index, *tag_id) {
                         (RawFormat::PanasonicRW2, 0, 0x001C) => {
                             format!("{}:BlackLevelRed", ifd_name)
+                        }
+                        (RawFormat::CanonCR2, 1, 0x0201) => {
+                            "EXIF:ThumbnailOffset".to_string()
+                        }
+                        (RawFormat::CanonCR2, 1, 0x0202) => {
+                            "EXIF:ThumbnailLength".to_string()
                         }
                         (RawFormat::PanasonicRW2, 0, 0x001D) => {
                             format!("{}:BlackLevelGreen", ifd_name)
@@ -399,6 +417,22 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     metadata.insert(tag_name, tag_value);
                 }
 
+                // Extract CR2 IFD1 thumbnail image
+                if format == RawFormat::CanonCR2 && ifd_index == 1 {
+                    if let (Some(offset), Some(length)) = (thumbnail_offset, thumbnail_length) {
+                        if length > 0 {
+                            let start = offset as usize;
+                            let end = start.saturating_add(length);
+                            if end <= data.len() {
+                                metadata.insert(
+                                    "EXIF:ThumbnailImage".to_string(),
+                                    TagValue::new_binary(data[start..end].to_vec()),
+                                );
+                            }
+                        }
+                    }
+                }
+
                 // Parse EXIF Sub-IFD if present
                 if let Some(offset) = exif_ifd_offset
                     && let Ok(exif_tags) = parse_ifd(&reader, offset, byte_order)
@@ -422,7 +456,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             exif_make = Some(make_str.trim_end_matches('\0').trim().to_string());
                         }
 
-                        let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
+                        let exif_name = lookup_tag_name(*tag_id, "ExifIFD");
+                        let tag_name = if let Some(stripped) = exif_name.strip_prefix("ExifIFD:") {
+                            format!("EXIF:{}", stripped)
+                        } else {
+                            exif_name
+                        };
                         let tag_value = if let Some(value) = format_exif_display_value(
                             *tag_id,
                             bytes,
@@ -846,6 +885,16 @@ fn format_exif_display_value(
             1 => Some("Soft".to_string()),
             2 => Some("Hard".to_string()),
             _ => None,
+        },
+
+        // SubSecTime, SubSecTimeOriginal, SubSecTimeDigitized: ASCII strings
+        // with trailing blanks trimmed (ExifTool ValueConv: '$val=~s/ +$//; $val').
+        0x9290 | 0x9291 | 0x9292 if field_type == 2 => {
+            let count = usize::try_from(value_count).ok()?;
+            let raw_bytes = bytes.get(..count)?;
+            let s = String::from_utf8_lossy(raw_bytes);
+            let trimmed = s.trim_end_matches('\0').trim_end();
+            Some(trimmed.to_string())
         },
         _ => None,
     }
@@ -1568,6 +1617,51 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         }
         if let Some(copyright) = extract_cr3_cmt1_ifd0_tag(tiff, 0x8298) {
             metadata.insert(lookup_tag_name(0x8298, "IFD0"), copyright);
+        }
+        // Extract EXIF Sub-IFD tags (SerialNumber, SubSecTime, etc.)
+        if tiff.len() >= 8 {
+            if let Ok(byte_order) = detect_byte_order(tiff) {
+                let ifd0_offset = read_u32(&tiff[4..8], byte_order) as u64;
+                let reader = SliceReader::new(tiff);
+                if let Ok(ifd0_tags) = parse_ifd(&reader, ifd0_offset, byte_order) {
+                    if let Some(offset) = ifd0_tags.iter().find_map(|(tag_id, field_type, _, raw_bytes)| {
+                        if *tag_id == 0x8769 && *field_type == 4 {
+                            read_tiff_u32(raw_bytes.as_ref(), byte_order).map(u64::from)
+                        } else {
+                            None
+                        }
+                    }) {
+                        if let Ok(exif_tags) = parse_ifd(&reader, offset, byte_order) {
+                            for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                                if *tag_id == 0x927C { continue; }
+                                let exif_name = lookup_tag_name(*tag_id, "ExifIFD");
+                                let tag_name = if let Some(stripped) = exif_name.strip_prefix("ExifIFD:") {
+                                    format!("EXIF:{}", stripped)
+                                } else {
+                                    exif_name
+                                };
+                                let tag_value = if let Some(value) = format_exif_display_value(
+                                    *tag_id,
+                                    raw_bytes.as_ref(),
+                                    *field_type,
+                                    *value_count,
+                                    byte_order,
+                                ) {
+                                    TagValue::new_string(value)
+                                } else {
+                                    raw_bytes_to_simple_tag_value(
+                                        raw_bytes.as_ref(),
+                                        *field_type,
+                                        *value_count,
+                                        byte_order,
+                                    )
+                                };
+                                metadata.insert(tag_name, tag_value);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
