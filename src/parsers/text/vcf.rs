@@ -70,6 +70,21 @@ impl VCFParser {
             .map_err(|e| ExifToolError::parse_error(format!("Invalid UTF-8: {}", e)))?;
 
         let mut metadata = MetadataMap::new();
+        let mut has_photo = false;
+        let mut has_organization = false;
+        let mut has_email = false;
+        let mut has_phone = false;
+        let mut has_address = false;
+        let mut has_url = false;
+        let mut vcard_count = 0;
+
+        // Count vCARDs and collect feature flags
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed == "BEGIN:VCARD" {
+                vcard_count += 1;
+            }
+        }
 
         // Parse vCard line by line
         for line in text.lines() {
@@ -84,6 +99,11 @@ impl VCFParser {
                             "VCardVersion".to_string(),
                             TagValue::String(value.to_string()),
                         );
+                        // Add VCF:Version for Worker 28 compatibility
+                        metadata.insert(
+                            "VCF:Version".to_string(),
+                            TagValue::new_string(value.to_string()),
+                        );
                     }
                     "FN" => {
                         metadata
@@ -91,15 +111,66 @@ impl VCFParser {
                     }
                     "EMAIL" => {
                         metadata.insert("Email".to_string(), TagValue::String(value.to_string()));
+                        has_email = true;
                     }
                     "TEL" => {
                         metadata
                             .insert("Telephone".to_string(), TagValue::String(value.to_string()));
+                        has_phone = true;
+                    }
+                    // Worker 28 additional fields
+                    "PHOTO" => {
+                        has_photo = true;
+                    }
+                    "ORG" => {
+                        has_organization = true;
+                    }
+                    "ADR" => {
+                        has_address = true;
+                    }
+                    "URL" => {
+                        has_url = true;
                     }
                     _ => {}
                 }
             }
         }
+
+        // Add Worker 28 tags for vCard properties
+        metadata.insert(
+            "VCF:Count".to_string(),
+            TagValue::new_integer(vcard_count as i64),
+        );
+
+        metadata.insert(
+            "VCF:HasPhoto".to_string(),
+            TagValue::new_string(if has_photo { "true" } else { "false" }),
+        );
+
+        metadata.insert(
+            "VCF:HasOrganization".to_string(),
+            TagValue::new_string(if has_organization { "true" } else { "false" }),
+        );
+
+        metadata.insert(
+            "VCF:HasEmail".to_string(),
+            TagValue::new_string(if has_email { "true" } else { "false" }),
+        );
+
+        metadata.insert(
+            "VCF:HasPhone".to_string(),
+            TagValue::new_string(if has_phone { "true" } else { "false" }),
+        );
+
+        metadata.insert(
+            "VCF:HasAddress".to_string(),
+            TagValue::new_string(if has_address { "true" } else { "false" }),
+        );
+
+        metadata.insert(
+            "VCF:HasURL".to_string(),
+            TagValue::new_string(if has_url { "true" } else { "false" }),
+        );
 
         Ok(metadata)
     }

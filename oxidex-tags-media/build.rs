@@ -33,9 +33,4 @@ fn main() {
     let dest_path = Path::new(&out_dir).join("media_tags.bin");
 
     fs::write(&dest_path, binary_data).expect("Failed to write binary tag database file");
-
-    println!(
-        "cargo:warning=Pre-compiled media_tags.yaml to binary format ({} bytes)",
-        fs::metadata(&dest_path).unwrap().len()
-    );
 }

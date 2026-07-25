@@ -1,0 +1,165 @@
+# T4 FOUNDATION-UNLOCK job seeds -- spec S3 of
+# docs/plans/specs/2026-07-24-fleet-knowledge-and-scaling-design.md.
+#
+# Each of these seven jobs is a table/module-scoped fix (a parser or dispatch
+# path, not a single tag) that unlocks many downstream per-tag gaps at once.
+# Hand-curated from the gap census (spec S3: "do not wait for
+# auto-escalation, which is deferred") -- do NOT auto-generate entries here.
+#
+# Fields per job:
+#   name            short, stable slug (used as the tag-state
+#                   held_by_foundation.job value and the commit's Job:
+#                   trailer) -- never rename one in place; add a new entry
+#                   and mark the old one's status "done" instead, so any
+#                   held_by_foundation reference already written stays
+#                   resolvable.
+#   description     what the job actually is and which gaps it unlocks --
+#                   fed straight into attempt_foundation_job's prompt (see
+#                   model_fix_loop.py's build_foundation_job_prompt).
+#   target_formats  container format(s) this job's gaps are observed under.
+#   target_module   ExifTool module (attribute_gaps.py "module" key) this
+#                   job's unlocked tags attribute to -- used for the
+#                   S4-item-5 T4 module-scoped claim exclusion and for
+#                   best-effort held_by_foundation matching.
+#   estimated_gaps  gap count from the census (spec S3 table); advisory,
+#                   never authoritative -- re-measure live via
+#                   gap-attribution.json once the job lands.
+#   status          "pending" (not yet attempted), "in_progress", or "done".
+#                   Default "pending" if omitted.
+
+[[jobs]]
+name = "cr3-quicktime-canon-cmt"
+description = """
+CR3's metadata rides inside QuickTime-style ISO-BMFF boxes (CNCV/CCTP/CTBO
+free-space boxes and a CMT1-CMT4 box quartet) rather than a classic TIFF
+IFD. Nothing in oxidex today walks CR3's QuickTime box tree far enough to
+find and dispatch the CMT boxes to Canon's existing MakerNotes/TIFF-IFD
+parsing logic (already implemented and working for CR2's own maker notes) --
+so every Canon CameraSettings/ShotInfo/... tag that's only reachable via a
+CR3 sample is a gap, even though the SAME tag closes cleanly for the
+equivalent CR2 file. Port ExifTool's QuickTime.pm CMT-box dispatch (each
+CMTn box is itself a raw TIFF IFD blob) and wire it to the existing Canon
+TIFF-IFD maker-note parser -- do not reimplement Canon tag parsing, only
+the box-to-dispatch plumbing.
+"""
+target_formats = ["CR3"]
+target_module = "Canon"
+estimated_gaps = 207
+status = "pending"
+
+[[jobs]]
+name = "flir-fff-record-parser"
+description = """
+FLIR's FFF (FLIR File Format) thermal-image container -- embedded directly
+in a JPEG APP1 segment by FLIR cameras and by DJI's own thermal drone
+models (which license FLIR's sensor/format) -- has no record parser in
+oxidex at all today, so every FLIR/DJI-thermal tag (raw thermal
+measurement parameters, camera/lens calibration constants, palette info)
+is a gap regardless of sample. Port ExifTool's FLIR.pm FFF record-index
+table: a fixed record-directory header followed by N fixed-size records,
+each keyed by a record type id, most of them flat structs of
+temperature/distance/emissivity floats. Land the record walker plus the
+handful of highest-value record types (camera info, raw data, measurement
+parameters); a residual few obscure record types can stay as later T1
+grind once the walker itself exists.
+"""
+target_formats = ["JPEG"]
+target_module = "FLIR"
+estimated_gaps = 90
+status = "pending"
+
+[[jobs]]
+name = "jumbf-c2pa-box-walker"
+description = """
+JUMBF (JPEG Universal Metadata Box Format) is the ISO-BMFF-style box
+container C2PA content-provenance metadata (and some other JPEG XT
+extensions) ride inside; oxidex has no JUMBF box walker, so every JUMBF/
+C2PA tag is a gap. Port ExifTool's Jpeg2000.pm JUMBF box-tree walker (box
+type + length header, recursing into content-type/description/data
+sub-boxes) and wire the C2PA manifest-store leaf boxes it finds through to
+tag emission. This is a container walker, not a full C2PA manifest
+validator -- land enough structure to expose the manifest's own tag-like
+fields, not cryptographic verification.
+"""
+target_formats = ["JPEG"]
+target_module = "Jpeg2000"
+estimated_gaps = 74
+status = "pending"
+
+[[jobs]]
+name = "pdf-embedded-streams"
+description = """
+A PDF can carry EXIF/IPTC/Photoshop-IRB metadata embedded inside its own
+object streams (most commonly inside an XObject image stream, or a
+metadata stream referenced by a page/catalog dict) in addition to its
+top-level XMP packet (already handled). oxidex's PDF parser does not walk
+into embedded image/metadata streams to look for these, so every tag only
+reachable that way is a gap. Port ExifTool's PDF.pm logic that, per
+object/XObject stream, sniffs for an embedded EXIF/IPTC/Photoshop blob
+(the same byte signatures the JPEG/TIFF parsers already recognize) and
+dispatches it to the existing EXIF/IPTC/Photoshop parsers already
+implemented and working elsewhere in oxidex -- do not reimplement those
+parsers, only the PDF-side stream discovery and dispatch.
+"""
+target_formats = ["PDF"]
+target_module = "PDF"
+estimated_gaps = 77
+status = "pending"
+
+[[jobs]]
+name = "sony-a100-minolta-dispatch"
+description = """
+The Sony A100 (Sony's first DSLR, a rebadged/derived Minolta design) writes
+maker notes in Minolta's own tag layout rather than Sony's later native
+one, and oxidex's Sony maker-note path does not detect this and dispatch
+to the existing Minolta.pm-derived parser (already implemented for real
+Minolta/MinoltaRaw samples) -- so every A100 sample's maker-note tag is a
+gap even though the identical tag closes cleanly for a native Minolta
+sample. Port ExifTool's Sony.pm model-sniff (checks the Make/Model or an
+early maker-note signature byte for "A100") that redirects A100 maker
+notes into the Minolta table dispatch. Dispatch plumbing only -- do not
+reimplement Minolta tag parsing.
+"""
+target_formats = ["ARW", "JPEG"]
+target_module = "Sony"
+estimated_gaps = 70
+status = "pending"
+
+[[jobs]]
+name = "nikoncapture-nx-edit-walker"
+description = """
+Nikon Capture NX (Nikon's own RAW-editing software) writes an edit-history
+sidecar structure into NEF/JPEG maker notes -- a NikonCapture-specific
+nested-IFD-like structure recording non-destructive edit steps -- that
+oxidex's Nikon maker-note parser does not walk at all today, so every tag
+inside it is a gap regardless of which other Nikon tags a given sample
+closes. Port ExifTool's NikonCapture.pm walker for this edit-history
+structure and wire its entries to tag emission using the same
+group/naming convention neighboring Nikon maker-note code already
+follows.
+"""
+target_formats = ["NEF", "JPEG"]
+target_module = "NikonCapture"
+estimated_gaps = 61
+status = "pending"
+
+[[jobs]]
+name = "ole-flashpix-property-sets"
+description = """
+FlashPix/OLE compound-file documents (and OLE-embedded metadata inside
+some Photoshop/Office-derived files) store their properties in
+SummaryInformation/DocumentSummaryInformation OLE property-set streams --
+a self-describing (type-tagged, section-indexed) binary structure. The
+OLE compound-file dispatch itself already exists
+(src/core/format_dispatch.rs already recognizes and routes OLE
+containers), but nothing in oxidex actually walks a property-set stream's
+property list and emits tags from it, so every property in these streams
+is a gap. Port ExifTool's FlashPix.pm property-set-stream walker (section
+header, per-property type + offset, then the type-tagged value itself --
+string/int/date/bool) and wire its output through to the existing
+FlashPix tag names/groups.
+"""
+target_formats = ["JPEG"]
+target_module = "FlashPix"
+estimated_gaps = 52
+status = "pending"

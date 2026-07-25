@@ -43,6 +43,7 @@
 
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::io::BufferedReader;
 use nom::{
     IResult,
     bytes::complete::{tag, take_until, take_while1},
@@ -66,7 +67,8 @@ use std::str;
 /// 2. Finds the /Resources -> /XObject dictionary
 /// 3. Identifies image XObjects (/Subtype /Image)
 /// 4. Extracts metadata from the first image (width, height, filter, colorspace)
-/// 5. Counts total embedded images
+/// 5. Attempts to parse metadata (EXIF/IPTC/XMP) from embedded JPEG images
+/// 6. Counts total embedded images
 ///
 /// # Parameters
 ///
@@ -84,6 +86,7 @@ use std::str;
 /// - `PDF:EmbeddedImageFilter`: Compression filter (e.g., DCTDecode, FlateDecode)
 /// - `PDF:EmbeddedImageColorSpace`: Color space (e.g., DeviceRGB, DeviceCMYK)
 /// - `PDF:EmbeddedImageCount`: Total number of embedded images
+/// - Any EXIF/IPTC/XMP tags found within embedded JPEG images
 pub fn parse_resources_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     // Load PDF context (xref table and trailer)
     let context = load_pdf_context(reader)?;
@@ -113,6 +116,10 @@ pub fn parse_resources_metadata(reader: &dyn FileReader) -> Result<MetadataMap> 
     let mut image_count = 0;
     let mut first_image_metadata: Option<ImageMetadata> = None;
 
+    // Store extracted metadata from embedded images to merge later
+    let mut embedded_metadata = MetadataMap::new();
+    let mut found_embedded_metadata = false;
+
     for xobject_ref in &xobject_refs {
         // Get XObject offset from xref table
         let xobject_offset = match context.xref_map.get(&xobject_ref.object_num) {
@@ -120,7 +127,8 @@ pub fn parse_resources_metadata(reader: &dyn FileReader) -> Result<MetadataMap> 
             None => continue, // Skip if not in xref table
         };
 
-        // Read XObject data
+        // Read XObject data (header + dictionary)
+        // We read enough to parse the dictionary and find the stream start
         let xobject_data = reader.read(
             xobject_offset,
             std::cmp::min(4096, reader.size().saturating_sub(xobject_offset) as usize),
@@ -130,17 +138,57 @@ pub fn parse_resources_metadata(reader: &dyn FileReader) -> Result<MetadataMap> 
         if is_image_xobject(xobject_data) {
             image_count += 1;
 
-            // Extract metadata from first image only
+            // Extract basic structural metadata from first image only
             if first_image_metadata.is_none()
                 && let Ok(metadata) = extract_image_metadata(xobject_data)
             {
                 first_image_metadata = Some(metadata);
             }
+
+            // Attempt to extract full metadata if it's a JPEG (DCTDecode)
+            // We only do this for the first JPEG that yields metadata to avoid conflicts
+            if !found_embedded_metadata {
+                if let Ok((_, filter)) = parse_dict_name(xobject_data, "/Filter") {
+                    if filter == "DCTDecode" {
+                        // It's a JPEG. Find the stream data.
+                        if let Ok((_, length)) = parse_dict_integer(xobject_data, "/Length") {
+                            if length > 0 {
+                                if let Some(stream_start_offset) = find_stream_start(xobject_data) {
+                                    let abs_stream_offset =
+                                        xobject_offset + stream_start_offset as u64;
+
+                                    // Read the stream data (the JPEG file)
+                                    if let Ok(stream_data) =
+                                        reader.read(abs_stream_offset, length as usize)
+                                    {
+                                        let stream_reader = BufferedReader::from_bytes(stream_data);
+
+                                        // Use the core JPEG parser
+                                        if let Ok(jpeg_meta) =
+                                            crate::core::operations::parse_jpeg_metadata(
+                                                &stream_reader,
+                                            )
+                                        {
+                                            if !jpeg_meta.is_empty() {
+                                                // Merge metadata
+                                                for (k, v) in jpeg_meta {
+                                                    embedded_metadata.insert(k, v);
+                                                }
+                                                found_embedded_metadata = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
     // Build metadata map
-    let mut metadata = MetadataMap::with_capacity(5);
+    let mut metadata = MetadataMap::with_capacity(5 + embedded_metadata.len());
 
     metadata.insert(
         "PDF:EmbeddedImageCount".to_string(),
@@ -172,6 +220,11 @@ pub fn parse_resources_metadata(reader: &dyn FileReader) -> Result<MetadataMap> 
                 TagValue::new_string(colorspace),
             );
         }
+    }
+
+    // Merge embedded metadata
+    for (k, v) in embedded_metadata {
+        metadata.insert(k, v);
     }
 
     if metadata.len() == 1 {
@@ -652,6 +705,29 @@ fn parse_dict_name<'a>(input: &'a [u8], key: &str) -> IResult<&'a [u8], String> 
             nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Char))
         })?;
         Ok((input, name_str.to_string()))
+    }
+}
+
+/// Finds the start of the stream data (after "stream" keyword and EOL)
+fn find_stream_start(data: &[u8]) -> Option<usize> {
+    if let Some(pos) = find_subsequence(data, b"stream") {
+        // "stream" keyword is 6 bytes
+        let after_stream = &data[pos + 6..];
+
+        // PDF spec: 'stream' should be followed by CRLF or LF
+        if after_stream.starts_with(b"\r\n") {
+            Some(pos + 8)
+        } else if after_stream.starts_with(b"\n") {
+            Some(pos + 7)
+        } else {
+            // Some PDFs might have just 'stream' then data (rare/malformed), or space?
+            // Spec requires EOL. If not found, maybe it's not a stream object start?
+            // Or maybe it's just 'stream' followed by data (technically invalid but happens)
+            // Let's be strict for now to avoid garbage.
+            None
+        }
+    } else {
+        None
     }
 }
 

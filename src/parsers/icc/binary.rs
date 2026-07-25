@@ -33,12 +33,15 @@ pub fn read_u64_be(data: &[u8], offset: usize) -> Result<u64> {
 }
 
 /// Reads a 4-byte signature as a trimmed ASCII string
+/// Null bytes are stripped to handle null-padded signatures.
 pub fn read_signature(data: &[u8], offset: usize) -> Result<String> {
     let reader = EndianReader::big_endian(data);
     let bytes = reader
         .bytes_at(offset, 4)
         .ok_or_else(|| ExifToolError::parse_error("Offset out of bounds"))?;
-    Ok(String::from_utf8_lossy(bytes).to_string())
+    // Convert to string and strip null bytes and whitespace
+    let s = String::from_utf8_lossy(bytes);
+    Ok(s.trim_matches('\0').trim().to_string())
 }
 
 /// Reads a signed 15.16 fixed-point number and converts to f64

@@ -103,10 +103,17 @@ const TRACK_ENTRY: u32 = 0xAE;
 const TRACK_NUMBER: u32 = 0xD7;
 const TRACK_UID: u32 = 0x73C5;
 const TRACK_TYPE: u32 = 0x83;
+const FLAG_DEFAULT: u32 = 0x88;
+const FLAG_ENABLED: u32 = 0xB9;
+const FLAG_FORCED: u32 = 0x55AA;
+const DEFAULT_DURATION: u32 = 0x23E383;
+const TRACK_TIMECODE_SCALE: u32 = 0x23314F;
 const CODEC_ID: u32 = 0x86;
 const CODEC_NAME: u32 = 0x258688;
+const CODEC_DECODE_ALL: u32 = 0xAA;
 const TRACK_NAME: u32 = 0x536E;
 const TRACK_LANGUAGE: u32 = 0x22B59C;
+const LANGUAGE_BCP47: u32 = 0x22B59D;
 
 // Video Elements
 const VIDEO: u32 = 0xE0;
@@ -115,6 +122,7 @@ const PIXEL_HEIGHT: u32 = 0xBA;
 const DISPLAY_WIDTH: u32 = 0x54B0;
 const DISPLAY_HEIGHT: u32 = 0x54BA;
 const FRAME_RATE: u32 = 0x2383E3;
+const FLAG_INTERLACED: u32 = 0x9A;
 
 // Audio Elements
 const AUDIO: u32 = 0xE1;
@@ -230,6 +238,14 @@ fn parse_ebml_header(
                             );
                         }
                     }
+                    EBML_DOC_TYPE_READ_VERSION => {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                            metadata.insert(
+                                "Matroska:DocTypeReadVersion".to_string(),
+                                TagValue::new_integer(value as i64),
+                            );
+                        }
+                    }
                     _ => {}
                 }
 
@@ -301,15 +317,32 @@ fn parse_info(
                     TIMECODE_SCALE => {
                         if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
                             timecode_scale = value;
+                            // Convert nanoseconds to milliseconds for ExifTool compatibility
+                            let ms = value / 1_000_000;
+                            metadata.insert(
+                                "Matroska:TimecodeScale".to_string(),
+                                TagValue::new_string(format!("{} ms", ms)),
+                            );
                         }
                     }
                     DURATION => {
                         if let Ok(value) = read_float(reader, data_offset, elem_size as usize) {
                             // Duration is in timecode scale units
                             let duration_secs = (value * timecode_scale as f64) / 1_000_000_000.0;
+                            // Format as H:MM:SS like ExifTool (round to nearest second)
+                            let total_secs = duration_secs.round() as u64;
+                            let hours = total_secs / 3600;
+                            let mins = (total_secs % 3600) / 60;
+                            let secs = total_secs % 60;
+                            let formatted = format!("{}:{:02}:{:02}", hours, mins, secs);
                             metadata.insert(
                                 "Matroska:Duration".to_string(),
-                                TagValue::new_string(format!("{:.3}", duration_secs)),
+                                TagValue::new_string(formatted.clone()),
+                            );
+                            // Add MKV:Duration tag for format-specific output
+                            metadata.insert(
+                                "MKV:Duration".to_string(),
+                                TagValue::new_string(formatted),
                             );
                         }
                     }
@@ -317,9 +350,11 @@ fn parse_info(
                         if let Ok(value) = read_sint(reader, data_offset, elem_size as usize) {
                             // DateUTC is nanoseconds since 2001-01-01T00:00:00 UTC
                             let timestamp = 978307200i64 + (value / 1_000_000_000);
+                            // Format as "YYYY:MM:DD HH:MM:SSZ" like ExifTool
+                            let formatted = format_unix_timestamp_utc(timestamp);
                             metadata.insert(
                                 "Matroska:DateTimeOriginal".to_string(),
-                                TagValue::new_integer(timestamp),
+                                TagValue::new_string(formatted),
                             );
                         }
                     }
@@ -386,16 +421,54 @@ fn parse_tracks(
     Ok(())
 }
 
+/// Track info collected during parsing
+struct TrackInfo {
+    track_type: u64,
+    track_number: u64,
+    track_uid: u64,
+    codec_id: String,
+    language: String,
+    flag_default: bool,
+    flag_enabled: bool,
+    flag_forced: bool,
+    default_duration_ns: u64,
+    track_timecode_scale: f64,
+    codec_decode_all: bool,
+}
+
+impl Default for TrackInfo {
+    fn default() -> Self {
+        Self {
+            track_type: 0,
+            track_number: 0,
+            track_uid: 0,
+            codec_id: String::new(),
+            language: "und".to_string(), // Default to "undetermined"
+            flag_default: true,          // Default is true per spec
+            flag_enabled: true,          // Default is true per spec
+            flag_forced: false,
+            default_duration_ns: 0,
+            track_timecode_scale: 1.0,
+            codec_decode_all: true, // Default is true per spec
+        }
+    }
+}
+
 /// Parse single track entry
 fn parse_track_entry(
     reader: &dyn FileReader,
     mut offset: u64,
     end_offset: u64,
-    track_num: usize,
+    _track_num: usize,
     metadata: &mut MetadataMap,
 ) -> Result<()> {
-    let track_prefix = format!("Matroska:Track{}:", track_num);
+    let mut track_info = TrackInfo::default();
+    let mut video_offset = None;
+    let mut audio_offset = None;
+    let mut video_end = 0u64;
+    let mut audio_end = 0u64;
 
+    // First pass: collect track info
     while offset < end_offset {
         match parse_element_header(reader, offset) {
             Ok((elem_id, elem_size, hdr_size)) => {
@@ -405,77 +478,66 @@ fn parse_track_entry(
                 match elem_id {
                     TRACK_TYPE => {
                         if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
-                            let type_str = match value {
-                                1 => "Video",
-                                2 => "Audio",
-                                3 => "Complex",
-                                17 => "Subtitle",
-                                18 => "Buttons",
-                                32 => "Control",
-                                _ => "Unknown",
-                            };
-                            metadata.insert(
-                                format!("{}TrackType", track_prefix),
-                                TagValue::new_string(type_str.to_string()),
-                            );
+                            track_info.track_type = value;
+                        }
+                    }
+                    TRACK_NUMBER => {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                            track_info.track_number = value;
+                        }
+                    }
+                    TRACK_UID => {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                            track_info.track_uid = value;
                         }
                     }
                     CODEC_ID => {
                         if let Ok(value) = read_string(reader, data_offset, elem_size as usize) {
-                            metadata.insert(
-                                format!("{}CodecID", track_prefix),
-                                TagValue::new_string(value.clone()),
-                            );
-                            // Also add as generic CodecID for first video/audio track
-                            if track_num == 1 {
-                                metadata.insert(
-                                    "Matroska:CodecID".to_string(),
-                                    TagValue::new_string(value),
-                                );
-                            }
+                            track_info.codec_id = value;
                         }
                     }
-                    CODEC_NAME => {
+                    TRACK_LANGUAGE | LANGUAGE_BCP47 => {
                         if let Ok(value) = read_string(reader, data_offset, elem_size as usize) {
-                            metadata.insert(
-                                format!("{}CodecName", track_prefix),
-                                TagValue::new_string(value),
-                            );
+                            track_info.language = value;
                         }
                     }
-                    TRACK_NAME => {
-                        if let Ok(value) = read_string(reader, data_offset, elem_size as usize) {
-                            metadata.insert(
-                                format!("{}TrackName", track_prefix),
-                                TagValue::new_string(value),
-                            );
+                    FLAG_DEFAULT => {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                            track_info.flag_default = value != 0;
                         }
                     }
-                    TRACK_LANGUAGE => {
-                        if let Ok(value) = read_string(reader, data_offset, elem_size as usize) {
-                            metadata.insert(
-                                format!("{}TrackLanguage", track_prefix),
-                                TagValue::new_string(value),
-                            );
+                    FLAG_ENABLED => {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                            track_info.flag_enabled = value != 0;
+                        }
+                    }
+                    FLAG_FORCED => {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                            track_info.flag_forced = value != 0;
+                        }
+                    }
+                    DEFAULT_DURATION => {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                            track_info.default_duration_ns = value;
+                        }
+                    }
+                    TRACK_TIMECODE_SCALE => {
+                        if let Ok(value) = read_float(reader, data_offset, elem_size as usize) {
+                            track_info.track_timecode_scale = value;
+                        }
+                    }
+                    CODEC_DECODE_ALL => {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                            track_info.codec_decode_all = value != 0;
                         }
                     }
                     VIDEO => {
-                        parse_video_info(
-                            reader,
-                            data_offset,
-                            element_end,
-                            &track_prefix,
-                            metadata,
-                        )?;
+                        video_offset = Some(data_offset);
+                        video_end = element_end;
                     }
                     AUDIO => {
-                        parse_audio_info(
-                            reader,
-                            data_offset,
-                            element_end,
-                            &track_prefix,
-                            metadata,
-                        )?;
+                        audio_offset = Some(data_offset);
+                        audio_end = element_end;
                     }
                     _ => {}
                 }
@@ -486,6 +548,122 @@ fn parse_track_entry(
         }
     }
 
+    // Now output tags based on track type (ExifTool outputs per-track, not indexed)
+    let track_type_str = match track_info.track_type {
+        1 => "Video",
+        2 => "Audio",
+        3 => "Complex",
+        17 => "Subtitle",
+        18 => "Buttons",
+        32 => "Control",
+        _ => "Unknown",
+    };
+
+    // Output common track tags
+    metadata.insert(
+        "Matroska:TrackNumber".to_string(),
+        TagValue::new_integer(track_info.track_number as i64),
+    );
+    metadata.insert(
+        "Matroska:TrackType".to_string(),
+        TagValue::new_string(track_type_str.to_string()),
+    );
+    if track_info.track_uid != 0 {
+        metadata.insert(
+            "Matroska:TrackUID".to_string(),
+            TagValue::new_string(format!("{:08x}", track_info.track_uid)),
+        );
+    }
+    metadata.insert(
+        "Matroska:TrackLanguage".to_string(),
+        TagValue::new_string(track_info.language.clone()),
+    );
+    metadata.insert(
+        "Matroska:TrackDefault".to_string(),
+        TagValue::new_string(if track_info.flag_default { "Yes" } else { "No" }.to_string()),
+    );
+    metadata.insert(
+        "Matroska:TrackUsed".to_string(),
+        TagValue::new_string(if track_info.flag_enabled { "Yes" } else { "No" }.to_string()),
+    );
+    metadata.insert(
+        "Matroska:TrackForced".to_string(),
+        TagValue::new_string(if track_info.flag_forced { "Yes" } else { "No" }.to_string()),
+    );
+    metadata.insert(
+        "Matroska:CodecDecodeAll".to_string(),
+        TagValue::new_string(
+            if track_info.codec_decode_all {
+                "Yes"
+            } else {
+                "No"
+            }
+            .to_string(),
+        ),
+    );
+
+    if track_info.default_duration_ns > 0 {
+        // Convert nanoseconds to milliseconds for ExifTool compatibility
+        let ms = track_info.default_duration_ns / 1_000_000;
+        metadata.insert(
+            "Matroska:DefaultDuration".to_string(),
+            TagValue::new_string(format!("{} ms", ms)),
+        );
+    }
+
+    if track_info.track_timecode_scale != 1.0 {
+        metadata.insert(
+            "Matroska:TrackTimecodeScale".to_string(),
+            TagValue::new_string(format!("{}", track_info.track_timecode_scale)),
+        );
+    } else {
+        metadata.insert(
+            "Matroska:TrackTimecodeScale".to_string(),
+            TagValue::new_string("1".to_string()),
+        );
+    }
+
+    // Output codec ID based on track type
+    if !track_info.codec_id.is_empty() {
+        match track_info.track_type {
+            1 => {
+                metadata.insert(
+                    "Matroska:VideoCodecID".to_string(),
+                    TagValue::new_string(track_info.codec_id.clone()),
+                );
+                // Add MKV:VideoCodec with human-readable codec name
+                let codec_name = convert_codec_id_to_name(&track_info.codec_id, 1);
+                metadata.insert(
+                    "MKV:VideoCodec".to_string(),
+                    TagValue::new_string(codec_name),
+                );
+            }
+            2 => {
+                metadata.insert(
+                    "Matroska:AudioCodecID".to_string(),
+                    TagValue::new_string(track_info.codec_id.clone()),
+                );
+                // Add MKV:AudioCodec with human-readable codec name
+                let codec_name = convert_codec_id_to_name(&track_info.codec_id, 2);
+                metadata.insert(
+                    "MKV:AudioCodec".to_string(),
+                    TagValue::new_string(codec_name),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    // Parse video info if this is a video track
+    if let Some(v_offset) = video_offset {
+        parse_video_info(reader, v_offset, video_end, &track_info, metadata)?;
+    }
+
+    // Parse audio info if this is an audio track
+    if let Some(a_offset) = audio_offset {
+        parse_audio_info(reader, a_offset, audio_end, metadata)?;
+    }
+
     Ok(())
 }
 
@@ -494,9 +672,13 @@ fn parse_video_info(
     reader: &dyn FileReader,
     mut offset: u64,
     end_offset: u64,
-    track_prefix: &str,
+    track_info: &TrackInfo,
     metadata: &mut MetadataMap,
 ) -> Result<()> {
+    let mut display_width = 0u64;
+    let mut display_height = 0u64;
+    let mut interlace_flag = 0u64;
+
     while offset < end_offset {
         match parse_element_header(reader, offset) {
             Ok((elem_id, elem_size, hdr_size)) => {
@@ -506,62 +688,64 @@ fn parse_video_info(
                     PIXEL_WIDTH => {
                         if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
                             metadata.insert(
-                                format!("{}ImageWidth", track_prefix),
+                                "Matroska:ImageWidth".to_string(),
                                 TagValue::new_integer(value as i64),
                             );
-                            // Also add as generic ImageWidth for first video track
-                            if track_prefix.contains("Track1:") {
-                                metadata.insert(
-                                    "Matroska:ImageWidth".to_string(),
-                                    TagValue::new_integer(value as i64),
-                                );
-                            }
+                            // Add MKV:Width tag for format-specific output
+                            metadata.insert(
+                                "MKV:Width".to_string(),
+                                TagValue::new_integer(value as i64),
+                            );
                         }
                     }
                     PIXEL_HEIGHT => {
                         if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
                             metadata.insert(
-                                format!("{}ImageHeight", track_prefix),
+                                "Matroska:ImageHeight".to_string(),
                                 TagValue::new_integer(value as i64),
                             );
-                            // Also add as generic ImageHeight for first video track
-                            if track_prefix.contains("Track1:") {
-                                metadata.insert(
-                                    "Matroska:ImageHeight".to_string(),
-                                    TagValue::new_integer(value as i64),
-                                );
-                            }
+                            // Add MKV:Height tag for format-specific output
+                            metadata.insert(
+                                "MKV:Height".to_string(),
+                                TagValue::new_integer(value as i64),
+                            );
                         }
                     }
                     DISPLAY_WIDTH => {
                         if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                            display_width = value;
                             metadata.insert(
-                                format!("{}DisplayWidth", track_prefix),
+                                "Matroska:DisplayWidth".to_string(),
                                 TagValue::new_integer(value as i64),
                             );
                         }
                     }
                     DISPLAY_HEIGHT => {
                         if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                            display_height = value;
                             metadata.insert(
-                                format!("{}DisplayHeight", track_prefix),
+                                "Matroska:DisplayHeight".to_string(),
                                 TagValue::new_integer(value as i64),
                             );
+                        }
+                    }
+                    FLAG_INTERLACED => {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                            interlace_flag = value;
                         }
                     }
                     FRAME_RATE => {
                         if let Ok(value) = read_float(reader, data_offset, elem_size as usize) {
                             metadata.insert(
-                                format!("{}FrameRate", track_prefix),
-                                TagValue::new_string(format!("{:.3}", value)),
+                                "Matroska:VideoFrameRate".to_string(),
+                                TagValue::new_integer(value as i64),
                             );
-                            // Also add as generic FrameRate for first video track
-                            if track_prefix.contains("Track1:") {
-                                metadata.insert(
-                                    "Matroska:FrameRate".to_string(),
-                                    TagValue::new_string(format!("{:.3}", value)),
-                                );
-                            }
+                            // Add MKV:FrameRate tag with "fps" format
+                            let frame_rate_str = format!("{:.3} fps", value);
+                            metadata.insert(
+                                "MKV:FrameRate".to_string(),
+                                TagValue::new_string(frame_rate_str),
+                            );
                         }
                     }
                     _ => {}
@@ -573,6 +757,52 @@ fn parse_video_info(
         }
     }
 
+    // Calculate frame rate from default duration if not explicitly set
+    if !metadata.contains_key("Matroska:VideoFrameRate") && track_info.default_duration_ns > 0 {
+        let fps = 1_000_000_000.0 / track_info.default_duration_ns as f64;
+        metadata.insert(
+            "Matroska:VideoFrameRate".to_string(),
+            TagValue::new_integer(fps.round() as i64),
+        );
+        // Add MKV:FrameRate tag if not already present
+        if !metadata.contains_key("MKV:FrameRate") {
+            let frame_rate_str = format!("{:.3} fps", fps);
+            metadata.insert(
+                "MKV:FrameRate".to_string(),
+                TagValue::new_string(frame_rate_str),
+            );
+        }
+    }
+
+    // Set scan type based on interlace flag
+    let scan_type = match interlace_flag {
+        0 => "Undetermined",
+        1 => "Interlaced",
+        2 => "Progressive",
+        _ => "Undetermined",
+    };
+    metadata.insert(
+        "Matroska:VideoScanType".to_string(),
+        TagValue::new_string(scan_type.to_string()),
+    );
+
+    // Add display dimensions if not already set
+    if display_width == 0 && display_height == 0 {
+        // Use pixel dimensions as display dimensions if not specified
+        if let Some(TagValue::Integer(w)) = metadata.get("Matroska:ImageWidth") {
+            metadata.insert(
+                "Matroska:DisplayWidth".to_string(),
+                TagValue::new_integer(*w),
+            );
+        }
+        if let Some(TagValue::Integer(h)) = metadata.get("Matroska:ImageHeight") {
+            metadata.insert(
+                "Matroska:DisplayHeight".to_string(),
+                TagValue::new_integer(*h),
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -581,7 +811,6 @@ fn parse_audio_info(
     reader: &dyn FileReader,
     mut offset: u64,
     end_offset: u64,
-    track_prefix: &str,
     metadata: &mut MetadataMap,
 ) -> Result<()> {
     while offset < end_offset {
@@ -593,41 +822,33 @@ fn parse_audio_info(
                     SAMPLING_FREQUENCY => {
                         if let Ok(value) = read_float(reader, data_offset, elem_size as usize) {
                             metadata.insert(
-                                format!("{}AudioSampleRate", track_prefix),
-                                TagValue::new_string(format!("{:.0}", value)),
+                                "Matroska:AudioSampleRate".to_string(),
+                                TagValue::new_integer(value as i64),
                             );
-                            // Also add as generic AudioSampleRate for first audio track
-                            if track_prefix.contains("Track")
-                                && !metadata.contains_key("Matroska:AudioSampleRate")
-                            {
-                                metadata.insert(
-                                    "Matroska:AudioSampleRate".to_string(),
-                                    TagValue::new_string(format!("{:.0}", value)),
-                                );
-                            }
+                            // Add MKV:SampleRate tag for format-specific output
+                            metadata.insert(
+                                "MKV:SampleRate".to_string(),
+                                TagValue::new_integer(value as i64),
+                            );
                         }
                     }
                     CHANNELS => {
                         if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
                             metadata.insert(
-                                format!("{}AudioChannels", track_prefix),
+                                "Matroska:AudioChannels".to_string(),
                                 TagValue::new_integer(value as i64),
                             );
-                            // Also add as generic AudioChannels for first audio track
-                            if track_prefix.contains("Track")
-                                && !metadata.contains_key("Matroska:AudioChannels")
-                            {
-                                metadata.insert(
-                                    "Matroska:AudioChannels".to_string(),
-                                    TagValue::new_integer(value as i64),
-                                );
-                            }
+                            // Add MKV:Channels tag for format-specific output
+                            metadata.insert(
+                                "MKV:Channels".to_string(),
+                                TagValue::new_integer(value as i64),
+                            );
                         }
                     }
                     BIT_DEPTH => {
                         if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
                             metadata.insert(
-                                format!("{}AudioBitsPerSample", track_prefix),
+                                "Matroska:AudioBitsPerSample".to_string(),
                                 TagValue::new_integer(value as i64),
                             );
                         }
@@ -991,6 +1212,96 @@ fn parse_attached_file(
     Ok(())
 }
 
+/// Convert Matroska codec ID to human-readable codec name
+///
+/// Maps standardized Matroska codec IDs (like "V_UNCOMPRESSED", "V_AV1", "A_OPUS")
+/// to user-friendly codec names for the MKV: format tags.
+///
+/// # Arguments
+///
+/// * `codec_id` - The Matroska codec ID string (e.g., "V_VP9", "A_AAC")
+/// * `track_type` - The track type (1 = video, 2 = audio, etc.)
+///
+/// # Returns
+///
+/// A human-readable codec name or the original codec ID if not recognized
+fn convert_codec_id_to_name(codec_id: &str, track_type: u64) -> String {
+    match track_type {
+        // Video codecs
+        1 => match codec_id {
+            "V_UNCOMPRESSED" => "Uncompressed".to_string(),
+            "V_MPEG4/ISO/AVC" => "H.264".to_string(),
+            "V_MPEGH/ISO/HEVC" => "H.265".to_string(),
+            "V_AV1" => "AV1".to_string(),
+            "V_MPEG4/MS/V3" => "MPEG4 V3".to_string(),
+            "V_MPEG4/ISO/SP" => "MPEG4 Part 2".to_string(),
+            "V_MPEG4/ISO/ASP" => "MPEG4 Part 2".to_string(),
+            "V_MPEG1" => "MPEG1".to_string(),
+            "V_MPEG2" => "MPEG2".to_string(),
+            "V_REAL/RV10" => "RealVideo 1.0".to_string(),
+            "V_REAL/RV20" => "RealVideo 2.0".to_string(),
+            "V_REAL/RV30" => "RealVideo 3.0".to_string(),
+            "V_REAL/RV40" => "RealVideo 4.0".to_string(),
+            "V_VP8" => "VP8".to_string(),
+            "V_VP9" => "VP9".to_string(),
+            "V_QUICKTIME" => "QuickTime".to_string(),
+            "V_DIRAC" => "Dirac".to_string(),
+            "V_PRORES" => "ProRes".to_string(),
+            "V_FFV1" => "FFV1".to_string(),
+            "V_THEORA" => "Theora".to_string(),
+            "V_DAALA" => "Daala".to_string(),
+            "V_JPEG2000" => "JPEG 2000".to_string(),
+            "V_BETACODEC" => "BetaCodec".to_string(),
+            "V_VC1" => "VC-1".to_string(),
+            _ => codec_id.to_string(),
+        },
+        // Audio codecs
+        2 => match codec_id {
+            "A_MPEG/L1" => "MP1".to_string(),
+            "A_MPEG/L2" => "MP2".to_string(),
+            "A_MPEG/L3" => "MP3".to_string(),
+            "A_PCM/INT/LIT" => "PCM".to_string(),
+            "A_PCM/INT/BIG" => "PCM".to_string(),
+            "A_PCM/FLOAT/IEEE" => "PCM (IEEE Float)".to_string(),
+            "A_AC3" => "AC-3".to_string(),
+            "A_EAC3" => "E-AC-3".to_string(),
+            "A_ALAC" => "ALAC".to_string(),
+            "A_DTS" => "DTS".to_string(),
+            "A_DTS/CORE" => "DTS Core".to_string(),
+            "A_DTS/EXPRESS" => "DTS Express".to_string(),
+            "A_DTS/LOSSLESS" => "DTS-HD".to_string(),
+            "A_FLAC" => "FLAC".to_string(),
+            "A_TRUEHD" => "TrueHD".to_string(),
+            "A_MLP" => "MLP".to_string(),
+            "A_AAC/MPEG4/MAIN" => "AAC".to_string(),
+            "A_AAC/MPEG4/LC" => "AAC-LC".to_string(),
+            "A_AAC/MPEG4/SBR" => "AAC-HE".to_string(),
+            "A_AAC/MPEG4/LC/SBR" => "AAC-HE".to_string(),
+            "A_AAC/MPEG4/MAIN/SBR" => "AAC-HE Main".to_string(),
+            "A_AAC/MPEG2/MAIN" => "AAC".to_string(),
+            "A_AAC/MPEG2/LC" => "AAC-LC".to_string(),
+            "A_AAC/MPEG2/SBR" => "AAC-HE".to_string(),
+            "A_AAC/MPEG2/LC/SBR" => "AAC-HE".to_string(),
+            "A_VORBIS" => "Vorbis".to_string(),
+            "A_OPUS" => "Opus".to_string(),
+            "A_REAL/14_4" => "RealAudio 1".to_string(),
+            "A_REAL/28_8" => "RealAudio 2".to_string(),
+            "A_REAL/COOK" => "RealAudio Cook".to_string(),
+            "A_REAL/SIPR" => "RealAudio Sipr".to_string(),
+            "A_REAL/RALF" => "RealAudio RALF".to_string(),
+            "A_REAL/ATRC" => "RealAudio ATRC".to_string(),
+            "A_WAVPACK4" => "WavPack".to_string(),
+            "A_QUICKTIME" => "QuickTime Audio".to_string(),
+            "A_TWOS" => "PCM (Two's Complement)".to_string(),
+            "A_SOWT" => "PCM (Signed)".to_string(),
+            "A_MSADPCM" => "MS ADPCM".to_string(),
+            "A_IMAADPCM" => "IMA ADPCM".to_string(),
+            _ => codec_id.to_string(),
+        },
+        _ => codec_id.to_string(),
+    }
+}
+
 /// Parse EBML element header (ID + size)
 /// Returns (element_id, element_size, header_size)
 fn parse_element_header(reader: &dyn FileReader, offset: u64) -> Result<(u32, u64, u64)> {
@@ -1173,6 +1484,37 @@ fn read_string(reader: &dyn FileReader, offset: u64, size: usize) -> Result<Stri
     er.str_at(0, size)
         .map(|s| s.to_string())
         .ok_or_else(|| ExifToolError::parse_error("Invalid UTF-8 string"))
+}
+
+/// Format Unix timestamp as ExifTool-compatible datetime string.
+///
+/// ExifTool uses format "YYYY:MM:DD HH:MM:SSZ" (colons between date parts, Z suffix)
+fn format_unix_timestamp_utc(timestamp: i64) -> String {
+    // Days since Unix epoch
+    let days = timestamp / 86400;
+    let time_of_day = (timestamp % 86400) as u32;
+
+    // Time components
+    let hour = time_of_day / 3600;
+    let minute = (time_of_day % 3600) / 60;
+    let second = time_of_day % 60;
+
+    // Convert days to date using Howard Hinnant's algorithm
+    let z = days + 719468; // Days since 0000-03-01
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32; // Day of era [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // Year of era [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // Day of year [0, 365]
+    let mp = (5 * doy + 2) / 153; // Month prime [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // Day [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // Month [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!(
+        "{:04}:{:02}:{:02} {:02}:{:02}:{:02}Z",
+        y, m, d, hour, minute, second
+    )
 }
 
 /// Convenience function to parse MKV metadata from a reader.

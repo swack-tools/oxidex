@@ -177,31 +177,56 @@ impl FormatParser for GLTFParser {
         };
 
         // Extract asset information
+        // Version is required in glTF asset, so try both locations
         if let Some(version) = Self::extract_json_string(&json_content, "version") {
-            metadata.insert("AssetVersion".to_string(), TagValue::String(version));
+            metadata.insert(
+                "AssetVersion".to_string(),
+                TagValue::String(version.clone()),
+            );
+            // Add GLTF:Version for Worker 25 compatibility
+            metadata.insert("GLTF:Version".to_string(), TagValue::new_string(version));
         }
 
         if let Some(generator) = Self::extract_json_string(&json_content, "generator") {
-            metadata.insert("AssetGenerator".to_string(), TagValue::String(generator));
+            metadata.insert(
+                "AssetGenerator".to_string(),
+                TagValue::String(generator.clone()),
+            );
+            // Add GLTF:Generator for Worker 25 compatibility
+            metadata.insert(
+                "GLTF:Generator".to_string(),
+                TagValue::new_string(generator),
+            );
         }
 
         if let Some(copyright) = Self::extract_json_string(&json_content, "copyright") {
-            metadata.insert("AssetCopyright".to_string(), TagValue::String(copyright));
+            metadata.insert(
+                "AssetCopyright".to_string(),
+                TagValue::String(copyright.clone()),
+            );
+            // Add GLTF:Copyright for Worker 25 compatibility
+            metadata.insert(
+                "GLTF:Copyright".to_string(),
+                TagValue::new_string(copyright),
+            );
         }
 
-        // Count array elements
+        // Count array elements for both old and new tag names
         let arrays = [
-            ("scenes", "SceneCount"),
-            ("nodes", "NodeCount"),
-            ("meshes", "MeshCount"),
-            ("materials", "MaterialCount"),
-            ("textures", "TextureCount"),
-            ("animations", "AnimationCount"),
+            ("scenes", "SceneCount", "GLTF:SceneCount"),
+            ("nodes", "NodeCount", "GLTF:NodeCount"),
+            ("meshes", "MeshCount", "GLTF:MeshCount"),
+            ("materials", "MaterialCount", "GLTF:MaterialCount"),
+            ("textures", "TextureCount", "GLTF:TextureCount"),
+            ("animations", "AnimationCount", "GLTF:AnimationCount"),
         ];
 
-        for (json_key, meta_key) in &arrays {
+        for (json_key, meta_key, gltf_key) in &arrays {
             if let Some(count) = Self::count_json_array(&json_content, json_key) {
-                metadata.insert(meta_key.to_string(), TagValue::Integer(count as i64));
+                let count_i64 = count as i64;
+                // Add both old and new tag names for compatibility
+                metadata.insert(meta_key.to_string(), TagValue::Integer(count_i64));
+                metadata.insert(gltf_key.to_string(), TagValue::new_integer(count_i64));
             }
         }
 

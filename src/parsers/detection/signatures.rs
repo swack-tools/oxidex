@@ -68,17 +68,24 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"\x76\x2F\x31\x01", 0, FileFormat::EXR),
     signature!(b"\x42\x50\x47\xFB", 0, FileFormat::BPG),
     signature!(b"\xFF\x0A", 0, FileFormat::JXL),
-    // Audio formats
+    // Audio/Video formats
     signature!(b"fLaC", 0, FileFormat::FLAC),
     signature!(b"ID3", 0, FileFormat::MP3),
     signature!(b"FLV", 0, FileFormat::FLV),
     signature!(b"MAC ", 0, FileFormat::APE),
     signature!(b"\x1A\x45\xDF\xA3", 0, FileFormat::MKV),
     signature!(b"OggS", 0, FileFormat::OGG),
+    // ASF/WMV - Header Object GUID
+    signature!(
+        b"\x30\x26\xB2\x75\x8E\x66\xCF\x11\xA6\xD9\x00\xAA\x00\x62\xCE\x6C",
+        0,
+        FileFormat::ASF
+    ),
+    // MXF - Universal Label prefix (06.0E.2B.34)
+    signature!(b"\x06\x0E\x2B\x34", 0, FileFormat::MXF),
     // Document formats
     signature!(b"%PDF", 0, FileFormat::PDF),
     // Archive formats
-    signature!(b"PK", 0, FileFormat::ZIP),
     signature!(b"Rar!", 0, FileFormat::RAR),
     signature!(b"\x37\x7A\xBC\xAF\x27\x1C", 0, FileFormat::SevenZ),
     signature!(b"\x1F\x8B", 0, FileFormat::GZ),
@@ -95,6 +102,7 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"BEGIN:VCARD", 0, FileFormat::VCF),
     signature!(b"\x4C\x00\x00\x00", 0, FileFormat::LNK),
     signature!(b"SQLite format 3\0", 0, FileFormat::SQLite),
+    signature!(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", 0, FileFormat::OLE),
     // Windows forensic formats
     signature!(b"MAM\x04", 0, FileFormat::Prefetch), // Compressed prefetch (Win10+)
     signature!(b"SCCA", 4, FileFormat::Prefetch),    // Uncompressed prefetch

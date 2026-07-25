@@ -113,19 +113,34 @@ impl FormatParser for BMPParser {
         );
 
         let (width, height) = Self::read_dimensions(reader)?;
+        let abs_width = width.abs() as u64;
+        let abs_height = height.abs() as u64;
+
         metadata.insert(
             "ImageWidth".to_string(),
-            TagValue::String(width.abs().to_string()),
+            TagValue::String(abs_width.to_string()),
         );
         metadata.insert(
             "ImageHeight".to_string(),
-            TagValue::String(height.abs().to_string()),
+            TagValue::String(abs_height.to_string()),
+        );
+
+        // Add BMP: prefixed versions for format-specific tagging
+        metadata.insert("BMP:Width".to_string(), TagValue::Integer(abs_width as i64));
+        metadata.insert(
+            "BMP:Height".to_string(),
+            TagValue::Integer(abs_height as i64),
         );
 
         let bit_depth = Self::read_bit_depth(reader)?;
         metadata.insert(
             "BitDepth".to_string(),
             TagValue::String(bit_depth.to_string()),
+        );
+        // Add BMP: prefixed version for format-specific tagging
+        metadata.insert(
+            "BMP:BitDepth".to_string(),
+            TagValue::Integer(bit_depth as i64),
         );
 
         // Compression method
@@ -143,6 +158,11 @@ impl FormatParser for BMPParser {
             "Compression".to_string(),
             TagValue::String(compression_str.to_string()),
         );
+        // Add BMP: prefixed version for format-specific tagging
+        metadata.insert(
+            "BMP:Compression".to_string(),
+            TagValue::String(compression_str.to_string()),
+        );
 
         // Resolution
         let h_res = Self::read_h_resolution(reader)?;
@@ -152,10 +172,20 @@ impl FormatParser for BMPParser {
                 "XResolution".to_string(),
                 TagValue::String(format!("{} pixels/meter", h_res)),
             );
+            // Add BMP: prefixed version for format-specific tagging
+            metadata.insert(
+                "BMP:XResolution".to_string(),
+                TagValue::String(format!("{} pixels/meter", h_res)),
+            );
         }
         if v_res > 0 {
             metadata.insert(
                 "YResolution".to_string(),
+                TagValue::String(format!("{} pixels/meter", v_res)),
+            );
+            // Add BMP: prefixed version for format-specific tagging
+            metadata.insert(
+                "BMP:YResolution".to_string(),
                 TagValue::String(format!("{} pixels/meter", v_res)),
             );
         }
@@ -166,6 +196,21 @@ impl FormatParser for BMPParser {
             metadata.insert(
                 "NumColors".to_string(),
                 TagValue::Integer(num_colors as i64),
+            );
+            // Add BMP: prefixed version for format-specific tagging
+            metadata.insert(
+                "BMP:ColorCount".to_string(),
+                TagValue::Integer(num_colors as i64),
+            );
+        }
+
+        // Calculate image size (file size - header size, approximately)
+        // DIB header is typically at offset 14, and image data follows the color table
+        let image_data_size = reader.size().saturating_sub(14);
+        if image_data_size > 0 {
+            metadata.insert(
+                "BMP:ImageSize".to_string(),
+                TagValue::Integer(image_data_size as i64),
             );
         }
 

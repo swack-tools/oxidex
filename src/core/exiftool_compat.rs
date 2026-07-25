@@ -62,9 +62,15 @@ use crate::core::formatters::gps_status::{
 };
 use crate::core::formatters::{
     decode_cfa_pattern, decode_gps_processing_method, decode_scene_type, decode_version_bytes,
-    format_exposure_program, format_gps_altitude_ref, format_gps_direction_ref, format_gps_lat_ref,
-    format_gps_lon_ref, format_gps_speed_ref, format_icc_value, format_integer_precision_values,
-    format_three_decimal_values, format_with_unit, is_icc_matrix_tag, is_integer_precision_tag,
+    format_color_space, format_components_configuration, format_compression, format_contrast,
+    format_custom_rendered, format_exposure_mode, format_exposure_program, format_file_source,
+    format_flash, format_gain_control, format_gps_altitude_ref, format_gps_direction_ref,
+    format_gps_lat_ref, format_gps_lon_ref, format_gps_speed_ref, format_icc_value,
+    format_integer_precision_values, format_interop_index, format_light_source,
+    format_metering_mode, format_orientation, format_resolution_unit, format_saturation,
+    format_scene_capture_type, format_sensing_method, format_sharpness,
+    format_subject_distance_range, format_three_decimal_values, format_white_balance,
+    format_with_unit, format_ycbcr_positioning, is_icc_matrix_tag, is_integer_precision_tag,
     is_three_decimal_tag,
 };
 use crate::core::{MetadataMap, TagValue};
@@ -323,6 +329,14 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         }
     }
 
+    // GPSVersionID uses a different format than the ASCII-digit version tags:
+    // the 4 raw bytes are joined as dot-separated decimal values (e.g. "2.2.0.0").
+    if is_gps_version_id(base_name)
+        && let TagValue::Binary(data) = value
+    {
+        return TagValue::String(format_gps_version_id(data));
+    }
+
     // ---------------------------------------------------------------------
     // Rule 8: APP14 Flags (APP14Flags0, APP14Flags1)
     // ExifTool shows "(none)" for value 0, otherwise shows the value
@@ -336,7 +350,7 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     // Non-zero values are returned as-is (pass through to default)
 
     // ---------------------------------------------------------------------
-    // Rule 9: Enum Tags (ExposureProgram)
+    // Rule 9: Enum Tags (ExposureProgram and other EXIF enum tags)
     // Convert integer enum values to human-readable strings
     // ---------------------------------------------------------------------
     if is_exposure_program(base_name)
@@ -346,6 +360,153 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         // Safe to cast from i64 to u32 for the formatter
         let formatted = format_exposure_program(i as u32);
         return TagValue::String(formatted);
+    }
+
+    // ColorSpace enum (1=sRGB, 65535=Uncalibrated)
+    if base_name == "ColorSpace"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_color_space(i));
+    }
+
+    // MeteringMode enum (0-6, 255)
+    if base_name == "MeteringMode"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_metering_mode(i));
+    }
+
+    // LightSource enum (0-24, 255)
+    if base_name == "LightSource"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_light_source(i));
+    }
+
+    // Flash enum (complex bitfield)
+    if base_name == "Flash"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_flash(i));
+    }
+
+    // ExposureMode enum (0=Auto, 1=Manual, 2=Auto bracket)
+    if base_name == "ExposureMode"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_exposure_mode(i));
+    }
+
+    // WhiteBalance enum (0=Auto, 1=Manual)
+    if base_name == "WhiteBalance"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_white_balance(i));
+    }
+
+    // SceneCaptureType enum (0-3)
+    if base_name == "SceneCaptureType"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_scene_capture_type(i));
+    }
+
+    // Contrast enum (0=Normal, 1=Low, 2=High)
+    if base_name == "Contrast"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_contrast(i));
+    }
+
+    // Saturation enum (0=Normal, 1=Low, 2=High)
+    if base_name == "Saturation"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_saturation(i));
+    }
+
+    // Sharpness enum (0=Normal, 1=Soft, 2=Hard)
+    if base_name == "Sharpness"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_sharpness(i));
+    }
+
+    // GainControl enum (0-4)
+    if base_name == "GainControl"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_gain_control(i));
+    }
+
+    // FileSource enum (1-3)
+    if base_name == "FileSource"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_file_source(i));
+    }
+
+    // SensingMethod enum (1-8)
+    if base_name == "SensingMethod"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_sensing_method(i));
+    }
+
+    // Compression enum (1-65535)
+    if base_name == "Compression"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_compression(i));
+    }
+
+    // Orientation enum (1-8)
+    if base_name == "Orientation"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_orientation(i));
+    }
+
+    // ResolutionUnit enum (1-3)
+    if base_name == "ResolutionUnit"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_resolution_unit(i));
+    }
+
+    // YCbCrPositioning enum (1=Centered, 2=Co-sited)
+    if base_name == "YCbCrPositioning"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_ycbcr_positioning(i));
+    }
+
+    // CustomRendered enum (0-8)
+    if base_name == "CustomRendered"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_custom_rendered(i));
+    }
+
+    // SubjectDistanceRange enum (0-3)
+    if base_name == "SubjectDistanceRange"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_subject_distance_range(i));
+    }
+
+    // InteropIndex (R98=sRGB, THM=thumbnail, R03=Adobe RGB)
+    if base_name == "InteropIndex"
+        && let Some(s) = value.as_string()
+    {
+        return TagValue::String(format_interop_index(s));
+    }
+
+    // ComponentsConfiguration binary data
+    if base_name == "ComponentsConfiguration"
+        && let TagValue::Binary(data) = value
+    {
+        return TagValue::String(format_components_configuration(data));
     }
 
     // ---------------------------------------------------------------------
@@ -426,7 +587,13 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     // Note: MeasurementFlare is also handled in the ICC matrix rule above,
     // but Quality (from Ducky segment) is handled here for integer values.
     // ---------------------------------------------------------------------
-    if is_percentage_tag(base_name) {
+    // Note: only Ducky's "Quality" tag (or a bare, family-less "Quality")
+    // gets a "%" suffix -- other formats that happen to share the tag name
+    // (e.g. RIFF/AVI's numeric stream Quality, unrelated to percentages)
+    // must NOT be reformatted here.
+    let quality_percentage_applies =
+        base_name == "MeasurementFlare" || tag_name == "Ducky:Quality" || tag_name == "Quality";
+    if quality_percentage_applies && is_percentage_tag(base_name) {
         if let Some(i) = value.as_integer() {
             return TagValue::String(format!("{}%", i));
         }
@@ -874,7 +1041,11 @@ pub fn is_scene_type(base_name: &str) -> bool {
 /// - InteropVersion
 /// - ExifVersion
 /// - FlashpixVersion
-/// - GPSVersionID
+///
+/// Note: `GPSVersionID` is *not* one of these -- unlike the tags above, its
+/// 4 raw bytes are not ASCII digit characters. ExifTool prints it by joining
+/// the 4 raw byte values with dots (e.g. `[2, 2, 0, 0]` -> `"2.2.0.0"`); see
+/// [`is_gps_version_id`] / [`format_gps_version_id`] for that formatting.
 ///
 /// # Arguments
 ///
@@ -886,8 +1057,37 @@ pub fn is_scene_type(base_name: &str) -> bool {
 pub fn is_version_tag(base_name: &str) -> bool {
     matches!(
         base_name,
-        "InteropVersion" | "ExifVersion" | "FlashpixVersion" | "GPSVersionID"
+        "InteropVersion" | "ExifVersion" | "FlashpixVersion"
     )
+}
+
+/// Checks if the tag is `GPSVersionID`.
+///
+/// Unlike the ASCII-digit version tags (`ExifVersion`, `InteropVersion`,
+/// `FlashpixVersion`), `GPSVersionID`'s 4 raw bytes are small integers
+/// (typically `[2, 2, 0, 0]`) that ExifTool prints by joining the decimal
+/// byte values with dots, e.g. `"2.2.0.0"`.
+///
+/// # Arguments
+///
+/// * `base_name` - The tag name without family prefix
+///
+/// # Returns
+///
+/// `true` if this tag should be decoded with [`format_gps_version_id`]
+pub fn is_gps_version_id(base_name: &str) -> bool {
+    base_name == "GPSVersionID"
+}
+
+/// Formats `GPSVersionID` raw bytes as dot-separated decimal values.
+///
+/// ExifTool prints the 4 raw bytes (e.g. `[2, 2, 0, 0]`) as `"2.2.0.0"`,
+/// not as a concatenated ASCII digit string like the other EXIF version tags.
+pub fn format_gps_version_id(data: &[u8]) -> String {
+    data.iter()
+        .map(|b| b.to_string())
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// Checks if the tag is an APP14 flags tag (APP14Flags0, APP14Flags1).
@@ -1336,10 +1536,13 @@ mod tests {
         let formatted = format_tag_value("FlashpixVersion", &value);
         assert_eq!(formatted.as_string(), Some("0100"));
 
-        let data = b"0230".to_vec();
+        // GPSVersionID is NOT decoded like the ASCII-digit version tags above:
+        // its 4 raw bytes are small integers joined with dots (e.g. "2.2.0.0"),
+        // not a concatenated ASCII digit string.
+        let data = vec![2u8, 2, 0, 0];
         let value = TagValue::Binary(data);
         let formatted = format_tag_value("GPSVersionID", &value);
-        assert_eq!(formatted.as_string(), Some("0230"));
+        assert_eq!(formatted.as_string(), Some("2.2.0.0"));
     }
 
     // -------------------------------------------------------------------------
@@ -1663,7 +1866,9 @@ mod tests {
         assert!(is_version_tag("InteropVersion"));
         assert!(is_version_tag("ExifVersion"));
         assert!(is_version_tag("FlashpixVersion"));
-        assert!(is_version_tag("GPSVersionID"));
+        // GPSVersionID uses a distinct dot-separated decimal format; see
+        // `is_gps_version_id` / `format_gps_version_id`.
+        assert!(!is_version_tag("GPSVersionID"));
         assert!(!is_version_tag("SomeOtherVersion"));
     }
 

@@ -299,6 +299,9 @@ impl FormatParser for OTFParser {
             eprintln!("Warning: Failed to parse head table: {}", e);
         }
 
+        // Add OTF-specific tag aliases for Worker 22 requirements
+        add_otf_tag_aliases(&mut metadata);
+
         Ok(metadata)
     }
 
@@ -313,6 +316,37 @@ impl FormatParser for OTFParser {
 pub fn parse_otf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let parser = OTFParser;
     parser.parse(reader).map_err(|e| e.to_string())
+}
+
+/// Adds OTF-specific tag aliases to metadata (Worker 22 requirements)
+///
+/// Maps generic font metadata to OTF-specific tags for ExifTool compatibility
+/// Worker 22 requires: OTF:FontName, OTF:FamilyName, OTF:StyleName,
+/// OTF:UnitsPerEm, OTF:ScalerType, OTF:GlyphCount, OTF:TableCount, OTF:Version
+fn add_otf_tag_aliases(metadata: &mut MetadataMap) {
+    // Create aliases with OTF prefix
+    let mappings = [
+        ("FontName", "OTF:FontName"),
+        ("FontFamily", "OTF:FamilyName"),
+        ("FontSubfamily", "OTF:StyleName"),
+        ("UnitsPerEm", "OTF:UnitsPerEm"),
+        ("OutlineFormat", "OTF:ScalerType"),
+        ("NumTables", "OTF:TableCount"),
+        ("FontVersion", "OTF:Version"),
+    ];
+
+    let mut otf_tags = Vec::new();
+    for (source, otf_tag) in &mappings {
+        if let Some(value) = metadata.get(source) {
+            otf_tags.push((otf_tag.to_string(), value.clone()));
+        }
+    }
+
+    for (key, value) in otf_tags {
+        metadata.insert(key, value);
+    }
+
+    // Note: GlyphCount would require parsing the CFF table or other glyph information
 }
 
 #[cfg(test)]

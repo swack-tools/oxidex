@@ -91,6 +91,25 @@ This document tracks acceptable differences in metadata extraction between ExifT
 - **Reason**: Both tools use `-G1` flag for group prefixes (EXIF:, GPS:, XMP:)
 - **Impact**: None (both outputs compatible)
 
+## JPEG COM / DQT wiring (2026-07-19)
+
+- **File:JPEGQualityEstimate is always emitted.** ExifTool computes this tag
+  only when explicitly requested (`-JPEGQualityEstimate` or `RequestAll > 2`)
+  because of Perl-side overhead; oxidex has no tag-request mechanism and the
+  computation is trivial, so it is always present. Values match ExifTool's
+  algorithm exactly (JPEGDigest.pm EstimateQuality).
+- **Multiple COM segments collapse to one File:Comment (last wins).** ExifTool
+  reports each COM segment as a duplicate Comment tag under `-a`; MetadataMap
+  stores one value per key.
+- **Non-UTF-8 COM comments are stored as a binary blob.** When a COM segment's
+  bytes are not valid UTF-8, oxidex stores `File:Comment` as a
+  `TagValue::Binary` blob; ExifTool Latin-1-decodes the bytes into a string
+  instead.
+- **Duplicate "1 of 1" ICC profiles keep the first, not the last.** Files
+  carrying multiple APP2 ICC_PROFILE segments each marked chunk 1 of 1 warn
+  and keep the first profile's tags, matching ExifTool's behavior; the
+  previous oxidex release silently kept the last.
+
 ## Testing Strategy
 
 ### Match Rate Thresholds

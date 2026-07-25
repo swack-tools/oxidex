@@ -90,6 +90,12 @@ const XMP_TAG: u16 = 0x02BC; // Tag 700: XMP metadata (ApplicationNotes)
 const IPTC_TAG: u16 = 0x83BB; // Tag 33723: IPTC-NAA metadata
 const PHOTOSHOP_TAG: u16 = 0x8649; // Tag 34377: Photoshop IRB metadata
 
+// GeoTiff tag IDs
+const GEOTIFF_DIRECTORY_TAG: u16 = 0x87AF; // Tag 34735: GeoKeyDirectoryTag
+const GEOTIFF_DOUBLE_PARAMS_TAG: u16 = 0x87B0; // Tag 34736: GeoDoubleParamsTag
+const GEOTIFF_ASCII_PARAMS_TAG: u16 = 0x87B1; // Tag 34737: GeoAsciiParamsTag
+const MODEL_TRANSFORMATION_TAG: u16 = 0x85D8; // Tag 34264: ModelTransformation
+
 // Tag IDs for camera detection
 const MAKE: u16 = 0x010F; // Camera manufacturer (e.g., "Canon", "Nikon")
 
@@ -150,14 +156,19 @@ pub fn parse_tiff_header(reader: &dyn FileReader) -> Result<TiffHeader> {
     // Create EndianReader for parsing remaining header fields
     let endian_reader = EndianReader::new(header, byte_order.to_io_byte_order());
 
-    // Parse magic number (bytes 2-3) - should be 42
+    // Parse magic number (bytes 2-3)
+    // Standard TIFF uses 42 (0x002A), but some formats use variants:
+    // - 42 (0x002A): Standard TIFF, Canon CR2, Nikon NEF, Sony ARW, DNG, etc.
+    // - 0x55 (85): Panasonic RW2 format (variant TIFF)
+    // - 0x4F4F ("RO"): Olympus ORF format (uses "RO" marker instead of magic number)
     let magic = endian_reader
         .u16_at(2)
         .ok_or_else(|| ExifToolError::parse_error("Failed to read TIFF magic number"))?;
 
-    if magic != 42 {
+    // Accept both standard TIFF magic (42) and known variants
+    if magic != 42 && magic != 0x55 {
         return Err(ExifToolError::parse_error(format!(
-            "Invalid TIFF magic number: {} (expected 42)",
+            "Invalid TIFF magic number: {} (expected 42 or 0x55 for RW2)",
             magic
         )));
     }
@@ -531,6 +542,69 @@ pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<IfdEntries> {
             }
         }
 
+        // Process GeoTiff tags if present
+        // GeoTiff uses three tags together: directory, double params, and ASCII params
+        let geotiff_directory: Option<&[u8]> = tags
+            .iter()
+            .find(|(id, _, _, _)| *id == GEOTIFF_DIRECTORY_TAG)
+            .map(|(_, _, _, v)| v.as_ref());
+
+        let geotiff_double_params: Option<&[u8]> = tags
+            .iter()
+            .find(|(id, _, _, _)| *id == GEOTIFF_DOUBLE_PARAMS_TAG)
+            .map(|(_, _, _, v)| v.as_ref());
+
+        let geotiff_ascii_params: Option<&str> = tags
+            .iter()
+            .find(|(id, _, _, _)| *id == GEOTIFF_ASCII_PARAMS_TAG)
+            .and_then(|(_, _, _, v)| std::str::from_utf8(v.as_ref()).ok());
+
+        let model_transformation: Option<&[u8]> = tags
+            .iter()
+            .find(|(id, _, _, _)| *id == MODEL_TRANSFORMATION_TAG)
+            .map(|(_, _, _, v)| v.as_ref());
+
+        if let Some(directory) = geotiff_directory {
+            use crate::parsers::tiff::geotiff_parser::parse_geotiff_keys;
+
+            let is_little_endian = byte_order == ByteOrder::LittleEndian;
+            let geotiff_tags = parse_geotiff_keys(
+                directory,
+                geotiff_double_params,
+                geotiff_ascii_params,
+                is_little_endian,
+            );
+
+            // Convert GeoTiff tags to IfdEntries format
+            for (key, val) in geotiff_tags {
+                let synthetic_value = format!("{}: {}", key, val);
+                all_tags.push((
+                    GEOTIFF_DIRECTORY_TAG,
+                    7, // Type UNDEFINED
+                    synthetic_value.len() as u32,
+                    std::borrow::Cow::Owned(synthetic_value.into_bytes()),
+                ));
+            }
+        }
+
+        // Process ModelTransformation if present
+        if let Some(transform_data) = model_transformation {
+            use crate::parsers::tiff::geotiff_parser::parse_model_transformation;
+
+            let is_little_endian = byte_order == ByteOrder::LittleEndian;
+            if let Some(transform_value) =
+                parse_model_transformation(transform_data, is_little_endian)
+            {
+                let synthetic_value = format!("EXIF:ModelTransform: {}", transform_value);
+                all_tags.push((
+                    MODEL_TRANSFORMATION_TAG,
+                    7, // Type UNDEFINED
+                    synthetic_value.len() as u32,
+                    std::borrow::Cow::Owned(synthetic_value.into_bytes()),
+                ));
+            }
+        }
+
         // Add tags from main IFD to result
         all_tags.extend(tags);
 
@@ -825,6 +899,29 @@ mod tests {
         let result = parse_tiff_header(&reader);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_tiff_header_rw2_magic() {
+        // Panasonic RW2 uses magic number 0x55 (85) instead of 42
+        let mut data = vec![0u8; 8];
+        data[0] = 0x49;
+        data[1] = 0x49; // Little-endian
+        data[2] = 0x55; // Magic: 85 (0x55) - RW2 variant
+        data[3] = 0x00;
+        // First IFD offset: 8
+        data[4] = 0x08;
+        data[5] = 0x00;
+        data[6] = 0x00;
+        data[7] = 0x00;
+
+        let reader = TestReader::new(data);
+        let result = parse_tiff_header(&reader);
+
+        assert!(result.is_ok(), "RW2 magic (0x55) should be accepted");
+        let header = result.unwrap();
+        assert_eq!(header.byte_order, ByteOrder::LittleEndian);
+        assert_eq!(header.first_ifd_offset, 8);
     }
 
     #[test]

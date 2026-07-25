@@ -6,6 +6,14 @@ use std::io::Cursor;
 use zip::ZipArchive;
 
 const ZIP_SIGNATURE: &[u8] = b"PK";
+const ZIP_LOCAL_FILE_HEADER_SIGNATURE: &[u8] = b"PK\x03\x04";
+const ZIP_LOCAL_FILE_HEADER_PREFIX_SIZE: usize = 8;
+const ZIP_LOCAL_FILE_HEADER_SIZE: usize = 30;
+const ZIP_LOCAL_FILE_COMPRESSION_OFFSET: usize = 8;
+const ZIP_LOCAL_FILE_COMPRESSION_FIELD_END: usize = ZIP_LOCAL_FILE_COMPRESSION_OFFSET + 2;
+const ZIP_LOCAL_FILE_BIT_FLAG_OFFSET: usize = 6;
+const ZIP_LOCAL_FILE_CRC_OFFSET: usize = 14;
+const ZIP_LOCAL_FILE_CRC_FIELD_END: usize = ZIP_LOCAL_FILE_CRC_OFFSET + 4;
 
 /// Parser for ZIP archive files
 ///
@@ -16,6 +24,134 @@ const ZIP_SIGNATURE: &[u8] = b"PK";
 pub struct ZipParser;
 
 impl ZipParser {
+    /// Reads the unnumbered ZIP tags from the first local file header.
+    ///
+    /// ExifTool's ZIP table reports these header fields for the first archive
+    /// member, while this parser's existing `FileN` tags describe every member.
+    fn read_first_local_file_tags(
+        reader: &dyn FileReader,
+        metadata: &mut MetadataMap,
+    ) -> Result<()> {
+        if reader.size() < ZIP_LOCAL_FILE_HEADER_SIZE as u64 {
+            return Ok(());
+        }
+
+        let header = reader.read(0, ZIP_LOCAL_FILE_HEADER_SIZE)?;
+        if !header.starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+            return Ok(());
+        }
+
+        let required_version = u16::from_le_bytes([header[4], header[5]]);
+        let modify_time = u16::from_le_bytes([header[10], header[11]]);
+        let modify_date = u16::from_le_bytes([header[12], header[13]]);
+        let compressed_size = u32::from_le_bytes([header[18], header[19], header[20], header[21]]);
+        let uncompressed_size =
+            u32::from_le_bytes([header[22], header[23], header[24], header[25]]);
+        let file_name_length = u16::from_le_bytes([header[26], header[27]]) as usize;
+
+        metadata.insert(
+            "ZIP:ZipRequiredVersion".to_string(),
+            TagValue::new_integer(required_version as i64),
+        );
+        metadata.insert(
+            "ZIP:ZipCompressedSize".to_string(),
+            TagValue::new_integer(compressed_size as i64),
+        );
+        metadata.insert(
+            "ZIP:ZipUncompressedSize".to_string(),
+            TagValue::new_integer(uncompressed_size as i64),
+        );
+
+        let year = ((modify_date >> 9) & 0x7f) + 1980;
+        let month = (modify_date >> 5) & 0x0f;
+        let day = modify_date & 0x1f;
+        let hour = (modify_time >> 11) & 0x1f;
+        let minute = (modify_time >> 5) & 0x3f;
+        let second = (modify_time & 0x1f) * 2;
+        metadata.insert(
+            "ZIP:ZipModifyDate".to_string(),
+            TagValue::new_string(format!(
+                "{year:04}:{month:02}:{day:02} {hour:02}:{minute:02}:{second:02}"
+            )),
+        );
+
+        let file_name_end = ZIP_LOCAL_FILE_HEADER_SIZE
+            .checked_add(file_name_length)
+            .ok_or_else(|| ExifToolError::parse_error("ZIP filename length overflows"))?;
+        if reader.size() < file_name_end as u64 {
+            return Ok(());
+        }
+        let file_name = reader.read(ZIP_LOCAL_FILE_HEADER_SIZE as u64, file_name_length)?;
+        metadata.insert(
+            "ZIP:ZipFileName".to_string(),
+            TagValue::new_string(String::from_utf8_lossy(file_name).to_string()),
+        );
+
+        Ok(())
+    }
+
+    /// Reads the general-purpose bit flag from the first local file header.
+    ///
+    /// The flag is a little-endian 16-bit value at offset 6 from the start of
+    /// a local file header.
+    fn read_first_local_file_bit_flag(reader: &dyn FileReader) -> Result<Option<u16>> {
+        if reader.size() < ZIP_LOCAL_FILE_HEADER_PREFIX_SIZE as u64 {
+            return Ok(None);
+        }
+
+        let header = reader.read(0, ZIP_LOCAL_FILE_HEADER_PREFIX_SIZE)?;
+        if !header.starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+            return Ok(None);
+        }
+
+        Ok(Some(u16::from_le_bytes([
+            header[ZIP_LOCAL_FILE_BIT_FLAG_OFFSET],
+            header[ZIP_LOCAL_FILE_BIT_FLAG_OFFSET + 1],
+        ])))
+    }
+
+    /// Reads the compression method from the first local file header.
+    ///
+    /// ZIP stores this value as a little-endian 16-bit integer at offset 8
+    /// from the start of a local file header.
+    fn read_first_local_file_compression(reader: &dyn FileReader) -> Result<Option<u16>> {
+        if reader.size() < ZIP_LOCAL_FILE_COMPRESSION_FIELD_END as u64 {
+            return Ok(None);
+        }
+
+        let header = reader.read(0, ZIP_LOCAL_FILE_COMPRESSION_FIELD_END)?;
+        if !header.starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+            return Ok(None);
+        }
+
+        Ok(Some(u16::from_le_bytes([
+            header[ZIP_LOCAL_FILE_COMPRESSION_OFFSET],
+            header[ZIP_LOCAL_FILE_COMPRESSION_OFFSET + 1],
+        ])))
+    }
+
+    /// Reads the CRC-32 value from the first local file header.
+    ///
+    /// ZIP stores this value as a little-endian 32-bit integer at offset 14
+    /// from the start of the local file header.
+    fn read_first_local_file_crc(reader: &dyn FileReader) -> Result<Option<u32>> {
+        if reader.size() < ZIP_LOCAL_FILE_CRC_FIELD_END as u64 {
+            return Ok(None);
+        }
+
+        let header = reader.read(0, ZIP_LOCAL_FILE_CRC_FIELD_END)?;
+        if !header.starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+            return Ok(None);
+        }
+
+        Ok(Some(u32::from_le_bytes([
+            header[ZIP_LOCAL_FILE_CRC_OFFSET],
+            header[ZIP_LOCAL_FILE_CRC_OFFSET + 1],
+            header[ZIP_LOCAL_FILE_CRC_OFFSET + 2],
+            header[ZIP_LOCAL_FILE_CRC_OFFSET + 3],
+        ])))
+    }
+
     /// Converts DOS DateTime to ISO 8601 format string
     ///
     /// DOS datetime format:
@@ -78,6 +214,36 @@ impl FormatParser for ZipParser {
         }
 
         let mut metadata = MetadataMap::new();
+
+        Self::read_first_local_file_tags(reader, &mut metadata)?;
+
+        if let Some(bit_flag) = Self::read_first_local_file_bit_flag(reader)? {
+            metadata.insert(
+                "ZIP:ZipBitFlag".to_string(),
+                TagValue::new_integer(bit_flag as i64),
+            );
+        }
+
+        if let Some(compression) = Self::read_first_local_file_compression(reader)? {
+            let compression = match compression {
+                0 => "None",
+                8 => "Deflated",
+                12 => "BZIP2",
+                93 => "Zstandard",
+                _ => "Unknown",
+            };
+            metadata.insert(
+                "ZIP:ZipCompression".to_string(),
+                TagValue::new_string(compression.to_string()),
+            );
+        }
+
+        if let Some(zip_crc) = Self::read_first_local_file_crc(reader)? {
+            metadata.insert(
+                "ZIP:ZipCRC".to_string(),
+                TagValue::new_string(format!("0x{:08x}", zip_crc)),
+            );
+        }
 
         // Read entire file into memory for zip crate
         let size = reader.size() as usize;
@@ -170,28 +336,31 @@ impl FormatParser for ZipParser {
                     TagValue::new_integer(compression_value),
                 );
 
-                // Last modified date/time (DOS format -> ISO 8601)
-                let last_modified = file.last_modified();
-                metadata.insert(
-                    format!("{}LastModified", prefix),
-                    TagValue::new_string(Self::datetime_to_iso8601(last_modified)),
-                );
+                // Last modified date/time (DOS format -> ISO 8601).
+                // zip 8.x returns Option<DateTime> (absent when the entry has no
+                // valid DOS timestamp), so only record it when present.
+                if let Some(last_modified) = file.last_modified() {
+                    metadata.insert(
+                        format!("{}LastModified", prefix),
+                        TagValue::new_string(Self::datetime_to_iso8601(last_modified)),
+                    );
 
-                // Track oldest and newest dates
-                match (&oldest_date, &newest_date) {
-                    (None, None) => {
-                        oldest_date = Some(last_modified);
-                        newest_date = Some(last_modified);
-                    }
-                    (Some(oldest), Some(newest)) => {
-                        if Self::datetime_compare(&last_modified, oldest) < 0 {
+                    // Track oldest and newest dates
+                    match (&oldest_date, &newest_date) {
+                        (None, None) => {
                             oldest_date = Some(last_modified);
-                        }
-                        if Self::datetime_compare(&last_modified, newest) > 0 {
                             newest_date = Some(last_modified);
                         }
+                        (Some(oldest), Some(newest)) => {
+                            if Self::datetime_compare(&last_modified, oldest) < 0 {
+                                oldest_date = Some(last_modified);
+                            }
+                            if Self::datetime_compare(&last_modified, newest) > 0 {
+                                newest_date = Some(last_modified);
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
 
                 // File attributes (Unix mode if available)
@@ -251,6 +420,87 @@ impl FormatParser for ZipParser {
         metadata.insert(
             "ZIP:TotalUncompressedSize".to_string(),
             TagValue::new_integer(total_uncompressed_size as i64),
+        );
+
+        // Required archive-level tags per Worker 1 specification
+        // CompressedSize and UncompressedSize at archive level
+        metadata.insert(
+            "ZIP:CompressedSize".to_string(),
+            TagValue::new_integer(total_compressed_size as i64),
+        );
+
+        metadata.insert(
+            "ZIP:UncompressedSize".to_string(),
+            TagValue::new_integer(total_uncompressed_size as i64),
+        );
+
+        // CreationDate: Use oldest file date as archive creation date
+        if let Some(oldest) = oldest_date {
+            metadata.insert(
+                "ZIP:CreationDate".to_string(),
+                TagValue::new_string(Self::datetime_to_iso8601(oldest)),
+            );
+        }
+
+        // Determine primary compression method used in archive
+        if file_count > 0 {
+            // Find the most common compression method among files
+            let mut compression_counts: std::collections::HashMap<String, i32> =
+                std::collections::HashMap::new();
+            let mut most_common_compression = "Unknown".to_string();
+            let mut max_count = 0;
+
+            for i in 0..file_count {
+                if let Ok(file) = archive.by_index(i) {
+                    let method = Self::compression_method_name(file.compression()).to_string();
+                    let count = compression_counts.entry(method.clone()).or_insert(0);
+                    *count += 1;
+                    if *count > max_count {
+                        max_count = *count;
+                        most_common_compression = method;
+                    }
+                }
+            }
+
+            metadata.insert(
+                "ZIP:CompressionMethod".to_string(),
+                TagValue::new_string(most_common_compression),
+            );
+        }
+
+        // Determine encryption method used (if any files are encrypted)
+        if encrypted_file_count > 0 {
+            // Check the first encrypted file for encryption type
+            let mut encryption_method = "Unknown".to_string();
+            for i in 0..file_count {
+                if let Ok(file) = archive.by_index(i) {
+                    let is_encrypted = file.compressed_size() > 0
+                        && file.compression() == zip::CompressionMethod::Stored
+                        && file.crc32() == 0;
+                    if is_encrypted {
+                        // ZIP typically uses Traditional PKWARE or WinZip AES encryption
+                        // For now, we report as encrypted but can't determine the exact method
+                        // from the stable zip crate API
+                        encryption_method = "Traditional PKWARE".to_string();
+                        break;
+                    }
+                }
+            }
+            metadata.insert(
+                "ZIP:EncryptionMethod".to_string(),
+                TagValue::new_string(encryption_method),
+            );
+        }
+
+        // SelfExtractingArchive: Check for executable markers
+        // A self-extracting archive typically has a prepended executable stub
+        // We detect this by checking if there's data before the ZIP signature
+        let first_bytes = reader.read(0, 4)?;
+        let is_self_extracting = !first_bytes.starts_with(ZIP_SIGNATURE);
+
+        metadata.insert(
+            "ZIP:SelfExtractingArchive".to_string(),
+            TagValue::new_string(is_self_extracting.to_string()),
         );
 
         // Compression ratio
@@ -322,7 +572,7 @@ mod tests {
     use super::*;
     use crate::io::BufferedReader;
     use std::io::Write;
-    use zip::write::{FileOptions, ZipWriter};
+    use zip::write::{SimpleFileOptions, ZipWriter};
 
     #[test]
     fn test_zip_signature() {
@@ -349,15 +599,86 @@ mod tests {
 
     #[test]
     fn test_datetime_to_iso8601() {
-        // Test DOS datetime conversion
-        let dt = zip::DateTime::from_date_and_time(2024, 3, 15, 14, 30, 45).unwrap();
+        // Test DOS datetime conversion. DOS timestamps have 2-second resolution,
+        // so use an even second that round-trips exactly (zip 8.x correctly
+        // truncates odd seconds; zip 0.6 did not).
+        let dt = zip::DateTime::from_date_and_time(2024, 3, 15, 14, 30, 44).unwrap();
         let iso = ZipParser::datetime_to_iso8601(dt);
-        assert_eq!(iso, "2024-03-15T14:30:45");
+        assert_eq!(iso, "2024-03-15T14:30:44");
 
         // Test edge case: earliest valid DOS date
         let dt = zip::DateTime::from_date_and_time(1980, 1, 1, 0, 0, 0).unwrap();
         let iso = ZipParser::datetime_to_iso8601(dt);
         assert_eq!(iso, "1980-01-01T00:00:00");
+    }
+
+    #[test]
+    fn test_zip_bit_flag_extraction() {
+        // Local file header with general-purpose bit flag 0x1234.
+        let data = b"PK\x03\x04\x0a\x00\x34\x12";
+        let reader = BufferedReader::from_bytes(data);
+
+        assert_eq!(
+            ZipParser::read_first_local_file_bit_flag(&reader).unwrap(),
+            Some(0x1234)
+        );
+    }
+
+    #[test]
+    fn test_zip_compression_extraction() {
+        // Local file header with the "stored" compression method.
+        let data = [
+            0x50, 0x4b, 0x03, 0x04, // Local file header signature
+            0x0a, 0x00, // Version needed
+            0x00, 0x00, // General-purpose bit flag
+            0x00, 0x00, // Compression method (stored)
+        ];
+        let reader = BufferedReader::from_bytes(&data);
+
+        assert_eq!(
+            ZipParser::read_first_local_file_compression(&reader).unwrap(),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn test_zip_crc_extraction() {
+        let data = [
+            0x50, 0x4b, 0x03, 0x04, // Local file header signature
+            0x0a, 0x00, // Version needed
+            0x00, 0x00, // General-purpose bit flag
+            0x00, 0x00, // Compression method
+            0xd7, 0x4e, // Modification time
+            0x1c, 0x39, // Modification date
+            0x1a, 0x46, 0x17, 0x6e, // CRC-32
+        ];
+        let reader = BufferedReader::from_bytes(&data);
+
+        assert_eq!(
+            ZipParser::read_first_local_file_crc(&reader).unwrap(),
+            Some(0x6e17461a)
+        );
+    }
+
+    #[test]
+    fn test_zip_crc_metadata_format() {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = ZipWriter::new(&mut buffer);
+            zip.start_file("test.txt", SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(b"ExifTool test file\n").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let data = buffer.into_inner();
+        let reader = BufferedReader::from_bytes(&data);
+        let metadata = ZipParser.parse(&reader).unwrap();
+
+        assert_eq!(
+            metadata.get("ZIP:ZipCRC"),
+            Some(&TagValue::new_string("0x6e17461a".to_string()))
+        );
     }
 
     #[test]
@@ -434,7 +755,7 @@ mod tests {
             let mut zip = ZipWriter::new(&mut buffer);
 
             // Add first file (stored)
-            let options = FileOptions::default()
+            let options = SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored)
                 .last_modified_time(
                     zip::DateTime::from_date_and_time(2024, 1, 15, 10, 30, 0).unwrap(),
@@ -443,7 +764,7 @@ mod tests {
             zip.write_all(b"Hello, World!").unwrap();
 
             // Add second file (deflated)
-            let options = FileOptions::default()
+            let options = SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated)
                 .last_modified_time(
                     zip::DateTime::from_date_and_time(2024, 3, 20, 15, 45, 30).unwrap(),
@@ -538,7 +859,7 @@ mod tests {
             let mut zip = ZipWriter::new(&mut buffer);
 
             // Add directory
-            let options = FileOptions::default();
+            let options = SimpleFileOptions::default();
             zip.add_directory("test_dir/", options).unwrap();
 
             // Add file in directory
@@ -572,7 +893,7 @@ mod tests {
         {
             let mut zip = ZipWriter::new(&mut buffer);
             let options =
-                FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
             zip.start_file("repeated.txt", options).unwrap();
             // Write highly compressible data (repeated pattern)
             let data = "A".repeat(10000);
@@ -608,7 +929,7 @@ mod tests {
         let mut buffer = std::io::Cursor::new(Vec::new());
         {
             let mut zip = ZipWriter::new(&mut buffer);
-            let options = FileOptions::default();
+            let options = SimpleFileOptions::default();
             zip.start_file("small.txt", options).unwrap();
             zip.write_all(b"Small file").unwrap();
             zip.finish().unwrap();

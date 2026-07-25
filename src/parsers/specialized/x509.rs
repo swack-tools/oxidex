@@ -771,9 +771,17 @@ impl X509Parser {
                     // Subject public key (BIT STRING)
                     if offset < spki_end && der[offset] == ASN1_BIT_STRING {
                         offset += 1;
-                        if let Some(key_len) = Self::parse_asn1_length(der, &mut offset) {
-                            // Key size estimation (bits) - subtract 1 for unused bits indicator
-                            let key_bits = (key_len - 1) * 8;
+                        if let Some(key_len) = Self::parse_asn1_length(der, &mut offset)
+                            && let Some(key_end) = offset.checked_add(key_len)
+                            && key_len > 1
+                            && key_end <= spki_end
+                            && key_end <= der.len()
+                            && der[offset] <= 7
+                            && let Some(key_bits) = key_len
+                                .checked_sub(1)
+                                .and_then(|length| length.checked_mul(8))
+                                .and_then(|bits| bits.checked_sub(der[offset] as usize))
+                        {
                             metadata.insert(
                                 "X509:PublicKeySize".to_string(),
                                 TagValue::String(format!("{} bits (approx)", key_bits)),

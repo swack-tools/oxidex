@@ -893,36 +893,36 @@ fn test_jpeg_with_icc_profile() {
 
     // Check for expected ICC profile header fields
     assert!(
-        metadata.contains_key("Profile:ProfileVersion"),
-        "Should have Profile:ProfileVersion tag"
+        metadata.contains_key("ICC_Profile:ProfileVersion"),
+        "Should have ICC_Profile:ProfileVersion tag"
     );
     assert!(
-        metadata.contains_key("Profile:ProfileClass"),
-        "Should have Profile:ProfileClass tag"
+        metadata.contains_key("ICC_Profile:ProfileClass"),
+        "Should have ICC_Profile:ProfileClass tag"
     );
     assert!(
-        metadata.contains_key("Profile:ColorSpaceData"),
-        "Should have Profile:ColorSpaceData tag"
+        metadata.contains_key("ICC_Profile:ColorSpaceData"),
+        "Should have ICC_Profile:ColorSpaceData tag"
     );
     assert!(
-        metadata.contains_key("Profile:RenderingIntent"),
-        "Should have Profile:RenderingIntent tag"
+        metadata.contains_key("ICC_Profile:RenderingIntent"),
+        "Should have ICC_Profile:RenderingIntent tag"
     );
 
     // Verify specific values
-    let version = metadata.get("Profile:ProfileVersion").unwrap();
+    let version = metadata.get("ICC_Profile:ProfileVersion").unwrap();
     assert!(
         format!("{:?}", version).contains("2.1"),
         "Profile version should be 2.1.0"
     );
 
-    let profile_class = metadata.get("Profile:ProfileClass").unwrap();
+    let profile_class = metadata.get("ICC_Profile:ProfileClass").unwrap();
     assert!(
         format!("{:?}", profile_class).contains("Display Device"),
         "Profile class should be Display Device"
     );
 
-    let color_space = metadata.get("Profile:ColorSpaceData").unwrap();
+    let color_space = metadata.get("ICC_Profile:ColorSpaceData").unwrap();
     assert!(
         format!("{:?}", color_space).contains("RGB"),
         "Color space should be RGB"

@@ -36,7 +36,7 @@
 //! let data: &[u8] = &[/* APP6 segment data */];
 //! let metadata = parse_app6(data)?;
 //!
-//! if let Some(model) = metadata.get_string("APP6:Model") {
+//! if let Some(model) = metadata.get_string("GoPro:Model") {
 //!     println!("Camera model: {}", model);
 //! }
 //! ```
@@ -47,11 +47,12 @@ use crate::io::EndianReader;
 
 /// Parses APP6 segment data and extracts metadata.
 ///
-/// This function dispatches to format-specific parsers based on the segment identifier:
-/// - GPMF data (GoPro cameras) - starts with known GPMF FourCC codes
-/// - TDHD data (HP/Toshiba) - starts with "TDHD" identifier
-/// - NITF data - starts with "NITF" identifier
-/// - Other proprietary formats
+/// This function dispatches to format-specific parsers based on the segment
+/// identifier, using the same conditions as ExifTool's JPEG.pm APP6 table:
+/// - GoPro GPMF data - starts with "GoPro\0"
+/// - TDHD data (HP/Toshiba) - starts with "TDHD\x01\0\0\0"
+/// - NITF data - starts with "NITF\0"
+/// - Other formats extract nothing (matching ExifTool without -u)
 ///
 /// # Arguments
 ///
@@ -76,11 +77,9 @@ use crate::io::EndianReader;
 /// // Parse a GoPro GPMF segment
 /// let gpmf_data = &[/* GPMF data */];
 /// let metadata = parse_app6(gpmf_data)?;
-/// assert!(metadata.contains_key("APP6:Model"));
+/// assert!(metadata.contains_key("GoPro:Model"));
 /// ```
 pub fn parse_app6(data: &[u8]) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
-
     // Minimum APP6 segment should have at least a few bytes
     if data.len() < 4 {
         return Err(ExifToolError::parse_error(
@@ -88,64 +87,152 @@ pub fn parse_app6(data: &[u8]) -> Result<MetadataMap> {
         ));
     }
 
-    // Try to identify the format by checking for known identifiers
+    // Dispatch on the same identifier conditions ExifTool's actual READ path
+    // uses (ExifTool.pm's ProcessJPEG APP6 handling, not JPEG.pm's table
+    // Condition which is never consulted for reads):
+    // GoPro: /^GoPro\0/, HP TDHD: /^TDHD\x01\0\0\0/ with length > 12, NITF: /^NITF\0/.
 
-    // Check for GoPro GPMF format (no explicit identifier, starts with FourCC)
-    // Common GoPro GPMF root tags: DEVC (device), DVID (device ID), DVNM (device name)
-    if is_gpmf_format(data) {
-        return parse_gpmf(data);
+    if data.starts_with(b"GoPro\0") {
+        return parse_gpmf(&data[6..]);
     }
 
-    // Check for TDHD (HP/Toshiba stereo image metadata)
-    if data.len() >= 4 && &data[..4] == b"TDHD" {
+    // ExifTool also requires segment length > 12 for TDHD (ExifTool.pm:8146);
+    // an 8-byte bare identifier extracts nothing.
+    if data.starts_with(b"TDHD\x01\0\0\0") && data.len() > 12 {
         return parse_tdhd(data);
     }
 
-    // Check for NITF (National Imagery Transmission Format)
-    if data.len() >= 4 && &data[..4] == b"NITF" {
+    if data.starts_with(b"NITF\0") {
         return parse_nitf(data);
     }
 
-    // Unknown or unsupported APP6 format
-    // Store as raw binary data for debugging
-    metadata.insert("APP6:Unknown".to_string(), TagValue::Binary(data.to_vec()));
-
-    Ok(metadata)
+    // Unknown APP6 formats (EPPIM, DJI DTAT, Motorola MMIMETA, ...) extract
+    // nothing, matching ExifTool's default (no -u) behavior.
+    Ok(MetadataMap::new())
 }
 
-/// Checks if the data appears to be GoPro GPMF format.
+/// Maps GPMF FourCC codes to ExifTool tag names (GoPro.pm %GoPro::GPMF).
 ///
-/// GPMF data starts with known FourCC identifiers and follows a specific structure.
-/// This function performs heuristic checks to identify GPMF data.
-///
-/// # Arguments
-///
-/// * `data` - Raw segment data
-///
-/// # Returns
-///
-/// `true` if the data appears to be GPMF format, `false` otherwise
-fn is_gpmf_format(data: &[u8]) -> bool {
-    if data.len() < 8 {
-        return false;
-    }
+/// Entries ExifTool marks `Unknown => 1` (DVID, EMPT, TSMP, TYPE, STNM, UNIT,
+/// ...) are omitted so they stay hidden, matching default ExifTool output.
+/// Unmapped FourCCs are skipped entirely.
+fn gopro_tag_name(fourcc: &str) -> Option<&'static str> {
+    Some(match fourcc {
+        "AALP" => "AudioLevel",
+        "ABSC" => "AutoBoostScore",
+        "ALLD" => "AutoLowLightDuration",
+        "APTO" => "AudioProtuneOption",
+        "ARUW" => "AspectRatioUnwarped",
+        "ARWA" => "AspectRatioWarped",
+        "AUBT" => "AudioBlueTooth",
+        "AUDO" => "AudioSetting",
+        "AUPT" => "AutoProtune",
+        "BITR" => "BitrateSetting",
+        "CASN" => "CameraSerialNumber",
+        "CDAT" => "CreationDate",
+        "CDTM" => "CaptureDelayTimer",
+        "CLDP" => "ClassificationDataPresent",
+        "CORI" => "CameraOrientation",
+        "CPIN" => "ChapterNumber",
+        "CTRL" => "ControlLevel",
+        "DUST" => "DurationSetting",
+        "DVNM" => "DeviceName",
+        "DZMX" => "DigitalZoomAmount",
+        "DZOM" => "DigitalZoomOn",
+        "DZST" => "DigitalZoom",
+        "EISA" => "ElectronicImageStabilization",
+        "EISE" => "ElectronicStabilizationOn",
+        "EXPT" => "ExposureType",
+        "FACE" => "FaceDetected",
+        "FCNM" => "FaceNumbers",
+        "FMWR" => "FirmwareVersion",
+        "FWVS" => "OtherFirmware",
+        "GPSA" => "GPSAltitudeSystem",
+        "GRAV" => "GravityVector",
+        "HCTL" => "HorizonControl",
+        "HDRV" => "HDRVideo",
+        "HSGT" => "HindsightSettings",
+        "HUES" => "PredominantHue",
+        "IORI" => "ImageOrientation",
+        "ISOE" => "ISOSpeeds",
+        "LOGS" => "HealthLogs",
+        "MAGN" => "Magnetometer",
+        "MAPX" => "MappingXCoefficients",
+        "MAPY" => "MappingYCoefficients",
+        "MINF" => "Model",
+        "MMOD" => "MediaMode",
+        "MTRX" => "AccelerometerMatrix",
+        "MUID" => "MediaUID",
+        "MWET" => "MicrophoneWet",
+        "MXCF" => "MappingXMode",
+        "MYCF" => "MappingYMode",
+        "ORDP" => "OrientationDataPresent",
+        "OREN" => "AutoRotation",
+        "ORIN" => "InputOrientation",
+        "ORIO" => "OutputOrientation",
+        "PHDR" => "HDRSetting",
+        "PIMD" => "ProtuneISOMode",
+        "PIMN" => "AutoISOMin",
+        "PIMX" => "AutoISOMax",
+        "POLY" => "PolynomialCoefficients",
+        "PRES" => "PhotoResolution",
+        "PRJT" => "LensProjection",
+        "PRTN" => "Protune",
+        "PTCL" => "ColorMode",
+        "PTEV" => "ExposureCompensation",
+        "PTSH" => "Sharpness",
+        "PTWB" => "WhiteBalance",
+        "PWPR" => "PowerProfile",
+        "PYCF" => "PolynomialPower",
+        "RAMP" => "SpeedRampSetting",
+        "RATE" => "Rate",
+        "SCAP" => "ScheduleCapture",
+        "SCEN" => "SceneClassification",
+        "SCTM" => "ScheduleCaptureTime",
+        "SMTR" => "SpotMeter",
+        "SROT" => "SensorReadoutTime",
+        "TIMO" => "TimeOffset",
+        "TZON" => "TimeZone",
+        "UNIF" => "InputUniformity",
+        "VERS" => "MetadataVersion",
+        "VFOV" => "FieldOfView",
+        "VFPS" => "VideoFrameRate",
+        "VRES" => "VideoFrameSize",
+        "WBAL" => "ColorTemperatures",
+        "WNDM" => "WindProcessing",
+        "YAVG" => "LumaAverage",
+        "ZFOV" => "DiagonalFieldOfView",
+        "ZMPL" => "ZoomScaleNormalization",
+        _ => return None,
+    })
+}
 
-    // Check for common GPMF root FourCC identifiers
-    // DEVC = Device, DVID = Device ID, DVNM = Device Name
-    const GPMF_ROOT_TAGS: &[&[u8]] = &[
-        b"DEVC", // Device (most common root)
-        b"DVID", // Device ID
-        b"DVNM", // Device Name
-        b"STRM", // Stream
+/// Applies ExifTool print conversions for the GoPro tags that define them.
+fn gopro_print_conv(fourcc: &str, value: TagValue) -> TagValue {
+    // Tags using %noYes = ( N => 'No', Y => 'Yes' ) in GoPro.pm
+    const NO_YES_TAGS: &[&str] = &[
+        "AUBT", "AUPT", "CLDP", "DZOM", "EISE", "HDRV", "ORDP", "SCAP", "SMTR",
     ];
 
-    for tag in GPMF_ROOT_TAGS {
-        if &data[..4] == *tag {
-            return true;
-        }
-    }
-
-    false
+    let TagValue::String(s) = &value else {
+        return value;
+    };
+    let mapped = match (fourcc, s.as_str()) {
+        ("OREN", "U") => "Up",
+        ("OREN", "D") => "Down",
+        ("OREN", "A") => "Auto",
+        ("PRTN", "N") => "Off",
+        ("PRTN", "Y") => "On",
+        ("VFOV", "W") => "Wide",
+        ("VFOV", "S") => "Super View",
+        ("VFOV", "L") => "Linear",
+        // VERS: PrintConv => '$val =~ tr/ /./; $val' (e.g. "7 6 5" -> "7.6.5")
+        ("VERS", _) => return TagValue::String(s.replace(' ', ".")),
+        (f, "N") if NO_YES_TAGS.contains(&f) => "No",
+        (f, "Y") if NO_YES_TAGS.contains(&f) => "Yes",
+        _ => return value,
+    };
+    TagValue::String(mapped.to_string())
 }
 
 /// Parses GoPro GPMF (GoPro Metadata Format) data.
@@ -180,145 +267,139 @@ fn is_gpmf_format(data: &[u8]) -> bool {
 /// - CAMD: Camera metadata
 fn parse_gpmf(data: &[u8]) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
-    let mut offset = 0;
-
-    while offset + 8 <= data.len() {
-        // Parse GPMF record header
-        let fourcc = &data[offset..offset + 4];
-        let type_char = data[offset + 4] as char;
-        let size = data[offset + 5] as usize;
-
-        let reader = EndianReader::big_endian(&data[offset + 6..]);
-        let count = reader.u16_at(0).unwrap_or(0) as usize;
-
-        offset += 8;
-
-        // Calculate data size (size * count, padded to 4-byte boundary)
-        let data_size = size * count;
-        let padded_size = (data_size + 3) & !3; // Round up to multiple of 4
-
-        if offset + data_size > data.len() {
-            break; // Truncated data
-        }
-
-        let value_data = &data[offset..offset + data_size];
-
-        // Convert FourCC to string
-        let tag_name = std::str::from_utf8(fourcc).unwrap_or("????").to_string();
-
-        // Parse value based on type and tag
-        parse_gpmf_value(&mut metadata, &tag_name, type_char, size, count, value_data)?;
-
-        offset += padded_size;
-    }
-
-    // If no metadata was extracted, the format might not be GPMF
-    if metadata.is_empty() {
-        return Err(ExifToolError::parse_error(
-            "No GPMF metadata could be extracted from APP6 segment",
-        ));
-    }
-
+    parse_gpmf_records(data, &mut metadata, 0);
     Ok(metadata)
 }
 
-/// Parses a GPMF value and inserts it into the metadata map.
-///
-/// # Arguments
-///
-/// * `metadata` - Metadata map to populate
-/// * `tag_name` - FourCC tag name
-/// * `type_char` - GPMF type character
-/// * `size` - Size of each element in bytes
-/// * `count` - Number of elements
-/// * `data` - Raw value data
-fn parse_gpmf_value(
-    metadata: &mut MetadataMap,
-    tag_name: &str,
-    type_char: char,
-    size: usize,
-    count: usize,
-    data: &[u8],
-) -> Result<()> {
-    let tag_key = format!("APP6:{}", tag_name);
+/// Maximum nesting depth for GPMF container records (format 0). Guards
+/// against pathological/malicious streams driving unbounded recursion;
+/// containers nested beyond this depth are skipped rather than recursed
+/// into, but sibling records at the current level continue to be walked.
+const MAX_GPMF_DEPTH: u8 = 16;
 
-    match type_char {
-        'c' | 'C' => {
-            // String/character data
-            if let Ok(s) = std::str::from_utf8(data) {
-                metadata.insert(
-                    tag_key,
-                    TagValue::String(s.trim_end_matches('\0').to_string()),
-                );
-            }
+/// Walks GPMF TLV records, inserting known tags into the metadata map.
+///
+/// Mirrors ExifTool's ProcessGoPro: stops at the null tag ("\0\0\0\0") or at
+/// a FourCC containing characters outside [-_a-zA-Z0-9 ]; skips FourCCs
+/// without a known tag name; recurses into container records (format 0).
+fn parse_gpmf_records(data: &[u8], metadata: &mut MetadataMap, depth: u8) {
+    let mut offset = 0;
+
+    while offset + 8 <= data.len() {
+        let fourcc_bytes = &data[offset..offset + 4];
+        let format = data[offset + 4];
+        let size = data[offset + 5] as usize;
+        let reader = EndianReader::big_endian(&data[offset + 6..]);
+        let count = reader.u16_at(0).unwrap_or(0) as usize;
+        offset += 8;
+
+        // Stop at the null terminator record
+        if fourcc_bytes == [0, 0, 0, 0] {
+            break;
         }
-        's' | 'S' => {
-            // Signed/unsigned 16-bit integers
-            if count == 1 && size == 2 {
-                let reader = EndianReader::big_endian(data);
-                if type_char == 's' {
-                    if let Some(v) = reader.i16_at(0) {
-                        metadata.insert(tag_key, TagValue::Integer(v as i64));
-                    }
-                } else if let Some(v) = reader.u16_at(0) {
-                    metadata.insert(tag_key, TagValue::Integer(v as i64));
-                }
-            } else {
-                // Array of shorts - store as binary for now
-                metadata.insert(tag_key, TagValue::Binary(data.to_vec()));
-            }
+        // Stop on malformed FourCCs (ExifTool: 'Unrecognized GoPro record')
+        if !fourcc_bytes
+            .iter()
+            .all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b' ')
+        {
+            break;
         }
-        'l' | 'L' => {
-            // Signed/unsigned 32-bit integers
-            if count == 1 && size == 4 {
-                let reader = EndianReader::big_endian(data);
-                if type_char == 'l' {
-                    if let Some(v) = reader.i32_at(0) {
-                        metadata.insert(tag_key, TagValue::Integer(v as i64));
-                    }
-                } else if let Some(v) = reader.u32_at(0) {
-                    metadata.insert(tag_key, TagValue::Integer(v as i64));
-                }
-            } else {
-                metadata.insert(tag_key, TagValue::Binary(data.to_vec()));
-            }
+
+        let data_size = size * count;
+        if offset + data_size > data.len() {
+            break; // Truncated record (ExifTool: 'Truncated GoPro record')
         }
-        'f' | 'F' => {
-            // Float/double
-            if count == 1 {
-                let reader = EndianReader::big_endian(data);
-                if size == 4 {
-                    if let Some(v) = reader.f32_at(0) {
-                        metadata.insert(tag_key, TagValue::Float(v as f64));
-                    }
-                } else if size == 8
-                    && let Some(v) = reader.f64_at(0)
-                {
-                    metadata.insert(tag_key, TagValue::Float(v));
-                }
-            } else {
-                metadata.insert(tag_key, TagValue::Binary(data.to_vec()));
+        let value_data = &data[offset..offset + data_size];
+        offset += (data_size + 3) & !3; // data is padded to a 4-byte boundary
+
+        let fourcc = std::str::from_utf8(fourcc_bytes).unwrap_or_default();
+
+        // Containers (format 0, e.g. DEVC/STRM) nest further GPMF records.
+        // Beyond MAX_GPMF_DEPTH, skip recursing into the container but keep
+        // walking its siblings at the current level.
+        if format == 0 {
+            if depth < MAX_GPMF_DEPTH {
+                parse_gpmf_records(value_data, metadata, depth + 1);
             }
+            continue;
         }
-        '\0' => {
-            // Nested container - recursively parse if it's a known container type
-            if tag_name == "DEVC" || tag_name == "STRM" {
-                // Parse nested structure
-                let nested = parse_gpmf(data)?;
-                for (key, value) in nested.iter() {
-                    metadata.insert(key.clone(), value.clone());
-                }
-            } else {
-                metadata.insert(tag_key, TagValue::Binary(data.to_vec()));
-            }
-        }
-        _ => {
-            // Unknown type - store as binary
-            metadata.insert(tag_key, TagValue::Binary(data.to_vec()));
+
+        // Unknown FourCCs are extracted by ExifTool only with -u; skip them.
+        let Some(tag_name) = gopro_tag_name(fourcc) else {
+            continue;
+        };
+        if let Some(value) = decode_gpmf_value(format, size, count, value_data) {
+            metadata.insert(
+                format!("GoPro:{}", tag_name),
+                gopro_print_conv(fourcc, value),
+            );
         }
     }
+}
 
-    Ok(())
+/// Decodes a GPMF record payload into a TagValue.
+///
+/// Single numeric elements become Integer/Float; multi-element numerics are
+/// space-joined strings (ExifTool's ReadValue list convention); 'c' data is a
+/// NUL-trimmed string; unhandled formats are kept as Binary.
+fn decode_gpmf_value(format: u8, size: usize, count: usize, data: &[u8]) -> Option<TagValue> {
+    if data.is_empty() {
+        return None;
+    }
+    let reader = EndianReader::big_endian(data);
+
+    // Integer element reader for one element at byte offset `off`
+    let int_at = |off: usize| -> Option<i64> {
+        match format {
+            b'b' => reader.i8_at(off).map(|v| v as i64),
+            b'B' => reader.u8_at(off).map(|v| v as i64),
+            b's' => reader.i16_at(off).map(|v| v as i64),
+            b'S' => reader.u16_at(off).map(|v| v as i64),
+            b'l' => reader.i32_at(off).map(|v| v as i64),
+            b'L' => reader.u32_at(off).map(|v| v as i64),
+            b'j' => reader.i64_at(off),
+            b'J' => reader.u64_at(off).map(|v| v as i64),
+            _ => None,
+        }
+    };
+
+    match format {
+        b'c' | b'C' => std::str::from_utf8(data)
+            .ok()
+            .map(|s| TagValue::String(s.trim_end_matches('\0').to_string())),
+        b'b' | b'B' | b's' | b'S' | b'l' | b'L' | b'j' | b'J' => {
+            if count == 1 {
+                int_at(0).map(TagValue::Integer)
+            } else {
+                let values: Vec<String> = (0..count)
+                    .map_while(|i| int_at(i * size))
+                    .map(|v| v.to_string())
+                    .collect();
+                (!values.is_empty()).then(|| TagValue::String(values.join(" ")))
+            }
+        }
+        b'f' | b'd' => {
+            let float_at = |off: usize| -> Option<f64> {
+                if format == b'f' {
+                    reader.f32_at(off).map(|v| v as f64)
+                } else {
+                    reader.f64_at(off)
+                }
+            };
+            if count == 1 {
+                float_at(0).map(TagValue::Float)
+            } else {
+                let values: Vec<String> = (0..count)
+                    .map_while(|i| float_at(i * size))
+                    .map(|v| v.to_string())
+                    .collect();
+                (!values.is_empty()).then(|| TagValue::String(values.join(" ")))
+            }
+        }
+        // 'F' (FourCC), 'G' (UUID), 'U' (date), 'q'/'Q' (fixed-point), '?'
+        // (TYPE-defined structure) and anything else: keep raw bytes.
+        _ => Some(TagValue::Binary(data.to_vec())),
+    }
 }
 
 /// Parses TDHD (True Definition High Definition) metadata.
@@ -337,25 +418,12 @@ fn parse_gpmf_value(
 fn parse_tdhd(data: &[u8]) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
 
-    if data.len() < 8 {
-        return Err(ExifToolError::parse_error("TDHD segment too short"));
-    }
-
-    // Skip "TDHD" identifier
-    let reader = EndianReader::big_endian(&data[4..]);
-
-    // TDHD version (typically at offset 4-5)
-    if let Some(version) = reader.u16_at(0) {
-        metadata.insert(
-            "APP6:TDHDVersion".to_string(),
-            TagValue::Integer(version as i64),
-        );
-    }
-
-    // Basic TDHD support - most fields are proprietary
+    // Caller has verified the "TDHD\x01\0\0\0" identifier (8 bytes).
+    // Detailed field parsing (ExifTool HP.pm %HP::TDHD) is not yet ported;
+    // expose the raw payload for now.
     metadata.insert(
         "APP6:TDHDData".to_string(),
-        TagValue::Binary(data[4..].to_vec()),
+        TagValue::Binary(data[8..].to_vec()),
     );
 
     Ok(metadata)
@@ -377,15 +445,12 @@ fn parse_tdhd(data: &[u8]) -> Result<MetadataMap> {
 fn parse_nitf(data: &[u8]) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
 
-    if data.len() < 8 {
-        return Err(ExifToolError::parse_error("NITF segment too short"));
-    }
-
-    // Skip "NITF" identifier
-    // NITF has a complex header structure - implement basic support
+    // Caller has verified the "NITF\0" identifier (5 bytes).
+    // Detailed field parsing (ExifTool JPEG.pm %JPEG::NITF) is not yet
+    // ported; expose the raw payload for now.
     metadata.insert(
         "APP6:NITFData".to_string(),
-        TagValue::Binary(data[4..].to_vec()),
+        TagValue::Binary(data[5..].to_vec()),
     );
 
     Ok(metadata)
@@ -395,121 +460,191 @@ fn parse_nitf(data: &[u8]) -> Result<MetadataMap> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_is_gpmf_format() {
-        // Valid GPMF data starting with DEVC
-        let valid_gpmf = b"DEVC\x00\x04\x00\x01test";
-        assert!(is_gpmf_format(valid_gpmf));
+    /// Builds one GPMF TLV record: FourCC + format + element size + count +
+    /// data padded to a 4-byte boundary.
+    fn gpmf_record(fourcc: &[u8; 4], fmt: u8, size: u8, count: u16, data: &[u8]) -> Vec<u8> {
+        let mut rec = fourcc.to_vec();
+        rec.push(fmt);
+        rec.push(size);
+        rec.extend_from_slice(&count.to_be_bytes());
+        rec.extend_from_slice(data);
+        while rec.len() % 4 != 0 {
+            rec.push(0);
+        }
+        rec
+    }
 
-        // Valid GPMF data starting with DVID
-        let valid_dvid = b"DVID\x00\x04\x00\x01test";
-        assert!(is_gpmf_format(valid_dvid));
-
-        // Invalid data
-        let invalid = b"TEST\x00\x04\x00\x01";
-        assert!(!is_gpmf_format(invalid));
-
-        // Too short
-        let too_short = b"DEV";
-        assert!(!is_gpmf_format(too_short));
+    /// APP6 payload as written by GoPro cameras: "GoPro\0" + GPMF records.
+    fn gopro_payload(records: &[Vec<u8>]) -> Vec<u8> {
+        let mut p = b"GoPro\0".to_vec();
+        for rec in records {
+            p.extend_from_slice(rec);
+        }
+        p
     }
 
     #[test]
-    fn test_parse_gpmf_string() {
-        // DVNM (Device Name) with string data
-        // FourCC: DVNM, Type: c (string), Size: 1, Count: 11, Data: "HERO8 Black"
-        let mut data = Vec::new();
-        data.extend_from_slice(b"DVNM"); // FourCC
-        data.push(b'c'); // Type: string
-        data.push(1); // Size: 1 byte per char
-        data.extend_from_slice(&11u16.to_be_bytes()); // Count: 11 chars
-        data.extend_from_slice(b"HERO8 Black"); // Data
-        data.push(0); // Padding to 4-byte boundary (11 + 1 = 12, already aligned)
-
-        let result = parse_gpmf(&data);
-        assert!(result.is_ok());
-
-        let metadata = result.unwrap();
-        assert_eq!(metadata.get_string("APP6:DVNM"), Some("HERO8 Black"));
+    fn test_parse_app6_gopro_maps_fourccs_to_exiftool_names() {
+        let payload = gopro_payload(&[
+            gpmf_record(b"MINF", b'c', 1, 11, b"HERO8 Black"),
+            gpmf_record(b"CASN", b'c', 1, 14, b"C3221324545448"),
+            gpmf_record(b"FMWR", b'c', 1, 15, b"HD8.01.01.60.00"),
+            gpmf_record(b"RATE", b'c', 1, 6, b"4_1SEC"),
+        ]);
+        let metadata = parse_app6(&payload).unwrap();
+        // ExifTool 13.55: -G1 group GoPro, tag names from GoPro.pm GPMF table
+        assert_eq!(metadata.get_string("GoPro:Model"), Some("HERO8 Black"));
+        assert_eq!(
+            metadata.get_string("GoPro:CameraSerialNumber"),
+            Some("C3221324545448")
+        );
+        assert_eq!(
+            metadata.get_string("GoPro:FirmwareVersion"),
+            Some("HD8.01.01.60.00")
+        );
+        assert_eq!(metadata.get_string("GoPro:Rate"), Some("4_1SEC"));
     }
 
     #[test]
-    fn test_parse_gpmf_integer() {
-        // Simple integer tag
-        // FourCC: TEST, Type: L (u32), Size: 4, Count: 1, Data: 12345
-        let mut data = Vec::new();
-        data.extend_from_slice(b"TEST"); // FourCC
-        data.push(b'L'); // Type: unsigned long
-        data.push(4); // Size: 4 bytes
-        data.extend_from_slice(&1u16.to_be_bytes()); // Count: 1
-        data.extend_from_slice(&12345u32.to_be_bytes()); // Data
-
-        let result = parse_gpmf(&data);
-        assert!(result.is_ok());
-
-        let metadata = result.unwrap();
-        assert_eq!(metadata.get_integer("APP6:TEST"), Some(12345));
+    fn test_parse_app6_gopro_print_conversions() {
+        let payload = gopro_payload(&[
+            gpmf_record(b"OREN", b'c', 1, 1, b"U"),
+            gpmf_record(b"PRTN", b'c', 1, 1, b"N"),
+            gpmf_record(b"VERS", b'B', 1, 3, &[7, 6, 5]),
+        ]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(metadata.get_string("GoPro:AutoRotation"), Some("Up"));
+        assert_eq!(metadata.get_string("GoPro:Protune"), Some("Off"));
+        assert_eq!(metadata.get_string("GoPro:MetadataVersion"), Some("7.6.5"));
     }
 
     #[test]
-    fn test_parse_tdhd() {
-        let mut data = Vec::new();
-        data.extend_from_slice(b"TDHD"); // Identifier
-        data.extend_from_slice(&0x0100u16.to_be_bytes()); // Version 1.0
-        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Additional data
-
-        let result = parse_tdhd(&data);
-        assert!(result.is_ok());
-
-        let metadata = result.unwrap();
-        assert_eq!(metadata.get_integer("APP6:TDHDVersion"), Some(256));
+    fn test_parse_app6_gopro_numeric_values() {
+        let payload = gopro_payload(&[
+            gpmf_record(b"PIMX", b'L', 4, 1, &1600u32.to_be_bytes()),
+            gpmf_record(b"PIMN", b'L', 4, 1, &100u32.to_be_bytes()),
+        ]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(metadata.get_integer("GoPro:AutoISOMax"), Some(1600));
+        assert_eq!(metadata.get_integer("GoPro:AutoISOMin"), Some(100));
     }
 
     #[test]
-    fn test_parse_nitf() {
-        let mut data = Vec::new();
-        data.extend_from_slice(b"NITF"); // Identifier
-        data.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]); // Sample data
+    fn test_parse_app6_gopro_unknown_fourcc_skipped() {
+        // ExifTool extracts unknown GPMF tags only with the -u option;
+        // known tags around it still parse.
+        let payload = gopro_payload(&[
+            gpmf_record(b"XXXX", b'c', 1, 4, b"junk"),
+            gpmf_record(b"RATE", b'c', 1, 6, b"4_1SEC"),
+        ]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert!(metadata.get("GoPro:XXXX").is_none());
+        assert_eq!(metadata.get_string("GoPro:Rate"), Some("4_1SEC"));
+    }
 
-        let result = parse_nitf(&data);
-        assert!(result.is_ok());
+    #[test]
+    fn test_parse_app6_gopro_container_recursion() {
+        // DEVC (format 0) nests further GPMF records
+        let inner = gpmf_record(b"DVNM", b'c', 1, 11, b"HERO8 Black");
+        let payload = gopro_payload(&[gpmf_record(b"DEVC", 0, 1, inner.len() as u16, &inner)]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(metadata.get_string("GoPro:DeviceName"), Some("HERO8 Black"));
+    }
 
-        let metadata = result.unwrap();
+    #[test]
+    fn test_parse_app6_gopro_stops_at_null_tag() {
+        let mut records = vec![gpmf_record(b"RATE", b'c', 1, 6, b"4_1SEC")];
+        records.push(gpmf_record(&[0, 0, 0, 0], 0, 0, 0, &[]));
+        records.push(gpmf_record(b"CASN", b'c', 1, 4, b"1234"));
+        let payload = gopro_payload(&records);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(metadata.get_string("GoPro:Rate"), Some("4_1SEC"));
+        // Records after the null terminator are not parsed (ExifTool behavior)
+        assert!(metadata.get("GoPro:CameraSerialNumber").is_none());
+    }
+
+    /// Wraps `inner` in `levels` nested DEVC container records (format 0).
+    fn nest_gpmf(levels: usize, inner: Vec<u8>) -> Vec<u8> {
+        let mut cur = inner;
+        for _ in 0..levels {
+            cur = gpmf_record(b"DEVC", 0, 1, cur.len() as u16, &cur);
+        }
+        cur
+    }
+
+    #[test]
+    fn test_parse_app6_gpmf_recursion_depth_capped() {
+        let rate = gpmf_record(b"RATE", b'c', 1, 6, b"4_1SEC");
+
+        // RATE nested 40 DEVC containers deep, well beyond the recursion
+        // cap (16) — parsing must complete (no stack overflow) and the
+        // innermost record must NOT be extracted since it's unreachable.
+        let deep = nest_gpmf(40, rate.clone());
+        let deep_payload = gopro_payload(&[deep]);
+        let deep_metadata = parse_app6(&deep_payload).unwrap();
+        assert_eq!(deep_metadata.get_string("GoPro:Rate"), None);
+
+        // Shallow control: RATE nested only 2 levels deep, well within the
+        // cap — must still be extracted normally.
+        let shallow = nest_gpmf(2, rate);
+        let shallow_payload = gopro_payload(&[shallow]);
+        let shallow_metadata = parse_app6(&shallow_payload).unwrap();
+        assert_eq!(shallow_metadata.get_string("GoPro:Rate"), Some("4_1SEC"));
+    }
+
+    #[test]
+    fn test_parse_app6_nitf_requires_nitf_identifier() {
+        // ExifTool's actual READ dispatch (ExifTool.pm:8140) matches
+        // `/^NITF\0/` with DirStart=5; JPEG.pm's table Condition ("NTIF\0")
+        // never governs reads. Verified empirically against exiftool 13.55:
+        // a "NITF\0" APP6 payload yields NITF:* tags; a "NTIF\0" payload
+        // yields only an "Unknown APP6 'NTIF' segment" warning, no tags.
+        let mut nitf = b"NITF\0".to_vec();
+        nitf.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
+        let metadata = parse_app6(&nitf).unwrap();
         assert!(metadata.contains_key("APP6:NITFData"));
+
+        // "NTIF\0" must NOT match the real dispatch condition
+        let mut ntif = b"NTIF\0".to_vec();
+        ntif.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
+        let metadata = parse_app6(&ntif).unwrap();
+        assert!(metadata.is_empty());
     }
 
     #[test]
-    fn test_parse_app6_unknown() {
-        // Unknown format
+    fn test_parse_app6_tdhd_requires_version_bytes_and_length_over_12() {
+        // ExifTool's gate is "TDHD\x01\0\0\0" AND segment length > 12
+        // (ExifTool.pm:8146: `/^TDHD\x01\0\0\0/ and $length > 12`).
+        let mut tdhd = b"TDHD\x01\0\0\0".to_vec(); // 8-byte identifier
+        tdhd.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE]); // 13 bytes total, > 12
+        let metadata = parse_app6(&tdhd).unwrap();
+        assert!(metadata.contains_key("APP6:TDHDData"));
+
+        // Bare "TDHD" without the version bytes must NOT match
+        let bare = b"TDHDxxxx".to_vec();
+        let metadata = parse_app6(&bare).unwrap();
+        assert!(metadata.is_empty());
+
+        // Exactly 12 bytes (identifier + 4 more) fails the "length > 12" gate
+        let mut exactly_12 = b"TDHD\x01\0\0\0".to_vec();
+        exactly_12.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]); // 12 bytes total
+        let metadata = parse_app6(&exactly_12).unwrap();
+        assert!(metadata.is_empty());
+    }
+
+    #[test]
+    fn test_parse_app6_unknown_format_yields_no_tags() {
+        // ExifTool ignores unrecognized APP6 payloads (without -u); no
+        // binary-blob tag is emitted.
         let data = b"UNKN\x00\x00\x00\x00";
-
-        let result = parse_app6(data);
-        assert!(result.is_ok());
-
-        let metadata = result.unwrap();
-        assert!(metadata.contains_key("APP6:Unknown"));
+        let metadata = parse_app6(data).unwrap();
+        assert!(metadata.is_empty());
     }
 
     #[test]
     fn test_parse_app6_too_short() {
         let data = b"AB";
-
         let result = parse_app6(data);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_app6_dispatches_to_gpmf() {
-        // Create a minimal GPMF segment
-        let mut data = Vec::new();
-        data.extend_from_slice(b"DEVC"); // Root container
-        data.push(0); // Type: container
-        data.push(0); // Size: 0 (container)
-        data.extend_from_slice(&0u16.to_be_bytes()); // Count: 0
-
-        let result = parse_app6(&data);
-        // Should attempt GPMF parsing (may fail due to empty container)
-        // But should not return unknown format error
-        assert!(result.is_ok() || matches!(result, Err(ExifToolError::ParseError { .. })));
     }
 }

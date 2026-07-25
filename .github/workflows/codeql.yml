@@ -1,0 +1,40 @@
+name: CodeQL
+
+# Rust (the project's primary language) has no CodeQL query support, so this
+# workflow only analyzes the Python tooling under scripts/ and bindings/python/.
+# See CLAUDE.md: OxiDex is a Rust implementation of ExifTool with a secondary
+# Python surface (build/analysis scripts + FFI bindings).
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'scripts/**.py'
+      - 'bindings/python/**.py'
+      - '.github/workflows/codeql.yml'
+  pull_request:
+    branches: ['**']
+    paths:
+      - 'scripts/**.py'
+      - 'bindings/python/**.py'
+      - '.github/workflows/codeql.yml'
+  schedule:
+    - cron: '17 3 * * 1'
+
+jobs:
+  analyze:
+    name: Analyze (python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: github/codeql-action/init@21eb7f7842f33eafc83782b56fff2a2c43e9696f # v4.37.1
+        with:
+          languages: python
+          source-root: .
+      - uses: github/codeql-action/analyze@21eb7f7842f33eafc83782b56fff2a2c43e9696f # v4.37.1
+        with:
+          category: '/language:python'

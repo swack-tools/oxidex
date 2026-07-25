@@ -4,7 +4,7 @@ use oxidex::core::{FormatParser, TagValue};
 use oxidex::io::BufferedReader;
 use oxidex::parsers::archive::ZipParser;
 use std::io::Write;
-use zip::write::{FileOptions, ZipWriter};
+use zip::write::{SimpleFileOptions, ZipWriter};
 
 #[test]
 fn test_zip_invalid_signature() {
@@ -35,7 +35,7 @@ fn test_zip_forensic_metadata_extraction() {
         zip.set_comment("Evidence archive created 2024-03-15");
 
         // Document file
-        let options = FileOptions::default()
+        let options = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .last_modified_time(zip::DateTime::from_date_and_time(2024, 1, 10, 9, 15, 0).unwrap());
         zip.start_file("documents/report.txt", options).unwrap();
@@ -43,7 +43,7 @@ fn test_zip_forensic_metadata_extraction() {
         zip.write_all(&content).unwrap();
 
         // Image file (stored)
-        let options = FileOptions::default()
+        let options = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
             .last_modified_time(
                 zip::DateTime::from_date_and_time(2024, 2, 15, 14, 30, 45).unwrap(),
@@ -52,7 +52,7 @@ fn test_zip_forensic_metadata_extraction() {
         zip.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap(); // JPEG header
 
         // Config file
-        let options = FileOptions::default()
+        let options = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .last_modified_time(zip::DateTime::from_date_and_time(2024, 3, 1, 16, 45, 30).unwrap());
         zip.start_file("config.ini", options).unwrap();
@@ -161,7 +161,7 @@ fn test_zip_crc32_format() {
     let mut buffer = std::io::Cursor::new(Vec::new());
     {
         let mut zip = ZipWriter::new(&mut buffer);
-        let options = FileOptions::default();
+        let options = SimpleFileOptions::default();
         zip.start_file("test.txt", options).unwrap();
         zip.write_all(b"Test content").unwrap();
         zip.finish().unwrap();
@@ -188,7 +188,7 @@ fn test_zip_unix_mode_extraction() {
     let mut buffer = std::io::Cursor::new(Vec::new());
     {
         let mut zip = ZipWriter::new(&mut buffer);
-        let options = FileOptions::default();
+        let options = SimpleFileOptions::default();
         zip.start_file("file.txt", options).unwrap();
         zip.write_all(b"content").unwrap();
         zip.finish().unwrap();

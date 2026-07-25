@@ -134,11 +134,13 @@ pub(crate) fn parse_riff_chunks(
                 }
             }
             b"LIST" => {
-                // Parse LIST chunk (may contain INFO)
+                // Parse LIST chunk (may contain INFO or exif)
                 if chunk_size >= 4 {
                     let list_type = reader.read(offset, 4)?;
                     if &list_type == b"INFO" {
                         parse_info_chunk(reader, offset + 4, offset + chunk_size, metadata)?;
+                    } else if &list_type == b"exif" {
+                        parse_exif_chunk(reader, offset + 4, offset + chunk_size, metadata)?;
                     }
                 }
             }
@@ -157,6 +159,25 @@ pub(crate) fn parse_riff_chunks(
     Ok(())
 }
 
+/// Decode audio format code to human-readable encoding name
+fn decode_audio_format(format: u16) -> &'static str {
+    match format {
+        0x0001 => "Microsoft PCM",
+        0x0002 => "Microsoft ADPCM",
+        0x0003 => "IEEE Float",
+        0x0006 => "ITU G.711 a-law",
+        0x0007 => "ITU G.711 mu-law",
+        0x0011 => "Intel DVI/IMA ADPCM",
+        0x0016 => "ITU G.723 ADPCM (Yamaha)",
+        0x0031 => "GSM 6.10",
+        0x0040 => "ITU G.721 ADPCM",
+        0x0055 => "MPEG",
+        0x0069 => "MPEG Layer 3",
+        0xFFFE => "Extensible",
+        _ => "Unknown",
+    }
+}
+
 /// Parse fmt chunk (format information)
 fn parse_fmt_chunk(reader: &dyn FileReader, offset: u64, metadata: &mut MetadataMap) -> Result<()> {
     let fmt_data = reader.read(offset, 16)?;
@@ -165,11 +186,13 @@ fn parse_fmt_chunk(reader: &dyn FileReader, offset: u64, metadata: &mut Metadata
     let audio_format = fmt_reader.u16_at(0).unwrap_or(0);
     let num_channels = fmt_reader.u16_at(2).unwrap_or(0);
     let sample_rate = fmt_reader.u32_at(4).unwrap_or(0);
+    let avg_bytes_per_sec = fmt_reader.u32_at(8).unwrap_or(0);
     let bits_per_sample = fmt_reader.u16_at(14).unwrap_or(0);
 
+    // Encoding - human-readable format name
     metadata.insert(
-        "RIFF:AudioFormat".to_string(),
-        TagValue::new_integer(audio_format as i64),
+        "RIFF:Encoding".to_string(),
+        TagValue::new_string(decode_audio_format(audio_format).to_string()),
     );
     metadata.insert(
         "RIFF:NumChannels".to_string(),
@@ -180,6 +203,10 @@ fn parse_fmt_chunk(reader: &dyn FileReader, offset: u64, metadata: &mut Metadata
         TagValue::new_integer(sample_rate as i64),
     );
     metadata.insert(
+        "RIFF:AvgBytesPerSec".to_string(),
+        TagValue::new_integer(avg_bytes_per_sec as i64),
+    );
+    metadata.insert(
         "RIFF:BitsPerSample".to_string(),
         TagValue::new_integer(bits_per_sample as i64),
     );
@@ -188,7 +215,7 @@ fn parse_fmt_chunk(reader: &dyn FileReader, offset: u64, metadata: &mut Metadata
 }
 
 /// Parse INFO chunk (metadata tags)
-fn parse_info_chunk(
+pub(crate) fn parse_info_chunk(
     reader: &dyn FileReader,
     start_offset: u64,
     end_offset: u64,
@@ -294,6 +321,86 @@ fn parse_info_chunk(
                 tag_name.to_string(),
                 TagValue::new_string(tag_value.to_string()),
             );
+        }
+
+        // Move to next tag (align to even byte boundary)
+        offset += tag_size as u64;
+        if tag_size % 2 == 1 {
+            offset += 1;
+        }
+    }
+
+    Ok(())
+}
+
+/// Parse EXIF chunk (EXIF 2.3 metadata for WAV audio files)
+///
+/// The LIST exif chunk contains EXIF tags with 4-byte IDs:
+/// - ever: ExifVersion
+/// - ecor: Make
+/// - emdl: Model
+/// - emnt: MakerNotes
+/// - erel: RelatedImageFile
+/// - etim: TimeCreated
+fn parse_exif_chunk(
+    reader: &dyn FileReader,
+    start_offset: u64,
+    end_offset: u64,
+    metadata: &mut MetadataMap,
+) -> Result<()> {
+    let mut offset = start_offset;
+
+    while offset + 8 < end_offset {
+        // Read tag header (4 byte ID + 4 byte size)
+        let tag_header = reader.read(offset, 8)?;
+        let header_reader = EndianReader::little_endian(tag_header);
+
+        let tag_id = &tag_header[0..4];
+        let tag_size = header_reader.u32_at(4).unwrap_or(0) as usize;
+
+        offset += 8;
+
+        if offset + tag_size as u64 > end_offset {
+            break;
+        }
+
+        // Read tag value
+        let tag_value_bytes = reader.read(offset, tag_size)?;
+
+        // Map EXIF tag IDs to readable names (EXIF 2.3 for WAV)
+        let tag_name = match tag_id {
+            b"ever" => "RIFF:ExifVersion",
+            b"ecor" => "RIFF:Make",
+            b"emdl" => "RIFF:Model",
+            b"emnt" => "RIFF:MakerNotes",
+            b"erel" => "RIFF:RelatedImageFile",
+            b"etim" => "RIFF:TimeCreated",
+            _ => {
+                // Unknown EXIF tag - skip
+                offset += tag_size as u64;
+                if tag_size % 2 == 1 {
+                    offset += 1;
+                }
+                continue;
+            }
+        };
+
+        // Handle different tag types
+        if tag_id == b"emnt" {
+            // MakerNotes is binary data - store as binary indicator (match ExifTool format)
+            let binary_msg = format!("(Binary data {} bytes, use -b option to extract)", tag_size);
+            metadata.insert(tag_name.to_string(), TagValue::new_string(binary_msg));
+        } else {
+            // Other tags are ASCII strings (null-terminated)
+            let (tag_value, _, _) = WINDOWS_1252.decode(tag_value_bytes);
+            let tag_value = tag_value.trim_end_matches('\0').trim();
+
+            if !tag_value.is_empty() {
+                metadata.insert(
+                    tag_name.to_string(),
+                    TagValue::new_string(tag_value.to_string()),
+                );
+            }
         }
 
         // Move to next tag (align to even byte boundary)

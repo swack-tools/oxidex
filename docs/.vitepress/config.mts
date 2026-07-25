@@ -77,6 +77,8 @@ export default defineConfig({
           collapsed: true,
           items: [
             { text: 'Overview', link: '/reference/comparison/' },
+            { text: 'JPEG Tag Support', link: '/reference/jpeg-tag-support' },
+            { text: 'JPEG Tag Matrix', link: '/reference/jpeg-tag-matrix' },
             ...getComparisonFormats()
           ]
         },

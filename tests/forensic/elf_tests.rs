@@ -176,7 +176,7 @@ fn test_elf64_little_endian_x86_64() {
         Some(&TagValue::String("ELF".to_string()))
     );
     assert_eq!(
-        metadata.get("ELF:Class"),
+        metadata.get("EXE:Class"),
         Some(&TagValue::String("64-bit".to_string()))
     );
 }
@@ -197,7 +197,7 @@ fn test_elf32_little_endian_x86() {
         Some(&TagValue::String("ELF".to_string()))
     );
     assert_eq!(
-        metadata.get("ELF:Class"),
+        metadata.get("EXE:Class"),
         Some(&TagValue::String("32-bit".to_string()))
     );
 }
@@ -218,7 +218,7 @@ fn test_elf64_big_endian_arm() {
         Some(&TagValue::String("ELF".to_string()))
     );
     assert_eq!(
-        metadata.get("ELF:Class"),
+        metadata.get("EXE:Class"),
         Some(&TagValue::String("64-bit".to_string()))
     );
 }
@@ -240,7 +240,7 @@ fn test_elf32_big_endian_mips() {
         Some(&TagValue::String("ELF".to_string()))
     );
     assert_eq!(
-        metadata.get("ELF:Class"),
+        metadata.get("EXE:Class"),
         Some(&TagValue::String("32-bit".to_string()))
     );
 }
@@ -264,7 +264,7 @@ fn test_elf64_shared_object_aarch64() {
         Some(&TagValue::String("ELF".to_string()))
     );
     assert_eq!(
-        metadata.get("ELF:Class"),
+        metadata.get("EXE:Class"),
         Some(&TagValue::String("64-bit".to_string()))
     );
 }
@@ -285,7 +285,7 @@ fn test_elf32_relocatable_arm() {
         Some(&TagValue::String("ELF".to_string()))
     );
     assert_eq!(
-        metadata.get("ELF:Class"),
+        metadata.get("EXE:Class"),
         Some(&TagValue::String("32-bit".to_string()))
     );
 }
@@ -306,7 +306,7 @@ fn test_elf64_core_dump() {
         Some(&TagValue::String("ELF".to_string()))
     );
     assert_eq!(
-        metadata.get("ELF:Class"),
+        metadata.get("EXE:Class"),
         Some(&TagValue::String("64-bit".to_string()))
     );
 }
@@ -327,7 +327,7 @@ fn test_elf64_riscv() {
         Some(&TagValue::String("ELF".to_string()))
     );
     assert_eq!(
-        metadata.get("ELF:Class"),
+        metadata.get("EXE:Class"),
         Some(&TagValue::String("64-bit".to_string()))
     );
 }

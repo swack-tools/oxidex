@@ -76,6 +76,8 @@ pub struct Atom<'a> {
     pub atom_type: FourCC,
     /// Atom data (excluding size and type header)
     pub data: &'a [u8],
+    /// Header size (8 for normal atoms, 16 for extended size atoms)
+    pub header_size: u8,
 }
 
 impl<'a> Atom<'a> {
@@ -122,16 +124,16 @@ fn parse_atom(input: &[u8]) -> IResult<&[u8], Atom<'_>> {
         map_opt(take(0usize), |_: &[u8]| FourCC::from_bytes(type_bytes)).parse(input)?;
 
     // Handle extended size (size == 1)
-    let (input, actual_size) = if size == 1 {
+    let (input, actual_size, header_size) = if size == 1 {
         let (input, extended_size) = be_u64(input)?;
         // Extended size includes the 16-byte header (4 + 4 + 8)
-        (input, extended_size.saturating_sub(16) as usize)
+        (input, extended_size.saturating_sub(16) as usize, 16u8)
     } else if size == 0 {
         // Size 0 means atom extends to end of file
-        (input, input.len())
+        (input, input.len(), 8u8)
     } else {
         // Normal size includes the 8-byte header (4 + 4)
-        (input, (size as usize).saturating_sub(8))
+        (input, (size as usize).saturating_sub(8), 8u8)
     };
 
     // Take the atom data
@@ -142,6 +144,7 @@ fn parse_atom(input: &[u8]) -> IResult<&[u8], Atom<'_>> {
         Atom {
             atom_type: atom_type.1,
             data,
+            header_size,
         },
     ))
 }
@@ -211,6 +214,7 @@ mod tests {
         assert!(remaining.is_empty());
         assert_eq!(atom.atom_type.as_str(), "test");
         assert_eq!(atom.data, b"datamore");
+        assert_eq!(atom.header_size, 8);
     }
 
     #[test]

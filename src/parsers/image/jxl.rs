@@ -13,6 +13,7 @@ use crate::error::{ExifToolError, Result};
 use crate::io::buffered_reader::BufferedReader;
 use crate::io::{ByteOrder as EndianByteOrder, EndianReader};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
+use crate::parsers::xmp::rdf_parser::parse_xmp;
 use crate::tag_db::lookup_tag_name;
 
 /// Bare codestream signature: 0xFF 0x0A
@@ -151,6 +152,25 @@ impl JXLParser {
         }
     }
 
+    /// Decode ISOBMFF brand code to human-readable name
+    fn decode_brand(brand: &[u8]) -> String {
+        match brand {
+            b"jxl " => "JPEG XL Image (.JXL)".to_string(),
+            b"avif" => "AV1 Image File Format".to_string(),
+            b"heic" => "HEIC Image".to_string(),
+            b"mif1" => "HEIF Image".to_string(),
+            b"msf1" => "HEIF Image Sequence".to_string(),
+            b"mp41" => "MP4 v1".to_string(),
+            b"mp42" => "MP4 v2".to_string(),
+            b"isom" => "ISO Base Media".to_string(),
+            b"jp2 " => "JPEG 2000 Image (.JP2)".to_string(),
+            _ => {
+                // Return the 4-char code as string
+                String::from_utf8_lossy(brand).trim().to_string()
+            }
+        }
+    }
+
     /// Parse ISOBMFF container format boxes
     fn parse_container_boxes(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
         let file_size = reader.size() as usize;
@@ -171,6 +191,57 @@ impl JXLParser {
             }
 
             match box_type {
+                "ftyp" => {
+                    // File Type box - contains brand information
+                    // Format: major_brand (4) + minor_version (4) + compatible_brands (4 each)
+                    if box_size >= 16 {
+                        let ftyp_data = reader.read((offset + 8) as u64, box_size - 8)?;
+                        let ftyp_reader = EndianReader::big_endian(&*ftyp_data);
+
+                        // Major brand (4 bytes)
+                        if ftyp_data.len() >= 4 {
+                            let major_brand = Self::decode_brand(&ftyp_data[0..4]);
+                            metadata.insert(
+                                "Jpeg2000:MajorBrand".to_string(),
+                                TagValue::new_string(major_brand),
+                            );
+                        }
+
+                        // Minor version (4 bytes as version number)
+                        if ftyp_data.len() >= 8 {
+                            let minor = ftyp_reader.u32_at(4).unwrap_or(0);
+                            // Format as X.X.X (major.minor.patch from 32-bit value)
+                            let major_ver = (minor >> 24) & 0xFF;
+                            let minor_ver = (minor >> 16) & 0xFF;
+                            let patch_ver = minor & 0xFFFF;
+                            metadata.insert(
+                                "Jpeg2000:MinorVersion".to_string(),
+                                TagValue::new_string(format!(
+                                    "{}.{}.{}",
+                                    major_ver, minor_ver, patch_ver
+                                )),
+                            );
+                        }
+
+                        // Compatible brands (remaining 4-byte chunks)
+                        if ftyp_data.len() > 8 {
+                            let mut brands: Vec<String> = Vec::new();
+                            let mut brand_offset = 8;
+                            while brand_offset + 4 <= ftyp_data.len() {
+                                let brand = &ftyp_data[brand_offset..brand_offset + 4];
+                                let brand_str = String::from_utf8_lossy(brand).to_string();
+                                brands.push(format!("\"{}\"", brand_str));
+                                brand_offset += 4;
+                            }
+                            if !brands.is_empty() {
+                                metadata.insert(
+                                    "Jpeg2000:CompatibleBrands".to_string(),
+                                    TagValue::new_string(format!("[{}]", brands.join(", "))),
+                                );
+                            }
+                        }
+                    }
+                }
                 "jxlc" | "jxlp" => {
                     // Codestream box - parse for dimensions
                     let content_offset = if box_type == "jxlp" { 12 } else { 8 };
@@ -312,51 +383,13 @@ impl JXLParser {
         }
     }
 
-    /// Extract basic metadata from XMP
+    /// Extract metadata from XMP using the proper RDF parser
     fn parse_xmp_data(xmp: &str, metadata: &mut MetadataMap) {
-        // Simple regex-free extraction of common XMP fields
-        let patterns = [
-            ("dc:creator", "XMP:Creator"),
-            ("dc:title", "XMP:Title"),
-            ("dc:description", "XMP:Description"),
-            ("xmp:CreateDate", "XMP:CreateDate"),
-            ("xmp:ModifyDate", "XMP:ModifyDate"),
-            ("tiff:Make", "XMP:Make"),
-            ("tiff:Model", "XMP:Model"),
-        ];
-
-        for (tag, key) in patterns {
-            if let Some(value) = Self::extract_xmp_value(xmp, tag) {
-                metadata.insert(key.to_string(), TagValue::String(value));
+        if let Ok(xmp_tags) = parse_xmp(xmp.as_bytes()) {
+            for (tag_name, value) in xmp_tags {
+                metadata.insert(tag_name, TagValue::String(value));
             }
         }
-    }
-
-    /// Extract a value from XMP by tag name
-    fn extract_xmp_value(xmp: &str, tag: &str) -> Option<String> {
-        // Look for <tag>value</tag> or tag="value"
-        let open_tag = format!("<{}>", tag);
-        let close_tag = format!("</{}>", tag);
-
-        if let Some(start) = xmp.find(&open_tag) {
-            let value_start = start + open_tag.len();
-            if let Some(end) = xmp[value_start..].find(&close_tag) {
-                let value = &xmp[value_start..value_start + end];
-                return Some(value.trim().to_string());
-            }
-        }
-
-        // Try attribute format: tag="value"
-        let attr_pattern = format!("{}=\"", tag);
-        if let Some(start) = xmp.find(&attr_pattern) {
-            let value_start = start + attr_pattern.len();
-            if let Some(end) = xmp[value_start..].find('"') {
-                let value = &xmp[value_start..value_start + end];
-                return Some(value.to_string());
-            }
-        }
-
-        None
     }
 }
 

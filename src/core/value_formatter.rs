@@ -50,7 +50,7 @@ pub fn format_file_size(bytes: u64) -> String {
 /// # Examples
 ///
 /// ```
-/// use chrono::{DateTime, Utc, TimeZone};
+/// use oxidex::chrono::{TimeZone, Utc};
 /// use oxidex::core::value_formatter::format_exif_datetime;
 ///
 /// let dt = Utc.with_ymd_and_hms(2002, 6, 20, 2, 11, 11).unwrap();
@@ -112,6 +112,111 @@ pub fn format_iptc_time(raw: &str) -> String {
         }
     } else {
         raw.to_string()
+    }
+}
+
+/// Format IPTC urgency value with human-readable description.
+///
+/// IPTC urgency is a single digit 1-8, where 1 is most urgent and 8 is least.
+/// ExifTool displays this with a parenthetical description for boundary values.
+///
+/// # Examples
+///
+/// ```
+/// use oxidex::core::value_formatter::format_iptc_urgency;
+///
+/// assert_eq!(format_iptc_urgency("1"), "1 (most urgent)");
+/// assert_eq!(format_iptc_urgency("5"), "5 (normal)");
+/// assert_eq!(format_iptc_urgency("8"), "8 (least urgent)");
+/// assert_eq!(format_iptc_urgency("3"), "3");
+/// assert_eq!(format_iptc_urgency("invalid"), "invalid"); // Preserves invalid input
+/// ```
+pub fn format_iptc_urgency(raw: &str) -> String {
+    match raw.trim() {
+        "1" => "1 (most urgent)".to_string(),
+        "5" => "5 (normal)".to_string(),
+        "8" => "8 (least urgent)".to_string(),
+        _ => raw.to_string(),
+    }
+}
+
+/// Format IPTC CodedCharacterSet from ISO 2022 escape sequence to human-readable.
+///
+/// IPTC uses ISO 2022 escape sequences to indicate character encoding.
+/// The most common is ESC %G (0x1B 0x25 0x47) which means UTF-8.
+///
+/// # Examples
+///
+/// ```
+/// use oxidex::core::value_formatter::format_iptc_coded_charset;
+///
+/// assert_eq!(format_iptc_coded_charset(&[0x1B, 0x25, 0x47]), "UTF8");
+/// assert_eq!(format_iptc_coded_charset(&[0x1B, 0x2E, 0x41]), "ISO-8859-1");
+/// assert_eq!(format_iptc_coded_charset(b"other"), "other");
+/// ```
+pub fn format_iptc_coded_charset(data: &[u8]) -> String {
+    // ESC %G = UTF-8 (ISO 2022 escape sequence)
+    if data == [0x1B, 0x25, 0x47] {
+        return "UTF8".to_string();
+    }
+    // ESC .A = ISO-8859-1 (Latin-1)
+    if data == [0x1B, 0x2E, 0x41] {
+        return "ISO-8859-1".to_string();
+    }
+    // ESC .B = ISO-8859-2 (Latin-2)
+    if data == [0x1B, 0x2E, 0x42] {
+        return "ISO-8859-2".to_string();
+    }
+    // ESC .C = ISO-8859-3 (Latin-3)
+    if data == [0x1B, 0x2E, 0x43] {
+        return "ISO-8859-3".to_string();
+    }
+    // ESC .D = ISO-8859-4 (Latin-4)
+    if data == [0x1B, 0x2E, 0x44] {
+        return "ISO-8859-4".to_string();
+    }
+    // ESC .E = ISO-8859-5 (Cyrillic)
+    if data == [0x1B, 0x2E, 0x45] {
+        return "ISO-8859-5".to_string();
+    }
+    // ESC .F = ISO-8859-6 (Arabic)
+    if data == [0x1B, 0x2E, 0x46] {
+        return "ISO-8859-6".to_string();
+    }
+    // ESC .G = ISO-8859-7 (Greek)
+    if data == [0x1B, 0x2E, 0x47] {
+        return "ISO-8859-7".to_string();
+    }
+    // ESC .H = ISO-8859-8 (Hebrew)
+    if data == [0x1B, 0x2E, 0x48] {
+        return "ISO-8859-8".to_string();
+    }
+    // Fallback: try to decode as string
+    String::from_utf8_lossy(data).trim().to_string()
+}
+
+/// Format IPTC record version from raw bytes.
+///
+/// IPTC record versions are stored as 2-byte big-endian integers.
+/// ExifTool displays them as decimal numbers.
+///
+/// # Examples
+///
+/// ```
+/// use oxidex::core::value_formatter::format_iptc_record_version;
+///
+/// assert_eq!(format_iptc_record_version(&[0x00, 0x04]), "4");
+/// assert_eq!(format_iptc_record_version(&[0x00, 0x02]), "2");
+/// assert_eq!(format_iptc_record_version(&[0x01, 0x00]), "256");
+/// ```
+pub fn format_iptc_record_version(data: &[u8]) -> String {
+    if data.len() >= 2 {
+        let version = u16::from_be_bytes([data[0], data[1]]);
+        version.to_string()
+    } else if data.len() == 1 {
+        data[0].to_string()
+    } else {
+        String::new()
     }
 }
 

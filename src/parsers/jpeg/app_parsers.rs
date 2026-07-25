@@ -1,96 +1,15 @@
-//! JPEG APP segment parsers (APP2, APP12, APP14, COM, DQT, SOF)
+//! JPEG APP segment parsers (APP0, APP8, APP11, APP12, COM, SOF)
 //!
 //! This module provides parsers for various JPEG application-specific segments:
-//! - APP2: ICC Profile
+//! - APP0: JFIF/JFXX
+//! - APP8: SPIFF
+//! - APP11: JPEG-HDR
 //! - APP12: Picture Info (Ducky)
-//! - APP14: Adobe segment
 //! - COM: JPEG Comment
-//! - DQT: Quantization tables (for quality estimation)
 //! - SOF: Start of Frame (component information)
 
 use crate::core::{MetadataMap, TagValue};
 use crate::io::EndianReader;
-
-/// Parse ICC Profile (APP2) segment
-///
-/// ICC Profile segments start with "ICC_PROFILE\0"
-pub fn parse_icc_profile_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    if data.len() < 14 {
-        return Err("ICC Profile segment too short".to_string());
-    }
-
-    // Check for ICC_PROFILE identifier
-    if &data[0..12] != b"ICC_PROFILE\0" {
-        return Err("Invalid ICC Profile identifier".to_string());
-    }
-
-    // Sequence number (1-based)
-    let sequence = data[12];
-    // Total number of APP2 segments
-    let total = data[13];
-
-    metadata.insert(
-        "ICC_Profile:ProfileSequence".to_string(),
-        TagValue::String(format!("{} of {}", sequence, total)),
-    );
-
-    // If this is the first segment, extract profile header info
-    if sequence == 1 && data.len() >= 128 + 14 {
-        let profile_data = &data[14..];
-
-        // Profile size (bytes 0-3)
-        if profile_data.len() >= 4 {
-            let reader = EndianReader::big_endian(profile_data);
-            let size = reader.u32_at(0).unwrap_or(0);
-            metadata.insert(
-                "ICC_Profile:ProfileSize".to_string(),
-                TagValue::Integer(size as i64),
-            );
-        }
-
-        // Profile version (bytes 8-11)
-        if profile_data.len() >= 11 {
-            let version_major = profile_data[8];
-            let version_minor = (profile_data[9] >> 4) & 0x0F;
-            metadata.insert(
-                "ICC_Profile:ProfileVersion".to_string(),
-                TagValue::String(format!("{}.{}", version_major, version_minor)),
-            );
-        }
-
-        // Profile class (bytes 12-15)
-        if profile_data.len() >= 16
-            && let Ok(class) = std::str::from_utf8(&profile_data[12..16])
-        {
-            let class_desc = match class {
-                "scnr" => "Input Device Profile",
-                "mntr" => "Display Device Profile",
-                "prtr" => "Output Device Profile",
-                "link" => "DeviceLink Profile",
-                "spac" => "ColorSpace Conversion Profile",
-                "abst" => "Abstract Profile",
-                "nmcl" => "Named Color Profile",
-                _ => class,
-            };
-            metadata.insert(
-                "ICC_Profile:ProfileClass".to_string(),
-                TagValue::String(class_desc.to_string()),
-            );
-        }
-
-        // Color space (bytes 16-19)
-        if profile_data.len() >= 20
-            && let Ok(color_space) = std::str::from_utf8(&profile_data[16..20])
-        {
-            metadata.insert(
-                "ICC_Profile:ColorSpace".to_string(),
-                TagValue::String(color_space.trim().to_string()),
-            );
-        }
-    }
-
-    Ok(())
-}
 
 /// Parse Picture Info (Ducky) segment (APP12)
 ///
@@ -164,116 +83,27 @@ pub fn parse_ducky_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<()
     Ok(())
 }
 
-/// Parse Adobe segment (APP14)
+/// Parse JPEG Comment segment (COM, marker 0xFFFE)
 ///
-/// Adobe segments start with "Adobe"
-pub fn parse_adobe_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    if data.len() < 12 {
-        return Err("Adobe segment too short".to_string());
-    }
-
-    if &data[0..5] != b"Adobe" {
-        return Err("Invalid Adobe identifier".to_string());
-    }
-
-    let reader = EndianReader::big_endian(data);
-
-    // DCT Encode Version (2 bytes at offset 5)
-    let dct_encode_version = reader.u16_at(5).unwrap_or(0);
-    metadata.insert(
-        "Adobe:DCTEncodeVersion".to_string(),
-        TagValue::Integer(dct_encode_version as i64),
-    );
-
-    // APP14 Flags0 (2 bytes at offset 7)
-    let flags0 = reader.u16_at(7).unwrap_or(0);
-    metadata.insert(
-        "Adobe:APP14Flags0".to_string(),
-        TagValue::Integer(flags0 as i64),
-    );
-
-    // APP14 Flags1 (2 bytes at offset 9)
-    let flags1 = reader.u16_at(9).unwrap_or(0);
-    metadata.insert(
-        "Adobe:APP14Flags1".to_string(),
-        TagValue::Integer(flags1 as i64),
-    );
-
-    // Color Transform (1 byte at offset 11)
-    let color_transform = data[11];
-    let transform_desc = match color_transform {
-        0 => "Unknown (RGB or CMYK)",
-        1 => "YCbCr",
-        2 => "YCCK",
-        _ => "Unknown",
-    };
-    metadata.insert(
-        "Adobe:ColorTransform".to_string(),
-        TagValue::String(transform_desc.to_string()),
-    );
-
-    Ok(())
-}
-
-/// Parse JPEG Comment segment (COM)
+/// ExifTool exposes COM data as the File:Comment tag and strips trailing NUL
+/// bytes ("some dumb softwares add null terminators" — ExifTool.pm COM handler).
 pub fn parse_comment_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    // Try to parse as UTF-8 text
-    match std::str::from_utf8(data) {
+    let end = data.iter().rposition(|&b| b != 0).map_or(0, |p| p + 1);
+    let trimmed = &data[..end];
+    match std::str::from_utf8(trimmed) {
         Ok(comment) => {
             metadata.insert(
-                "JPEG:Comment".to_string(),
+                "File:Comment".to_string(),
                 TagValue::String(comment.to_string()),
             );
-            Ok(())
         }
         Err(_) => {
-            // If not valid UTF-8, store as binary
-            metadata.insert("JPEG:Comment".to_string(), TagValue::Binary(data.to_vec()));
-            Ok(())
+            metadata.insert(
+                "File:Comment".to_string(),
+                TagValue::Binary(trimmed.to_vec()),
+            );
         }
     }
-}
-
-/// Estimate JPEG quality from DQT (Define Quantization Table) segment
-///
-/// This uses a heuristic based on the quantization table values
-pub fn estimate_quality_from_dqt(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    if data.is_empty() {
-        return Err("DQT segment is empty".to_string());
-    }
-
-    // Parse DQT header
-    let precision_and_id = data[0];
-    let _precision = (precision_and_id >> 4) & 0x0F; // 0 = 8-bit, 1 = 16-bit
-    let _table_id = precision_and_id & 0x0F;
-
-    // For 8-bit precision, we have 64 quantization values
-    if data.len() < 65 {
-        return Err("DQT segment too short".to_string());
-    }
-
-    // Calculate average quantization value (excluding first byte)
-    let qvals = &data[1..65];
-    let sum: u32 = qvals.iter().map(|&v| v as u32).sum();
-    let avg = sum / 64;
-
-    // Estimate quality using a simple heuristic
-    // Lower quantization values = higher quality
-    let quality = if avg <= 10 {
-        95 + (10 - avg) as i64
-    } else if avg <= 50 {
-        85 - ((avg - 10) / 4) as i64
-    } else {
-        50 - ((avg - 50) / 2) as i64
-    };
-
-    let quality = quality.clamp(1, 100);
-
-    metadata.insert(
-        "JPEG:EstimatedQuality".to_string(),
-        TagValue::Integer(quality),
-    );
-
     Ok(())
 }
 
@@ -283,6 +113,50 @@ pub fn estimate_quality_from_dqt(data: &[u8], metadata: &mut MetadataMap) -> Res
 pub fn parse_app0_extended(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
     if data.len() < 5 {
         return Err("APP0 segment too short".to_string());
+    }
+
+    // AVI1 (Motion JPEG) APP0 segment
+    //
+    // ExifTool exposes the byte after the "AVI1\0" signature as
+    // APP0:InterleavedField.
+    if data.len() >= 6 && &data[0..5] == b"AVI1\0" {
+        let interleaved = data[5];
+        let interleaved_str = match interleaved {
+            0 => "Not Interleaved",
+            1 => "Odd",
+            2 => "Even",
+            _ => "Unknown",
+        };
+        metadata.insert(
+            "APP0:InterleavedField".to_string(),
+            TagValue::String(interleaved_str.to_string()),
+        );
+        return Ok(());
+    }
+
+    // OCAD APP0 segment
+    //
+    // OCAD writes an ASCII revision header of the form
+    // "Ocad$Rev: <decimal revision> $", followed by padding and other data.
+    const OCAD_REVISION_PREFIX: &[u8] = b"Ocad$Rev: ";
+    if data.starts_with(OCAD_REVISION_PREFIX) {
+        let revision_data = &data[OCAD_REVISION_PREFIX.len()..];
+        let digit_count = revision_data
+            .iter()
+            .position(|byte| !byte.is_ascii_digit())
+            .unwrap_or(revision_data.len());
+
+        if digit_count == 0 {
+            return Err("OCAD APP0 segment has no revision number".to_string());
+        }
+
+        let revision = std::str::from_utf8(&revision_data[..digit_count])
+            .map_err(|_| "OCAD revision is not valid ASCII".to_string())?
+            .parse::<i64>()
+            .map_err(|_| "OCAD revision is outside the supported integer range".to_string())?;
+
+        metadata.insert("APP0:OcadRevision".to_string(), TagValue::Integer(revision));
+        return Ok(());
     }
 
     // Check JFIF identifier
@@ -373,6 +247,15 @@ pub fn parse_sof_segment(
         "File:ColorComponents".to_string(),
         TagValue::Integer(num_components as i64),
     );
+    // Also add JPEG: prefixed version for format-specific tagging
+    metadata.insert(
+        "JPEG:ColorComponents".to_string(),
+        TagValue::Integer(num_components as i64),
+    );
+
+    // Also add JPEG: prefixed versions for format-specific tagging
+    metadata.insert("JPEG:Width".to_string(), TagValue::Integer(width as i64));
+    metadata.insert("JPEG:Height".to_string(), TagValue::Integer(height as i64));
 
     // Encoding process - match ExifTool's format with coding suffix
     let encoding = match marker {
@@ -419,6 +302,9 @@ pub fn parse_sof_segment(
         );
     }
 
+    // Collect sampling factors for JPEG:SamplingFactors tag
+    let mut sampling_factors_vec = Vec::new();
+
     // Also keep JPEG: prefixed tags for component details
     offset = 6;
     for i in 0..num_components {
@@ -447,12 +333,187 @@ pub fn parse_sof_segment(
             TagValue::String(component_name.to_string()),
         );
 
+        let subsampling_str = format!("{}x{}", h_sampling, v_sampling);
         metadata.insert(
             format!("JPEG:YCbCrSubSampling_{}", i + 1),
-            TagValue::String(format!("{}x{}", h_sampling, v_sampling)),
+            TagValue::String(subsampling_str.clone()),
         );
 
+        // Collect sampling factors for the combined tag
+        sampling_factors_vec.push(subsampling_str);
+
         offset += 3;
+    }
+
+    // Add combined JPEG:SamplingFactors tag (comma-separated)
+    if !sampling_factors_vec.is_empty() {
+        metadata.insert(
+            "JPEG:SamplingFactors".to_string(),
+            TagValue::String(sampling_factors_vec.join(", ")),
+        );
+    }
+
+    Ok(())
+}
+
+/// Parse APP8 (SPIFF) segment
+///
+/// SPIFF (Still Picture Interchange File Format, ISO/IEC 10918-3) stores basic
+/// image parameters in the first APP8 segment. ExifTool processes APP8 as
+/// SPIFF only when the payload starts with "SPIFF\0" AND is exactly 32 bytes;
+/// real-world v1.2 samples carry 2 pad bytes after ColorComponents that the
+/// spec does not mention, and the offsets below follow those samples
+/// (ExifTool JPEG.pm %SPIFF table).
+pub fn parse_spiff_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
+    if data.len() != 32 {
+        return Err(format!(
+            "APP8 SPIFF payload must be 32 bytes, got {}",
+            data.len()
+        ));
+    }
+    if &data[0..6] != b"SPIFF\0" {
+        return Err("Invalid SPIFF identifier".to_string());
+    }
+
+    // Offsets are relative to the byte after the 6-byte identifier.
+    let body = &data[6..];
+    let reader = EndianReader::big_endian(body);
+
+    metadata.insert(
+        "SPIFF:SPIFFVersion".to_string(),
+        TagValue::String(format!("{}.{}", body[0], body[1])),
+    );
+
+    let profile_id = match body[2] {
+        0 => "Not Specified".to_string(),
+        1 => "Continuous-tone Base".to_string(),
+        2 => "Continuous-tone Progressive".to_string(),
+        3 => "Bi-level Facsimile".to_string(),
+        4 => "Continuous-tone Facsimile".to_string(),
+        other => format!("Unknown ({})", other),
+    };
+    metadata.insert("SPIFF:ProfileID".to_string(), TagValue::String(profile_id));
+
+    metadata.insert(
+        "SPIFF:ColorComponents".to_string(),
+        TagValue::Integer(body[3] as i64),
+    );
+
+    metadata.insert(
+        "SPIFF:ImageHeight".to_string(),
+        TagValue::Integer(reader.u32_at(6).unwrap_or(0) as i64),
+    );
+    metadata.insert(
+        "SPIFF:ImageWidth".to_string(),
+        TagValue::Integer(reader.u32_at(10).unwrap_or(0) as i64),
+    );
+
+    let color_space = match body[14] {
+        0 => "Bi-level".to_string(),
+        1 => "YCbCr, ITU-R BT 709, video".to_string(),
+        2 => "No color space specified".to_string(),
+        3 => "YCbCr, ITU-R BT 601-1, RGB".to_string(),
+        4 => "YCbCr, ITU-R BT 601-1, video".to_string(),
+        8 => "Gray-scale".to_string(),
+        9 => "PhotoYCC".to_string(),
+        10 => "RGB".to_string(),
+        11 => "CMY".to_string(),
+        12 => "CMYK".to_string(),
+        13 => "YCCK".to_string(),
+        14 => "CIELab".to_string(),
+        other => format!("Unknown ({})", other),
+    };
+    metadata.insert(
+        "SPIFF:ColorSpace".to_string(),
+        TagValue::String(color_space),
+    );
+
+    metadata.insert(
+        "SPIFF:BitsPerSample".to_string(),
+        TagValue::Integer(body[15] as i64),
+    );
+
+    let compression = match body[16] {
+        0 => "Uncompressed, interleaved, 8 bits per sample".to_string(),
+        1 => "Modified Huffman".to_string(),
+        2 => "Modified READ".to_string(),
+        3 => "Modified Modified READ".to_string(),
+        4 => "JBIG".to_string(),
+        5 => "JPEG".to_string(),
+        other => format!("Unknown ({})", other),
+    };
+    metadata.insert(
+        "SPIFF:Compression".to_string(),
+        TagValue::String(compression),
+    );
+
+    let resolution_unit = match body[17] {
+        0 => "None".to_string(),
+        1 => "inches".to_string(),
+        2 => "cm".to_string(),
+        other => format!("Unknown ({})", other),
+    };
+    metadata.insert(
+        "SPIFF:ResolutionUnit".to_string(),
+        TagValue::String(resolution_unit),
+    );
+
+    metadata.insert(
+        "SPIFF:YResolution".to_string(),
+        TagValue::Integer(reader.u32_at(18).unwrap_or(0) as i64),
+    );
+    metadata.insert(
+        "SPIFF:XResolution".to_string(),
+        TagValue::Integer(reader.u32_at(22).unwrap_or(0) as i64),
+    );
+
+    Ok(())
+}
+
+/// Parse APP11 (JPEG-HDR) segment
+///
+/// APP11 segments (marker 0xFFEB) contain HDR (High Dynamic Range) metadata.
+/// This includes tone mapping information and exposure data for HDR images.
+/// Note: More detailed HDR parsing is available in app_segments/app11_jpeg_hdr.rs
+pub fn parse_jpeg_hdr_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
+    if data.is_empty() {
+        return Err("APP11 JPEG-HDR segment is empty".to_string());
+    }
+
+    // Check for HDR_RI identifier (HDR Rendering Intent)
+    if data.len() >= 6 && &data[0..6] == b"HDR_RI" {
+        metadata.insert(
+            "APP11:Format".to_string(),
+            TagValue::String("HDR_RI".to_string()),
+        );
+
+        if data.len() >= 7 {
+            let rendering_intent = data[6];
+            let intent_name = match rendering_intent {
+                0 => "Perceptual",
+                1 => "Relative Colorimetric",
+                2 => "Saturation",
+                3 => "Absolute Colorimetric",
+                _ => "Unknown",
+            };
+            metadata.insert(
+                "APP11:RenderingIntent".to_string(),
+                TagValue::String(intent_name.to_string()),
+            );
+        }
+    } else {
+        // Generic HDR data or other JPEG-HDR variant
+        metadata.insert(
+            "APP11:DataSize".to_string(),
+            TagValue::Integer(data.len() as i64),
+        );
+    }
+
+    // Delegate to specialized HDR parser if available and data looks valid
+    if let Ok(hdr_metadata) = crate::parsers::jpeg::app_segments::parse_app11_jpeg_hdr(data) {
+        for (key, value) in hdr_metadata {
+            metadata.insert(key, value);
+        }
     }
 
     Ok(())
@@ -463,87 +524,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_icc_profile() {
-        let mut data = Vec::new();
-        data.extend_from_slice(b"ICC_PROFILE\0");
-        data.push(1); // Sequence 1
-        data.push(1); // Total 1
-
-        // Minimal ICC profile header
-        let mut profile_header = vec![0u8; 128];
-        // Profile size
-        profile_header[0..4].copy_from_slice(&[0x00, 0x00, 0x02, 0x00]);
-        // Version 4.0
-        profile_header[8] = 0x04;
-        profile_header[9] = 0x00;
-        // Profile class "mntr" (display)
-        profile_header[12..16].copy_from_slice(b"mntr");
-        // Color space "RGB "
-        profile_header[16..20].copy_from_slice(b"RGB ");
-
-        data.extend_from_slice(&profile_header);
-
-        let mut metadata = MetadataMap::new();
-        let result = parse_icc_profile_segment(&data, &mut metadata);
-
-        assert!(result.is_ok());
-        assert_eq!(
-            metadata.get_string("ICC_Profile:ProfileClass").as_deref(),
-            Some("Display Device Profile")
-        );
-        assert_eq!(
-            metadata.get_string("ICC_Profile:ColorSpace").as_deref(),
-            Some("RGB")
-        );
-    }
-
-    #[test]
-    fn test_parse_adobe_segment() {
-        let data = [
-            b'A', b'd', b'o', b'b', b'e', // Identifier
-            0x00, 0x64, // DCT Encode Version: 100
-            0x00, 0x00, // Flags0
-            0x00, 0x00, // Flags1
-            0x01, // Color Transform: YCbCr
-        ];
-
-        let mut metadata = MetadataMap::new();
-        let result = parse_adobe_segment(&data, &mut metadata);
-
-        assert!(result.is_ok());
-        assert_eq!(metadata.get_integer("Adobe:DCTEncodeVersion"), Some(100));
-        assert_eq!(
-            metadata.get_string("Adobe:ColorTransform").as_deref(),
-            Some("YCbCr")
-        );
-    }
-
-    #[test]
     fn test_parse_comment_segment() {
-        let data = b"This is a JPEG comment";
-
         let mut metadata = MetadataMap::new();
-        let result = parse_comment_segment(data, &mut metadata);
+        // Trailing NULs are stripped, matching ExifTool's COM handler
+        let result = parse_comment_segment(b"Hello JPEG\0\0", &mut metadata);
+        assert!(result.is_ok());
+        assert_eq!(metadata.get_string("File:Comment"), Some("Hello JPEG"));
+    }
 
+    #[test]
+    fn test_parse_comment_segment_binary_fallback() {
+        let mut metadata = MetadataMap::new();
+        let result = parse_comment_segment(&[0xFF, 0xFE, 0x00, 0x41], &mut metadata);
         assert!(result.is_ok());
         assert_eq!(
-            metadata.get_string("JPEG:Comment").as_deref(),
-            Some("This is a JPEG comment")
+            metadata.get("File:Comment"),
+            Some(&TagValue::Binary(vec![0xFF, 0xFE, 0x00, 0x41]))
         );
     }
 
     #[test]
-    fn test_estimate_quality_high() {
-        // Create a DQT with low values (high quality)
-        let mut data = vec![0x00]; // Precision 0, table 0
-        data.extend(vec![5u8; 64]); // Low quantization values
-
+    fn test_parse_app0_ocad_revision() {
+        // Exact APP0 payload layout used by SonyDCR-DVD710.jpg.
+        let data = b"Ocad$Rev: 14797 $\0\0\0\0\0\0\0\x01\x10";
         let mut metadata = MetadataMap::new();
-        let result = estimate_quality_from_dqt(&data, &mut metadata);
+
+        let result = parse_app0_extended(data, &mut metadata);
 
         assert!(result.is_ok());
-        let quality = metadata.get_integer("JPEG:EstimatedQuality").unwrap();
-        assert!(quality > 90);
+        assert_eq!(metadata.get_integer("APP0:OcadRevision"), Some(14797));
     }
 
     #[test]
@@ -578,5 +587,331 @@ mod tests {
             Some("YCbCr4:2:0 (2 2)")
         );
         assert_eq!(metadata.get_string("JPEG:ComponentID_1"), Some("Y"));
+    }
+
+    /// Builds the 32-byte APP8 SPIFF payload ExifTool recognizes
+    /// (identifier + version + profile + components + 2 pad bytes +
+    /// dimensions + colorspace/bps/compression/unit + resolutions).
+    fn spiff_payload_32() -> Vec<u8> {
+        let mut p = b"SPIFF\0".to_vec();
+        p.extend_from_slice(&[1, 0]); // version 1.0
+        p.push(1); // ProfileID: Continuous-tone Base
+        p.push(3); // 3 color components
+        p.extend_from_slice(&[0, 0]); // pad bytes seen in real v1.2 samples
+        p.extend_from_slice(&480u32.to_be_bytes()); // height
+        p.extend_from_slice(&640u32.to_be_bytes()); // width
+        p.extend_from_slice(&[3, 8, 5, 1]); // BT601 RGB, 8 bits, JPEG, inches
+        p.extend_from_slice(&72u32.to_be_bytes()); // Y resolution
+        p.extend_from_slice(&72u32.to_be_bytes()); // X resolution
+        assert_eq!(p.len(), 32);
+        p
+    }
+
+    #[test]
+    fn test_parse_spiff_segment_full() {
+        let mut metadata = MetadataMap::new();
+        let result = parse_spiff_segment(&spiff_payload_32(), &mut metadata);
+        assert!(result.is_ok());
+        assert_eq!(metadata.get_string("SPIFF:SPIFFVersion"), Some("1.0"));
+        assert_eq!(
+            metadata.get_string("SPIFF:ProfileID"),
+            Some("Continuous-tone Base")
+        );
+        assert_eq!(metadata.get_integer("SPIFF:ColorComponents"), Some(3));
+        assert_eq!(metadata.get_integer("SPIFF:ImageHeight"), Some(480));
+        assert_eq!(metadata.get_integer("SPIFF:ImageWidth"), Some(640));
+        assert_eq!(
+            metadata.get_string("SPIFF:ColorSpace"),
+            Some("YCbCr, ITU-R BT 601-1, RGB")
+        );
+        assert_eq!(metadata.get_integer("SPIFF:BitsPerSample"), Some(8));
+        assert_eq!(metadata.get_string("SPIFF:Compression"), Some("JPEG"));
+        assert_eq!(metadata.get_string("SPIFF:ResolutionUnit"), Some("inches"));
+        assert_eq!(metadata.get_integer("SPIFF:YResolution"), Some(72));
+        assert_eq!(metadata.get_integer("SPIFF:XResolution"), Some(72));
+    }
+
+    #[test]
+    fn test_parse_spiff_segment_rejects_non_32_byte_payload() {
+        // ExifTool only recognizes 32-byte SPIFF payloads; a 30-byte
+        // spec-shaped payload must extract nothing.
+        let mut payload = spiff_payload_32();
+        payload.truncate(30);
+        let mut metadata = MetadataMap::new();
+        assert!(parse_spiff_segment(&payload, &mut metadata).is_err());
+        assert!(metadata.get("SPIFF:SPIFFVersion").is_none());
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_f_number() {
+        let data = b"[picture info]\r\nFNumber=11.0\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert!(
+            metadata.get("APP12:FNumber").is_some(),
+            "FNumber should be exposed in ExifTool's APP12 group"
+        );
+        assert_eq!(
+            metadata.get("APP12:FNumber"),
+            metadata.get("Olympus:FNumber"),
+            "APP12 FNumber should retain the parsed decimal value"
+        );
+    }
+
+    #[test]
+    fn test_parse_picture_info_resolution() {
+        // ExifTool's APP12 Picture Info table exposes Resolution verbatim
+        // as its own tag (Image::ExifTool::APP12::PictureInfo has no
+        // PrintConv for it) -- it is not renamed to ImageSize.
+        let data = b"[picture info]\r\nResolution=1280x960\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:Resolution"), Some("1280x960"));
+    }
+
+    #[test]
+    fn test_parse_picture_info_image_size() {
+        // ExifTool's ImageSize tag stores a dash-delimited width-height pair
+        // and its PrintConv (`$val=~tr/-/x/;$val`) converts every '-' to 'x'
+        // for display, distinct from the verbatim Resolution tag above.
+        let data = b"[picture info]\r\nImageSize=1280-1024\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:ImageSize"), Some("1280x1024"));
+    }
+
+    #[test]
+    fn test_parse_legacy_picture_info_resolution() {
+        // Identifier-less legacy Picture Info records (including Agfa SR84)
+        // are routed through the same key=value parser as the "[picture
+        // info]" format, so Resolution/ImageSize behave identically here.
+        let data = b"Type=SR84\r\nResolution=1280x960\r\nID=AGFA DIGITAL CAMERA\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid legacy Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:Resolution"), Some("1280x960"));
+    }
+
+    #[test]
+    fn test_parse_legacy_picture_info_image_size() {
+        let data = b"Type=SR84\r\nImageSize=1280-1024\r\nID=AGFA DIGITAL CAMERA\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid legacy Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:ImageSize"), Some("1280x1024"));
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_flash() {
+        let data = b"[picture info]\r\nFlash=Off\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:Flash"),
+            Some("Off"),
+            "Flash should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_legacy_agfa_app12_id() {
+        // Identifier-less Agfa Picture Info is recognized by the generic
+        // Olympus/Picture Info parser used by APP12 dispatch.
+        let data = b"Type=SR84\r\nVersion=v84-71\r\nID=AGFA DIGITAL CAMERA\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid legacy Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:ID"), Some("AGFA DIGITAL CAMERA"));
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_fcs7() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nFCS6=3\r\nFCS7=3\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:FCS6"), Some(3));
+        assert_eq!(
+            metadata.get_integer("APP12:FCS7"),
+            Some(3),
+            "FCS7 should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imbb() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMbb=35761\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:IMbb"),
+            Some(35761),
+            "IMbb should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imbg() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMbg=33709\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:IMbg"), Some(33709));
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imgb() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMgb=33346\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:IMgb"),
+            Some(33346),
+            "IMgb should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imgr() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMgr=33122\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:IMgr"),
+            Some(33122),
+            "IMgr should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imrg() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMrg=33975\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:IMrg"),
+            Some(33975),
+            "IMrg should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imbr() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMbr=32929\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:IMbr"),
+            Some(32929),
+            "IMbr should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_jpeg1() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nJPEG1=696880\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:JPEG1"),
+            Some(696880),
+            "JPEG1 should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_mode1() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nMODE1=0\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:MODE1"),
+            Some(0),
+            "MODE1 should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_mode2() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nMODE2=0\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:MODE2"),
+            Some(0),
+            "MODE2 should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_imrb() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMrb=32721\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:IMrb"),
+            Some(32721),
+            "IMrb should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_jpeg_hdr_segment() {
+        let data = b"HDR_RI\x01";
+
+        let mut metadata = MetadataMap::new();
+        let result = parse_jpeg_hdr_segment(data, &mut metadata);
+
+        assert!(result.is_ok());
+        assert_eq!(
+            metadata.get_string("APP11:Format"),
+            Some("HDR_RI"),
+            "Should identify HDR_RI format"
+        );
+        assert_eq!(
+            metadata.get_string("APP11:RenderingIntent"),
+            Some("Relative Colorimetric"),
+            "Should parse rendering intent"
+        );
     }
 }

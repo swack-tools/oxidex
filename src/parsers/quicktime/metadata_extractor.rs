@@ -62,6 +62,12 @@ fn extract_track_metadata(
         let _ = extract_track_header(&tkhd, metadata, index);
     }
 
+    // Extract track aperture mode dimensions (tapt) - optional
+    // Contains clef (clean aperture), prof (production aperture), enof (encoded pixels)
+    if let Some(tapt) = trak.find_child("tapt") {
+        let _ = extract_track_aperture(&tapt, metadata, index);
+    }
+
     // Media container - required for further extraction
     // Uses ok_or_else() to convert Option to Result, enabling ? operator
     let mdia = trak
@@ -83,9 +89,27 @@ fn extract_track_metadata(
         let _ = extract_video_media_header(&vmhd, metadata, index);
     }
 
+    // Check if this is an audio track (has smhd)
+    let is_audio_track = minf.find_child("smhd").is_some();
+
     // Extract sound media header (smhd) - optional, contains Balance
     if let Some(smhd) = minf.find_child("smhd") {
         let _ = extract_sound_media_header(&smhd, metadata, index);
+    }
+
+    // Extract handler reference from dinf (data information) container - contains HandlerClass
+    // ExifTool only extracts HandlerClass for audio tracks
+    if is_audio_track {
+        if let Some(dinf) = minf.find_child("dinf")
+            && let Some(dref) = dinf.find_child("dref")
+        {
+            let _ = extract_data_handler_info(dref.data, metadata, index);
+        }
+
+        // Also check for hdlr directly in minf (some formats use this)
+        if let Some(hdlr) = minf.find_child("hdlr") {
+            let _ = extract_track_handler_metadata(&hdlr, metadata, index);
+        }
     }
 
     // Sample table - required for sample descriptions
@@ -224,6 +248,53 @@ fn extract_sound_media_header(
     Ok(())
 }
 
+/// Extract track aperture mode dimensions (tapt atom)
+/// Contains clef (clean aperture), prof (production aperture), enof (encoded pixels)
+fn extract_track_aperture(
+    tapt: &Atom,
+    metadata: &mut MetadataMap,
+    track_index: usize,
+) -> Result<(), String> {
+    let children = tapt.parse_children().unwrap_or_default();
+
+    let track_suffix = if track_index > 0 {
+        format!("_{}", track_index + 1)
+    } else {
+        String::new()
+    };
+
+    for atom in children {
+        let atom_type = atom.atom_type.as_str();
+        // Each aperture atom has: version (1), flags (3), width (4), height (4)
+        // Width and height are 16.16 fixed-point values
+        if atom.data.len() >= 12 {
+            let r = EndianReader::big_endian(atom.data);
+            // Fixed-point 16.16: width/height are stored as integers, interpret high 16 bits
+            let width_fp = r.u32_at(4).unwrap_or(0);
+            let height_fp = r.u32_at(8).unwrap_or(0);
+            // Convert 16.16 fixed-point to integer by taking upper 16 bits
+            let width = width_fp >> 16;
+            let height = height_fp >> 16;
+
+            if width > 0 && height > 0 {
+                let dimensions = format!("{}x{}", width, height);
+                let tag_name = match atom_type {
+                    "clef" => "QuickTime:CleanApertureDimensions",
+                    "prof" => "QuickTime:ProductionApertureDimensions",
+                    "enof" => "QuickTime:EncodedPixelsDimensions",
+                    _ => continue,
+                };
+                metadata.insert(
+                    format!("{}{}", tag_name, track_suffix),
+                    TagValue::String(dimensions),
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Extract all metadata from QuickTime/MP4 atoms
 pub fn extract_metadata(root_atoms: &[Atom]) -> Result<MetadataMap, String> {
     let mut metadata = MetadataMap::with_capacity(50);
@@ -340,6 +411,19 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
                 "M4V " => "Apple iTunes Video (.M4V) Video",
                 "qt  " => "Apple QuickTime (.MOV/QT)",
                 "mp4 " => "MP4 Base Media v1 [IS0 14496-12:2003]",
+                // HEIF/HEIC brands
+                "mif1" => "High Efficiency Image Format still image (.HEIF)",
+                "msf1" => "High Efficiency Image Format sequence (.HEICS)",
+                "heic" => "High Efficiency Image Coding (.HEIC)",
+                "heix" => "High Efficiency Image Coding (.HEIC)",
+                "hevc" => "High Efficiency Video Coding (.HEVC)",
+                "hevx" => "High Efficiency Video Coding (.HEVC)",
+                "heim" => "High Efficiency Image Coding Multiview",
+                "heis" => "High Efficiency Image Coding Scalable",
+                "hevm" => "High Efficiency Video Coding Multiview",
+                "hevs" => "High Efficiency Video Coding Scalable",
+                "avif" => "AV1 Image File Format (.AVIF)",
+                "avis" => "AV1 Image Sequence File Format",
                 _ => brand,
             };
             metadata.insert(
@@ -394,12 +478,12 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
             );
             metadata.insert(
                 "QuickTime:MediaDataOffset".to_string(),
-                TagValue::Integer((offset + 8) as i64), // +8 for atom header
+                TagValue::Integer((offset + atom.header_size as u64) as i64),
             );
             break;
         }
-        // Calculate atom size (8-byte header + data length)
-        offset += 8 + atom.data.len() as u64;
+        // Calculate atom size (header + data length), accounting for extended headers
+        offset += atom.header_size as u64 + atom.data.len() as u64;
     }
 }
 
@@ -629,11 +713,20 @@ fn extract_track_header(
         TagValue::Integer(track_id as i64),
     );
 
-    // Track duration - ExifTool formats this as "X.XX s" using timescale
-    // For now we output raw units; formatting with timescale happens at display time
+    // Track duration - ExifTool formats this as "X.XX s" using movie timescale
+    // Get movie timescale from previously extracted metadata
+    let duration_str = if let Some(timescale_value) = metadata.get("QuickTime:TimeScale")
+        && let Some(timescale) = timescale_value.as_integer()
+        && timescale > 0
+    {
+        let duration_sec = duration as f64 / timescale as f64;
+        format!("{:.2} s", duration_sec)
+    } else {
+        format!("{} units", duration)
+    };
     metadata.insert(
         format!("QuickTime:TrackDuration{}", track_suffix),
-        TagValue::String(format!("{} units", duration)),
+        TagValue::String(duration_str),
     );
 
     // Track layer (2 bytes at version-dependent offset)
@@ -834,6 +927,7 @@ fn extract_sample_description(
                 );
 
                 // Determine if this is an audio or video codec
+                // Note: format_trimmed has trailing spaces removed, so "raw " becomes "raw"
                 let is_audio_codec = matches!(
                     format_trimmed,
                     "mp4a"
@@ -841,7 +935,8 @@ fn extract_sample_description(
                         | "twos"
                         | "alaw"
                         | "ulaw"
-                        | "raw "
+                        | "raw"   // Raw PCM (trimmed from "raw ")
+                        | "raw "  // Raw PCM (untrimmed)
                         | "lpcm"
                         | "ac-3"
                         | "ec-3"
@@ -894,6 +989,34 @@ fn extract_sample_description(
                 // Video sample descriptions have width/height at specific offsets
                 let entry_reader = EndianReader::big_endian(entry_data);
 
+                // VendorID (4 bytes at offset 20) - camera manufacturer
+                // Video sample entry structure:
+                // size(4) + format(4) + reserved(6) + data_ref_index(2) + version(2) + revision(2) = 20
+                if let Some(vendor_bytes) = entry_reader.bytes_at(20, 4) {
+                    if let Ok(vendor_str) = std::str::from_utf8(vendor_bytes) {
+                        let vendor_trimmed =
+                            vendor_str.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+                        if !vendor_trimmed.is_empty() {
+                            // Map common vendor codes to readable names
+                            let vendor_name = match vendor_trimmed {
+                                "pent" => "Pentax",
+                                "niko" => "Nikon",
+                                "cano" => "Canon",
+                                "sony" => "Sony",
+                                "fuji" => "Fujifilm",
+                                "pana" => "Panasonic",
+                                "olym" => "Olympus",
+                                "appl" => "Apple",
+                                _ => vendor_trimmed,
+                            };
+                            metadata.insert(
+                                format!("QuickTime:VendorID{}", track_suffix),
+                                TagValue::String(vendor_name.to_string()),
+                            );
+                        }
+                    }
+                }
+
                 // Width (2 bytes at offset 32)
                 if let Some(width) = entry_reader.u16_at(32)
                     && width > 0
@@ -934,6 +1057,12 @@ fn extract_sample_description(
                         format!("QuickTime:BitDepth{}", track_suffix),
                         TagValue::Integer(depth as i64),
                     );
+                }
+
+                // Extract HEVC configuration from hvcC box if present (for hvc1/hev1 codecs)
+                // Video sample entry structure ends at byte 86, extensions follow
+                if entry_data.len() > 86 {
+                    extract_hevc_configuration(&entry_data[86..], metadata, &track_suffix);
                 }
 
                 // Horizontal and vertical resolution (fixed-point 16.16 at offsets 36 and 40)
@@ -989,11 +1118,11 @@ fn extract_sample_description(
                 // Sample rate (fixed-point 16.16 at offset 32)
                 if let Some(sample_rate_fixed) = entry_reader.u32_at(32) {
                     let sample_rate = (sample_rate_fixed >> 16) as f64;
-                    if (8000.0..=192000.0).contains(&sample_rate) {
-                        // Sanity check
+                    // Allow sample rates from 1000 to 192000 Hz (some old cameras use lower rates)
+                    if (1000.0..=192000.0).contains(&sample_rate) {
                         metadata.insert(
                             format!("QuickTime:AudioSampleRate{}", track_suffix),
-                            TagValue::String(format!("{:.0} Hz", sample_rate)),
+                            TagValue::Integer(sample_rate as i64),
                         );
                     }
                 }
@@ -1002,6 +1131,219 @@ fn extract_sample_description(
     }
 
     Ok(())
+}
+
+/// Extract HEVC configuration (hvcC box) from video sample entry extension data
+///
+/// The hvcC box contains HEVC decoder configuration record with profile, level,
+/// and constraint information. It's found in hvc1/hev1 sample entries.
+///
+/// HEVCDecoderConfigurationRecord structure:
+/// - configurationVersion (1 byte)
+/// - general_profile_space (2 bits) + general_tier_flag (1 bit) + general_profile_idc (5 bits)
+/// - general_profile_compatibility_flags (4 bytes)
+/// - general_constraint_indicator_flags (6 bytes)
+/// - general_level_idc (1 byte)
+/// - min_spatial_segmentation_idc (4 bits reserved + 12 bits value)
+/// - parallelismType (6 bits reserved + 2 bits value)
+/// - chromaFormat (6 bits reserved + 2 bits value)
+/// - bitDepthLumaMinus8 (5 bits reserved + 3 bits value)
+/// - bitDepthChromaMinus8 (5 bits reserved + 3 bits value)
+/// - avgFrameRate (2 bytes)
+/// - constantFrameRate (2 bits) + numTemporalLayers (3 bits) + temporalIdNested (1 bit) + lengthSizeMinusOne (2 bits)
+fn extract_hevc_configuration(data: &[u8], metadata: &mut MetadataMap, _track_suffix: &str) {
+    // Look for hvcC box in the extension data
+    // Box format: 4 bytes size + 4 bytes type ("hvcC")
+    let mut offset = 0;
+    while offset + 8 <= data.len() {
+        let box_size = u32::from_be_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]) as usize;
+        if box_size < 8 || offset + box_size > data.len() {
+            break;
+        }
+
+        let box_type = &data[offset + 4..offset + 8];
+        if box_type == b"hvcC" {
+            // Found hvcC box, parse the configuration record
+            let hvcc_data = &data[offset + 8..offset + box_size];
+            if hvcc_data.len() >= 23 {
+                // configurationVersion (1 byte)
+                let config_version = hvcc_data[0];
+                metadata.insert(
+                    "QuickTime:HEVCConfigurationVersion".to_string(),
+                    TagValue::Integer(config_version as i64),
+                );
+
+                // general_profile_space (2 bits) + general_tier_flag (1 bit) + general_profile_idc (5 bits)
+                let profile_byte = hvcc_data[1];
+                let profile_space = (profile_byte >> 6) & 0x03;
+                let tier_flag = (profile_byte >> 5) & 0x01;
+                let profile_idc = profile_byte & 0x1F;
+
+                let profile_space_str = match profile_space {
+                    0 => "Conforming",
+                    1 => "Reserved 1",
+                    2 => "Reserved 2",
+                    3 => "Reserved 3",
+                    _ => "Unknown",
+                };
+                metadata.insert(
+                    "QuickTime:GeneralProfileSpace".to_string(),
+                    TagValue::String(profile_space_str.to_string()),
+                );
+
+                let tier_str = if tier_flag == 0 {
+                    "Main Tier"
+                } else {
+                    "High Tier"
+                };
+                metadata.insert(
+                    "QuickTime:GeneralTierFlag".to_string(),
+                    TagValue::String(tier_str.to_string()),
+                );
+
+                let profile_name = match profile_idc {
+                    1 => "Main",
+                    2 => "Main 10",
+                    3 => "Main Still Picture",
+                    4 => "Format Range Extensions",
+                    5 => "High Throughput",
+                    6 => "Multiview Main",
+                    7 => "Scalable Main",
+                    8 => "3D Main",
+                    9 => "Screen-Extended Main",
+                    10 => "Scalable Format Range Extensions",
+                    11 => "High Throughput Screen-Extended",
+                    _ => "Unknown",
+                };
+                metadata.insert(
+                    "QuickTime:GeneralProfileIDC".to_string(),
+                    TagValue::String(profile_name.to_string()),
+                );
+
+                // general_profile_compatibility_flags (4 bytes)
+                let compat_flags =
+                    u32::from_be_bytes([hvcc_data[2], hvcc_data[3], hvcc_data[4], hvcc_data[5]]);
+                let mut compat_profiles = Vec::new();
+                if compat_flags & (1 << 31) != 0 {
+                    compat_profiles.push("Main");
+                }
+                if compat_flags & (1 << 30) != 0 {
+                    compat_profiles.push("Main 10");
+                }
+                if compat_flags & (1 << 29) != 0 {
+                    compat_profiles.push("Main Still Picture");
+                }
+                if !compat_profiles.is_empty() {
+                    metadata.insert(
+                        "QuickTime:GenProfileCompatibilityFlags".to_string(),
+                        TagValue::String(compat_profiles.join(", ")),
+                    );
+                }
+
+                // general_constraint_indicator_flags (6 bytes at offset 6-11)
+                let constraint_bytes: Vec<String> =
+                    hvcc_data[6..12].iter().map(|b| format!("{}", b)).collect();
+                metadata.insert(
+                    "QuickTime:ConstraintIndicatorFlags".to_string(),
+                    TagValue::String(constraint_bytes.join(" ")),
+                );
+
+                // general_level_idc (1 byte at offset 12)
+                let level_idc = hvcc_data[12];
+                let level = level_idc as f64 / 30.0;
+                metadata.insert(
+                    "QuickTime:GeneralLevelIDC".to_string(),
+                    TagValue::String(format!("{} (level {:.1})", level_idc, level)),
+                );
+
+                // min_spatial_segmentation_idc (4 bits reserved + 12 bits value at offset 13-14)
+                let min_spatial = u16::from_be_bytes([hvcc_data[13], hvcc_data[14]]) & 0x0FFF;
+                metadata.insert(
+                    "QuickTime:MinSpatialSegmentationIDC".to_string(),
+                    TagValue::Integer(min_spatial as i64),
+                );
+
+                // parallelismType (6 bits reserved + 2 bits value at offset 15)
+                let parallelism = hvcc_data[15] & 0x03;
+                metadata.insert(
+                    "QuickTime:ParallelismType".to_string(),
+                    TagValue::Integer(parallelism as i64),
+                );
+
+                // chromaFormat (6 bits reserved + 2 bits value at offset 16)
+                let chroma_format = hvcc_data[16] & 0x03;
+                let chroma_str = match chroma_format {
+                    0 => "Monochrome",
+                    1 => "4:2:0",
+                    2 => "4:2:2",
+                    3 => "4:4:4",
+                    _ => "Unknown",
+                };
+                metadata.insert(
+                    "QuickTime:ChromaFormat".to_string(),
+                    TagValue::String(chroma_str.to_string()),
+                );
+
+                // bitDepthLumaMinus8 (5 bits reserved + 3 bits value at offset 17)
+                let bit_depth_luma = (hvcc_data[17] & 0x07) + 8;
+                metadata.insert(
+                    "QuickTime:BitDepthLuma".to_string(),
+                    TagValue::Integer(bit_depth_luma as i64),
+                );
+
+                // bitDepthChromaMinus8 (5 bits reserved + 3 bits value at offset 18)
+                let bit_depth_chroma = (hvcc_data[18] & 0x07) + 8;
+                metadata.insert(
+                    "QuickTime:BitDepthChroma".to_string(),
+                    TagValue::Integer(bit_depth_chroma as i64),
+                );
+
+                // avgFrameRate (2 bytes at offset 19-20)
+                let avg_frame_rate = u16::from_be_bytes([hvcc_data[19], hvcc_data[20]]);
+                metadata.insert(
+                    "QuickTime:AverageFrameRate".to_string(),
+                    TagValue::Integer(avg_frame_rate as i64),
+                );
+
+                // Byte at offset 21: constantFrameRate (2 bits) + numTemporalLayers (3 bits) + temporalIdNested (1 bit) + lengthSizeMinusOne (2 bits)
+                let flags_byte = hvcc_data[21];
+                let constant_frame_rate = (flags_byte >> 6) & 0x03;
+                let num_temporal_layers = (flags_byte >> 3) & 0x07;
+                let temporal_id_nested = (flags_byte >> 2) & 0x01;
+
+                let cfr_str = match constant_frame_rate {
+                    0 => "Unknown",
+                    1 => "Constant",
+                    2 => "Variable",
+                    _ => "Reserved",
+                };
+                metadata.insert(
+                    "QuickTime:ConstantFrameRate".to_string(),
+                    TagValue::String(cfr_str.to_string()),
+                );
+
+                metadata.insert(
+                    "QuickTime:NumTemporalLayers".to_string(),
+                    TagValue::Integer(num_temporal_layers as i64),
+                );
+
+                metadata.insert(
+                    "QuickTime:TemporalIDNested".to_string(),
+                    TagValue::String(
+                        if temporal_id_nested == 1 { "Yes" } else { "No" }.to_string(),
+                    ),
+                );
+            }
+            return;
+        }
+
+        offset += box_size;
+    }
 }
 
 /// Extract video frame rate from stts (sample-to-time table) atom
@@ -1070,13 +1412,125 @@ fn extract_video_frame_rate(
     Ok(())
 }
 
-/// Extract handler metadata from hdlr atom
+/// Extract data handler information from dref atom in minf→dinf→dref
+/// The dref contains data references that can specify data handlers
+fn extract_data_handler_info(
+    data: &[u8],
+    metadata: &mut MetadataMap,
+    track_index: usize,
+) -> Result<(), String> {
+    // dref structure:
+    // 0-3: version/flags
+    // 4-7: number of entries
+    // 8+: data reference entries (each entry has atom header + content)
+
+    if data.len() < 8 {
+        return Ok(());
+    }
+
+    let track_suffix = if track_index > 0 {
+        format!("_{}", track_index + 1)
+    } else {
+        String::new()
+    };
+
+    let reader = EndianReader::big_endian(data);
+
+    // Check entry count
+    let entry_count = reader.u32_at(4).unwrap_or(0) as usize;
+    if entry_count == 0 {
+        return Ok(());
+    }
+
+    // Parse first entry to get handler class
+    if data.len() >= 20 {
+        // First entry atom header starts at offset 8
+        // The entry has: size (4) + type (4) + version/flags (4) + data
+        // Entry type often tells us the handler class:
+        // - "alis" = Data Handler (alias)
+        // - "url " = URL Data Handler
+        // - "dhlr" = Data Handler
+        let entry_type = &data[12..16];
+        if let Ok(type_str) = std::str::from_utf8(entry_type) {
+            let handler_class = match type_str.trim() {
+                "alis" | "dhlr" => "Data Handler",
+                "url " => "URL Data Handler",
+                "rsrc" => "Resource Data Handler",
+                _ => return Ok(()), // Unknown type, don't output
+            };
+            metadata.insert(
+                format!("QuickTime:HandlerClass{}", track_suffix),
+                TagValue::String(handler_class.to_string()),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract track-level handler metadata from hdlr atom in track
+fn extract_track_handler_metadata(
+    hdlr: &Atom,
+    metadata: &mut MetadataMap,
+    track_index: usize,
+) -> Result<(), String> {
+    if hdlr.data.len() < 12 {
+        return Ok(());
+    }
+
+    let track_suffix = if track_index > 0 {
+        format!("_{}", track_index + 1)
+    } else {
+        String::new()
+    };
+
+    // Component type / handler class (4 bytes at offset 4)
+    let component_type = &hdlr.data[4..8];
+    if let Ok(component_str) = std::str::from_utf8(component_type) {
+        let component_desc = match component_str {
+            "mhlr" => "Media Handler",
+            "dhlr" => "Data Handler",
+            _ => component_str.trim(),
+        };
+        if !component_desc.is_empty() {
+            metadata.insert(
+                format!("QuickTime:HandlerClass{}", track_suffix),
+                TagValue::String(component_desc.to_string()),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract handler metadata from hdlr atom (movie-level, without track suffix)
 fn extract_handler_metadata(hdlr: &Atom, metadata: &mut MetadataMap) -> Result<(), String> {
     if hdlr.data.len() < 24 {
         return Ok(());
     }
 
-    // Skip version/flags (4 bytes) and pre-defined (4 bytes)
+    // Component type / handler class (4 bytes at offset 4)
+    // "mhlr" = Media Handler, "dhlr" = Data Handler
+    // Note: Movie-level metadata handler may have empty component type - don't output HandlerClass in that case
+    let component_type = &hdlr.data[4..8];
+    if let Ok(component_str) = std::str::from_utf8(component_type) {
+        // Trim null bytes and whitespace
+        let component_trimmed =
+            component_str.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+        if !component_trimmed.is_empty() {
+            let component_desc = match component_trimmed {
+                "mhlr" => "Media Handler",
+                "dhlr" => "Data Handler",
+                _ => component_trimmed,
+            };
+            metadata.insert(
+                "QuickTime:HandlerClass".to_string(),
+                TagValue::String(component_desc.to_string()),
+            );
+        }
+    }
+
+    // Handler type / component subtype (4 bytes at offset 8)
     let handler_type = &hdlr.data[8..12];
     if let Ok(handler_str) = std::str::from_utf8(handler_type) {
         let handler_desc = match handler_str {
@@ -1087,6 +1541,9 @@ fn extract_handler_metadata(hdlr: &Atom, metadata: &mut MetadataMap) -> Result<(
             "meta" => "Timed Metadata",
             "text" => "Text Track",
             "tmcd" => "Time Code",
+            "pict" => "Picture",
+            "auxv" => "Auxiliary Video",
+            "auxC" => "Auxiliary Codec",
             _ => handler_str,
         };
         metadata.insert(
@@ -1276,6 +1733,8 @@ fn extract_user_data_atoms(udta: &Atom, metadata: &mut MetadataMap) -> Result<()
                     b"\xa9wrt" => Some("Composer"),
                     b"\xa9lyr" => Some("Lyrics"),
                     b"\xa9grp" => Some("Grouping"),
+                    b"\xa9fmt" => Some("Format"), // Camera format description
+                    b"\xa9inf" => Some("Information"), // Camera information
                     _ => None,
                 };
 
@@ -1441,6 +1900,14 @@ fn extract_user_data_atoms(udta: &Atom, metadata: &mut MetadataMap) -> Result<()
                         metadata
                             .insert("QuickTime:Format".to_string(), TagValue::new_string(value));
                     }
+                }
+                "TAGS" => {
+                    // Pentax MakerNotes (TAGS atom)
+                    let _ = extract_pentax_maker_notes(atom.data, metadata);
+                }
+                "XMP_" => {
+                    // XMP metadata atom
+                    let _ = extract_xmp_from_atom(atom.data, metadata);
                 }
                 _ => {
                     // Skip unknown atoms
@@ -1652,21 +2119,9 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
                     b"ldes" => Some("QuickTime:LongDescription"),
                     _ => None,
                 };
-                if let Some(qt_tag_name) = qt_tag {
-                    metadata.insert(qt_tag_name.to_string(), value.clone());
-                }
-
-                metadata.insert(tag_name.into_owned(), value.clone());
-
-                if add_year_tag
-                    && let TagValue::String(ref text) = value
-                    && text.len() >= 4
-                {
-                    let year = text.chars().take(4).collect::<String>();
-                    metadata.insert("ItemList:Year".to_string(), TagValue::new_string(year));
-                }
-
                 // Handle TrackNumber and DiscNumber formatted as "X of Y"
+                // This must be done FIRST, before inserting raw value, so formatted value takes precedence
+                let mut formatted_track_or_disc = false;
                 if (atom_bytes == b"trkn" || atom_bytes == b"disk")
                     && let TagValue::Binary(ref data) = value
                     && data.len() >= 6
@@ -1685,6 +2140,23 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
                         "QuickTime:DiskNumber"
                     };
                     metadata.insert(tag.to_string(), TagValue::new_string(formatted));
+                    formatted_track_or_disc = true;
+                }
+
+                // For trkn/disk, don't insert the raw binary ItemList value - only the formatted QuickTime value
+                if !formatted_track_or_disc {
+                    if let Some(qt_tag_name) = qt_tag {
+                        metadata.insert(qt_tag_name.to_string(), value.clone());
+                    }
+                    metadata.insert(tag_name.into_owned(), value.clone());
+                }
+
+                if add_year_tag
+                    && let TagValue::String(ref text) = value
+                    && text.len() >= 4
+                {
+                    let year = text.chars().take(4).collect::<String>();
+                    metadata.insert("ItemList:Year".to_string(), TagValue::new_string(year));
                 }
             }
         }
@@ -1874,6 +2346,10 @@ fn extract_itunes_data_value(data: &[u8]) -> Option<TagValue> {
                 _ => None,
             }
         }
+        0 => {
+            // Implicit data type (binary) - used for TrackNumber, DiscNumber, etc.
+            Some(TagValue::Binary(value_data.to_vec()))
+        }
         13 | 14 => {
             // JPEG or PNG image data
             Some(TagValue::Binary(value_data.to_vec()))
@@ -1960,8 +2436,14 @@ fn extract_heif_metadata(
     // Parse iloc to build item locations
     let item_locations = parse_iloc_locations(&children);
 
-    // Extract image dimensions from ispe atoms
+    // Extract image dimensions from ispe atoms (in iprp->ipco)
     extract_ispe_dimensions(&children, metadata);
+
+    // Extract primary item reference from pitm atom
+    extract_primary_item_reference(&children, metadata);
+
+    // Extract HEVC configuration from iprp->ipco container
+    extract_heif_hevc_config(&children, metadata);
 
     // Extract EXIF data from mdat if we found an Exif item
     if let Some(id) = exif_item_id
@@ -2090,7 +2572,42 @@ fn parse_iloc_locations(children: &[Atom]) -> HashMap<u16, (u64, u64)> {
 }
 
 /// Extract image dimensions from ispe (image spatial extents) atoms
+/// The ispe atom is located inside iprp -> ipco container
 fn extract_ispe_dimensions(children: &[Atom], metadata: &mut MetadataMap) {
+    // First, try to find ispe atoms in iprp -> ipco container (HEIF standard structure)
+    if let Some(iprp) = children.iter().find(|a| a.atom_type.matches("iprp")) {
+        if let Ok((_, iprp_children)) = super::atom_parser::parse_atoms(iprp.data) {
+            if let Some(ipco) = iprp_children.iter().find(|a| a.atom_type.matches("ipco")) {
+                if let Ok((_, ipco_children)) = super::atom_parser::parse_atoms(ipco.data) {
+                    for atom in &ipco_children {
+                        if atom.atom_type.matches("ispe") && atom.data.len() >= 12 {
+                            let r = EndianReader::big_endian(atom.data);
+                            if let (Some(width), Some(height)) = (r.u32_at(4), r.u32_at(8))
+                                && !metadata.contains_key("HEIF:ImageWidth")
+                            {
+                                metadata.insert(
+                                    "HEIF:ImageWidth".to_string(),
+                                    TagValue::Integer(width as i64),
+                                );
+                                metadata.insert(
+                                    "HEIF:ImageHeight".to_string(),
+                                    TagValue::Integer(height as i64),
+                                );
+                                // Also add ImageSpatialExtent in ExifTool format
+                                metadata.insert(
+                                    "QuickTime:ImageSpatialExtent".to_string(),
+                                    TagValue::String(format!("{}x{}", width, height)),
+                                );
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: check if ispe atoms are directly in children (legacy path)
     for atom in children {
         if atom.atom_type.matches("ispe") && atom.data.len() >= 12 {
             let r = EndianReader::big_endian(atom.data);
@@ -2105,7 +2622,243 @@ fn extract_ispe_dimensions(children: &[Atom], metadata: &mut MetadataMap) {
                     "HEIF:ImageHeight".to_string(),
                     TagValue::Integer(height as i64),
                 );
+                // Also add ImageSpatialExtent in ExifTool format
+                metadata.insert(
+                    "QuickTime:ImageSpatialExtent".to_string(),
+                    TagValue::String(format!("{}x{}", width, height)),
+                );
+                return;
             }
+        }
+    }
+}
+
+/// Extract primary item reference from pitm atom
+fn extract_primary_item_reference(children: &[Atom], metadata: &mut MetadataMap) {
+    if let Some(pitm) = children.iter().find(|a| a.atom_type.matches("pitm")) {
+        if pitm.data.len() >= 6 {
+            let version = pitm.data[0];
+            let item_id = if version == 0 {
+                u16::from_be_bytes([pitm.data[4], pitm.data[5]]) as u32
+            } else if pitm.data.len() >= 8 {
+                u32::from_be_bytes([pitm.data[4], pitm.data[5], pitm.data[6], pitm.data[7]])
+            } else {
+                return;
+            };
+            metadata.insert(
+                "QuickTime:PrimaryItemReference".to_string(),
+                TagValue::Integer(item_id as i64),
+            );
+        }
+    }
+}
+
+/// Extract HEVC configuration from HEIF item properties (iprp -> ipco -> hvcC)
+fn extract_heif_hevc_config(children: &[Atom], metadata: &mut MetadataMap) {
+    // Find iprp (item properties) atom
+    let Some(iprp) = children.iter().find(|a| a.atom_type.matches("iprp")) else {
+        return;
+    };
+
+    // Parse children of iprp
+    let iprp_children = match super::atom_parser::parse_atoms(iprp.data) {
+        Ok((_, atoms)) => atoms,
+        Err(_) => return,
+    };
+
+    // Find ipco (item property container) atom
+    let Some(ipco) = iprp_children.iter().find(|a| a.atom_type.matches("ipco")) else {
+        return;
+    };
+
+    // Parse children of ipco - this contains the actual properties
+    let ipco_children = match super::atom_parser::parse_atoms(ipco.data) {
+        Ok((_, atoms)) => atoms,
+        Err(_) => return,
+    };
+
+    // Look for hvcC atom in ipco children
+    for atom in &ipco_children {
+        if atom.atom_type.matches("hvcC") && atom.data.len() >= 23 {
+            // Parse HEVC configuration directly from the atom data
+            let hvcc_data = atom.data;
+
+            // configurationVersion (1 byte)
+            let config_version = hvcc_data[0];
+            metadata.insert(
+                "QuickTime:HEVCConfigurationVersion".to_string(),
+                TagValue::Integer(config_version as i64),
+            );
+
+            // general_profile_space (2 bits) + general_tier_flag (1 bit) + general_profile_idc (5 bits)
+            let profile_byte = hvcc_data[1];
+            let profile_space = (profile_byte >> 6) & 0x03;
+            let tier_flag = (profile_byte >> 5) & 0x01;
+            let profile_idc = profile_byte & 0x1F;
+
+            let profile_space_str = match profile_space {
+                0 => "Conforming",
+                1 => "Reserved 1",
+                2 => "Reserved 2",
+                3 => "Reserved 3",
+                _ => "Unknown",
+            };
+            metadata.insert(
+                "QuickTime:GeneralProfileSpace".to_string(),
+                TagValue::String(profile_space_str.to_string()),
+            );
+
+            let tier_str = if tier_flag == 0 {
+                "Main Tier"
+            } else {
+                "High Tier"
+            };
+            metadata.insert(
+                "QuickTime:GeneralTierFlag".to_string(),
+                TagValue::String(tier_str.to_string()),
+            );
+
+            let profile_name = match profile_idc {
+                1 => "Main",
+                2 => "Main 10",
+                3 => "Main Still Picture",
+                4 => "Format Range Extensions",
+                5 => "High Throughput",
+                6 => "Multiview Main",
+                7 => "Scalable Main",
+                8 => "3D Main",
+                9 => "Screen-Extended Main",
+                10 => "Scalable Format Range Extensions",
+                11 => "High Throughput Screen-Extended",
+                _ => "Unknown",
+            };
+            metadata.insert(
+                "QuickTime:GeneralProfileIDC".to_string(),
+                TagValue::String(profile_name.to_string()),
+            );
+
+            // general_profile_compatibility_flags (4 bytes)
+            let compat_flags =
+                u32::from_be_bytes([hvcc_data[2], hvcc_data[3], hvcc_data[4], hvcc_data[5]]);
+            let mut compat_profiles = Vec::with_capacity(12);
+            for (bit, profile) in [
+                (29, "Main 10"),
+                (30, "Main"),
+                (31, "No Profile"),
+                (28, "Main Still Picture"),
+                (27, "Format Range Extensions"),
+                (26, "High Throughput"),
+                (25, "Multiview Main"),
+                (24, "Scalable Main"),
+                (23, "3D Main"),
+                (22, "Screen Content Coding Extensions"),
+                (21, "Scalable Format Range Extensions"),
+                (20, "High Throughput Screen Content Coding Extensions"),
+            ] {
+                if compat_flags & (1u32 << bit) != 0 {
+                    compat_profiles.push(profile);
+                }
+            }
+            if !compat_profiles.is_empty() {
+                metadata.insert(
+                    "QuickTime:GenProfileCompatibilityFlags".to_string(),
+                    TagValue::String(compat_profiles.join(", ")),
+                );
+            }
+
+            // general_constraint_indicator_flags (6 bytes at offset 6-11)
+            let constraint_bytes: Vec<String> =
+                hvcc_data[6..12].iter().map(|b| format!("{}", b)).collect();
+            metadata.insert(
+                "QuickTime:ConstraintIndicatorFlags".to_string(),
+                TagValue::String(constraint_bytes.join(" ")),
+            );
+
+            // general_level_idc (1 byte at offset 12)
+            let level_idc = hvcc_data[12];
+            let level = level_idc as f64 / 30.0;
+            metadata.insert(
+                "QuickTime:GeneralLevelIDC".to_string(),
+                TagValue::String(format!("{} (level {:.1})", level_idc, level)),
+            );
+
+            // min_spatial_segmentation_idc (4 bits reserved + 12 bits value at offset 13-14)
+            let min_spatial = u16::from_be_bytes([hvcc_data[13], hvcc_data[14]]) & 0x0FFF;
+            metadata.insert(
+                "QuickTime:MinSpatialSegmentationIDC".to_string(),
+                TagValue::Integer(min_spatial as i64),
+            );
+
+            // parallelismType (6 bits reserved + 2 bits value at offset 15)
+            let parallelism = hvcc_data[15] & 0x03;
+            metadata.insert(
+                "QuickTime:ParallelismType".to_string(),
+                TagValue::Integer(parallelism as i64),
+            );
+
+            // chromaFormat (6 bits reserved + 2 bits value at offset 16)
+            let chroma_format = hvcc_data[16] & 0x03;
+            let chroma_str = match chroma_format {
+                0 => "Monochrome",
+                1 => "4:2:0",
+                2 => "4:2:2",
+                3 => "4:4:4",
+                _ => "Unknown",
+            };
+            metadata.insert(
+                "QuickTime:ChromaFormat".to_string(),
+                TagValue::String(chroma_str.to_string()),
+            );
+
+            // bitDepthLumaMinus8 (5 bits reserved + 3 bits value at offset 17)
+            let bit_depth_luma = (hvcc_data[17] & 0x07) + 8;
+            metadata.insert(
+                "QuickTime:BitDepthLuma".to_string(),
+                TagValue::Integer(bit_depth_luma as i64),
+            );
+
+            // bitDepthChromaMinus8 (5 bits reserved + 3 bits value at offset 18)
+            let bit_depth_chroma = (hvcc_data[18] & 0x07) + 8;
+            metadata.insert(
+                "QuickTime:BitDepthChroma".to_string(),
+                TagValue::Integer(bit_depth_chroma as i64),
+            );
+
+            // avgFrameRate (2 bytes at offset 19-20)
+            let avg_frame_rate = u16::from_be_bytes([hvcc_data[19], hvcc_data[20]]);
+            metadata.insert(
+                "QuickTime:AverageFrameRate".to_string(),
+                TagValue::Integer(avg_frame_rate as i64),
+            );
+
+            // Byte at offset 21: constantFrameRate (2 bits) + numTemporalLayers (3 bits) + temporalIdNested (1 bit) + lengthSizeMinusOne (2 bits)
+            let flags_byte = hvcc_data[21];
+            let constant_frame_rate = (flags_byte >> 6) & 0x03;
+            let num_temporal_layers = (flags_byte >> 3) & 0x07;
+            let temporal_id_nested = (flags_byte >> 2) & 0x01;
+
+            let cfr_str = match constant_frame_rate {
+                0 => "Unknown",
+                1 => "Constant",
+                2 => "Variable",
+                _ => "Reserved",
+            };
+            metadata.insert(
+                "QuickTime:ConstantFrameRate".to_string(),
+                TagValue::String(cfr_str.to_string()),
+            );
+
+            metadata.insert(
+                "QuickTime:NumTemporalLayers".to_string(),
+                TagValue::Integer(num_temporal_layers as i64),
+            );
+
+            metadata.insert(
+                "QuickTime:TemporalIDNested".to_string(),
+                TagValue::String(if temporal_id_nested == 1 { "Yes" } else { "No" }.to_string()),
+            );
+
+            return;
         }
     }
 }
@@ -2396,6 +3149,151 @@ fn raw_bytes_to_tag_value(
     }
 }
 
+/// Formats an exposure time in seconds the way ExifTool's `PrintExposureTime`
+/// does: as a `1/N` fraction for sub-quarter-second exposures, otherwise as a
+/// decimal number of seconds (with a trailing `.0` stripped).
+fn format_exposure_time_seconds(secs: f64) -> String {
+    if secs > 0.0 && secs < 0.25001 {
+        format!("1/{}", (0.5 + 1.0 / secs) as i64)
+    } else {
+        let s = format!("{:.1}", secs);
+        s.strip_suffix(".0").map(str::to_string).unwrap_or(s)
+    }
+}
+
+/// Extract Pentax MakerNotes from the TAGS atom in QuickTime/MOV files.
+///
+/// This mirrors ExifTool's `Image::ExifTool::Pentax::MOV` table (a
+/// `ProcessBinaryData` block, little-endian, found in movies such as the
+/// Optio WP): a fixed-size layout keyed off absolute byte offsets from the
+/// start of the atom payload, not relative to the end of the maker string.
+fn extract_pentax_maker_notes(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
+    // ExifTool only recognizes this sub-format when the payload starts with
+    // this exact maker string (see QuickTime.pm's `TAGS` tag definition).
+    if !data.starts_with(b"PENTAX DIGITAL CAMERA\0") || data.len() < 24 {
+        return Ok(());
+    }
+
+    // 0x00: Make, string[24]
+    if let Ok(make) = std::str::from_utf8(&data[0..24]) {
+        let make_trimmed = make.trim_end_matches('\0').trim();
+        if !make_trimmed.is_empty() {
+            metadata.insert(
+                "MakerNotes:Make".to_string(),
+                TagValue::new_string(make_trimmed.to_string()),
+            );
+        }
+    }
+
+    let r = EndianReader::little_endian(data);
+
+    // 0x26: ExposureTime, int32u; ValueConv: $val ? 10/$val : 0
+    if let Some(raw) = r.u32_at(0x26) {
+        if raw != 0 {
+            let secs = 10.0 / raw as f64;
+            metadata.insert(
+                "MakerNotes:ExposureTime".to_string(),
+                TagValue::new_string(format_exposure_time_seconds(secs)),
+            );
+        }
+    }
+
+    // 0x2a: FNumber, rational64u; PrintConv: sprintf("%.1f", $val)
+    if let Some((num, den)) = r.rational_at(0x2a) {
+        if den != 0 {
+            let fnumber = num as f64 / den as f64;
+            metadata.insert(
+                "MakerNotes:FNumber".to_string(),
+                TagValue::new_string(format!("{:.1}", fnumber)),
+            );
+        }
+    }
+
+    // 0x32: ExposureCompensation, rational64s; PrintConv: $val ? "+X.X" : 0
+    if let Some((num, den)) = r.srational_at(0x32) {
+        if den != 0 {
+            let val = num as f64 / den as f64;
+            let ec_str = if val != 0.0 {
+                format!("{:+.1}", val)
+            } else {
+                "0".to_string()
+            };
+            metadata.insert(
+                "MakerNotes:ExposureCompensation".to_string(),
+                TagValue::new_string(ec_str),
+            );
+        }
+    }
+
+    // 0x44: WhiteBalance, int16u
+    if let Some(wb) = r.u16_at(0x44) {
+        let wb_str = match wb {
+            0 => Some("Auto"),
+            1 => Some("Daylight"),
+            2 => Some("Shade"),
+            3 => Some("Fluorescent"),
+            4 => Some("Tungsten"),
+            5 => Some("Manual"),
+            _ => None,
+        };
+        if let Some(wb_str) = wb_str {
+            metadata.insert(
+                "MakerNotes:WhiteBalance".to_string(),
+                TagValue::new_string(wb_str.to_string()),
+            );
+        }
+    }
+
+    // 0x48: FocalLength, rational64u; PrintConv: sprintf("%.1f mm", $val)
+    if let Some((num, den)) = r.rational_at(0x48) {
+        if den != 0 {
+            let focal_length = num as f64 / den as f64;
+            metadata.insert(
+                "MakerNotes:FocalLength".to_string(),
+                TagValue::new_string(format!("{:.1} mm", focal_length)),
+            );
+        }
+    }
+
+    // 0xaf: ISO, int16u
+    if let Some(iso) = r.u16_at(0xaf) {
+        metadata.insert("MakerNotes:ISO".to_string(), TagValue::Integer(iso as i64));
+    }
+
+    Ok(())
+}
+
+/// Extract XMP metadata from XMP_ atom in QuickTime files
+fn extract_xmp_from_atom(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
+    // XMP_ atom contains raw XMP data (XML format)
+    // Find the start of XMP data - may start directly or after some header
+    let xmp_start = if data.starts_with(b"<?xpacket") {
+        0
+    } else if let Some(pos) = data.windows(9).position(|w| w == b"<?xpacket") {
+        pos
+    } else {
+        return Ok(());
+    };
+
+    let xmp_data = &data[xmp_start..];
+
+    // Parse XMP tags using the existing XMP parser (takes bytes)
+    if let Ok(xmp_tags) = crate::parsers::xmp::rdf_parser::parse_xmp(xmp_data) {
+        for (key, value) in xmp_tags {
+            // The XMP parser returns keys without "XMP:" prefix, so add it
+            // But some keys might already be prefixed, so check first
+            let full_key = if key.starts_with("XMP:") {
+                key
+            } else {
+                format!("XMP:{}", key)
+            };
+            metadata.insert(full_key, TagValue::new_string(value));
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2597,6 +3495,7 @@ mod tests {
         let stts = Atom {
             atom_type: FourCC::from_string("stts").unwrap(),
             data: &stts_data,
+            header_size: 8,
         };
 
         let mut metadata = MetadataMap::new();
@@ -2631,6 +3530,7 @@ mod tests {
         let stts = Atom {
             atom_type: FourCC::from_string("stts").unwrap(),
             data: &stts_data,
+            header_size: 8,
         };
 
         let mut metadata = MetadataMap::new();

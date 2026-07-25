@@ -3,10 +3,43 @@
 //! Registry of all Sanyo MakerNote tags with their metadata and decoders.
 //! Supports Sanyo Xacti dual camera/camcorder and VPC series digital cameras.
 
+use super::super::shared::generic_decoders::SimpleValueDecoder;
 use super::super::shared::tag_registry::TagRegistry;
 
-// Re-export decoders from sanyo.rs
-use super::super::sanyo::{FOCUS_MODE, QUALITY, RECORD_MODE, SCENE_MODE, SEQUENTIAL_MODE};
+// ============================================================================
+// Sanyo Decoders
+// ============================================================================
+// Inline decoders to avoid cross-module import issues
+
+/// Decoder for Sanyo quality settings
+const QUALITY: SimpleValueDecoder<u16> =
+    SimpleValueDecoder::new(&[(0, "Normal"), (1, "Fine"), (2, "Super Fine")]);
+
+/// Decoder for Sanyo focus modes
+const FOCUS_MODE: SimpleValueDecoder<u16> = SimpleValueDecoder::new(&[(0, "Normal"), (1, "Macro")]);
+
+/// Decoder for Sanyo sequential modes
+const SEQUENTIAL_MODE: SimpleValueDecoder<u16> = SimpleValueDecoder::new(&[
+    (0, "None"),
+    (1, "Standard"),
+    (2, "Best"),
+    (3, "Adjust Exposure"),
+]);
+
+/// Decoder for Sanyo scene modes
+const SCENE_MODE: SimpleValueDecoder<u16> = SimpleValueDecoder::new(&[
+    (0, "Normal"),
+    (1, "Portrait"),
+    (2, "Scenery"),
+    (3, "Sports"),
+    (4, "Night"),
+    (5, "Beach"),
+    (6, "Snow"),
+]);
+
+/// Decoder for Sanyo record modes
+const RECORD_MODE: SimpleValueDecoder<u16> =
+    SimpleValueDecoder::new(&[(0, "Still Image"), (1, "Video")]);
 
 // Wrapper functions to convert SimpleValueDecoder to function pointers
 fn decode_quality(value: u16) -> String {

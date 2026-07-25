@@ -3,6 +3,7 @@
 //! This module contains parsers for various APP segments beyond the standard
 //! EXIF, XMP, and IPTC segments.
 
+pub mod app0;
 pub mod app10_hdr;
 pub mod app11_jpeg_hdr;
 pub mod app12_agfa;
@@ -13,6 +14,7 @@ pub mod jumbf;
 pub mod photoshop;
 
 // Re-export main parsing functions
+pub use app0::parse_app0;
 pub use app6::parse_app6;
 pub use app10_hdr::parse_app10_hdr;
 pub use app11_jpeg_hdr::parse_app11_jpeg_hdr;

@@ -21,6 +21,12 @@
 //! The byte order marker appears at the start of the TIFF file and affects all
 //! multi-byte values in the IFD structure.
 //!
+//! # TIFF Variants
+//!
+//! While standard TIFF uses magic number 42 (0x002A), some RAW formats use variants:
+//! - Panasonic RW2: uses 0x55 (85) as magic number, but otherwise standard TIFF structure
+//! - The IFD parser works with all TIFF variants, as it only processes IFD structures
+//!
 //! # Value Storage
 //!
 //! Values are stored either inline or via offset:

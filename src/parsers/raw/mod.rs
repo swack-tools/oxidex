@@ -7,6 +7,9 @@
 pub mod format_detection;
 pub mod metadata;
 
+// Format-specific parsers
+pub mod raf_parser;
+
 // Re-export the public API
 pub use format_detection::{RawFormat, detect_raw_format};
 pub use metadata::parse_raw_metadata;

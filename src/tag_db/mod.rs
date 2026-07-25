@@ -50,6 +50,108 @@ static TAG_ID_TO_NAME_INDEX: LazyLock<HashMap<(u16, FormatFamily), String>> = La
         }
     }
 
+    // Helper function to detect invalid tag names that are actually enum values
+    // These are incorrectly parsed as tags from the YAML database but should be skipped
+    fn is_valid_tag_name(name: &str) -> bool {
+        // Skip names that look like enum values or pixel format descriptors
+        // These typically have patterns like:
+        // - "Low", "High", "Soft", "Hard" (single-word enum values)
+        // - "128-bit PRGBA Float", "32-bit BGRA" (WIC pixel format values)
+        // - Names with digits followed by "-bit"
+        // - Names starting with lowercase (unlikely for real EXIF tags)
+
+        // Skip if contains "-bit " pattern (WIC pixel format values)
+        if name.contains("-bit ") {
+            return false;
+        }
+
+        // Skip if name contains " Channels" (WIC formats like "24-bit 3 Channels")
+        if name.contains(" Channels") {
+            return false;
+        }
+
+        // Skip JBIG2 profile names and other compression type strings
+        if name.contains("Profile M")
+            || name.contains("Profile A")
+            || name.contains("Layer Profile")
+            || name.contains(" raster ")
+            || name.contains("grayscale,")
+            || name.contains("color,")
+            || name.contains("multi-page")
+            || name.contains("Resolution/")
+            || name.contains(" rows ")
+            || name.contains(" columns")
+            || name.contains(" sequential")
+            || name.contains(" dither")
+            || name.contains("Sensitivity,")
+            || name.contains("Exposure Index")
+        {
+            return false;
+        }
+
+        // Skip compression/sensor type names that look like descriptions
+        let description_patterns = ["Associated Alpha", "Baseline JPEG", "JBIG color", "JBIG"];
+        for pattern in &description_patterns {
+            if name == *pattern {
+                return false;
+            }
+        }
+
+        // Skip known enum value names that appear with small IDs
+        let enum_values = [
+            "Low",
+            "High",
+            "Soft",
+            "Hard",
+            "Unknown",
+            "None",
+            "On",
+            "Off",
+            "Normal",
+            "Disabled",
+            "Enabled",
+            "Auto",
+            "Manual",
+            "Yes",
+            "No",
+            "Portrait",
+            "Landscape",
+            "Macro",
+            "Close",
+            "Distant",
+            "Program",
+            "Aperture priority",
+            "Shutter priority",
+            "Creative",
+            "Action",
+            "Night",
+            "Long Sector",
+            "Sector",
+            "Lossless",
+            "Lossy",
+            "Uncompressed",
+            "Regenerated",
+            "Shared Data",
+        ];
+        if enum_values.contains(&name) {
+            return false;
+        }
+
+        // Skip names that start with lowercase (most EXIF tags are PascalCase)
+        // but allow certain patterns like "undef", "n/a"
+        if !name.is_empty() {
+            let first_char = name.chars().next().unwrap();
+            if first_char.is_ascii_lowercase()
+                && !name.starts_with("undef")
+                && !name.starts_with("n/a")
+            {
+                return false;
+            }
+        }
+
+        true
+    }
+
     // Scan all domain tag databases and build reverse index
     // We iterate through: core, camera, media, image, document, specialty
     // Using entry().or_insert() so FIRST occurrence wins (standard tags take priority over value names)
@@ -65,6 +167,10 @@ static TAG_ID_TO_NAME_INDEX: LazyLock<HashMap<(u16, FormatFamily), String>> = La
         if let Some((format_family, prefix)) = get_format_info(&table.name) {
             for tag in &table.tags {
                 if let Some(tag_id) = parse_tag_id(&tag.id) {
+                    // Skip invalid tag names (enum values mixed in with real tags)
+                    if !is_valid_tag_name(&tag.name) {
+                        continue;
+                    }
                     let full_name = format!("{}:{}", prefix, tag.name);
                     index.entry((tag_id, format_family)).or_insert(full_name);
                 }
@@ -80,6 +186,9 @@ static TAG_ID_TO_NAME_INDEX: LazyLock<HashMap<(u16, FormatFamily), String>> = La
         if let Some((format_family, prefix)) = get_format_info(&table.name) {
             for tag in &table.tags {
                 if let Some(tag_id) = parse_tag_id(&tag.id) {
+                    if !is_valid_tag_name(&tag.name) {
+                        continue;
+                    }
                     let full_name = format!("{}:{}", prefix, tag.name);
                     index.entry((tag_id, format_family)).or_insert(full_name);
                 }
@@ -95,6 +204,9 @@ static TAG_ID_TO_NAME_INDEX: LazyLock<HashMap<(u16, FormatFamily), String>> = La
         if let Some((format_family, prefix)) = get_format_info(&table.name) {
             for tag in &table.tags {
                 if let Some(tag_id) = parse_tag_id(&tag.id) {
+                    if !is_valid_tag_name(&tag.name) {
+                        continue;
+                    }
                     let full_name = format!("{}:{}", prefix, tag.name);
                     index.entry((tag_id, format_family)).or_insert(full_name);
                 }
@@ -110,6 +222,9 @@ static TAG_ID_TO_NAME_INDEX: LazyLock<HashMap<(u16, FormatFamily), String>> = La
         if let Some((format_family, prefix)) = get_format_info(&table.name) {
             for tag in &table.tags {
                 if let Some(tag_id) = parse_tag_id(&tag.id) {
+                    if !is_valid_tag_name(&tag.name) {
+                        continue;
+                    }
                     let full_name = format!("{}:{}", prefix, tag.name);
                     index.entry((tag_id, format_family)).or_insert(full_name);
                 }
@@ -125,6 +240,9 @@ static TAG_ID_TO_NAME_INDEX: LazyLock<HashMap<(u16, FormatFamily), String>> = La
         if let Some((format_family, prefix)) = get_format_info(&table.name) {
             for tag in &table.tags {
                 if let Some(tag_id) = parse_tag_id(&tag.id) {
+                    if !is_valid_tag_name(&tag.name) {
+                        continue;
+                    }
                     let full_name = format!("{}:{}", prefix, tag.name);
                     index.entry((tag_id, format_family)).or_insert(full_name);
                 }
@@ -140,6 +258,9 @@ static TAG_ID_TO_NAME_INDEX: LazyLock<HashMap<(u16, FormatFamily), String>> = La
         if let Some((format_family, prefix)) = get_format_info(&table.name) {
             for tag in &table.tags {
                 if let Some(tag_id) = parse_tag_id(&tag.id) {
+                    if !is_valid_tag_name(&tag.name) {
+                        continue;
+                    }
                     let full_name = format!("{}:{}", prefix, tag.name);
                     index.entry((tag_id, format_family)).or_insert(full_name);
                 }

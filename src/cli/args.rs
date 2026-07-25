@@ -67,6 +67,72 @@ pub struct CliArgs {
     pub args: Vec<String>,
 }
 
+fn normalize_exiftool_option(arg: String) -> String {
+    if let Some(value) = arg.strip_prefix("-TagsFromFile=") {
+        return format!("--TagsFromFile={value}");
+    }
+
+    match arg.as_str() {
+        "-json" => "--json".to_string(),
+        "-csv" => "--csv".to_string(),
+        "-preserve-file-times" => "--preserve-file-times".to_string(),
+        "-backup" => "--backup".to_string(),
+        "-readonly" => "--readonly".to_string(),
+        "-exiftool-compat" => "--exiftool-compat".to_string(),
+        "-TagsFromFile" => "--TagsFromFile".to_string(),
+        _ => arg,
+    }
+}
+
+fn is_flag_short_option(ch: char) -> bool {
+    matches!(ch, 'h' | 'V' | 'j' | 's' | 'a' | 'r' | 'e' | 'n')
+}
+
+fn is_lexopt_short_arg(arg: &str) -> bool {
+    let Some(body) = arg.strip_prefix('-') else {
+        return false;
+    };
+    if body.is_empty() || body.starts_with('-') {
+        return false;
+    }
+    // Assignment-shaped args are tag modifications (e.g. -description=x), never
+    // short-option clusters, even when they start with a valid cluster prefix.
+    if body.contains('=') {
+        return false;
+    }
+
+    for (index, ch) in body.char_indices() {
+        if ch == 'd' {
+            // Everything before 'd' was already confirmed to be a flag option.
+            // 'd' is the date-format option only when it ends the cluster
+            // (`-d`, `-srd`; format is the next argument) or is immediately
+            // followed by a strftime directive (`-d%Y%m%d`). Otherwise the arg
+            // is a tag name that merely starts with cluster letters
+            // (`-description`, `-date`, `-shadows`) and must not be swallowed.
+            let remainder = &body[index + 1..];
+            return remainder.is_empty() || remainder.starts_with('%');
+        }
+        if !is_flag_short_option(ch) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn lexopt_arg_requires_next_value(arg: &str) -> bool {
+    if arg == "--TagsFromFile" {
+        return true;
+    }
+
+    let Some(body) = arg.strip_prefix('-') else {
+        return false;
+    };
+    !body.starts_with('-')
+        && body.ends_with('d')
+        && body[..body.len() - 1].chars().all(is_flag_short_option)
+}
+
 impl CliArgs {
     /// Parse command-line arguments from the environment.
     ///
@@ -107,21 +173,32 @@ impl CliArgs {
         let raw_args: Vec<String> = std::env::args().skip(1).collect();
         let mut lexopt_args = Vec::new();
         let mut tag_modifications = Vec::new();
+        let mut next_arg_is_lexopt_value = false;
 
-        for arg in raw_args {
-            // Check if this looks like a tag modification, date shift, or specific tag extraction
-            // These start with '-' but aren't double-dash flags, and contain '=' or ':'
-            // (Tag names usually contain ':' like "-EXIF:Model", or '=' for assignment)
+        for raw_arg in raw_args {
+            if next_arg_is_lexopt_value {
+                lexopt_args.push(raw_arg);
+                next_arg_is_lexopt_value = false;
+                continue;
+            }
+
+            let arg = normalize_exiftool_option(raw_arg);
+
+            // Keep tag modifications, date shifts, and specific tag extraction out of lexopt.
+            // Supported short options and clusters still flow through lexopt.
             if arg.starts_with('-')
                 && !arg.starts_with("--")
+                && !is_lexopt_short_arg(&arg)
                 && (arg.contains('=')
                     || arg.ends_with("+=")
                     || arg.ends_with("-=")
-                    || arg.contains(':'))
+                    || arg.contains(':')
+                    || arg.len() > 1)
             {
                 // This is a tag modification, date shift, or specific tag - don't pass to lexopt
                 tag_modifications.push(arg);
             } else {
+                next_arg_is_lexopt_value = lexopt_arg_requires_next_value(&arg);
                 // Regular argument - pass to lexopt
                 lexopt_args.push(arg);
             }
@@ -677,4 +754,59 @@ fn print_help() {
 /// Displays the application name and version number from Cargo package metadata.
 fn print_version() {
     println!("oxidex {}", env!("CARGO_PKG_VERSION"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_option_clusters_are_lexopt_args() {
+        assert!(is_lexopt_short_arg("-s"));
+        assert!(is_lexopt_short_arg("-sr"));
+        assert!(is_lexopt_short_arg("-d"));
+        // Attached date-format values stay with lexopt's -d option.
+        assert!(is_lexopt_short_arg("-d%Y%m%d"));
+        assert!(is_lexopt_short_arg("-srd%Y"));
+    }
+
+    #[test]
+    fn assignment_shaped_args_are_never_lexopt_short_args() {
+        // Regression: these were consumed as `-d` with an attached value,
+        // silently dropping the requested tag write.
+        assert!(!is_lexopt_short_arg("-description=test"));
+        assert!(!is_lexopt_short_arg(
+            "-datetimeoriginal=2020:01:01 10:00:00"
+        ));
+        assert!(!is_lexopt_short_arg("-d=broken"));
+    }
+
+    #[test]
+    fn non_cluster_args_are_not_lexopt_short_args() {
+        assert!(!is_lexopt_short_arg("--json"));
+        assert!(!is_lexopt_short_arg("-EXIF:Model"));
+        assert!(!is_lexopt_short_arg("photo.jpg"));
+        assert!(!is_lexopt_short_arg("-"));
+    }
+
+    #[test]
+    fn tag_names_starting_with_cluster_letters_are_not_swallowed() {
+        // Regression: these bare (no '=') filter/extraction args start with
+        // valid cluster letters but are tag names, not option clusters. The
+        // 'd'-prefixed ones were parsed as `-d` with an attached value.
+        assert!(!is_lexopt_short_arg("-description"));
+        assert!(!is_lexopt_short_arg("-datetimeoriginal"));
+        assert!(!is_lexopt_short_arg("-date"));
+        assert!(!is_lexopt_short_arg("-shadows")); // s,h,a all flags, then 'd'
+        assert!(!is_lexopt_short_arg("-redbalance")); // r,e flags, then 'd'
+        assert!(!is_lexopt_short_arg("-address")); // a flag, then 'd'
+    }
+
+    #[test]
+    fn genuine_date_option_forms_still_reach_lexopt() {
+        assert!(is_lexopt_short_arg("-d")); // format is the next argument
+        assert!(is_lexopt_short_arg("-d%Y%m%d")); // attached strftime format
+        assert!(is_lexopt_short_arg("-srd")); // cluster ending in -d
+        assert!(is_lexopt_short_arg("-nd%H%M")); // cluster + attached format
+    }
 }

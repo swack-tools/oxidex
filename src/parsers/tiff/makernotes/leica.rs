@@ -98,6 +98,94 @@ const LEICA_CAMERA_ROLL_ANGLE: u16 = 0x0064;
 const LEICA_MACRO_MODE: u16 = 0x0070;
 const LEICA_SCENE_MODE: u16 = 0x0071;
 
+// Leica 4 (M9) Subdirectories
+const L4_SUBDIR_3000: u16 = 0x3000;
+const L4_SUBDIR_3100: u16 = 0x3100;
+const L4_SUBDIR_3400: u16 = 0x3400;
+const L4_SUBDIR_3900: u16 = 0x3900;
+
+// Leica 4 (M9) Tag IDs
+const L4_QUALITY: u16 = 0x0003;
+const L4_USER_PROFILE: u16 = 0x0004;
+const L4_SERIAL_NUMBER: u16 = 0x0005;
+const L4_WHITE_BALANCE: u16 = 0x0006;
+const L4_FIRMWARE_VERSION: u16 = 0x0007;
+const L4_EXTERNAL_SENSOR_BRIGHTNESS: u16 = 0x0008;
+const L4_MEASURED_LV: u16 = 0x0009;
+const L4_APPROXIMATE_F_NUMBER: u16 = 0x000A;
+const L4_CAMERA_TEMPERATURE: u16 = 0x000B;
+const L4_WB_RGB_LEVELS: u16 = 0x000E;
+const L4_LENS_TYPE: u16 = 0x0014;
+const L4_CONTRAST: u16 = 0x002C;
+const L4_SATURATION: u16 = 0x002D;
+const L4_SHARPENING: u16 = 0x002E;
+const L4_JPEG_QUALITY: u16 = 0x002F;
+const L4_BASE_ISO: u16 = 0x0030;
+const L4_SENSOR_WIDTH: u16 = 0x0031;
+const L4_SENSOR_HEIGHT: u16 = 0x0032;
+const L4_SENSOR_BIT_DEPTH: u16 = 0x0033;
+
+// Leica 4 Decoders
+const_decoder!(
+    L4_DECODE_CONTRAST,
+    i32,
+    [
+        (0, "Low"),
+        (1, "Normal"),
+        (2, "High"),
+        (3, "Medium Low"),
+        (4, "Medium High"),
+    ]
+);
+
+const_decoder!(
+    L4_DECODE_SHARPENING,
+    i32,
+    [
+        (0, "Low"),
+        (1, "Normal"),
+        (2, "High"),
+        (3, "Medium Low"),
+        (4, "Medium High"),
+        (5, "Off"),
+    ]
+);
+
+const_decoder!(
+    L4_DECODE_SATURATION,
+    i32,
+    [
+        (0, "Low"),
+        (1, "Normal"),
+        (2, "High"),
+        (3, "Medium Low"),
+        (4, "Medium High"),
+        (5, "Black & White"),
+    ]
+);
+
+const_decoder!(
+    L4_DECODE_WHITE_BALANCE,
+    i32,
+    [
+        (0, "Auto"),
+        (1, "Daylight"),
+        (2, "Fluorescent"),
+        (3, "Tungsten"),
+        (4, "Flash"),
+        (5, "Cloudy"),
+        (6, "Shade"),
+        (7, "Manual"),
+        (8, "Kelvin"),
+    ]
+);
+
+const_decoder!(
+    L4_DECODE_JPEG_QUALITY,
+    i32,
+    [(1, "Basic"), (2, "Standard"), (3, "Fine"),]
+);
+
 // Leica MakerNote header signature
 // Leica typically uses "LEICA\0\0\0" or "LEICA CAMERA AG" headers
 const LEICA_HEADER_SHORT: &[u8] = b"LEICA\0\0\0";
@@ -739,6 +827,315 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         }
 
         Ok(())
+    }
+}
+
+impl LeicaMakerNoteParser {
+    /// Parse Leica4 format (M9/M Monochrom)
+    ///
+    /// This format uses a "LEICA0\x03\0" header followed by an IFD with
+    /// subdirectory tags at 0x3000, 0x3100, 0x3400, 0x3900.
+    fn parse_leica4(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        // Skip 8-byte header: "LEICA0\x03\0"
+        let header_size = 8;
+        if data.len() <= header_size {
+            return Err("No data after Leica4 header".to_string());
+        }
+
+        let ifd_data = &data[header_size..];
+        if ifd_data.len() < 2 {
+            return Err("Insufficient data for IFD entry count".to_string());
+        }
+
+        let reader = EndianReader::new(ifd_data, byte_order.to_io_byte_order());
+        let entry_count = reader.u16_at(0).unwrap_or(0);
+
+        if entry_count == 0 || entry_count > 50 {
+            return Err(format!("Invalid Leica4 IFD entry count: {}", entry_count));
+        }
+
+        let required_size = 2 + (entry_count as usize * 12);
+        if ifd_data.len() < required_size {
+            return Err("Insufficient data for IFD entries".to_string());
+        }
+
+        // Parse each IFD entry - these are subdirectory pointers
+        for i in 0..entry_count {
+            let entry_offset = 2 + (i as usize * 12);
+            let entry_data = &ifd_data[entry_offset..entry_offset + 12];
+            let entry_reader = EndianReader::new(entry_data, byte_order.to_io_byte_order());
+
+            let tag_id = entry_reader.u16_at(0).unwrap_or(0);
+            let count = entry_reader.u32_at(4).unwrap_or(0);
+            let value_offset = entry_reader.u32_at(8).unwrap_or(0);
+
+            // Each main tag points to a subdirectory
+            match tag_id {
+                L4_SUBDIR_3000 | L4_SUBDIR_3100 | L4_SUBDIR_3400 | L4_SUBDIR_3900 => {
+                    let subdir_offset = value_offset as usize;
+                    let subdir_size = count as usize;
+                    if subdir_offset + subdir_size <= data.len() {
+                        let subdir_data = &data[subdir_offset..subdir_offset + subdir_size];
+                        self.parse_leica4_subdirectory(subdir_data, data, byte_order, tags);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Parse a Leica4 subdirectory (0x3000, 0x3100, 0x3400, or 0x3900)
+    fn parse_leica4_subdirectory(
+        &self,
+        subdir_data: &[u8],
+        full_data: &[u8],
+        byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+    ) {
+        if subdir_data.len() < 2 {
+            return;
+        }
+
+        let reader = EndianReader::new(subdir_data, byte_order.to_io_byte_order());
+        let entry_count = reader.u16_at(0).unwrap_or(0);
+
+        if entry_count == 0 || entry_count > 100 {
+            return;
+        }
+
+        let required_size = 2 + (entry_count as usize * 12);
+        if subdir_data.len() < required_size {
+            return;
+        }
+
+        for i in 0..entry_count {
+            let entry_offset = 2 + (i as usize * 12);
+            if entry_offset + 12 > subdir_data.len() {
+                break;
+            }
+
+            let entry_data = &subdir_data[entry_offset..entry_offset + 12];
+            let entry_reader = EndianReader::new(entry_data, byte_order.to_io_byte_order());
+
+            let tag_id = entry_reader.u16_at(0).unwrap_or(0);
+            let format = entry_reader.u16_at(2).unwrap_or(0);
+            let count = entry_reader.u32_at(4).unwrap_or(0);
+            let value_offset = entry_reader.u32_at(8).unwrap_or(0);
+
+            match tag_id {
+                L4_CONTRAST => {
+                    let value = value_offset as i32;
+                    tags.insert(
+                        "Leica:Contrast".to_string(),
+                        L4_DECODE_CONTRAST.decode(value),
+                    );
+                }
+                L4_SHARPENING => {
+                    let value = value_offset as i32;
+                    tags.insert(
+                        "Leica:Sharpening".to_string(),
+                        L4_DECODE_SHARPENING.decode(value),
+                    );
+                }
+                L4_SATURATION => {
+                    let value = value_offset as i32;
+                    tags.insert(
+                        "Leica:Saturation".to_string(),
+                        L4_DECODE_SATURATION.decode(value),
+                    );
+                }
+                L4_WHITE_BALANCE => {
+                    let value = value_offset as i32;
+                    tags.insert(
+                        "Leica:WhiteBalance".to_string(),
+                        L4_DECODE_WHITE_BALANCE.decode(value),
+                    );
+                }
+                L4_JPEG_QUALITY => {
+                    let value = value_offset as i32;
+                    tags.insert(
+                        "Leica:JPEGQuality".to_string(),
+                        L4_DECODE_JPEG_QUALITY.decode(value),
+                    );
+                }
+                L4_WB_RGB_LEVELS => {
+                    // WB RGB Levels are stored as 3 rational values
+                    if format == 5 && count == 3 {
+                        // Read rational values from offset
+                        let offset = value_offset as usize;
+                        if offset + 24 <= full_data.len() {
+                            let wb_reader = EndianReader::new(
+                                &full_data[offset..],
+                                byte_order.to_io_byte_order(),
+                            );
+                            let r_num = wb_reader.u32_at(0).unwrap_or(0);
+                            let r_den = wb_reader.u32_at(4).unwrap_or(1);
+                            let g_num = wb_reader.u32_at(8).unwrap_or(0);
+                            let g_den = wb_reader.u32_at(12).unwrap_or(1);
+                            let b_num = wb_reader.u32_at(16).unwrap_or(0);
+                            let b_den = wb_reader.u32_at(20).unwrap_or(1);
+                            let r = if r_den > 0 {
+                                r_num as f64 / r_den as f64
+                            } else {
+                                0.0
+                            };
+                            let g = if g_den > 0 {
+                                g_num as f64 / g_den as f64
+                            } else {
+                                0.0
+                            };
+                            let b = if b_den > 0 {
+                                b_num as f64 / b_den as f64
+                            } else {
+                                0.0
+                            };
+                            tags.insert(
+                                "Leica:WBRGBLevels".to_string(),
+                                format!("{:.10} {:.10} {:.10}", r, g, b),
+                            );
+                        }
+                    }
+                }
+                L4_USER_PROFILE => {
+                    // String value
+                    if format == 2 && count > 0 {
+                        let str_offset = value_offset as usize;
+                        if str_offset + count as usize <= full_data.len() {
+                            if let Ok(s) = std::str::from_utf8(
+                                &full_data[str_offset..str_offset + count as usize],
+                            ) {
+                                tags.insert(
+                                    "Leica:UserProfile".to_string(),
+                                    s.trim_end_matches('\0').to_string(),
+                                );
+                            }
+                        }
+                    }
+                }
+                L4_SERIAL_NUMBER => {
+                    // String value
+                    if format == 2 && count > 0 {
+                        let str_offset = value_offset as usize;
+                        if str_offset + count as usize <= full_data.len() {
+                            if let Ok(s) = std::str::from_utf8(
+                                &full_data[str_offset..str_offset + count as usize],
+                            ) {
+                                // ExifTool masks serial numbers with asterisks
+                                let serial = s.trim_end_matches('\0');
+                                let masked = if serial.len() > 0 {
+                                    "*".repeat(serial.len().min(7))
+                                } else {
+                                    serial.to_string()
+                                };
+                                tags.insert("Leica:SerialNumber".to_string(), masked);
+                            }
+                        }
+                    }
+                }
+                L4_FIRMWARE_VERSION => {
+                    // String value
+                    if format == 2 && count > 0 {
+                        let str_offset = value_offset as usize;
+                        if str_offset + count as usize <= full_data.len() {
+                            if let Ok(s) = std::str::from_utf8(
+                                &full_data[str_offset..str_offset + count as usize],
+                            ) {
+                                tags.insert(
+                                    "Leica:FirmwareVersion".to_string(),
+                                    s.trim_end_matches('\0').to_string(),
+                                );
+                            }
+                        }
+                    }
+                }
+                L4_BASE_ISO => {
+                    tags.insert("Leica:BaseISO".to_string(), format!("{}", value_offset));
+                }
+                L4_SENSOR_WIDTH => {
+                    tags.insert("Leica:SensorWidth".to_string(), format!("{}", value_offset));
+                }
+                L4_SENSOR_HEIGHT => {
+                    tags.insert(
+                        "Leica:SensorHeight".to_string(),
+                        format!("{}", value_offset),
+                    );
+                }
+                L4_SENSOR_BIT_DEPTH => {
+                    tags.insert(
+                        "Leica:SensorBitDepth".to_string(),
+                        format!("{}", value_offset),
+                    );
+                }
+                L4_CAMERA_TEMPERATURE => {
+                    let value = value_offset as i32;
+                    tags.insert(
+                        "Leica:CameraTemperature".to_string(),
+                        format!("{} C", value),
+                    );
+                }
+                L4_LENS_TYPE => {
+                    // Leica M9 lens type uses special encoding
+                    let lens_id = value_offset;
+                    let actual_lens_id = (lens_id >> 2) as u16;
+                    if let Some(lens_name) = lookup_lens_name(actual_lens_id) {
+                        tags.insert("Leica:LensType".to_string(), lens_name);
+                    } else if let Some(lens_name) = lookup_lens_name(lens_id as u16) {
+                        tags.insert("Leica:LensType".to_string(), lens_name);
+                    } else {
+                        tags.insert(
+                            "Leica:LensType".to_string(),
+                            format!("Unknown ({})", lens_id),
+                        );
+                    }
+                }
+                L4_APPROXIMATE_F_NUMBER => {
+                    // Stored as rational64u
+                    if format == 5 {
+                        let offset = value_offset as usize;
+                        if offset + 8 <= full_data.len() {
+                            let f_reader = EndianReader::new(
+                                &full_data[offset..],
+                                byte_order.to_io_byte_order(),
+                            );
+                            let num = f_reader.u32_at(0).unwrap_or(0);
+                            let den = f_reader.u32_at(4).unwrap_or(1);
+                            if den > 0 {
+                                let f_value = num as f64 / den as f64;
+                                tags.insert(
+                                    "Leica:ApproximateFNumber".to_string(),
+                                    format!("{:.1}", f_value),
+                                );
+                            }
+                        }
+                    }
+                }
+                L4_MEASURED_LV => {
+                    // Stored as int32s, divided by 100000 for actual LV
+                    let value = value_offset as i32;
+                    let lv = value as f64 / 100000.0;
+                    tags.insert("Leica:MeasuredLV".to_string(), format!("{:.2}", lv));
+                }
+                L4_EXTERNAL_SENSOR_BRIGHTNESS => {
+                    // Stored as int32s, divided by 100000 for actual EV
+                    let value = value_offset as i32;
+                    let ev = value as f64 / 100000.0;
+                    tags.insert(
+                        "Leica:ExternalSensorBrightnessValue".to_string(),
+                        format!("{:.2}", ev),
+                    );
+                }
+                _ => {
+                    // Unknown tags are silently skipped
+                }
+            }
+        }
     }
 }
 

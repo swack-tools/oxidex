@@ -146,10 +146,10 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     {
         let version = version_str.trim();
         // Store as string to preserve exact version format (e.g., "1.3", "1.4", "2.0")
-        metadata.insert(
-            "PDF:PDFVersion".to_string(),
-            crate::core::TagValue::new_string(version.to_string()),
-        );
+        let version_string = crate::core::TagValue::new_string(version.to_string());
+        metadata.insert("PDF:PDFVersion".to_string(), version_string.clone());
+        // Add PDF:Version as alias for ExifTool compatibility
+        metadata.insert("PDF:Version".to_string(), version_string);
     }
 
     // Check for linearization (optimize for web display)
@@ -238,12 +238,11 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     }
 
     // Extract embedded resources metadata
-    // TODO: Uncomment when resources_parser is fixed
-    // if let Ok(res_meta) = resources_parser::parse_resources_metadata(reader) {
-    //     for (key, value) in res_meta.iter() {
-    //         metadata.insert(key.clone(), value.clone());
-    //     }
-    // }
+    if let Ok(res_meta) = resources_parser::parse_resources_metadata(reader) {
+        for (key, value) in res_meta.iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
 
     // Extract font metadata
     if let Ok(font_meta) = font_parser::parse_font_metadata(reader) {
@@ -303,6 +302,15 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     //     }
     // }
 
+    // PDF image streams may contain complete TIFF/EXIF payloads. Extract
+    // metadata from these payloads after the PDF-level resource parsers have
+    // run so the standard IFD tag database determines the canonical key.
+    if let Ok(exif_metadata) = extract_embedded_exif_metadata(reader) {
+        for (key, value) in exif_metadata.iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
+
     // If we didn't extract any metadata at all, return error
     if metadata.is_empty() {
         return Err(ExifToolError::parse_error(
@@ -311,6 +319,197 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     }
 
     Ok(metadata)
+}
+
+const TIFF_ARTIST_TAG: u16 = 0x013b;
+
+#[derive(Clone, Copy)]
+enum EmbeddedTiffByteOrder {
+    Little,
+    Big,
+}
+
+/// Extracts the standard IFD0 Artist tag from TIFF/EXIF payloads embedded in
+/// PDF image streams.
+///
+/// DCT-encoded PDF image streams retain their JPEG APP1 payload byte-for-byte,
+/// so the TIFF byte-order marker can be located without interpreting the PDF
+/// data as text. TIFF offsets remain relative to the located TIFF header.
+fn extract_embedded_exif_metadata(
+    reader: &dyn crate::core::FileReader,
+) -> crate::error::Result<crate::core::MetadataMap> {
+    let mut metadata = crate::core::MetadataMap::with_capacity(1);
+    let file_size = usize::try_from(reader.size()).map_err(|_| {
+        crate::error::ExifToolError::parse_error(
+            "PDF is too large to scan for embedded EXIF metadata",
+        )
+    })?;
+    let data = reader.read(0, file_size)?;
+
+    let Some(artist) = find_embedded_exif_artist(data) else {
+        return Ok(metadata);
+    };
+
+    // Artist is tag 0x013b in IFD0. The tag database supplies the canonical
+    // group-qualified key for this directory instead of assigning a prefix
+    // based on the containing PDF.
+    let tag_key = crate::tag_db::lookup_tag_name(TIFF_ARTIST_TAG, "IFD0");
+    metadata.insert(tag_key, crate::core::TagValue::new_string(artist));
+
+    Ok(metadata)
+}
+
+/// Searches raw PDF bytes for embedded TIFF headers and returns the first
+/// valid IFD0 Artist value.
+fn find_embedded_exif_artist(data: &[u8]) -> Option<String> {
+    let mut cursor = 0usize;
+
+    while cursor < data.len() {
+        let remaining = data.get(cursor..)?;
+        let Some(relative_offset) = remaining
+            .windows(4)
+            .position(|window| window == b"II\x2a\x00" || window == b"MM\x00\x2a")
+        else {
+            break;
+        };
+
+        let tiff_offset = cursor.checked_add(relative_offset)?;
+        if let Some(artist) = parse_ifd0_ascii_tag(data.get(tiff_offset..)?, TIFF_ARTIST_TAG) {
+            return Some(artist);
+        }
+
+        // Advance one byte rather than trusting any offsets in a malformed
+        // candidate, allowing a later valid TIFF payload to be considered.
+        cursor = tiff_offset.checked_add(1)?;
+    }
+
+    None
+}
+
+/// Parses one ASCII tag from the first TIFF IFD.
+fn parse_ifd0_ascii_tag(data: &[u8], wanted_tag: u16) -> Option<String> {
+    let byte_order = if data.get(0..2)? == b"II" {
+        EmbeddedTiffByteOrder::Little
+    } else if data.get(0..2)? == b"MM" {
+        EmbeddedTiffByteOrder::Big
+    } else {
+        return None;
+    };
+
+    if read_embedded_tiff_u16(data, 2, byte_order)? != 42 {
+        return None;
+    }
+
+    let ifd_offset = usize::try_from(read_embedded_tiff_u32(data, 4, byte_order)?).ok()?;
+    let entry_count = usize::from(read_embedded_tiff_u16(data, ifd_offset, byte_order)?);
+    let entries_offset = ifd_offset.checked_add(2)?;
+    let entries_len = entry_count.checked_mul(12)?;
+    let entries_end = entries_offset.checked_add(entries_len)?;
+
+    // Validate the complete entry array before iterating over file-controlled
+    // entry counts.
+    data.get(entries_offset..entries_end)?;
+
+    for entry_index in 0..entry_count {
+        let entry_offset = entries_offset.checked_add(entry_index.checked_mul(12)?)?;
+
+        if read_embedded_tiff_u16(data, entry_offset, byte_order)? != wanted_tag {
+            continue;
+        }
+
+        let field_type = read_embedded_tiff_u16(data, entry_offset.checked_add(2)?, byte_order)?;
+        if field_type != 2 {
+            return None;
+        }
+
+        let value_len = usize::try_from(read_embedded_tiff_u32(
+            data,
+            entry_offset.checked_add(4)?,
+            byte_order,
+        )?)
+        .ok()?;
+        if value_len == 0 {
+            return None;
+        }
+
+        let value_offset = if value_len <= 4 {
+            entry_offset.checked_add(8)?
+        } else {
+            usize::try_from(read_embedded_tiff_u32(
+                data,
+                entry_offset.checked_add(8)?,
+                byte_order,
+            )?)
+            .ok()?
+        };
+        let value_end = value_offset.checked_add(value_len)?;
+        let raw_value = data.get(value_offset..value_end)?;
+        let text_len = raw_value
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(raw_value.len());
+        let value = String::from_utf8_lossy(raw_value.get(..text_len)?).into_owned();
+
+        if !value.is_empty() {
+            return Some(value);
+        }
+        return None;
+    }
+
+    None
+}
+
+fn read_embedded_tiff_u16(
+    data: &[u8],
+    offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<u16> {
+    let end = offset.checked_add(2)?;
+    let bytes: [u8; 2] = data.get(offset..end)?.try_into().ok()?;
+
+    Some(match byte_order {
+        EmbeddedTiffByteOrder::Little => u16::from_le_bytes(bytes),
+        EmbeddedTiffByteOrder::Big => u16::from_be_bytes(bytes),
+    })
+}
+
+fn read_embedded_tiff_u32(
+    data: &[u8],
+    offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let bytes: [u8; 4] = data.get(offset..end)?.try_into().ok()?;
+
+    Some(match byte_order {
+        EmbeddedTiffByteOrder::Little => u32::from_le_bytes(bytes),
+        EmbeddedTiffByteOrder::Big => u32::from_be_bytes(bytes),
+    })
+}
+
+#[cfg(test)]
+mod embedded_exif_tests {
+    use super::find_embedded_exif_artist;
+
+    #[test]
+    fn extracts_artist_from_embedded_little_endian_tiff() {
+        let mut pdf = b"%PDF-1.4\nstream\nExif\0\0".to_vec();
+
+        // TIFF header with IFD0 at offset 8.
+        pdf.extend_from_slice(b"II\x2a\x00\x08\x00\x00\x00");
+        // One IFD entry.
+        pdf.extend_from_slice(b"\x01\x00");
+        // Artist (0x013b), ASCII, 12 bytes, value at TIFF offset 26.
+        pdf.extend_from_slice(b"\x3b\x01\x02\x00\x0c\x00\x00\x00\x1a\x00\x00\x00");
+        // No next IFD, followed by the Artist string.
+        pdf.extend_from_slice(b"\x00\x00\x00\x00Phil Harvey\0");
+        pdf.extend_from_slice(b"\nendstream\n%%EOF");
+
+        assert_eq!(
+            find_embedded_exif_artist(&pdf).as_deref(),
+            Some("Phil Harvey")
+        );
+    }
 }
 
 #[cfg(test)]

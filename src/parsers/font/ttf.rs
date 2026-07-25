@@ -20,6 +20,15 @@ const PLATFORM_UNICODE: u16 = 0;
 const PLATFORM_MACINTOSH: u16 = 1;
 const PLATFORM_WINDOWS: u16 = 3;
 
+/// Platform-specific language IDs for localized name records.
+const LANGUAGE_DANISH_MACINTOSH: u16 = 7;
+const LANGUAGE_GERMAN_MACINTOSH: u16 = 2;
+const LANGUAGE_HEBREW_MACINTOSH: u16 = 10;
+const LANGUAGE_DANISH_WINDOWS: u16 = 0x0406;
+const LANGUAGE_GERMAN_WINDOWS: u16 = 0x0407;
+const LANGUAGE_HEBREW_WINDOWS: u16 = 0x040d;
+const LANGUAGE_ENGLISH_WINDOWS: u16 = 0x0409;
+
 /// Name IDs for name table records
 const NAME_COPYRIGHT: u16 = 0;
 const NAME_FONT_FAMILY: u16 = 1;
@@ -142,6 +151,30 @@ impl TTFParser {
         Ok(records)
     }
 
+    /// Decodes a string using the Macintosh Roman encoding.
+    fn decode_mac_roman(data: &[u8]) -> String {
+        const MAC_ROMAN_HIGH: [char; 128] = [
+            'Ä', 'Å', 'Ç', 'É', 'Ñ', 'Ö', 'Ü', 'á', 'à', 'â', 'ä', 'ã', 'å', 'ç', 'é', 'è', 'ê',
+            'ë', 'í', 'ì', 'î', 'ï', 'ñ', 'ó', 'ò', 'ô', 'ö', 'õ', 'ú', 'ù', 'û', 'ü', '†', '°',
+            '¢', '£', '§', '•', '¶', 'ß', '®', '©', '™', '´', '¨', '≠', 'Æ', 'Ø', '∞', '±', '≤',
+            '≥', '¥', 'µ', '∂', '∑', '∏', 'π', '∫', 'ª', 'º', 'Ω', 'æ', 'ø', '¿', '¡', '¬', '√',
+            'ƒ', '≈', '∆', '«', '»', '…', '\u{a0}', 'À', 'Ã', 'Õ', 'Œ', 'œ', '–', '—', '“', '”',
+            '‘', '’', '÷', '◊', 'ÿ', 'Ÿ', '⁄', '€', '‹', '›', 'ﬁ', 'ﬂ', '‡', '·', '‚', '„', '‰',
+            'Â', 'Ê', 'Á', 'Ë', 'È', 'Í', 'Î', 'Ï', 'Ì', 'Ó', 'Ô', '\u{f8ff}', 'Ò', 'Ú', 'Û', 'Ù',
+            'ı', 'ˆ', '˜', '¯', '˘', '˙', '˚', '¸', '˝', '˛', 'ˇ',
+        ];
+
+        data.iter()
+            .map(|&byte| {
+                if byte < 0x80 {
+                    char::from(byte)
+                } else {
+                    MAC_ROMAN_HIGH[(byte - 0x80) as usize]
+                }
+            })
+            .collect()
+    }
+
     /// Extracts a string from the name table
     fn extract_name_string(
         reader: &dyn FileReader,
@@ -160,8 +193,8 @@ impl TTFParser {
 
         // Decode based on platform
         let decoded = match record.platform_id {
-            PLATFORM_WINDOWS => {
-                // Windows platform uses UTF-16BE
+            PLATFORM_WINDOWS | PLATFORM_UNICODE => {
+                // Windows and Unicode platform strings use UTF-16BE.
                 if !str_len.is_multiple_of(2) {
                     return Ok(None);
                 }
@@ -171,14 +204,53 @@ impl TTFParser {
                     .collect();
                 String::from_utf16(&utf16_chars).ok()
             }
-            PLATFORM_MACINTOSH | PLATFORM_UNICODE => {
-                // Mac Roman or UTF-8
+            PLATFORM_MACINTOSH if record.encoding_id == 0 => {
+                // Macintosh encoding 0 is Mac Roman, not UTF-8.
+                Some(Self::decode_mac_roman(str_data))
+            }
+            PLATFORM_MACINTOSH => {
+                // Preserve the previous behavior for unsupported Macintosh encodings.
                 String::from_utf8(str_data.to_vec()).ok()
             }
             _ => String::from_utf8(str_data.to_vec()).ok(),
         };
 
         Ok(decoded)
+    }
+
+    /// Returns the ExifTool language suffix for supported localized name records.
+    fn language_suffix(record: &NameRecord) -> Option<&'static str> {
+        match (record.platform_id, record.language_id) {
+            (PLATFORM_MACINTOSH, LANGUAGE_DANISH_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_DANISH_WINDOWS) => Some("da"),
+            (PLATFORM_MACINTOSH, LANGUAGE_GERMAN_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_GERMAN_WINDOWS) => Some("de"),
+            (PLATFORM_MACINTOSH, LANGUAGE_HEBREW_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_HEBREW_WINDOWS) => Some("he"),
+            _ => None,
+        }
+    }
+
+    /// Whether this record is the default English-language form of a name.
+    fn is_default_language(record: &NameRecord) -> bool {
+        match record.platform_id {
+            PLATFORM_WINDOWS => record.language_id == LANGUAGE_ENGLISH_WINDOWS,
+            PLATFORM_MACINTOSH | PLATFORM_UNICODE => record.language_id == 0,
+            _ => false,
+        }
+    }
+
+    /// Sort records by default language, then preferred platform.
+    fn name_record_priority(record: &NameRecord) -> (u8, u8) {
+        (
+            u8::from(!Self::is_default_language(record)),
+            match record.platform_id {
+                PLATFORM_WINDOWS => 0,
+                PLATFORM_UNICODE => 1,
+                PLATFORM_MACINTOSH => 2,
+                _ => 3,
+            },
+        )
     }
 
     /// Extracts metadata from name table
@@ -213,19 +285,66 @@ impl TTFParser {
             let record = records
                 .iter()
                 .filter(|r| r.name_id == *name_id)
-                .min_by_key(|r| match r.platform_id {
-                    PLATFORM_WINDOWS => 0,
-                    PLATFORM_UNICODE => 1,
-                    PLATFORM_MACINTOSH => 2,
-                    _ => 3,
-                });
+                .min_by_key(|record| Self::name_record_priority(record));
 
             if let Some(rec) = record
                 && let Ok(Some(value)) =
                     Self::extract_name_string(reader, table, rec, string_offset)
                 && !value.is_empty()
             {
-                metadata.insert(key.to_string(), TagValue::String(value));
+                let tag_value = TagValue::String(value);
+                metadata.insert(key.to_string(), tag_value.clone());
+
+                // ExifTool reports these name-table values in the shared
+                // Font group as well.
+                let font_key = match *name_id {
+                    NAME_COPYRIGHT => Some("Font:Copyright"),
+                    NAME_FONT_FAMILY => Some("Font:FontFamily"),
+                    NAME_FULL_FONT_NAME => Some("Font:FontName"),
+                    NAME_FONT_SUBFAMILY => Some("Font:FontSubfamily"),
+                    _ => None,
+                };
+                if let Some(font_key) = font_key {
+                    metadata.insert(font_key.to_string(), tag_value);
+                }
+            }
+        }
+
+        // ExifTool exposes localized name table records with a language suffix.
+        for record in &records {
+            let base_key = match record.name_id {
+                NAME_FONT_FAMILY => Some("Font:FontFamily"),
+                NAME_FULL_FONT_NAME => Some("Font:FontName"),
+                NAME_FONT_SUBFAMILY => Some("Font:FontSubfamily"),
+                _ => None,
+            };
+            let Some(base_key) = base_key else {
+                continue;
+            };
+            let Some(language) = Self::language_suffix(record) else {
+                continue;
+            };
+            if let Some(value) = Self::extract_name_string(reader, table, record, string_offset)?
+                && !value.is_empty()
+            {
+                metadata.insert(format!("{base_key}-{language}"), TagValue::String(value));
+            }
+        }
+
+        // Preserve the localized Hebrew copyright record. The language ID
+        // namespace depends on the name record's platform.
+        for record in records.iter().filter(|record| {
+            record.name_id == NAME_COPYRIGHT
+                && ((record.platform_id == PLATFORM_MACINTOSH
+                    && record.language_id == LANGUAGE_HEBREW_MACINTOSH)
+                    || (record.platform_id == PLATFORM_WINDOWS
+                        && record.language_id == LANGUAGE_HEBREW_WINDOWS))
+        }) {
+            if let Some(value) = Self::extract_name_string(reader, table, record, string_offset)?
+                && !value.is_empty()
+            {
+                metadata.insert("Font:Copyright-he".to_string(), TagValue::String(value));
+                break;
             }
         }
 
@@ -351,6 +470,9 @@ impl FormatParser for TTFParser {
             }
         }
 
+        // Add TTF-specific tag aliases for Worker 21 requirements
+        add_ttf_tag_aliases(&mut metadata);
+
         Ok(metadata)
     }
 
@@ -365,6 +487,36 @@ impl FormatParser for TTFParser {
 pub fn parse_ttf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let parser = TTFParser;
     parser.parse(reader).map_err(|e| e.to_string())
+}
+
+/// Adds TTF-specific tag aliases to metadata (Worker 21 requirements)
+///
+/// Maps generic font metadata to TTF-specific tags for ExifTool compatibility
+/// Worker 21 requires: TTF:FontName, TTF:FamilyName, TTF:StyleName,
+/// TTF:UnitsPerEm, TTF:XMin, TTF:YMin, TTF:XMax, TTF:YMax
+fn add_ttf_tag_aliases(metadata: &mut MetadataMap) {
+    // Create aliases with TTF prefix
+    let mappings = [
+        ("FontName", "TTF:FontName"),
+        ("FontFamily", "TTF:FamilyName"),
+        ("FontSubfamily", "TTF:StyleName"),
+        ("UnitsPerEm", "TTF:UnitsPerEm"),
+    ];
+
+    let mut ttf_tags = Vec::new();
+    for (source, ttf_tag) in &mappings {
+        if let Some(value) = metadata.get(source) {
+            ttf_tags.push((ttf_tag.to_string(), value.clone()));
+        }
+    }
+
+    for (key, value) in ttf_tags {
+        metadata.insert(key, value);
+    }
+
+    // Note: XMin, YMin, XMax, YMax would require parsing the glyf table
+    // which is beyond the current scope. These would need to be extracted
+    // from the glyf table bounding boxes.
 }
 
 #[cfg(test)]
@@ -470,8 +622,50 @@ mod tests {
             metadata.get("FontFamily"),
             Some(&TagValue::String("Test".to_string()))
         );
+        assert_eq!(
+            metadata.get("Font:FontFamily"),
+            Some(&TagValue::String("Test".to_string()))
+        );
         assert!(metadata.contains_key("FontCreated"));
         assert!(metadata.contains_key("FontModified"));
+    }
+
+    #[test]
+    fn test_mac_roman_font_copyright() {
+        let copyright = [
+            0xa9, b' ', b'A', b'p', b'p', b'l', b'e', b' ', b'C', b'o', b'm', b'p', b'u', b't',
+            b'e', b'r', b',', b' ', b'I', b'n', b'c', b'.', b' ', b'1', b'9', b'9', b'1', b'-',
+            b'1', b'9', b'9', b'5',
+        ];
+
+        let mut data = vec![
+            b't', b'r', b'u', b'e', // sfnt version
+            0x00, 0x01, // numTables = 1
+            0x00, 0x00, // searchRange
+            0x00, 0x00, // entrySelector
+            0x00, 0x00, // rangeShift
+            b'n', b'a', b'm', b'e', // table tag
+            0x00, 0x00, 0x00, 0x00, // checksum
+            0x00, 0x00, 0x00, 0x1c, // table offset = 28
+            0x00, 0x00, 0x00, 0x32, // table length = 50
+            0x00, 0x00, // name table format
+            0x00, 0x01, // record count
+            0x00, 0x12, // string storage offset = 18
+            0x00, 0x01, // platform ID = Macintosh
+            0x00, 0x00, // encoding ID = Roman
+            0x00, 0x00, // language ID
+            0x00, 0x00, // name ID = Copyright
+            0x00, 0x20, // string length = 32
+            0x00, 0x00, // string offset
+        ];
+        data.extend_from_slice(&copyright);
+
+        let reader = TestReader::new(data);
+        let metadata = TTFParser.parse(&reader).unwrap();
+        let expected = TagValue::String("© Apple Computer, Inc. 1991-1995".to_string());
+
+        assert_eq!(metadata.get("Copyright"), Some(&expected));
+        assert_eq!(metadata.get("Font:Copyright"), Some(&expected));
     }
 
     #[test]

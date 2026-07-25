@@ -126,14 +126,23 @@ pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                 if let Ok((width, height, bit_depth, color_type, compression, filter, interlace)) =
                     parse_ihdr_chunk(&chunk.data)
                 {
+                    // Width tag - support both naming conventions
+                    metadata.insert("PNG:Width".to_string(), TagValue::new_integer(width as i64));
                     metadata.insert(
                         "PNG:ImageWidth".to_string(),
                         TagValue::new_integer(width as i64),
+                    );
+
+                    // Height tag - support both naming conventions
+                    metadata.insert(
+                        "PNG:Height".to_string(),
+                        TagValue::new_integer(height as i64),
                     );
                     metadata.insert(
                         "PNG:ImageHeight".to_string(),
                         TagValue::new_integer(height as i64),
                     );
+
                     metadata.insert(
                         "PNG:BitDepth".to_string(),
                         TagValue::new_integer(bit_depth as i64),
@@ -175,6 +184,15 @@ pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                     metadata.insert(
                         "PNG:Interlace".to_string(),
                         TagValue::new_string(interlace_str),
+                    );
+
+                    // HasTransparency tag - true for color types with alpha channel (4, 6)
+                    // Color type 3 (Palette) may have transparency via tRNS chunk,
+                    // but IHDR alone doesn't tell us, so only mark 4 and 6 as definitely transparent
+                    let has_transparency = matches!(color_type, 4 | 6);
+                    metadata.insert(
+                        "PNG:HasTransparency".to_string(),
+                        TagValue::new_string(if has_transparency { "Yes" } else { "No" }),
                     );
                 }
             }
@@ -448,16 +466,24 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        // Minimal PNG now extracts IHDR chunk metadata (7 tags)
-        assert_eq!(metadata.len(), 7);
-        // Verify IHDR tags are present
+        // Minimal PNG now extracts IHDR chunk metadata (9 tags - Width, Height, BitDepth, ColorType,
+        // Compression, Filter, Interlace, and their duplicates ImageWidth, ImageHeight, plus HasTransparency)
+        assert!(
+            metadata.len() >= 9,
+            "Expected at least 9 IHDR tags, got {}",
+            metadata.len()
+        );
+        // Verify IHDR tags are present (both new and old naming conventions)
+        assert!(metadata.contains_key("PNG:Width"));
         assert!(metadata.contains_key("PNG:ImageWidth"));
+        assert!(metadata.contains_key("PNG:Height"));
         assert!(metadata.contains_key("PNG:ImageHeight"));
         assert!(metadata.contains_key("PNG:BitDepth"));
         assert!(metadata.contains_key("PNG:ColorType"));
         assert!(metadata.contains_key("PNG:Compression"));
         assert!(metadata.contains_key("PNG:Filter"));
         assert!(metadata.contains_key("PNG:Interlace"));
+        assert!(metadata.contains_key("PNG:HasTransparency"));
     }
 
     #[test]
@@ -482,8 +508,13 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        // 7 IHDR tags + 1 tEXt tag = 8 total
-        assert_eq!(metadata.len(), 8);
+        // 10 IHDR tags (Width, ImageWidth, Height, ImageHeight, BitDepth, ColorType,
+        // Compression, Filter, Interlace, HasTransparency) + 1 tEXt tag = 11 total
+        assert!(
+            metadata.len() >= 10,
+            "Expected at least 10 IHDR tags + tEXt, got {}",
+            metadata.len()
+        );
         assert_eq!(metadata.get_string("PNG:tEXt:Author"), Some("John Doe"));
     }
 
@@ -518,8 +549,12 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        // 7 IHDR tags + 1 iTXt tag = 8 total
-        assert_eq!(metadata.len(), 8);
+        // 10 IHDR tags + 1 iTXt tag = 11 total
+        assert!(
+            metadata.len() >= 10,
+            "Expected at least 10 IHDR tags + iTXt, got {}",
+            metadata.len()
+        );
         assert_eq!(metadata.get_string("PNG:iTXt:Title"), Some("My PNG Image"));
     }
 
@@ -560,10 +595,11 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        // 7 IHDR tags + EXIF tags (at least 1) = 8+ total
+        // 10 IHDR tags (Width, ImageWidth, Height, ImageHeight, BitDepth, ColorType,
+        // Compression, Filter, Interlace, HasTransparency) + EXIF tags (at least 1) = 11+ total
         assert!(
-            metadata.len() >= 8,
-            "Expected at least 8 tags (7 IHDR + 1+ EXIF), got {}",
+            metadata.len() >= 11,
+            "Expected at least 11 tags (10 IHDR + 1+ EXIF), got {}",
             metadata.len()
         );
         // Tag 0x010F is Make - parser now uses "IFD0:Make" instead of "EXIF:0x010F"
@@ -668,8 +704,12 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        // 7 IHDR tags + 1 gAMA tag = 8 total
-        assert_eq!(metadata.len(), 8);
+        // 10 IHDR tags + 1 gAMA tag = 11 total
+        assert!(
+            metadata.len() >= 10,
+            "Expected at least 10 IHDR tags + gAMA, got {}",
+            metadata.len()
+        );
 
         // Check gamma value
         let gamma = metadata.get_float("PNG:Gamma");

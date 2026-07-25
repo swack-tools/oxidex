@@ -17,6 +17,7 @@ use crate::error::{ExifToolError, Result};
 use crate::io::buffered_reader::BufferedReader;
 use crate::io::{ByteOrder as EndianByteOrder, EndianReader};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
+use crate::parsers::xmp::rdf_parser::parse_xmp;
 use crate::tag_db::lookup_tag_name;
 
 const BPG_SIGNATURE: &[u8] = &[0x42, 0x50, 0x47, 0xFB];
@@ -304,46 +305,13 @@ impl BPGParser {
         }
     }
 
-    /// Extract basic metadata from XMP
+    /// Extract metadata from XMP using the proper RDF parser
     fn parse_xmp_data(xmp: &str, metadata: &mut MetadataMap) {
-        let patterns = [
-            ("dc:creator", "XMP:Creator"),
-            ("dc:title", "XMP:Title"),
-            ("dc:description", "XMP:Description"),
-            ("xmp:CreateDate", "XMP:CreateDate"),
-            ("xmp:ModifyDate", "XMP:ModifyDate"),
-        ];
-
-        for (tag, key) in patterns {
-            if let Some(value) = Self::extract_xmp_value(xmp, tag) {
-                metadata.insert(key.to_string(), TagValue::String(value));
+        if let Ok(xmp_tags) = parse_xmp(xmp.as_bytes()) {
+            for (tag_name, value) in xmp_tags {
+                metadata.insert(tag_name, TagValue::String(value));
             }
         }
-    }
-
-    /// Extract a value from XMP by tag name
-    fn extract_xmp_value(xmp: &str, tag: &str) -> Option<String> {
-        let open_tag = format!("<{}>", tag);
-        let close_tag = format!("</{}>", tag);
-
-        if let Some(start) = xmp.find(&open_tag) {
-            let value_start = start + open_tag.len();
-            if let Some(end) = xmp[value_start..].find(&close_tag) {
-                let value = &xmp[value_start..value_start + end];
-                return Some(value.trim().to_string());
-            }
-        }
-
-        let attr_pattern = format!("{}=\"", tag);
-        if let Some(start) = xmp.find(&attr_pattern) {
-            let value_start = start + attr_pattern.len();
-            if let Some(end) = xmp[value_start..].find('"') {
-                let value = &xmp[value_start..value_start + end];
-                return Some(value.to_string());
-            }
-        }
-
-        None
     }
 }
 

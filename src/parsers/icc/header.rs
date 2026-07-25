@@ -292,24 +292,21 @@ fn extract_manufacturer(
 ) -> Result<()> {
     if data.len() >= offset + 4 {
         let manufacturer = read_signature(data, offset)?;
-        let trimmed = manufacturer.trim();
-        if !trimmed.is_empty() {
-            // Look up the manufacturer in the registry to get a human-readable name
-            let manufacturer_name = lookup_in_table(MANUFACTURERS, trimmed);
-            // Only include if the lookup returned a non-empty name
-            // (handles the "none" -> "" case)
-            if !manufacturer_name.is_empty() {
-                metadata.insert(
-                    "DeviceManufacturer".to_string(),
-                    TagValue::new_string(manufacturer_name.to_string()),
-                );
-            }
+        // Look up the manufacturer in the registry to get a human-readable name
+        // "none" code returns "none" to match ExifTool behavior
+        let manufacturer_name = lookup_in_table(MANUFACTURERS, &manufacturer);
+        if !manufacturer_name.is_empty() {
+            metadata.insert(
+                "DeviceManufacturer".to_string(),
+                TagValue::new_string(manufacturer_name.to_string()),
+            );
         }
     }
     Ok(())
 }
 
 /// Extracts device model from header
+/// Empty, null-byte, or non-printable models are reported as empty string to match ExifTool.
 fn extract_model(
     data: &[u8],
     offset: usize,
@@ -317,9 +314,14 @@ fn extract_model(
 ) -> Result<()> {
     if data.len() >= offset + 4 {
         let model = read_signature(data, offset)?;
-        if !model.trim().is_empty() {
-            metadata.insert("DeviceModel".to_string(), TagValue::new_string(model));
-        }
+        // If the model contains non-printable characters or is empty, report as empty
+        let is_printable = model.chars().all(|c| c.is_ascii_graphic() || c == ' ');
+        let value = if model.is_empty() || !is_printable {
+            String::new()
+        } else {
+            model
+        };
+        metadata.insert("DeviceModel".to_string(), TagValue::new_string(value));
     }
     Ok(())
 }
@@ -402,6 +404,7 @@ fn extract_illuminant(
 ///
 /// Reads the 4-character creator signature and converts it to a
 /// human-readable name using the MANUFACTURERS lookup table.
+/// Empty or null-byte creators are reported as empty string to match ExifTool.
 fn extract_creator(
     data: &[u8],
     offset: usize,
@@ -410,17 +413,19 @@ fn extract_creator(
     if data.len() >= offset + 4 {
         let creator = read_signature(data, offset)?;
         let trimmed = creator.trim();
-        if !trimmed.is_empty() {
+        if trimmed.is_empty() {
+            // Empty creator - ExifTool shows empty string
+            metadata.insert(
+                "ProfileCreator".to_string(),
+                TagValue::new_string(String::new()),
+            );
+        } else {
             // Look up the creator in the registry to get a human-readable name
             let creator_name = lookup_in_table(MANUFACTURERS, trimmed);
-            // Only include if the lookup returned a non-empty name
-            // (handles the "none" -> "" case)
-            if !creator_name.is_empty() {
-                metadata.insert(
-                    "ProfileCreator".to_string(),
-                    TagValue::new_string(creator_name.to_string()),
-                );
-            }
+            metadata.insert(
+                "ProfileCreator".to_string(),
+                TagValue::new_string(creator_name.to_string()),
+            );
         }
     }
     Ok(())

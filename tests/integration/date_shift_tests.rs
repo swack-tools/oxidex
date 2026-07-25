@@ -262,7 +262,7 @@ fn test_parse_offset_and_apply() {
     let dt = Utc.with_ymd_and_hms(2025, 1, 15, 10, 30, 0).unwrap();
 
     // Parse and apply offset: +1 day
-    let offset = parse_offset("0:0:1 0:0:0").expect("Failed to parse offset");
+    let (offset, _neg) = parse_offset("0:0:1 0:0:0").expect("Failed to parse offset");
     let shifted = apply_shift(dt, &offset, ShiftOperation::Add).expect("Failed to apply shift");
 
     assert_eq!(shifted.day(), 16);

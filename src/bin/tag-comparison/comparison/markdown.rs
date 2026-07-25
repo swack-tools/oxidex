@@ -55,12 +55,22 @@ fn generate_index(
     }
     content.push_str("\n\n");
 
+    content.push_str(
+        "::: tip Empirical JPEG tag matrix\n\
+         These reports sample real fixture files per format. For JPEG, a \
+         complete per-tag read/write matrix against ExifTool (every writable \
+         tag, with a CI regression gate) is also available: \
+         [JPEG Tag Support](/reference/jpeg-tag-support) · \
+         [JPEG Tag Matrix](/reference/jpeg-tag-matrix)\n\
+         :::\n\n",
+    );
+
     // Summary table for tested formats
     content.push_str("## Coverage by Format\n\n");
     content
-        .push_str("| Format | Files | Coverage | Missing | Extra | Value Diffs | Regressions |\n");
+        .push_str("| Format | Files | Total Tags | Coverage | Missing | Extra | Value Diffs | Regressions |\n");
     content
-        .push_str("|--------|-------|----------|---------|-------|-------------|-------------|\n");
+        .push_str("|--------|-------|------------|----------|---------|-------|-------------|-------------|\n");
 
     let mut formats: Vec<_> = report.by_format.iter().collect();
     formats.sort_by(|a, b| a.0.cmp(b.0));
@@ -76,10 +86,11 @@ fn generate_index(
         };
 
         content.push_str(&format!(
-            "| [{}](./{}.md) | {} | {:.1}% | {} | {} | {} | {} |\n",
+            "| [{}](./{}.md) | {} | {} | {:.1}% | {} | {} | {} | {} |\n",
             format,
             format.to_lowercase(),
             comp.files_tested,
+            comp.total_exiftool_tags,
             comp.coverage_percentage,
             comp.missing_in_oxidex.len(),
             comp.extra_in_oxidex.len(),
@@ -210,7 +221,7 @@ fn generate_format_page(
         content.push_str("Tags where ExifTool and OxiDex extract different values:\n\n");
         content.push_str("| Tag | ExifTool | OxiDex |\n");
         content.push_str("|-----|----------|--------|\n");
-        for diff in comparison.value_differences.iter().take(50) {
+        for diff in &comparison.value_differences {
             let et_val = truncate(&diff.exiftool_value, 40);
             let ox_val = truncate(&diff.oxidex_value, 40);
             content.push_str(&format!(
@@ -218,11 +229,22 @@ fn generate_format_page(
                 diff.tag_key, et_val, ox_val
             ));
         }
-        if comparison.value_differences.len() > 50 {
-            content.push_str(&format!(
-                "\n*...and {} more differences*\n",
-                comparison.value_differences.len() - 50
-            ));
+        content.push('\n');
+    }
+
+    // Matched Tags
+    if !comparison.matched_tags.is_empty() {
+        content.push_str("## Matched Tags\n\n");
+        content.push_str(
+            "Tags where OxiDex matches ExifTool exactly (or matches expected format):\n\n",
+        );
+        content.push_str("| Tag |\n");
+        content.push_str("|-----|\n");
+        // Sort tags for better readability
+        let mut matched = comparison.matched_tags.clone();
+        matched.sort();
+        for tag in matched {
+            content.push_str(&format!("| `{}` |\n", tag));
         }
         content.push('\n');
     }
@@ -233,15 +255,9 @@ fn generate_format_page(
         content.push_str("Tags ExifTool extracts that OxiDex doesn't:\n\n");
         content.push_str("| Tag | Sample Value |\n");
         content.push_str("|-----|-------------|\n");
-        for tag in comparison.missing_in_oxidex.iter().take(100) {
+        for tag in &comparison.missing_in_oxidex {
             let val = truncate(&tag.value, 50);
             content.push_str(&format!("| `{}:{}` | {} |\n", tag.family, tag.name, val));
-        }
-        if comparison.missing_in_oxidex.len() > 100 {
-            content.push_str(&format!(
-                "\n*...and {} more missing tags*\n",
-                comparison.missing_in_oxidex.len() - 100
-            ));
         }
         content.push('\n');
     }
@@ -252,15 +268,9 @@ fn generate_format_page(
         content.push_str("Tags OxiDex extracts that ExifTool doesn't:\n\n");
         content.push_str("| Tag | Value |\n");
         content.push_str("|-----|-------|\n");
-        for tag in comparison.extra_in_oxidex.iter().take(50) {
+        for tag in &comparison.extra_in_oxidex {
             let val = truncate(&tag.value, 50);
             content.push_str(&format!("| `{}:{}` | {} |\n", tag.family, tag.name, val));
-        }
-        if comparison.extra_in_oxidex.len() > 50 {
-            content.push_str(&format!(
-                "\n*...and {} more extra tags*\n",
-                comparison.extra_in_oxidex.len() - 50
-            ));
         }
         content.push('\n');
     }

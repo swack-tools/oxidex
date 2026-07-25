@@ -318,11 +318,12 @@ pub static TECHNOLOGIES: &[LookupEntry] = &[
 ];
 
 /// Rendering intent names (indexed by code 0-3)
+/// Names match ExifTool output format
 pub static RENDERING_INTENTS: &[&str] = &[
     "Perceptual",
-    "Relative Colorimetric",
+    "Media-Relative Colorimetric",
     "Saturation",
-    "Absolute Colorimetric",
+    "ICC-Absolute Colorimetric",
 ];
 
 /// CMM (Color Management Module) type lookup table
@@ -527,7 +528,7 @@ pub static MANUFACTURERS: &[LookupEntry] = &[
     },
     LookupEntry {
         code: "none",
-        name: "",
+        name: "none",
     },
 ];
 

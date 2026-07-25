@@ -3,14 +3,114 @@
 //! Registry of all Sigma MakerNote tags with their metadata and decoders.
 //! Supports Sigma SD series, DP series, and fp/fp L cameras.
 
+use super::super::shared::generic_decoders::SimpleValueDecoder;
 use super::super::shared::tag_registry::TagRegistry;
 
-// Re-export decoders from sigma.rs
-use super::super::sigma::{
-    DECODE_AF_MODE, DECODE_COLOR_MODE, DECODE_COLOR_SPACE, DECODE_DRIVE_MODE, DECODE_EXPOSURE_MODE,
-    DECODE_FLASH_MODE, DECODE_METERING_MODE, DECODE_PICTURE_STYLE, DECODE_QUALITY,
-    DECODE_RESOLUTION_MODE, DECODE_WHITE_BALANCE,
-};
+// ============================================================================
+// Sigma Decoders
+// ============================================================================
+// Inline decoders to avoid cross-module import issues
+
+/// Decoder for Sigma resolution modes
+const DECODE_RESOLUTION_MODE: SimpleValueDecoder<i32> =
+    SimpleValueDecoder::new(&[(0, "Low"), (1, "Medium"), (2, "High"), (3, "Ultra High")]);
+
+/// Decoder for Sigma autofocus modes
+const DECODE_AF_MODE: SimpleValueDecoder<i32> = SimpleValueDecoder::new(&[
+    (0, "Manual"),
+    (1, "AF-S (Single)"),
+    (2, "AF-C (Continuous)"),
+    (3, "AF-A (Auto)"),
+]);
+
+/// Decoder for Sigma white balance settings
+const DECODE_WHITE_BALANCE: SimpleValueDecoder<i32> = SimpleValueDecoder::new(&[
+    (0, "Auto"),
+    (1, "Daylight"),
+    (2, "Shade"),
+    (3, "Cloudy"),
+    (4, "Tungsten"),
+    (5, "Fluorescent"),
+    (6, "Flash"),
+    (7, "Custom"),
+    (8, "Color Temperature"),
+]);
+
+/// Decoder for Sigma exposure modes
+const DECODE_EXPOSURE_MODE: SimpleValueDecoder<i32> = SimpleValueDecoder::new(&[
+    (0, "Auto"),
+    (1, "Program"),
+    (2, "Aperture Priority"),
+    (3, "Shutter Priority"),
+    (4, "Manual"),
+]);
+
+/// Decoder for Sigma metering modes
+const DECODE_METERING_MODE: SimpleValueDecoder<i32> = SimpleValueDecoder::new(&[
+    (0, "Unknown"),
+    (1, "Multi-segment"),
+    (2, "Center-weighted Average"),
+    (3, "Spot"),
+    (4, "Average"),
+]);
+
+/// Decoder for Sigma drive modes
+const DECODE_DRIVE_MODE: SimpleValueDecoder<i32> = SimpleValueDecoder::new(&[
+    (0, "Single"),
+    (1, "Continuous"),
+    (2, "Self-Timer"),
+    (3, "Self-Timer (Multiple)"),
+    (4, "Bracket"),
+    (5, "Mirror Lock-up"),
+]);
+
+/// Decoder for Sigma flash modes
+const DECODE_FLASH_MODE: SimpleValueDecoder<i32> = SimpleValueDecoder::new(&[
+    (0, "Off"),
+    (1, "Auto"),
+    (2, "On"),
+    (3, "Red-eye Reduction"),
+    (4, "Fill Flash"),
+    (5, "Slow Sync"),
+    (6, "Rear Curtain"),
+    (7, "Wireless"),
+]);
+
+/// Decoder for Sigma image quality settings
+const DECODE_QUALITY: SimpleValueDecoder<i32> = SimpleValueDecoder::new(&[
+    (0, "Low"),
+    (1, "Medium"),
+    (2, "High"),
+    (3, "RAW"),
+    (4, "RAW + JPEG"),
+]);
+
+/// Decoder for Sigma color modes
+const DECODE_COLOR_MODE: SimpleValueDecoder<i32> = SimpleValueDecoder::new(&[
+    (0, "Standard"),
+    (1, "Vivid"),
+    (2, "Neutral"),
+    (3, "Portrait"),
+    (4, "Landscape"),
+    (5, "Monochrome"),
+    (6, "Sepia"),
+    (7, "FOV Classic Blue"),
+    (8, "FOV Classic Yellow"),
+]);
+
+/// Decoder for Sigma color space settings
+const DECODE_COLOR_SPACE: SimpleValueDecoder<i32> =
+    SimpleValueDecoder::new(&[(0, "sRGB"), (1, "Adobe RGB")]);
+
+/// Decoder for Sigma picture styles
+const DECODE_PICTURE_STYLE: SimpleValueDecoder<i32> = SimpleValueDecoder::new(&[
+    (0, "Standard"),
+    (1, "Vivid"),
+    (2, "Neutral"),
+    (3, "Portrait"),
+    (4, "Landscape"),
+    (5, "Monochrome"),
+]);
 
 // Wrapper functions to convert SimpleValueDecoder to function pointers
 fn decode_resolution_mode(value: i32) -> String {

@@ -7,7 +7,7 @@ OxiDex maintains a comprehensive tag database automatically synchronized with Ex
 - **Total Tags:** 32,677 / 28,853 (113% of ExifTool)
 - **Unique Tag Names:** 32,677
 - **Format Families:** 140+
-- **Sync:** Weekly automated PR from ExifTool master ([workflow](https://github.com/swack-tools/oxidex/actions/workflows/sync-exiftool-tags.yml))
+- **Sync:** Manual regeneration from ExifTool master (see [Synchronization](#synchronization))
 
 ## Architecture
 
@@ -285,11 +285,9 @@ pub struct TagDescriptor {
 
 The tag database stays synchronized with ExifTool through:
 
-1. **Weekly CI workflow** - [sync-exiftool-tags.yml](https://github.com/swack-tools/oxidex/actions/workflows/sync-exiftool-tags.yml) checks ExifTool master every Sunday
-2. **Automated PRs** - When ExifTool updates, a `[BETA]` PR is automatically created for review
-3. **Version tracking** - `.exiftool-version` file tracks the synced commit hash
-4. **Manual sync** - Force regeneration with `rm src/tag_db/generated_tags.rs && cargo build --release`
-5. **CI validation** - Automated tests verify tag count and coverage on every PR
+1. **Version tracking** - `.exiftool-version` file tracks the synced commit hash
+2. **Manual sync** - Force regeneration with `rm src/tag_db/generated_tags.rs && cargo build --release`
+3. **CI validation** - Automated tests verify tag count and coverage on every PR
 
 ## Additional Resources
 

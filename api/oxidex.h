@@ -3059,6 +3059,26 @@
 #define IMAGE_DEBUG_TYPE_REPRO 16
 
 /*
+ GeoTiff tag ID for the GeoKeyDirectoryTag (34735)
+ */
+#define GEOTIFF_DIRECTORY_TAG 34735
+
+/*
+ GeoTiff tag ID for the GeoDoubleParamsTag (34736) - stores double precision values
+ */
+#define GEOTIFF_DOUBLE_PARAMS_TAG 34736
+
+/*
+ GeoTiff tag ID for the GeoAsciiParamsTag (34737) - stores ASCII string values
+ */
+#define GEOTIFF_ASCII_PARAMS_TAG 34737
+
+/*
+ TIFF tag ID for ModelTransformation (34264) - stores 4x4 transformation matrix
+ */
+#define MODEL_TRANSFORMATION_TAG 34264
+
+/*
  Version string offset (4 bytes ASCII)
  */
 #define VERSION 0

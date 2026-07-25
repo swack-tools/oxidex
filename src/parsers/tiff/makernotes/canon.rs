@@ -29,9 +29,7 @@ use std::collections::HashMap;
 use super::canon_lens_database::lookup_lens_name;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::extract_i16_array;
-use super::shared::value_extractors::{
-    extract_inline_value, extract_integer_value, extract_string_value,
-};
+use super::shared::value_extractors::{extract_inline_value, extract_integer_value};
 use crate::bitfield_decoder;
 use crate::const_decoder;
 
@@ -117,6 +115,16 @@ fn extract_canon_i16_array_with_base(
 /// Calculates the MakerNote base offset by examining the IFD structure.
 /// The base offset is needed to convert TIFF-relative value_offsets to positions
 /// within the MakerNote data slice.
+///
+/// Canon MakerNotes use TIFF-relative offsets, meaning the value_offset field
+/// in each IFD entry contains an offset from the start of the entire TIFF file,
+/// not from the start of the MakerNote. To correctly extract values, we need
+/// to calculate: position_in_slice = value_offset - base_offset
+///
+/// The algorithm works by:
+/// 1. Finding the first IFD entry with offset-based data (size > 4 bytes)
+/// 2. Knowing the data starts right after the IFD header in the slice
+/// 3. Calculating: base_offset = value_offset - expected_position_in_slice
 fn calculate_makernote_base(data: &[u8], byte_order: ByteOrder) -> Option<u32> {
     if data.len() < 2 {
         return None;
@@ -130,50 +138,63 @@ fn calculate_makernote_base(data: &[u8], byte_order: ByteOrder) -> Option<u32> {
     }
 
     // Calculate IFD header size: 2 bytes (entry count) + 12 bytes per entry + 4 bytes (next IFD pointer)
-    // Canon MakerNote data starts right after this header
+    // Canon MakerNote data values start right after this header
     let header_size = 2 + entry_count * 12 + 4;
 
-    if header_size + 12 > data.len() {
+    if header_size > data.len() {
         return None;
     }
 
-    // Read first entry to get its value_offset
+    // Iterate through entries to find one with offset-based data
     // Entry format: [tag_id:2][field_type:2][value_count:4][value_offset:4]
-    let first_entry_offset = 2;
-    let _tag_id = reader.u16_at(first_entry_offset)?;
-    let field_type = reader.u16_at(first_entry_offset + 2)?;
-    let value_count = reader.u32_at(first_entry_offset + 4)?;
-    let value_offset = reader.u32_at(first_entry_offset + 8)?;
+    for i in 0..entry_count {
+        let entry_offset = 2 + i * 12;
+        if entry_offset + 12 > data.len() {
+            break;
+        }
 
-    // Calculate if this entry has inline or offset-based data
-    let type_size = match field_type {
-        3 => 2, // SHORT
-        7 => 1, // UNDEFINED (byte count in value_count)
-        _ => return None,
-    };
-    let total_size = if field_type == 7 {
-        value_count as usize // UNDEFINED: value_count is byte count
-    } else {
-        type_size * value_count as usize
-    };
+        let field_type = reader.u16_at(entry_offset + 2)?;
+        let value_count = reader.u32_at(entry_offset + 4)?;
+        let value_offset = reader.u32_at(entry_offset + 8)?;
 
-    // If data is offset-based (>4 bytes), use the value_offset to calculate base
-    if total_size > 4 {
-        // The value_offset is TIFF-relative
-        // The data should be at position (header_size or later) in our slice
-        // So: base = value_offset - position_in_slice
-        // Position in slice is at least header_size (after IFD entries + next IFD pointer)
-        // Minimum position would be right after IFD entries
-        let min_data_pos = header_size;
-        if value_offset as usize >= min_data_pos {
-            // Try to find the actual position by checking where valid data starts
-            // For Canon, data typically starts right after the IFD header
-            // base = value_offset - (position of data in slice)
-            // We assume data is at header_size + 4 (after next IFD pointer) or directly at header_size
-            return Some(value_offset - header_size as u32);
+        // Calculate byte size based on field type
+        // Reference: TIFF specification field types
+        let type_size = match field_type {
+            1 => 1,        // BYTE
+            2 => 1,        // ASCII
+            3 => 2,        // SHORT
+            4 => 4,        // LONG
+            5 => 8,        // RATIONAL
+            6 => 1,        // SBYTE
+            7 => 1,        // UNDEFINED
+            8 => 2,        // SSHORT
+            9 => 4,        // SLONG
+            10 => 8,       // SRATIONAL
+            11 => 4,       // FLOAT
+            12 => 8,       // DOUBLE
+            _ => continue, // Unknown type, skip
+        };
+
+        let total_size = type_size * value_count as usize;
+
+        // If data is offset-based (>4 bytes), use the value_offset to calculate base
+        if total_size > 4 && value_offset > 0 {
+            // The value_offset is TIFF-relative
+            // The data should be at position (header_size or later) in our slice
+            // base_offset = value_offset - position_in_slice
+            //
+            // We need to find where this entry's data actually is in the slice.
+            // Canon typically stores data sequentially after the IFD header.
+            // For the first offset-based entry, its data starts at header_size.
+            //
+            // So: base_offset = value_offset - header_size
+            if value_offset as usize >= header_size {
+                return Some(value_offset - header_size as u32);
+            }
         }
     }
 
+    // If no offset-based entries found, return None (fallback will use 0)
     None
 }
 
@@ -190,6 +211,82 @@ fn extract_canon_i16_array(
     } else {
         // Fallback: assume offsets are relative to data slice (original behavior)
         extract_canon_i16_array_with_base(entry, data, byte_order, 0)
+    }
+}
+
+/// Extracts a string value from a Canon MakerNote IFD entry.
+///
+/// Canon MakerNotes use TIFF-relative offsets, so we need to calculate the
+/// base offset and subtract it from the value_offset to get the position
+/// within the MakerNote data slice.
+///
+/// # Parameters
+/// - `entry`: The IFD entry containing the tag metadata
+/// - `data`: The MakerNote data slice (after any signature)
+/// - `byte_order`: Byte order for parsing
+/// - `base_offset`: The calculated base offset to subtract from value_offset
+///
+/// # Returns
+/// The extracted string value, or None if extraction fails
+fn extract_canon_string_with_base(
+    entry: &IfdEntry,
+    data: &[u8],
+    byte_order: ByteOrder,
+    base_offset: u32,
+) -> Option<String> {
+    // Only handle ASCII type (2)
+    if entry.field_type != 2 {
+        return None;
+    }
+
+    let byte_count = entry.value_count as usize;
+    if byte_count == 0 {
+        return None;
+    }
+
+    // For inline strings (<=4 bytes), value is stored in value_offset field
+    if byte_count <= 4 {
+        let bytes = match byte_order {
+            ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+            ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+        };
+        let s = String::from_utf8_lossy(&bytes[..byte_count])
+            .trim_end_matches('\0')
+            .trim()
+            .to_string();
+        return if s.is_empty() { None } else { Some(s) };
+    }
+
+    // For offset-based strings, adjust the offset using base_offset
+    let tiff_offset = entry.value_offset;
+    if tiff_offset < base_offset {
+        // Offset is before MakerNote start - might be inline or invalid
+        return None;
+    }
+
+    let relative_offset = (tiff_offset - base_offset) as usize;
+    if relative_offset + byte_count > data.len() {
+        return None;
+    }
+
+    let bytes = &data[relative_offset..relative_offset + byte_count];
+    let s = String::from_utf8_lossy(bytes)
+        .trim_end_matches('\0')
+        .trim()
+        .to_string();
+
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// Extracts a string value from a Canon MakerNote IFD entry.
+///
+/// This is a convenience wrapper that calculates the base offset automatically.
+fn extract_canon_string(entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) -> Option<String> {
+    if let Some(base) = calculate_makernote_base(data, byte_order) {
+        extract_canon_string_with_base(entry, data, byte_order, base)
+    } else {
+        // Fallback: try with base_offset = 0 (original behavior)
+        extract_canon_string_with_base(entry, data, byte_order, 0)
     }
 }
 
@@ -1356,9 +1453,10 @@ fn parse_canon_makernote_impl(
     let _ = parse_ifd_entries(data, byte_order, &config, |entry, ifd_data| {
         match entry.tag_id {
             // Simple string tags (Phase 1)
-            // These tags seem to use offsets relative to the IFD start
+            // Canon MakerNotes use TIFF-relative offsets, so we use extract_canon_string
+            // which properly calculates and applies the base offset
             CANON_IMAGE_TYPE | CANON_FIRMWARE_VERSION | CANON_OWNER_NAME | CANON_SERIAL_NUMBER => {
-                if let Some(value) = extract_string_value(entry, ifd_data) {
+                if let Some(value) = extract_canon_string(entry, ifd_data, byte_order) {
                     let tag_name = canon_tag_to_name(entry.tag_id);
                     tags.insert(tag_name.clone(), value.clone());
 

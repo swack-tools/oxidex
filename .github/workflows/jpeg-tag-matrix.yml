@@ -1,0 +1,116 @@
+name: JPEG Tag Matrix
+
+# Empirical exiftool <-> oxidex JPEG tag comparison:
+#  - builds oxidex, writes every ExifTool-writable JPEG tag with exiftool and
+#    verifies oxidex reads it; writes via the oxidex CLI and verifies both
+#    readers see it (jpeg-tag-matrix binary)
+#  - regenerates docs/reference/jpeg-tag-support.md + jpeg-tag-matrix.md
+#  - fails on regression vs docs/reference/jpeg-tag-baseline.json (ratchet:
+#    improvements auto-raise the baseline)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'oxidex-tags-*/src/**'
+      - 'tests/fixtures/jpeg/tag_matrix_base.jpg'
+      - '.github/workflows/jpeg-tag-matrix.yml'
+  schedule:
+    - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: jpeg-tag-matrix
+  cancel-in-progress: true
+
+env:
+  EXIFTOOL_VERSION: '13.55'
+
+jobs:
+  tag-matrix:
+    name: ExifTool comparison matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The `runner` context (runner.temp) is only available inside a step,
+      # not in any `env:` block (workflow- or job-level) -- referencing it
+      # there fails to parse ("This run likely failed because of a workflow
+      # file issue", zero jobs scheduled). Route it through $GITHUB_ENV from
+      # a shell step instead, using the plain $RUNNER_TEMP env var GitHub
+      # Actions provides (no expression syntax needed).
+      # https://docs.github.com/actions/learn-github-actions/contexts#context-availability
+      - name: Set TAGMATRIX_WORK
+        run: echo "TAGMATRIX_WORK=$RUNNER_TEMP/oxidex-tagmap" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable (2026-07)
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2.9.1
+        with:
+          shared-key: jpeg-tag-matrix
+
+      - name: Install pinned ExifTool
+        run: |
+          git clone -q --depth 1 --branch "${EXIFTOOL_VERSION}" \
+            https://github.com/exiftool/exiftool /tmp/exiftool
+          echo "/tmp/exiftool" >> "$GITHUB_PATH"
+          /tmp/exiftool/exiftool -ver
+
+      - name: Build oxidex and jpeg-tag-matrix (release)
+        run: |
+          cargo build --release --bin oxidex
+          cargo build --release --features jpeg-tag-matrix-binary --bin jpeg-tag-matrix
+
+      - name: Generate ExifTool tag manifest
+        run: ./target/release/jpeg-tag-matrix manifest --flag-noops
+
+      - name: Run tag matrix (read + write round-trips)
+        run: ./target/release/jpeg-tag-matrix run --workers 8
+
+      - name: Generate reports and check baseline
+        run: ./target/release/jpeg-tag-matrix report --check-baseline
+
+      - name: Ratchet baseline on improvement
+        run: ./target/release/jpeg-tag-matrix report --update-baseline
+
+      - name: Upload raw results
+        uses: actions/upload-artifact@v4
+        with:
+          name: jpeg-tag-matrix-results
+          path: |
+            ${{ env.TAGMATRIX_WORK }}/results.json
+            ${{ env.TAGMATRIX_WORK }}/exiftool_jpeg_tags.json
+            ${{ env.TAGMATRIX_WORK }}/exiftool_jpeg_readonly_tags.json
+          retention-days: 90
+
+      - name: Check for docs changes
+        id: changes
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git diff --quiet docs/reference/jpeg-tag-support.md \
+            docs/reference/jpeg-tag-matrix.md \
+            docs/reference/jpeg-tag-baseline.json || echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push docs updates
+        if: github.ref == 'refs/heads/main' && steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/reference/jpeg-tag-support.md \
+            docs/reference/jpeg-tag-matrix.md \
+            docs/reference/jpeg-tag-baseline.json
+          git commit -m "docs: auto-update JPEG tag matrix (exiftool ${EXIFTOOL_VERSION})
+
+          Generated from commit ${{ github.sha }}
+
+          [skip ci]"
+          git push

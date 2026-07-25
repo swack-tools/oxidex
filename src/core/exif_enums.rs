@@ -48,8 +48,19 @@ pub static CONTRAST: LazyLock<HashMap<u32, &'static str>> =
 /// CustomRendered (tag 0xA401) - Custom image processing
 ///
 /// Indicates whether special processing was applied to the image data.
-pub static CUSTOM_RENDERED: LazyLock<HashMap<u32, &'static str>> =
-    LazyLock::new(|| HashMap::from([(0, "Normal"), (1, "Custom")]));
+/// Extended values (2+) are from Apple's HDR/Portrait processing.
+pub static CUSTOM_RENDERED: LazyLock<HashMap<u32, &'static str>> = LazyLock::new(|| {
+    HashMap::from([
+        (0, "Normal"),
+        (1, "Custom"),
+        (2, "HDR (no original saved)"),
+        (3, "HDR (original saved)"),
+        (4, "Original (for HDR)"),
+        (6, "Panorama"),
+        (7, "Portrait HDR"),
+        (8, "Portrait"),
+    ])
+});
 
 /// ExposureMode (tag 0xA402) - Exposure mode setting
 ///

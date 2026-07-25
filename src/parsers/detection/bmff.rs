@@ -17,6 +17,9 @@ use super::helpers::matches_at_offset;
 /// - HEIF/HEIC (ftyp + HEIF brands)
 /// - Generic QuickTime/MP4
 ///
+/// Classic QuickTime files may start with "moov", "wide", "free", "skip", or "mdat"
+/// atoms at offset 4 instead of "ftyp".
+///
 /// # Arguments
 ///
 /// * `data` - Magic bytes buffer (at least 12 bytes recommended)
@@ -25,10 +28,30 @@ use super::helpers::matches_at_offset;
 ///
 /// `Some(FileFormat)` if BMFF variant detected, `None` otherwise
 pub fn detect_bmff_variants(data: &[u8]) -> Option<FileFormat> {
-    if data.len() < 8 || !matches_at_offset(data, b"ftyp", 4) {
+    if data.len() < 8 {
         return None;
     }
 
+    // Check for ftyp (modern MP4/QuickTime)
+    if matches_at_offset(data, b"ftyp", 4) {
+        return detect_ftyp_brand(data);
+    }
+
+    // Check for classic QuickTime atoms
+    // Classic QuickTime files may start with moov, wide, free, skip, or mdat
+    let atom_type = &data[4..8];
+    match atom_type {
+        b"moov" | b"wide" | b"free" | b"skip" | b"mdat" | b"pnot" => {
+            return Some(FileFormat::QuickTime);
+        }
+        _ => {}
+    }
+
+    None
+}
+
+/// Detect format from ftyp brand identifier
+fn detect_ftyp_brand(data: &[u8]) -> Option<FileFormat> {
     // Check brand identifier at offset 8
     if data.len() < 12 {
         // Has ftyp but not enough bytes for brand

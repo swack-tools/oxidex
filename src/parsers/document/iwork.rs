@@ -44,6 +44,21 @@ impl FormatParser for KeynoteParser {
     }
 }
 
+pub fn parse_pages_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
+    let parser = PagesParser;
+    parser.parse(reader).map_err(|e| e.to_string())
+}
+
+pub fn parse_numbers_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
+    let parser = NumbersParser;
+    parser.parse(reader).map_err(|e| e.to_string())
+}
+
+pub fn parse_keynote_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
+    let parser = KeynoteParser;
+    parser.parse(reader).map_err(|e| e.to_string())
+}
+
 /// Common iWork parsing logic
 fn parse_iwork(
     reader: &dyn FileReader,

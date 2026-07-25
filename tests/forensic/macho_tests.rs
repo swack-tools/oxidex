@@ -195,9 +195,9 @@ fn test_macho64_executable_x86_64() {
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
     // Verify basic metadata - new API uses MachO: prefix
-    assert_eq!(metadata.get_string("MachO:CPUType").unwrap(), "x86_64");
-    assert_eq!(metadata.get_string("MachO:FileType").unwrap(), "Executable");
-    assert_eq!(metadata.get_integer("MachO:Is64Bit").unwrap(), 1);
+    assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "x86_64");
+    assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
+    assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
 }
 
 #[test]
@@ -217,9 +217,9 @@ fn test_macho32_executable_x86() {
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(metadata.get_string("MachO:CPUType").unwrap(), "i386");
-    assert_eq!(metadata.get_string("MachO:FileType").unwrap(), "Executable");
-    assert_eq!(metadata.get_integer("MachO:Is64Bit").unwrap(), 0);
+    assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "i386");
+    assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
+    assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 0);
 }
 
 #[test]
@@ -239,9 +239,9 @@ fn test_macho64_arm64_executable() {
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(metadata.get_string("MachO:CPUType").unwrap(), "ARM64");
-    assert_eq!(metadata.get_string("MachO:FileType").unwrap(), "Executable");
-    assert_eq!(metadata.get_integer("MachO:Is64Bit").unwrap(), 1);
+    assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM64");
+    assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
+    assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
 }
 
 #[test]
@@ -254,9 +254,9 @@ fn test_macho64_cigam() {
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(metadata.get_integer("MachO:Is64Bit").unwrap(), 1);
+    assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
     // CIGAM = file is LE = is_swapped=true (swapped from original BE)
-    assert_eq!(metadata.get_integer("MachO:IsByteSwapped").unwrap(), 1);
+    assert_eq!(metadata.get_integer("EXE:IsByteSwapped").unwrap(), 1);
 }
 
 #[test]
@@ -269,8 +269,8 @@ fn test_macho32_cigam() {
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(metadata.get_integer("MachO:Is64Bit").unwrap(), 0);
-    assert_eq!(metadata.get_integer("MachO:IsByteSwapped").unwrap(), 1);
+    assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 0);
+    assert_eq!(metadata.get_integer("EXE:IsByteSwapped").unwrap(), 1);
 }
 
 #[test]
@@ -283,10 +283,10 @@ fn test_macho64_dylib() {
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
     assert_eq!(
-        metadata.get_string("MachO:FileType").unwrap(),
+        metadata.get_string("EXE:FileType").unwrap(),
         "Dynamic Library"
     );
-    assert_eq!(metadata.get_integer("MachO:Is64Bit").unwrap(), 1);
+    assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
 }
 
 #[test]
@@ -298,8 +298,8 @@ fn test_macho64_bundle() {
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(metadata.get_string("MachO:FileType").unwrap(), "Bundle");
-    assert_eq!(metadata.get_integer("MachO:Is64Bit").unwrap(), 1);
+    assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Bundle");
+    assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
 }
 
 #[test]
@@ -311,8 +311,8 @@ fn test_macho64_object_file() {
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(metadata.get_string("MachO:FileType").unwrap(), "Object");
-    assert_eq!(metadata.get_integer("MachO:Is64Bit").unwrap(), 1);
+    assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Object");
+    assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
 }
 
 #[test]
@@ -340,8 +340,8 @@ fn test_macho64_with_load_commands() {
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(metadata.get_integer("MachO:Is64Bit").unwrap(), 1);
-    assert_eq!(metadata.get_integer("MachO:LoadCommandCount").unwrap(), 2);
+    assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
+    assert_eq!(metadata.get_integer("EXE:LoadCommandCount").unwrap(), 2);
 }
 
 #[test]
@@ -364,8 +364,8 @@ fn test_macho64_with_code_signature() {
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(metadata.get_integer("MachO:Is64Bit").unwrap(), 1);
-    assert_eq!(metadata.get_string("MachO:CPUType").unwrap(), "ARM64");
+    assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
+    assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM64");
 }
 
 #[test]
@@ -425,9 +425,9 @@ fn test_macho32_arm_executable() {
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(metadata.get_integer("MachO:Is64Bit").unwrap(), 0);
-    assert_eq!(metadata.get_string("MachO:CPUType").unwrap(), "ARM");
-    assert_eq!(metadata.get_string("MachO:FileType").unwrap(), "Executable");
+    assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 0);
+    assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM");
+    assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
 }
 
 #[test]
@@ -440,10 +440,7 @@ fn test_macho_file_size() {
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(
-        metadata.get_integer("MachO:FileSize").unwrap(),
-        expected_size
-    );
+    assert_eq!(metadata.get_integer("EXE:FileSize").unwrap(), expected_size);
 }
 
 #[test]
@@ -475,7 +472,7 @@ fn test_macho_architecture_detection() {
     let metadata_32 = parser
         .parse(&reader_32)
         .expect("Failed to parse 32-bit Mach-O");
-    assert_eq!(metadata_32.get_integer("MachO:Is64Bit").unwrap(), 0);
+    assert_eq!(metadata_32.get_integer("EXE:Is64Bit").unwrap(), 0);
 
     // Test 64-bit detection
     let data_64 = create_macho64_header(MH_MAGIC_64, CPU_TYPE_X86_64, 3, MH_EXECUTE, 0, 0, 0);
@@ -483,5 +480,5 @@ fn test_macho_architecture_detection() {
     let metadata_64 = parser
         .parse(&reader_64)
         .expect("Failed to parse 64-bit Mach-O");
-    assert_eq!(metadata_64.get_integer("MachO:Is64Bit").unwrap(), 1);
+    assert_eq!(metadata_64.get_integer("EXE:Is64Bit").unwrap(), 1);
 }

@@ -1,14 +1,16 @@
 //! Tag value validation engine
 //!
-//! This module provides validation logic for metadata tag values, ensuring that
-//! tag values match their expected types as defined in tag descriptors before
-//! write operations are performed.
+//! This module provides validation logic for metadata tag values before write
+//! operations are performed. Tags with reliable registry type metadata are
+//! checked against their descriptor type; registry-owned YAML descriptors with
+//! absent or conflicting type metadata are limited to intrinsic value checks.
 
 #![allow(dead_code)]
 
 use crate::core::tag_value::TagValue;
 use crate::core::{TagDescriptor, ValueType};
 use crate::error::ExifToolError;
+use crate::tag_db::tag_registry::descriptor_has_reliable_value_type;
 
 fn descriptor_allows_datetime(descriptor: &TagDescriptor) -> bool {
     let name = descriptor.name();
@@ -19,7 +21,8 @@ fn descriptor_allows_datetime(descriptor: &TagDescriptor) -> bool {
 ///
 /// This function performs comprehensive type checking to ensure tag values conform to their
 /// schema definitions. It validates:
-/// - Type matching between TagValue variants and TagDescriptor value_type
+/// - Type matching between TagValue variants and reliable TagDescriptor value_type metadata
+/// - Intrinsic value constraints for descriptors whose YAML type metadata is ambiguous
 /// - Special constraints like non-zero denominators for Rational values
 /// - DateTime structural validity (already guaranteed by chrono::DateTime type)
 ///
@@ -33,7 +36,7 @@ fn descriptor_allows_datetime(descriptor: &TagDescriptor) -> bool {
 ///
 /// # Returns
 ///
-/// * `Ok(())` if validation succeeds (value matches expected type)
+/// * `Ok(())` if validation succeeds
 /// * `Err(ExifToolError::InvalidTagValue)` if validation fails with detailed reason
 ///
 /// # Examples
@@ -65,7 +68,8 @@ fn descriptor_allows_datetime(descriptor: &TagDescriptor) -> bool {
 /// # Validation Rules
 ///
 /// ## Type Matching
-/// The function checks that the TagValue variant matches the expected ValueType:
+/// The function checks that the TagValue variant matches the expected ValueType when the
+/// descriptor has reliable type metadata:
 /// - `TagValue::String` must match `ValueType::String`
 /// - `TagValue::Integer` must match `ValueType::Integer`
 /// - `TagValue::Float` must match `ValueType::Float`
@@ -74,6 +78,8 @@ fn descriptor_allows_datetime(descriptor: &TagDescriptor) -> bool {
 /// - `TagValue::DateTime` must match `ValueType::DateTime`
 /// - `TagValue::Struct` must match `ValueType::Struct`
 ///
+/// Exact descriptors returned from the active registry may skip strict type matching when the
+/// descriptor came from YAML rows with absent, unrecognized, or conflicting type metadata.
 /// ## Rational Number Constraints
 /// For Rational values, the denominator must not be zero, as this would represent
 /// an undefined mathematical value.
@@ -105,6 +111,10 @@ pub fn validate_tag_value_with_name(
     descriptor: &TagDescriptor,
     value: &TagValue,
 ) -> Result<(), ExifToolError> {
+    if !descriptor_has_reliable_value_type(descriptor) {
+        return validate_tag_value_intrinsics(tag_name, value);
+    }
+
     let expected_type = descriptor.value_type();
 
     match value {
@@ -137,7 +147,7 @@ pub fn validate_tag_value_with_name(
         }
         TagValue::Rational {
             numerator: _,
-            denominator,
+            denominator: _,
         } => {
             if expected_type != ValueType::Rational {
                 return Err(ExifToolError::invalid_tag_value(
@@ -148,13 +158,7 @@ pub fn validate_tag_value_with_name(
                     ),
                 ));
             }
-            // Validate that denominator is not zero (undefined mathematical value)
-            if *denominator == 0 {
-                return Err(ExifToolError::invalid_tag_value(
-                    tag_name,
-                    "Invalid Rational value: denominator cannot be zero".to_string(),
-                ));
-            }
+            validate_tag_value_intrinsics(tag_name, value)?;
         }
         TagValue::Binary(_) => {
             if expected_type != ValueType::Binary {
@@ -193,6 +197,23 @@ pub fn validate_tag_value_with_name(
             // For this iteration, basic type matching is sufficient
             // Recursive validation of nested structure contents is out of scope
         }
+    }
+
+    Ok(())
+}
+
+/// Validates constraints that are independent of registry type metadata.
+pub(crate) fn validate_tag_value_intrinsics(
+    tag_name: &str,
+    value: &TagValue,
+) -> Result<(), ExifToolError> {
+    if let TagValue::Rational { denominator, .. } = value
+        && *denominator == 0
+    {
+        return Err(ExifToolError::invalid_tag_value(
+            tag_name,
+            "Invalid Rational value: denominator cannot be zero".to_string(),
+        ));
     }
 
     Ok(())
@@ -305,6 +326,25 @@ mod tests {
             assert!(reason.contains("Type mismatch"));
             assert!(reason.contains("String"));
             assert!(reason.contains("Integer"));
+        } else {
+            panic!("Expected InvalidTagValue error");
+        }
+    }
+
+    #[test]
+    fn test_cloned_unreliable_yaml_descriptor_remains_strict() {
+        let descriptor = crate::tag_db::tag_registry::get_tag_descriptor("PNG:ImageWidth")
+            .expect("expected YAML-backed PNG descriptor")
+            .clone();
+        let value = TagValue::new_integer(640);
+
+        let result = validate_tag_value(&descriptor, &value);
+
+        assert!(result.is_err());
+        if let Err(ExifToolError::InvalidTagValue { tag_name, reason }) = result {
+            assert_eq!(tag_name, "PNG:ImageWidth");
+            assert!(reason.contains("expected String"));
+            assert!(reason.contains("got Integer"));
         } else {
             panic!("Expected InvalidTagValue error");
         }

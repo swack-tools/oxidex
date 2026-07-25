@@ -3,7 +3,10 @@
 //! This module handles parsing of IPTC data in JPEG APP13 segments.
 //! IPTC data is stored in Adobe Photoshop Image Resource Blocks (8BIM).
 
-use crate::core::value_formatter::{format_iptc_date, format_iptc_time};
+use crate::core::value_formatter::{
+    format_iptc_coded_charset, format_iptc_date, format_iptc_record_version, format_iptc_time,
+    format_iptc_urgency,
+};
 use crate::error::Result;
 use crate::parsers::jpeg::segment_parser::Segment;
 use nom::{
@@ -158,42 +161,91 @@ pub fn parse_all_iptc_records(input: &[u8]) -> Result<Vec<IptcRecord>> {
 /// Returns static string slices for known datasets to avoid allocations.
 /// Tag name in the format "IPTC:TagName"
 pub fn dataset_to_tag_name(record_number: u8, dataset_number: u8) -> String {
-    // Only handle Record 2 (Application Record) for now
-    if record_number != 2 {
-        return format!("IPTC:Unknown-{}-{}", record_number, dataset_number);
+    // Handle Record 2 (Application Record)
+    if record_number == 2 {
+        let tag_name = match dataset_number {
+            0 => "IPTC:ApplicationRecordVersion",
+            5 => "IPTC:ObjectName",
+            7 => "IPTC:EditStatus",
+            10 => "IPTC:Urgency",
+            15 => "IPTC:Category",
+            20 => "IPTC:SupplementalCategories",
+            22 => "IPTC:FixtureIdentifier",
+            25 => "IPTC:Keywords",
+            26 => "IPTC:ContentLocationCode",
+            27 => "IPTC:ContentLocationName",
+            30 => "IPTC:ReleaseDate",
+            35 => "IPTC:ReleaseTime",
+            37 => "IPTC:ExpirationDate",
+            38 => "IPTC:ExpirationTime",
+            40 => "IPTC:SpecialInstructions",
+            42 => "IPTC:ActionAdvised",
+            45 => "IPTC:ReferenceService",
+            47 => "IPTC:ReferenceDate",
+            50 => "IPTC:ReferenceNumber",
+            55 => "IPTC:DateCreated",
+            60 => "IPTC:TimeCreated",
+            62 => "IPTC:DigitalCreationDate",
+            63 => "IPTC:DigitalCreationTime",
+            65 => "IPTC:OriginatingProgram",
+            70 => "IPTC:ProgramVersion",
+            75 => "IPTC:ObjectCycle",
+            80 => "IPTC:By-line",
+            85 => "IPTC:By-lineTitle",
+            90 => "IPTC:City",
+            92 => "IPTC:Sub-location",
+            95 => "IPTC:Province-State",
+            100 => "IPTC:Country-PrimaryLocationCode",
+            101 => "IPTC:Country-PrimaryLocationName",
+            103 => "IPTC:OriginalTransmissionReference",
+            105 => "IPTC:Headline",
+            110 => "IPTC:Credit",
+            115 => "IPTC:Source",
+            116 => "IPTC:CopyrightNotice",
+            118 => "IPTC:Contact",
+            120 => "IPTC:Caption-Abstract",
+            121 => "IPTC:LocalCaption",
+            122 => "IPTC:Writer-Editor",
+            125 => "IPTC:RasterizedCaption",
+            130 => "IPTC:ImageType",
+            131 => "IPTC:ImageOrientation",
+            135 => "IPTC:LanguageIdentifier",
+            150 => "IPTC:AudioType",
+            151 => "IPTC:AudioSamplingRate",
+            152 => "IPTC:AudioSamplingResolution",
+            153 => "IPTC:AudioDuration",
+            154 => "IPTC:AudioOutcue",
+            200 => "IPTC:ObjectPreviewFileFormat",
+            201 => "IPTC:ObjectPreviewFileFormatVer",
+            202 => "IPTC:ObjectPreviewData",
+            _ => return format!("IPTC:Unknown-{}-{}", record_number, dataset_number),
+        };
+        return tag_name.to_string();
     }
 
-    // Return static strings for known datasets to avoid allocations
-    let tag_name = match dataset_number {
-        5 => "IPTC:ObjectName",
-        7 => "IPTC:EditStatus",
-        10 => "IPTC:Urgency",
-        15 => "IPTC:Category",
-        20 => "IPTC:SupplementalCategories",
-        25 => "IPTC:Keywords",
-        40 => "IPTC:SpecialInstructions",
-        55 => "IPTC:DateCreated",
-        60 => "IPTC:TimeCreated",
-        80 => "IPTC:By-line",
-        85 => "IPTC:By-lineTitle",
-        90 => "IPTC:City",
-        92 => "IPTC:Sub-location",
-        95 => "IPTC:Province-State",
-        100 => "IPTC:Country-PrimaryLocationCode",
-        101 => "IPTC:Country-PrimaryLocationName",
-        103 => "IPTC:OriginalTransmissionReference",
-        105 => "IPTC:Headline",
-        110 => "IPTC:Credit",
-        115 => "IPTC:Source",
-        116 => "IPTC:CopyrightNotice",
-        118 => "IPTC:Contact",
-        120 => "IPTC:Caption-Abstract",
-        122 => "IPTC:Writer-Editor",
-        _ => return format!("IPTC:Unknown-{}-{}", record_number, dataset_number),
-    };
+    // Handle Record 1 (Envelope Record)
+    if record_number == 1 {
+        let tag_name = match dataset_number {
+            0 => "IPTC:EnvelopeRecordVersion",
+            5 => "IPTC:Destination",
+            20 => "IPTC:FileFormat",
+            22 => "IPTC:FileVersion",
+            30 => "IPTC:ServiceIdentifier",
+            40 => "IPTC:EnvelopeNumber",
+            50 => "IPTC:ProductID",
+            60 => "IPTC:EnvelopePriority",
+            70 => "IPTC:DateSent",
+            80 => "IPTC:TimeSent",
+            90 => "IPTC:CodedCharacterSet",
+            100 => "IPTC:UniqueObjectName",
+            120 => "IPTC:ARMIdentifier",
+            122 => "IPTC:ARMVersion",
+            _ => return format!("IPTC:Unknown-{}-{}", record_number, dataset_number),
+        };
+        return tag_name.to_string();
+    }
 
-    // Convert static string to String
-    tag_name.to_string()
+    format!("IPTC:Unknown-{}-{}", record_number, dataset_number)
 }
 
 /// Decodes an IPTC string from bytes.
@@ -273,22 +325,57 @@ pub fn extract_iptc_from_segments(segments: &[Segment]) -> Result<Vec<(String, S
                                         record.record_number,
                                         record.dataset_number,
                                     );
-                                    let mut value = decode_iptc_string(&record.data);
 
-                                    // Apply formatting for specific dataset types
-                                    if record.record_number == 2 {
+                                    // Some fields need raw byte handling instead of string decoding
+                                    let value = if record.record_number == 1 {
                                         match record.dataset_number {
-                                            55 => {
-                                                // DateCreated: YYYYMMDD -> YYYY:MM:DD
-                                                value = format_iptc_date(&value);
+                                            0 => {
+                                                // EnvelopeRecordVersion: binary u16
+                                                format_iptc_record_version(&record.data)
                                             }
-                                            60 => {
-                                                // TimeCreated: HHMMSS±HHMM -> HH:MM:SS±HH:MM
-                                                value = format_iptc_time(&value);
+                                            70 => {
+                                                // DateSent: YYYYMMDD -> YYYY:MM:DD
+                                                format_iptc_date(&decode_iptc_string(&record.data))
                                             }
-                                            _ => {}
+                                            80 => {
+                                                // TimeSent: HHMMSS±HHMM -> HH:MM:SS±HH:MM
+                                                format_iptc_time(&decode_iptc_string(&record.data))
+                                            }
+                                            90 => {
+                                                // CodedCharacterSet: ISO 2022 escape sequence
+                                                format_iptc_coded_charset(&record.data)
+                                            }
+                                            _ => decode_iptc_string(&record.data),
                                         }
-                                    }
+                                    } else if record.record_number == 2 {
+                                        match record.dataset_number {
+                                            0 => {
+                                                // ApplicationRecordVersion: binary u16
+                                                format_iptc_record_version(&record.data)
+                                            }
+                                            10 => {
+                                                // Urgency: add description to match ExifTool
+                                                format_iptc_urgency(&decode_iptc_string(
+                                                    &record.data,
+                                                ))
+                                            }
+                                            30 | 37 | 47 | 55 | 62 | 70 => {
+                                                // Date fields: YYYYMMDD -> YYYY:MM:DD
+                                                // 30=ReleaseDate, 37=ExpirationDate, 47=ReferenceDate
+                                                // 55=DateCreated, 62=DigitalCreationDate, 70=DateSent
+                                                format_iptc_date(&decode_iptc_string(&record.data))
+                                            }
+                                            35 | 38 | 60 | 63 => {
+                                                // Time fields: HHMMSS±HHMM -> HH:MM:SS±HH:MM
+                                                // 35=ReleaseTime, 38=ExpirationTime, 60=TimeCreated
+                                                // 63=DigitalCreationTime
+                                                format_iptc_time(&decode_iptc_string(&record.data))
+                                            }
+                                            _ => decode_iptc_string(&record.data),
+                                        }
+                                    } else {
+                                        decode_iptc_string(&record.data)
+                                    };
 
                                     all_iptc_tags.push((tag_name, value));
                                 }
@@ -429,14 +516,21 @@ mod tests {
 
     #[test]
     fn test_dataset_to_tag_name() {
+        // Application Record (Record 2)
+        assert_eq!(dataset_to_tag_name(2, 0), "IPTC:ApplicationRecordVersion");
         assert_eq!(dataset_to_tag_name(2, 5), "IPTC:ObjectName");
         assert_eq!(dataset_to_tag_name(2, 25), "IPTC:Keywords");
         assert_eq!(dataset_to_tag_name(2, 80), "IPTC:By-line");
         assert_eq!(dataset_to_tag_name(2, 90), "IPTC:City");
         assert_eq!(dataset_to_tag_name(2, 120), "IPTC:Caption-Abstract");
 
+        // Envelope Record (Record 1)
+        assert_eq!(dataset_to_tag_name(1, 0), "IPTC:EnvelopeRecordVersion");
+        assert_eq!(dataset_to_tag_name(1, 90), "IPTC:CodedCharacterSet");
+
         // Unknown dataset should return generic name
         assert_eq!(dataset_to_tag_name(2, 255), "IPTC:Unknown-2-255");
+        assert_eq!(dataset_to_tag_name(3, 5), "IPTC:Unknown-3-5");
     }
 
     #[test]

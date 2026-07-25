@@ -5,11 +5,27 @@
 
 use super::ExtractionResult;
 use crate::models::TagInfo;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use walkdir::WalkDir;
+
+/// On-disk cache entry for one format's ExifTool extraction. ExifTool's own
+/// output for a given sample corpus never changes round-to-round (only
+/// OxiDex's binary changes as fixes land), so this persists across process
+/// invocations -- unlike ExifToolExtractor's in-memory `cache` field, which
+/// is rebuilt from scratch every time main.rs constructs a fresh extractor
+/// (once per format, every single comparison run). Invalidated by either an
+/// ExifTool version change or the sample corpus itself changing (tracked
+/// via `signature`, a hash of every matched file's path/size/mtime).
+#[derive(Debug, Serialize, Deserialize)]
+struct DiskCacheEntry {
+    exiftool_version: String,
+    signature: String,
+    result: ExtractionResult,
+}
 
 /// Batch size for exiftool invocations
 /// ExifTool handles batches efficiently, but we limit batch size to avoid
@@ -45,7 +61,8 @@ impl ExifToolExtractor {
         format: &str,
         fixture_path: &Path,
     ) -> Result<ExtractionResult, Box<dyn std::error::Error>> {
-        // Check cache first
+        // Check in-memory cache first (survives within this one process,
+        // e.g. a repeat call for the same format within a single run)
         if let Some(cached) = self.cache.get(format) {
             return Ok(cached.clone());
         }
@@ -60,6 +77,19 @@ impl ExifToolExtractor {
                 tags: Vec::new(),
                 files_processed: 0,
             });
+        }
+
+        // Check the on-disk cache next -- ExifTool's own output for this
+        // sample corpus never changes between rounds of a fix-loop, only
+        // OxiDex's binary does, so this is the expensive part actually
+        // worth persisting across process invocations.
+        let signature = Self::compute_signature(&files);
+        let exiftool_version = self.get_exiftool_version();
+        if let Some(cached) =
+            self.load_disk_cache(fixture_path, format, &exiftool_version, &signature)
+        {
+            self.cache.insert(format.to_string(), cached.clone());
+            return Ok(cached);
         }
 
         // OPTIMIZATION: Process files in batches using exiftool's batch mode
@@ -110,10 +140,129 @@ impl ExifToolExtractor {
             files_processed,
         };
 
-        // Cache the result
+        // Cache the result in memory and on disk
         self.cache.insert(format.to_string(), result.clone());
+        self.save_disk_cache(fixture_path, format, &exiftool_version, &signature, &result);
 
         Ok(result)
+    }
+
+    /// Directory the on-disk cache lives in: a sibling of the samples dir
+    /// itself (fixture_path is e.g. `<cache_dir>/combined-samples`, so this
+    /// resolves to `<cache_dir>/exiftool-tag-cache`), keeping it alongside
+    /// the rest of the ExifTool cache machinery rather than inside the
+    /// samples tree.
+    fn disk_cache_dir(fixture_path: &Path) -> PathBuf {
+        fixture_path
+            .parent()
+            .map(|p| p.join("exiftool-tag-cache"))
+            .unwrap_or_else(|| fixture_path.join(".exiftool-tag-cache"))
+    }
+
+    fn disk_cache_path(fixture_path: &Path, format: &str) -> PathBuf {
+        Self::disk_cache_dir(fixture_path).join(format!("{}.json", format.to_lowercase()))
+    }
+
+    /// Cheap signature of the exact sample set this format's cache entry
+    /// covers -- path, size, and mtime per file, hashed together. Any
+    /// change to the corpus (a sample added/removed/modified) changes this,
+    /// which invalidates the cache without needing to re-run ExifTool just
+    /// to find out.
+    fn compute_signature(files: &[PathBuf]) -> String {
+        let mut sorted: Vec<&PathBuf> = files.iter().collect();
+        sorted.sort();
+        let mut hasher_input = String::new();
+        for path in sorted {
+            if let Ok(meta) = std::fs::metadata(path) {
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                hasher_input.push_str(&format!("{}|{}|{}\n", path.display(), meta.len(), mtime));
+            } else {
+                hasher_input.push_str(&format!("{}|?|?\n", path.display()));
+            }
+        }
+        format!("{:x}", md5::compute(hasher_input.as_bytes()))
+    }
+
+    /// Runs `<exiftool> -ver`. Falls back to "unknown" on failure (rather
+    /// than erroring out) -- a version we can't determine still invalidates
+    /// any stale disk cache safely, since "unknown" simply never matches a
+    /// real version string recorded by a prior successful run.
+    fn get_exiftool_version(&self) -> String {
+        match Command::new(&self.exiftool_path).arg("-ver").output() {
+            Ok(o) if o.status.success() => String::from_utf8(o.stdout)
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "unknown".to_string()),
+            Ok(o) => {
+                eprintln!(
+                    "Warning: `{} -ver` exited non-zero ({}); ExifTool disk cache disabled this run",
+                    self.exiftool_path, o.status
+                );
+                "unknown".to_string()
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to run `{} -ver` ({e}); ExifTool disk cache disabled this run",
+                    self.exiftool_path
+                );
+                "unknown".to_string()
+            }
+        }
+    }
+
+    fn load_disk_cache(
+        &self,
+        fixture_path: &Path,
+        format: &str,
+        exiftool_version: &str,
+        signature: &str,
+    ) -> Option<ExtractionResult> {
+        let path = Self::disk_cache_path(fixture_path, format);
+        let content = std::fs::read_to_string(path).ok()?;
+        let entry: DiskCacheEntry = serde_json::from_str(&content).ok()?;
+        if entry.exiftool_version == exiftool_version && entry.signature == signature {
+            Some(entry.result)
+        } else {
+            None
+        }
+    }
+
+    /// Best-effort -- a failure to persist the cache (e.g. read-only
+    /// filesystem) must never fail the extraction itself, since the result
+    /// was already computed correctly; it just means next round pays the
+    /// same ExifTool cost again. Also refuses to write when exiftool_version
+    /// is "unknown" (get_exiftool_version's failure sentinel) -- writing
+    /// under that key would clobber a previously good cache entry with one
+    /// that can never validate against a future successful run.
+    fn save_disk_cache(
+        &self,
+        fixture_path: &Path,
+        format: &str,
+        exiftool_version: &str,
+        signature: &str,
+        result: &ExtractionResult,
+    ) {
+        if exiftool_version == "unknown" {
+            return;
+        }
+        let dir = Self::disk_cache_dir(fixture_path);
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let entry = DiskCacheEntry {
+            exiftool_version: exiftool_version.to_string(),
+            signature: signature.to_string(),
+            result: result.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&entry) {
+            let _ = std::fs::write(Self::disk_cache_path(fixture_path, format), json);
+        }
     }
 
     /// Run exiftool on multiple files at once (batch mode)
@@ -229,6 +378,16 @@ impl ExifToolExtractor {
         let mut tags = Vec::new();
 
         if let Some(obj) = file_data.as_object() {
+            // ExifTool's own JSON always includes this per entry regardless
+            // of -G grouping -- reading it directly here is far more
+            // robust than trying to zip batch results back up against the
+            // input file list positionally (which breaks the moment
+            // ExifTool skips or reorders an entry for a failed file).
+            let source_file = obj
+                .get("SourceFile")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+
             for (key, value) in obj.iter() {
                 let (family, name) = self.parse_tag_name(key);
                 // Skip pseudo-tags and computed values
@@ -241,7 +400,10 @@ impl ExifToolExtractor {
                         serde_json::Value::Object(_) => value.to_string(),
                         serde_json::Value::Null => "null".to_string(),
                     };
-                    let tag_info = TagInfo::new(name, family, value_str);
+                    let mut tag_info = TagInfo::new(name, family, value_str);
+                    if let Some(sf) = &source_file {
+                        tag_info = tag_info.with_source_file(sf.clone());
+                    }
                     tags.push(tag_info);
                 }
             }
@@ -364,6 +526,23 @@ impl ExifToolExtractor {
             "SR2" => vec!["sr2", "srf"],
             "KDC" => vec!["kdc"],
             "ERF" => vec!["erf"],
+            "PE" => vec!["exe", "dll", "sys"],
+            "ELF" => vec!["elf", "so"],
+            "MACHO" => vec!["dylib", "bundle", "macho"],
+            "OTF" => vec!["otf"],
+            "TTF" => vec!["ttf"],
+            "WOFF" => vec!["woff"],
+            "WOFF2" => vec!["woff2"],
+            "DOCX" => vec!["docx"],
+            "XLSX" => vec!["xlsx"],
+            "PPTX" => vec!["pptx"],
+            "ZIP" => vec!["zip"],
+            "RAR" => vec!["rar"],
+            "7Z" => vec!["7z"],
+            "GZIP" => vec!["gz"],
+            "TAR" => vec!["tar"],
+            "ISO" => vec!["iso"],
+            "OLE" => vec!["doc", "xls", "ppt", "msg", "vsd", "pub"],
             _ => vec![],
         }
     }
@@ -426,5 +605,29 @@ mod tests {
             tags.iter()
                 .any(|t| t.name == "Creator" && t.family == "XMP")
         );
+    }
+
+    #[test]
+    fn test_parse_single_file_json_populates_source_file_from_exiftool_own_field() {
+        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let json = serde_json::json!({
+            "SourceFile": "/samples/JPEG/Sony/camera.jpg",
+            "EXIF:Make": "Sony",
+        });
+        let tags = extractor.parse_single_file_json(&json);
+        assert_eq!(tags.len(), 1);
+        assert_eq!(
+            tags[0].source_file,
+            Some("/samples/JPEG/Sony/camera.jpg".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_single_file_json_source_file_none_when_absent() {
+        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let json = serde_json::json!({"EXIF:Make": "Sony"});
+        let tags = extractor.parse_single_file_json(&json);
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].source_file, None);
     }
 }

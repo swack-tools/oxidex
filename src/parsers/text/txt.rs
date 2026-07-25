@@ -332,6 +332,9 @@ impl FormatParser for TXTParser {
             metadata.insert(key, value);
         }
 
+        // Add TEXT-specific tag aliases for Worker 23 requirements
+        add_text_tag_aliases(&mut metadata);
+
         Ok(metadata)
     }
 
@@ -365,6 +368,35 @@ impl FormatParser for TXTParser {
 pub fn parse_txt_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let parser = TXTParser;
     parser.parse(reader).map_err(|e| e.to_string())
+}
+
+/// Adds TEXT-specific tag aliases to metadata (Worker 23 requirements)
+///
+/// Maps generic text metadata to TEXT-specific tags for ExifTool compatibility
+/// Worker 23 requires: TEXT:Encoding, TEXT:LineCount, TEXT:CharacterCount,
+/// TEXT:WordCount, TEXT:FileSize, TEXT:LastModified, TEXT:HasBOM, TEXT:LineEnding
+fn add_text_tag_aliases(metadata: &mut MetadataMap) {
+    // Create aliases with TEXT prefix
+    let mappings = [
+        ("MIMEEncoding", "TEXT:Encoding"),
+        ("LineCount", "TEXT:LineCount"),
+        ("CharacterCount", "TEXT:CharacterCount"),
+        ("WordCount", "TEXT:WordCount"),
+        ("FileSize", "TEXT:FileSize"),
+        ("ByteOrderMark", "TEXT:HasBOM"),
+        ("Newlines", "TEXT:LineEnding"),
+    ];
+
+    let mut text_tags = Vec::new();
+    for (source, text_tag) in &mappings {
+        if let Some(value) = metadata.get(source) {
+            text_tags.push((text_tag.to_string(), value.clone()));
+        }
+    }
+
+    for (key, value) in text_tags {
+        metadata.insert(key, value);
+    }
 }
 
 #[cfg(test)]

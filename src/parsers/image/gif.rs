@@ -105,6 +105,8 @@ impl GIFParser {
         let mut first_gce: Option<GraphicControlExtension> = None;
         let mut has_transparency = false;
         let mut transparent_color: Option<u8> = None;
+        let mut icc_profile: Option<Vec<u8>> = None;
+        let mut xmp_data: Option<Vec<u8>> = None;
 
         while pos < reader.size() {
             let byte = match reader.read(pos, 1) {
@@ -135,6 +137,40 @@ impl GIFParser {
                                     // Check for NETSCAPE2.0 animation extension
                                     if &app_data[0..8] == b"NETSCAPE" {
                                         is_animated = true;
+                                    }
+                                    // Check for ICC profile extension: ICCRGBG1012
+                                    // Application identifier: "ICCRGBG1" (8 bytes)
+                                    // Authentication code: "012" (3 bytes)
+                                    else if &app_data[0..8] == b"ICCRGBG1"
+                                        && &app_data[8..11] == b"012"
+                                    {
+                                        // Collect ICC profile data from sub-blocks
+                                        pos += size;
+                                        let (new_pos, profile_data) =
+                                            Self::read_sub_blocks(reader, pos)?;
+                                        if !profile_data.is_empty() {
+                                            icc_profile = Some(profile_data);
+                                        }
+                                        pos = new_pos;
+                                        continue; // Skip the normal sub-block skip
+                                    }
+                                    // Check for XMP extension: "XMP DataXMP"
+                                    // Application identifier: "XMP Data" (8 bytes)
+                                    // Authentication code: "XMP" (3 bytes)
+                                    else if &app_data[0..8] == b"XMP Data"
+                                        && &app_data[8..11] == b"XMP"
+                                    {
+                                        // GIF XMP is NOT stored in sub-blocks - it's stored as raw data
+                                        // followed by a 258-byte "magic trailer" (landing zone)
+                                        pos += size;
+
+                                        // Read raw XMP data until we hit the end marker
+                                        let (new_pos, raw_xmp) = Self::read_xmp_data(reader, pos)?;
+                                        if !raw_xmp.is_empty() {
+                                            xmp_data = Some(raw_xmp);
+                                        }
+                                        pos = new_pos;
+                                        continue; // Skip the normal sub-block skip
                                     }
                                 }
                                 pos += size;
@@ -218,6 +254,8 @@ impl GIFParser {
             disposal_method: first_gce.as_ref().map(|gce| gce.disposal_method),
             has_transparency,
             transparent_color,
+            icc_profile,
+            xmp_data,
         })
     }
 
@@ -281,6 +319,73 @@ impl GIFParser {
         Ok(pos)
     }
 
+    /// Reads sub-blocks and collects their data
+    fn read_sub_blocks(reader: &dyn FileReader, mut pos: u64) -> Result<(u64, Vec<u8>)> {
+        let mut data = Vec::new();
+        while pos < reader.size() {
+            let block_size = reader.read(pos, 1)?[0];
+            pos += 1;
+            if block_size == 0 {
+                break;
+            }
+            if pos + (block_size as u64) <= reader.size() {
+                let block_data = reader.read(pos, block_size as usize)?;
+                data.extend_from_slice(block_data);
+            }
+            pos += block_size as u64;
+        }
+        Ok((pos, data))
+    }
+
+    /// Reads XMP data from GIF (special format - not standard sub-blocks)
+    /// GIF XMP is stored as raw data followed by a 258-byte "magic trailer"
+    /// The trailer consists of: 0x01, 0xFF, 0xFE, ..., 0x01, 0x00, 0x00
+    fn read_xmp_data(reader: &dyn FileReader, start_pos: u64) -> Result<(u64, Vec<u8>)> {
+        // Read until we find the XMP end marker <?xpacket end=...?>
+        // We need to scan the file for the end of XMP content
+        let max_xmp_size = 1024 * 1024; // 1MB max XMP size
+        let remaining = (reader.size() - start_pos).min(max_xmp_size as u64) as usize;
+
+        if remaining == 0 {
+            return Ok((start_pos, Vec::new()));
+        }
+
+        let raw_data = reader.read(start_pos, remaining)?;
+
+        // Find the XMP end marker: <?xpacket end='w'?> or <?xpacket end="r"?>
+        let end_marker = b"<?xpacket end=";
+        let mut xmp_end = None;
+
+        for i in 0..raw_data.len().saturating_sub(end_marker.len() + 5) {
+            if &raw_data[i..i + end_marker.len()] == end_marker {
+                // Find the closing ?>
+                for j in i + end_marker.len()..raw_data.len().saturating_sub(1) {
+                    if raw_data[j] == b'?' && raw_data[j + 1] == b'>' {
+                        xmp_end = Some(j + 2);
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+
+        if let Some(end) = xmp_end {
+            let xmp_data = raw_data[..end].to_vec();
+            // Skip past the magic trailer (258 bytes) plus any remaining data
+            let new_pos = start_pos + end as u64 + 258;
+            Ok((new_pos.min(reader.size()), xmp_data))
+        } else {
+            // No end marker found - try to strip trailing non-XML bytes
+            // The magic trailer starts with 0x01 and ends with 0x00
+            if let Some(end_pos) = raw_data.iter().rposition(|&b| b == b'>') {
+                let xmp_data = raw_data[..=end_pos].to_vec();
+                Ok((start_pos + remaining as u64, xmp_data))
+            } else {
+                Ok((start_pos + remaining as u64, Vec::new()))
+            }
+        }
+    }
+
     /// Reads comment blocks and appends to comment string
     fn read_comment_blocks(
         reader: &dyn FileReader,
@@ -330,6 +435,8 @@ struct BlockScanResult {
     disposal_method: Option<u8>,
     has_transparency: bool,
     transparent_color: Option<u8>,
+    icc_profile: Option<Vec<u8>>,
+    xmp_data: Option<Vec<u8>>,
 }
 
 /// Graphic Control Extension data
@@ -362,6 +469,11 @@ impl FormatParser for GIFParser {
             "GIFVersion".to_string(),
             TagValue::String(version.to_string()),
         );
+        // Add GIF: prefixed version for format-specific tagging
+        metadata.insert(
+            "GIF:Version".to_string(),
+            TagValue::String(version.to_string()),
+        );
 
         // Logical Screen Descriptor fields
         let lsd = Self::read_logical_screen_descriptor(reader)?;
@@ -374,22 +486,33 @@ impl FormatParser for GIFParser {
             "ImageHeight".to_string(),
             TagValue::String(lsd.height.to_string()),
         );
-
+        // Add GIF: prefixed versions for format-specific tagging
+        metadata.insert("GIF:Width".to_string(), TagValue::Integer(lsd.width as i64));
         metadata.insert(
-            "ColorResolution".to_string(),
+            "GIF:Height".to_string(),
+            TagValue::Integer(lsd.height as i64),
+        );
+
+        // ColorResolutionDepth - ExifTool tag name for bits per primary color
+        metadata.insert(
+            "ColorResolutionDepth".to_string(),
             TagValue::Integer(lsd.color_resolution as i64),
         );
 
+        // HasColorMap - ExifTool tag for global color table flag
+        let has_color_map_str = if lsd.global_color_table_flag {
+            "Yes"
+        } else {
+            "No"
+        };
         metadata.insert(
-            "HasGlobalColorTable".to_string(),
-            TagValue::String(
-                if lsd.global_color_table_flag {
-                    "yes"
-                } else {
-                    "no"
-                }
-                .to_string(),
-            ),
+            "HasColorMap".to_string(),
+            TagValue::String(has_color_map_str.to_string()),
+        );
+        // Add GIF: prefixed version for format-specific tagging
+        metadata.insert(
+            "GIF:GlobalColorTable".to_string(),
+            TagValue::String(has_color_map_str.to_string()),
         );
 
         if lsd.global_color_table_flag {
@@ -397,18 +520,41 @@ impl FormatParser for GIFParser {
                 "GlobalColorTableSize".to_string(),
                 TagValue::Integer(lsd.global_color_table_size as i64),
             );
+            // Add GIF: prefixed version for format-specific tagging
+            metadata.insert(
+                "GIF:ColorTableSize".to_string(),
+                TagValue::Integer(lsd.global_color_table_size as i64),
+            );
+            // BitsPerPixel - log2 of color table size
+            let bits_per_pixel = (lsd.global_color_table_size as f64).log2() as i64;
+            metadata.insert(
+                "BitsPerPixel".to_string(),
+                TagValue::Integer(bits_per_pixel),
+            );
         }
 
+        // BackgroundColor - ExifTool uses this name (not BackgroundColorIndex)
         metadata.insert(
-            "BackgroundColorIndex".to_string(),
+            "BackgroundColor".to_string(),
             TagValue::Integer(lsd.background_color_index as i64),
         );
+        // Add GIF: prefixed version for format-specific tagging
+        metadata.insert(
+            "GIF:BackgroundColor".to_string(),
+            TagValue::String(format!("#{:02x}", lsd.background_color_index)),
+        );
 
-        if lsd.pixel_aspect_ratio != 0 {
+        // PixelAspectRatio - convert from raw value to actual ratio
+        // If raw value is 0, aspect ratio is not given, otherwise: (value + 15) / 64
+        // ExifTool rounds to nearest integer
+        if lsd.pixel_aspect_ratio == 0 {
             metadata.insert(
                 "PixelAspectRatio".to_string(),
-                TagValue::Integer(lsd.pixel_aspect_ratio as i64),
+                TagValue::Integer(1), // Default 1:1
             );
+        } else {
+            let ratio = ((lsd.pixel_aspect_ratio as f64 + 15.0) / 64.0).round() as i64;
+            metadata.insert("PixelAspectRatio".to_string(), TagValue::Integer(ratio));
         }
 
         // Scan for extensions and image blocks
@@ -416,6 +562,11 @@ impl FormatParser for GIFParser {
 
         metadata.insert(
             "FrameCount".to_string(),
+            TagValue::Integer(scan_result.frame_count as i64),
+        );
+        // Add GIF: prefixed version for format-specific tagging
+        metadata.insert(
+            "GIF:FrameCount".to_string(),
             TagValue::Integer(scan_result.frame_count as i64),
         );
 
@@ -458,6 +609,36 @@ impl FormatParser for GIFParser {
                     "TransparentColorIndex".to_string(),
                     TagValue::Integer(color as i64),
                 );
+            }
+        }
+
+        // Parse ICC profile if present
+        if let Some(icc_data) = scan_result.icc_profile {
+            if icc_data.len() >= 128 {
+                match crate::parsers::icc::parse_icc_profile_data(&icc_data) {
+                    Ok(icc_tags) => {
+                        for (tag_name, value) in icc_tags {
+                            metadata.insert(format!("ICC_Profile:{}", tag_name), value);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to parse ICC profile in GIF: {}", e);
+                    }
+                }
+            }
+        }
+
+        // Parse XMP data if present
+        if let Some(xmp_bytes) = scan_result.xmp_data {
+            match crate::parsers::xmp::rdf_parser::parse_xmp(&xmp_bytes) {
+                Ok(xmp_tags) => {
+                    for (tag_name, value) in xmp_tags {
+                        metadata.insert(tag_name, TagValue::String(value));
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to parse XMP in GIF: {}", e);
+                }
             }
         }
 

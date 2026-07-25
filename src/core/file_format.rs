@@ -102,6 +102,12 @@ pub enum FileFormat {
     /// MTS (MPEG Transport Stream) format (.mts, .m2ts)
     MTS,
 
+    /// ASF/WMV (Advanced Systems Format) video format (.asf, .wmv, .wma)
+    ASF,
+
+    /// MXF (Material eXchange Format) video format (.mxf)
+    MXF,
+
     /// MP3 audio format (.mp3)
     MP3,
 
@@ -234,6 +240,9 @@ pub enum FileFormat {
     /// vCard contact format (.vcf)
     VCF,
 
+    /// iCalendar format (.ics)
+    ICS,
+
     /// Email message format (.eml)
     EML,
 
@@ -277,6 +286,9 @@ pub enum FileFormat {
     /// XMP Sidecar (.xmp)
     XMP,
 
+    /// EPS (Encapsulated PostScript) (.eps, .epsf, .ps)
+    EPS,
+
     /// Unknown or unsupported format
     Unknown,
 }
@@ -313,6 +325,8 @@ impl FileFormat {
             FileFormat::FLV => "FLV",
             FileFormat::AVI => "AVI",
             FileFormat::MTS => "MTS",
+            FileFormat::ASF => "ASF",
+            FileFormat::MXF => "MXF",
             FileFormat::MP3 => "MP3",
             FileFormat::FLAC => "FLAC",
             FileFormat::AAC => "AAC",
@@ -355,6 +369,7 @@ impl FileFormat {
             FileFormat::FITS => "FITS",
             FileFormat::HDF5 => "HDF5",
             FileFormat::VCF => "vCard",
+            FileFormat::ICS => "iCalendar",
             FileFormat::EML => "EML",
             FileFormat::TXT => "TXT",
             FileFormat::LNK => "Windows Shortcut",
@@ -369,6 +384,7 @@ impl FileFormat {
             FileFormat::X509 => "X.509",
             FileFormat::ICC => "ICC",
             FileFormat::XMP => "XMP",
+            FileFormat::EPS => "EPS",
             FileFormat::Unknown => "Unknown",
         }
     }
@@ -407,6 +423,8 @@ impl FileFormat {
             FileFormat::FLV => &["flv"],
             FileFormat::AVI => &["avi"],
             FileFormat::MTS => &["mts", "m2ts"],
+            FileFormat::ASF => &["asf", "wmv", "wma"],
+            FileFormat::MXF => &["mxf"],
             FileFormat::MP3 => &["mp3"],
             FileFormat::FLAC => &["flac"],
             FileFormat::AAC => &["aac", "m4a"],
@@ -449,6 +467,7 @@ impl FileFormat {
             FileFormat::FITS => &["fits", "fit"],
             FileFormat::HDF5 => &["h5", "hdf5"],
             FileFormat::VCF => &["vcf", "vcard"],
+            FileFormat::ICS => &["ics", "ical"],
             FileFormat::EML => &["eml", "email"],
             FileFormat::TXT => &["txt", "text"],
             FileFormat::LNK => &["lnk"],
@@ -463,6 +482,7 @@ impl FileFormat {
             FileFormat::X509 => &["crt", "cer", "pem", "der"],
             FileFormat::ICC => &["icc", "icm"],
             FileFormat::XMP => &["xmp"],
+            FileFormat::EPS => &["eps", "epsf", "ps"],
             FileFormat::Unknown => &[],
         }
     }

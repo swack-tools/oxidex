@@ -7,15 +7,16 @@
 use super::{FileFormat, FileReader, MetadataMap, TagValue};
 use crate::core::format_dispatch::dispatch_format_parser;
 use crate::core::jpeg_helpers::{
-    process_app10_segments, process_app11_segments, process_app12_segments, process_app14_segments,
-    process_exif_segments, process_icc_segments, process_iptc_segments, process_jfif_segments,
-    process_mpf_segments, process_sof_segments, process_xmp_segments,
+    process_app6_segments, process_app10_segments, process_app11_segments, process_app12_segments,
+    process_app14_segments, process_com_segments, process_dqt_segments, process_exif_segments,
+    process_icc_segments, process_iptc_segments, process_jfif_segments, process_mpf_segments,
+    process_sof_segments, process_spiff_segments, process_xmp_segments,
 };
 use crate::core::operations_helpers::{read_u16, read_u32};
 #[cfg(test)]
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::core::tiff_helpers::parse_ifd_chain;
-use crate::core::validation::validate_tag_value_with_name;
+use crate::core::validation::{validate_tag_value_intrinsics, validate_tag_value_with_name};
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
 use crate::parsers::detection::detect_format;
@@ -23,9 +24,11 @@ use crate::parsers::jpeg::segment_parser::parse_segments;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 #[cfg(test)]
 use crate::parsers::tiff::tiff_subreader::TiffSubReader;
-use crate::tag_db::tag_registry::get_tag_descriptor;
+use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::jpeg_writer::write_exif_to_jpeg;
+use crate::writers::pdf_writer::write_pdf_file;
+use crate::writers::png_writer::write_png_metadata;
 use std::path::Path;
 
 // ============================================================================
@@ -178,40 +181,57 @@ pub fn read_metadata(path: &Path) -> Result<MetadataMap> {
 /// # Validation
 ///
 /// All tags are validated before any file operations. Validation checks:
-/// - Type matching (String, Integer, Float, Rational, etc.)
-/// - Value constraints (e.g., Rational denominator != 0)
+/// - Type matching for tags with reliable registry type metadata
+/// - Intrinsic value constraints (e.g., Rational denominator != 0)
+///
+/// YAML-backed tags with absent or conflicting type metadata are still validated for intrinsic
+/// constraints, but they do not force strict fallback `String` matching.
 ///
 /// Tags not in the registry are skipped during validation (allows custom tags).
 pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
-    // PHASE 1: VALIDATION (fail fast before any file operations)
-    // Iterate through all tags and validate each one against its descriptor
-    for (tag_name, tag_value) in metadata.iter() {
-        // Look up tag descriptor in registry
-        if let Some(descriptor) = get_tag_descriptor(tag_name) {
-            // Validate that the tag value matches the expected type
-            // Pass the original tag_name (e.g., "IFD0:Make") for error messages
-            validate_tag_value_with_name(tag_name, descriptor, tag_value)?;
-        }
-        // If tag is not in registry, skip validation (allows custom/rare tags)
-    }
-
-    // PHASE 2: READ ORIGINAL FILE
-    // Open file with MMapReader for zero-copy access
+    // PHASE 1: VALIDATION
+    // JPEG is validated inside the surgical writer, which distinguishes
+    // caller-changed values (strict validation) from unchanged originals
+    // (raw carry-over that never re-enters through TagValue). Whole-map
+    // validation here would wrongly reject unchanged display-form tags
+    // (issue #20). Other formats keep the original whole-map validation.
     let reader = MMapReader::new(path)?;
-
-    // PHASE 3: DETECT FORMAT
     let format = detect_format(&reader)?;
 
-    // PHASE 4: SERIALIZE WITH APPROPRIATE WRITER
-    let serialized_bytes = match format {
+    if format != FileFormat::JPEG {
+        for (tag_name, tag_value) in metadata.iter() {
+            // Look up tag descriptor in registry
+            if let Some(descriptor) = get_tag_descriptor(tag_name) {
+                if has_reliable_value_type(tag_name) {
+                    // Pass the original tag_name (e.g., "IFD0:Make") for error messages.
+                    validate_tag_value_with_name(tag_name, descriptor, tag_value)?;
+                } else {
+                    validate_tag_value_intrinsics(tag_name, tag_value)?;
+                }
+            }
+            // If tag is not in registry, skip validation (allows custom/rare tags)
+        }
+    }
+
+    // PHASE 2: ROUTE TO APPROPRIATE WRITER
+    match format {
         FileFormat::JPEG => {
             // Use JPEG writer to serialize metadata
-            write_exif_to_jpeg(&reader, metadata)?
+            let serialized_bytes = write_exif_to_jpeg(&reader, metadata)?;
+            write_atomic(path, &serialized_bytes)?;
+        }
+        FileFormat::PNG => {
+            write_png_metadata(path, &reader, metadata)?;
+        }
+        FileFormat::PDF => {
+            write_pdf_file(path, &reader, metadata)?;
         }
         FileFormat::TIFF => {
-            // TIFF writer not yet implemented (will be in I3.T7)
+            // The TIFF writer rebuilds the file from metadata alone and does not
+            // yet carry over image data (strips/tiles), so routing it here would
+            // replace the image with a metadata-only file.
             return Err(ExifToolError::unsupported_format(
-                "TIFF write operations are not yet supported in this iteration",
+                "TIFF write operations are not yet supported: the TIFF writer does not preserve image data",
             ));
         }
         _ => {
@@ -220,11 +240,7 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
                 format
             )));
         }
-    };
-
-    // PHASE 5: ATOMIC WRITE
-    // Write serialized bytes to file using atomic temp-file-and-rename pattern
-    write_atomic(path, &serialized_bytes)?;
+    }
 
     Ok(())
 }
@@ -474,10 +490,12 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
     process_icc_segments(&segments, &mut metadata);
     process_mpf_segments(&segments, &mut metadata);
     process_sof_segments(&segments, &mut metadata);
+    process_com_segments(&segments, &mut metadata);
+    process_dqt_segments(&segments, &mut metadata);
+    process_spiff_segments(&segments, &mut metadata);
 
     // Process HDR and manufacturer-specific APP segments
-    // TODO: re-enable when parse_app6 is implemented
-    // process_app6_segments(&segments, &mut metadata);
+    process_app6_segments(&segments, &mut metadata);
     process_app10_segments(&segments, &mut metadata);
     process_app11_segments(&segments, &mut metadata);
     process_app12_segments(&segments, &mut metadata);
@@ -537,7 +555,64 @@ pub(crate) fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap
     let mut metadata = MetadataMap::new();
     parse_ifd_chain(reader, first_ifd_offset, byte_order, &mut metadata)?;
 
+    // Add TIFF: prefixed format-specific tags from standard EXIF tags
+    // These map standard EXIF tag names to TIFF-specific format tags
+    // Collect the tags to add to avoid borrow checker issues
+    let tiff_tags = collect_tiff_format_tags(&metadata);
+    for (key, value) in tiff_tags {
+        metadata.insert(key, value);
+    }
+
     Ok(metadata)
+}
+
+/// Collects TIFF: prefixed format-specific tags from standard EXIF tags.
+///
+/// This function reads standard EXIF tag names from the metadata and creates
+/// corresponding TIFF: prefixed versions for format-specific identification.
+///
+/// Mapped tags:
+/// - ImageWidth -> TIFF:Width
+/// - ImageLength -> TIFF:Height
+/// - BitsPerSample -> TIFF:BitsPerSample
+/// - Compression -> TIFF:Compression
+/// - PhotometricInterpretation -> TIFF:PhotometricInterpretation
+/// - Orientation -> TIFF:Orientation
+/// - XResolution -> TIFF:XResolution
+/// - YResolution -> TIFF:YResolution
+fn collect_tiff_format_tags(source: &MetadataMap) -> Vec<(String, TagValue)> {
+    // Map standard EXIF tag names to TIFF: prefixed versions
+    let tag_mappings = [
+        ("ImageWidth", "TIFF:Width"),
+        ("ImageLength", "TIFF:Height"),
+        ("BitsPerSample", "TIFF:BitsPerSample"),
+        ("Compression", "TIFF:Compression"),
+        (
+            "PhotometricInterpretation",
+            "TIFF:PhotometricInterpretation",
+        ),
+        ("Orientation", "TIFF:Orientation"),
+        ("XResolution", "TIFF:XResolution"),
+        ("YResolution", "TIFF:YResolution"),
+    ];
+
+    let mut result = Vec::new();
+
+    for (source_tag, dest_tag) in &tag_mappings {
+        // Look for the source tag in IFD0 (main image)
+        let ifd0_key = format!("IFD0:{}", source_tag);
+        if let Some(value) = source.get(&ifd0_key) {
+            result.push((dest_tag.to_string(), value.clone()));
+            continue;
+        }
+
+        // Fall back to unprefixed version if IFD0 version not found
+        if let Some(value) = source.get(source_tag) {
+            result.push((dest_tag.to_string(), value.clone()));
+        }
+    }
+
+    result
 }
 
 /// Parses metadata from a Casio CAM file.

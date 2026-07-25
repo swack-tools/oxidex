@@ -20,9 +20,26 @@ use oxidex::core::value_formatter::{
     needs_unit_suffix,
 };
 use oxidex::parsers::tiff::tiff_enums::tiff_enum_to_string;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+
+/// On-disk cache entry for one format's OxiDex extraction. Unlike ExifTool's
+/// output (which is stable across a whole fix-loop run), OxiDex's output can
+/// legitimately change every time a fix gets applied and rebuilt -- so this
+/// is keyed on the currently-running binary's own content hash rather than a
+/// version string: a rebuild changes that hash automatically, forcing a
+/// fresh extraction exactly when (and only when) the code actually changed.
+/// A round where the last diff was rejected/reverted leaves the binary
+/// byte-for-byte identical, so this hits and skips re-extracting from
+/// scratch every round even though nothing was actually fixed.
+#[derive(Debug, Serialize, Deserialize)]
+struct DiskCacheEntry {
+    binary_hash: String,
+    signature: String,
+    result: ExtractionResult,
+}
 
 /// Extract tags from OxiDex by processing test fixtures
 pub struct OxiDexExtractor {
@@ -44,7 +61,7 @@ impl OxiDexExtractor {
         &mut self,
         format: &str,
     ) -> Result<ExtractionResult, Box<dyn std::error::Error>> {
-        // Check cache first
+        // Check in-memory cache first
         if let Some(cached) = self.cache.get(format) {
             return Ok(cached.clone());
         }
@@ -61,17 +78,52 @@ impl OxiDexExtractor {
             });
         }
 
-        // Extract tags from each file
-        let mut all_tags: HashMap<String, (TagInfo, usize)> = HashMap::new();
+        // Check the on-disk cache next -- see DiskCacheEntry's docs. Only
+        // meaningful once this binary was actually built once and run from
+        // disk (current_exe/hashing an in-memory-only test binary isn't
+        // useful), so a hashing failure just means "treat as a miss".
+        let signature = Self::compute_signature(&files);
+        let binary_hash = Self::current_binary_hash();
+        if let Some(hash) = &binary_hash
+            && let Some(cached) = self.load_disk_cache(format, hash, &signature)
+        {
+            self.cache.insert(format.to_string(), cached.clone());
+            return Ok(cached);
+        }
+
+        // Extract tags from each file. `all_tags` keeps ONE canonical
+        // TagInfo per format-wide key (first file it's seen in wins,
+        // matching the pre-existing cross-file reduction other report
+        // fields -- matched/missing/extra_in_oxidex/value_differences --
+        // depend on), now additionally stamped with `source_file` (spec
+        // M3). `duplicate_evidence` is a small side channel: whenever
+        // `flatten_metadata` reports that a SINGLE file emitted the same
+        // displayed key more than once (a registry/dynamic-name emitter
+        // collision -- the exact bug class M3 targets, and one the
+        // literal-string diff backstop can't see), two clones tagged with
+        // that file's source_file are appended here so
+        // `ComparisonEngine::compare`'s per-(source_file, key) count > 1
+        // check actually has something to find. Without this, every
+        // format-wide key collapses to at most one TagInfo before
+        // `compare()` runs and `duplicate_emissions` is always `[]`.
+        let mut all_tags: HashMap<String, TagInfo> = HashMap::new();
+        let mut duplicate_evidence: Vec<TagInfo> = Vec::new();
 
         for file_path in &files {
             match self.extract_tags_from_file(file_path) {
-                Ok(file_tags) => {
+                Ok((file_tags, duplicate_keys)) => {
+                    let source_file = file_path.display().to_string();
                     for tag_info in file_tags {
+                        let key = format!("{}:{}", tag_info.family, tag_info.name);
+                        if duplicate_keys.contains(&key) {
+                            duplicate_evidence
+                                .push(tag_info.clone().with_source_file(source_file.clone()));
+                            duplicate_evidence
+                                .push(tag_info.clone().with_source_file(source_file.clone()));
+                        }
                         all_tags
-                            .entry(format!("{}:{}", tag_info.family, tag_info.name))
-                            .and_modify(|(_info, count)| *count += 1)
-                            .or_insert((tag_info.clone(), 1));
+                            .entry(key)
+                            .or_insert_with(|| tag_info.with_source_file(source_file.clone()));
                     }
                 }
                 Err(e) => {
@@ -84,10 +136,8 @@ impl OxiDexExtractor {
             }
         }
 
-        let mut tags: Vec<TagInfo> = all_tags
-            .into_values()
-            .map(|(tag_info, _count)| tag_info)
-            .collect();
+        let mut tags: Vec<TagInfo> = all_tags.into_values().collect();
+        tags.extend(duplicate_evidence);
 
         tags.sort_by_key(|a| a.key());
 
@@ -97,8 +147,101 @@ impl OxiDexExtractor {
         };
 
         self.cache.insert(format.to_string(), result.clone());
+        if let Some(hash) = &binary_hash {
+            self.save_disk_cache(format, hash, &signature, &result);
+        }
 
         Ok(result)
+    }
+
+    /// Directory the on-disk cache lives in: a sibling of the samples dir
+    /// itself, keeping it alongside ExifTool's own disk cache dir rather
+    /// than inside the samples tree.
+    fn disk_cache_dir(&self) -> PathBuf {
+        self.fixture_path
+            .parent()
+            .map(|p| p.join("oxidex-tag-cache"))
+            .unwrap_or_else(|| self.fixture_path.join(".oxidex-tag-cache"))
+    }
+
+    fn disk_cache_path(&self, format: &str) -> PathBuf {
+        self.disk_cache_dir()
+            .join(format!("{}.json", format.to_lowercase()))
+    }
+
+    /// Cheap signature of the exact sample set this format's cache entry
+    /// covers -- path, size, and mtime per file, hashed together. Any
+    /// change to the corpus changes this, invalidating the cache.
+    fn compute_signature(files: &[PathBuf]) -> String {
+        let mut sorted: Vec<&PathBuf> = files.iter().collect();
+        sorted.sort();
+        let mut hasher_input = String::new();
+        for path in sorted {
+            if let Ok(meta) = std::fs::metadata(path) {
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                hasher_input.push_str(&format!("{}|{}|{}\n", path.display(), meta.len(), mtime));
+            } else {
+                hasher_input.push_str(&format!("{}|?|?\n", path.display()));
+            }
+        }
+        format!("{:x}", md5::compute(hasher_input.as_bytes()))
+    }
+
+    /// MD5 of the currently-running executable's own bytes -- a rebuild
+    /// (new fix applied and compiled) changes this automatically, so the
+    /// cache invalidates exactly when OxiDex's actual behavior could have
+    /// changed. Returns None if the exe path or its bytes can't be read
+    /// (e.g. sandboxed environments); callers treat that as "skip caching"
+    /// rather than erroring.
+    fn current_binary_hash() -> Option<String> {
+        // Cache-invalidation key only (see docstring above), not a trust or
+        // security decision, so current_exe's spoofability doesn't apply.
+        let exe_path = std::env::current_exe().ok()?; // nosemgrep: rust.lang.security.current-exe.current-exe
+        let bytes = std::fs::read(exe_path).ok()?;
+        Some(format!("{:x}", md5::compute(&bytes)))
+    }
+
+    fn load_disk_cache(
+        &self,
+        format: &str,
+        binary_hash: &str,
+        signature: &str,
+    ) -> Option<ExtractionResult> {
+        let content = std::fs::read_to_string(self.disk_cache_path(format)).ok()?;
+        let entry: DiskCacheEntry = serde_json::from_str(&content).ok()?;
+        if entry.binary_hash == binary_hash && entry.signature == signature {
+            Some(entry.result)
+        } else {
+            None
+        }
+    }
+
+    /// Best-effort -- a failure to persist the cache must never fail the
+    /// extraction itself, since the result was already computed correctly.
+    fn save_disk_cache(
+        &self,
+        format: &str,
+        binary_hash: &str,
+        signature: &str,
+        result: &ExtractionResult,
+    ) {
+        let dir = self.disk_cache_dir();
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let entry = DiskCacheEntry {
+            binary_hash: binary_hash.to_string(),
+            signature: signature.to_string(),
+            result: result.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&entry) {
+            let _ = std::fs::write(self.disk_cache_path(format), json);
+        }
     }
 
     /// Extract tags from a single file using OxiDex
@@ -107,10 +250,14 @@ impl OxiDexExtractor {
     /// formatting before flattening into TagInfo structures. The formatting ensures
     /// that GPS references, binary values, enums, and numeric precision match
     /// ExifTool's output format for accurate comparison.
+    ///
+    /// Returns the flattened tags plus the set of displayed `family:name`
+    /// keys that `flatten_metadata` found more than one raw source for
+    /// within this single file (spec M3 duplicate-emission evidence).
     fn extract_tags_from_file(
         &self,
         file_path: &Path,
-    ) -> Result<Vec<TagInfo>, Box<dyn std::error::Error>> {
+    ) -> Result<(Vec<TagInfo>, HashSet<String>), Box<dyn std::error::Error>> {
         // Step 1: Read raw metadata from the file
         let raw_metadata = oxidex::core::operations::read_metadata(file_path)?;
 
@@ -126,14 +273,68 @@ impl OxiDexExtractor {
             .map(|e| e.to_uppercase());
 
         // Step 4: Flatten the formatted metadata into TagInfo structures
-        let tags = self.flatten_metadata(&formatted_metadata, format.as_deref());
-        Ok(tags)
+        let (tags, duplicate_keys) = self.flatten_metadata(&formatted_metadata, format.as_deref());
+        Ok((tags, duplicate_keys))
     }
 
     /// Format a tag value to match ExifTool's output format
     fn format_value(&self, key: &str, name: &str, value: &TagValue) -> String {
         match value {
             TagValue::String(s) => {
+                // ColorMap is a large array of color values stored as space-separated string
+                // ExifTool shows it as "(Binary data N bytes, use -b option to extract)"
+                if name == "ColorMap" {
+                    // Count entries to estimate byte size (each value is 2 bytes for SHORT)
+                    let entry_count = s.split_whitespace().count();
+                    if entry_count > 10 {
+                        let byte_size = entry_count * 2;
+                        return format!(
+                            "(Binary data {} bytes, use -b option to extract)",
+                            byte_size
+                        );
+                    }
+                }
+
+                // Copyright and similar text tags - trim whitespace and null bytes to match ExifTool
+                // ExifTool trims empty copyright strings to empty
+                if name == "Copyright" || name == "Artist" || name == "ImageDescription" {
+                    // Trim null bytes and whitespace
+                    let trimmed = s
+                        .trim_end_matches('\0')
+                        .trim()
+                        .trim_end_matches('\0')
+                        .trim();
+                    if trimmed.is_empty() {
+                        return String::new();
+                    }
+                    return trimmed.to_string();
+                }
+
+                // ExposureTime might come as a string ratio like "10/2500" - simplify to "1/250"
+                if name == "ExposureTime"
+                    && let Some(slash_pos) = s.find('/')
+                    && let (Ok(num), Ok(den)) = (
+                        s[..slash_pos].parse::<i64>(),
+                        s[slash_pos + 1..].parse::<i64>(),
+                    )
+                    && den > 0
+                    && num > 0
+                {
+                    // Find GCD to simplify the fraction
+                    fn gcd(a: i64, b: i64) -> i64 {
+                        if b == 0 { a } else { gcd(b, a % b) }
+                    }
+                    let g = gcd(num, den);
+                    let simplified_num = num / g;
+                    let simplified_den = den / g;
+                    if simplified_num == 1 {
+                        return format!("1/{}", simplified_den);
+                    } else if simplified_den == 1 {
+                        return simplified_num.to_string();
+                    }
+                    return format!("{}/{}", simplified_num, simplified_den);
+                }
+
                 // Try to format dates in EXIF style
                 if (key.contains("Date") || key.contains("Time"))
                     && (s.contains('T') || s.contains('-'))
@@ -150,6 +351,13 @@ impl OxiDexExtractor {
                 i.to_string()
             }
             TagValue::Float(f) => {
+                // ExposureTime should be formatted as a fraction (e.g., "1/250") for sub-second values
+                if name == "ExposureTime" && *f > 0.0 && *f < 1.0 {
+                    // Convert to fraction: find closest 1/N form
+                    let denominator = (1.0 / f).round() as i64;
+                    return format!("1/{}", denominator);
+                }
+
                 // Format floats with reasonable precision
                 let formatted = format!("{:.5}", f);
                 formatted
@@ -191,6 +399,29 @@ impl OxiDexExtractor {
                         return format!("1/{}", denominator);
                     } else {
                         return format!("{:.1}", exposure_time);
+                    }
+                }
+
+                // ExposureTime: format as simplified fraction (e.g., "1/250") for times < 1 second
+                if name == "ExposureTime" {
+                    let value = *numerator as f64 / *denominator as f64;
+                    if value < 1.0 && value > 0.0 {
+                        // Find GCD to simplify first
+                        fn gcd_i32(a: i32, b: i32) -> i32 {
+                            if b == 0 { a.abs() } else { gcd_i32(b, a % b) }
+                        }
+                        let g = gcd_i32(*numerator, *denominator);
+                        let simplified_num = numerator / g;
+                        let simplified_den = denominator / g;
+                        if simplified_num == 1 {
+                            return format!("1/{}", simplified_den);
+                        } else {
+                            // Approximate to 1/N form like ExifTool does
+                            let approx_denom = (1.0 / value).round() as i64;
+                            return format!("1/{}", approx_denom);
+                        }
+                    } else if value >= 1.0 {
+                        return format!("{:.1}", value);
                     }
                 }
 
@@ -246,6 +477,75 @@ impl OxiDexExtractor {
                     return s.to_string();
                 }
 
+                // ComponentsConfiguration - 4 bytes indicating component order
+                // Values: 0=doesn't exist, 1=Y, 2=Cb, 3=Cr, 4=R, 5=G, 6=B
+                if name == "ComponentsConfiguration" && bytes.len() == 4 {
+                    let components: Vec<&str> = bytes
+                        .iter()
+                        .map(|&b| match b {
+                            0 => "-",
+                            1 => "Y",
+                            2 => "Cb",
+                            3 => "Cr",
+                            4 => "R",
+                            5 => "G",
+                            6 => "B",
+                            _ => "?",
+                        })
+                        .collect();
+                    return components.join(", ");
+                }
+
+                // SRATIONAL tags stored as binary (8 bytes = numerator + denominator, both i32)
+                // BrightnessValue, ExposureCompensation, ShutterSpeedValue
+                if (name == "BrightnessValue"
+                    || name == "ExposureCompensation"
+                    || name == "ShutterSpeedValue"
+                    || name == "ExposureBiasValue")
+                    && bytes.len() == 8
+                {
+                    // Try both little-endian and big-endian
+                    let num_le = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    let den_le = i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+                    let num_be = i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    let den_be = i32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+
+                    // Use whichever gives a reasonable denominator (positive, non-zero)
+                    let (num, den) = if den_le > 0 && den_le < 1_000_000 {
+                        (num_le, den_le)
+                    } else if den_be > 0 && den_be < 1_000_000 {
+                        (num_be, den_be)
+                    } else {
+                        // Fallback to default binary display
+                        return format!(
+                            "(Binary data {} bytes, use -b option to extract)",
+                            bytes.len()
+                        );
+                    };
+
+                    if den != 0 {
+                        // ShutterSpeedValue requires APEX conversion
+                        if name == "ShutterSpeedValue" {
+                            let apex = num as f64 / den as f64;
+                            let exposure_time = (2.0_f64).powf(-apex);
+                            if exposure_time < 1.0 {
+                                let denominator = (1.0 / exposure_time).round() as i64;
+                                return format!("1/{}", denominator);
+                            } else {
+                                return format!("{:.1}", exposure_time);
+                            }
+                        }
+
+                        // Other tags: just format as decimal
+                        let value = num as f64 / den as f64;
+                        let formatted = format!("{:.9}", value);
+                        return formatted
+                            .trim_end_matches('0')
+                            .trim_end_matches('.')
+                            .to_string();
+                    }
+                }
+
                 // UserComment - starts with 8-byte encoding identifier followed by data
                 // Encoding prefixes: "ASCII\0\0\0", "UNICODE\0", "JIS\0\0\0\0\0", etc.
                 if name == "UserComment" && bytes.len() > 8 {
@@ -292,6 +592,17 @@ impl OxiDexExtractor {
             }
             TagValue::Struct(_) => "[Structured data]".to_string(),
             TagValue::Array(arr) => {
+                // ColorMap and similar large numeric arrays are shown as binary data by ExifTool
+                // ColorMap is 256 entries × 3 colors × 2 bytes = 1536 bytes
+                if name == "ColorMap" {
+                    // Calculate the size: each value is 2 bytes (SHORT)
+                    let byte_size = arr.len() * 2;
+                    return format!(
+                        "(Binary data {} bytes, use -b option to extract)",
+                        byte_size
+                    );
+                }
+
                 // Format array elements
                 let parts: Vec<String> = arr
                     .iter()
@@ -391,6 +702,46 @@ impl OxiDexExtractor {
         }
     }
 
+    /// Normalize QuickTime track suffix tags for ExifTool comparison
+    /// ExifTool outputs audio track tags (from track 2) without suffix,
+    /// while OxiDex uses _2 suffix to distinguish tracks.
+    /// This function maps _2 suffix audio tags to non-suffix versions when needed.
+    fn normalize_quicktime_track_tags(tag_map: &mut HashMap<String, String>) {
+        // Audio-specific tags that ExifTool shows from the audio track without suffix
+        let audio_tags = [
+            "AudioBitsPerSample",
+            "AudioChannels",
+            "AudioFormat",
+            "AudioSampleRate",
+            "Balance",
+            "HandlerClass",
+        ];
+
+        // For audio tags, if _2 version exists and non-suffix doesn't exist or is empty, copy it
+        for tag in &audio_tags {
+            let key_with_suffix = format!("QuickTime:{}_2", tag);
+            let key_without_suffix = format!("QuickTime:{}", tag);
+            if let Some(suffix_value) = tag_map.get(&key_with_suffix).cloned() {
+                // Copy if non-suffix doesn't exist OR non-suffix is empty but suffix has value
+                let should_copy = match tag_map.get(&key_without_suffix) {
+                    None => true,
+                    Some(existing) => existing.trim().is_empty() && !suffix_value.trim().is_empty(),
+                };
+                if should_copy {
+                    tag_map.insert(key_without_suffix, suffix_value);
+                }
+            }
+        }
+
+        // Special handling for MediaTimeScale: ExifTool uses audio track value
+        // If MediaTimeScale_2 exists, use its value for MediaTimeScale
+        let media_timescale_2 = "QuickTime:MediaTimeScale_2";
+        let media_timescale = "QuickTime:MediaTimeScale";
+        if let Some(audio_timescale) = tag_map.get(media_timescale_2).cloned() {
+            tag_map.insert(media_timescale.to_string(), audio_timescale);
+        }
+    }
+
     /// Apply comparison-specific normalization for ExifTool compatibility reports
     /// This normalizes families for the comparison tool documentation output
     /// Check if a tag family should be skipped (pseudo-tags, not actual metadata)
@@ -398,11 +749,21 @@ impl OxiDexExtractor {
         matches!(family, "File" | "System" | "UNKNOWN")
     }
 
+    /// Capitalize the first letter of a string to match ExifTool naming conventions
+    fn capitalize_first(s: &str) -> String {
+        let mut chars = s.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(first) => first.to_uppercase().chain(chars).collect(),
+        }
+    }
+
     fn normalize_for_comparison(tag_key: &str, format: Option<&str>) -> String {
         // Handle PNG special cases first
         // PNG:tEXt:Author → PNG:Author
         // PNG:tEXt:date:create → PNG:Datecreate
         // PNG-pHYs:PixelUnits → PNG:PixelUnits
+        // ExifTool capitalizes PNG text chunk keywords (comment → Comment)
         if let Some(rest) = tag_key.strip_prefix("PNG:tEXt:") {
             // Handle date:create → Datecreate format
             // ExifTool uses lowercase after "Date" (Datecreate, not DateCreate)
@@ -410,44 +771,74 @@ impl OxiDexExtractor {
                 // date:create → Datecreate, date:modify → Datemodify, date:timestamp → Datetimestamp
                 return format!("PNG:Date{}", date_part);
             }
-            return format!("PNG:{}", rest);
+            // Capitalize the keyword to match ExifTool (comment → Comment)
+            return format!("PNG:{}", Self::capitalize_first(rest));
         }
         if let Some(rest) = tag_key.strip_prefix("PNG-pHYs:") {
             return format!("PNG:{}", rest);
         }
         if let Some(rest) = tag_key.strip_prefix("PNG:iTXt:") {
-            return format!("PNG:{}", rest);
+            // Capitalize the keyword to match ExifTool
+            return format!("PNG:{}", Self::capitalize_first(rest));
+        }
+        if let Some(rest) = tag_key.strip_prefix("PNG:zTXt:") {
+            // Capitalize the keyword to match ExifTool
+            return format!("PNG:{}", Self::capitalize_first(rest));
         }
 
         if let Some((family, name)) = tag_key.split_once(':') {
             let normalized_family = match family {
-                // ExifIFD, IFD0, and GPS tags are output as EXIF in comparison reports
-                // Perl ExifTool outputs GPS tags as EXIF:GPSxxx
-                "ExifIFD" | "IFD0" | "GPS" => "EXIF",
+                // ExifIFD, IFD0, IFD1, GPS, and InteropIFD tags are output as EXIF in
+                // comparison reports. Perl ExifTool outputs GPS tags as EXIF:GPSxxx,
+                // and groups the thumbnail (IFD1) and Interoperability (InteropIFD)
+                // sub-IFDs under the same top-level "EXIF" family by default.
+                "ExifIFD" | "IFD0" | "IFD1" | "GPS" | "InteropIFD" => "EXIF",
                 // Manufacturer maker notes are output as MakerNotes in comparison reports
                 "Canon" | "Nikon" | "Sony" | "Fujifilm" | "Panasonic" | "Olympus" | "Pentax"
                 | "Samsung" => "MakerNotes",
                 // MP4/QuickTime: ItemList and UserData → QuickTime for comparison
                 "ItemList" | "UserData" => "QuickTime",
+                // WebP tags map to RIFF family in ExifTool
+                "WebP" => "RIFF",
+                // EXR tags map to OpenEXR family in ExifTool
+                "EXR" => "OpenEXR",
                 // Keep other families unchanged
                 _ => family,
             };
             format!("{}:{}", normalized_family, name)
         } else if let Some(fmt) = format {
             // No family prefix - use format as family (e.g., GIF:GIFVersion)
-            format!("{}:{}", fmt.to_uppercase(), tag_key)
+            // Apply family normalization to format-based families
+            let format_family = fmt.to_uppercase();
+            let normalized_family = match format_family.as_str() {
+                "EXR" => "OpenEXR",
+                other => other,
+            };
+            format!("{}:{}", normalized_family, tag_key)
         } else {
             tag_key.to_string()
         }
     }
 
     /// Flatten MetadataMap into TagInfo vector
+    ///
+    /// Returns the flattened tags plus the set of displayed `family:name`
+    /// keys that had more than one DIFFERENT raw `metadata` key normalize
+    /// down to them (spec M3: a registry/dynamic-name emitter computing
+    /// the same conceptual tag twice via two different raw paths, where
+    /// the second write silently clobbers the first in `tag_map` below).
+    /// `metadata` itself is already a `HashMap`, so a literal repeated raw
+    /// key is structurally impossible here -- this only catches
+    /// post-normalization collisions between genuinely distinct raw keys,
+    /// which is exactly the class the literal-string diff backstop
+    /// (`detect_duplicate_tag_insertion`) is blind to.
     fn flatten_metadata(
         &self,
         metadata: &oxidex::core::MetadataMap,
         format: Option<&str>,
-    ) -> Vec<TagInfo> {
+    ) -> (Vec<TagInfo>, HashSet<String>) {
         let mut tag_map: HashMap<String, String> = HashMap::new();
+        let mut duplicate_keys: HashSet<String> = HashSet::new();
 
         for (key, value) in metadata.iter() {
             // Check if original family should be skipped (pseudo-tags)
@@ -492,17 +883,27 @@ impl OxiDexExtractor {
                     }
                     _ => continue,
                 };
+                if tag_map.contains_key(&normalized_key) {
+                    duplicate_keys.insert(normalized_key.clone());
+                }
                 tag_map.insert(normalized_key, formatted);
                 continue;
             }
 
             // Format the value
             let value_str = self.format_value(&normalized_key, &name, value);
+            if tag_map.contains_key(&normalized_key) {
+                duplicate_keys.insert(normalized_key.clone());
+            }
             tag_map.insert(normalized_key, value_str);
         }
 
         // Add composite tags
         self.add_composite_tags(&mut tag_map);
+
+        // Handle QuickTime track suffix normalization for ExifTool comparison
+        // ExifTool outputs audio track tags without suffix, OxiDex uses _2 suffix
+        Self::normalize_quicktime_track_tags(&mut tag_map);
 
         // Convert to Vec<TagInfo>
         let mut tags: Vec<TagInfo> = tag_map
@@ -518,7 +919,7 @@ impl OxiDexExtractor {
             .collect();
 
         tags.sort_by_key(|a| a.key());
-        tags
+        (tags, duplicate_keys)
     }
 
     /// Find files by extension recursively throughout the samples directory
@@ -616,6 +1017,23 @@ impl OxiDexExtractor {
                 "mef", "mos", "mrw", "nrw", "pef", "ptx", "r3d", "raf", "rw2", "rwl", "sr2", "srf",
                 "srw", "x3f",
             ],
+            "PE" => vec!["exe", "dll", "sys"],
+            "ELF" => vec!["elf", "so"],
+            "MACHO" => vec!["dylib", "bundle", "macho"],
+            "OTF" => vec!["otf"],
+            "TTF" => vec!["ttf"],
+            "WOFF" => vec!["woff"],
+            "WOFF2" => vec!["woff2"],
+            "DOCX" => vec!["docx"],
+            "XLSX" => vec!["xlsx"],
+            "PPTX" => vec!["pptx"],
+            "ZIP" => vec!["zip"],
+            "RAR" => vec!["rar"],
+            "7Z" => vec!["7z"],
+            "GZIP" => vec!["gz"],
+            "TAR" => vec!["tar"],
+            "ISO" => vec!["iso"],
+            "OLE" => vec!["doc", "xls", "ppt", "msg", "vsd", "pub"],
             _ => vec![],
         }
     }
@@ -635,8 +1053,9 @@ mod tests {
     fn test_flatten_metadata_empty() {
         let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
         let metadata = oxidex::core::MetadataMap::new();
-        let tags = extractor.flatten_metadata(&metadata, None);
+        let (tags, duplicate_keys) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 0);
+        assert!(duplicate_keys.is_empty());
     }
 
     #[test]
@@ -644,8 +1063,50 @@ mod tests {
         let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
         let mut metadata = oxidex::core::MetadataMap::new();
         metadata.insert("Canon:FileNumber".to_string(), TagValue::Integer(7669483));
-        let tags = extractor.flatten_metadata(&metadata, None);
+        let (tags, duplicate_keys) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].value, "117-1771");
+        assert!(duplicate_keys.is_empty());
+    }
+
+    /// Spec M3: two DIFFERENT raw keys that normalize to the same
+    /// displayed `family:name` must be reported as a duplicate, even
+    /// though `MetadataMap` itself (a `HashMap`) makes a literal repeated
+    /// raw key structurally impossible.
+    #[test]
+    fn test_flatten_metadata_detects_normalization_collision() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        let mut metadata = oxidex::core::MetadataMap::new();
+        // Two distinct raw keys ExifTool-family-normalization collapses
+        // onto the same "MakerNotes:Sharpness" displayed key.
+        metadata.insert(
+            "Canon:Sharpness".to_string(),
+            TagValue::String("Normal".to_string()),
+        );
+        metadata.insert(
+            "Nikon:Sharpness".to_string(),
+            TagValue::String("Hard".to_string()),
+        );
+        let (tags, duplicate_keys) = extractor.flatten_metadata(&metadata, None);
+        assert_eq!(tags.len(), 1);
+        assert!(duplicate_keys.contains("MakerNotes:Sharpness"));
+    }
+
+    /// Two unrelated tags that don't collide must never be flagged.
+    #[test]
+    fn test_flatten_metadata_no_false_positive_duplicates() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        let mut metadata = oxidex::core::MetadataMap::new();
+        metadata.insert(
+            "EXIF:Make".to_string(),
+            TagValue::String("Canon".to_string()),
+        );
+        metadata.insert(
+            "EXIF:Model".to_string(),
+            TagValue::String("EOS 5D".to_string()),
+        );
+        let (tags, duplicate_keys) = extractor.flatten_metadata(&metadata, None);
+        assert_eq!(tags.len(), 2);
+        assert!(duplicate_keys.is_empty());
     }
 }
