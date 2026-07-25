@@ -42,7 +42,10 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0x0111 // PreviewImageStart (StripOffsets)
+            0x0103 // Compression
+                | 0x0111 // PreviewImageStart / JpgFromRawStart (StripOffsets)
+                | 0x0211 // YCbCrCoefficients
+                | 0x0213 // YCbCrPositioning
                 | 0x0117 // PreviewImageLength (StripByteCounts)
                 | 0x0143 // TileLength
                 | 0x0142 // TileWidth
@@ -69,9 +72,27 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
         // Some DNG tags are not yet in the generated oxidex-tags database.
         // Use hardcoded names to avoid emitting hex fallbacks like EXIF:0x828D.
         match tag_id {
-            0x0111 if ifd_name.starts_with("SubIFD") => "EXIF:PreviewImageStart".to_string(),
-            0x0117 if ifd_name.starts_with("SubIFD") => "EXIF:PreviewImageLength".to_string(),
-            0x0111 | 0x0117 => lookup_tag_name(tag_id, "EXIF"),
+            0x0103 => lookup_tag_name(tag_id, "EXIF"),
+            0x0111 => {
+                if ifd_name == "SubIFD2" {
+                    "EXIF:JpgFromRawStart".to_string()
+                } else if ifd_name.starts_with("SubIFD") {
+                    "EXIF:PreviewImageStart".to_string()
+                } else {
+                    lookup_tag_name(tag_id, "EXIF")
+                }
+            }
+            0x0117 => {
+                if ifd_name == "SubIFD2" {
+                    "EXIF:JpgFromRawLength".to_string()
+                } else if ifd_name.starts_with("SubIFD") {
+                    "EXIF:PreviewImageLength".to_string()
+                } else {
+                    lookup_tag_name(tag_id, "EXIF")
+                }
+            }
+            0x0211 => lookup_tag_name(tag_id, "EXIF"),
+            0x0213 => lookup_tag_name(tag_id, "EXIF"),
             0x0143 => "EXIF:TileLength".to_string(),
             0x0142 => lookup_tag_name(tag_id, "EXIF"),
             0x0144 => lookup_tag_name(tag_id, "EXIF"),
@@ -557,17 +578,39 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 // Parse SubIFD(s) if present - crucial for RAW formats
                 // SubIFDs contain RAW image data, compression info, and RAW-specific tags
                 for (sub_index, sub_offset) in sub_ifd_offsets.iter().enumerate() {
-                    // Use SubIFD0, SubIFD1, etc. for tag naming
-                    let sub_ifd_name = if sub_index == 0 {
-                        "SubIFD0"
-                    } else {
-                        // Multiple SubIFDs are rare but possible
-                        eprintln!("Warning: Found SubIFD{} which is unusual", sub_index);
-                        "SubIFD0" // Use SubIFD0 as fallback for consistency
+                    let sub_ifd_name: &str = match sub_index {
+                        0 => "SubIFD0",
+                        1 => "SubIFD1",
+                        2 => "SubIFD2",
+                        _ => "SubIFD0",
                     };
+                    let is_raw_subifd = sub_index == 0;
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
+                        if format == RawFormat::AdobeDNG && !is_raw_subifd {
+                            if let Some(image_data) = extract_subifd_image(&reader, &sub_tags, byte_order) {
+                                let image_tag = if sub_index == 2 {
+                                    "EXIF:JpgFromRaw"
+                                } else {
+                                    "EXIF:PreviewImage"
+                                };
+                                metadata.insert(image_tag.to_string(), TagValue::Binary(image_data));
+                            }
+                        }
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+                            if format == RawFormat::AdobeDNG && !is_raw_subifd {
+                                let is_offset_length = tag_id == 0x0111 || tag_id == 0x0117;
+                                let is_structural = matches!(tag_id,
+                                    0x00FE | 0x00FF |
+                                    0x0100 | 0x0101 | 0x0102 | 0x0103 | 0x0106 |
+                                    0x0115 | 0x0116 | 0x011A | 0x011B | 0x011C |
+                                    0x0142 | 0x0143 | 0x0144 | 0x0145 |
+                                    0x0211 | 0x0212 | 0x0213
+                                );
+                                if is_structural && !is_offset_length {
+                                    continue;
+                                }
+                            }
                             let tag_name = lookup_raw_tag_name(tag_id, sub_ifd_name, format);
                             let bytes = raw_bytes.as_ref();
                             let tag_value = if format == RawFormat::AdobeDNG {
@@ -802,6 +845,30 @@ fn format_dng_display_value(
     match tag_id {
         // ReferenceBlackWhite: RATIONAL[6]
         0x0214 if field_type == 5 => format_rational_array(bytes, value_count, byte_order),
+        // YCbCrCoefficients: RATIONAL[3]
+        0x0211 if field_type == 5 => format_rational_array(bytes, value_count, byte_order),
+        // ColorMatrix1: RATIONAL[9]
+        0xC621 if field_type == 5 => format_rational_array(bytes, value_count, byte_order),
+        // ColorMatrix2: RATIONAL[9]
+        0xC622 if field_type == 5 => format_rational_array(bytes, value_count, byte_order),
+        // CameraCalibration1: RATIONAL[9]
+        0xC623 if field_type == 5 => format_rational_array(bytes, value_count, byte_order),
+        // CameraCalibration2: RATIONAL[9]
+        0xC624 if field_type == 5 => format_rational_array(bytes, value_count, byte_order),
+        // YCbCrPositioning: SHORT[1]
+        0x0213 if field_type == 3 && value_count == 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("Centered".to_string()),
+            2 => Some("Co-sited".to_string()),
+            _ => None,
+        },
+        // Compression: SHORT[1]
+        0x0103 if field_type == 3 && value_count == 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("Uncompressed".to_string()),
+            6 => Some("JPEG (old-style)".to_string()),
+            7 => Some("JPEG".to_string()),
+            8 => Some("Deflate/Adobe deflate".to_string()),
+            _ => None,
+        },
         // PreviewImageStart/Length, TileLength/TileByteCounts: use default scalar formatting
         // TileWidth, TileOffsets: scalar, default formatting
         0x0111 | 0x0117 | 0x0142 | 0x0143 | 0x0144 | 0x0145 => None,
@@ -1065,6 +1132,14 @@ fn format_exif_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // YCbCrCoefficients: RATIONAL[3]
+        0x0211 if field_type == 5 => format_rational_array(bytes, value_count, byte_order),
+        // YCbCrPositioning: SHORT[1]
+        0x0213 if field_type == 3 && value_count == 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("Centered".to_string()),
+            2 => Some("Co-sited".to_string()),
+            _ => None,
+        },
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -1208,6 +1283,28 @@ fn decode_exif_cfa_pattern(bytes: &[u8], byte_order: ByteOrder) -> Option<String
         formatted.push(']');
     }
     Some(formatted)
+}
+
+/// Extract image data from a SubIFD using StripOffsets and StripByteCounts.
+fn extract_subifd_image<R: FileReader>(
+    reader: &R,
+    tags: &[(u16, u16, u32, std::borrow::Cow<'_, [u8]>)],
+    byte_order: ByteOrder,
+) -> Option<Vec<u8>> {
+    let mut strip_offsets = None;
+    let mut strip_byte_counts = None;
+
+    for (tag_id, _field_type, _value_count, raw_bytes) in tags {
+        match *tag_id {
+            0x0111 => strip_offsets = read_tiff_u32(raw_bytes.as_ref(), byte_order),
+            0x0117 => strip_byte_counts = read_tiff_u32(raw_bytes.as_ref(), byte_order),
+            _ => {}
+        }
+    }
+
+    let offset = strip_offsets? as u64;
+    let length = strip_byte_counts? as usize;
+    reader.read(offset, length).ok().map(|data| data.to_vec())
 }
 
 #[cfg(test)]
