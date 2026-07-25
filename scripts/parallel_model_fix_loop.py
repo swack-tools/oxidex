@@ -468,6 +468,19 @@ def _branch_has_undiscardable_commits(repo_root, branch, base_ref):
     merge deliberately leaves its worker branch in place; without this
     check the next round's re-anchor silently threw those commits away.
 
+    Ancestry alone isn't enough, though: a squash merge gives previously
+    landed work a brand new SHA with no parent relationship to the
+    original commit, so content that already made it upstream can still
+    look "unreachable" by ancestry forever -- e.g. every config/prompt
+    tuning commit this fleet squash-merges to main is, from that point
+    on, permanently "not reachable from base_ref" on any worker branch
+    that happened to carry it, which would refuse that branch's reset
+    on every single round for good, blocking it from ever picking up a
+    newer base -- for a branch that has nothing left worth protecting.
+    `git cherry` compares by patch-id instead of ancestry, so a commit
+    whose diff already exists upstream (under any SHA) gets filtered out
+    before anything is declared undiscardable.
+
     Errs on the safe side: if git can't answer (bad ref, unreadable
     output), the commits are treated as present and the reset refused.
     """
@@ -475,13 +488,27 @@ def _branch_has_undiscardable_commits(repo_root, branch, base_ref):
     origin_main = _git(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"], repo_root)
     if origin_main.returncode == 0:
         exclude.append("^refs/remotes/origin/main")
-    result = _git(["rev-list", "--count", branch, *exclude], repo_root)
+    result = _git(["rev-list", branch, *exclude], repo_root)
     if result.returncode != 0:
         return True
-    try:
-        return int(result.stdout.strip()) > 0
-    except (TypeError, ValueError):
-        return True
+    candidates = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    if not candidates:
+        return False
+
+    upstream_refs = [base_ref]
+    if origin_main.returncode == 0:
+        upstream_refs.append("refs/remotes/origin/main")
+    for ref in upstream_refs:
+        cherry = _git(["cherry", ref, branch], repo_root)
+        if cherry.returncode != 0:
+            return True
+        merged_by_patch_id = {
+            line[2:] for line in cherry.stdout.splitlines() if line.startswith("- ")
+        }
+        candidates -= merged_by_patch_id
+        if not candidates:
+            return False
+    return bool(candidates)
 
 
 def _branch_head_sha(repo_root, branch):
