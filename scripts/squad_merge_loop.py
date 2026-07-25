@@ -757,7 +757,30 @@ def run_batch_check(*, staging_path, squad, formats, cache_dir, comparison_fn,
     problems = []
     new_baselines = {}
     for fmt in formats:
-        report = comparison_fn(staging_path, cache_dir, fmt, "squad-staging-batch")
+        # This function's contract (above) is "never raises -- log loudly and
+        # report via `ok`". comparison_fn bottoms out in
+        # find_tag_gaps.run_format_comparison, which shells out with
+        # check=True, so ANY non-zero exit (a SIGTERM from an operator's
+        # pkill, an OOM kill, a diff that compiles under `--bin oxidex` but
+        # breaks the tag-comparison-binary feature path) raised straight
+        # through this loop and killed the whole daemon -- and nothing
+        # respawns a merger. Observed live 2026-07-25: 7 of 14 mergers died
+        # on this exact line within seconds of each other, stranding 68% of
+        # worker slots with no publish path for over an hour.
+        #
+        # Deliberately does NOT fall through to whatever report may already
+        # be on disk: /tmp accumulates tagcmp-*.json for days, so reusing a
+        # stale one would silently hand a previous round's verdicts to the
+        # publication gate -- turning a loud crash into a false "clean".
+        # Treated as a check FAILURE (hold publication), which is the
+        # existing, already-safe behavior for an unhealthy batch check.
+        try:
+            report = comparison_fn(staging_path, cache_dir, fmt, "squad-staging-batch")
+        except subprocess.CalledProcessError as exc:
+            ok = False
+            problems.append(f"{fmt}: comparison run failed ({exc})")
+            new_baselines[fmt] = None
+            continue
         new_baselines[fmt] = report
         if report is None:
             continue

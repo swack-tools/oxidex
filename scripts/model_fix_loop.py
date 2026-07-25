@@ -2404,15 +2404,57 @@ def extract_review_verdict_full(response_text):
     we couldn't understand. See extract_review_verdict for the
     preserved, backward-compatible two-tuple shape existing callers use."""
     stripped = response_text.strip()
-    if stripped.upper().startswith("APPROVE"):
-        return "approve", ""
-    if stripped.upper().startswith("UNVERIFIABLE"):
-        _, _, reason = stripped.partition(":")
-        return "unverifiable", reason.strip() or "unverifiable, no checklist id given"
-    if stripped.upper().startswith("REJECT"):
-        _, _, reason = stripped.partition(":")
-        return "reject", reason.strip() or "rejected, no reason given"
+    verdict = _verdict_from_line(stripped)
+    if verdict is not None:
+        return verdict
+
+    # The review prompt itself instructs "answer each checklist item
+    # briefly, THEN give your verdict", so a model that FOLLOWS the
+    # instruction puts its verdict on the LAST line, not the first --
+    # and the first-line-only match above then scored it unparseable,
+    # which fails safe to REJECT. Measured live: 7 of 209 reviewer
+    # replies (3.3%) were APPROVE verdicts inverted to REJECT this way,
+    # destroying ~4 already-built, already-gap-verified fixes against 10
+    # delivered in the same window.
+    #
+    # Scanning bottom-up (not top-down) is deliberate: a checklist body
+    # routinely mentions the words approve/reject while discussing the
+    # criteria, so the LAST such line is the model's actual conclusion.
+    # A response with no verdict line anywhere still falls through to
+    # reject -- the fail-safe posture is preserved, just no longer
+    # triggered by correct answers.
+    for line in reversed(stripped.splitlines()):
+        verdict = _verdict_from_line(line.strip())
+        if verdict is not None:
+            return verdict
     return "reject", f"unparseable review verdict: {stripped[:200]!r}"
+
+
+# Tolerated decoration around a verdict line, e.g. "**Final Verdict:** APPROVE"
+# or "Verdict: REJECT: C3 ..." -- stripped before the keyword match below.
+_VERDICT_PREFIX_RE = re.compile(r"^[*_`\s>#-]*(?:final\s+)?verdict\s*:?\s*", re.IGNORECASE)
+
+
+def _verdict_from_line(line):
+    """(verdict, reason) for one line that states a verdict, else None.
+
+    Shared by the first-line fast path and the bottom-up rescan so both
+    accept exactly the same shapes -- including a "Verdict:" label and
+    light markdown emphasis, which reviewers emit routinely.
+    """
+    if not line:
+        return None
+    candidate = _VERDICT_PREFIX_RE.sub("", line).lstrip("*_`# ").strip()
+    upper = candidate.upper()
+    if upper.startswith("APPROVE"):
+        return "approve", ""
+    if upper.startswith("UNVERIFIABLE"):
+        _, _, reason = candidate.partition(":")
+        return "unverifiable", reason.strip() or "unverifiable, no checklist id given"
+    if upper.startswith("REJECT"):
+        _, _, reason = candidate.partition(":")
+        return "reject", reason.strip() or "rejected, no reason given"
+    return None
 
 
 def extract_review_verdict(response_text):

@@ -710,6 +710,48 @@ class RunBatchCheckTests(unittest.TestCase):
         )
         self.assertFalse(ok)
 
+    def test_comparison_subprocess_failure_holds_publication_instead_of_killing_the_daemon(self):
+        # run_format_comparison shells out with check=True, so any non-zero
+        # exit (operator pkill, OOM kill, a diff that breaks the
+        # tag-comparison-binary feature path) used to raise straight out of
+        # run_batch_check and kill the merger -- and nothing respawns one.
+        # Observed live 2026-07-25: 7 of 14 mergers died on this single
+        # line, stranding 68% of worker slots with no publish path.
+        logged = []
+
+        def comparison_fn(staging, cache, fmt, suffix):
+            raise subprocess.CalledProcessError(returncode=-15, cmd=["tag-comparison", "--format", fmt])
+
+        ok, problems, baselines = sml.run_batch_check(
+            staging_path="/unused", squad="nikon", formats=["NEF"], cache_dir="/unused",
+            comparison_fn=comparison_fn, baselines={}, log_fn=logged.append,
+        )
+        self.assertFalse(ok)
+        self.assertTrue(any("comparison run failed" in p for p in problems))
+        # must NOT fall through to a stale on-disk report -- a swallowed
+        # failure that reused one would hand a previous round's verdicts to
+        # the publication gate, turning a loud crash into a false "clean".
+        self.assertEqual(baselines, {"NEF": None})
+        self.assertTrue(any("ERROR" in line for line in logged))
+
+    def test_one_format_failing_does_not_abort_the_remaining_formats(self):
+        seen = []
+
+        def comparison_fn(staging, cache, fmt, suffix):
+            seen.append(fmt)
+            if fmt == "NEF":
+                raise subprocess.CalledProcessError(returncode=1, cmd=["tag-comparison"])
+            return {"duplicate_emissions": [], "extra_in_oxidex": []}
+
+        ok, problems, baselines = sml.run_batch_check(
+            staging_path="/unused", squad="nikon", formats=["NEF", "JPEG"], cache_dir="/unused",
+            comparison_fn=comparison_fn, baselines={}, log_fn=lambda *a: None,
+        )
+        self.assertEqual(seen, ["NEF", "JPEG"])
+        self.assertFalse(ok)
+        self.assertIsNone(baselines["NEF"])
+        self.assertIsNotNone(baselines["JPEG"])
+
     def test_a_format_the_comparison_fn_cannot_find_is_skipped_not_fatal(self):
         ok, problems, baselines = sml.run_batch_check(
             staging_path="/unused", squad="nikon", formats=["NEF"], cache_dir="/unused",
