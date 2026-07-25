@@ -40,6 +40,15 @@ temperature = 0.7
 max_prompt_tags = 40
 max_prompt_file_bytes = 60000
 timeout = 600
+# deadline_seconds (default 120): wall-clock ceiling on ONE model call,
+# checked as stream chunks arrive and NOT reset by arriving data. This is
+# the knob that actually bounds a call -- `timeout` above is urlopen's
+# SOCKET read timeout, which every arriving SSE chunk resets, so under
+# stream = true it cannot bound a slow-drip response at all (measured on
+# one provider: a single request ran 2118s against timeout=1200). On
+# expiry the connection is closed and the request is replayed, counting
+# against max_retries.
+deadline_seconds = 120
 max_request_turns = 20
 max_request_repeats = 3
 max_verify_turns = 10
@@ -121,6 +130,15 @@ stream = true
 thinking = true
 temperature = 0
 timeout = 600
+# deadline_seconds (default 120): wall-clock ceiling on ONE model call,
+# checked as stream chunks arrive and NOT reset by arriving data. This is
+# the knob that actually bounds a call -- `timeout` above is urlopen's
+# SOCKET read timeout, which every arriving SSE chunk resets, so under
+# stream = true it cannot bound a slow-drip response at all (measured on
+# one provider: a single request ran 2118s against timeout=1200). On
+# expiry the connection is closed and the request is replayed, counting
+# against max_retries.
+deadline_seconds = 120
 max_retries = 1000
 retry_backoff_seconds = 2
 max_retry_backoff_seconds = 120
