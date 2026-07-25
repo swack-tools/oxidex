@@ -42,12 +42,17 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0xC619 // BlackLevelRepeatDim
+            0xC616 // CFAPlaneColor
+                | 0xC617 // CFALayout
+                | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
+                | 0xC61F // DefaultCropOrigin
+                | 0xC620 // DefaultCropSize
                 | 0xC62D // BayerGreenSplit
                 | 0xC632 // AntiAliasStrength
                 | 0xC65C // BestQualityScale
                 | 0xC68D // ActiveArea
+                | 0x828E // CFAPattern2
         )
     {
         lookup_tag_name(tag_id, "EXIF")
@@ -502,6 +507,40 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+                            // DNG-specific: SubIFD-resident CFA tags that
+                            // ExifTool reports under the EXIF group.
+                            if format == RawFormat::AdobeDNG
+                                && (tag_id == 0x828D || tag_id == 0x828E)
+                            {
+                                let name = if tag_id == 0x828D {
+                                    "EXIF:CFARepeatPatternDim".to_string()
+                                } else {
+                                    lookup_tag_name(tag_id, "EXIF")
+                                };
+                                let value = format_exif_display_value(
+                                    tag_id,
+                                    raw_bytes.as_ref(),
+                                    field_type,
+                                    value_count,
+                                    byte_order,
+                                )
+                                .unwrap_or_else(|| {
+                                    if tag_id == 0x828E {
+                                        format_cfa_pattern2(
+                                            raw_bytes.as_ref(),
+                                            value_count,
+                                        )
+                                    } else {
+                                        "0 0".to_string()
+                                    }
+                                });
+                                metadata.insert(
+                                    name,
+                                    TagValue::new_string(value),
+                                );
+                                continue;
+                            }
+
                             // TIFF/EP tag 0x828E (CFAPattern2) is a plain
                             // int8u array with no dimension header, unlike
                             // EXIF tag 0xA302 (CFAPattern). The generic
@@ -525,12 +564,17 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             let tag_name = lookup_raw_tag_name(tag_id, sub_ifd_name, format);
                             let bytes = raw_bytes.as_ref();
                             let tag_value = if format == RawFormat::AdobeDNG {
-                                format_dng_integer_array(
-                                    tag_id,
-                                    bytes,
-                                    field_type,
-                                    value_count,
-                                    byte_order,
+                                if let Some(value) = format_exif_display_value(
+                                    tag_id, bytes, field_type, value_count, byte_order,
+                                ) {
+                                    TagValue::new_string(value)
+                                } else {
+                                    format_dng_integer_array(
+                                        tag_id,
+                                        bytes,
+                                        field_type,
+                                        value_count,
+                                        byte_order,
                                 )
                                 .map(TagValue::new_string)
                                 .unwrap_or_else(|| {
@@ -541,6 +585,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                         byte_order,
                                     )
                                 })
+                                }
                             } else {
                                 raw_bytes_to_simple_tag_value(
                                     bytes,
@@ -730,6 +775,10 @@ fn format_dng_integer_array(
 ) -> Option<String> {
     let component_size = match tag_id {
         0xC619 if field_type == 3 => 2, // BlackLevelRepeatDim: SHORT[2]
+        0xC61F if field_type == 3 => 2, // DefaultCropOrigin: SHORT[2]
+        0xC61F if field_type == 4 => 4, // DefaultCropOrigin: LONG[2]
+        0xC620 if field_type == 3 => 2, // DefaultCropSize: SHORT[2]
+        0xC620 if field_type == 4 => 4, // DefaultCropSize: LONG[2]
         0xC68D if field_type == 4 => 4, // ActiveArea: LONG[4]
         _ => return None,
     };
@@ -795,6 +844,77 @@ fn format_exif_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // CFARepeatPatternDim: SHORT[2] or LONG[2], space-separated.
+        0x828D if (field_type == 3 || field_type == 4) && value_count >= 2 => {
+            if field_type == 3 {
+                let val1 = read_tiff_u16(bytes, byte_order)?;
+                let val2 = read_tiff_u16(bytes.get(2..)?, byte_order)?;
+                Some(format!("{} {}", val1, val2))
+            } else {
+                let val1 = read_tiff_u32(bytes, byte_order)?;
+                let val2 = read_tiff_u32(bytes.get(4..)?, byte_order)?;
+                Some(format!("{} {}", val1, val2))
+            }
+        }
+        // CFAPattern2: BYTE or UNDEFINED array, space-separated decimal.
+        0x828E if field_type == 1 || field_type == 7 => {
+            Some(format_cfa_pattern2(bytes, value_count))
+        }
+        // CFAPlaneColor: UNDEFINED array, comma-separated color names.
+        0xC616 if field_type == 7 => {
+            let count = usize::try_from(value_count).ok()?;
+            let values = bytes.get(..count)?;
+            if values.is_empty() {
+                return None;
+            }
+            Some(
+                values
+                    .iter()
+                    .map(|v| match v {
+                        0 => "Red".to_string(),
+                        1 => "Green".to_string(),
+                        2 => "Blue".to_string(),
+                        3 => "Cyan".to_string(),
+                        4 => "Magenta".to_string(),
+                        5 => "Yellow".to_string(),
+                        6 => "White".to_string(),
+                        other => format!("Unknown({})", other),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(","),
+            )
+        }
+        // CFALayout: SHORT[1] or LONG[1], PrintConv table.
+        0xC617 if (field_type == 3 || field_type == 4) && value_count >= 1 => {
+            let layout: u32 = if field_type == 3 {
+                u32::from(read_tiff_u16(bytes, byte_order)?)
+            } else {
+                read_tiff_u32(bytes, byte_order)?
+            };
+            Some(
+                match layout {
+                    1 => "Rectangular",
+                    2 => "Even columns offset down 1/2 row",
+                    3 => "Even columns offset up 1/2 row",
+                    4 => "Even rows offset right 1/2 column",
+                    5 => "Even rows offset left 1/2 column",
+                    6 => {
+                        "Even rows offset up by 1/2 row, even columns offset left by 1/2 column"
+                    }
+                    7 => {
+                        "Even rows offset up by 1/2 row, even columns offset right by 1/2 column"
+                    }
+                    8 => {
+                        "Even rows offset down by 1/2 row, even columns offset left by 1/2 column"
+                    }
+                    9 => {
+                        "Even rows offset down by 1/2 row, even columns offset right by 1/2 column"
+                    }
+                    _ => return None,
+                }
+                .to_string(),
+            )
+        }
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
