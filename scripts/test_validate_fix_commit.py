@@ -938,6 +938,35 @@ class LooseningHardeningTests(unittest.TestCase):
         values, _ = extract_added_map_values(diff)
         self.assertEqual(values, [])
 
+    def test_a_multiline_assert_message_is_ignored_too(self):
+        # rustfmt splits long asserts, leaving the message alone on a line
+        # with no macro token on it. Measured on 12a20366f5bc.
+        diff = (
+            "diff --git a/src/thermal.rs b/src/thermal.rs\n"
+            "@@ -200,3 +200,8 @@ mod tests {\n"
+            "+        assert_eq!(\n"
+            '+            metadata.get_string("APP12:Flash"),\n'
+            '+            Some("Off"),\n'
+            "+            \"Flash=0 should be PrintConv'd to Off\"\n"
+            "+        );\n"
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+
+    def test_a_fabricated_value_after_a_multiline_assert_is_still_caught(self):
+        # The assert skip must CLOSE, not swallow the rest of the hunk.
+        diff = (
+            "diff --git a/src/canon/q.rs b/src/canon/q.rs\n"
+            "@@ -10,3 +10,8 @@ fn quality(v: u8) -> &'static str {\n"
+            "+        assert_eq!(\n"
+            '+            got,\n'
+            '+            Some("Off"),\n'
+            "+        );\n"
+            '+        0x1 => "Fabricated Display Value",\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Fabricated Display Value"])
+
     # -- the registry gate keys on the NAME, not the type shape ---------
 
     def test_an_icc_display_value_slice_is_still_checked(self):

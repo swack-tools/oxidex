@@ -632,14 +632,17 @@ def extract_added_map_values(diff_text):
     values = []
     unverifiable = []
     depth = 0  # bracket depth inside a const/static array literal
+    assert_depth = 0  # paren depth inside a multi-line assert!/panic! call
     hunk_ctx = ""  # git's record of the declaration enclosing this hunk
     for raw in diff_text.splitlines():
         if raw.startswith("diff --git"):
             depth = 0  # never let array state leak across files/hunks
+            assert_depth = 0
             hunk_ctx = ""
             continue
         if raw.startswith("@@"):
             depth = 0
+            assert_depth = 0
             # "@@ -a,b +c,d @@ <enclosing declaration>" -- everything
             # after the second "@@" is git's funcname context.
             parts = raw.split("@@")
@@ -651,11 +654,21 @@ def extract_added_map_values(diff_text):
             continue  # removed lines and diff noise
         added = raw[0] == "+"
         code = raw[1:]
-        if _ASSERT_LINE_RE.search(code):
-            # An assert/panic message is prose about a value, not the
-            # value. Bracket depth still has to advance below, so this
-            # must not `continue` past the depth bookkeeping -- but the
-            # line contributes nothing.
+        if assert_depth > 0 or _ASSERT_LINE_RE.search(code):
+            # An assert/panic message is prose ABOUT a value, not the
+            # value. rustfmt routinely splits these across lines:
+            #     assert_eq!(
+            #         metadata.get_string("APP12:Flash"),
+            #         Some("Off"),
+            #         "Flash=0 should be PrintConv'd to Off"
+            #     );
+            # so a per-line token test alone misses the message (measured
+            # on 12a20366f5bc). Track the macro's parenthesis depth and
+            # skip until it closes. Unlike the hunk-level `mod tests` gate
+            # this replaced, it cannot be widened by where git decides to
+            # put a funcname header: a fabricated table entry is not
+            # inside an assert call.
+            assert_depth = max(0, assert_depth + code.count("(") - code.count(")"))
             depth = max(0, depth + code.count("[") - code.count("]"))
             continue
         if depth > 0:
