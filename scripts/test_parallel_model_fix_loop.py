@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -22,6 +23,7 @@ from parallel_model_fix_loop import (
     _unregister_pgid,
     _wait_for_process_group_exit,
     acquire_dispatcher_lock,
+    adopt_open_sweep_prs,
     allocate_squad_slots,
     auto_publish_round,
     branch_name,
@@ -35,6 +37,7 @@ from parallel_model_fix_loop import (
     fast_forward_local_main,
     is_worktree_stale_and_resolved,
     janitor_reset_stale_worktrees,
+    list_open_sweep_prs,
     main,
     merge_branch,
     merge_pr,
@@ -2188,6 +2191,45 @@ class EnsureSweepWorktreeTests(GitRepoTestCase):
             git(repo, "rev-parse", "--verify", "refs/heads/sweep/tags-2026-07-25-1", check=False).returncode, 0,
         )
 
+    def test_a_directory_that_is_not_a_registered_worktree_is_self_healed(self):
+        """`if path.is_dir():` took the reuse branch on EXISTENCE alone.
+        A half-failed `worktree add`, a `worktree remove` that left the
+        directory behind, or a human who ran overlord_sweep.py's own
+        usage line by hand all leave a plain directory there -- every git
+        call in the reuse branch then fails, ensure_sweep_worktree
+        returns (None, ...), and auto-publish is silently and
+        permanently disabled for the life of the dispatcher while
+        looking exactly like a healthy no-news round. The `worktree
+        prune` + `worktree add` self-heal below existed but was only
+        reachable when the directory was ABSENT."""
+        repo = self.make_repo()
+        path = self.tmp / "sweep-wt"
+        path.mkdir()  # exists, but git has never heard of it
+        result, message = ensure_sweep_worktree(
+            repo, path, origin_ref="main", log_fn=lambda *a: None,
+        )
+        self.assertEqual(result, path)
+        self.assertEqual(git_out(path, "rev-parse", "--abbrev-ref", "HEAD").strip(), "HEAD")
+        self.assertEqual(git_out(path, "rev-parse", "HEAD").strip(),
+                         git_out(repo, "rev-parse", "main").strip())
+        self.assertIn("created", message)
+
+    def test_a_stale_registration_whose_directory_was_recreated_is_pruned_and_re_added(self):
+        # The exact shape of a half-failed add: git still has the
+        # registration, the directory is back but empty. `worktree add`
+        # refuses that path until it is pruned.
+        repo = self.make_repo()
+        path = self.tmp / "sweep-wt"
+        ensure_sweep_worktree(repo, path, origin_ref="main", log_fn=lambda *a: None)
+        shutil.rmtree(path)
+        path.mkdir()
+        result, _message = ensure_sweep_worktree(
+            repo, path, origin_ref="main", log_fn=lambda *a: None,
+        )
+        self.assertEqual(result, path)
+        self.assertEqual(git_out(path, "rev-parse", "HEAD").strip(),
+                         git_out(repo, "rev-parse", "main").strip())
+
     def test_unusable_worktree_returns_none_instead_of_raising(self):
         # A failure here must degrade to "skip auto-publish this round",
         # never to an exception that takes down an --infinite dispatcher.
@@ -2377,6 +2419,90 @@ class MergePrTests(unittest.TestCase):
         self.assertFalse(ok)
 
 
+def _gh_pr_list(*prs):
+    """A `gh pr list --json number,url,headRefName` payload."""
+    return json.dumps([
+        {"number": n, "url": f"https://github.com/o/r/pull/{n}", "headRefName": head}
+        for n, head in prs
+    ])
+
+
+class ListOpenSweepPrsTests(unittest.TestCase):
+    def test_keeps_only_sweep_branch_prs_and_orders_them_oldest_first(self):
+        payload = _gh_pr_list((130, "feat/some-human-branch"), (128, "sweep/tags-2026-07-26-1"),
+                              (126, "sweep/tags-2026-07-25-2"))
+        prs = list_open_sweep_prs("/repo", lambda args, repo: (0, payload, ""))
+        # Only this automation's own namespace is ever adopted -- a
+        # human's PR going green must never be squash-merged by a
+        # dispatcher running unattended for weeks.
+        self.assertEqual([p["number"] for p in prs], [126, 128])
+
+    def test_unparseable_output_is_no_prs_not_an_exception(self):
+        # Expired auth / gh missing: one skipped adoption pass, never a
+        # crash inside an --infinite dispatcher.
+        self.assertEqual(list_open_sweep_prs("/repo", lambda args, repo: (1, "", "gh: auth required")), [])
+
+
+class AdoptOpenSweepPrsTests(unittest.TestCase):
+    """MAJOR 4: a sweep PR whose checks went green AFTER the round that
+    created it had already given up (the 45-minute
+    wait_for_pr_checks timeout, a red-then-fixed run, a `gh pr create`
+    that failed and was retried by hand) was never revisited by
+    anything. overlord_sweep advances the sweep-state cursor before the
+    push, so the stamps that fed that PR are already consumed and no
+    later sweep re-cuts those commits: the fixes were stranded forever.
+    """
+
+    def _run_gh(self, list_payload, checks_by_ref, merge_rc=0):
+        calls = []
+
+        def run_gh(args, repo_root):
+            calls.append(args)
+            if args[:2] == ["pr", "list"]:
+                return 0, list_payload, ""
+            if args[:2] == ["pr", "checks"]:
+                return 0, checks_by_ref[args[2]], ""
+            if args[:2] == ["pr", "view"]:
+                return 0, json.dumps({"state": "OPEN"}), ""
+            return merge_rc, "Merged\n", "" if merge_rc == 0 else "not mergeable"
+        return run_gh, calls
+
+    GREEN = json.dumps([{"name": "Build & Test", "state": "SUCCESS", "bucket": "pass"}])
+    RED = json.dumps([{"name": "Lint & Audit", "state": "FAILURE", "bucket": "fail"}])
+    PENDING = json.dumps([{"name": "Build & Test", "state": "IN_PROGRESS", "bucket": "pending"}])
+
+    def test_a_since_green_abandoned_pr_is_merged(self):
+        url = "https://github.com/o/r/pull/126"
+        run_gh, calls = self._run_gh(_gh_pr_list((126, "sweep/tags-2026-07-25-2")), {url: self.GREEN})
+        adopted = adopt_open_sweep_prs(repo_root="/repo", run_gh=run_gh, log_fn=lambda *a: None)
+        self.assertEqual([(a["pr"], a["action"]) for a in adopted], [(url, "merged")])
+        self.assertIn(["pr", "merge", url, "--squash", "--delete-branch"], calls)
+
+    def test_a_still_red_pr_is_left_open_and_never_merged(self):
+        url = "https://github.com/o/r/pull/126"
+        run_gh, calls = self._run_gh(_gh_pr_list((126, "sweep/tags-2026-07-25-2")), {url: self.RED})
+        adopted = adopt_open_sweep_prs(repo_root="/repo", run_gh=run_gh, log_fn=lambda *a: None)
+        self.assertEqual([a["action"] for a in adopted], ["left_open"])
+        self.assertFalse(any(a[:2] == ["pr", "merge"] for a in calls))
+
+    def test_a_still_pending_pr_is_not_waited_on(self):
+        # Adoption is a single non-blocking read per PR: the round's own
+        # sweep still has to run, and a PR that is genuinely mid-CI gets
+        # picked up by the NEXT round instead of blocking this one.
+        url = "https://github.com/o/r/pull/126"
+        run_gh, calls = self._run_gh(_gh_pr_list((126, "sweep/tags-2026-07-25-2")), {url: self.PENDING})
+        adopt_open_sweep_prs(repo_root="/repo", run_gh=run_gh, log_fn=lambda *a: None)
+        self.assertEqual(sum(1 for a in calls if a[:2] == ["pr", "checks"]), 1)
+        self.assertFalse(any(a[:2] == ["pr", "merge"] for a in calls))
+
+    def test_no_open_sweep_prs_is_no_gh_merge_traffic_at_all(self):
+        run_gh, calls = self._run_gh("[]", {})
+        self.assertEqual(adopt_open_sweep_prs(repo_root="/repo", run_gh=run_gh,
+                                              log_fn=lambda *a: None), [])
+        self.assertEqual(calls, [["pr", "list", "--state", "open", "--json",
+                                  "number,url,headRefName", "--limit", "50"]])
+
+
 class SyncWorktreesToOriginMainTests(GitRepoTestCase):
     """Real tempdir repo + real `git worktree add`: the whole point of
     this step is which worktrees git actually moves and which it refuses
@@ -2473,9 +2599,11 @@ class AutoPublishRoundTests(unittest.TestCase):
         self.sync_calls.append(kwargs)
         return {"updated": [], "current": [], "skipped": [], "failed": []}
 
-    def _run_gh(self, checks_payload, merge_rc=0):
+    def _run_gh(self, checks_payload, merge_rc=0, list_payload="[]"):
         def run_gh(args, repo_root):
             self.gh_calls.append(args)
+            if args[:2] == ["pr", "list"]:
+                return 0, list_payload, ""
             if args[:2] == ["pr", "checks"]:
                 return 0, checks_payload, ""
             return merge_rc, "Merged\n", "" if merge_rc == 0 else "not mergeable"
@@ -2530,10 +2658,61 @@ class AutoPublishRoundTests(unittest.TestCase):
         self.assertEqual(result["status"], "merge_failed")
         self.assertEqual(self.sync_calls, [])
 
-    def test_a_sweep_with_no_news_touches_nothing_at_all(self):
+    def test_a_check_that_flips_red_between_the_green_poll_and_the_merge_is_not_merged(self):
+        # .github/workflows/ci.yml:11-13 sets
+        # `concurrency: cancel-in-progress: true`, so a push to the same
+        # ref (or a re-run) moves an in-flight job into the "cancel"
+        # bucket -- RED -- in the seconds between the poll that returned
+        # green and `gh pr merge`. One re-read closes that window.
+        answers = iter([self.GREEN, self.RED])
+
+        def run_gh(args, repo_root):
+            self.gh_calls.append(args)
+            if args[:2] == ["pr", "list"]:
+                return 0, "[]", ""
+            if args[:2] == ["pr", "checks"]:
+                return 0, next(answers), ""
+            return 0, "Merged\n", ""
+
+        result = self._publish(self.OK_SWEEP, run_gh)
+        self.assertEqual(result["status"], "checks_red")
+        self.assertFalse(any(args[:2] == ["pr", "merge"] for args in self.gh_calls))
+        self.assertEqual(self.sync_calls, [])
+
+    def test_an_abandoned_sweep_pr_from_an_earlier_round_is_adopted_and_merged(self):
+        # MAJOR 4: nothing revisited an already-open sweep PR, and the
+        # sweep cursor had already consumed its stamps -- so a PR that
+        # went green one minute after the checks timeout was stranded on
+        # origin forever.
+        run_gh = self._run_gh(self.GREEN, list_payload=_gh_pr_list((126, "sweep/tags-2026-07-25-2")))
+        result = self._publish({"status": "no_news"}, run_gh)
+        self.assertEqual(result["status"], "no_news")
+        self.assertEqual([a["action"] for a in result["adopted"]], ["merged"])
+        self.assertIn(["pr", "merge", "https://github.com/o/r/pull/126", "--squash", "--delete-branch"],
+                      self.gh_calls)
+        # A merge -- from ANY source -- has to be followed by the
+        # worktree fast-forward, or ~100 worktrees sit behind main.
+        self.assertEqual(len(self.sync_calls), 1)
+
+    def test_adoption_runs_before_the_sweep_cuts_a_new_branch(self):
+        order = []
+        run_gh = self._run_gh(self.GREEN, list_payload=_gh_pr_list((126, "sweep/tags-2026-07-25-2")))
+
+        def watching_gh(args, repo_root):
+            order.append(args[:2])
+            return run_gh(args, repo_root)
+
+        self._publish({"status": "no_news"}, watching_gh,
+                      sweep_fn=lambda **kw: order.append(["sweep"]) or {"status": "no_news"})
+        self.assertLess(order.index(["pr", "merge"]), order.index(["sweep"]))
+
+    def test_a_sweep_with_no_news_and_no_open_pr_touches_nothing_at_all(self):
         result = self._publish({"status": "no_news"}, self._run_gh(self.GREEN))
         self.assertEqual(result["status"], "no_news")
-        self.assertEqual(self.gh_calls, [])
+        # One read-only `gh pr list` (the adoption pass) and nothing
+        # else: no checks poll, no merge, no sync.
+        self.assertEqual(self.gh_calls, [["pr", "list", "--state", "open", "--json",
+                                          "number,url,headRefName", "--limit", "50"]])
         self.assertEqual(self.sync_calls, [])
 
     def test_an_unavailable_sweep_worktree_skips_the_round(self):
@@ -2542,8 +2721,23 @@ class AutoPublishRoundTests(unittest.TestCase):
             ensure_worktree_fn=lambda repo_root, path, **kw: (None, "worktree add failed"),
         )
         self.assertEqual(result["status"], "no_worktree")
-        self.assertEqual(self.gh_calls, [])
+        # Only the read-only adoption listing ran; no PR of this round's
+        # was polled or merged, and nothing was synced.
+        self.assertEqual([a[:2] for a in self.gh_calls], [["pr", "list"]])
         self.assertEqual(self.sync_calls, [])
+
+    def test_an_unavailable_sweep_worktree_still_adopts_a_stale_green_pr(self):
+        # The worktree is what the SWEEP needs; an already-open PR from
+        # an earlier round needs nothing but gh, so a provisioning
+        # failure must not strand it too.
+        result = self._publish(
+            self.OK_SWEEP,
+            self._run_gh(self.GREEN, list_payload=_gh_pr_list((126, "sweep/tags-2026-07-25-2"))),
+            ensure_worktree_fn=lambda repo_root, path, **kw: (None, "worktree add failed"),
+        )
+        self.assertEqual(result["status"], "no_worktree")
+        self.assertEqual([a["action"] for a in result["adopted"]], ["merged"])
+        self.assertEqual(len(self.sync_calls), 1)
 
     def test_sweep_receives_the_sweep_worktree_and_a_home_scoped_cursor(self):
         seen = {}
@@ -2561,10 +2755,17 @@ class AutoPublishRoundTests(unittest.TestCase):
 class AutoPublishNoNewsIsATrueNoOpTests(GitRepoTestCase):
     """The no-op path, driven through the REAL overlord_sweep.run_sweep
     rather than a stub: with no squad stamped green since the last
-    cursor position, a round must not create a ref, run a command, or
-    touch a PR."""
+    cursor position, a round must not create a ref, make a commit, or
+    open/merge/poll a PR.
 
-    def test_real_run_sweep_with_no_green_stamps_creates_no_refs_and_no_gh_calls(self):
+    The one gh call such a round does make is the READ-ONLY `gh pr list`
+    of the round-start adoption pass (see adopt_open_sweep_prs) -- that
+    pass is the only thing in this system that can ever land a sweep PR
+    stranded by an earlier round, so it deliberately runs even when
+    there is no news to sweep. With no open sweep PR it changes nothing.
+    """
+
+    def test_real_run_sweep_with_no_green_stamps_creates_no_refs_and_no_gh_writes(self):
         repo = self.make_repo()
         home = self.tmp / "home"
         squads_toml = self.tmp / "squads.toml"
@@ -2597,7 +2798,8 @@ class AutoPublishNoNewsIsATrueNoOpTests(GitRepoTestCase):
         self.assertEqual(git_out(repo, "for-each-ref", "--format=%(refname)"), refs_before)
         self.assertEqual(git_out(repo, "rev-parse", "HEAD").strip(), head_before)
         self.assertEqual(git_out(repo, "status", "--porcelain"), "")
-        self.assertEqual(gh_calls, [])
+        self.assertEqual([a[:2] for a in gh_calls], [["pr", "list"]])
+        self.assertEqual(result["adopted"], [])
         self.assertEqual(sync_calls, [])
 
 
@@ -2644,18 +2846,33 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
         git(repo, "worktree", "add", "-q", "-b", "worker-idle", str(worker_wt), "main")
 
         gh_calls = []
+        pr_head_branch = {}
 
         def fake_gh(args, repo_root):
             gh_calls.append(args)
+            if args[:2] == ["pr", "list"]:
+                # No sweep PR is open before this round -- the adoption
+                # pass has nothing to pick up.
+                return 0, "[]", ""
             if args[:2] == ["pr", "checks"]:
                 return 0, json.dumps([{"name": "Build & Test", "state": "SUCCESS", "bucket": "pass"},
                                       {"name": "Lint & Audit", "state": "SUCCESS", "bucket": "pass"},
                                       {"name": "Multi-platform Build", "state": "SKIPPED",
                                        "bucket": "skipping"}]), ""
             if args[:2] == ["pr", "merge"]:
-                # Stand in for GitHub's squash-merge: advance origin's
-                # main to the PR head.
-                git(repo, "push", "-q", "origin", "HEAD:main")
+                # Stand in for GitHub's squash-merge, FAITHFULLY: GitHub
+                # merges the REMOTE head branch of the PR -- whatever
+                # `git push origin <branch>` actually delivered -- and has
+                # no idea what this machine's local HEAD points at.
+                #
+                # The previous fake ran `git push -q origin HEAD:main` from
+                # the local checkout, which merged the local DETACHED HEAD
+                # instead. That silently papered over the orphaned-fmt-
+                # commit defect: the fmt commit only ever existed on the
+                # detached HEAD, so pushing HEAD made it "land" on main
+                # while the branch origin really had was still unformatted.
+                git(origin, "update-ref", "refs/heads/main",
+                    f"refs/heads/{pr_head_branch['branch']}")
                 return 0, "Merged\n", ""
             return 1, "", "unexpected gh call"
 
@@ -2673,9 +2890,10 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
                 },
                 checkout_fn=overlord_sweep.real_checkout,
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
-                create_pr_fn=lambda title, body, branch, base: {
-                    "ok": True, "stdout": "https://github.com/o/r/pull/200",
-                },
+                create_pr_fn=lambda title, body, branch, base: (
+                    pr_head_branch.update(branch=branch)
+                    or {"ok": True, "stdout": "https://github.com/o/r/pull/200"}
+                ),
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 **kwargs,
             )
@@ -2692,6 +2910,16 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
 
         self.assertEqual(result["status"], "merged")
         self.assertTrue(result["sweep"]["fmt"]["committed"])
+
+        # What origin ACTUALLY received on the head branch -- the only
+        # thing GitHub could ever squash-merge -- has to be the formatted
+        # tree, fmt commit included. Asserted on the branch as it exists
+        # in the bare origin repo, not on any local ref.
+        pushed_branch = pr_head_branch["branch"]
+        self.assertEqual(git_out(origin, "show", f"refs/heads/{pushed_branch}:src/fix.rs"),
+                         "fn fixed() {}\n")
+        self.assertIn("style: cargo fmt --all (sweep publish)",
+                      git_out(origin, "log", f"refs/heads/{pushed_branch}", "--format=%s").splitlines())
 
         # The fix reached origin/main, and so did the fmt commit that
         # keeps CI's Lint & Audit job green.
@@ -2751,6 +2979,9 @@ class AutoPublishFormattingTests(GitRepoTestCase):
             repo_root=self.tmp / "repo", cache_dir="/unused", home=self.tmp / "home",
             sweep_fn=lambda **kw: seen.update(kw) or {"status": "no_news"},
             ensure_worktree_fn=lambda repo_root, path, **kw: (self.tmp, "reused"),
+            # Injected so the round-start adoption pass stays hermetic --
+            # the default run_gh would shell out to a real `gh`.
+            run_gh=lambda args, repo_root: (0, "[]", ""),
             fmt_fn=marker, log_fn=lambda *a: None,
         )
         self.assertIs(seen["fmt_fn"], marker)

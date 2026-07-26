@@ -433,6 +433,56 @@ def sum_verified_deltas(repo_root, shas, run_git):
 # Step 5: post-merge semantic recheck
 # ---------------------------------------------------------------------------
 
+def reattach_sweep_branch(repo_root, branch, run_git):
+    """Point `branch` at the current HEAD and check it out ATTACHED.
+    Returns (ok, message).
+
+    Everything after step 5 -- bisection's `git revert` commits, step
+    7b's cargo-fmt commit -- runs on a DETACHED HEAD, because
+    run_post_merge_recheck ends with checkout_fn(repo_root, sweep_tip)
+    and the production checkout_fn (real_checkout, also what
+    parallel_model_fix_loop.default_sweep_fn wires in) is `git checkout
+    --detach`. Commits made there are orphans: the sweep branch ref
+    never moves, and the branch ref is the ONLY thing `git push origin
+    <branch>` and `gh pr create --head <branch>` ever see.
+
+    Measured 2026-07-26 by re-running RunSweepIntegrationTests'
+    full-pass fixture with an fmt_fn that actually rewrites a .rs file
+    (as `cargo fmt --all` does) instead of the no-op lambda that fixture
+    used to inject: branch log = "fix JPEG:Foo | base", HEAD log =
+    "style: cargo fmt --all (sweep publish) | fix JPEG:Foo | base", and
+    `git show <branch>:src/parsers/jpeg/x.rs` still unformatted. The
+    same fixture with a bisected sweep shipped the QUARANTINED squad's
+    regression on the branch, because its revert commits were orphaned
+    too. Net effect on the real fleet: every sweep PR pushed
+    unformatted, CI's `cargo fmt --all -- --check` red (exactly the PR
+    #124 failure step 7b exists to fix), auto_publish_round returns
+    checks_red, nothing ever merges, and an --infinite dispatcher opens
+    one red PR per round forever.
+
+    `checkout -B` is safe here BECAUSE of the guard below and only
+    because of it: HEAD is only ever an append to the branch tip (the
+    merges run while attached; the recheck detaches AT that tip; the
+    reverts append), so `branch` is always an ancestor of HEAD. If it
+    somehow is not, this refuses rather than force-moving a ref --
+    the fleet-wide no-discard invariant.
+    """
+    rc, head, err = run_git(["rev-parse", "HEAD"], repo_root)
+    if rc != 0 or not head.strip():
+        return False, f"could not resolve HEAD: {err.strip()}"
+    rc, _out, err = run_git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], repo_root)
+    if rc != 0:
+        return False, f"sweep branch {branch} no longer exists: {err.strip()}"
+    rc, _out, _err = run_git(["merge-base", "--is-ancestor", branch, "HEAD"], repo_root)
+    if rc != 0:
+        return False, (f"refusing to move {branch} to HEAD: {branch} is not an ancestor of "
+                       f"{head.strip()[:12]} (it carries commits HEAD does not)")
+    rc, _out, err = run_git(["checkout", "-B", branch, head.strip()], repo_root)
+    if rc != 0:
+        return False, f"could not re-attach to {branch}: {err.strip()}"
+    return True, f"re-attached HEAD to {branch}"
+
+
 def run_post_merge_recheck(*, repo_root, formats, cache_dir, comparison_fn, checkout_fn, base_ref, sweep_tip):
     """spec M4 step 5: pre (origin/main-base) vs post (merged sweep
     branch tip) per-format comparison for the union of touched formats
@@ -836,7 +886,8 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
     the step-by-step breakdown. Returns a summary dict whose "status"
     is one of: "no_news", "branch_cut_failed", "nothing_merged",
     "sweep_aborted" (bisection quarantined every candidate),
-    "workspace_tests_failed", "push_failed", "ok".
+    "reattach_failed", "workspace_tests_failed", "push_failed",
+    "pr_create_failed", "ok".
     """
     run_git = run_git or default_run_git
     cargo_test_workspace_fn = cargo_test_workspace_fn or _real_cargo_test_workspace
@@ -943,6 +994,27 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
                 "failed_squads": failed_squads, "preflight": health,
             }
 
+    # Step 5 left the worktree DETACHED at sweep_tip (see
+    # run_post_merge_recheck), and so did every bisection probe. From
+    # here on the round makes commits again -- bisection's reverts are
+    # already on this HEAD, and step 7b's fmt commit is still to come --
+    # and all of them have to be reachable from the branch ref that gets
+    # pushed. Re-attaching once, here, is the single point that
+    # guarantees it for everything downstream.
+    attached_ok, attach_message = reattach_sweep_branch(repo_root, branch, run_git)
+    if not attached_ok:
+        log_fn(f"could not re-attach HEAD to {branch}: {attach_message} -- refusing to push a branch "
+               "that does not contain this round's work (bisection reverts and/or the cargo fmt "
+               "commit); leaving everything for manual inspection")
+        # Same durability reasoning as workspace_tests_failed below: only
+        # bisection-quarantined offenders are durable, the surviving
+        # squads never reached a PR and must be retried by a later sweep.
+        persist_cursor(durable_squads)
+        return {
+            "status": "reattach_failed", "branch": branch, "message": attach_message,
+            "bisection": bisection_result, "failed_squads": failed_squads, "preflight": health,
+        }
+
     all_shas = []
     for squad, info in merge_infos.items():
         all_shas.extend(commits_contributed(repo_root, info, run_git))
@@ -1003,6 +1075,34 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
         }
 
     pr_result = create_pr_fn(title, body, branch, "main")
+    # `gh pr create` fails routinely and quietly: an expired token, a
+    # secondary rate limit, an org rule forbidding PRs from this actor,
+    # no network. Until 2026-07-26 this result was stuffed into the
+    # summary and never looked at, so the round still reported "ok" --
+    # and auto_publish_round then treated the failure as a live PR:
+    # pr_ref_from_result finds no http line in the empty stdout, falls
+    # back to the BRANCH NAME, and wait_for_pr_checks polls `gh pr
+    # checks <branch>` against a branch with no PR (three "unknown"
+    # answers, two 30s sleeps). Net result was an orphan branch on
+    # origin with no PR, the cursor already advanced past its stamps,
+    # 60s burned, and `overlord_sweep.py` exiting 0.
+    #
+    # Only an EXPLICIT {"ok": False} counts as a failure: create_pr_fn is
+    # injectable and several callers return None or a bare URL string,
+    # and inventing a failure for those would be a worse bug than the
+    # one being fixed.
+    if isinstance(pr_result, dict) and "ok" in pr_result and not pr_result["ok"]:
+        detail = (pr_result.get("stderr") or pr_result.get("stdout") or "").strip()
+        log_fn(f"gh pr create FAILED for {branch}: {detail} -- the branch IS pushed and its "
+               "commits are safe; open the PR by hand (`gh pr create --head "
+               f"{branch} --base main`)")
+        return {
+            "status": "pr_create_failed", "branch": branch, "pr": pr_result, "message": detail,
+            "fmt": fmt_result, "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
+            "measured_delta": measured_delta, "verified_delta_sum": sum(verified_deltas.values()),
+            "bisection": bisection_result, "judgment_entries": judgment_entries, "preflight": health,
+            "sweep_review_written": len(written),
+        }
 
     return {
         "status": "ok",
@@ -1052,7 +1152,14 @@ def main(argv=None):
     )
     printable = {k: v for k, v in result.items() if k != "pr"}
     print(json.dumps(printable, indent=2, default=str))
-    if result.get("pr") is not None:
+    if result.get("status") == "pr_create_failed":
+        # Loud and unmissable: the branch is on origin but NO PR exists,
+        # and a `PR: {'ok': False, ...}` dict buried under a JSON blob is
+        # not something anyone spots in a cron log.
+        print(f"PR CREATION FAILED for {result.get('branch')} -- the branch is pushed but no PR "
+              f"exists: {result.get('message')}")
+        print(f"  retry with: gh pr create --head {result.get('branch')} --base main")
+    elif result.get("pr") is not None:
         print(f"PR: {result['pr']}")
     return 0 if result.get("status") in ("ok", "no_news") else 1
 
