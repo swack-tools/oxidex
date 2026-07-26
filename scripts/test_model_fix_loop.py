@@ -3186,6 +3186,21 @@ class OwnQuarantineTests(unittest.TestCase):
         self.assertLess(len(rendered.strip().splitlines()[-1]),
                         QUARANTINE_REASON_DISPLAY_CHARS + 120)
 
+    def test_the_hidden_count_covers_flags_dropped_by_the_CHAR_cap_too(self):
+        # Deriving `hidden` from the flag-COUNT cap alone made the suffix
+        # lie: three 100-char flags against a 200-char budget rendered
+        # 200 chars + "..." with hidden == 0, so the third flag vanished
+        # silently. Both caps must feed the same count.
+        text = model_fix_loop._clamp_quarantine_flags(["A" * 100, "B" * 100, "C" * 100])
+        self.assertIn("(+2 more)", text)
+        self.assertNotIn("C" * 100, text)
+
+    def test_a_single_flag_longer_than_the_whole_budget_still_renders(self):
+        text = model_fix_loop._clamp_quarantine_flags(["Z" * 500])
+        self.assertTrue(text.startswith("Z"))
+        self.assertTrue(text.endswith("..."))
+        self.assertNotIn("more)", text, "nothing is hidden when there is one flag")
+
     def test_the_flags_list_is_capped_so_one_entry_cannot_eat_the_block(self):
         """validate_fix_commit appends one `printconv-mismatch:<48-char
         excerpt>` flag per unverifiable map value, uncapped -- the live
@@ -3459,9 +3474,28 @@ class AdaptiveDiffFormatGuidanceTests(unittest.TestCase):
         body = ("--- a/src/parsers/jpeg/foo.rs\n"
                 "+++ b/src/parsers/jpeg/foo.rs\n"
                 "@@ -1,2 +1,3 @@\n a\n+b\n c\n")
+        # First half: what the parser really accepts.
         self.assertIsNotNone(extract_diff(body))                       # unfenced
         self.assertIsNotNone(extract_diff(f"```diff\n{body}```\nthanks!"))  # trailing prose
         self.assertIsNotNone(extract_diff(f"Here is the fix.\n\n```diff\n{body}```"))
+
+        # Second half, and WITHOUT IT THIS TEST GUARDS NOTHING: assert the
+        # alert text makes no claim the three cases above contradict.
+        # Reverting DIFF_FORMAT_REMEDIATION wholesale to its old
+        # self-contradicting wording left this test green, because every
+        # assertion was on extract_diff -- a function the change never
+        # touched. The docstring's promise ("so the text and the parser can
+        # never drift apart again") requires binding BOTH sides.
+        alert = model_fix_loop.DIFF_FORMAT_REMEDIATION
+        for false_in_the_strict_direction in (
+            "nothing else counts",
+            "Nothing may follow the closing fence",
+        ):
+            self.assertNotIn(false_in_the_strict_direction, alert)
+        # And it must not discourage the evidence-gathering protocol the
+        # loop documents as its own fastest path to convergence.
+        for shape in ("REQUEST", "VERIFY"):
+            self.assertIn(shape, alert)
 
 
 class RecurrenceRankingOnProseRowsTests(unittest.TestCase):

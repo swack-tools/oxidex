@@ -696,6 +696,85 @@ class BuildEvidenceRowsTests(GitRepoTestCase):
 # Step 7b: cargo fmt before push (the measured PR #124 CI failure)
 # ---------------------------------------------------------------------------
 
+class ReattachSweepBranchTests(GitRepoTestCase):
+    """The re-attach is what makes every commit after step 5 land on the
+    branch instead of on an orphaned detached HEAD. Its FAILURE path had
+    no coverage at all, so "a terminal reattach_failed status that
+    refuses to push" rested on assertion; these pin it, including the
+    no-discard invariant that matters most -- it must refuse rather than
+    force-move a ref."""
+
+    def test_happy_path_attaches_head_to_the_branch(self):
+        repo = self.make_repo()
+        git(repo, "checkout", "-q", "-b", "sweep/tags-2026-07-26-1")
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "fix")
+        tip = git_out(repo, "rev-parse", "HEAD").strip()
+        git(repo, "checkout", "-q", "--detach", tip)
+
+        ok, message = overlord_sweep.reattach_sweep_branch(
+            repo, "sweep/tags-2026-07-26-1", overlord_sweep.default_run_git,
+        )
+        self.assertTrue(ok, message)
+        # Symbolically attached, not merely pointing at the same sha.
+        self.assertEqual(
+            git_out(repo, "rev-parse", "--abbrev-ref", "HEAD").strip(),
+            "sweep/tags-2026-07-26-1",
+        )
+
+    def test_a_commit_made_while_detached_is_carried_onto_the_branch(self):
+        repo = self.make_repo()
+        git(repo, "checkout", "-q", "-b", "sweep/tags-2026-07-26-1")
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "fix")
+        branch_before = git_out(repo, "rev-parse", "sweep/tags-2026-07-26-1").strip()
+        git(repo, "checkout", "-q", "--detach", branch_before)
+        # This is the orphan the real bug produced: bisection's revert, or
+        # step 7b's cargo-fmt commit.
+        self.commit_file(repo, "src/a.rs", "fn a() { }\n", "style: cargo fmt")
+        orphan = git_out(repo, "rev-parse", "HEAD").strip()
+        self.assertNotEqual(branch_before, orphan)
+
+        ok, _message = overlord_sweep.reattach_sweep_branch(
+            repo, "sweep/tags-2026-07-26-1", overlord_sweep.default_run_git,
+        )
+        self.assertTrue(ok)
+        self.assertEqual(
+            git_out(repo, "rev-parse", "sweep/tags-2026-07-26-1").strip(), orphan
+        )
+
+    def test_a_missing_branch_ref_fails_instead_of_creating_one(self):
+        repo = self.make_repo()
+        ok, message = overlord_sweep.reattach_sweep_branch(
+            repo, "sweep/tags-2026-07-26-9", overlord_sweep.default_run_git,
+        )
+        self.assertFalse(ok)
+        self.assertIn("no longer exists", message)
+        rc, _out, _err = overlord_sweep.default_run_git(
+            ["rev-parse", "--verify", "--quiet", "refs/heads/sweep/tags-2026-07-26-9"], repo,
+        )
+        self.assertNotEqual(rc, 0, "must not have created the branch it could not find")
+
+    def test_a_branch_that_is_not_an_ancestor_is_refused_not_force_moved(self):
+        # The no-discard invariant. If HEAD somehow diverged, moving the
+        # ref would silently drop whatever the branch carried.
+        repo = self.make_repo()
+        git(repo, "checkout", "-q", "-b", "sweep/tags-2026-07-26-1")
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "branch-only work")
+        branch_tip = git_out(repo, "rev-parse", "sweep/tags-2026-07-26-1").strip()
+        git(repo, "checkout", "-q", "--detach", "main")
+        self.commit_file(repo, "src/b.rs", "fn b() {}\n", "divergent work")
+
+        ok, message = overlord_sweep.reattach_sweep_branch(
+            repo, "sweep/tags-2026-07-26-1", overlord_sweep.default_run_git,
+        )
+        self.assertFalse(ok)
+        self.assertIn("not an ancestor", message)
+        self.assertEqual(
+            git_out(repo, "rev-parse", "sweep/tags-2026-07-26-1").strip(),
+            branch_tip,
+            "the branch ref must be exactly where it was",
+        )
+
+
 class FormatSweepBranchTests(GitRepoTestCase):
     """cargo fmt itself is injected (a tempdir repo has no Cargo.toml and
     hermetic tests never shell out to a real cargo); what is exercised

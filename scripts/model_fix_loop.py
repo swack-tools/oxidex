@@ -2613,9 +2613,25 @@ def read_own_quarantine(quarantine_path, worker_label, format_name,
     exif-core/canon for "CR2", and ps-docs/sony-minolta/thermal for the
     bare "1" -- all rendered by format_own_quarantine under "YOUR OWN
     commits that were REJECTED ... Fix the defect named by the flags
-    below". A legacy worker owns no ledger entries at all, so 100% of
-    what it was shown was another worker's rejected code asserted as its
-    own. Showing nothing is strictly better than showing a lie.
+    below". Showing nothing is strictly better than showing a lie.
+
+    KNOWN GAP, stated plainly because the earlier version of this comment
+    got it wrong. It is NOT true that a legacy worker owns no ledger
+    entries: squad_merge_loop.candidate_worker_branches returns the legacy
+    per-format branch model-fix-parallel-<fmt> for every format
+    squads.toml lists under a squad, and poll_once feeds those to
+    process_commit(squad=<squad>, fmt=<fmt>), whose quarantine() records
+    squad=<the CONSUMING squad>. So a legacy worker's commits do become
+    entries -- filed under whichever squad consumed them, and since
+    squads.toml lists JPEG under 12 of 14 squads, potentially under many
+    squad names at once. Nothing in the ledger ties them back to the
+    legacy label the worker was given, so this function cannot claim them
+    and returns [] on that path: the quarantine section is inert for
+    legacy per-format workers, including the missing-trailer:Format class
+    it would otherwise surface. The ledger does record `sha`, so ownership
+    is recoverable in principle by walking the worker branch -- nothing
+    does that today. Fail-closed is still the right default here; a wrong
+    owner teaches a worker to fix someone else's defect.
 
     No worker_label at all returns [] before any of that: an absent label
     means there is no worker to be the owner of anything. That is what
@@ -2683,7 +2699,9 @@ def _clamp_quarantine_flags(raw_flags,
     stayed in the 64KB window, which today is the whole ledger. The first
     few flags already name the defect class; flags 5..30 are the same
     class with different excerpts, so the tail costs budget and teaches
-    nothing. The "(+N more)" suffix keeps the true count visible.
+    nothing. The "(+N more)" suffix keeps the true count visible, and it
+    counts flags dropped by EITHER cap -- the char budget decides how many
+    flags fit, then the remainder is reported.
 
     DEFENSIVE because `flags` is written by another process. Every other
     field in this read path is coerced; this one was consumed as
@@ -2706,11 +2724,29 @@ def _clamp_quarantine_flags(raw_flags,
     flags = [f for f in flags if f]
     if not flags:
         return "(no flags)"
-    hidden = max(0, len(flags) - max_flags)
-    text = ", ".join(flags[:max_flags])
+    # Both caps have to feed the SAME count, or "(+N more)" lies. Deriving
+    # `hidden` from the flag-count cap alone meant
+    # (['A'*100, 'B'*100, 'C'*100]) rendered 200 chars + "..." with
+    # hidden == 0 -- the third flag vanished with nothing to say so. Decide
+    # how many flags actually fit, then report the rest.
+    shown = []
+    used = 0
+    for flag in flags[:max_flags]:
+        cost = len(flag) + (2 if shown else 0)  # ", " between flags
+        if shown and used + cost > max_chars:
+            break
+        shown.append(flag)
+        used += cost
+    if not shown:
+        shown = [flags[0]]
+    hidden = len(flags) - len(shown)
+    text = ", ".join(shown)
     if len(text) > max_chars:
+        # Only reachable when the FIRST flag alone exceeds the budget: it
+        # is force-included above so the line is never empty, but the
+        # bound this function exists to enforce still has to hold.
         text = text[:max_chars].rstrip() + "..."
-    if hidden:
+    if hidden > 0:
         text += f" (+{hidden} more)"
     return text
 

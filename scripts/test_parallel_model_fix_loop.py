@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 import shutil
@@ -136,10 +137,28 @@ class MainInfiniteLoopTests(unittest.TestCase):
         self.lock_path = Path(self._tmpdir.name) / "dispatcher.lock"
         self.pgids_path = Path(self._tmpdir.name) / "dispatcher-pgids.json"
         self.addCleanup(parallel_model_fix_loop._set_pgids_persist_path, None)
+        self.publish_calls = []
+
+    def record_publish(self, *args, **kwargs):
+        """Stand-in for auto_publish_round. See _main for why this class
+        must never reach the real one."""
+        self.publish_calls.append((args, kwargs))
+        return {"status": "no_news"}
 
     def _main(self, argv, **kwargs):
         kwargs.setdefault("lock_path", self.lock_path)
         kwargs.setdefault("pgids_path", self.pgids_path)
+        # HERMETICITY, and this is not a nicety. --auto-publish defaults ON
+        # for --infinite, so a test that calls the real main() without
+        # injecting this runs the REAL auto_publish_round against the REAL
+        # REPO_ROOT and ~/.oxidex/worktrees/overlord-sweep. Measured
+        # 2026-07-26: that made 4 live `gh pr list` calls, and with one
+        # open green sweep/* PR present it went on to
+        # `gh pr merge --squash --delete-branch` a REAL pull request and
+        # fast-forward ~100 live worktrees -- from `python3 -m unittest`.
+        # Defaulted here rather than per-test so a future test added to
+        # this class cannot reintroduce it.
+        kwargs.setdefault("auto_publish_fn", self.record_publish)
         return main(argv, **kwargs)
 
     def _config_path(self, tmpdir):
@@ -166,6 +185,40 @@ class MainInfiniteLoopTests(unittest.TestCase):
                 run_round_fn=lambda args, cfg: False,
             )
             self.assertEqual(exit_code, 1)
+
+    def test_infinite_never_reaches_the_real_publisher_from_a_unit_test(self):
+        # Guards the hermeticity hole this class had: --auto-publish
+        # defaults ON for --infinite, so an un-injected main() ran the real
+        # auto_publish_round against the live repo -- 4 live `gh pr list`
+        # calls, and with one open green sweep/* PR it squash-merged a REAL
+        # PR and fast-forwarded ~100 live worktrees. Asserting the
+        # stand-in was used proves the injection point is still wired; the
+        # sentinel proves the class default is the stand-in and not the
+        # production function.
+        self.assertIs(
+            inspect.signature(main).parameters["auto_publish_fn"].default,
+            parallel_model_fix_loop.auto_publish_round,
+            "main()'s production default must stay the real publisher -- the "
+            "test class is what overrides it",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._config_path(tmpdir)
+            rounds = []
+
+            def fake_run_round(args, cfg):
+                rounds.append(1)
+                if len(rounds) == 2:
+                    raise RuntimeError("stop the test loop")
+                return True
+
+            with self.assertRaises(RuntimeError):
+                self._main(
+                    ["--config", str(config_path), "--infinite"],
+                    run_round_fn=fake_run_round,
+                )
+        # One completed round -> one publish attempt, and it went to the
+        # stand-in rather than to GitHub.
+        self.assertEqual(len(self.publish_calls), 1)
 
     def test_infinite_keeps_calling_run_round_fn_until_it_raises(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2442,6 +2495,40 @@ class ListOpenSweepPrsTests(unittest.TestCase):
         # crash inside an --infinite dispatcher.
         self.assertEqual(list_open_sweep_prs("/repo", lambda args, repo: (1, "", "gh: auth required")), [])
 
+    def test_a_human_sweep_branch_of_a_different_shape_is_never_adopted(self):
+        # A bare "sweep/" prefix was too broad. This repo really does
+        # carry human/skill-driven sweep branches of another shape --
+        # sweep/parallel-fix-tags-2026-07-23 and -07-24, both with live
+        # registered worktrees -- and an unattended dispatcher must not
+        # squash-merge a PR it did not create.
+        payload = _gh_pr_list(
+            (140, "sweep/parallel-fix-tags-2026-07-24"),
+            (141, "sweep/manual-tags-2026-07-25"),
+            (142, "sweep/tags-2026-07-26-1"),
+        )
+        prs = list_open_sweep_prs("/repo", lambda args, repo: (0, payload, ""))
+        self.assertEqual([p["number"] for p in prs], [142])
+
+    def test_the_shape_test_is_anchored_at_both_ends(self):
+        for head, adopted in (
+            ("sweep/tags-2026-07-26-1", True),
+            ("sweep/tags-2026-07-26-12", True),
+            ("wip-sweep/tags-2026-07-26-1", False),   # not anchored at the start
+            ("sweep/tags-2026-07-26-1-evil", False),  # not anchored at the end
+            ("sweep/tags-2026-07-26", False),         # missing the counter
+            ("sweep/tags-bogus-1", False),
+        ):
+            with self.subTest(head=head):
+                self.assertEqual(
+                    parallel_model_fix_loop.is_own_sweep_branch(head), adopted
+                )
+
+    def test_the_server_side_search_is_not_trusted_as_the_boundary(self):
+        # --search is a substring match, so a head that merely CONTAINS
+        # the searched text must still be rejected locally.
+        payload = _gh_pr_list((150, "attacker/sweep/tags-2026-07-26-1"))
+        self.assertEqual(list_open_sweep_prs("/repo", lambda args, repo: (0, payload, "")), [])
+
 
 class AdoptOpenSweepPrsTests(unittest.TestCase):
     """MAJOR 4: a sweep PR whose checks went green AFTER the round that
@@ -2500,7 +2587,8 @@ class AdoptOpenSweepPrsTests(unittest.TestCase):
         self.assertEqual(adopt_open_sweep_prs(repo_root="/repo", run_gh=run_gh,
                                               log_fn=lambda *a: None), [])
         self.assertEqual(calls, [["pr", "list", "--state", "open", "--json",
-                                  "number,url,headRefName", "--limit", "50"]])
+                                  "number,url,headRefName",
+                                   "--search", "head:sweep/tags-", "--limit", "200"]])
 
 
 class SyncWorktreesToOriginMainTests(GitRepoTestCase):
@@ -2712,7 +2800,8 @@ class AutoPublishRoundTests(unittest.TestCase):
         # One read-only `gh pr list` (the adoption pass) and nothing
         # else: no checks poll, no merge, no sync.
         self.assertEqual(self.gh_calls, [["pr", "list", "--state", "open", "--json",
-                                          "number,url,headRefName", "--limit", "50"]])
+                                          "number,url,headRefName",
+                                   "--search", "head:sweep/tags-", "--limit", "200"]])
         self.assertEqual(self.sync_calls, [])
 
     def test_an_unavailable_sweep_worktree_skips_the_round(self):

@@ -2033,7 +2033,20 @@ def merge_pr(pr_ref, repo_root, run_gh=default_run_gh):
 # Sweep branches are cut by overlord_sweep.next_sweep_branch_name as
 # "sweep/tags-<date>-<n>"; adoption only ever touches this automation's
 # own namespace.
-SWEEP_BRANCH_PREFIX = "sweep/"
+#
+# A bare "sweep/" prefix is NOT that namespace, and this repo proves it:
+# the human/skill-driven /sweep-oxidex-tags path has produced
+# sweep/parallel-fix-tags-2026-07-23 and sweep/parallel-fix-tags-2026-07-24,
+# both with live registered worktrees. A prefix test adopts those, so an
+# unattended dispatcher would squash-merge sweep PRs it did not create and
+# whose provenance it cannot vouch for. Match the shape this automation
+# actually generates, exactly.
+SWEEP_BRANCH_RE = re.compile(r"sweep/tags-\d{4}-\d{2}-\d{2}-\d+\Z")
+
+
+def is_own_sweep_branch(head):
+    """True only for a branch THIS automation cut. See SWEEP_BRANCH_RE."""
+    return bool(SWEEP_BRANCH_RE.match(str(head or "")))
 
 
 def list_open_sweep_prs(repo_root, run_gh=default_run_gh):
@@ -2042,8 +2055,15 @@ def list_open_sweep_prs(repo_root, run_gh=default_run_gh):
     `gh` must cost one skipped adoption pass, never an exception inside
     an --infinite dispatcher."""
     try:
+        # --search filters SERVER-side. With a bare --limit, `gh pr list`
+        # returns the NEWEST N open PRs, so once the repo carries more than
+        # N the OLDEST stranded sweep PRs -- precisely what adoption exists
+        # to rescue -- fall outside the window and are never adopted,
+        # silently. The limit is also raised well past any plausible count
+        # of concurrently-open sweep PRs.
         _rc, out, _err = run_gh(
-            ["pr", "list", "--state", "open", "--json", "number,url,headRefName", "--limit", "50"],
+            ["pr", "list", "--state", "open", "--json", "number,url,headRefName",
+             "--search", "head:sweep/tags-", "--limit", "200"],
             repo_root,
         )
     except OSError:
@@ -2058,9 +2078,12 @@ def list_open_sweep_prs(repo_root, run_gh=default_run_gh):
         return []
     if not isinstance(prs, list):
         return []
+    # --search narrows server-side but is a substring match, so the exact
+    # shape is still enforced here: never trust the server filter to be
+    # the security boundary.
     sweeps = [
         pr for pr in prs
-        if isinstance(pr, dict) and str(pr.get("headRefName") or "").startswith(SWEEP_BRANCH_PREFIX)
+        if isinstance(pr, dict) and is_own_sweep_branch(pr.get("headRefName"))
     ]
     return sorted(sweeps, key=lambda pr: pr.get("number") or 0)
 
