@@ -43,6 +43,7 @@ from model_fix_loop import (
     gather_live_claims,
     load_foundation_jobs,
     DEFAULT_DEADLINE_SECONDS,
+    INFRA_FAILURE_PREFIX,
     ModelCallDeadlineExceeded,
     ModelQuotaExhausted,
     load_tag_state,
@@ -3065,22 +3066,24 @@ class ReviewVerdictTests(unittest.TestCase):
         self.assertFalse(approved)
         self.assertIn("review call failed", reason)
 
-    def test_exhausted_quota_is_not_treated_as_a_rejection(self):
-        # A spent budget says nothing about the patch. Folding it into a
-        # rejection would discard a diff that was never actually judged.
+    def test_unreachable_reviewer_does_not_kill_the_worker(self):
+        # Continue-on policy: an unreachable reviewer is "not approved
+        # this round", not a crash. The tag comes back around and gets
+        # reviewed again once the provider answers.
         gap = make_gap()
 
         def raising(messages, *a):
             raise ModelQuotaExhausted("weekly cost limit reached")
 
-        with self.assertRaises(ModelQuotaExhausted):
-            review_verdict(
-                gap, "--- a/x\n+++ b/x\n",
-                {"base_url": "u", "api_key": "k",
-                 "models": [{"name": "gpt-5.5", "base_url": "u", "api_key": "k"}],
-                 "max_tokens": 4096, "reasoning_effort": "low"},
-                call_model_fn=raising,
-            )
+        approved, reason = review_verdict(
+            gap, "--- a/x\n+++ b/x\n",
+            {"base_url": "u", "api_key": "k",
+             "models": [{"name": "gpt-5.6-terra", "base_url": "u", "api_key": "k"}],
+             "max_tokens": 4096, "reasoning_effort": "low"},
+            call_model_fn=raising,
+        )
+        self.assertFalse(approved)
+        self.assertIn("review call failed", reason)
 
     def test_picks_a_model_from_the_pool_via_pick_model_fn(self):
         gap = make_gap()
@@ -3474,24 +3477,46 @@ class AttemptBuildTests(unittest.TestCase):
         self.assertIn("model call failed", reason)
         self.assertIn("timed out", reason)
 
-    def test_exhausted_quota_propagates_instead_of_failing_the_tag(self):
-        # An out-of-budget account is not evidence about this tag. If it
-        # were swallowed into a "failed" verdict, every remaining tag
-        # would fail identically and the cross-round 2-strikes skip-list
-        # would blacklist all of them over a billing problem.
+    def test_exhausted_quota_is_an_infra_failure_the_worker_continues_past(self):
+        # Operator policy: empty 200s, 429s and everything in that class
+        # are continued past, never fatal. The reason must carry
+        # INFRA_FAILURE_PREFIX so run_tag_loop's infra_only branch charges
+        # nothing -- no fail increment, no blacklist. Propagating instead
+        # would kill the worker, which is the opposite of continuing on.
         def raising_call_model(messages, *a):
             raise ModelQuotaExhausted("weekly cost limit reached")
 
-        with self.assertRaises(ModelQuotaExhausted):
-            attempt_build(
-                [{"role": "user", "content": "fix format X"}],
-                call_model_fn=raising_call_model,
-                git_apply_fn=lambda diff, root: self.fail("should not apply"),
-                cargo_build_fn=lambda root: self.fail("should not build"),
-                git_checkout_clean_fn=lambda root: None,
-                config=CONFIG,
-                repo_root=Path("/fake/repo"),
-            )
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=raising_call_model,
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertTrue(reason.startswith(INFRA_FAILURE_PREFIX), reason)
+        self.assertIn("weekly cost limit", reason)
+
+    def test_empty_reply_exhaustion_is_also_an_infra_failure(self):
+        # The dominant real-world failure: HTTP 200 with an empty body
+        # (29.1% of gpt-5.5 calls, 5.9% of gpt-5.6-terra). Must land in
+        # the same continue-on bucket as a 429.
+        def raising_call_model(messages, *a):
+            raise RuntimeError("model returned an empty reply")
+
+        built, reason, _diff, _msgs = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=raising_call_model,
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertTrue(reason.startswith(INFRA_FAILURE_PREFIX), reason)
 
     def test_nudges_model_to_submit_a_diff_once_request_budget_is_exhausted(self):
         # Previously: once request_turns_used hit MAX_REQUEST_TURNS, the
