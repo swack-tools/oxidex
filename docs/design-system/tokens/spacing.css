@@ -1,0 +1,6 @@
+:root {
+  --ox-sp-1: 4px; --ox-sp-2: 8px; --ox-sp-3: 12px; --ox-sp-4: 16px;
+  --ox-sp-6: 24px; --ox-sp-10: 40px; --ox-sp-16: 64px;
+  --ox-radius: 4px;      /* max radius anywhere */
+  --ox-radius-chip: 2px; /* chips */
+}

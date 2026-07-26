@@ -1,0 +1,15 @@
+/* Mono is the voice: headings, data, labels, nav, buttons. Inter for prose only. */
+:root {
+  --ox-font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --ox-font-body: "Inter", system-ui, sans-serif;
+  --ox-fs-12: 12px; --ox-fs-13: 13px; --ox-fs-15: 15px; --ox-fs-18: 18px;
+  --ox-fs-24: 24px; --ox-fs-36: 36px; --ox-fs-56: 56px;
+  --ox-track-heading: 0.04em; /* headings are spaced, not bold */
+  --ox-track-label: 0.08em;   /* uppercase labels */
+}
+.ox-h1 { font-family: var(--ox-font-mono); font-size: var(--ox-fs-56); font-weight: 400; letter-spacing: var(--ox-track-heading); color: var(--ox-text); }
+.ox-h2 { font-family: var(--ox-font-mono); font-size: var(--ox-fs-36); font-weight: 400; letter-spacing: var(--ox-track-heading); color: var(--ox-text); }
+.ox-h3 { font-family: var(--ox-font-mono); font-size: var(--ox-fs-24); font-weight: 400; letter-spacing: var(--ox-track-heading); color: var(--ox-text); }
+.ox-label { font-family: var(--ox-font-mono); font-size: var(--ox-fs-12); letter-spacing: var(--ox-track-label); text-transform: uppercase; color: var(--ox-text); }
+.ox-body { font-family: var(--ox-font-body); font-size: var(--ox-fs-15); line-height: 1.6; color: var(--ox-text); }
+.ox-mono { font-family: var(--ox-font-mono); font-size: var(--ox-fs-13); }
