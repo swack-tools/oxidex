@@ -495,10 +495,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             // ExifTool exposes the Olympus WB2..WB5 diagnostic fields in
             // the APP12 group using their original names.
             let wb_upper = key.to_ascii_uppercase();
-            if matches!(
-                wb_upper.as_str(),
-                "WB2" | "WB3" | "WB4" | "WB5"
-            ) {
+            if matches!(wb_upper.as_str(), "WB2" | "WB3" | "WB4" | "WB5") {
                 let app12_value = value
                     .parse::<i64>()
                     .map(TagValue::Integer)
