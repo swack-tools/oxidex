@@ -528,6 +528,56 @@ fn parse_flir_legacy_format(data: &[u8], metadata: &mut MetadataMap) -> Result<(
         );
     }
 
+    // Extract camera temperature range and limit values
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_RANGE_MAX,
+        "FLIR:CameraTemperatureRangeMax",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_RANGE_MIN,
+        "FLIR:CameraTemperatureRangeMin",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_MAX_CLIP,
+        "FLIR:CameraTemperatureMaxClip",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_MIN_CLIP,
+        "FLIR:CameraTemperatureMinClip",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_MAX_WARN,
+        "FLIR:CameraTemperatureMaxWarn",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_MIN_WARN,
+        "FLIR:CameraTemperatureMinWarn",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_MAX_SATURATED,
+        "FLIR:CameraTemperatureMaxSaturated",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_MIN_SATURATED,
+        "FLIR:CameraTemperatureMinSaturated",
+        metadata,
+    );
+
     Ok(())
 }
 
