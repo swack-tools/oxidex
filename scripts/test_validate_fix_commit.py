@@ -1192,6 +1192,7 @@ class ExtractorEvasionShapeTests(unittest.TestCase):
                 self.assertEqual(values, ["Fabricated Value"])
 
     @unittest.skipUnless(
+        # nosec B603 -- list-argv, no shell, and the argv is a literal.
         subprocess.run(["which", "rustfmt"], capture_output=True).returncode == 0,
         "rustfmt not installed",
     )
@@ -1217,7 +1218,8 @@ class ExtractorEvasionShapeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "lens.rs"
             path.write_text(source)
-            subprocess.run(
+            subprocess.run(  # nosec B603 -- list-argv, no shell; the only
+                # interpolated element is a tempdir path this test made.
                 ["rustfmt", "--edition", "2021", str(path)],
                 check=True, capture_output=True,
             )
