@@ -427,8 +427,8 @@ const SHOT_INFO_BULB_DURATION: usize = 24;
 const SHOT_INFO_AUTO_ROTATE: usize = 27;
 
 // FileInfo array indices (tag 0x0093)
-const FILE_INFO_BRACKET_SHOT_NUMBER: usize = 0;
-const FILE_INFO_FILE_NUMBER: usize = 1;
+const FILE_INFO_FILE_NUMBER: usize = 0;
+const FILE_INFO_BRACKET_SHOT_NUMBER: usize = 1;
 const FILE_INFO_SHUTTER_COUNT_LOW: usize = 2;
 const FILE_INFO_SHUTTER_COUNT_HIGH: usize = 3;
 const FILE_INFO_BRACKET_MODE: usize = 4;
@@ -436,10 +436,10 @@ const FILE_INFO_BRACKET_VALUE: usize = 5;
 const FILE_INFO_LENS_ID: usize = 6;
 
 // SensorInfo array indices (tag 0x00E0)
-const SENSOR_INFO_BLACK_MASK_LEFT_BORDER: usize = 6;
-const SENSOR_INFO_BLACK_MASK_TOP_BORDER: usize = 7;
-const SENSOR_INFO_BLACK_MASK_RIGHT_BORDER: usize = 8;
-const SENSOR_INFO_BLACK_MASK_BOTTOM_BORDER: usize = 9;
+const SENSOR_INFO_BLACK_MASK_LEFT_BORDER: usize = 9;
+const SENSOR_INFO_BLACK_MASK_TOP_BORDER: usize = 10;
+const SENSOR_INFO_BLACK_MASK_RIGHT_BORDER: usize = 11;
+const SENSOR_INFO_BLACK_MASK_BOTTOM_BORDER: usize = 12;
 
 // AFInfo array indices
 const AF_INFO_NUM_AF_POINTS: usize = 1;
@@ -2135,9 +2135,9 @@ fn parse_canon_makernote_impl(
                         }
                     }
 
-                    // BracketShotNumber (index 0) - bracket shot sequence number
+                    // BracketShotNumber (index 1) - bracket shot sequence number
                     if let Some(&bracket_shot) = array.get(FILE_INFO_BRACKET_SHOT_NUMBER) {
-                        tags.insert("Canon:BracketShotNumber".to_string(), bracket_shot.to_string());
+                        tags.insert("MakerNotes:BracketShotNumber".to_string(), bracket_shot.to_string());
                     }
 
                     // BracketMode (index 4) - bracket mode setting
@@ -2266,7 +2266,7 @@ fn parse_canon_makernote_impl(
                             258 => "4:3 crop",
                             _ => "Unknown",
                         };
-                        tags.insert("Canon:AspectRatio".to_string(), aspect_str.to_string());
+                        tags.insert("MakerNotes:AspectRatio".to_string(), aspect_str.to_string());
                     }
                 }
             }
@@ -2285,7 +2285,7 @@ fn parse_canon_makernote_impl(
                             _ => "Unknown",
                         };
                         tags.insert(
-                            "Canon:AutoLightingOptimizer".to_string(),
+                            "MakerNotes:AutoLightingOptimizer".to_string(),
                             optimizer_str.to_string(),
                         );
                     }
@@ -2301,7 +2301,7 @@ fn parse_canon_makernote_impl(
                             let end = suffix.iter().position(|&b| b == 0).unwrap_or(suffix.len());
                             if end > 0 {
                                 if let Ok(battery_type) = std::str::from_utf8(&suffix[..end]) {
-                                    tags.insert("Canon:BatteryType".to_string(), battery_type.to_string());
+                                    tags.insert("MakerNotes:BatteryType".to_string(), battery_type.to_string());
                                 }
                             }
                         }
@@ -2314,25 +2314,25 @@ fn parse_canon_makernote_impl(
                 if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
                     if array.len() > SENSOR_INFO_BLACK_MASK_LEFT_BORDER {
                         tags.insert(
-                            "Canon:BlackMaskLeftBorder".to_string(),
+                            "MakerNotes:BlackMaskLeftBorder".to_string(),
                             array[SENSOR_INFO_BLACK_MASK_LEFT_BORDER].to_string(),
                         );
                     }
                     if array.len() > SENSOR_INFO_BLACK_MASK_TOP_BORDER {
                         tags.insert(
-                            "Canon:BlackMaskTopBorder".to_string(),
+                            "MakerNotes:BlackMaskTopBorder".to_string(),
                             array[SENSOR_INFO_BLACK_MASK_TOP_BORDER].to_string(),
                         );
                     }
                     if array.len() > SENSOR_INFO_BLACK_MASK_RIGHT_BORDER {
                         tags.insert(
-                            "Canon:BlackMaskRightBorder".to_string(),
+                            "MakerNotes:BlackMaskRightBorder".to_string(),
                             array[SENSOR_INFO_BLACK_MASK_RIGHT_BORDER].to_string(),
                         );
                     }
                     if array.len() > SENSOR_INFO_BLACK_MASK_BOTTOM_BORDER {
                         tags.insert(
-                            "Canon:BlackMaskBottomBorder".to_string(),
+                            "MakerNotes:BlackMaskBottomBorder".to_string(),
                             array[SENSOR_INFO_BLACK_MASK_BOTTOM_BORDER].to_string(),
                         );
                     }
