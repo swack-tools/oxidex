@@ -693,6 +693,82 @@ class BuildEvidenceRowsTests(GitRepoTestCase):
 
 
 # ---------------------------------------------------------------------------
+# Step 7b: cargo fmt before push (the measured PR #124 CI failure)
+# ---------------------------------------------------------------------------
+
+class FormatSweepBranchTests(GitRepoTestCase):
+    """cargo fmt itself is injected (a tempdir repo has no Cargo.toml and
+    hermetic tests never shell out to a real cargo); what is exercised
+    for real is the git half -- what gets staged, whether a commit is
+    created at all, and that the commit is a separate, labelled one."""
+
+    def test_commits_when_fmt_changed_a_rust_file(self):
+        repo = self.make_repo()
+        self.commit_file(repo, "src/a.rs", "fn a( ) {}\n", "add a.rs")
+        before = git_out(repo, "rev-parse", "HEAD").strip()
+
+        def fake_fmt(repo_root):
+            (Path(repo_root) / "src" / "a.rs").write_text("fn a() {}\n")
+            return True, ""
+
+        result = overlord_sweep.format_sweep_branch(
+            repo, overlord_sweep.default_run_git, fmt_fn=fake_fmt, log_fn=lambda *a: None,
+        )
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["committed"])
+        head = git_out(repo, "rev-parse", "HEAD").strip()
+        self.assertNotEqual(head, before)
+        self.assertIn("style: cargo fmt --all", git_out(repo, "log", "-1", "--format=%s"))
+        # Exactly one new commit, and it carries only the reformatted file.
+        self.assertEqual(git_out(repo, "log", f"{before}..HEAD", "--format=%H").split(), [head])
+        self.assertEqual(git_out(repo, "show", "--name-only", "--format=", "HEAD").split(), ["src/a.rs"])
+
+    def test_no_commit_when_the_branch_is_already_fmt_clean(self):
+        repo = self.make_repo()
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "add a.rs")
+        before = git_out(repo, "rev-parse", "HEAD").strip()
+
+        result = overlord_sweep.format_sweep_branch(
+            repo, overlord_sweep.default_run_git, fmt_fn=lambda repo_root: (True, ""),
+            log_fn=lambda *a: None,
+        )
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["committed"])
+        self.assertEqual(git_out(repo, "rev-parse", "HEAD").strip(), before)
+
+    def test_untracked_junk_in_the_worktree_never_rides_along(self):
+        # `git add -u -- '*.rs'`: a comparison report or editor dropping
+        # sitting in the sweep worktree must never end up inside a commit
+        # labelled "cargo fmt".
+        repo = self.make_repo()
+        self.commit_file(repo, "src/a.rs", "fn a( ) {}\n", "add a.rs")
+
+        def fake_fmt(repo_root):
+            (Path(repo_root) / "src" / "a.rs").write_text("fn a() {}\n")
+            (Path(repo_root) / "tagcmp-JPEG-sweep-post.json").write_text("{}")
+            return True, ""
+
+        overlord_sweep.format_sweep_branch(
+            repo, overlord_sweep.default_run_git, fmt_fn=fake_fmt, log_fn=lambda *a: None,
+        )
+        self.assertEqual(git_out(repo, "show", "--name-only", "--format=", "HEAD").split(), ["src/a.rs"])
+        self.assertIn("tagcmp-JPEG-sweep-post.json", git_out(repo, "status", "--porcelain"))
+
+    def test_a_failing_cargo_fmt_is_reported_but_commits_nothing(self):
+        repo = self.make_repo()
+        before = git_out(repo, "rev-parse", "HEAD").strip()
+        logged = []
+        result = overlord_sweep.format_sweep_branch(
+            repo, overlord_sweep.default_run_git,
+            fmt_fn=lambda repo_root: (False, "error: no rustfmt component"), log_fn=logged.append,
+        )
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["committed"])
+        self.assertEqual(git_out(repo, "rev-parse", "HEAD").strip(), before)
+        self.assertTrue(any("cargo fmt --all FAILED" in line for line in logged))
+
+
+# ---------------------------------------------------------------------------
 # run_sweep -- end to end with everything side-effectful injected
 # ---------------------------------------------------------------------------
 
@@ -718,6 +794,24 @@ class RunSweepIntegrationTests(GitRepoTestCase):
     def _checkout_fn(repo_root, ref):
         git(repo_root, "checkout", "--detach", ref)
 
+    @staticmethod
+    def _reformatting_fmt_fn(repo_root):
+        """An fmt_fn that behaves like the real `cargo fmt --all`: it
+        REWRITES a tracked .rs file.
+
+        `lambda repo_root: (True, "")` -- what these integration tests
+        injected until 2026-07-26 -- changes no file, so
+        format_sweep_branch short-circuits at "already cargo-fmt clean"
+        and never reaches its `git commit`. That made the orphaned-fmt-
+        commit defect (the fmt commit landing on the recheck's DETACHED
+        HEAD instead of on the sweep branch) completely invisible here.
+        """
+        for path in sorted(Path(repo_root).rglob("*.rs")):
+            text = path.read_text()
+            if "( )" in text:
+                path.write_text(text.replace("( )", "()"))
+        return True, ""
+
     def test_no_news_short_circuits_before_cutting_a_branch(self):
         repo = self.make_repo()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -736,7 +830,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         git(repo, "branch", "squad/canon", "main")
         git(repo, "checkout", "-q", "squad/canon")
         canon_sha = self.commit_file(
-            repo, "src/parsers/jpeg/x.rs", "// fixed\n", "fix JPEG:Foo",
+            repo, "src/parsers/jpeg/x.rs", "fn fixed( ) {}\n", "fix JPEG:Foo",
             trailers=[
                 ("Format", "JPEG"), ("Tag", "MakerNotes:Foo"), ("Sample", "s1.jpg"),
                 ("Exiftool-Value", "5"), ("Oxidex-Value", "5"), ("Verified", "recheck-pass gaps=3->2"),
@@ -755,10 +849,19 @@ class RunSweepIntegrationTests(GitRepoTestCase):
             )
 
             pr_calls = []
+            pushed = []
 
             def fake_create_pr(title, body, branch, base):
                 pr_calls.append({"title": title, "body": body, "branch": branch, "base": base})
                 return {"ok": True, "url": "https://example/pr/1"}
+
+            def fake_push(repo_root, branch):
+                # What origin would actually receive: the BRANCH ref, not
+                # whatever local HEAD happens to be. Recorded at push time
+                # so the assertions below can compare against the exact
+                # commit `gh pr create --head <branch>` would open a PR on.
+                pushed.append(git_out(repo_root, "rev-parse", branch).strip())
+                return True, "pushed"
 
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused", comparison_fn=self._passing_comparison_fn,
@@ -766,7 +869,14 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 sweep_state_path=home / "sweep-state.json", origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
-                create_pr_fn=fake_create_pr, push_branch_fn=lambda repo_root, branch: (True, "pushed"),
+                create_pr_fn=fake_create_pr, push_branch_fn=fake_push,
+                # A tempdir repo has no Cargo.toml -- inject the fmt step
+                # (step 7b, which sits between the workspace test and the
+                # push) so this stays hermetic instead of shelling out to
+                # a real cargo. It must REWRITE a tracked .rs file, exactly
+                # as rustfmt does: a no-op hook produces no commit and so
+                # cannot show whether that commit lands on the branch.
+                fmt_fn=self._reformatting_fmt_fn,
                 now_fn=lambda: 12345,
             )
 
@@ -783,6 +893,91 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         self.assertIn("Judgment queue", body)
         self.assertEqual(pr_calls[0]["branch"], result["branch"])
         self.assertIn("canon", cursor["squads"])
+
+        # The fmt commit must be ON THE BRANCH at push time. The pre/post
+        # recheck ends by checking out sweep_tip DETACHED, so without an
+        # explicit re-attach every commit made after it (the fmt commit,
+        # and any bisection revert) lands on a detached HEAD and the
+        # branch ref -- the only thing `git push origin <branch>` and
+        # `gh pr create --head <branch>` ever see -- stays behind.
+        branch = result["branch"]
+        self.assertTrue(result["fmt"]["committed"])
+        self.assertEqual(git_out(repo, "rev-parse", "HEAD").strip(),
+                         git_out(repo, "rev-parse", branch).strip())
+        self.assertIn("style: cargo fmt --all (sweep publish)",
+                      git_out(repo, "log", branch, "--format=%s").splitlines())
+        self.assertEqual(git_out(repo, "show", f"{branch}:src/parsers/jpeg/x.rs"), "fn fixed() {}\n")
+        self.assertEqual(pushed, [git_out(repo, "rev-parse", branch).strip()])
+
+    def test_a_bisected_sweep_pushes_the_branch_with_the_offender_actually_reverted(self):
+        """The same detached-HEAD defect as the fmt commit, one step
+        earlier: bisect_sweep_failure's `git revert` commits also run
+        AFTER the pre/post recheck has detached HEAD. Without a re-attach
+        the branch ref still points at the pre-bisection merge tip, so
+        the PR ships the quarantined squad's regression -- the exact
+        thing bisection exists to keep out."""
+        repo = self.make_repo()
+
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "canon_fixed.marker", "1", "canon fix",
+            trailers=[("Format", "JPEG"), ("Tag", "JPEG:Good"), ("Verified", "recheck-pass gaps=13->10")],
+        )
+        git(repo, "checkout", "-q", "main")
+
+        git(repo, "branch", "squad/nikon", "main")
+        git(repo, "checkout", "-q", "squad/nikon")
+        self.commit_file(
+            repo, "nikon_fixed.marker", "1", "nikon fix (looks fine)",
+            trailers=[("Format", "JPEG"), ("Tag", "JPEG:Bad"), ("Verified", "recheck-pass gaps=10->8")],
+        )
+        nikon_sha = self.commit_file(repo, "duplicate.marker", "1", "nikon dup side effect")
+        git(repo, "checkout", "-q", "main")
+
+        def comparison_fn(repo_root, cache_dir, fmt, suffix):
+            repo_root = Path(repo_root)
+            gap_count = 10 - 3 * (repo_root / "canon_fixed.marker").exists() \
+                - 2 * (repo_root / "nikon_fixed.marker").exists()
+            return {
+                "gap_count": gap_count,
+                "duplicate_emissions": ["JPEG:Dup"] if (repo_root / "duplicate.marker").exists() else [],
+                "extra_in_oxidex": [],
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            squads_toml = self._squads_toml(Path(tmpdir), ["canon", "nikon"])
+            for squad, sha in (("canon", canon_sha), ("nikon", nikon_sha)):
+                squad_merge_loop.record_head(
+                    squad_merge_loop.squad_status_file(home, squad), f"{squad}head", status="consumed",
+                    patch_id=f"p-{squad}", format_name="JPEG", squad_sha=sha, now_fn=lambda: 100,
+                )
+            pushed = []
+
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused", comparison_fn=comparison_fn,
+                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                sweep_state_path=home / "sweep-state.json", origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                quarantine_path=home / "quarantine.jsonl",
+                cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
+                create_pr_fn=lambda *a, **kw: {"ok": True, "url": "https://example/pr/2"},
+                push_branch_fn=lambda repo_root, branch: (
+                    pushed.append(git_out(repo_root, "rev-parse", branch).strip()) or (True, "pushed")
+                ),
+                fmt_fn=self._reformatting_fmt_fn, log_fn=lambda *a: None,
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["bisection"]["offenders"], ["nikon"])
+        branch = result["branch"]
+        # What origin receives must be the post-bisection tree.
+        listing = git_out(repo, "ls-tree", "-r", "--name-only", branch).split()
+        self.assertIn("canon_fixed.marker", listing)
+        self.assertNotIn("nikon_fixed.marker", listing)
+        self.assertNotIn("duplicate.marker", listing)
+        self.assertEqual(pushed, [git_out(repo, "rev-parse", branch).strip()])
 
     def test_workspace_test_failure_blocks_pr_creation(self):
         repo = self.make_repo()
@@ -907,6 +1102,67 @@ class RunSweepIntegrationTests(GitRepoTestCase):
             stamps, _new_cursor = overlord_sweep.collect_green_stamps(home, squads, cursor)
             self.assertIn("canon", stamps)
 
+    def _one_squad_fixture(self, repo, tmpdir):
+        """One green-stamped squad on `repo`, its home under `tmpdir`.
+        Returns (home, squads_toml, sweep_state_path)."""
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "src/a.rs", "fn a( ) {}\n", "fix JPEG:Foo",
+            trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:Foo"), ("Verified", "recheck-pass gaps=3->2")],
+        )
+        git(repo, "checkout", "-q", "main")
+        home = Path(tmpdir) / "home"
+        squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+        squad_merge_loop.record_head(
+            squad_merge_loop.squad_status_file(home, "canon"), "workerheadsha", status="consumed",
+            patch_id="p1", format_name="JPEG", squad_sha=canon_sha, now_fn=lambda: 100,
+        )
+        return home, squads_toml, home / "sweep-state.json"
+
+    def test_a_failed_gh_pr_create_is_its_own_status_not_ok(self):
+        """`gh pr create` fails for entirely routine reasons -- expired
+        auth, a secondary rate limit, an org rule that forbids the PR,
+        no network. Reporting that round as "ok" made the caller poll
+        `gh pr checks <branch>` against a branch with no PR (three
+        "unknown" answers, two 30s sleeps) and left an orphan branch on
+        origin with the sweep cursor already advanced past it."""
+        repo = self.make_repo()
+        logged = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home, squads_toml, sweep_state_path = self._one_squad_fixture(repo, tmpdir)
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused", comparison_fn=self._passing_comparison_fn,
+                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                sweep_state_path=sweep_state_path, origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: (True, "pushed"),
+                fmt_fn=self._reformatting_fmt_fn, log_fn=logged.append,
+                create_pr_fn=lambda *a, **kw: {
+                    "ok": False, "stdout": "",
+                    "stderr": "gh: To get started with GitHub CLI, please run: gh auth login",
+                },
+            )
+        self.assertEqual(result["status"], "pr_create_failed")
+        self.assertIn("pr", result)
+        self.assertTrue(any("gh pr create FAILED" in line for line in logged))
+
+    def test_main_exits_non_zero_when_pr_creation_fails(self):
+        # The CLI must surface it too: `uv run overlord_sweep.py` exiting
+        # 0 on a round that opened no PR is indistinguishable from a
+        # healthy one in any wrapper script or cron log.
+        printed = []
+        with patch.object(overlord_sweep, "run_sweep",
+                          return_value={"status": "pr_create_failed", "branch": "sweep/x",
+                                        "pr": {"ok": False, "stderr": "gh auth login"}}):
+            with patch("builtins.print", side_effect=lambda *a, **kw: printed.append(" ".join(map(str, a)))):
+                rc = overlord_sweep.main(["--repo", str(self.tmp), "--home", str(self.tmp / "home")])
+        self.assertEqual(rc, 1)
+        # Loud, not a dict buried in the JSON blob: an operator scanning
+        # a cron log has to be able to see that no PR exists.
+        self.assertTrue(any("PR CREATION FAILED" in line for line in printed), printed)
+
     def test_push_failure_blocks_pr_creation_but_cursor_still_advances(self):
         # Once cargo test --workspace passes, every surviving squad's
         # contribution is durably on a cut, tested sweep branch --
@@ -941,6 +1197,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
                 create_pr_fn=lambda *a, **kw: pr_calls.append(1),
                 push_branch_fn=lambda repo_root, branch: (False, "no configured push destination"),
+                fmt_fn=lambda repo_root: (True, ""),
             )
 
             self.assertEqual(result["status"], "push_failed")
