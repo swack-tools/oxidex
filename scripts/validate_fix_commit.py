@@ -79,6 +79,7 @@ Everything side-effectful is injectable for hermetic tests: the git runner
 """
 import argparse
 import fnmatch
+import functools
 import json
 import re
 import shlex
@@ -110,19 +111,43 @@ REQUIRED_TRAILERS = (
     "Worker",
 )
 
+# The same list minus Perl-Ref, used when the diff contains no PrintConv
+# value for that trailer to attest. See check_trailers.
+CONDITIONAL_TRAILERS = tuple(k for k in REQUIRED_TRAILERS if k != "Perl-Ref")
+
+# Bump this WHENEVER a change here can turn a previously-rejected commit
+# into an accepted one -- new/removed REQUIRED_TRAILERS, any change to
+# what extract_added_map_values extracts, any change to check_printconv's
+# verdicts, or a new WARN_ONLY prefix.
+#
+# The merger stamps this version onto every quarantine record, and treats
+# a head quarantined under a DIFFERENT version as eligible for one fresh
+# attempt (see squad_merge_loop.candidate_commits). Without it, quarantine
+# is terminal: the 2026-07-25 extractor fixes made 20 of 44 quarantined
+# heads admissible, and not one of them would ever have been re-examined,
+# because both the squad-status heads map and the patch-id ledger reject
+# a known sha before the validator is ever consulted.
+#
+# History:
+#   1  original M1 gate
+#   2  #114 dropped the Table trailer requirement
+#   3  #119 added the tag-key / byte-string identifier exclusions
+#   4  match arms, &[&str] registries, format! templates, test-code
+#      scoping, wrong-perl-ref warn-only, conditional Perl-Ref
+POLICY_VERSION = 4
+
+# Flags that are recorded for the human record but do NOT block
+# admission. `ownership:` says the fix landed outside the worker's squad
+# globs -- true but not a defect in the fix. `printconv-wrong-perl-ref:`
+# says the value IS a real ExifTool string, just attributed to the wrong
+# module: an evidence-quality problem, not the fabricated-value problem
+# the PrintConv check exists to stop.
+WARN_ONLY_FLAG_PREFIXES = ("ownership:", "printconv-wrong-perl-ref:")
+
 # How much of a mismatched PrintConv value to embed in its flag. Full
 # values can be long (lens descriptions); the excerpt is for humans
 # scanning the queue, the full value is still in the diff.
 PRINTCONV_EXCERPT_CHARS = 48
-
-# A `X => <rhs>` right-hand side that is NOT a quoted string but also NOT
-# "computed": bare numeric literals (incl. hex/oct/bin, _ separators,
-# type suffixes) and true/false/None carry no byte-checkable text, so
-# they neither verify nor force the human queue.
-_BENIGN_MAP_RHS_RE = re.compile(
-    r"-?(?:0[xXbBoO][0-9a-fA-F_]+|\d[\d_]*(?:\.\d[\d_]*)?)(?:_?(?:[iuf]\d+|usize|isize))?"
-    r"|true|false|None"
-)
 
 # One Rust/Perl-style double-quoted string literal, escape-aware.
 _QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
@@ -173,6 +198,8 @@ def is_identifier_not_printconv(value, code_line):
         return True
     if f'b"{value}"' in (code_line or ""):
         return True
+    if _FORMAT_PLACEHOLDER_RE.search(value or ""):
+        return True
     return False
 
 # A line that IS nothing but string-literal array element(s) -- one or
@@ -185,6 +212,52 @@ def is_identifier_not_printconv(value, code_line):
 _BARE_STRING_ELEMENT_RE = re.compile(
     r'^\s*(?:"(?:[^"\\]|\\.)*"\s*,\s*)*"(?:[^"\\]|\\.)*"\s*,?\s*$'
 )
+
+# git writes the enclosing declaration into every hunk header, after the
+# second "@@":
+#     @@ -102,6 +102,10 @@ const KNOWN_TAGS: &[&str] = &[
+# The bare-string rule above was justified by "the declaring line is
+# outside the hunk" -- but git hands it to us right here, and the old
+# loop threw it away by `continue`-ing on "@@". These two patterns read
+# it back.
+#
+# A SLICE of str -- `&[&str]` -- is the Rust idiom for a flat registry of
+# KEY NAMES the parser recognises (`const KNOWN_TAGS: &[&str] = &[...]`
+# in the APP12 Olympus/Ricoh/thermal parsers). Its elements are tag
+# IDENTIFIERS ("REV", "S0", "STB1", "WB3"); demanding they appear in an
+# ExifTool PrintConv table rejects correct code, and was the single
+# largest quarantine cause measured 2026-07-25.
+#
+# A FIXED-SIZE array -- `[&str; 400]` -- is the idiom for an INDEXED
+# PrintConv lookup (`const LENS_NAMES: [&str; 400]`), whose elements are
+# genuine display values that must still be byte-checked. The `;` is
+# what separates the two, so this pattern deliberately does not match it.
+_STR_SLICE_REGISTRY_RE = re.compile(
+    r"\b(?:const|static)\s+\w+\s*:\s*&?\s*\[\s*&(?:'\w+\s+)?str\s*\]"
+)
+
+# Assert messages and fixture strings in test code are not PrintConv
+# values -- thermal's `printconv-mismatch:Flash=0 should be PrintConv'd
+# to Off` flag came from an `assert!` message inside `mod tests`.
+_TEST_CONTEXT_RE = re.compile(r"\bmod\s+\w*tests?\b|\bfn\s+test_")
+
+# A macro that BUILDS a string at runtime. Its first argument is a format
+# TEMPLATE, not a value: `other => format!("Unknown({})", other)` yields
+# the literal `Unknown({})`, which by construction never appears in any
+# ExifTool module. The template is genuinely unverifiable -- exactly what
+# the docstring already promised computed right-hand sides would be --
+# but `if found:` short-circuited it into `values` and flagged it as a
+# fabrication instead.
+_STRING_BUILDING_MACRO_RE = re.compile(
+    r"\b(?:format|write|writeln|concat|format_args|println|panic|assert\w*)\s*!"
+)
+
+# A `{}` / `{:04}` / `{name}` placeholder. Any string carrying one is a
+# format template rather than a literal display value -- belt-and-braces
+# for multi-line macro calls whose template sits alone on its own line
+# (`"{:04}:{:02}:{:02} {:02}:{:02}:{:02}.{:03}",` in parse_flir_datetime),
+# where no `format!` token is visible on the line at all.
+_FORMAT_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
 
 
 class GitError(RuntimeError):
@@ -255,14 +328,19 @@ def parse_trailers(message, repo, git_run=run_git):
     return trailers
 
 
-def check_trailers(trailers):
+def check_trailers(trailers, require_perl_ref=True):
     """Flags for every required trailer key that is missing or empty.
 
     Missing evidence is itself a routing signal: a commit without a
-    parseable Verified/Perl-Ref cannot be machine-accepted no matter how
-    green its build is."""
+    parseable Verified trailer cannot be machine-accepted no matter how
+    green its build is.
+
+    require_perl_ref is False when the diff has no PrintConv value to
+    byte-check, because Perl-Ref's only consumer is that check -- see the
+    call site in validate_commit."""
+    required = REQUIRED_TRAILERS if require_perl_ref else CONDITIONAL_TRAILERS
     flags = []
-    for key in REQUIRED_TRAILERS:
+    for key in required:
         values = [v for v in trailers.get(key, []) if v]
         if not values:
             flags.append(f"missing-trailer:{key}")
@@ -455,10 +533,21 @@ def extract_added_map_values(diff_text):
     values = []
     unverifiable = []
     depth = 0  # bracket depth inside a const/static array literal
+    hunk_ctx = ""  # git's record of the declaration enclosing this hunk
     for raw in diff_text.splitlines():
-        if raw.startswith("diff --git") or raw.startswith("@@"):
+        if raw.startswith("diff --git"):
             depth = 0  # never let array state leak across files/hunks
+            hunk_ctx = ""
             continue
+        if raw.startswith("@@"):
+            depth = 0
+            # "@@ -a,b +c,d @@ <enclosing declaration>" -- everything
+            # after the second "@@" is git's funcname context.
+            parts = raw.split("@@")
+            hunk_ctx = parts[2] if len(parts) > 2 else ""
+            continue
+        if _TEST_CONTEXT_RE.search(hunk_ctx):
+            continue  # assert messages and fixtures are not PrintConv values
         if raw.startswith("+++") or raw.startswith("---"):
             continue
         if not raw or raw[0] not in "+ ":
@@ -479,13 +568,27 @@ def extract_added_map_values(diff_text):
                 continue
         if added and "=>" in code:
             rhs = code.split("=>", 1)[1]
+            if _STRING_BUILDING_MACRO_RE.search(rhs):
+                # Runtime-built string: the literal in the diff is a
+                # template, not a value, so there is nothing to
+                # byte-check. Honestly unverifiable rather than a
+                # fabrication.
+                unverifiable.append(code.strip()[:80])
+                continue
             found = _QUOTED_RE.findall(rhs)
             if found:
                 values.extend(_keep_printconv_values(found, code))
-            else:
-                stripped = rhs.strip().rstrip(",;").strip()
-                if stripped and not _BENIGN_MAP_RHS_RE.fullmatch(stripped):
-                    unverifiable.append(code.strip()[:80])
+            # A right-hand side with NO quoted string carries no display
+            # text, so it cannot possibly hide a fabricated PrintConv
+            # value -- there are no bytes to compare. It used to be
+            # reported as "computed"/unverifiable on the theory that `=>`
+            # means map-entry, but in Rust `=>` is MATCH-ARM syntax, and
+            # a match arm dispatching a tag id to a decoder is the single
+            # most common shape of a tag-wiring fix. The rule therefore
+            # fired on ordinary control flow (`_ => continue,`,
+            # `Ok(bo) => bo,`, `Err(_) => return,`) and on byte-order
+            # switches, quarantining 12 valid fixes as of 2026-07-25
+            # while never once catching a real fabrication.
         elif added and _BARE_STRING_ELEMENT_RE.match(code):
             # Bare string element(s) added at depth 0: the enclosing
             # const table's declaration is outside the hunk (mid-table
@@ -493,6 +596,18 @@ def extract_added_map_values(diff_text):
             # over-catching a stray string list here is fine (spec open
             # question 6: over-flagging routes to the human queue,
             # under-flagging auto-ships a fabricated value).
+            #
+            # The ONE exception is when git's hunk header positively
+            # identifies the table as a `&[&str]` key registry, whose
+            # elements are identifiers by construction. This is a
+            # NEGATIVE gate on purpose: absent or unparseable context
+            # falls through to the check as before, so a fabricated value
+            # inserted into a table declared indented inside an fn/impl
+            # -- which git's default funcname driver never surfaces,
+            # since it only reports column-0 declarations -- is still
+            # caught.
+            if _STR_SLICE_REGISTRY_RE.search(hunk_ctx):
+                continue
             values.extend(_keep_printconv_values(_QUOTED_RE.findall(code), code))
     return list(dict.fromkeys(values)), unverifiable
 
@@ -515,6 +630,32 @@ def resolve_perl_module(perl_ref, perl_lib):
             return candidate
     hits = sorted(p for p in perl_lib.rglob(name) if p.is_file())
     return hits[0] if hits else None
+
+
+@functools.lru_cache(maxsize=8)
+def _perl_lib_corpus(perl_lib):
+    """Every .pm byte under perl_lib, concatenated once per process.
+
+    Used only as a SECOND opinion after the Perl-Ref module itself has
+    already missed: a value that appears verbatim somewhere in ExifTool's
+    source is a real ExifTool string that was merely attributed to the
+    wrong module, which is an evidence defect -- not the invented-value
+    defect this check exists to catch. Measured cases: `YCbCr4:4:4 (1 1)`
+    lives in ExifTool.pm while the trailer said Exif.pm; `Centered` and
+    `JPEG (old-style)` live in Exif.pm while the trailer said
+    CanonRaw.pm; `Does not emit` lives in CanonCustom.pm while the
+    trailer said Canon.pm.
+
+    Cached because it is ~30MB of Perl and check_printconv can be called
+    once per commit across a whole sweep.
+    """
+    blobs = []
+    for path in sorted(perl_lib.rglob("*.pm")):
+        try:
+            blobs.append(path.read_bytes())
+        except OSError:
+            continue  # unreadable module must never take down validation
+    return b"\n".join(blobs)
 
 
 def check_printconv(diff_text, perl_ref, perl_lib):
@@ -542,7 +683,15 @@ def check_printconv(diff_text, perl_ref, perl_lib):
         else:
             source = module.read_bytes()
             for value in values:
-                if value.encode("utf-8") not in source:
+                if value.encode("utf-8") in source:
+                    continue
+                if value.encode("utf-8") in _perl_lib_corpus(perl_lib):
+                    # Real ExifTool string, wrong module cited. Warn-only:
+                    # the fix is sound, only its Perl-Ref trailer is off.
+                    flags.append(
+                        f"printconv-wrong-perl-ref:{value[:PRINTCONV_EXCERPT_CHARS]}"
+                    )
+                else:
                     flags.append(f"printconv-mismatch:{value[:PRINTCONV_EXCERPT_CHARS]}")
     if unverifiable:
         flags.append("printconv-unverifiable")
@@ -667,7 +816,6 @@ def validate_commit(
 
     message = commit_message(sha, repo, git_run)
     trailers = parse_trailers(message, repo, git_run)
-    trailer_flags = check_trailers(trailers)
 
     diff_text = commit_diff(sha, repo, git_run)
 
@@ -676,6 +824,18 @@ def validate_commit(
 
     perl_ref = next(iter(trailers.get("Perl-Ref", [])), "")
     printconv_status, printconv_flags = check_printconv(diff_text, perl_ref, perl_lib)
+
+    # Perl-Ref is required only when there is a PrintConv value for it to
+    # attest -- exactly the same conditional-evidence fix PR #114 made
+    # for the Table trailer, which was left half-done. The emitter
+    # (model_fix_loop._build_fix_gap_trailers) documents Perl-Ref as
+    # omittable and only emits it when the gap actually has a Perl table
+    # block behind it, so requiring it unconditionally permanently
+    # quarantined every fix for a tag with no such block (APP12 tags, and
+    # every fix whose diff is pure wiring).
+    trailer_flags = check_trailers(
+        trailers, require_perl_ref=bool(extract_added_map_values(diff_text)[0])
+    )
 
     globs_by_squad = load_squad_globs(squads_toml) if squads_toml else {}
     worker = next(iter(trailers.get("Worker", [])), "")
@@ -687,10 +847,11 @@ def validate_commit(
     flags = list(
         dict.fromkeys(trailer_flags + multi_flags + printconv_flags + ownership_flags)
     )
-    hard_flags = [f for f in flags if not f.startswith("ownership:")]
+    hard_flags = [f for f in flags if not f.startswith(WARN_ONLY_FLAG_PREFIXES)]
     return {
         "sha": sha,
         "ok": not hard_flags,
+        "policy_version": POLICY_VERSION,
         "flags": flags,
         "patch_id": patch_id,
         "checks": {
