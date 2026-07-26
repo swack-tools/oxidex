@@ -693,6 +693,82 @@ class BuildEvidenceRowsTests(GitRepoTestCase):
 
 
 # ---------------------------------------------------------------------------
+# Step 7b: cargo fmt before push (the measured PR #124 CI failure)
+# ---------------------------------------------------------------------------
+
+class FormatSweepBranchTests(GitRepoTestCase):
+    """cargo fmt itself is injected (a tempdir repo has no Cargo.toml and
+    hermetic tests never shell out to a real cargo); what is exercised
+    for real is the git half -- what gets staged, whether a commit is
+    created at all, and that the commit is a separate, labelled one."""
+
+    def test_commits_when_fmt_changed_a_rust_file(self):
+        repo = self.make_repo()
+        self.commit_file(repo, "src/a.rs", "fn a( ) {}\n", "add a.rs")
+        before = git_out(repo, "rev-parse", "HEAD").strip()
+
+        def fake_fmt(repo_root):
+            (Path(repo_root) / "src" / "a.rs").write_text("fn a() {}\n")
+            return True, ""
+
+        result = overlord_sweep.format_sweep_branch(
+            repo, overlord_sweep.default_run_git, fmt_fn=fake_fmt, log_fn=lambda *a: None,
+        )
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["committed"])
+        head = git_out(repo, "rev-parse", "HEAD").strip()
+        self.assertNotEqual(head, before)
+        self.assertIn("style: cargo fmt --all", git_out(repo, "log", "-1", "--format=%s"))
+        # Exactly one new commit, and it carries only the reformatted file.
+        self.assertEqual(git_out(repo, "log", f"{before}..HEAD", "--format=%H").split(), [head])
+        self.assertEqual(git_out(repo, "show", "--name-only", "--format=", "HEAD").split(), ["src/a.rs"])
+
+    def test_no_commit_when_the_branch_is_already_fmt_clean(self):
+        repo = self.make_repo()
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "add a.rs")
+        before = git_out(repo, "rev-parse", "HEAD").strip()
+
+        result = overlord_sweep.format_sweep_branch(
+            repo, overlord_sweep.default_run_git, fmt_fn=lambda repo_root: (True, ""),
+            log_fn=lambda *a: None,
+        )
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["committed"])
+        self.assertEqual(git_out(repo, "rev-parse", "HEAD").strip(), before)
+
+    def test_untracked_junk_in_the_worktree_never_rides_along(self):
+        # `git add -u -- '*.rs'`: a comparison report or editor dropping
+        # sitting in the sweep worktree must never end up inside a commit
+        # labelled "cargo fmt".
+        repo = self.make_repo()
+        self.commit_file(repo, "src/a.rs", "fn a( ) {}\n", "add a.rs")
+
+        def fake_fmt(repo_root):
+            (Path(repo_root) / "src" / "a.rs").write_text("fn a() {}\n")
+            (Path(repo_root) / "tagcmp-JPEG-sweep-post.json").write_text("{}")
+            return True, ""
+
+        overlord_sweep.format_sweep_branch(
+            repo, overlord_sweep.default_run_git, fmt_fn=fake_fmt, log_fn=lambda *a: None,
+        )
+        self.assertEqual(git_out(repo, "show", "--name-only", "--format=", "HEAD").split(), ["src/a.rs"])
+        self.assertIn("tagcmp-JPEG-sweep-post.json", git_out(repo, "status", "--porcelain"))
+
+    def test_a_failing_cargo_fmt_is_reported_but_commits_nothing(self):
+        repo = self.make_repo()
+        before = git_out(repo, "rev-parse", "HEAD").strip()
+        logged = []
+        result = overlord_sweep.format_sweep_branch(
+            repo, overlord_sweep.default_run_git,
+            fmt_fn=lambda repo_root: (False, "error: no rustfmt component"), log_fn=logged.append,
+        )
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["committed"])
+        self.assertEqual(git_out(repo, "rev-parse", "HEAD").strip(), before)
+        self.assertTrue(any("cargo fmt --all FAILED" in line for line in logged))
+
+
+# ---------------------------------------------------------------------------
 # run_sweep -- end to end with everything side-effectful injected
 # ---------------------------------------------------------------------------
 
@@ -767,6 +843,11 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
                 create_pr_fn=fake_create_pr, push_branch_fn=lambda repo_root, branch: (True, "pushed"),
+                # A tempdir repo has no Cargo.toml -- inject the fmt step
+                # (step 7b, which sits between the workspace test and the
+                # push) so this stays hermetic instead of shelling out to
+                # a real cargo. FormatSweepBranchTests covers it directly.
+                fmt_fn=lambda repo_root: (True, ""),
                 now_fn=lambda: 12345,
             )
 
@@ -941,6 +1022,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
                 create_pr_fn=lambda *a, **kw: pr_calls.append(1),
                 push_branch_fn=lambda repo_root, branch: (False, "no configured push destination"),
+                fmt_fn=lambda repo_root: (True, ""),
             )
 
             self.assertEqual(result["status"], "push_failed")
