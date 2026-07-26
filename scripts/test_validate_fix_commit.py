@@ -1383,13 +1383,17 @@ class ExtractorEvasionShapeTests(unittest.TestCase):
             "diff --git a/src/parsers/tiff/makernotes/canon.rs "
             "b/src/parsers/tiff/makernotes/canon.rs\n"
             "@@ -40,6 +40,12 @@\n"
+            #
+            # The entries deliberately SHARE a line and one key is
+            # parenthesised. One tuple per line let this test pass with
+            # _TABLE_MACRO_RE replaced by a never-matching pattern --
+            # _BARE_TUPLE_ELEMENT_RE carried it alone, so the macro
+            # recognition that is the headline of this fix was unpinned.
+            # Verified 2026-07-26 by mutation.
             "+const_decoder!(\n"
             "+    pub ASPECT_RATIO,\n"
             "+    i32,\n"
-            "+    [\n"
-            '+        (0, "3:2"),\n'
-            '+        (12, "Totally Fabricated Crop Mode"),\n'
-            "+    ]\n"
+            '+    [(0, "3:2"), (mask(12), "Totally Fabricated Crop Mode")]\n'
             "+);\n"
         )
         values, _ = extract_added_map_values(diff)
@@ -1423,17 +1427,21 @@ class ExtractorEvasionShapeTests(unittest.TestCase):
     def test_for_loop_inline_table_values_are_extracted(self):
         # `for (bit, name) in [(29, "Main 10"), ...]` -- a real QuickTime
         # HEVC fix used this shape and its whole diff extracted nothing.
+        #
+        # The tuples MUST share a line here. Written one-per-line this
+        # test passed with _INLINE_TABLE_RE replaced by a never-matching
+        # pattern, because _BARE_TUPLE_ELEMENT_RE satisfied it on its own
+        # -- so it pinned nothing of the rule it is named for. Verified
+        # 2026-07-26 by mutation: with the rule neutered, this now fails.
         diff = (
             "diff --git a/src/parsers/quicktime/hevc.rs "
             "b/src/parsers/quicktime/hevc.rs\n"
-            "@@ -10,6 +10,9 @@ fn profiles(flags: u32) -> Vec<String> {\n"
-            "+    for (bit, name) in [\n"
-            '+        (29, "Main 10"),\n'
-            '+        (30, "Fabricated Profile Name"),\n'
-            "+    ] {\n"
+            "@@ -10,6 +10,8 @@ fn profiles(flags: u32) -> Vec<String> {\n"
+            '+    for (bit, name) in [(29, "Main 10"), (30, "Fabricated Profile Name")] {\n'
         )
         values, _ = extract_added_map_values(diff)
         self.assertIn("Fabricated Profile Name", values)
+        self.assertIn("Main 10", values)
 
     def test_map_insert_value_is_extracted(self):
         diff = (

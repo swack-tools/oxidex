@@ -367,15 +367,44 @@ _WRAPPED_STRING_VALUE_RE = re.compile(
 # display value that merely contains a colon ("Fine: Best") or a space
 # is unaffected, so the fabricated-value check this gate exists for is
 # preserved intact.
-_TAG_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*:[A-Za-z][A-Za-z0-9_]*$")
+#
+# The identifier half admits `-` and `.` because real oxidex tag names
+# carry them. Measured 2026-07-26 while adding the block-arm/.insert/
+# tuple rules below: those rules read a string as a display value
+# without asking whether it IS one, and with a `\w`-only pattern
+# `"EXIF:TIFF-EPStandardID"` hard-blocked -- a value copied verbatim
+# from 2026-07-25T07:58:08-nikon-2-APPLIED.diff, i.e. a commit the fleet
+# had already ACCEPTED. Widening the halves rather than loosening the
+# whole gate keeps "Fine: Best" and "YCbCr4:4:4 (1 1)" checked: a space
+# still disqualifies, which is what separates a key from a display
+# string.
+_TAG_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*:[A-Za-z][A-Za-z0-9_.-]*$")
+
+# A BARE CamelCase tag name with no group prefix ("VolumeDescriptorType")
+# is deliberately NOT suppressed, though the same 2026-07-26 measurement
+# surfaced one via a block-arm return in tail-1. Shape cannot separate it
+# from a genuine display value: "RhsOnly" and "VolumeDescriptorType" are
+# identical to any rule expressible here, and a bare-CamelCase exemption
+# would hand a fabricator a trivial evasion -- return an invented
+# CamelCase value and it is never byte-checked.
+#
+# So this over-flags that one shape on purpose. The asymmetry decides it:
+# an over-flag costs one recoverable quarantine plus a POLICY_VERSION
+# retry, while an under-flag auto-merges a fabricated display value to
+# main and stays there. Widening the group-qualified form above already
+# removes 3 of the 4 measured over-flags; this is the remaining 1.
 
 
 def looks_like_tag_key(value):
-    """True for an oxidex metadata key like "EXIF:PreviewImageStart".
+    """True for an oxidex metadata key like "EXIF:PreviewImageStart" or
+    "EXIF:TIFF-EPStandardID".
 
-    Requires BOTH halves to be bare identifiers (no spaces, no
-    punctuation beyond the single separating colon), so display strings
-    that happen to contain a colon are not swallowed.
+    Requires BOTH halves to be identifier-shaped -- letters, digits,
+    `_`, `-`, `.`, and nothing else -- around a single separating colon.
+    A space anywhere disqualifies, which is what keeps display strings
+    that merely contain a colon ("Fine: Best", "YCbCr4:4:4 (1 1)")
+    byte-checked. A BARE name with no colon is not matched here; see
+    the comment above _TAG_KEY_RE for why that is deliberate.
     """
     return bool(_TAG_KEY_RE.match(value or ""))
 
