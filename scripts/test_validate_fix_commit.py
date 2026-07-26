@@ -898,5 +898,113 @@ class FalseQuarantineRegressionTests(unittest.TestCase):
         self.assertFalse(result["ok"])
 
 
+class LooseningHardeningTests(unittest.TestCase):
+    """Regressions introduced by the 2026-07-25 extractor loosening
+    (POLICY_VERSION 4) and closed at POLICY_VERSION 5. Each was
+    independently reproduced against the pre-loosening validator, which
+    rejected the same commit."""
+
+    def setUp(self):
+        validate_fix_commit._perl_lib_corpus.cache_clear()
+
+    # -- the mod-tests hunk gate was exploitable ------------------------
+
+    def test_a_fabrication_appended_at_eof_is_not_excused_by_a_mod_tests_header(self):
+        # git's default funcname driver reports the nearest preceding
+        # COLUMN-0 declaration, and `#[cfg(test)] mod tests {` is
+        # conventionally the LAST one in a Rust file. So an end-of-file
+        # append gets `mod tests` as its hunk context while being 100%
+        # production code. The old hunk-level gate skipped all of it.
+        diff = (
+            "diff --git a/src/core/formatters/exposure_program.rs "
+            "b/src/core/formatters/exposure_program.rs\n"
+            "@@ -141,3 +141,7 @@ mod tests {\n"
+            "+pub fn program(v: u8) -> &'static str {\n"
+            "+    match v {\n"
+            '+        1 => "Landscape Mode",\n'
+            '+        2 => "Night Scene Mode",\n'
+            "+    }\n"
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Landscape Mode", "Night Scene Mode"])
+
+    def test_an_assert_message_is_still_ignored(self):
+        # The real false positive the hunk gate was introduced for.
+        diff = (
+            "diff --git a/src/thermal.rs b/src/thermal.rs\n"
+            "@@ -200,3 +200,5 @@ mod tests {\n"
+            '+        assert_eq!(v, "Off", "Flash=0 should be PrintConv\'d to Off");\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+
+    # -- the registry gate keys on the NAME, not the type shape ---------
+
+    def test_an_icc_display_value_slice_is_still_checked(self):
+        # RENDERING_INTENTS is `&[&str]` but is an INDEXED PrintConv
+        # table; the shape-based gate skipped it.
+        diff = (
+            "diff --git a/src/parsers/icc/registries.rs b/src/parsers/icc/registries.rs\n"
+            "@@ -322,4 +322,5 @@ pub static RENDERING_INTENTS: &[&str] = &[\n"
+            '     "Perceptual",\n'
+            '+    "Fabricated Intent",\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Fabricated Intent"])
+
+    def test_a_named_tag_registry_slice_is_still_skipped(self):
+        # The case the loosening existed for must keep working.
+        diff = (
+            "diff --git a/src/jpeg/app12_olympus.rs b/src/jpeg/app12_olympus.rs\n"
+            "@@ -102,6 +102,9 @@ const KNOWN_TAGS: &[&str] = &[\n"
+            '     "Protect",\n'
+            '+    "REV",\n'
+            '+    "STB1",\n'
+        )
+        values, unverifiable = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+        self.assertEqual(unverifiable, [])
+
+    # -- a real string in the wrong module must still BLOCK -------------
+
+    def test_wrong_perl_ref_is_labelled_but_still_blocks(self):
+        rust = (
+            "pub fn quality(v: u8) -> &'static str {\n"
+            "    match v {\n"
+            '        0x1 => "Co-sited",\n'
+            "    }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            perl_lib = write_perl_module(Path(tmp) / "perl", PERL_QUALITY)
+            write_perl_module(perl_lib, "%ycc = (2 => 'Co-sited');\n", name="Exif.pm")
+            sha = commit_fix(repo, {"src/canon/q.rs": rust}, full_trailers())
+            result = validate_commit(sha, repo, perl_lib=perl_lib)
+        # Still named distinctly, so a human sees "real string, wrong
+        # module" rather than "invented string" ...
+        self.assertIn("printconv-wrong-perl-ref:Co-sited", result["flags"])
+        # ... but it no longer auto-admits.
+        self.assertFalse(result["ok"])
+
+    def test_the_corpus_second_opinion_ignores_lang_translation_tables(self):
+        # Image/ExifTool/Lang/*.pm carries every display string in every
+        # supported language and would rescue almost any fabrication.
+        with tempfile.TemporaryDirectory() as tmp:
+            perl_lib = Path(tmp) / "perl"
+            write_perl_module(perl_lib, "%q = (1 => 'Real');\n")
+            lang = perl_lib / "Image" / "ExifTool" / "Lang"
+            lang.mkdir(parents=True, exist_ok=True)
+            (lang / "de.pm").write_text("%de = ('Totally Invented' => 'Erfunden');\n")
+            validate_fix_commit._perl_lib_corpus.cache_clear()
+            corpus = validate_fix_commit._perl_lib_corpus(perl_lib)
+        self.assertIn(b"Real", corpus)
+        self.assertNotIn(b"Totally Invented", corpus)
+
+    def test_policy_version_was_bumped_so_the_old_verdicts_are_re_examined(self):
+        # Heads admitted under the loosened policy 4 must be reconsidered.
+        self.assertGreaterEqual(validate_fix_commit.POLICY_VERSION, 5)
+
+
 if __name__ == "__main__":
     unittest.main()
