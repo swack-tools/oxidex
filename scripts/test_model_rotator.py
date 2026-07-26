@@ -148,22 +148,22 @@ class ScoreModelsTests(unittest.TestCase):
     def test_counts_ok_and_retry_per_model(self):
         with tempfile.TemporaryDirectory() as tmp:
             s = score_models(self._write(tmp))
-        self.assertEqual(s["deepseek-v4-pro"]["ok"], 2)
-        self.assertEqual(s["deepseek-v4-pro"]["retry"], 0)
-        self.assertEqual(s["glm-5.2"]["ok"], 1)
-        self.assertEqual(s["glm-5.2"]["retry"], 1)
+        self.assertEqual(s["theclawbay-deepseek-v4-pro"]["ok"], 2)
+        self.assertEqual(s["theclawbay-deepseek-v4-pro"]["retry"], 0)
+        self.assertEqual(s["theclawbay-glm-5.2"]["ok"], 1)
+        self.assertEqual(s["theclawbay-glm-5.2"]["retry"], 1)
 
     def test_success_rate_and_latency(self):
         with tempfile.TemporaryDirectory() as tmp:
             s = score_models(self._write(tmp))
-        self.assertAlmostEqual(s["deepseek-v4-pro"]["success_rate"], 1.0)
-        self.assertAlmostEqual(s["glm-5.2"]["success_rate"], 0.5)
-        self.assertAlmostEqual(s["deepseek-v4-pro"]["p50_latency"], 15.0)
+        self.assertAlmostEqual(s["theclawbay-deepseek-v4-pro"]["success_rate"], 1.0)
+        self.assertAlmostEqual(s["theclawbay-glm-5.2"]["success_rate"], 0.5)
+        self.assertAlmostEqual(s["theclawbay-deepseek-v4-pro"]["p50_latency"], 15.0)
 
     def test_since_filter_excludes_older_lines(self):
         with tempfile.TemporaryDirectory() as tmp:
             s = score_models(self._write(tmp), since_iso="2026-07-25T06:43:00")
-        self.assertNotIn("deepseek-v4-pro", s)
+        self.assertNotIn("theclawbay-deepseek-v4-pro", s)
 
     def test_fix_attribution_from_commit_subjects(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -171,8 +171,8 @@ class ScoreModelsTests(unittest.TestCase):
             def fake_git(args, cwd):
                 return "fix(elf): wire 2 missing tags (via glm-5.2/deepseek-v4-pro)\nchore: noise\n"
             s = score_models(p, repo="/unused", git_run=fake_git)
-        self.assertEqual(s["glm-5.2"]["fixes"], 1)
-        self.assertEqual(s["deepseek-v4-pro"]["fixes"], 1)
+        self.assertEqual(s["theclawbay-glm-5.2"]["fixes"], 1)
+        self.assertEqual(s["theclawbay-deepseek-v4-pro"]["fixes"], 1)
 
     def test_missing_manifest_is_empty_not_a_crash(self):
         self.assertEqual(score_models("/nonexistent/manifest.log"), {})
@@ -256,3 +256,61 @@ class CandidatesForProviderTests(unittest.TestCase):
     def test_unknown_endpoint_falls_back_rather_than_raising(self):
         from model_rotator import candidates_for
         self.assertTrue(candidates_for("https://brand-new-provider/v1"))
+
+
+class ProviderSplitTests(unittest.TestCase):
+    """The same model id on two providers must never share a bucket --
+    that is what made a clawbay quota failure look like the model itself
+    degrading (DeepSeek read 98.7% on wafer, 81.8% blended with clawbay)."""
+
+    MANIFEST = (
+        "2026-07-25T14:00:00 phase=fixer worker=a provider=wafer model=DeepSeek-V4-Pro elapsed=10.0s OK\n"
+        "2026-07-25T14:01:00 phase=fixer worker=a provider=theclawbay model=deepseek-v4-pro RETRY "
+        "model call retry 1/10 after <HTTPError 429: 'Too Many Requests'>\n"
+        "2026-07-25T14:02:00 phase=fixer worker=a provider=theclawbay model=deepseek-v4-pro RETRY "
+        "model call retry 2/10 after <HTTPError 503: 'Service Unavailable'>\n"
+        "2026-07-25T14:03:00 phase=fixer worker=a provider=wafer model=DeepSeek-V4-Pro RETRY "
+        "model call retry 1/10 after RuntimeError('model returned an empty reply')\n"
+    )
+
+    def _score(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "manifest.log"
+            p.write_text(self.MANIFEST)
+            return score_models(p)
+
+    def test_same_model_splits_by_provider(self):
+        s = self._score()
+        self.assertIn("wafer-DeepSeek-V4-Pro", s)
+        self.assertIn("theclawbay-deepseek-v4-pro", s)
+
+    def test_429_and_500_are_separate_from_reply_level_retry(self):
+        s = self._score()
+        cb = s["theclawbay-deepseek-v4-pro"]
+        self.assertEqual(cb["http_429"], 1)
+        self.assertEqual(cb["http_500"], 1)
+        self.assertEqual(cb["retry"], 0)   # neither is a reply-quality failure
+
+    def test_empty_reply_counts_as_retry_not_http(self):
+        s = self._score()
+        w = s["wafer-DeepSeek-V4-Pro"]
+        self.assertEqual(w["retry"], 1)
+        self.assertEqual(w["http_429"], 0)
+        self.assertEqual(w["http_500"], 0)
+
+    def test_quota_failures_count_against_success_rate(self):
+        # 1 OK out of 3 attempts on clawbay -> quota costs the same
+        # wall-clock as any other failure, so it must not be excluded.
+        s = self._score()
+        self.assertAlmostEqual(s["theclawbay-deepseek-v4-pro"]["success_rate"], 0.0)
+        self.assertAlmostEqual(s["wafer-DeepSeek-V4-Pro"]["success_rate"], 0.5)
+
+    def test_legacy_lines_without_provider_are_inferred_by_casing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "manifest.log"
+            p.write_text(
+                "2026-07-25T01:00:00 phase=fixer worker=a model=Kimi-K2.6 elapsed=5.0s OK\n"
+                "2026-07-25T01:01:00 phase=fixer worker=a model=gpt-5.5 elapsed=5.0s OK\n")
+            s = score_models(p)
+        self.assertIn("wafer-Kimi-K2.6", s)
+        self.assertIn("theclawbay-gpt-5.5", s)
