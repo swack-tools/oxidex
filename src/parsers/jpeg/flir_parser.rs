@@ -474,6 +474,21 @@ fn parse_record_index(
     Ok(records)
 }
 
+/// Read FLIR date/time string from CameraInfo record.
+///
+/// The date/time is stored as a null-terminated ASCII string at the given offset,
+/// typically in EXIF-like format "YYYY:MM:DD HH:MM:SS.sss+HH:MM".
+fn read_flir_datetime_string(data: &[u8], offset: usize) -> Option<String> {
+    let max_len = 32;
+    if offset + max_len > data.len() {
+        return None;
+    }
+    let bytes = &data[offset..offset + max_len];
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    let str_bytes = &bytes[..end];
+    std::str::from_utf8(str_bytes).ok().map(|s| s.trim().to_string())
+}
+
 /// Parse legacy/embedded FLIR format without full FFF structure.
 ///
 /// Some FLIR segments contain data in a simpler format without the
@@ -515,7 +530,7 @@ fn parse_flir_legacy_format(data: &[u8], metadata: &mut MetadataMap) -> Result<(
         && fov < 180.0
     {
         metadata.insert(
-            "FLIR:FieldOfView".to_string(),
+            "APP1:FieldOfView".to_string(),
             TagValue::String(format!("{:.1} deg", fov)),
         );
     }
@@ -540,10 +555,8 @@ fn parse_flir_legacy_format(data: &[u8], metadata: &mut MetadataMap) -> Result<(
     }
 
     // Extract DateTimeOriginal
-    if data.len() > camera_info_offsets::DATE_TIME_ORIGINAL + 8 {
-        if let Some(dt) = parse_flir_datetime(data, camera_info_offsets::DATE_TIME_ORIGINAL) {
-            metadata.insert("FLIR:DateTimeOriginal".to_string(), TagValue::String(dt));
-        }
+    if let Some(dt) = read_flir_datetime_string(data, camera_info_offsets::DATE_TIME_ORIGINAL) {
+        metadata.insert("APP1:DateTimeOriginal".to_string(), TagValue::String(dt));
     }
 
     // Try to read dimensions
@@ -901,7 +914,7 @@ fn parse_camera_info_record(data: &[u8], metadata: &mut MetadataMap) {
         && fov < 180.0
     {
         metadata.insert(
-            "FLIR:FieldOfView".to_string(),
+            "APP1:FieldOfView".to_string(),
             TagValue::String(format!("{:.1} deg", fov)),
         );
     }
@@ -979,10 +992,8 @@ fn parse_camera_info_record(data: &[u8], metadata: &mut MetadataMap) {
     // === Timing and Focus ===
 
     // Try to parse DateTimeOriginal
-    if data.len() > camera_info_offsets::DATE_TIME_ORIGINAL + 8
-        && let Some(dt) = parse_flir_datetime(data, camera_info_offsets::DATE_TIME_ORIGINAL)
-    {
-        metadata.insert("FLIR:DateTimeOriginal".to_string(), TagValue::String(dt));
+    if let Some(dt) = read_flir_datetime_string(data, camera_info_offsets::DATE_TIME_ORIGINAL) {
+        metadata.insert("APP1:DateTimeOriginal".to_string(), TagValue::String(dt));
     }
 
     if let Some(focus_steps) = reader.i16_at(camera_info_offsets::FOCUS_STEP_COUNT) {
