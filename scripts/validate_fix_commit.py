@@ -134,15 +134,25 @@ CONDITIONAL_TRAILERS = tuple(k for k in REQUIRED_TRAILERS if k != "Perl-Ref")
 #   3  #119 added the tag-key / byte-string identifier exclusions
 #   4  match arms, &[&str] registries, format! templates, test-code
 #      scoping, wrong-perl-ref warn-only, conditional Perl-Ref
-POLICY_VERSION = 4
+#   5  hardening: printconv-wrong-perl-ref blocks again, the corpus is
+#      restricted to real tag tables, the mod-tests hunk gate is gone,
+#      and the &[&str] registry gate is keyed on the declaration NAME
+POLICY_VERSION = 5
 
 # Flags that are recorded for the human record but do NOT block
 # admission. `ownership:` says the fix landed outside the worker's squad
-# globs -- true but not a defect in the fix. `printconv-wrong-perl-ref:`
-# says the value IS a real ExifTool string, just attributed to the wrong
-# module: an evidence-quality problem, not the fabricated-value problem
-# the PrintConv check exists to stop.
-WARN_ONLY_FLAG_PREFIXES = ("ownership:", "printconv-wrong-perl-ref:")
+# globs -- true but not a defect in the fix.
+#
+# `printconv-wrong-perl-ref:` used to be here and is deliberately NOT any
+# more. Measured 2026-07-26 over 9,600 wrong-table trials drawn from
+# 11,884 real ExifTool PrintConv strings and weighted by the Perl-Ref
+# distribution in actual worker commits: checking the CITED module blocks
+# 97.3% of them, and accepting any whole-corpus hit gives that up. Worse,
+# the flag was warn-only AND discarded on accept, so the fabrication
+# signal went nowhere at all. The distinct flag name is still worth
+# keeping -- it tells a human "real string, wrong module" instead of
+# "invented string" -- but it must route to the queue, not to main.
+WARN_ONLY_FLAG_PREFIXES = ("ownership:",)
 
 # How much of a mismatched PrintConv value to embed in its flag. Full
 # values can be long (lens descriptions); the excerpt is for humans
@@ -221,25 +231,59 @@ _BARE_STRING_ELEMENT_RE = re.compile(
 # loop threw it away by `continue`-ing on "@@". These two patterns read
 # it back.
 #
-# A SLICE of str -- `&[&str]` -- is the Rust idiom for a flat registry of
-# KEY NAMES the parser recognises (`const KNOWN_TAGS: &[&str] = &[...]`
-# in the APP12 Olympus/Ricoh/thermal parsers). Its elements are tag
-# IDENTIFIERS ("REV", "S0", "STB1", "WB3"); demanding they appear in an
-# ExifTool PrintConv table rejects correct code, and was the single
-# largest quarantine cause measured 2026-07-25.
+# What we are looking for is a registry of KEY NAMES the parser
+# recognises -- `const KNOWN_TAGS: &[&str] = &[...]` in the APP12
+# Olympus/Ricoh/thermal parsers, whose elements are tag IDENTIFIERS
+# ("REV", "S0", "STB1", "WB3"). Demanding those appear in an ExifTool
+# PrintConv table rejects correct code, and was the single largest
+# quarantine cause measured 2026-07-25.
 #
-# A FIXED-SIZE array -- `[&str; 400]` -- is the idiom for an INDEXED
-# PrintConv lookup (`const LENS_NAMES: [&str; 400]`), whose elements are
-# genuine display values that must still be byte-checked. The `;` is
-# what separates the two, so this pattern deliberately does not match it.
+# This originally keyed on the TYPE SHAPE -- `&[&str]` slice meaning
+# registry, `[&str; N]` fixed array meaning indexed PrintConv lookup.
+# That premise is BACKWARDS for this repo. Counted 2026-07-26 over src/:
+# 36 `&[&str]` declarations against 3 `[&str; N]`, and the slices include
+# src/parsers/icc/registries.rs's RENDERING_INTENTS, ILLUMINANT_TYPES,
+# OBSERVER_TYPES and GEOMETRY_TYPES -- indexed display-value tables whose
+# own comments read "indexed by code 1-2" and whose elements
+# ("Perceptual", "Media-Relative Colorimetric", "CIE 1931") are exactly
+# the strings the byte check exists to protect. The shape gate therefore
+# disabled the fabrication check for 36 declarations to save 3.
+#
+# Keying on the declaration NAME instead is both narrower and closer to
+# the actual semantics: a name ending in _TAGS/_KEYS/_FIELDS/_NAMES/
+# _EXTENSIONS/_GROUPS/_MARKERS, or starting SUPPORTED_, denotes
+# identifiers. Measured against the same 36: 25 match (correctly skipped)
+# and 11 stay checked -- including all four ICC value tables. The
+# remainder that stay checked (CORE_FRAMEWORKS, PACKER_SECTIONS,
+# SUSPICIOUS_IMPORTS, ...) are identifier-ish too, but leaving them
+# CHECKED is the safe direction: over-checking costs one recoverable
+# flag and a POLICY_VERSION retry, under-checking ships a fabricated
+# value to main silently and forever.
 _STR_SLICE_REGISTRY_RE = re.compile(
-    r"\b(?:const|static)\s+\w+\s*:\s*&?\s*\[\s*&(?:'\w+\s+)?str\s*\]"
+    r"\b(?:const|static)\s+(\w*(?:_TAGS|_KEYS|_FIELDS|_NAMES|_EXTENSIONS|_GROUPS|_MARKERS)"
+    r"|SUPPORTED_\w+)\s*:\s*&?\s*\[\s*&(?:'\w+\s+)?str\s*\]"
 )
 
-# Assert messages and fixture strings in test code are not PrintConv
-# values -- thermal's `printconv-mismatch:Flash=0 should be PrintConv'd
-# to Off` flag came from an `assert!` message inside `mod tests`.
-_TEST_CONTEXT_RE = re.compile(r"\bmod\s+\w*tests?\b|\bfn\s+test_")
+# Assert messages are not PrintConv values -- thermal's
+# `printconv-mismatch:Flash=0 should be PrintConv'd to Off` flag came
+# from an `assert!` message.
+#
+# This is a LINE test, deliberately. It used to be a HUNK test keyed on
+# git's funcname context matching `mod tests`, which was exploitable:
+# git's default driver reports the nearest preceding COLUMN-0
+# declaration, and `#[cfg(test)] mod tests {` is conventionally the last
+# such declaration in a Rust file -- so appending a fabricated PrintConv
+# function at end-of-file makes git emit `@@ -141,3 +141,14 @@ mod tests {`
+# for a hunk of 100% PRODUCTION code, and the whole hunk was skipped.
+# Reproduced 2026-07-26 against src/core/formatters/exposure_program.rs:
+# 'Landscape Mode' / 'Portrait Mode' / 'Night Scene Mode' -- none of
+# which occur in any of the 171 Image/ExifTool/*.pm files -- went
+# ok=false on the pre-#125 validator and ok=true after it.
+#
+# A per-line assert test cannot be gamed that way: the fabricated table
+# entries are not assert lines, so they stay checked no matter what git
+# decides to put in the hunk header.
+_ASSERT_LINE_RE = re.compile(r"\b(?:assert\w*|panic|unreachable|todo|unimplemented)\s*!")
 
 # A macro that BUILDS a string at runtime. Its first argument is a format
 # TEMPLATE, not a value: `other => format!("Unknown({})", other)` yields
@@ -546,14 +590,19 @@ def extract_added_map_values(diff_text):
             parts = raw.split("@@")
             hunk_ctx = parts[2] if len(parts) > 2 else ""
             continue
-        if _TEST_CONTEXT_RE.search(hunk_ctx):
-            continue  # assert messages and fixtures are not PrintConv values
         if raw.startswith("+++") or raw.startswith("---"):
             continue
         if not raw or raw[0] not in "+ ":
             continue  # removed lines and diff noise
         added = raw[0] == "+"
         code = raw[1:]
+        if _ASSERT_LINE_RE.search(code):
+            # An assert/panic message is prose about a value, not the
+            # value. Bracket depth still has to advance below, so this
+            # must not `continue` past the depth bookkeeping -- but the
+            # line contributes nothing.
+            depth = max(0, depth + code.count("[") - code.count("]"))
+            continue
         if depth > 0:
             if added:
                 values.extend(_keep_printconv_values(_QUOTED_RE.findall(code), code))
@@ -634,23 +683,33 @@ def resolve_perl_module(perl_ref, perl_lib):
 
 @functools.lru_cache(maxsize=8)
 def _perl_lib_corpus(perl_lib):
-    """Every .pm byte under perl_lib, concatenated once per process.
+    """Every TAG-TABLE .pm byte under perl_lib, concatenated once.
 
-    Used only as a SECOND opinion after the Perl-Ref module itself has
-    already missed: a value that appears verbatim somewhere in ExifTool's
-    source is a real ExifTool string that was merely attributed to the
-    wrong module, which is an evidence defect -- not the invented-value
-    defect this check exists to catch. Measured cases: `YCbCr4:4:4 (1 1)`
-    lives in ExifTool.pm while the trailer said Exif.pm; `Centered` and
-    `JPEG (old-style)` live in Exif.pm while the trailer said
-    CanonRaw.pm; `Does not emit` lives in CanonCustom.pm while the
-    trailer said Canon.pm.
+    Used only to LABEL a miss, never to excuse one: a value absent from
+    the cited module but present in another tag table is "real string,
+    wrong module" (printconv-wrong-perl-ref) rather than "invented
+    string" (printconv-mismatch). BOTH block -- see
+    WARN_ONLY_FLAG_PREFIXES.
 
-    Cached because it is ~30MB of Perl and check_printconv can be called
-    once per commit across a whole sweep.
+    Restricted to Image/ExifTool/*.pm because the naive rglob("*.pm")
+    swept in a lot of Perl that has nothing to do with metadata and
+    supplies free substring matches: measured 2026-07-26 on
+    exiftool 13.55, the whole tree is 78.2% tag tables, 16.3%
+    Image/ExifTool/Lang/*.pm (translated UI strings for every language)
+    and 5.5% Alien/, Path/, Test/, File/, Capture/, FFI/, Sort/, Mozilla/.
+    A short display value hits those by coincidence.
+
+    Cached because it is tens of MB of Perl and check_printconv runs once
+    per commit across a whole sweep.
     """
+    root = perl_lib / "Image" / "ExifTool"
     blobs = []
-    for path in sorted(perl_lib.rglob("*.pm")):
+    for path in sorted(root.rglob("*.pm") if root.is_dir() else perl_lib.rglob("*.pm")):
+        # Lang/ is ExifTool's own translation tables -- every display
+        # string in every supported language, which would rescue almost
+        # any plausible-looking fabrication.
+        if "Lang" in path.parts:
+            continue
         try:
             blobs.append(path.read_bytes())
         except OSError:
