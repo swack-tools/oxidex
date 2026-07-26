@@ -751,6 +751,41 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_spiff_segment_full() {
+        let mut metadata = MetadataMap::new();
+        let result = parse_spiff_segment(&spiff_payload_32(), &mut metadata);
+        assert!(result.is_ok());
+        assert_eq!(metadata.get_string("SPIFF:SPIFFVersion"), Some("1.0"));
+        assert_eq!(
+            metadata.get_string("SPIFF:ProfileID"),
+            Some("Continuous-tone Base")
+        );
+        assert_eq!(metadata.get_integer("SPIFF:ColorComponents"), Some(3));
+        assert_eq!(metadata.get_integer("SPIFF:ImageHeight"), Some(480));
+        assert_eq!(metadata.get_integer("SPIFF:ImageWidth"), Some(640));
+        assert_eq!(
+            metadata.get_string("SPIFF:ColorSpace"),
+            Some("YCbCr, ITU-R BT 601-1, RGB")
+        );
+        assert_eq!(metadata.get_integer("SPIFF:BitsPerSample"), Some(8));
+        assert_eq!(metadata.get_string("SPIFF:Compression"), Some("JPEG"));
+        assert_eq!(metadata.get_string("SPIFF:ResolutionUnit"), Some("inches"));
+        assert_eq!(metadata.get_integer("SPIFF:YResolution"), Some(72));
+        assert_eq!(metadata.get_integer("SPIFF:XResolution"), Some(72));
+    }
+
+    #[test]
+    fn test_parse_spiff_segment_rejects_non_32_byte_payload() {
+        // ExifTool only recognizes 32-byte SPIFF payloads; a 30-byte
+        // spec-shaped payload must extract nothing.
+        let mut payload = spiff_payload_32();
+        payload.truncate(30);
+        let mut metadata = MetadataMap::new();
+        assert!(parse_spiff_segment(&payload, &mut metadata).is_err());
+        assert!(metadata.get("SPIFF:SPIFFVersion").is_none());
+    }
+
+    #[test]
     fn test_parse_olympus_app12_imbb() {
         let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nIMbb=35761\r\n";
 
