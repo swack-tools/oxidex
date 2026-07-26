@@ -115,6 +115,27 @@ REQUIRED_TRAILERS = (
 # value for that trailer to attest. See check_trailers.
 CONDITIONAL_TRAILERS = tuple(k for k in REQUIRED_TRAILERS if k != "Perl-Ref")
 
+# Bump this WHENEVER a change here can turn a previously-rejected commit
+# into an accepted one -- new/removed REQUIRED_TRAILERS, any change to
+# what extract_added_map_values extracts, any change to check_printconv's
+# verdicts, or a new WARN_ONLY prefix.
+#
+# The merger stamps this version onto every quarantine record, and treats
+# a head quarantined under a DIFFERENT version as eligible for one fresh
+# attempt (see squad_merge_loop.candidate_commits). Without it, quarantine
+# is terminal: the 2026-07-25 extractor fixes made 20 of 44 quarantined
+# heads admissible, and not one of them would ever have been re-examined,
+# because both the squad-status heads map and the patch-id ledger reject
+# a known sha before the validator is ever consulted.
+#
+# History:
+#   1  original M1 gate
+#   2  #114 dropped the Table trailer requirement
+#   3  #119 added the tag-key / byte-string identifier exclusions
+#   4  match arms, &[&str] registries, format! templates, test-code
+#      scoping, wrong-perl-ref warn-only, conditional Perl-Ref
+POLICY_VERSION = 4
+
 # Flags that are recorded for the human record but do NOT block
 # admission. `ownership:` says the fix landed outside the worker's squad
 # globs -- true but not a defect in the fix. `printconv-wrong-perl-ref:`
@@ -830,6 +851,7 @@ def validate_commit(
     return {
         "sha": sha,
         "ok": not hard_flags,
+        "policy_version": POLICY_VERSION,
         "flags": flags,
         "patch_id": patch_id,
         "checks": {
