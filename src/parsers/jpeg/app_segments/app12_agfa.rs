@@ -248,9 +248,14 @@ fn parse_key_value_pairs(content: &[u8], metadata: &mut MetadataMap) {
             // Flash is a standard Picture Info field. ExifTool exposes the
             // display-ready value (for example, "Off") in the APP12 group.
             if key.eq_ignore_ascii_case("Flash") {
+                let flash_str = match value {
+                    "0" => "Off",
+                    "1" => "On",
+                    _ => value,
+                };
                 metadata.insert(
                     "APP12:Flash".to_string(),
-                    TagValue::String(value.to_string()),
+                    TagValue::String(flash_str.to_string()),
                 );
             }
 
@@ -424,6 +429,24 @@ mod tests {
         assert_eq!(metadata.get_string("Agfa:Flash"), Some("Fired"));
         assert_eq!(metadata.get_string("APP12:Flash"), Some("Fired"));
         assert_eq!(metadata.get_string("Agfa:FlashMode"), Some("Auto"));
+    }
+
+    /// Test parsing Flash tag with numeric values (PrintConv to Off/On).
+    #[test]
+    fn test_parse_flash_numeric() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"AGFA");
+        data.push(0x00);
+        data.extend_from_slice(b"Flash=0\nFlashMode=1\n");
+
+        let result = parse_app12_agfa(&data);
+        assert!(result.is_ok());
+
+        let metadata = result.unwrap();
+        assert_eq!(metadata.get_string("APP12:Flash"), Some("Off"));
+        // FlashMode is not a recognized special tag, so it gets the generic
+        // Agfa: prefix. The parser auto-converts numeric values to Integer.
+        assert_eq!(metadata.get_integer("Agfa:FlashMode"), Some(1));
     }
 
     /// Test that segment too short returns an error.

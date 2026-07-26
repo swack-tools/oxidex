@@ -55,6 +55,10 @@ const KNOWN_TAGS: &[&str] = &[
     "Zoom",
     "Resolution",
     "ImageSize",
+    "WB2",
+    "WB3",
+    "WB4",
+    "WB5",
     "Quality",
     "FocusMode",
     "WhiteBalance",
@@ -313,24 +317,33 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     "APP12:Resolution".to_string(),
                     TagValue::String(value.clone()),
                 );
-            }
-
-            // ImageSize stores a dash-delimited width-height pair (for
-            // example "1280-1024"); ExifTool's PrintConv translates every
-            // '-' to 'x' (`$val=~tr/-/x/;$val`) to produce the "1280x1024"
-            // display form.
-            if key.eq_ignore_ascii_case("ImageSize") {
+                // ImageSize is derived from Resolution when both are present
                 metadata.insert(
                     "APP12:ImageSize".to_string(),
                     TagValue::String(value.replace('-', "x")),
                 );
             }
 
+            // ImageSize key: only used if Resolution was not present
+            if key.eq_ignore_ascii_case("ImageSize") {
+                if !metadata.contains_key("APP12:ImageSize") {
+                    metadata.insert(
+                        "APP12:ImageSize".to_string(),
+                        TagValue::String(value.replace('-', "x")),
+                    );
+                }
+            }
+
             // Flash is part of ExifTool's JPEG Picture Info table and belongs
             // to the APP12 group. Preserve its display-ready textual value,
             // such as "Off", while retaining the Olympus compatibility tag.
             if key.eq_ignore_ascii_case("Flash") {
-                metadata.insert("APP12:Flash".to_string(), TagValue::String(value.clone()));
+                let flash_display = match value.as_str() {
+                    "0" => "Off".to_string(),
+                    "1" => "On".to_string(),
+                    _ => value.clone(),
+                };
+                metadata.insert("APP12:Flash".to_string(), TagValue::String(flash_display));
             }
 
             // The source field in JPEG Picture Info records is normally named
@@ -477,6 +490,17 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .map(TagValue::Integer)
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
                 metadata.insert(format!("APP12:{}", mode_upper), app12_value);
+            }
+
+            // ExifTool exposes the Olympus WB2..WB5 diagnostic fields in
+            // the APP12 group using their original names.
+            let wb_upper = key.to_ascii_uppercase();
+            if matches!(wb_upper.as_str(), "WB2" | "WB3" | "WB4" | "WB5") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert(format!("APP12:{}", wb_upper), app12_value);
             }
 
             // ExifTool exposes the Olympus IMbb diagnostic field in the
