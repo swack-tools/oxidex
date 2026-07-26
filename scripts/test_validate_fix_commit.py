@@ -1127,5 +1127,574 @@ class NonSourceFilePathTests(unittest.TestCase):
             validate_fix_commit.WARN_ONLY_FLAG_PREFIXES))
 
 
+class ExtractorEvasionShapeTests(unittest.TestCase):
+    """Shapes that carried a display string straight past the PrintConv
+    byte check (measured on origin/main = a2aa0df, POLICY_VERSION 5,
+    2026-07-26). Each was reproduced end-to-end before being fixed:
+    extract_added_map_values returned ([], []), validate_commit returned
+    ok=True with no flags, and overlord_sweep.classify_for_judgment_queue
+    -- which shares this extractor and is the only thing that routes a
+    commit to a human -- returned [] as well. So the commit shipped as
+    machine_accepted with zero review of a value nothing had verified.
+
+    The three families:
+      * a BLOCK match arm (`260 => {` / `"...".to_string()` / `}`) --
+        rustfmt MANUFACTURES this shape out of a same-line arm at 71+
+        chars of display value (measured below), so the check switched
+        itself off as a pure function of line width;
+      * the repo's own table macro (`const_decoder!(...[(12, "..."), ...])`,
+        338 uses across 46 files) and `.insert(k, "...")`, neither of
+        which has a `=>` or is a bare string element;
+      * a TRAILING COMMENT on a bare table element -- the file's own
+        house style (`"F2",             // 4`) -- which broke the
+        `$`-anchored bare-string rule.
+    """
+
+    def setUp(self):
+        validate_fix_commit._perl_lib_corpus.cache_clear()
+
+    # -- block match arms (rustfmt's own output) -------------------------
+
+    def test_block_arm_body_value_is_extracted(self):
+        diff = (
+            "diff --git a/src/canon/lens.rs b/src/canon/lens.rs\n"
+            "@@ -20,6 +20,9 @@ pub fn lens_type(v: u16) -> String {\n"
+            "+        260 => {\n"
+            '+            "Fabricated Sigma 150-600mm F5-6.3 DG OS HSM Sport".to_string()\n'
+            "+        }\n"
+        )
+        values, unverifiable = extract_added_map_values(diff)
+        self.assertEqual(
+            values, ["Fabricated Sigma 150-600mm F5-6.3 DG OS HSM Sport"])
+        self.assertEqual(unverifiable, [])
+
+    def test_block_arm_conversion_wrappers_are_extracted(self):
+        # Any expression wrapped around the literal used to defeat the
+        # bare-string rule; these are the wrappers real oxidex code uses.
+        for body in (
+            '            "Fabricated Value".to_string()',
+            '            "Fabricated Value".into()',
+            '            String::from("Fabricated Value")',
+            '            Some("Fabricated Value".to_string())',
+            '            Cow::Borrowed("Fabricated Value")',
+            '            TagValue::String("Fabricated Value".to_owned())',
+            '            return "Fabricated Value".to_string();',
+        ):
+            with self.subTest(body=body.strip()):
+                diff = (
+                    "diff --git a/src/canon/lens.rs b/src/canon/lens.rs\n"
+                    "@@ -20,6 +20,9 @@ pub fn lens_type(v: u16) -> String {\n"
+                    "+        260 => {\n"
+                    f"+{body}\n"
+                    "+        }\n"
+                )
+                values, _ = extract_added_map_values(diff)
+                self.assertEqual(values, ["Fabricated Value"])
+
+    @unittest.skipUnless(
+        subprocess.run(["which", "rustfmt"], capture_output=True).returncode == 0,
+        "rustfmt not installed",
+    )
+    def test_rustfmt_reflow_of_a_long_arm_keeps_the_check_on(self):
+        # THE property that actually matters. Measured 2026-07-26 with
+        # rustfmt 1.9.0 --edition 2021 by binary search: at indent 8 with
+        # a 3-digit key, a same-line arm whose display value is >= 71
+        # chars is rewritten into `260 => {` / `"...".to_string()` / `}`.
+        # 2.44% of the 19,796 distinct display strings in
+        # Image/ExifTool/*.pm are that long, so before this fix the byte
+        # check silently switched off for long values with no adversarial
+        # intent required -- and `cargo fmt` runs on every sweep branch.
+        long_value = "Fabricated " + "Lens Name " * 6  # 71 chars
+        self.assertGreaterEqual(len(long_value), 71)
+        source = (
+            "pub fn lens_type(v: u16) -> String {\n"
+            "    match v {\n"
+            f'        260 => "{long_value}".to_string(),\n'
+            '        _ => "Unknown".to_string(),\n'
+            "    }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "lens.rs"
+            path.write_text(source)
+            subprocess.run(
+                ["rustfmt", "--edition", "2021", str(path)],
+                check=True, capture_output=True,
+            )
+            formatted = path.read_text()
+        # rustfmt really did produce the block shape ...
+        self.assertIn("260 => {", formatted)
+        diff = (
+            "diff --git a/src/canon/lens.rs b/src/canon/lens.rs\n"
+            "@@ -1,6 +1,8 @@ pub fn lens_type(v: u16) -> String {\n"
+            + "".join(f"+{line}\n" for line in formatted.splitlines())
+        )
+        values, _ = extract_added_map_values(diff)
+        # ... and the value is still checked.
+        self.assertIn(long_value, values)
+
+    def test_block_arm_fabrication_is_flagged_end_to_end(self):
+        rust = (
+            "pub fn lens_type(v: u16) -> String {\n"
+            "    match v {\n"
+            "        1 => {\n"
+            '            "Economy".to_string()\n'
+            "        }\n"
+            "        260 => {\n"
+            '            "Fabricated Lens That Is Not In Any Perl Module".to_string()\n'
+            "        }\n"
+            '        _ => "Unknown".to_string(),\n'
+            "    }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            perl_lib = write_perl_module(Path(tmp) / "perl", PERL_QUALITY)
+            sha = commit_fix(repo, {"src/canon/lens.rs": rust}, full_trailers())
+            result = validate_commit(sha, repo, perl_lib=perl_lib)
+        self.assertIn(
+            "printconv-mismatch:Fabricated Lens That Is Not In Any Perl Module",
+            result["flags"])
+        self.assertFalse(result["ok"])
+        # The genuine arm in the same block, written in the same shape,
+        # is byte-verified rather than merely ignored.
+        self.assertNotIn("printconv-mismatch:Economy", result["flags"])
+
+    def test_stringless_block_arm_bodies_stay_clean(self):
+        # The false-quarantine class the `=>` rule was loosened for in
+        # POLICY_VERSION 4 must not come back through the block door.
+        diff = (
+            "diff --git a/src/raw/metadata.rs b/src/raw/metadata.rs\n"
+            "@@ -10,3 +10,14 @@ fn read_header(bytes: &[u8]) -> Result<()> {\n"
+            "+        ByteOrder::BigEndian => {\n"
+            "+            u16::from_be_bytes([bytes[0], bytes[1]])\n"
+            "+        }\n"
+            "+        Err(_) => {\n"
+            "+            return;\n"
+            "+        }\n"
+            "+        _ => {\n"
+            "+            continue;\n"
+            "+        }\n"
+        )
+        values, unverifiable = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+        self.assertEqual(unverifiable, [])
+
+    def test_format_template_inside_a_block_arm_is_not_a_value(self):
+        # A template is not a display value, and inside a BODY it is not
+        # raised as printconv-unverifiable either: measured 2026-07-26
+        # over all 2,348 worker diffs, doing so newly blocks 227 of them
+        # against the 100 that carry the flag today, and a `{}` template
+        # can never be a fabricated ExifTool string. Quarantined head
+        # 4a71eb0a4b72 -- a real CR2 LensInfo fix whose whole arm body is
+        # `format!("{:.1}", ...)` -- is one of the 227.
+        diff = (
+            "diff --git a/src/x.rs b/src/x.rs\n"
+            "@@ -1,2 +1,5 @@ fn describe(other: u32) -> String {\n"
+            "+        other => {\n"
+            '+            format!("Unknown({})", other)\n'
+            "+        }\n"
+        )
+        values, unverifiable = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+        self.assertEqual(unverifiable, [])
+
+        # The SAME-LINE arm keeps its unverifiable flag: that rule is
+        # about an arm whose entire value is computed, and nothing here
+        # loosens it.
+        same_line = (
+            "diff --git a/src/x.rs b/src/x.rs\n"
+            "@@ -1,2 +1,3 @@ fn describe(other: u32) -> String {\n"
+            '+        other => format!("Unknown({})", other),\n'
+        )
+        values, unverifiable = extract_added_map_values(same_line)
+        self.assertEqual(values, [])
+        self.assertEqual(len(unverifiable), 1)
+
+    def test_only_the_arms_own_value_is_taken_from_its_body(self):
+        # Everything else in a body is ordinary code: separators, byte
+        # magic, key prefixes and tag names. Extracting those re-imported
+        # the false-quarantine class POLICY_VERSION 3 and 4 were spent
+        # removing (334 of 2,348 real worker diffs, measured 2026-07-26).
+        diff = (
+            "diff --git a/src/parsers/raw/dng.rs b/src/parsers/raw/dng.rs\n"
+            "@@ -10,3 +10,10 @@ fn decode(tag: u16) -> Option<String> {\n"
+            "+        0xC61A => {\n"
+            '+            let key = format!("EXIF:{}", "BlackLevel");\n'
+            '+            let joined = parts.join(", ");\n'
+            '+            md.insert(key, "Fabricated Body Value".to_string());\n'
+            '+            "Fabricated Arm Value".to_string()\n'
+            "+        }\n"
+        )
+        values, _ = extract_added_map_values(diff)
+        # The arm's own value, and the .insert() value (its own rule) --
+        # but not the key prefix, the tag name or the separator.
+        self.assertIn("Fabricated Arm Value", values)
+        self.assertIn("Fabricated Body Value", values)
+        self.assertNotIn("BlackLevel", values)
+        self.assertNotIn(", ", values)
+
+    def test_multiline_assert_inside_a_block_arm_is_ignored(self):
+        diff = (
+            "diff --git a/src/thermal.rs b/src/thermal.rs\n"
+            "@@ -200,3 +200,9 @@ mod tests {\n"
+            "+        0 => {\n"
+            "+            assert_eq!(\n"
+            '+                metadata.get_string("APP12:Flash"),\n'
+            '+                Some("Off"),\n'
+            "+                \"Flash=0 should be PrintConv'd to Off\"\n"
+            "+            );\n"
+            "+        }\n"
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+
+    def test_arm_body_tracking_closes_and_does_not_leak(self):
+        # The body skip/extract window must CLOSE on the matching brace,
+        # and must never survive a hunk or file boundary -- the same
+        # invariant the bracket-depth tracker already has.
+        diff = (
+            "diff --git a/src/canon/lens.rs b/src/canon/lens.rs\n"
+            "@@ -20,6 +20,7 @@ pub fn lens_type(v: u16) -> String {\n"
+            "+        260 => {\n"
+            '+            "Fabricated Inside".to_string()\n'
+            "+        }\n"
+            "+    }\n"
+            '+    let unrelated = "Not A Map Value";\n'
+            "diff --git a/src/other.rs b/src/other.rs\n"
+            "@@ -1,2 +1,3 @@ fn other() {\n"
+            '+    let also_unrelated = "Still Not A Map Value";\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Fabricated Inside"])
+
+    # -- the repo's own table shapes ------------------------------------
+
+    def test_const_decoder_table_values_are_extracted(self):
+        # `const_decoder!` is oxidex's canonical PrintConv table macro --
+        # 338 uses across 46 files in src/ (counted 2026-07-26) -- and the
+        # module docstring already claimed to cover "const_decoder-style
+        # tables". It did not: _CONST_STATIC_RE's \b(?:const|static)\b
+        # cannot match `const_decoder!` (the underscore kills the word
+        # boundary) and `(12, "...")` is neither a `=>` line nor a bare
+        # string element. Real fleet output: 17 distinct worker diffs add
+        # 21 distinct multi-word display strings in this shape.
+        diff = (
+            "diff --git a/src/parsers/tiff/makernotes/canon.rs "
+            "b/src/parsers/tiff/makernotes/canon.rs\n"
+            "@@ -40,6 +40,12 @@\n"
+            #
+            # The entries deliberately SHARE a line and one key is
+            # parenthesised. One tuple per line let this test pass with
+            # _TABLE_MACRO_RE replaced by a never-matching pattern --
+            # _BARE_TUPLE_ELEMENT_RE carried it alone, so the macro
+            # recognition that is the headline of this fix was unpinned.
+            # Verified 2026-07-26 by mutation.
+            "+const_decoder!(\n"
+            "+    pub ASPECT_RATIO,\n"
+            "+    i32,\n"
+            '+    [(0, "3:2"), (mask(12), "Totally Fabricated Crop Mode")]\n'
+            "+);\n"
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertIn("Totally Fabricated Crop Mode", values)
+
+    def test_single_line_const_decoder_table_values_are_extracted(self):
+        diff = (
+            "diff --git a/src/parsers/tiff/makernotes/canon.rs "
+            "b/src/parsers/tiff/makernotes/canon.rs\n"
+            "@@ -40,6 +40,7 @@\n"
+            '+const_decoder!(pub AF_MICRO_ADJ, i16, [(1, "Fabricated Adjust Mode")]);\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Fabricated Adjust Mode"])
+
+    def test_mid_table_tuple_element_is_extracted(self):
+        # A value inserted into the MIDDLE of an existing decoder table:
+        # the declaring `[` is outside the hunk, exactly like the
+        # bare-string case _BARE_STRING_ELEMENT_RE exists for.
+        diff = (
+            "diff --git a/src/parsers/tiff/makernotes/canon.rs "
+            "b/src/parsers/tiff/makernotes/canon.rs\n"
+            "@@ -140,6 +140,7 @@\n"
+            '         (11, "1:1"),\n'
+            '+        (12, "Fabricated Crop Mode"),\n'
+            '         (13, "16:9"),\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Fabricated Crop Mode"])
+
+    def test_for_loop_inline_table_values_are_extracted(self):
+        # `for (bit, name) in [(29, "Main 10"), ...]` -- a real QuickTime
+        # HEVC fix used this shape and its whole diff extracted nothing.
+        #
+        # The tuples MUST share a line here. Written one-per-line this
+        # test passed with _INLINE_TABLE_RE replaced by a never-matching
+        # pattern, because _BARE_TUPLE_ELEMENT_RE satisfied it on its own
+        # -- so it pinned nothing of the rule it is named for. Verified
+        # 2026-07-26 by mutation: with the rule neutered, this now fails.
+        diff = (
+            "diff --git a/src/parsers/quicktime/hevc.rs "
+            "b/src/parsers/quicktime/hevc.rs\n"
+            "@@ -10,6 +10,8 @@ fn profiles(flags: u32) -> Vec<String> {\n"
+            '+    for (bit, name) in [(29, "Main 10"), (30, "Fabricated Profile Name")] {\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertIn("Fabricated Profile Name", values)
+        self.assertIn("Main 10", values)
+
+    def test_map_insert_value_is_extracted(self):
+        diff = (
+            "diff --git a/src/parsers/raw/rw2.rs b/src/parsers/raw/rw2.rs\n"
+            "@@ -10,6 +10,8 @@ fn quality_map() -> HashMap<u16, &'static str> {\n"
+            '+    map.insert(1u16, "Economy");\n'
+            '+    map.insert(2u16, "Fabricated Fine Detail");\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Economy", "Fabricated Fine Detail"])
+
+    def test_insert_keyed_by_a_metadata_key_stays_clean(self):
+        # The overwhelmingly common `.insert(...)` shape in src/ (1,029
+        # sites counted 2026-07-26) puts an oxidex metadata KEY first and
+        # a runtime value second -- no display string to check, and the
+        # key itself is an identifier, not a PrintConv value.
+        diff = (
+            "diff --git a/src/parsers/jpeg/exif.rs b/src/parsers/jpeg/exif.rs\n"
+            "@@ -10,6 +10,9 @@ fn emit(md: &mut Metadata) {\n"
+            '+    md.insert("EXIF:Make", make_value);\n'
+            '+    md.insert("EXIF:Model", model.to_string());\n'
+            '+    md.insert(format!("ICC_Profile:{}", tag), value);\n'
+        )
+        values, unverifiable = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+        self.assertEqual(unverifiable, [])
+
+    def test_perl_ref_is_required_when_the_values_live_in_a_decoder_table(self):
+        # Second-order effect of the blind spot: check_trailers is called
+        # with require_perl_ref=bool(extract_added_map_values(diff)[0]),
+        # so a diff whose only display strings sat in a const_decoder!
+        # table was not even required to cite the Perl evidence a human
+        # would need to audit it.
+        rust = (
+            "const_decoder!(\n"
+            "    pub ASPECT_RATIO,\n"
+            "    i32,\n"
+            "    [\n"
+            '        (0, "Economy"),\n'
+            '        (12, "Fine"),\n'
+            "    ]\n"
+            ");\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            perl_lib = write_perl_module(Path(tmp) / "perl", PERL_QUALITY)
+            sha = commit_fix(
+                repo, {"src/canon/aspect.rs": rust}, full_trailers(**{"Perl-Ref": None})
+            )
+            result = validate_commit(sha, repo, perl_lib=perl_lib)
+        self.assertIn("missing-trailer:Perl-Ref", result["flags"])
+        self.assertFalse(result["ok"])
+
+    # -- trailing comments on bare table elements ------------------------
+
+    def test_trailing_comments_do_not_hide_a_mid_table_value(self):
+        # src/parsers/icc/registries.rs writes its indexed display-value
+        # tables as `"F2",             // 4`. The `$`-anchored bare-string
+        # rule matched none of those, so 3 of the 4 ICC tables the
+        # POLICY_VERSION 5 comment claims to protect were unprotected in
+        # their own house style (measured 2026-07-26: only tables whose
+        # declaring line lands inside the 3-line diff context survived).
+        for element in (
+            '+    "FAB COMMENT VALUE", // 42',
+            '+    "FAB COMMENT VALUE", /* 42 */',
+            '+    "FAB COMMENT VALUE",            // 4b',
+            '+    "FAB COMMENT VALUE" // trailing, no comma',
+        ):
+            with self.subTest(element=element):
+                diff = (
+                    "diff --git a/src/parsers/icc/registries.rs "
+                    "b/src/parsers/icc/registries.rs\n"
+                    "@@ -539,6 +539,7 @@ pub static ILLUMINANT_TYPES: &[&str] = &[\n"
+                    '     "F2",             // 4\n'
+                    f"{element}\n"
+                    '     "F7",             // 5\n'
+                )
+                values, _ = extract_added_map_values(diff)
+                self.assertEqual(values, ["FAB COMMENT VALUE"])
+
+    def test_a_url_inside_a_string_is_not_mistaken_for_a_comment(self):
+        # Why the comment strip is a scanner and not a regex: a `//`
+        # inside a string literal is not a comment.
+        diff = (
+            "diff --git a/src/parsers/icc/registries.rs "
+            "b/src/parsers/icc/registries.rs\n"
+            "@@ -539,6 +539,7 @@ pub static ILLUMINANT_TYPES: &[&str] = &[\n"
+            '+    "http://x.example//y",\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["http://x.example//y"])
+
+    def test_the_comment_scanner_handles_the_cases_a_regex_would_not(self):
+        strip = validate_fix_commit.strip_trailing_comment
+        self.assertEqual(strip('    "FAB", // 42'), '    "FAB", ')
+        self.assertEqual(strip('    "FAB", /* 42 */'), '    "FAB", ')
+        # `//` and `/*` inside a literal are literal text, not comments.
+        self.assertEqual(strip('    "http://x//y",'), '    "http://x//y",')
+        self.assertEqual(strip('    "a /* b */ c",'), '    "a /* b */ c",')
+        # An escaped quote does not end the literal early.
+        self.assertEqual(strip('    "say \\" // no",'), '    "say \\" // no",')
+        # An unterminated block comment swallows the rest of the line.
+        self.assertEqual(strip('    "FAB", /* 42'), '    "FAB", ')
+        # A comment-only line becomes empty, so no rule can match it.
+        self.assertEqual(strip("    // 42").strip(), "")
+
+    def test_a_tableless_decoder_macro_does_not_pend(self):
+        # `const_decoder!(` pends until its `[` arrives on a later line
+        # (rustfmt's multi-line form). A macro call that CLOSES on its own
+        # line without a table must NOT stay pending, or the next `[`
+        # anywhere in the hunk gets read as that table's body.
+        tail = validate_fix_commit._table_literal_tail
+        self.assertEqual(tail("const_decoder!(", False), (None, True))
+        self.assertEqual(tail("    register_decoder!(ASPECT_RATIO, i32);", False),
+                         (None, False))
+        # While pending, the `[` line opens the table; a macro argument
+        # line keeps pending without opening one.
+        self.assertEqual(tail("    pub ASPECT_RATIO,", True), (None, True))
+        self.assertEqual(tail("    [", True), ("    [", False))
+
+    def test_a_string_that_only_exists_inside_a_comment_is_not_a_value(self):
+        diff = (
+            "diff --git a/src/parsers/icc/registries.rs "
+            "b/src/parsers/icc/registries.rs\n"
+            "@@ -539,6 +539,8 @@ pub static ILLUMINANT_TYPES: &[&str] = &[\n"
+            '+    "Real Value", // see "Commented Out Value"\n'
+            '+    // "Fully Commented Value",\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Real Value"])
+
+    def test_icc_house_style_insert_is_flagged_end_to_end(self):
+        # The real table, the real style, the real consumer: tags.rs does
+        # `ILLUMINANT_TYPES.get(illum_type as usize)`, so a fabricated
+        # element is a user-visible wrong metadata value AND it shifts
+        # every later index.
+        base = (
+            "pub static ILLUMINANT_TYPES: &[&str] = &[\n"
+            '    "Unknown",        // 0 - not used\n'
+            '    "D50",            // 1\n'
+            '    "D65",            // 2\n'
+            '    "D93",            // 3\n'
+            '    "F2",             // 4\n'
+            '    "D55",            // 5\n'
+            '    "A",              // 6\n'
+            '    "Equi-Power (E)", // 7\n'
+            '    "F8",             // 8\n'
+            "];\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            perl_lib = write_perl_module(
+                Path(tmp) / "perl", "%illum = (1 => 'D50', 2 => 'D65');\n"
+            )
+            commit_fix(repo, {"src/parsers/icc/registries.rs": base},
+                       full_trailers(), subject="base: illuminants")
+            fabricated = base.replace(
+                '    "D55",            // 5\n',
+                '    "D77",            // 5b\n'
+                '    "D55",            // 5\n')
+            sha = commit_fix(
+                repo, {"src/parsers/icc/registries.rs": fabricated}, full_trailers())
+            result = validate_commit(sha, repo, perl_lib=perl_lib)
+        self.assertIn("printconv-mismatch:D77", result["flags"])
+        self.assertFalse(result["ok"])
+
+    # -- the human-routing gate shares this extractor --------------------
+
+    def test_the_judgment_queue_also_sees_these_shapes_now(self):
+        # overlord_sweep.classify_for_judgment_queue calls THIS extractor
+        # for its only PrintConv reason, so every shape above defeated the
+        # machine gate and the human-routing gate simultaneously: the
+        # commit shipped as machine_accepted with no review at all.
+        # Imported lazily so the rest of this file does not depend on the
+        # sweep module (verified side-effect-free on import 2026-07-26:
+        # it writes nothing under ~/.oxidex at import time).
+        import overlord_sweep
+
+        shapes = {
+            "block arm": (
+                "pub fn lens(v: u16) -> String {\n"
+                "    match v {\n"
+                "        260 => {\n"
+                '            "Fabricated Block Value".to_string()\n'
+                "        }\n"
+                "    }\n"
+                "}\n"
+            ),
+            "insert": (
+                "pub fn build(map: &mut HashMap<u16, &'static str>) {\n"
+                '    map.insert(9, "Fabricated Insert Value");\n'
+                "}\n"
+            ),
+            "decoder table": (
+                "const_decoder!(\n"
+                "    pub ASPECT_RATIO,\n"
+                "    i32,\n"
+                "    [\n"
+                '        (12, "Fabricated Table Value"),\n'
+                "    ]\n"
+                ");\n"
+            ),
+        }
+        for name, rust in shapes.items():
+            with self.subTest(shape=name), tempfile.TemporaryDirectory() as tmp:
+                repo = make_repo(tmp)
+                sha = commit_fix(repo, {"src/canon/x.rs": rust}, full_trailers())
+                reasons = overlord_sweep.classify_for_judgment_queue(
+                    sha, repo, validate_fix_commit.run_git)
+                self.assertIn("touches a value-map/PrintConv-like table", reasons)
+
+    # -- the docstring must describe what the code does ------------------
+
+    def test_the_docstring_does_not_promise_unimplemented_behaviour(self):
+        # The module docstring promised that "computed right-hand sides
+        # (format!/sprintf-style, function calls, match-arm blocks)" are
+        # reported printconv-unverifiable. Only the macro half was ever
+        # implemented: a plain call's quoted argument is EXTRACTED and
+        # byte-checked, and match-arm blocks are now extracted too (that
+        # is the point of this change). A gate's docstring claiming a
+        # protection it does not have is worse than no docstring.
+        doc = " ".join((validate_fix_commit.__doc__ or "").split())
+        # The exact old promise, whitespace-normalised.
+        self.assertNotIn(
+            "computed right-hand sides (format!/sprintf-style, function "
+            "calls, match-arm blocks)", doc)
+        # And it now names the shapes it really does extract.
+        self.assertIn("block-bodied arms", doc)
+
+        # ... and here is the behaviour the old text mis-described: the
+        # quoted argument of a plain function call IS checked. Keeping it
+        # checked is deliberate -- `Some("Centered".to_string())`,
+        # `String::from("sRGB")` and `.insert(k, "Fine")` are all
+        # single-shape function calls carrying genuine display values,
+        # and a "skip strings that are call arguments" rule would re-open
+        # exactly the `.insert(k, "...")` hole closed above.
+        diff = (
+            "diff --git a/src/parsers/raw/cr2.rs b/src/parsers/raw/cr2.rs\n"
+            "@@ -10,3 +10,4 @@ fn tag_name(tag_id: u16) -> String {\n"
+            '+        (_, 0x080a) => lookup_tag_name(tag_id, "EXIF"),\n'
+        )
+        values, unverifiable = extract_added_map_values(diff)
+        self.assertEqual(values, ["EXIF"])
+        self.assertEqual(unverifiable, [])
+
+    def test_policy_version_was_bumped_for_the_new_extraction_rules(self):
+        # The header mandates a bump for "any change to what
+        # extract_added_map_values extracts", in either direction: it is
+        # what lets squad_merge_loop re-offer already-quarantined heads,
+        # and what tells a human reading quarantine.jsonl which ruleset
+        # produced a verdict.
+        self.assertGreaterEqual(validate_fix_commit.POLICY_VERSION, 6)
+
+
 if __name__ == "__main__":
     unittest.main()
