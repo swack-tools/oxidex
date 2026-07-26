@@ -624,7 +624,7 @@ class PatchIdAndCliTests(unittest.TestCase):
         self.assertRegex(parsed["patch_id"], r"^[0-9a-f]{40}$")
         self.assertEqual(
             set(parsed["checks"]),
-            {"trailers", "multi_sample", "printconv", "ownership"},
+            {"trailers", "multi_sample", "printconv", "paths", "ownership"},
         )
 
     def test_exit_two_when_flagged(self):
@@ -896,6 +896,235 @@ class FalseQuarantineRegressionTests(unittest.TestCase):
             result = validate_commit(sha, repo, perl_lib=perl_lib)
         self.assertIn("missing-trailer:Perl-Ref", result["flags"])
         self.assertFalse(result["ok"])
+
+
+class LooseningHardeningTests(unittest.TestCase):
+    """Regressions introduced by the 2026-07-25 extractor loosening
+    (POLICY_VERSION 4) and closed at POLICY_VERSION 5. Each was
+    independently reproduced against the pre-loosening validator, which
+    rejected the same commit."""
+
+    def setUp(self):
+        validate_fix_commit._perl_lib_corpus.cache_clear()
+
+    # -- the mod-tests hunk gate was exploitable ------------------------
+
+    def test_a_fabrication_appended_at_eof_is_not_excused_by_a_mod_tests_header(self):
+        # git's default funcname driver reports the nearest preceding
+        # COLUMN-0 declaration, and `#[cfg(test)] mod tests {` is
+        # conventionally the LAST one in a Rust file. So an end-of-file
+        # append gets `mod tests` as its hunk context while being 100%
+        # production code. The old hunk-level gate skipped all of it.
+        diff = (
+            "diff --git a/src/core/formatters/exposure_program.rs "
+            "b/src/core/formatters/exposure_program.rs\n"
+            "@@ -141,3 +141,7 @@ mod tests {\n"
+            "+pub fn program(v: u8) -> &'static str {\n"
+            "+    match v {\n"
+            '+        1 => "Landscape Mode",\n'
+            '+        2 => "Night Scene Mode",\n'
+            "+    }\n"
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Landscape Mode", "Night Scene Mode"])
+
+    def test_an_assert_message_is_still_ignored(self):
+        # The real false positive the hunk gate was introduced for.
+        diff = (
+            "diff --git a/src/thermal.rs b/src/thermal.rs\n"
+            "@@ -200,3 +200,5 @@ mod tests {\n"
+            '+        assert_eq!(v, "Off", "Flash=0 should be PrintConv\'d to Off");\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+
+    def test_a_multiline_assert_message_is_ignored_too(self):
+        # rustfmt splits long asserts, leaving the message alone on a line
+        # with no macro token on it. Measured on 12a20366f5bc.
+        diff = (
+            "diff --git a/src/thermal.rs b/src/thermal.rs\n"
+            "@@ -200,3 +200,8 @@ mod tests {\n"
+            "+        assert_eq!(\n"
+            '+            metadata.get_string("APP12:Flash"),\n'
+            '+            Some("Off"),\n'
+            "+            \"Flash=0 should be PrintConv'd to Off\"\n"
+            "+        );\n"
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+
+    def test_a_fabricated_value_after_a_multiline_assert_is_still_caught(self):
+        # The assert skip must CLOSE, not swallow the rest of the hunk.
+        diff = (
+            "diff --git a/src/canon/q.rs b/src/canon/q.rs\n"
+            "@@ -10,3 +10,8 @@ fn quality(v: u8) -> &'static str {\n"
+            "+        assert_eq!(\n"
+            '+            got,\n'
+            '+            Some("Off"),\n'
+            "+        );\n"
+            '+        0x1 => "Fabricated Display Value",\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Fabricated Display Value"])
+
+    # -- the registry gate keys on the NAME, not the type shape ---------
+
+    def test_an_icc_display_value_slice_is_still_checked(self):
+        # RENDERING_INTENTS is `&[&str]` but is an INDEXED PrintConv
+        # table; the shape-based gate skipped it.
+        diff = (
+            "diff --git a/src/parsers/icc/registries.rs b/src/parsers/icc/registries.rs\n"
+            "@@ -322,4 +322,5 @@ pub static RENDERING_INTENTS: &[&str] = &[\n"
+            '     "Perceptual",\n'
+            '+    "Fabricated Intent",\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Fabricated Intent"])
+
+    def test_a_named_tag_registry_slice_is_still_skipped(self):
+        # The case the loosening existed for must keep working.
+        diff = (
+            "diff --git a/src/jpeg/app12_olympus.rs b/src/jpeg/app12_olympus.rs\n"
+            "@@ -102,6 +102,9 @@ const KNOWN_TAGS: &[&str] = &[\n"
+            '     "Protect",\n'
+            '+    "REV",\n'
+            '+    "STB1",\n'
+        )
+        values, unverifiable = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+        self.assertEqual(unverifiable, [])
+
+    # -- a real string in the wrong module must still BLOCK -------------
+
+    def test_wrong_perl_ref_is_labelled_but_still_blocks(self):
+        rust = (
+            "pub fn quality(v: u8) -> &'static str {\n"
+            "    match v {\n"
+            '        0x1 => "Co-sited",\n'
+            "    }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            perl_lib = write_perl_module(Path(tmp) / "perl", PERL_QUALITY)
+            write_perl_module(perl_lib, "%ycc = (2 => 'Co-sited');\n", name="Exif.pm")
+            sha = commit_fix(repo, {"src/canon/q.rs": rust}, full_trailers())
+            result = validate_commit(sha, repo, perl_lib=perl_lib)
+        # Still named distinctly, so a human sees "real string, wrong
+        # module" rather than "invented string" ...
+        self.assertIn("printconv-wrong-perl-ref:Co-sited", result["flags"])
+        # ... but it no longer auto-admits.
+        self.assertFalse(result["ok"])
+
+    def test_the_corpus_second_opinion_ignores_lang_translation_tables(self):
+        # Image/ExifTool/Lang/*.pm carries every display string in every
+        # supported language and would rescue almost any fabrication.
+        with tempfile.TemporaryDirectory() as tmp:
+            perl_lib = Path(tmp) / "perl"
+            write_perl_module(perl_lib, "%q = (1 => 'Real');\n")
+            lang = perl_lib / "Image" / "ExifTool" / "Lang"
+            lang.mkdir(parents=True, exist_ok=True)
+            (lang / "de.pm").write_text("%de = ('Totally Invented' => 'Erfunden');\n")
+            validate_fix_commit._perl_lib_corpus.cache_clear()
+            corpus = validate_fix_commit._perl_lib_corpus(perl_lib)
+        self.assertIn(b"Real", corpus)
+        self.assertNotIn(b"Totally Invented", corpus)
+
+    def test_policy_version_was_bumped_so_the_old_verdicts_are_re_examined(self):
+        # Heads admitted under the loosened policy 4 must be reconsidered.
+        self.assertGreaterEqual(validate_fix_commit.POLICY_VERSION, 5)
+
+
+class NonSourceFilePathTests(unittest.TestCase):
+    """A tag fix that also commits a stray artifact from the worker's
+    worktree must not reach main. Measured case: 85a24f04390d on
+    model-fix-parallel-standards-appn-1 added config.toml.bak-pre-gpt55
+    (163 lines) beside a real fix and validated CLEAN."""
+
+    def test_a_committed_config_backup_blocks_the_fix(self):
+        rust = (
+            "pub fn quality(v: u8) -> &'static str {\n"
+            "    match v {\n"
+            '        0x1 => "Economy",\n'
+            "    }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            perl_lib = write_perl_module(Path(tmp) / "perl", PERL_QUALITY)
+            sha = commit_fix(
+                repo,
+                {
+                    "src/canon/q.rs": rust,
+                    "config.toml.bak-pre-gpt55": "[worker]\nmodel = 'x'\n",
+                },
+                full_trailers(),
+            )
+            result = validate_commit(sha, repo, perl_lib=perl_lib)
+        self.assertIn("non-source-file:config.toml.bak-pre-gpt55", result["flags"])
+        self.assertFalse(result["ok"], "a stray artifact must BLOCK, not warn")
+
+    def test_a_clean_fix_is_unaffected(self):
+        rust = (
+            "pub fn quality(v: u8) -> &'static str {\n"
+            "    match v {\n"
+            '        0x1 => "Economy",\n'
+            "    }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            perl_lib = write_perl_module(Path(tmp) / "perl", PERL_QUALITY)
+            sha = commit_fix(repo, {"src/canon/q.rs": rust}, full_trailers())
+            result = validate_commit(sha, repo, perl_lib=perl_lib)
+        self.assertEqual([f for f in result["flags"] if f.startswith("non-source")], [])
+        self.assertTrue(result["ok"])
+
+    def test_every_place_a_real_tag_fix_writes_is_allowed(self):
+        # Derived from the 17 distinct paths every worker fix commit
+        # currently ahead of origin/main touches, plus the manifest and
+        # crate areas a fix could legitimately need.
+        for path in (
+            "src/parsers/jpeg/flir_parser.rs",
+            "src/parsers/tiff/makernotes/canon.rs",
+            "tests/integration_jpeg.rs",
+            "docs/tag-coverage.md",
+            "benches/parse.rs",
+            "bindings/c/oxidex.h",
+            "oxidex-tags-core/src/lib.rs",
+            "oxidex-tags-camera/src/canon.rs",
+            "Cargo.toml",
+            "Cargo.lock",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(validate_fix_commit.is_fix_commit_path(path))
+
+    def test_stray_artifacts_and_non_tag_fix_areas_are_rejected(self):
+        for path in (
+            "config.toml.bak-pre-gpt55",
+            "config.toml.bak-medium",
+            "config.example.toml",
+            ".mcp.json",
+            ".gitignore",
+            "justfile",
+            ".githooks/pre-commit",
+            # Fleet-infrastructure commits are not tag fixes. Two of them
+            # (7a5dd662, 93994f59) were routed through this validator and
+            # written into all 14 squads' ledgers, producing 28 of the 77
+            # quarantine entries as eight misleading missing-trailer flags
+            # apiece.
+            "scripts/model_fix_loop.py",
+            "scripts/parallel_model_fix_loop.py",
+            # A repo-root file that merely starts with the tag-crate
+            # prefix is not a tag crate.
+            "oxidex-tags-notes.bak",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(validate_fix_commit.is_fix_commit_path(path))
+
+    def test_the_flag_is_hard_not_warn_only(self):
+        self.assertFalse("non-source-file:".startswith(
+            validate_fix_commit.WARN_ONLY_FLAG_PREFIXES))
 
 
 if __name__ == "__main__":

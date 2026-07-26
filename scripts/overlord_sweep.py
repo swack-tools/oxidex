@@ -44,6 +44,13 @@ order:
    (``model_fix_loop.cargo_test_workspace``).
 7. Auto-log ``machine_accepted`` sweep-review entries for every merged
    commit (``log_sweep_review.append_from_commits``).
+7b. ``cargo fmt --all`` over the assembled branch, committed separately
+   when (and only when) it changes something (``format_sweep_branch``,
+   injectable -- ``fmt_fn``). Nothing upstream of here ever style-checks
+   worker-authored Rust, and CI's "Lint & Audit" job runs ``cargo fmt
+   --all -- --check``, so without this every sweep PR fails CI by
+   construction -- measured on PR #124 (CI run 30186389305: Build & Test
+   green, Lint & Audit red on exactly that step).
 8. ``gh pr create`` (injectable -- ``create_pr_fn``), PR body carrying a
    per-tag evidence table (Tag / Exiftool-Value / Oxidex-Value / Sample
    count) parsed from the merged commits' trailers, plus a
@@ -426,6 +433,56 @@ def sum_verified_deltas(repo_root, shas, run_git):
 # Step 5: post-merge semantic recheck
 # ---------------------------------------------------------------------------
 
+def reattach_sweep_branch(repo_root, branch, run_git):
+    """Point `branch` at the current HEAD and check it out ATTACHED.
+    Returns (ok, message).
+
+    Everything after step 5 -- bisection's `git revert` commits, step
+    7b's cargo-fmt commit -- runs on a DETACHED HEAD, because
+    run_post_merge_recheck ends with checkout_fn(repo_root, sweep_tip)
+    and the production checkout_fn (real_checkout, also what
+    parallel_model_fix_loop.default_sweep_fn wires in) is `git checkout
+    --detach`. Commits made there are orphans: the sweep branch ref
+    never moves, and the branch ref is the ONLY thing `git push origin
+    <branch>` and `gh pr create --head <branch>` ever see.
+
+    Measured 2026-07-26 by re-running RunSweepIntegrationTests'
+    full-pass fixture with an fmt_fn that actually rewrites a .rs file
+    (as `cargo fmt --all` does) instead of the no-op lambda that fixture
+    used to inject: branch log = "fix JPEG:Foo | base", HEAD log =
+    "style: cargo fmt --all (sweep publish) | fix JPEG:Foo | base", and
+    `git show <branch>:src/parsers/jpeg/x.rs` still unformatted. The
+    same fixture with a bisected sweep shipped the QUARANTINED squad's
+    regression on the branch, because its revert commits were orphaned
+    too. Net effect on the real fleet: every sweep PR pushed
+    unformatted, CI's `cargo fmt --all -- --check` red (exactly the PR
+    #124 failure step 7b exists to fix), auto_publish_round returns
+    checks_red, nothing ever merges, and an --infinite dispatcher opens
+    one red PR per round forever.
+
+    `checkout -B` is safe here BECAUSE of the guard below and only
+    because of it: HEAD is only ever an append to the branch tip (the
+    merges run while attached; the recheck detaches AT that tip; the
+    reverts append), so `branch` is always an ancestor of HEAD. If it
+    somehow is not, this refuses rather than force-moving a ref --
+    the fleet-wide no-discard invariant.
+    """
+    rc, head, err = run_git(["rev-parse", "HEAD"], repo_root)
+    if rc != 0 or not head.strip():
+        return False, f"could not resolve HEAD: {err.strip()}"
+    rc, _out, err = run_git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], repo_root)
+    if rc != 0:
+        return False, f"sweep branch {branch} no longer exists: {err.strip()}"
+    rc, _out, _err = run_git(["merge-base", "--is-ancestor", branch, "HEAD"], repo_root)
+    if rc != 0:
+        return False, (f"refusing to move {branch} to HEAD: {branch} is not an ancestor of "
+                       f"{head.strip()[:12]} (it carries commits HEAD does not)")
+    rc, _out, err = run_git(["checkout", "-B", branch, head.strip()], repo_root)
+    if rc != 0:
+        return False, f"could not re-attach to {branch}: {err.strip()}"
+    return True, f"re-attached HEAD to {branch}"
+
+
 def run_post_merge_recheck(*, repo_root, formats, cache_dir, comparison_fn, checkout_fn, base_ref, sweep_tip):
     """spec M4 step 5: pre (origin/main-base) vs post (merged sweep
     branch tip) per-format comparison for the union of touched formats
@@ -717,6 +774,78 @@ def build_pr_body(*, evidence_rows, judgment_entries, branch):
 
 
 # ---------------------------------------------------------------------------
+# Step 7b: cargo fmt the sweep branch before it is ever pushed
+# ---------------------------------------------------------------------------
+
+# Deliberately its own commit, and deliberately labelled: a reviewer
+# scrolling the sweep PR's diff must be able to tell "this is rustfmt
+# moving whitespace" from "this is a worker changing tag extraction"
+# without reading either.
+FMT_COMMIT_MESSAGE = """style: cargo fmt --all (sweep publish)
+
+Worker-authored Rust reaches this branch semantically validated but never
+style-checked: validate_fix_commit.py, the per-commit merger check and the
+post-merge recheck all assert behaviour (gap deltas, no duplicate
+emissions, no unexplained oxidex-only keys) and none of them look at
+formatting. CI's "Lint & Audit" job runs `cargo fmt --all -- --check`, so
+an unformatted sweep branch fails CI by construction.
+
+Measured on PR #124 (branch sweep/tags-2026-07-26-1, the first sweep PR
+ever opened): CI run 30186389305 -- "Build & Test" success, "Lint &
+Audit" failure, and the failing step is literally `Run cargo fmt --all --
+--check`. Kept as a separate commit so the tag-fix diffs stay readable.
+"""
+
+
+def real_cargo_fmt(repo_root):
+    """`cargo fmt --all` in repo_root -> (ok, output). Injectable
+    (``fmt_fn``) so hermetic tests never shell out to a real cargo."""
+    result = subprocess.run(  # nosec B603
+        ["cargo", "fmt", "--all"], cwd=repo_root, capture_output=True, text=True,
+    )
+    return result.returncode == 0, (result.stdout + result.stderr).strip()
+
+
+def format_sweep_branch(repo_root, run_git, fmt_fn=None, log_fn=print):
+    """Run cargo fmt over the assembled sweep branch and commit the
+    result, if and only if it changed something. Returns
+    {"ok", "committed", "message"}.
+
+    Only tracked *.rs files are staged (`git add -u -- '*.rs'`): rustfmt
+    never creates a file and never touches anything else, so scoping the
+    stage this way makes it impossible for a stray artifact left in the
+    sweep worktree (a comparison report, an editor swapfile) to ride
+    along inside a commit labelled "cargo fmt".
+
+    A cargo fmt that FAILS outright (no rustfmt component installed, a
+    parse error) is logged loudly and reported as ok=False, but is not
+    fatal to the caller: the worst case is the same red "Lint & Audit"
+    the sweep has always had, and a PR left open for a human beats
+    throwing away a branch full of validated fixes.
+    """
+    fmt_fn = fmt_fn or real_cargo_fmt
+    ok, output = fmt_fn(repo_root)
+    if not ok:
+        log_fn(f"cargo fmt --all FAILED on the sweep branch: {output} -- pushing unformatted "
+               "(expect CI's Lint & Audit job to go red on this PR)")
+        return {"ok": False, "committed": False, "message": f"cargo fmt failed: {output}"}
+
+    rc, _out, err = run_git(["add", "-u", "--", "*.rs"], repo_root)
+    if rc != 0:
+        return {"ok": False, "committed": False, "message": f"git add failed: {err.strip()}"}
+    rc, staged, _err = run_git(["diff", "--cached", "--name-only"], repo_root)
+    if rc != 0 or not staged.strip():
+        return {"ok": True, "committed": False, "message": "already cargo-fmt clean"}
+
+    rc, _out, err = run_git(["commit", "-m", FMT_COMMIT_MESSAGE], repo_root)
+    if rc != 0:
+        return {"ok": False, "committed": False, "message": f"git commit failed: {err.strip()}"}
+    files = [line for line in staged.splitlines() if line]
+    log_fn(f"cargo fmt --all reformatted {len(files)} file(s) -- committed separately before push")
+    return {"ok": True, "committed": True, "message": f"committed cargo fmt over {len(files)} file(s)"}
+
+
+# ---------------------------------------------------------------------------
 # Step 8: PR creation (injectable -- never shells out in a way that
 # fails hermetic tests)
 # ---------------------------------------------------------------------------
@@ -750,14 +879,15 @@ def real_create_pr(title, body, branch, base="main", repo_root=REPO_ROOT):
 
 def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
              squads_toml_path=DEFAULT_SQUADS_TOML, cargo_test_workspace_fn=None, create_pr_fn=None,
-             push_branch_fn=None, run_git=None, now_fn=time.time, log_fn=print, sweep_state_path=None,
-             quarantine_path=None, sweep_review_log_path=None, origin_ref=ORIGIN_MAIN,
-             dispatcher_lock_path=None):
+             push_branch_fn=None, fmt_fn=None, run_git=None, now_fn=time.time, log_fn=print,
+             sweep_state_path=None, quarantine_path=None, sweep_review_log_path=None,
+             origin_ref=ORIGIN_MAIN, dispatcher_lock_path=None):
     """One full overlord sweep pass (spec M4). See module docstring for
     the step-by-step breakdown. Returns a summary dict whose "status"
     is one of: "no_news", "branch_cut_failed", "nothing_merged",
     "sweep_aborted" (bisection quarantined every candidate),
-    "workspace_tests_failed", "push_failed", "ok".
+    "reattach_failed", "workspace_tests_failed", "push_failed",
+    "pr_create_failed", "ok".
     """
     run_git = run_git or default_run_git
     cargo_test_workspace_fn = cargo_test_workspace_fn or _real_cargo_test_workspace
@@ -864,6 +994,27 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
                 "failed_squads": failed_squads, "preflight": health,
             }
 
+    # Step 5 left the worktree DETACHED at sweep_tip (see
+    # run_post_merge_recheck), and so did every bisection probe. From
+    # here on the round makes commits again -- bisection's reverts are
+    # already on this HEAD, and step 7b's fmt commit is still to come --
+    # and all of them have to be reachable from the branch ref that gets
+    # pushed. Re-attaching once, here, is the single point that
+    # guarantees it for everything downstream.
+    attached_ok, attach_message = reattach_sweep_branch(repo_root, branch, run_git)
+    if not attached_ok:
+        log_fn(f"could not re-attach HEAD to {branch}: {attach_message} -- refusing to push a branch "
+               "that does not contain this round's work (bisection reverts and/or the cargo fmt "
+               "commit); leaving everything for manual inspection")
+        # Same durability reasoning as workspace_tests_failed below: only
+        # bisection-quarantined offenders are durable, the surviving
+        # squads never reached a PR and must be retried by a later sweep.
+        persist_cursor(durable_squads)
+        return {
+            "status": "reattach_failed", "branch": branch, "message": attach_message,
+            "bisection": bisection_result, "failed_squads": failed_squads, "preflight": health,
+        }
+
     all_shas = []
     for squad, info in merge_infos.items():
         all_shas.extend(commits_contributed(repo_root, info, run_git))
@@ -901,6 +1052,16 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
     body = build_pr_body(evidence_rows=evidence_rows, judgment_entries=judgment_entries, branch=branch)
     title = f"sweep {branch}: {len(all_shas)} tag fix(es) across {len(merge_infos)} squad(s)"
 
+    # Formatting is deliberately the LAST thing to touch the branch.
+    # all_shas / the evidence table / the judgment queue above are the
+    # TAG-FIX commits, and the fmt commit is not one of them: it carries
+    # no trailers, closes no gap, and must not show up as a row in the
+    # PR's evidence table or as an entry in the judgment queue. Running
+    # it after cargo_test_workspace_fn is also deliberate -- rustfmt only
+    # moves whitespace, so re-running a multi-minute workspace suite
+    # afterwards would double the sweep's wall clock for no semantic gain.
+    fmt_result = format_sweep_branch(repo_root, run_git, fmt_fn=fmt_fn, log_fn=log_fn)
+
     push_ok, push_message = push_branch_fn(repo_root, branch)
     if not push_ok:
         log_fn(f"could not push {branch} to origin: {push_message} -- skipping PR creation "
@@ -910,14 +1071,43 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
             "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
             "measured_delta": measured_delta, "verified_delta_sum": sum(verified_deltas.values()),
             "bisection": bisection_result, "judgment_entries": judgment_entries, "preflight": health,
-            "sweep_review_written": len(written),
+            "sweep_review_written": len(written), "fmt": fmt_result,
         }
 
     pr_result = create_pr_fn(title, body, branch, "main")
+    # `gh pr create` fails routinely and quietly: an expired token, a
+    # secondary rate limit, an org rule forbidding PRs from this actor,
+    # no network. Until 2026-07-26 this result was stuffed into the
+    # summary and never looked at, so the round still reported "ok" --
+    # and auto_publish_round then treated the failure as a live PR:
+    # pr_ref_from_result finds no http line in the empty stdout, falls
+    # back to the BRANCH NAME, and wait_for_pr_checks polls `gh pr
+    # checks <branch>` against a branch with no PR (three "unknown"
+    # answers, two 30s sleeps). Net result was an orphan branch on
+    # origin with no PR, the cursor already advanced past its stamps,
+    # 60s burned, and `overlord_sweep.py` exiting 0.
+    #
+    # Only an EXPLICIT {"ok": False} counts as a failure: create_pr_fn is
+    # injectable and several callers return None or a bare URL string,
+    # and inventing a failure for those would be a worse bug than the
+    # one being fixed.
+    if isinstance(pr_result, dict) and "ok" in pr_result and not pr_result["ok"]:
+        detail = (pr_result.get("stderr") or pr_result.get("stdout") or "").strip()
+        log_fn(f"gh pr create FAILED for {branch}: {detail} -- the branch IS pushed and its "
+               "commits are safe; open the PR by hand (`gh pr create --head "
+               f"{branch} --base main`)")
+        return {
+            "status": "pr_create_failed", "branch": branch, "pr": pr_result, "message": detail,
+            "fmt": fmt_result, "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
+            "measured_delta": measured_delta, "verified_delta_sum": sum(verified_deltas.values()),
+            "bisection": bisection_result, "judgment_entries": judgment_entries, "preflight": health,
+            "sweep_review_written": len(written),
+        }
 
     return {
         "status": "ok",
         "branch": branch,
+        "fmt": fmt_result,
         "merged_squads": sorted(merge_infos),
         "failed_squads": failed_squads,
         "measured_delta": measured_delta,
@@ -934,7 +1124,11 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
 # CLI
 # ---------------------------------------------------------------------------
 
-def _real_checkout(repo_root, ref):
+def real_checkout(repo_root, ref):
+    """The real ``checkout_fn`` for the pre/post recheck's detach dance.
+    Public (not _-prefixed) because the dispatcher's own auto-publish
+    step reuses it verbatim when it calls run_sweep in-process -- see
+    parallel_model_fix_loop.default_sweep_fn."""
     subprocess.run(["git", "checkout", "--detach", ref], cwd=repo_root, check=True)  # nosec B603
 
 
@@ -954,11 +1148,18 @@ def main(argv=None):
 
     result = run_sweep(
         repo_root=repo_root, home=home, cache_dir=args.cache_dir, comparison_fn=comparison_fn,
-        checkout_fn=_real_checkout, squads_toml_path=args.squads_toml,
+        checkout_fn=real_checkout, squads_toml_path=args.squads_toml,
     )
     printable = {k: v for k, v in result.items() if k != "pr"}
     print(json.dumps(printable, indent=2, default=str))
-    if result.get("pr") is not None:
+    if result.get("status") == "pr_create_failed":
+        # Loud and unmissable: the branch is on origin but NO PR exists,
+        # and a `PR: {'ok': False, ...}` dict buried under a JSON blob is
+        # not something anyone spots in a cron log.
+        print(f"PR CREATION FAILED for {result.get('branch')} -- the branch is pushed but no PR "
+              f"exists: {result.get('message')}")
+        print(f"  retry with: gh pr create --head {result.get('branch')} --base main")
+    elif result.get("pr") is not None:
         print(f"PR: {result['pr']}")
     return 0 if result.get("status") in ("ok", "no_news") else 1
 

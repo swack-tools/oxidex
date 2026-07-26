@@ -134,15 +134,80 @@ CONDITIONAL_TRAILERS = tuple(k for k in REQUIRED_TRAILERS if k != "Perl-Ref")
 #   3  #119 added the tag-key / byte-string identifier exclusions
 #   4  match arms, &[&str] registries, format! templates, test-code
 #      scoping, wrong-perl-ref warn-only, conditional Perl-Ref
-POLICY_VERSION = 4
+#   5  hardening: printconv-wrong-perl-ref blocks again, the corpus is
+#      restricted to real tag tables, the mod-tests hunk gate is gone,
+#      the &[&str] registry gate is keyed on the declaration NAME, and
+#      non-source paths are rejected outright
+#
+# NOTE ON DIRECTION: the paragraph above frames a bump as "a rejection
+# can become an acceptance", because that is the case the merger's retry
+# machinery acts on -- it re-offers QUARANTINED heads. A STRICTER change
+# (like the non-source-file gate) has no retry surface at all: a head
+# already recorded "consumed" is published and is never reconsidered, by
+# design. Bump for either direction anyway. Marking the version is how a
+# human reading quarantine.jsonl months from now knows which ruleset
+# produced a verdict, and a stricter rule still changes what a re-offered
+# head is measured against.
+POLICY_VERSION = 5
 
 # Flags that are recorded for the human record but do NOT block
 # admission. `ownership:` says the fix landed outside the worker's squad
-# globs -- true but not a defect in the fix. `printconv-wrong-perl-ref:`
-# says the value IS a real ExifTool string, just attributed to the wrong
-# module: an evidence-quality problem, not the fabricated-value problem
-# the PrintConv check exists to stop.
-WARN_ONLY_FLAG_PREFIXES = ("ownership:", "printconv-wrong-perl-ref:")
+# globs -- true but not a defect in the fix.
+#
+# `printconv-wrong-perl-ref:` used to be here and is deliberately NOT any
+# more. Measured 2026-07-26 over 9,600 wrong-table trials drawn from
+# 11,884 real ExifTool PrintConv strings and weighted by the Perl-Ref
+# distribution in actual worker commits: checking the CITED module blocks
+# 97.3% of them, and accepting any whole-corpus hit gives that up. Worse,
+# the flag was warn-only AND discarded on accept, so the fabrication
+# signal went nowhere at all. The distinct flag name is still worth
+# keeping -- it tells a human "real string, wrong module" instead of
+# "invented string" -- but it must route to the queue, not to main.
+WARN_ONLY_FLAG_PREFIXES = ("ownership:",)
+
+# Where a tag fix is allowed to write. Anything else is a blocking
+# non-source-file flag.
+#
+# Derived from measurement, not taste. Across every commit currently
+# ahead of origin/main on the 74 worker branches (2026-07-26) there are
+# exactly 17 distinct touched paths: 10 under src/, 2 under tests/, 1
+# under oxidex-tags-core/, 3 under scripts/, and one
+# `config.toml.bak-pre-gpt55` -- a local config BACKUP that a worker
+# dropped in its worktree and committed alongside a real tag fix
+# (85a24f04390d on model-fix-parallel-standards-appn-1, 163 lines). That
+# commit validated CLEAN, because the only path-aware check was
+# check_ownership and ownership: is warn-only, so the backup would have
+# been swept into a PR and merged to main. Sibling droppings are already
+# loose in other worktrees: config.toml.bak-medium, .bak-pre-pin,
+# .bak-pre-terra, .bak-2026-07-25.
+#
+# The scripts/ hits are the OTHER thing this catches, and it is the more
+# valuable half: they belong to two fleet-INFRASTRUCTURE commits
+# (7a5dd662 "tuning: nudge fixer toward earlier patch attempts" and
+# 93994f59 "fix(fleet): consume handshake never unblocks a worker") that
+# the merger routed through a TAG-FIX evidence validator. Each was then
+# written into all 14 squads' ledgers, so those two commits alone account
+# for 28 of the 77 quarantine entries, showing up as eight
+# missing-trailer flags apiece instead of the one true statement: this is
+# not a tag fix. Naming it precisely is worth more than the eight
+# misleading flags.
+#
+# Cargo.toml/Cargo.lock are allowed although no worker has yet touched
+# them: a tag fix that genuinely needs a dependency is plausible, and a
+# fabricated PrintConv value cannot hide in a manifest. benches/ and
+# bindings/ are allowed for the same reason -- they are real parts of the
+# crate a fix could legitimately extend.
+FIX_COMMIT_PATH_PREFIXES = (
+    "src/",
+    "tests/",
+    "docs/",
+    "benches/",
+    "bindings/",
+)
+FIX_COMMIT_PATH_EXACT = ("Cargo.toml", "Cargo.lock")
+# Tag-definition crates are versioned per family (oxidex-tags-core,
+# -camera, -image, ...), so they are matched by prefix rather than listed.
+_TAG_CRATE_PREFIX = "oxidex-tags"
 
 # How much of a mismatched PrintConv value to embed in its flag. Full
 # values can be long (lens descriptions); the excerpt is for humans
@@ -221,25 +286,59 @@ _BARE_STRING_ELEMENT_RE = re.compile(
 # loop threw it away by `continue`-ing on "@@". These two patterns read
 # it back.
 #
-# A SLICE of str -- `&[&str]` -- is the Rust idiom for a flat registry of
-# KEY NAMES the parser recognises (`const KNOWN_TAGS: &[&str] = &[...]`
-# in the APP12 Olympus/Ricoh/thermal parsers). Its elements are tag
-# IDENTIFIERS ("REV", "S0", "STB1", "WB3"); demanding they appear in an
-# ExifTool PrintConv table rejects correct code, and was the single
-# largest quarantine cause measured 2026-07-25.
+# What we are looking for is a registry of KEY NAMES the parser
+# recognises -- `const KNOWN_TAGS: &[&str] = &[...]` in the APP12
+# Olympus/Ricoh/thermal parsers, whose elements are tag IDENTIFIERS
+# ("REV", "S0", "STB1", "WB3"). Demanding those appear in an ExifTool
+# PrintConv table rejects correct code, and was the single largest
+# quarantine cause measured 2026-07-25.
 #
-# A FIXED-SIZE array -- `[&str; 400]` -- is the idiom for an INDEXED
-# PrintConv lookup (`const LENS_NAMES: [&str; 400]`), whose elements are
-# genuine display values that must still be byte-checked. The `;` is
-# what separates the two, so this pattern deliberately does not match it.
+# This originally keyed on the TYPE SHAPE -- `&[&str]` slice meaning
+# registry, `[&str; N]` fixed array meaning indexed PrintConv lookup.
+# That premise is BACKWARDS for this repo. Counted 2026-07-26 over src/:
+# 36 `&[&str]` declarations against 3 `[&str; N]`, and the slices include
+# src/parsers/icc/registries.rs's RENDERING_INTENTS, ILLUMINANT_TYPES,
+# OBSERVER_TYPES and GEOMETRY_TYPES -- indexed display-value tables whose
+# own comments read "indexed by code 1-2" and whose elements
+# ("Perceptual", "Media-Relative Colorimetric", "CIE 1931") are exactly
+# the strings the byte check exists to protect. The shape gate therefore
+# disabled the fabrication check for 36 declarations to save 3.
+#
+# Keying on the declaration NAME instead is both narrower and closer to
+# the actual semantics: a name ending in _TAGS/_KEYS/_FIELDS/_NAMES/
+# _EXTENSIONS/_GROUPS/_MARKERS, or starting SUPPORTED_, denotes
+# identifiers. Measured against the same 36: 25 match (correctly skipped)
+# and 11 stay checked -- including all four ICC value tables. The
+# remainder that stay checked (CORE_FRAMEWORKS, PACKER_SECTIONS,
+# SUSPICIOUS_IMPORTS, ...) are identifier-ish too, but leaving them
+# CHECKED is the safe direction: over-checking costs one recoverable
+# flag and a POLICY_VERSION retry, under-checking ships a fabricated
+# value to main silently and forever.
 _STR_SLICE_REGISTRY_RE = re.compile(
-    r"\b(?:const|static)\s+\w+\s*:\s*&?\s*\[\s*&(?:'\w+\s+)?str\s*\]"
+    r"\b(?:const|static)\s+(\w*(?:_TAGS|_KEYS|_FIELDS|_NAMES|_EXTENSIONS|_GROUPS|_MARKERS)"
+    r"|SUPPORTED_\w+)\s*:\s*&?\s*\[\s*&(?:'\w+\s+)?str\s*\]"
 )
 
-# Assert messages and fixture strings in test code are not PrintConv
-# values -- thermal's `printconv-mismatch:Flash=0 should be PrintConv'd
-# to Off` flag came from an `assert!` message inside `mod tests`.
-_TEST_CONTEXT_RE = re.compile(r"\bmod\s+\w*tests?\b|\bfn\s+test_")
+# Assert messages are not PrintConv values -- thermal's
+# `printconv-mismatch:Flash=0 should be PrintConv'd to Off` flag came
+# from an `assert!` message.
+#
+# This is a LINE test, deliberately. It used to be a HUNK test keyed on
+# git's funcname context matching `mod tests`, which was exploitable:
+# git's default driver reports the nearest preceding COLUMN-0
+# declaration, and `#[cfg(test)] mod tests {` is conventionally the last
+# such declaration in a Rust file -- so appending a fabricated PrintConv
+# function at end-of-file makes git emit `@@ -141,3 +141,14 @@ mod tests {`
+# for a hunk of 100% PRODUCTION code, and the whole hunk was skipped.
+# Reproduced 2026-07-26 against src/core/formatters/exposure_program.rs:
+# 'Landscape Mode' / 'Portrait Mode' / 'Night Scene Mode' -- none of
+# which occur in any of the 171 Image/ExifTool/*.pm files -- went
+# ok=false on the pre-#125 validator and ok=true after it.
+#
+# A per-line assert test cannot be gamed that way: the fabricated table
+# entries are not assert lines, so they stay checked no matter what git
+# decides to put in the hunk header.
+_ASSERT_LINE_RE = re.compile(r"\b(?:assert\w*|panic|unreachable|todo|unimplemented)\s*!")
 
 # A macro that BUILDS a string at runtime. Its first argument is a format
 # TEMPLATE, not a value: `other => format!("Unknown({})", other)` yields
@@ -533,27 +632,45 @@ def extract_added_map_values(diff_text):
     values = []
     unverifiable = []
     depth = 0  # bracket depth inside a const/static array literal
+    assert_depth = 0  # paren depth inside a multi-line assert!/panic! call
     hunk_ctx = ""  # git's record of the declaration enclosing this hunk
     for raw in diff_text.splitlines():
         if raw.startswith("diff --git"):
             depth = 0  # never let array state leak across files/hunks
+            assert_depth = 0
             hunk_ctx = ""
             continue
         if raw.startswith("@@"):
             depth = 0
+            assert_depth = 0
             # "@@ -a,b +c,d @@ <enclosing declaration>" -- everything
             # after the second "@@" is git's funcname context.
             parts = raw.split("@@")
             hunk_ctx = parts[2] if len(parts) > 2 else ""
             continue
-        if _TEST_CONTEXT_RE.search(hunk_ctx):
-            continue  # assert messages and fixtures are not PrintConv values
         if raw.startswith("+++") or raw.startswith("---"):
             continue
         if not raw or raw[0] not in "+ ":
             continue  # removed lines and diff noise
         added = raw[0] == "+"
         code = raw[1:]
+        if assert_depth > 0 or _ASSERT_LINE_RE.search(code):
+            # An assert/panic message is prose ABOUT a value, not the
+            # value. rustfmt routinely splits these across lines:
+            #     assert_eq!(
+            #         metadata.get_string("APP12:Flash"),
+            #         Some("Off"),
+            #         "Flash=0 should be PrintConv'd to Off"
+            #     );
+            # so a per-line token test alone misses the message (measured
+            # on 12a20366f5bc). Track the macro's parenthesis depth and
+            # skip until it closes. Unlike the hunk-level `mod tests` gate
+            # this replaced, it cannot be widened by where git decides to
+            # put a funcname header: a fabricated table entry is not
+            # inside an assert call.
+            assert_depth = max(0, assert_depth + code.count("(") - code.count(")"))
+            depth = max(0, depth + code.count("[") - code.count("]"))
+            continue
         if depth > 0:
             if added:
                 values.extend(_keep_printconv_values(_QUOTED_RE.findall(code), code))
@@ -634,23 +751,33 @@ def resolve_perl_module(perl_ref, perl_lib):
 
 @functools.lru_cache(maxsize=8)
 def _perl_lib_corpus(perl_lib):
-    """Every .pm byte under perl_lib, concatenated once per process.
+    """Every TAG-TABLE .pm byte under perl_lib, concatenated once.
 
-    Used only as a SECOND opinion after the Perl-Ref module itself has
-    already missed: a value that appears verbatim somewhere in ExifTool's
-    source is a real ExifTool string that was merely attributed to the
-    wrong module, which is an evidence defect -- not the invented-value
-    defect this check exists to catch. Measured cases: `YCbCr4:4:4 (1 1)`
-    lives in ExifTool.pm while the trailer said Exif.pm; `Centered` and
-    `JPEG (old-style)` live in Exif.pm while the trailer said
-    CanonRaw.pm; `Does not emit` lives in CanonCustom.pm while the
-    trailer said Canon.pm.
+    Used only to LABEL a miss, never to excuse one: a value absent from
+    the cited module but present in another tag table is "real string,
+    wrong module" (printconv-wrong-perl-ref) rather than "invented
+    string" (printconv-mismatch). BOTH block -- see
+    WARN_ONLY_FLAG_PREFIXES.
 
-    Cached because it is ~30MB of Perl and check_printconv can be called
-    once per commit across a whole sweep.
+    Restricted to Image/ExifTool/*.pm because the naive rglob("*.pm")
+    swept in a lot of Perl that has nothing to do with metadata and
+    supplies free substring matches: measured 2026-07-26 on
+    exiftool 13.55, the whole tree is 78.2% tag tables, 16.3%
+    Image/ExifTool/Lang/*.pm (translated UI strings for every language)
+    and 5.5% Alien/, Path/, Test/, File/, Capture/, FFI/, Sort/, Mozilla/.
+    A short display value hits those by coincidence.
+
+    Cached because it is tens of MB of Perl and check_printconv runs once
+    per commit across a whole sweep.
     """
+    root = perl_lib / "Image" / "ExifTool"
     blobs = []
-    for path in sorted(perl_lib.rglob("*.pm")):
+    for path in sorted(root.rglob("*.pm") if root.is_dir() else perl_lib.rglob("*.pm")):
+        # Lang/ is ExifTool's own translation tables -- every display
+        # string in every supported language, which would rescue almost
+        # any plausible-looking fabrication.
+        if "Lang" in path.parts:
+            continue
         try:
             blobs.append(path.read_bytes())
         except OSError:
@@ -740,6 +867,40 @@ def load_squad_globs(squads_toml):
         if globs:
             globs_by_squad[squad] = globs
     return globs_by_squad
+
+
+def is_fix_commit_path(path):
+    """True when `path` is somewhere a tag fix may legitimately write.
+
+    See FIX_COMMIT_PATH_PREFIXES for the evidence behind the allowlist.
+    """
+    path = (path or "").strip()
+    if not path:
+        return True  # nothing to judge; never invent a flag from noise
+    if path in FIX_COMMIT_PATH_EXACT:
+        return True
+    if path.startswith(FIX_COMMIT_PATH_PREFIXES):
+        return True
+    # oxidex-tags-core/, oxidex-tags-camera/, ... -- prefix, not a list,
+    # so a new tag crate does not silently start failing validation. The
+    # trailing "/" matters: it must be a DIRECTORY, so a repo-root file
+    # merely named "oxidex-tags-something.bak" is still rejected.
+    head = path.split("/", 1)[0]
+    return "/" in path and head.startswith(_TAG_CRATE_PREFIX)
+
+
+def check_paths(changed_files):
+    """HARD flags for files a tag fix has no business touching.
+
+    Deliberately NOT warn-only, unlike check_ownership below. Ownership
+    says "the right kind of file, owned by another squad" -- a routing
+    observation. This says "not the kind of file a tag fix produces at
+    all", which is either a stray artifact from the worker's worktree or
+    a commit that is not a tag fix. Neither should reach main, and before
+    this gate existed both did: see FIX_COMMIT_PATH_PREFIXES.
+    """
+    flags = [f"non-source-file:{p}" for p in changed_files if not is_fix_commit_path(p)]
+    return ("flagged" if flags else "pass"), flags
 
 
 def check_ownership(changed_files, worker, globs_by_squad):
@@ -841,11 +1002,14 @@ def validate_commit(
     worker = next(iter(trailers.get("Worker", [])), "")
     changed = commit_changed_files(sha, repo, git_run)
     ownership_status, ownership_flags = check_ownership(changed, worker, globs_by_squad)
+    paths_status, path_flags = check_paths(changed)
 
     patch_id = compute_patch_id(diff_text, repo, git_run)
 
     flags = list(
-        dict.fromkeys(trailer_flags + multi_flags + printconv_flags + ownership_flags)
+        dict.fromkeys(
+            trailer_flags + multi_flags + printconv_flags + path_flags + ownership_flags
+        )
     )
     hard_flags = [f for f in flags if not f.startswith(WARN_ONLY_FLAG_PREFIXES)]
     return {
@@ -858,6 +1022,7 @@ def validate_commit(
             "trailers": "flagged" if trailer_flags else "pass",
             "multi_sample": multi_status,
             "printconv": printconv_status,
+            "paths": paths_status,
             "ownership": ownership_status,
         },
     }
