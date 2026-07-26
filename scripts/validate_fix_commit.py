@@ -136,7 +136,18 @@ CONDITIONAL_TRAILERS = tuple(k for k in REQUIRED_TRAILERS if k != "Perl-Ref")
 #      scoping, wrong-perl-ref warn-only, conditional Perl-Ref
 #   5  hardening: printconv-wrong-perl-ref blocks again, the corpus is
 #      restricted to real tag tables, the mod-tests hunk gate is gone,
-#      and the &[&str] registry gate is keyed on the declaration NAME
+#      the &[&str] registry gate is keyed on the declaration NAME, and
+#      non-source paths are rejected outright
+#
+# NOTE ON DIRECTION: the paragraph above frames a bump as "a rejection
+# can become an acceptance", because that is the case the merger's retry
+# machinery acts on -- it re-offers QUARANTINED heads. A STRICTER change
+# (like the non-source-file gate) has no retry surface at all: a head
+# already recorded "consumed" is published and is never reconsidered, by
+# design. Bump for either direction anyway. Marking the version is how a
+# human reading quarantine.jsonl months from now knows which ruleset
+# produced a verdict, and a stricter rule still changes what a re-offered
+# head is measured against.
 POLICY_VERSION = 5
 
 # Flags that are recorded for the human record but do NOT block
@@ -153,6 +164,50 @@ POLICY_VERSION = 5
 # keeping -- it tells a human "real string, wrong module" instead of
 # "invented string" -- but it must route to the queue, not to main.
 WARN_ONLY_FLAG_PREFIXES = ("ownership:",)
+
+# Where a tag fix is allowed to write. Anything else is a blocking
+# non-source-file flag.
+#
+# Derived from measurement, not taste. Across every commit currently
+# ahead of origin/main on the 74 worker branches (2026-07-26) there are
+# exactly 17 distinct touched paths: 10 under src/, 2 under tests/, 1
+# under oxidex-tags-core/, 3 under scripts/, and one
+# `config.toml.bak-pre-gpt55` -- a local config BACKUP that a worker
+# dropped in its worktree and committed alongside a real tag fix
+# (85a24f04390d on model-fix-parallel-standards-appn-1, 163 lines). That
+# commit validated CLEAN, because the only path-aware check was
+# check_ownership and ownership: is warn-only, so the backup would have
+# been swept into a PR and merged to main. Sibling droppings are already
+# loose in other worktrees: config.toml.bak-medium, .bak-pre-pin,
+# .bak-pre-terra, .bak-2026-07-25.
+#
+# The scripts/ hits are the OTHER thing this catches, and it is the more
+# valuable half: they belong to two fleet-INFRASTRUCTURE commits
+# (7a5dd662 "tuning: nudge fixer toward earlier patch attempts" and
+# 93994f59 "fix(fleet): consume handshake never unblocks a worker") that
+# the merger routed through a TAG-FIX evidence validator. Each was then
+# written into all 14 squads' ledgers, so those two commits alone account
+# for 28 of the 77 quarantine entries, showing up as eight
+# missing-trailer flags apiece instead of the one true statement: this is
+# not a tag fix. Naming it precisely is worth more than the eight
+# misleading flags.
+#
+# Cargo.toml/Cargo.lock are allowed although no worker has yet touched
+# them: a tag fix that genuinely needs a dependency is plausible, and a
+# fabricated PrintConv value cannot hide in a manifest. benches/ and
+# bindings/ are allowed for the same reason -- they are real parts of the
+# crate a fix could legitimately extend.
+FIX_COMMIT_PATH_PREFIXES = (
+    "src/",
+    "tests/",
+    "docs/",
+    "benches/",
+    "bindings/",
+)
+FIX_COMMIT_PATH_EXACT = ("Cargo.toml", "Cargo.lock")
+# Tag-definition crates are versioned per family (oxidex-tags-core,
+# -camera, -image, ...), so they are matched by prefix rather than listed.
+_TAG_CRATE_PREFIX = "oxidex-tags"
 
 # How much of a mismatched PrintConv value to embed in its flag. Full
 # values can be long (lens descriptions); the excerpt is for humans
@@ -801,6 +856,40 @@ def load_squad_globs(squads_toml):
     return globs_by_squad
 
 
+def is_fix_commit_path(path):
+    """True when `path` is somewhere a tag fix may legitimately write.
+
+    See FIX_COMMIT_PATH_PREFIXES for the evidence behind the allowlist.
+    """
+    path = (path or "").strip()
+    if not path:
+        return True  # nothing to judge; never invent a flag from noise
+    if path in FIX_COMMIT_PATH_EXACT:
+        return True
+    if path.startswith(FIX_COMMIT_PATH_PREFIXES):
+        return True
+    # oxidex-tags-core/, oxidex-tags-camera/, ... -- prefix, not a list,
+    # so a new tag crate does not silently start failing validation. The
+    # trailing "/" matters: it must be a DIRECTORY, so a repo-root file
+    # merely named "oxidex-tags-something.bak" is still rejected.
+    head = path.split("/", 1)[0]
+    return "/" in path and head.startswith(_TAG_CRATE_PREFIX)
+
+
+def check_paths(changed_files):
+    """HARD flags for files a tag fix has no business touching.
+
+    Deliberately NOT warn-only, unlike check_ownership below. Ownership
+    says "the right kind of file, owned by another squad" -- a routing
+    observation. This says "not the kind of file a tag fix produces at
+    all", which is either a stray artifact from the worker's worktree or
+    a commit that is not a tag fix. Neither should reach main, and before
+    this gate existed both did: see FIX_COMMIT_PATH_PREFIXES.
+    """
+    flags = [f"non-source-file:{p}" for p in changed_files if not is_fix_commit_path(p)]
+    return ("flagged" if flags else "pass"), flags
+
+
 def check_ownership(changed_files, worker, globs_by_squad):
     """Warn-flag every diff file outside the committing squad's
     ownership globs. WARN-ONLY per spec M1 ('violations flag, not
@@ -900,11 +989,14 @@ def validate_commit(
     worker = next(iter(trailers.get("Worker", [])), "")
     changed = commit_changed_files(sha, repo, git_run)
     ownership_status, ownership_flags = check_ownership(changed, worker, globs_by_squad)
+    paths_status, path_flags = check_paths(changed)
 
     patch_id = compute_patch_id(diff_text, repo, git_run)
 
     flags = list(
-        dict.fromkeys(trailer_flags + multi_flags + printconv_flags + ownership_flags)
+        dict.fromkeys(
+            trailer_flags + multi_flags + printconv_flags + path_flags + ownership_flags
+        )
     )
     hard_flags = [f for f in flags if not f.startswith(WARN_ONLY_FLAG_PREFIXES)]
     return {
@@ -917,6 +1009,7 @@ def validate_commit(
             "trailers": "flagged" if trailer_flags else "pass",
             "multi_sample": multi_status,
             "printconv": printconv_status,
+            "paths": paths_status,
             "ownership": ownership_status,
         },
     }

@@ -624,7 +624,7 @@ class PatchIdAndCliTests(unittest.TestCase):
         self.assertRegex(parsed["patch_id"], r"^[0-9a-f]{40}$")
         self.assertEqual(
             set(parsed["checks"]),
-            {"trailers", "multi_sample", "printconv", "ownership"},
+            {"trailers", "multi_sample", "printconv", "paths", "ownership"},
         )
 
     def test_exit_two_when_flagged(self):
@@ -1004,6 +1004,98 @@ class LooseningHardeningTests(unittest.TestCase):
     def test_policy_version_was_bumped_so_the_old_verdicts_are_re_examined(self):
         # Heads admitted under the loosened policy 4 must be reconsidered.
         self.assertGreaterEqual(validate_fix_commit.POLICY_VERSION, 5)
+
+
+class NonSourceFilePathTests(unittest.TestCase):
+    """A tag fix that also commits a stray artifact from the worker's
+    worktree must not reach main. Measured case: 85a24f04390d on
+    model-fix-parallel-standards-appn-1 added config.toml.bak-pre-gpt55
+    (163 lines) beside a real fix and validated CLEAN."""
+
+    def test_a_committed_config_backup_blocks_the_fix(self):
+        rust = (
+            "pub fn quality(v: u8) -> &'static str {\n"
+            "    match v {\n"
+            '        0x1 => "Economy",\n'
+            "    }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            perl_lib = write_perl_module(Path(tmp) / "perl", PERL_QUALITY)
+            sha = commit_fix(
+                repo,
+                {
+                    "src/canon/q.rs": rust,
+                    "config.toml.bak-pre-gpt55": "[worker]\nmodel = 'x'\n",
+                },
+                full_trailers(),
+            )
+            result = validate_commit(sha, repo, perl_lib=perl_lib)
+        self.assertIn("non-source-file:config.toml.bak-pre-gpt55", result["flags"])
+        self.assertFalse(result["ok"], "a stray artifact must BLOCK, not warn")
+
+    def test_a_clean_fix_is_unaffected(self):
+        rust = (
+            "pub fn quality(v: u8) -> &'static str {\n"
+            "    match v {\n"
+            '        0x1 => "Economy",\n'
+            "    }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            perl_lib = write_perl_module(Path(tmp) / "perl", PERL_QUALITY)
+            sha = commit_fix(repo, {"src/canon/q.rs": rust}, full_trailers())
+            result = validate_commit(sha, repo, perl_lib=perl_lib)
+        self.assertEqual([f for f in result["flags"] if f.startswith("non-source")], [])
+        self.assertTrue(result["ok"])
+
+    def test_every_place_a_real_tag_fix_writes_is_allowed(self):
+        # Derived from the 17 distinct paths every worker fix commit
+        # currently ahead of origin/main touches, plus the manifest and
+        # crate areas a fix could legitimately need.
+        for path in (
+            "src/parsers/jpeg/flir_parser.rs",
+            "src/parsers/tiff/makernotes/canon.rs",
+            "tests/integration_jpeg.rs",
+            "docs/tag-coverage.md",
+            "benches/parse.rs",
+            "bindings/c/oxidex.h",
+            "oxidex-tags-core/src/lib.rs",
+            "oxidex-tags-camera/src/canon.rs",
+            "Cargo.toml",
+            "Cargo.lock",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(validate_fix_commit.is_fix_commit_path(path))
+
+    def test_stray_artifacts_and_non_tag_fix_areas_are_rejected(self):
+        for path in (
+            "config.toml.bak-pre-gpt55",
+            "config.toml.bak-medium",
+            "config.example.toml",
+            ".mcp.json",
+            ".gitignore",
+            "justfile",
+            ".githooks/pre-commit",
+            # Fleet-infrastructure commits are not tag fixes. Two of them
+            # (7a5dd662, 93994f59) were routed through this validator and
+            # written into all 14 squads' ledgers, producing 28 of the 77
+            # quarantine entries as eight misleading missing-trailer flags
+            # apiece.
+            "scripts/model_fix_loop.py",
+            "scripts/parallel_model_fix_loop.py",
+            # A repo-root file that merely starts with the tag-crate
+            # prefix is not a tag crate.
+            "oxidex-tags-notes.bak",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(validate_fix_commit.is_fix_commit_path(path))
+
+    def test_the_flag_is_hard_not_warn_only(self):
+        self.assertFalse("non-source-file:".startswith(
+            validate_fix_commit.WARN_ONLY_FLAG_PREFIXES))
 
 
 if __name__ == "__main__":
