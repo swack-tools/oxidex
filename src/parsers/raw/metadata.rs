@@ -1594,7 +1594,10 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                             let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
                             let tag_value = raw_bytes_to_simple_tag_value(
-                                bytes, *field_type, *value_count, byte_order,
+                                bytes,
+                                *field_type,
+                                *value_count,
+                                byte_order,
                             );
                             metadata.insert(tag_name, tag_value);
                         }
@@ -1602,15 +1605,15 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 }
 
                 // Parse MakerNote from CMT1 EXIF IFD
-                if let (Some(make), Some(mn_data)) =
-                    (camera_make.as_ref(), makernote_data.as_ref())
+                if let (Some(make), Some(mn_data)) = (camera_make.as_ref(), makernote_data.as_ref())
                 {
                     let mut makernote_tags = std::collections::HashMap::new();
-                    if let Err(e) =
-                        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
-                            make, mn_data, byte_order, &mut makernote_tags,
-                        )
-                    {
+                    if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
+                        make,
+                        mn_data,
+                        byte_order,
+                        &mut makernote_tags,
+                    ) {
                         eprintln!("Warning: Failed to parse MakerNote for {}: {}", make, e);
                     } else {
                         for (tag_name, tag_value) in makernote_tags {

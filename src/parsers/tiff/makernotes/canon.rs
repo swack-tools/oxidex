@@ -1975,10 +1975,7 @@ fn parse_canon_makernote_impl(
                     // BulbDuration (index 24) - direct value in seconds
                     if array.len() > SHOT_INFO_BULB_DURATION {
                         let duration = array[SHOT_INFO_BULB_DURATION];
-                        tags.insert(
-                            "Canon:BulbDuration".to_string(),
-                            duration.to_string(),
-                        );
+                        tags.insert("Canon:BulbDuration".to_string(), duration.to_string());
                     }
                 }
             }
