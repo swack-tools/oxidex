@@ -75,7 +75,14 @@ from model_fix_loop import (
     extract_cache_usage,
     cluster_key,
     compact_messages,
+    compose_learning_block,
+    count_diff_format_failures,
+    build_diff_format_remediation,
     DEFAULT_GOVERNOR_BURST,
+    DEFAULT_LEARNING_BUDGET_TOKENS,
+    DEFAULT_QUARANTINE_MAX_ENTRIES,
+    LEARNING_SECTION_ORDER,
+    QUARANTINE_REASON_DISPLAY_CHARS,
     detect_duplicate_tag_insertion,
     estimate_tokens,
     expand_gaps_to_tags,
@@ -86,10 +93,16 @@ from model_fix_loop import (
     file_content_at_head,
     find_implemented_sibling,
     fix_gap,
+    format_lessons_tail,
+    format_own_quarantine,
     format_previous_attempts,
     load_global_pitfalls,
     load_module_playbook,
     format_sweep_review_history,
+    read_lessons_tail_events,
+    read_own_quarantine,
+    select_module_lessons,
+    squad_of_worker,
     git_apply,
     git_checkout_clean,
     git_commit,
@@ -2974,6 +2987,416 @@ class BuildPromptKnowledgeLayerTests(unittest.TestCase):
         self.assertIn("fallback-key playbook", prompt)
 
 
+def _seed_lessons(home, rows):
+    """Write K1 rows to <home>/logs/lessons.jsonl, ledger order."""
+    path = Path(home) / "logs" / "lessons.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+    return path
+
+
+def _lesson_row(event="build_failed", reason="r", worker="canon-1",
+                module="Canon.pm", fmt="NEF", tag_key="", ts="2026-07-25T10:00:00"):
+    return {"ts": ts, "worker": worker, "format": fmt, "module": module,
+            "table": "", "tag_key": tag_key, "event": event, "reason": reason,
+            "evidence": "", "checklist_id": ""}
+
+
+def _seed_quarantine(home, rows):
+    """Write squad_merge_loop-shaped entries to <home>/logs/quarantine.jsonl."""
+    path = Path(home) / "logs" / "quarantine.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+    return path
+
+
+def _quarantine_entry(squad="canon", fmt="NEF", flags=("printconv-unverifiable",),
+                      reason="validate_fix_commit flags: printconv-unverifiable",
+                      ts="2026-07-25T18:46:30"):
+    return {"ts": ts, "patch_id": "p" + str(abs(hash((squad, fmt, reason))) % 10**8),
+            "sha": "deadbeef", "format": fmt, "squad": squad, "reason": reason,
+            "flags": list(flags), "attempt": 1, "backoff_seconds": 60}
+
+
+class SquadOfWorkerTests(unittest.TestCase):
+    """parallel_model_fix_loop mints worker ids as f"{squad}-{n}"; the
+    quarantine ledger records only the squad. This is the link back."""
+
+    def test_trailing_index_is_stripped(self):
+        self.assertEqual(squad_of_worker("canon-3"), "canon")
+        self.assertEqual(squad_of_worker("sony-minolta-2"), "sony-minolta")
+        self.assertEqual(squad_of_worker("pentax-samsung-11"), "pentax-samsung")
+
+    def test_non_squad_identities_yield_none(self):
+        # run_worker's bare format name and main()'s default "1" never
+        # encoded a squad -- guessing one from them would silently show a
+        # worker some other squad's rejections.
+        for label in ("JPEG", "1", "", None, "canon-"):
+            self.assertIsNone(squad_of_worker(label))
+
+
+class OwnQuarantineTests(unittest.TestCase):
+    """A worker never learned its own commit had been rejected, so it
+    kept stacking new commits on the rejected code -- the root cause of
+    an entire quarantine class (7 heads hitting cherry-pick conflicts
+    purely because their own earlier commit had been dropped)."""
+
+    def test_own_squad_and_format_entries_are_returned_newest_first(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = _seed_quarantine(home, [
+                _quarantine_entry(reason="older rejection", ts="2026-07-25T01:00:00"),
+                _quarantine_entry(reason="newer rejection", ts="2026-07-25T02:00:00"),
+            ])
+            entries = read_own_quarantine(path, "canon-3", "NEF")
+        self.assertEqual([e["reason"] for e in entries],
+                         ["newer rejection", "older rejection"])
+
+    def test_other_squads_and_other_formats_are_excluded(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = _seed_quarantine(home, [
+                _quarantine_entry(squad="canon", fmt="NEF", reason="mine"),
+                _quarantine_entry(squad="nikon", fmt="NEF", reason="other squad"),
+                _quarantine_entry(squad="canon", fmt="CR2", reason="other format"),
+            ])
+            entries = read_own_quarantine(path, "canon-3", "NEF")
+        self.assertEqual([e["reason"] for e in entries], ["mine"])
+
+    def test_squad_wide_bisection_verdict_has_no_format_and_still_matches(self):
+        # overlord_sweep.bisect_sweep_failure quarantines a whole squad
+        # with format_name=None: it rolled back the branch every member
+        # shares, so every member needs to see it.
+        with tempfile.TemporaryDirectory() as home:
+            path = _seed_quarantine(home, [
+                _quarantine_entry(squad="canon", fmt=None, flags=("sweep-bisection",),
+                                  reason="overlord sweep bisection: isolated as the offending squad"),
+            ])
+            entries = read_own_quarantine(path, "canon-3", "NEF")
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["flags"], ["sweep-bisection"])
+
+    def test_label_without_a_squad_degrades_to_format_only(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = _seed_quarantine(home, [
+                _quarantine_entry(squad="canon", fmt="NEF", reason="same format"),
+                _quarantine_entry(squad="canon", fmt="CR2", reason="other format"),
+            ])
+            entries = read_own_quarantine(path, "JPEG", "NEF")
+        self.assertEqual([e["reason"] for e in entries], ["same format"])
+
+    def test_bounded_by_max_entries_and_tolerant_of_garbage(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = _seed_quarantine(home, [
+                _quarantine_entry(reason=f"rejection {c}") for c in "abcdefghij"
+            ])
+            with path.open("a") as f:
+                f.write("not json at all\n[1,2,3]\n")
+            entries = read_own_quarantine(path, "canon-3", "NEF")
+        self.assertEqual(len(entries), DEFAULT_QUARANTINE_MAX_ENTRIES)
+        self.assertEqual(entries[0]["reason"], "rejection j")
+
+    def test_missing_ledger_is_not_an_error(self):
+        with tempfile.TemporaryDirectory() as home:
+            self.assertEqual(
+                read_own_quarantine(Path(home) / "logs" / "quarantine.jsonl", "canon-3", "NEF"),
+                [],
+            )
+
+    def test_rendered_section_leads_with_flags_and_clamps_the_reason(self):
+        long_conflict = "cherry-pick failed: " + "CONFLICT line\n" * 200
+        rendered = format_own_quarantine([
+            _quarantine_entry(flags=("printconv-mismatch:Auto (bracketed)",),
+                              reason=long_conflict),
+        ])
+        self.assertIn("printconv-mismatch:Auto (bracketed)", rendered)
+        self.assertIn("REJECTED", rendered)
+        # One bullet, one line: the multi-line git transcript is flattened
+        # and clamped, never allowed to become 200 unindented lines.
+        self.assertEqual(len(rendered.strip().splitlines()[-1:]), 1)
+        self.assertLess(len(rendered.strip().splitlines()[-1]),
+                        QUARANTINE_REASON_DISPLAY_CHARS + 120)
+
+
+class BuildPromptOwnQuarantineTests(unittest.TestCase):
+    def test_a_workers_own_rejection_flags_reach_its_prompt(self):
+        with tempfile.TemporaryDirectory() as home:
+            _seed_quarantine(home, [
+                _quarantine_entry(squad="canon", fmt="NEF",
+                                  flags=("printconv-mismatch:Auto (bracketed)",),
+                                  reason="validate_fix_commit flags: printconv-mismatch"),
+            ])
+            prompt = build_prompt(make_gap(gap_count=1), knowledge_home=Path(home),
+                                  worker_label="canon-3")
+        self.assertIn("printconv-mismatch:Auto (bracketed)", prompt)
+        self.assertIn("REJECTED", prompt)
+
+    def test_another_workers_rejection_does_not(self):
+        with tempfile.TemporaryDirectory() as home:
+            _seed_quarantine(home, [
+                _quarantine_entry(squad="nikon", fmt="NEF",
+                                  flags=("targeted-test-failed",),
+                                  reason="cargo test --lib nef failed"),
+            ])
+            prompt = build_prompt(make_gap(gap_count=1), knowledge_home=Path(home),
+                                  worker_label="canon-3")
+        self.assertNotIn("targeted-test-failed", prompt)
+        self.assertNotIn("REJECTED", prompt)
+
+    def test_omitted_entirely_without_a_worker_label(self):
+        # Hermetic-by-default: every pre-existing caller passes no
+        # worker_label and must keep its byte-identical prompt.
+        with tempfile.TemporaryDirectory() as home:
+            _seed_quarantine(home, [_quarantine_entry(squad="canon", fmt="NEF")])
+            with_label = build_prompt(make_gap(gap_count=1), knowledge_home=Path(home),
+                                      worker_label="canon-3")
+            without = build_prompt(make_gap(gap_count=1), knowledge_home=Path(home))
+        self.assertIn("printconv-unverifiable", with_label)
+        self.assertNotIn("printconv-unverifiable", without)
+
+
+class InfraNoiseNeverReachesAPromptTests(unittest.TestCase):
+    """226 urlopen errors and 54 HTTP 429s are provider outages, not
+    knowledge. They must not reach a prompt and must not consume a byte
+    of the learning budget -- including the 231 live rows that labelled
+    an outage as build_failed/review_rejected/structural."""
+
+    INFRA_ROWS = (
+        ("infra", "model call failed: HTTP Error 429: Too Many Requests"),
+        ("build_failed", "model call failed: <urlopen error [Errno 8] nodename "
+                         "nor servname provided, or not known>"),
+        ("review_rejected", "review call failed: [Errno 54] Connection reset by peer"),
+        ("structural", "FAILED NEF:EXIF:CFAPattern2: model call failed: "
+                       "[Errno 54] Connection reset by peer"),
+    )
+
+    def test_tail_reader_drops_them_however_they_were_labelled(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = _seed_lessons(home, [
+                _lesson_row(event=event, reason=reason)
+                for event, reason in self.INFRA_ROWS
+            ] + [_lesson_row(event="wrong_value", reason="a genuine lesson")])
+            events = read_lessons_tail_events(path)
+        self.assertEqual([e["reason"] for e in events], ["a genuine lesson"])
+
+    def test_none_of_it_reaches_the_prompt(self):
+        with tempfile.TemporaryDirectory() as home:
+            _seed_lessons(home, [
+                _lesson_row(event=event, reason=reason)
+                for event, reason in self.INFRA_ROWS
+            ])
+            prompt = build_prompt(make_gap(gap_count=1), knowledge_home=Path(home),
+                                  module_name="Canon.pm", worker_label="canon-1")
+        for token in ("urlopen", "429", "Connection reset", "model call failed",
+                      "Recent lessons ledger entries"):
+            self.assertNotIn(token, prompt)
+
+    def test_it_consumes_no_learning_budget(self):
+        """Hundreds of outage rows must produce a byte-identical prompt
+        to zero of them. The block admits max_entries DISTINCT lessons;
+        if an outage counted as one, a single provider incident would
+        evict every real lesson from the block for hours."""
+        gap = make_gap(gap_count=1)
+        # Outages first, real lessons last: if the outages consumed any
+        # ranking slot or any byte of budget, the real lessons appended
+        # after them would be the ones pushed out.
+        outage = [_lesson_row(event=event, reason=reason)
+                  for event, reason in self.INFRA_ROWS] * 50
+        real = [_lesson_row(event="wrong_value", reason=f"real lesson {c}")
+                for c in "abcdefgh"]
+        with tempfile.TemporaryDirectory() as quiet:
+            _seed_lessons(quiet, real)
+            quiet_prompt = build_prompt(gap, knowledge_home=Path(quiet),
+                                        module_name="Canon.pm", worker_label="canon-1")
+        with tempfile.TemporaryDirectory() as noisy:
+            _seed_lessons(noisy, outage + real)
+            noisy_prompt = build_prompt(gap, knowledge_home=Path(noisy),
+                                        module_name="Canon.pm", worker_label="canon-1")
+        self.assertIn("real lesson a", quiet_prompt)
+        self.assertEqual(noisy_prompt, quiet_prompt)
+
+
+class AdaptiveDiffFormatGuidanceTests(unittest.TestCase):
+    """"no diff in model response" is 1489 of 4922 live lesson rows
+    (~40% of all failures) and is a RESPONSE-FORMAT failure, not a
+    domain-knowledge one. The corrective text goes only to the workers
+    actually failing that way."""
+
+    NO_DIFF_SPELLINGS = (
+        "no diff in model response",
+        "no diff in model response (exhausted request budget)",
+        "no diff in model response (exhausted verify budget)",
+        "no diff in model response (patch chunking exceeded safety limit)",
+    )
+
+    def test_counts_only_this_workers_rows(self):
+        events = [
+            _lesson_row(worker="canon-1", reason=self.NO_DIFF_SPELLINGS[0]),
+            _lesson_row(worker="canon-1", reason=self.NO_DIFF_SPELLINGS[2]),
+            _lesson_row(worker="nikon-1", reason=self.NO_DIFF_SPELLINGS[0]),
+            _lesson_row(worker="canon-1", reason="gap count did not decrease"),
+        ]
+        self.assertEqual(count_diff_format_failures(events, "canon-1"), 2)
+        self.assertEqual(count_diff_format_failures(events, "nikon-1"), 1)
+        self.assertEqual(count_diff_format_failures(events, "olympus-1"), 0)
+        self.assertEqual(count_diff_format_failures(events, None), 0)
+
+    def test_every_attempt_build_spelling_is_recognized(self):
+        for reason in self.NO_DIFF_SPELLINGS:
+            self.assertEqual(
+                count_diff_format_failures([_lesson_row(reason=reason)], "canon-1"), 1,
+                reason,
+            )
+
+    def test_guidance_states_the_envelope_with_a_working_example(self):
+        text = build_diff_format_remediation(3)
+        self.assertIn("```diff", text)
+        self.assertIn("--- a/", text)   # a bare @@ hunk does not apply
+        self.assertIn("+++ b/", text)
+        self.assertIn("EXACTLY ONE", text)
+        self.assertIn("3 recent", text)
+        self.assertEqual(build_diff_format_remediation(0), "")
+
+    def test_it_never_spends_a_slot_in_the_domain_lessons_ranking(self):
+        """Each failure class is routed to the one section that can fix
+        it. Without this, ranking by recurrence is self-defeating: over
+        the live tail 2026-07-25 this reason is 40 of 235 rows and ranks
+        FIRST for essentially every module, evicting the wrong_value and
+        structural lessons that carry the actual ExifTool knowledge."""
+        events = [_lesson_row(reason=self.NO_DIFF_SPELLINGS[0])] * 40
+        events += [_lesson_row(event="wrong_value", reason="PrintConv byte match")] * 2
+        ranked = select_module_lessons(events, "Canon.pm", "NEF")
+        self.assertEqual([(e["reason"], n) for e, n in ranked],
+                         [("PrintConv byte match", 2)])
+
+    def test_failing_worker_gets_it_and_a_clean_worker_does_not(self):
+        gap = make_gap(gap_count=1)
+        with tempfile.TemporaryDirectory() as home:
+            _seed_lessons(home, [
+                _lesson_row(worker="canon-1", reason=self.NO_DIFF_SPELLINGS[0]),
+            ])
+            failing = build_prompt(gap, knowledge_home=Path(home),
+                                   module_name="Canon.pm", worker_label="canon-1")
+            clean = build_prompt(gap, knowledge_home=Path(home),
+                                 module_name="Canon.pm", worker_label="canon-2")
+        self.assertIn("FORMAT ALERT", failing)
+        self.assertNotIn("FORMAT ALERT", clean)
+
+
+class LessonRecurrenceRankingTests(unittest.TestCase):
+    """Section 6: the block leads with the mistake this module keeps
+    repeating, not with whatever happened last."""
+
+    def test_repeated_fingerprint_outranks_a_more_recent_one_off(self):
+        events = [_lesson_row(event="wrong_value", reason="PrintConv must match Perl")] * 3
+        events.append(_lesson_row(event="build_failed", reason="a one-off compile error"))
+        ranked = select_module_lessons(events, "Canon.pm", "NEF")
+        self.assertEqual([(e["reason"], n) for e, n in ranked], [
+            ("PrintConv must match Perl", 3),
+            ("a one-off compile error", 1),
+        ])
+
+    def test_module_scoping_beats_format_scoping_when_a_module_is_given(self):
+        events = [
+            _lesson_row(module="Canon.pm", fmt="NEF", reason="canon lesson"),
+            _lesson_row(module="Nikon.pm", fmt="NEF", reason="nikon lesson"),
+        ]
+        self.assertEqual([e["reason"] for e, _ in select_module_lessons(events, "Canon.pm", "NEF")],
+                         ["canon lesson"])
+        # No module key -> format scoping, which here admits both rows.
+        self.assertEqual(len(select_module_lessons(events, None, "NEF")), 2)
+
+    def test_rendered_block_shows_the_recurrence_count_only_when_repeated(self):
+        events = [_lesson_row(event="wrong_value", reason="recurring")] * 4
+        events.append(_lesson_row(event="build_failed", reason="one-off"))
+        rendered = format_lessons_tail(select_module_lessons(events, "Canon.pm", "NEF"))
+        self.assertIn("- wrong_value x4: recurring", rendered)
+        self.assertIn("- build_failed: one-off", rendered)
+        self.assertLess(rendered.index("x4"), rendered.index("one-off"))
+
+    def test_recurring_mistake_leads_the_prompt_block(self):
+        with tempfile.TemporaryDirectory() as home:
+            rows = [_lesson_row(event="wrong_value", reason="THE RECURRING MISTAKE")] * 5
+            rows += [_lesson_row(event="build_failed", reason=f"a fresh one-off {c}")
+                     for c in "abcdefgh"]
+            _seed_lessons(home, rows)
+            prompt = build_prompt(make_gap(gap_count=1), knowledge_home=Path(home),
+                                  module_name="Canon.pm")
+        self.assertIn("wrong_value x5: THE RECURRING MISTAKE", prompt)
+        self.assertLess(prompt.index("THE RECURRING MISTAKE"), prompt.index("a fresh one-off"))
+
+
+class LearningBlockBudgetTests(unittest.TestCase):
+    """The budget must stay honest no matter how large the ledgers grow,
+    and the squeeze must fall on the least valuable sections."""
+
+    def test_composition_is_bounded_by_the_budget(self):
+        parts = {name: "x" * 10_000 for name in LEARNING_SECTION_ORDER}
+        self.assertEqual(len(compose_learning_block(parts, 100)), 400)
+        self.assertEqual(compose_learning_block(parts, 0), "")
+
+    def test_overflow_is_shed_from_the_tail_of_the_priority_order(self):
+        parts = {"diff_format": "F" * 40, "quarantine": "Q" * 40,
+                 "sweep_reviews": "S" * 40, "module_playbook": "M" * 40,
+                 "lessons_tail": "L" * 40}
+        text = compose_learning_block(parts, 25)  # 100 chars
+        self.assertEqual(text, "F" * 40 + "Q" * 40 + "S" * 20)
+        self.assertNotIn("M", text)
+        self.assertNotIn("L", text)
+
+    def test_unranked_keys_are_ignored(self):
+        self.assertEqual(compose_learning_block({"mystery": "Z" * 50}, 100), "")
+
+    def test_pre_existing_three_section_order_is_unchanged(self):
+        # With neither new section present the block must be exactly what
+        # the old `sweep + module + tail` concatenation produced, so a
+        # worker with no quarantine record and no format problem keeps a
+        # byte-identical (cacheable) prompt.
+        parts = {"sweep_reviews": "S", "module_playbook": "M", "lessons_tail": "L"}
+        self.assertEqual(compose_learning_block(parts, 1000), "SML")
+
+    def test_large_synthetic_ledger_stays_within_the_configured_budget(self):
+        gap = make_gap(gap_count=1)
+        budget = DEFAULT_LEARNING_BUDGET_TOKENS  # 1200 tokens -> 4800 chars
+        with tempfile.TemporaryDirectory() as home:
+            # ~3000 lesson rows, 400 quarantine entries and a full-size
+            # playbook: every section of the block over-full at once.
+            rows = []
+            for i in range(1000):
+                rows.append(_lesson_row(event="wrong_value",
+                                        reason=f"recurring mistake {chr(97 + i % 26)}" * 8))
+                rows.append(_lesson_row(event="build_failed", reason="x" * 400))
+                rows.append(_lesson_row(worker="canon-1",
+                                        reason="no diff in model response"))
+            _seed_lessons(home, rows)
+            _seed_quarantine(home, [
+                _quarantine_entry(flags=("printconv-mismatch:Auto (bracketed)",),
+                                  reason="y" * 900)
+                for _ in range(400)
+            ])
+            modules_dir = Path(home) / "logs" / "knowledge" / "modules"
+            modules_dir.mkdir(parents=True)
+            (modules_dir / "Canon.pm.md").write_text("- playbook bullet\n" * 300)
+
+            # learning_budget_tokens=0 empties the block entirely, so the
+            # difference between the two prompts IS the block, exactly --
+            # no estimating around the rest of the prompt.
+            without_block = build_prompt(gap, knowledge_home=Path(home),
+                                         module_name="Canon.pm", worker_label="canon-1",
+                                         learning_budget_tokens=0)
+            loaded = build_prompt(gap, knowledge_home=Path(home),
+                                  module_name="Canon.pm", worker_label="canon-1",
+                                  learning_budget_tokens=budget)
+        self.assertLessEqual(len(loaded) - len(without_block), budget * 4)
+        # The highest-priority sections are the ones that survived...
+        self.assertIn("FORMAT ALERT", loaded)
+        self.assertIn("printconv-mismatch:Auto (bracketed)", loaded)
+        # ...and the lowest-priority one was shed entirely.
+        self.assertNotIn("Recent lessons ledger entries", loaded)
+
+
 class FormatPreviousAttemptsTests(unittest.TestCase):
     def test_empty_returns_empty_string(self):
         self.assertEqual(format_previous_attempts([]), "")
@@ -4812,8 +5235,13 @@ class FixGapK1LessonTests(HermeticFixGapTestCase):
                 knowledge_home=tmpdir, worker_label="w1",
             )
             events = [e["event"] for e in _read_lessons(tmpdir)]
-        self.assertIn("build_failed", events)
-        self.assertIn("infra", events)
+        # Exactly ONE row, and it is infra. fix_gap used to ALSO write a
+        # build_failed row carrying the same outage reason (from inside
+        # `if not built:`, where a DNS error and a type error look
+        # identical) -- 218 such duplicate rows on the live ledger
+        # 2026-07-25, every one of them a knowledge-file bullet and a
+        # line of some worker's prompt budget spent on a 429.
+        self.assertEqual(events, ["infra"])
         self.assertNotIn("critique", events)
 
     def test_test_regression_writes_test_regressed_event(self):

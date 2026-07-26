@@ -21,7 +21,11 @@ ledger `<home>/logs/lessons.jsonl`:
      bytes is a no-op (K3 "dedupe by sha1 of the event line").
   2. Skip malformed lines (readers of lessons.jsonl never degrade to `{}`
      -- K1) and skip `event=infra` entirely: 429/timeout noise is excluded
-     from every knowledge query at the source.
+     from every knowledge query at the source. `infra` is now decided by
+     the REASON, not by what the caller claimed (classify_event /
+     INFRA_REASON_RE), both when a row is appended and again when one is
+     read -- the live ledger holds 231 pre-existing rows that labelled a
+     provider outage as build_failed/review_rejected/structural.
   3. Cluster surviving events by `fingerprint_generic` -- sha1 of
      (event, checklist_id-or-normalized-reason) -- which is exactly what
      makes "same mistake in Canon.pm and Nikon.pm" clusterable across
@@ -114,6 +118,69 @@ NOISE_RE = re.compile(
     r"(?i)\b429\b|too many requests|rate[ -]?limit|tim(?:e|ed|ing)[ -]?out|timeout"
 )
 
+#: Provider-outage markers in a lesson `reason`. A DNS failure or a 429
+#: teaches a worker nothing about ExifTool, and every byte one occupies is
+#: a byte of the worker prompt's learning-block budget stolen from a real
+#: lesson -- so these are folded onto event="infra" at the point of append
+#: (classify_event) and dropped again defensively on read (apply_events,
+#: model_fix_loop.read_lessons_tail_events).
+#:
+#: Measured on the live ledger 2026-07-25 (4922 rows): 218 rows carried an
+#: "model call failed: ..." reason under event=infra -- correctly excluded
+#: -- but the fixer ALSO wrote the identical reason under
+#: event=build_failed for every one of them (fix_gap logged the specific
+#: event before critique_and_continue logged the infra one), so 218 copies
+#: sailed straight past the `event == "infra"` filter. 13 more hid a
+#: "model call failed:"/"review call failed:" string mid-reason under
+#: review_rejected/structural. 231 rows of pure provider noise were
+#: reaching distillation and worker prompts; 226 of them were the single
+#: "<urlopen error [Errno 8] nodename nor servname provided>" outage.
+#:
+#: Deliberately NARROWER than NOISE_RE above: NOISE_RE folds a bare
+#: "timeout" and only ever runs over hand-written legacy format-memory
+#: bullets, whereas this one runs over every real lesson -- a genuine
+#: build error whose text happens to contain the word "timeout" must not
+#: be silently reclassified into oblivion.
+INFRA_REASON_RE = re.compile(
+    r"(?i)"
+    r"model call failed:"                    # model_fix_loop.INFRA_FAILURE_PREFIX
+    r"|review call failed:"                   # the reviewer's/critic's equivalents
+    r"|critique call failed:"
+    r"|urlopen error"                         # urllib connection-level failure
+    # "rate limit" / "rate-limited" / OpenAI's "rate_limit_error". The
+    # (?!er) is load-bearing: without it this also swallows any lesson
+    # that merely names a Rust type called RateLimiter.
+    r"|http error 429|too many requests|rate[ _-]?limit(?!er)"
+    r"|http error 5\d\d"                      # provider 5xx
+    r"|read operation timed out"              # socket read timeout (not bare "timeout")
+    r"|connection reset by peer"
+    r"|remote end closed connection"
+    r"|temporarily unavailable|service unavailable|bad gateway"
+)
+
+
+def is_infra_reason(reason):
+    """True when `reason` is provider/infrastructure noise rather than a
+    lesson (see INFRA_REASON_RE). The single predicate every reader and
+    writer shares, so "infra" means exactly one thing fleet-wide."""
+    return bool(INFRA_REASON_RE.search(str(reason or "")))
+
+
+def classify_event(event, reason):
+    """Fold a provider-outage `reason` onto event="infra" AT THE POINT OF
+    APPEND, whatever the caller believed it was logging.
+
+    Callers are not wrong to ask for `build_failed` -- from inside
+    fix_gap's `if not built:` branch an outage genuinely looks like a
+    failed build -- they simply cannot see that the reason is a DNS error.
+    Classifying here (rather than at each of the ~10 call sites) is what
+    makes the exclusion total: `infra` is filtered by apply_events and by
+    model_fix_loop's tail reader, so a reason that reaches this function
+    can never reach a knowledge file or a worker prompt again.
+    """
+    return "infra" if is_infra_reason(reason) else str(event)
+
+
 #: Bullet shape this script itself renders -- parsed back out of
 #: GLOBAL-PITFALLS.md so a promoted cluster whose count grows updates its
 #: existing bullet in place instead of appending a duplicate.
@@ -195,9 +262,76 @@ def fingerprint_generic(event, checklist_id, reason):
     return sha1_fields(event, fingerprint_key(checklist_id, reason))
 
 
+def event_fingerprint_scoped(ev):
+    """The scoped fingerprint of one ledger ROW: the writer's own
+    `fingerprint_scoped` field when present (every K1 writer shares the
+    formula, so trusting it costs nothing and keeps a row that was
+    clamped by encode_lesson_line clustering with its siblings), else
+    recomputed from the row's fields with the same module-then-format-
+    then-Unknown attribution _apply_one uses."""
+    fp = str(ev.get("fingerprint_scoped") or "").strip()
+    if fp:
+        return fp
+    return fingerprint_scoped(
+        str(ev.get("event") or ""),
+        str(ev.get("module") or ev.get("format") or "Unknown"),
+        str(ev.get("checklist_id") or ""),
+        str(ev.get("reason") or ""),
+    )
+
+
+def rank_by_recurrence(events, max_entries=None):
+    """Rank ledger rows by how OFTEN a distinct mistake recurs, not by
+    when it last happened.
+
+    `events` is in ledger order (oldest first). Rows are collapsed by
+    event_fingerprint_scoped -- the same (event, module, checklist-id-or-
+    normalized-reason) identity the distiller's own clusters use -- and
+    returned as [(newest_representative_row, occurrence_count), ...]
+    ordered by count descending, ties broken by most-recent occurrence.
+
+    This exists because a plain newest-first tail is the wrong ranking for
+    a prompt: with 1489 of 4922 live rows sharing one reason, a tail of
+    the last 8 rows is mostly 8 samples of whatever the last hour happened
+    to produce, while the mistake this module keeps repeating -- the one
+    actually worth spending prompt budget on -- may not appear at all.
+    Collapsing by fingerprint also means one recurring failure costs one
+    line instead of N, which is where most of the budget saving comes
+    from.
+
+    max_entries=None returns every cluster; ordering is total and
+    deterministic (count, then recency, then fingerprint) so the same
+    input always renders the same prompt bytes -- prompt-cache friendly
+    and testable.
+    """
+    clusters = {}
+    for index, ev in enumerate(events):
+        fp = event_fingerprint_scoped(ev)
+        cluster = clusters.get(fp)
+        if cluster is None:
+            clusters[fp] = {"fp": fp, "count": 1, "last_index": index, "event": ev}
+        else:
+            cluster["count"] += 1
+            cluster["last_index"] = index
+            cluster["event"] = ev  # newest occurrence represents the cluster
+    ordered = sorted(
+        clusters.values(),
+        key=lambda c: (-c["count"], -c["last_index"], c["fp"]),
+    )
+    if max_entries is not None:
+        ordered = ordered[:max_entries]
+    return [(c["event"], c["count"]) for c in ordered]
+
+
 def make_lesson(*, ts, worker, format_name, module, event, reason,
                 evidence="", table="", tag_key="", checklist_id=""):
-    """Build one schema-complete K1 event dict (fingerprints included)."""
+    """Build one schema-complete K1 event dict (fingerprints included).
+
+    A provider-outage reason is reclassified to event="infra" here (see
+    classify_event) -- BEFORE the fingerprints are computed, so the stored
+    row is self-consistent and a replay of it clusters as infra too.
+    """
+    event = classify_event(event, reason)
     return {
         "ts": iso_ts(ts) if isinstance(ts, (int, float)) else str(ts),
         "worker": worker,
@@ -320,8 +454,16 @@ def apply_events(state, lines):
     """Fold complete ledger lines into the cluster state.
 
     Dedupe by sha1 of the raw line (idempotent replay after a crash
-    between output-replace and cursor-advance); skip malformed lines and
-    `event=infra`. Returns the number of events actually applied.
+    between output-replace and cursor-advance); skip malformed lines,
+    `event=infra`, and any row whose *reason* is provider noise however it
+    was labelled. Returns the number of events actually applied.
+
+    The reason-based check is not redundant with the event check: rows
+    written before classify_event existed carry an outage reason under
+    build_failed/review_rejected/structural (231 of them on the live
+    ledger, 2026-07-25 -- see INFRA_REASON_RE), and the ledger is
+    append-only, so the only way to keep those out of the module
+    playbooks and GLOBAL-PITFALLS is to filter them on read forever.
     """
     seen = set(state["seen"])
     applied = 0
@@ -330,7 +472,7 @@ def apply_events(state, lines):
         if line_hash in seen:
             continue
         ev = parse_lesson_line(raw)
-        if ev is None or ev["event"] == "infra":
+        if ev is None or ev["event"] == "infra" or is_infra_reason(ev.get("reason")):
             continue
         _apply_one(state, ev)
         state["seen"].append(line_hash)
