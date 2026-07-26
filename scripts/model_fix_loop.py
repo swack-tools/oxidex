@@ -37,17 +37,29 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           evidence, and a scoped emission scan alongside
                           the C1-C5 checklist -- see review_verdict)
     learning_budget_tokens default 1200 (worker only; flat, reserved token
-                          budget for the learning block -- GLOBAL-PITFALLS.md
-                          excerpt + module playbook + sweep reviews +
-                          lessons tail -- never squeezed further and never
-                          dropped entirely, see build_prompt)
+                          budget for the learning block -- adaptive
+                          diff-format remediation + this worker's own
+                          quarantine verdicts + sweep reviews + module
+                          playbook + lessons tail -- never squeezed further
+                          and never dropped entirely. Overflow inside the
+                          block is shed from the tail of
+                          LEARNING_SECTION_ORDER, so a growing ledger costs
+                          the low-value sections first, never the
+                          high-value ones. See build_prompt /
+                          compose_learning_block. The GLOBAL-PITFALLS.md
+                          excerpt is outside this budget -- it sits in the
+                          static cacheable prefix.)
     parser_floor_tokens    default 2000 (worker only; the parser-files
                           section never shrinks below this even under the
                           worst prompt overflow -- "elastic with a floor")
     lessons_tail_kb        default 256 (worker only; how far back
                           build_prompt seeks into the tail of
                           logs/lessons.jsonl -- bounded, no full scan of a
-                          ledger that only grows -- see read_lessons_tail)
+                          ledger that only grows -- see
+                          read_lessons_tail_events. Those bytes are read
+                          ONCE and feed both the recurrence-ranked
+                          module/format lessons and the per-worker
+                          "no diff in model response" detector.)
     max_request_repeats    default 3 (worker only; identical REQUESTs before
                           a pivot nudge replaces the served content)
     max_verify_turns       default 10 (worker only; VERIFY trial-compile
@@ -213,8 +225,19 @@ from find_tag_gaps import (
 # rather than keeping its own copy, exactly like log_sweep_review.py does.
 from distill_lessons import (
     append_lesson as _dl_append_lesson,
+    is_infra_reason,
     make_lesson as make_lesson_event,
+    rank_by_recurrence,
 )
+
+# validate_fix_commit.py is the canonical owner of "which squad does this
+# worker id belong to" -- it is the helper the merger itself uses when it
+# decides ownership of a candidate commit (see check_ownership). Reusing
+# it, rather than keeping a second regex here, is what guarantees the
+# prompt and the validator can never disagree about whose commit was
+# rejected. Same sibling-import shape as find_tag_gaps/distill_lessons
+# above; validate_fix_commit is stdlib-only and imports nothing from here.
+from validate_fix_commit import squad_from_worker
 
 # --- K1 lessons ledger (writer side; see distill_lessons.py for the ---------
 # --- canonical schema/fingerprint/append contract) --------------------------
@@ -2286,26 +2309,79 @@ def build_exact_sample_block(gap, samples_dir):
     )
 
 
+# --- Section 6: adaptive response-format guidance --------------------------
+#
+# "no diff in model response" is attempt_build's verdict when
+# extract_diff() finds neither a ```diff fenced block nor a reply that
+# starts like a raw unified diff. It accounts for 1489 of 4922 live
+# lesson rows (2026-07-25) -- ~40% of every failure the fleet records,
+# nearly 4x the next reason -- and it is a RESPONSE-FORMAT failure, not a
+# domain-knowledge one: the model usually did the work and then wrapped
+# it in ```rust, or narrated the patch in prose, or emitted a bare
+# @@ hunk. No amount of ExifTool lore in the prompt fixes that; a
+# corrective statement of the expected envelope does.
+#
+# It is injected adaptively -- only for the workers actually failing this
+# way -- because the fix is worth ~120 tokens and the learning budget is
+# 1200: charging every prompt for it permanently would cost 10% of the
+# block to teach the ~60% of workers who already get the format right
+# something they already know.
+#
+# Declared here, ahead of the lessons tail, because the tail DEFERS to
+# it: select_module_lessons drops these rows from the domain-lessons
+# ranking entirely (see there), so each failure class is routed to the
+# one section that can actually fix it.
+
+DIFF_FORMAT_FAILURE_RE = re.compile(r"(?i)no diff in model response")
+
+#: One occurrence in the tail window is enough to escalate. This failure
+#: mode is self-reinforcing (the model that answers in prose once answers
+#: in prose again on the retry) and the corrective text is cheap, so
+#: waiting for a second sample buys nothing but another wasted round.
+DEFAULT_DIFF_FORMAT_ESCALATION_THRESHOLD = 1
+
+
 # --- Section 6: lessons tail (part of the learning block) ------------------
 
 DEFAULT_LESSONS_TAIL_KB = 256
 DEFAULT_LESSONS_TAIL_MAX_ENTRIES = 8
 
+#: One rendered lessons/quarantine line is clamped to this many chars.
+#: Reasons carry whole cherry-pick transcripts and cargo output; a single
+#: un-clamped one can be 2000 bytes (the K1 line cap) and eat the entire
+#: learning budget by itself.
+LESSON_REASON_DISPLAY_CHARS = 240
 
-def read_lessons_tail(lessons_path, module_key, format_name,
-                       tail_kb=DEFAULT_LESSONS_TAIL_KB,
-                       max_entries=DEFAULT_LESSONS_TAIL_MAX_ENTRIES):
-    """Section 6: the last `tail_kb` KB of <home>/logs/lessons.jsonl via
-    seek (bounded, no full scan of a ledger that only ever grows), non-
-    infra events filtered to the same module (when module_key is given)
-    else the same format, newest `max_entries` kept.
+
+def _clamp_reason(reason, limit=LESSON_REASON_DISPLAY_CHARS):
+    """Whitespace-flatten and clamp one ledger reason to a single prompt
+    line. Flattening matters as much as clamping: a cherry-pick or cargo
+    reason is multi-line, and an embedded newline would silently split one
+    "  - " bullet into several unindented lines mid-block."""
+    text = " ".join(str(reason or "").split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def read_lessons_tail_events(lessons_path, tail_kb=DEFAULT_LESSONS_TAIL_KB):
+    """Section 6: every parseable, non-infra K1 row in the last `tail_kb`
+    KB of <home>/logs/lessons.jsonl, in ledger order (oldest first), via
+    seek -- bounded, no full scan of a ledger that only ever grows.
 
     A byte offset can land mid-line (either the seek itself, or a writer
     mid-append at the moment of the read) -- the first split chunk after
     a nonzero offset is dropped rather than risking a truncated JSON
     object; every other malformed line is skipped the same way every
     other K1 reader skips one (never degrades to {}). Missing file (not
-    yet created, or no lessons_path given): []."""
+    yet created, or no lessons_path given): [].
+
+    This is the SINGLE choke point where infra noise leaves the worker's
+    view: a row is dropped when its event is "infra" OR when its reason
+    reads as a provider outage however it was labelled (see
+    distill_lessons.is_infra_reason -- 231 live rows label an outage as
+    build_failed/review_rejected/structural). Everything downstream --
+    the module/format ranking, the per-worker diff-format detector -- is
+    built on this list, so none of them can leak one.
+    """
     if not lessons_path:
         return []
     path = Path(lessons_path)
@@ -2335,34 +2411,484 @@ def read_lessons_tail(lessons_path, module_key, format_name,
         if not isinstance(ev, dict):
             continue
         event = ev.get("event")
-        if not event or event == "infra":
-            continue
-        if module_key:
-            if ev.get("module") != module_key:
-                continue
-        elif ev.get("format") != format_name:
+        if not event or event == "infra" or is_infra_reason(ev.get("reason")):
             continue
         events.append(ev)
-    events.reverse()  # ledger is append-order (oldest first); newest first
-    return events[:max_entries]
+    return events
 
 
-def format_lessons_tail(events):
-    """Render read_lessons_tail's output into a learning-block section."""
-    if not events:
+def select_module_lessons(events, module_key, format_name,
+                          max_entries=DEFAULT_LESSONS_TAIL_MAX_ENTRIES):
+    """Scope read_lessons_tail_events' rows to this module (when
+    module_key is given) else this format, then rank them by RECURRENCE
+    -- see distill_lessons.rank_by_recurrence. Returns
+    [(representative_row, occurrence_count), ...], most-repeated first.
+
+    Ranking replaced a plain newest-first tail: the tail spent its whole
+    budget on whatever the last hour happened to emit, which on a fleet
+    where one failure mode accounts for ~40% of all rows means N nearly
+    identical lines and no room for the mistake this module actually
+    keeps repeating. Collapsing by fingerprint costs one line per
+    distinct mistake instead of one per occurrence, so the same budget
+    now buys `max_entries` DISTINCT lessons rather than `max_entries`
+    samples.
+
+    Two row classes are excluded outright before ranking.
+
+    (1) "no diff in model response" rows. Ranking by recurrence without
+    this would be self-defeating: measured over the live tail 2026-07-25
+    that one reason is 40 of 235 rows and duly ranks FIRST for
+    essentially every module, evicting the wrong_value and structural
+    lessons that are the only ones carrying ExifTool knowledge. It is a
+    response-format defect, it teaches a worker nothing about the module,
+    and it is already routed to the section that can actually fix it
+    (build_diff_format_remediation) -- so it does not also get to spend a
+    slot here.
+
+    (2) `critique` rows, for two independent reasons that happen to have
+    the same fix.
+
+    First, they are DUPLICATES BY CONSTRUCTION. fix_gap writes two rows
+    per failed round, not one: the specific event (build_failed /
+    wrong_value / gap_not_closed / structural / test_regressed) and then
+    critique_and_continue's lesson("critique", critique). The critique row
+    is the critic's PARAPHRASE of the very failure the row beside it
+    already states, so ranking both double-counts one event. This is the
+    same duplicate-row shape already fixed for infra rows in fix_gap
+    (which stopped writing a build_failed row beside every `infra` row).
+    Excluding (1) by literal reason match could never catch the paraphrase
+    -- "The fixer likely emitted no diff because...", "provided a prose
+    description instead of an actual unified diff" contain no literal
+    "no diff in model response" -- so the diff-format failure went on
+    taking slots through its critique twin: 14 of 43 ranked slots across
+    the 6 live formats, 2026-07-25 (MRW 5 of 6, NEF 4 of 6).
+
+    Second, a critique reason is unbounded LLM prose, and recurrence
+    ranking cannot cluster prose. fingerprint_scoped's reason component is
+    normalized free text, so two critiques of the same mistake share no
+    key. Measured per event over the same 235-row tail: critique 112 rows
+    -> 107 clusters, 106 of them singletons (95%); build_failed 78 rows ->
+    2 clusters, 0 singletons; gap_not_closed 11 -> 1; review_rejected 10
+    -> 2. Every other event clusters; the critique event alone does not,
+    and a ranking whose entries are all singletons is just newest-first
+    with extra steps -- precisely the ranking this function replaced.
+
+    Nothing is lost by dropping them: the critique is fed back IN FULL and
+    unclamped to the worker that earned it, in the same conversation
+    (critique_and_continue appends it to `messages`). What was being
+    ranked here was a 240-char truncation of someone else's critique of
+    someone else's round.
+    """
+    if module_key:
+        scoped = [ev for ev in events if ev.get("module") == module_key]
+    else:
+        scoped = [ev for ev in events if ev.get("format") == format_name]
+    scoped = [ev for ev in scoped
+              if ev.get("event") != "critique"
+              and not DIFF_FORMAT_FAILURE_RE.search(str(ev.get("reason") or ""))]
+    return rank_by_recurrence(scoped, max_entries=max_entries)
+
+
+def format_lessons_tail(ranked):
+    """Render select_module_lessons' [(row, count), ...] into a
+    learning-block section. The "xN" recurrence count is shown only when
+    N > 1: on a one-off it is noise, and on a repeat it is the whole
+    point -- it tells the model this is a rake the fleet keeps stepping
+    on, not one worker's bad afternoon."""
+    if not ranked:
         return ""
     lines = []
-    for ev in events:
+    for ev, count in ranked:
         event = ev.get("event", "?")
-        reason = str(ev.get("reason") or "").strip()
+        reason = _clamp_reason(ev.get("reason"))
         tag_key = ev.get("tag_key") or ""
         suffix = f" ({tag_key})" if tag_key else ""
-        lines.append(f"  - {event}: {reason}{suffix}")
+        recurrence = f" x{count}" if count > 1 else ""
+        lines.append(f"  - {event}{recurrence}: {reason}{suffix}")
     return (
         "\n\nRecent lessons ledger entries (fleet-wide, spec K1 -- other "
-        "workers' recent outcomes on this module/format):\n"
+        "workers' outcomes on this module/format, ranked by how often each "
+        "distinct mistake RECURS, most-repeated first; \"xN\" is the "
+        "recurrence count):\n"
         + "\n".join(lines)
     )
+
+
+# --- Section 6: the worker's own quarantine verdicts -----------------------
+#
+# scripts/squad_merge_loop.py's mergers validate every worker commit and
+# cherry-pick it onto squad/<name>; a rejected commit is appended to
+# <home>/logs/quarantine.jsonl (see squad_merge_loop.append_quarantine for
+# the entry shape) and NEVER retried. Until now nothing told the worker:
+# model_fix_loop.py contained zero references to that ledger, so a worker
+# whose commit was rejected went on stacking new commits on top of the
+# rejected code -- which is how 7 heads came to hit cherry-pick conflicts
+# for no reason other than their OWN earlier commit having been silently
+# dropped from the squad branch. Surfacing the verdict is the whole fix:
+# the flags name the defect ("printconv-mismatch:<value>",
+# "cherry-pick-conflict", "targeted-test-failed"), so a worker that sees
+# them can stop reproducing it.
+
+#: The quarantine ledger is tiny next to lessons.jsonl (77 lines vs 4922
+#: live, 2026-07-25) but it is append-only and grows, so it gets the same
+#: bounded-seek treatment rather than a full read.
+DEFAULT_QUARANTINE_TAIL_KB = 64
+
+#: At most this many of the worker's own rejections reach the prompt.
+#: Four is the same window K4 gives sweep reviews: enough to show a
+#: pattern, small enough that a bad afternoon cannot crowd out the
+#: module playbook.
+DEFAULT_QUARANTINE_MAX_ENTRIES = 4
+
+#: A cherry-pick reason embeds git's entire conflict transcript (~700
+#: chars live). The flags carry the actual verdict, so the reason is
+#: clamped harder than a lesson's.
+QUARANTINE_REASON_DISPLAY_CHARS = 180
+
+#: The rendered flags list of ONE entry is capped at this many flags and
+#: this many chars.
+QUARANTINE_MAX_FLAGS = 4
+QUARANTINE_FLAGS_DISPLAY_CHARS = 200
+
+#: squad_merge_loop writes this literal when a candidate commit has no
+#: `Format:` trailer to read (squad_merge_loop.py:1111,
+#: `commit_format_trailer(...) or "UNKNOWN"`). It is a placeholder for a
+#: MISSING format, not a format, and must be read back as one -- see
+#: _quarantine_entry_format.
+QUARANTINE_UNKNOWN_FORMAT = "UNKNOWN"
+
+
+def _quarantine_entry_format(entry):
+    """The format a quarantine entry actually pins itself to, or None for
+    a squad-wide verdict that pins itself to no format at all.
+
+    Two shapes mean "no format": JSON null (overlord_sweep's bisection
+    quarantines a whole squad with format_name=None) and the literal
+    "UNKNOWN" that squad_merge_loop substitutes when the commit carries no
+    Format: trailer. Only the first was recognised, and since "UNKNOWN" is
+    truthy the second was silently pinned to a format no worker ever has:
+    28 of 77 live rows (36%, exactly 2 per squad across all 14 squads,
+    2026-07-25) were invisible to every worker -- and ALL 28 carry
+    `missing-trailer:Format` as their first flag, so the single rejection
+    class whose defect IS the absent trailer was the one class this
+    feature could never report back. The worker therefore kept omitting
+    the trailer, and the ledger kept growing two more rows per squad.
+    """
+    fmt = str(entry.get("format") or "").strip()
+    if not fmt or fmt == QUARANTINE_UNKNOWN_FORMAT:
+        return None
+    return fmt
+
+
+def read_own_quarantine(quarantine_path, worker_label, format_name,
+                        tail_kb=DEFAULT_QUARANTINE_TAIL_KB,
+                        max_entries=DEFAULT_QUARANTINE_MAX_ENTRIES):
+    """This worker's OWN recent quarantine verdicts, newest first.
+
+    "Own" is (squad, format): the pair is what identifies a worker in the
+    ledger, since squad_merge_loop records the squad and the commit's
+    Format trailer but not the worker id. A verdict that pins itself to no
+    format (see _quarantine_entry_format: JSON null from overlord_sweep's
+    squad bisection, or the "UNKNOWN" placeholder for a commit with no
+    Format: trailer) matches every member of its squad -- it rolled back
+    or rejected work on the branch they all share, so they all need it.
+
+    Another squad's rejections are deliberately NOT shown, and neither
+    are the same squad's rejections on a different format: they name
+    parser files this worker never touches, and the budget they would
+    spend is better spent on the module playbook.
+
+    Ownership is decided by validate_fix_commit.squad_from_worker -- the
+    SAME helper the merger uses to decide which squad a candidate commit
+    belongs to -- so a label with no "-<n>" suffix is its own squad name
+    and matches nothing in a ledger whose squads are real squad names.
+    That is a deliberate fail-closed default, and it is the only safe one:
+    the previous helper here returned None for such a label and the match
+    degraded to FORMAT ALONE, which is not an edge case but the DEFAULT
+    path -- parallel_model_fix_loop picks run_round unless --squad-mode,
+    run_worker labels those workers with the bare format name ("JPEG",
+    "CR2") and model_fix_loop's own CLI defaults the label to "1".
+    Measured against the live ledger 2026-07-25, the degrade returned
+    ps-docs/sony-minolta/thermal rejections for label "JPEG",
+    exif-core/canon for "CR2", and ps-docs/sony-minolta/thermal for the
+    bare "1" -- all rendered by format_own_quarantine under "YOUR OWN
+    commits that were REJECTED ... Fix the defect named by the flags
+    below". A legacy worker owns no ledger entries at all, so 100% of
+    what it was shown was another worker's rejected code asserted as its
+    own. Showing nothing is strictly better than showing a lie.
+
+    No worker_label at all returns [] before any of that: an absent label
+    means there is no worker to be the owner of anything. That is what
+    keeps build_prompt hermetic by default -- a caller that never opted
+    in must not be shown some arbitrary worker's rejections.
+
+    Missing/unreadable ledger, or no path: [] -- advisory context, never
+    a hard dependency, same contract as every other build_prompt source.
+    """
+    if not quarantine_path or not worker_label:
+        return []
+    path = Path(quarantine_path)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return []
+    offset = max(0, size - tail_kb * 1024)
+    try:
+        with path.open("rb") as f:
+            f.seek(offset)
+            data = f.read()
+    except OSError:
+        return []
+    lines = data.split(b"\n")
+    if offset > 0:
+        lines = lines[1:]  # drop a possibly-partial leading fragment
+    squad = squad_from_worker(str(worker_label).strip())
+    entries = []
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            entry = json.loads(raw)
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("squad") != squad:
+            continue
+        entry_format = _quarantine_entry_format(entry)
+        # A formatless verdict applies to every member of the squad.
+        if entry_format and entry_format != format_name:
+            continue
+        entries.append(entry)
+    entries.reverse()  # ledger is append-order (oldest first); newest first
+    return entries[:max_entries]
+
+
+def _clamp_quarantine_flags(raw_flags,
+                            max_flags=QUARANTINE_MAX_FLAGS,
+                            max_chars=QUARANTINE_FLAGS_DISPLAY_CHARS):
+    """Render one entry's `flags` as a bounded, deterministic string.
+
+    BOUNDED because the writer is unbounded: validate_fix_commit appends
+    one `printconv-mismatch:<48-char excerpt>` flag per unverifiable map
+    value with no cap of its own, so a commit adding a ~30-entry PrintConv
+    lookup emits 30 flags in a single entry (the live worst case is
+    already 11 flags / 512 chars, 2026-07-25). Four such entries rendered
+    a 5858-char section against a 4800-char learning budget, and since
+    LEARNING_SECTION_ORDER ranks this section SECOND, compose_learning_
+    block then admitted the quarantine block ALONE and dropped the K4
+    sweep reviews, the K3 module playbook and the lessons tail outright --
+    the knowledge spine went dark for that worker for as long as the entry
+    stayed in the 64KB window, which today is the whole ledger. The first
+    few flags already name the defect class; flags 5..30 are the same
+    class with different excerpts, so the tail costs budget and teaches
+    nothing. The "(+N more)" suffix keeps the true count visible.
+
+    DEFENSIVE because `flags` is written by another process. Every other
+    field in this read path is coerced; this one was consumed as
+    `", ".join(str(f) for f in entry["flags"])`, so a row whose flags is
+    a bare int raised TypeError straight out of build_prompt, through
+    fix_gap, and killed the worker -- from a section whose whole contract
+    (read_own_quarantine's docstring) is "advisory context, never a hard
+    dependency". A string is treated as ONE flag rather than as an
+    iterable of characters, which is the only reading a writer could have
+    meant; anything else non-list is reported as one opaque value.
+    """
+    if isinstance(raw_flags, str):
+        flags = [raw_flags]
+    elif isinstance(raw_flags, (list, tuple)):
+        flags = [str(f) for f in raw_flags]
+    elif not raw_flags:
+        flags = []
+    else:
+        flags = [str(raw_flags)]
+    flags = [f for f in flags if f]
+    if not flags:
+        return "(no flags)"
+    hidden = max(0, len(flags) - max_flags)
+    text = ", ".join(flags[:max_flags])
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "..."
+    if hidden:
+        text += f" (+{hidden} more)"
+    return text
+
+
+def format_own_quarantine(entries):
+    """Render read_own_quarantine's entries into a learning-block section.
+
+    The flags lead each line because they ARE the verdict and they carry
+    the offending value inline (validate_fix_commit emits
+    "printconv-mismatch:<the wrong string>", "multi-sample-fail:<tag>",
+    "missing-trailer:<key>"); the reason is the human-readable tail and
+    is clamped hard. Deterministic, bounded output -- and now actually
+    bounded, see _clamp_quarantine_flags: at most
+    DEFAULT_QUARANTINE_MAX_ENTRIES lines, each at most
+    QUARANTINE_FLAGS_DISPLAY_CHARS + QUARANTINE_REASON_DISPLAY_CHARS
+    chars plus a fixed rendering overhead.
+    """
+    if not entries:
+        return ""
+    lines = []
+    for entry in entries:
+        flags = _clamp_quarantine_flags(entry.get("flags"))
+        reason = _clamp_reason(entry.get("reason"), QUARANTINE_REASON_DISPLAY_CHARS)
+        date = str(entry.get("ts") or "")[:10]
+        stamp = f" [{date}]" if date else ""
+        lines.append(f"  - {flags}{stamp}: {reason}")
+    return (
+        "\n\nYOUR OWN commits that were REJECTED at merge time (spec M2 "
+        "quarantine ledger, newest first). These never reached the squad "
+        "branch and were never retried -- anything you build on top of them "
+        "will conflict or be rejected the same way. Fix the defect named by "
+        "the flags below before repeating that approach:\n"
+        + "\n".join(lines)
+    )
+
+
+# --- Section 6: adaptive response-format guidance, continued --------------
+# (DIFF_FORMAT_FAILURE_RE and the escalation threshold are declared at the
+# top of section 6 because select_module_lessons above depends on them.)
+
+def count_diff_format_failures(events, worker_label):
+    """How many of THIS worker's rows in the tail window failed with "no
+    diff in model response". Scoped to the worker, not the module: the
+    defect belongs to whichever model this worker is rotating through,
+    and a sibling worker on the same module that formats its replies
+    correctly must not be taxed for it. No worker_label (the hermetic
+    default) means no escalation -- 0."""
+    if not worker_label:
+        return 0
+    return sum(
+        1 for ev in events
+        if ev.get("worker") == worker_label
+        and DIFF_FORMAT_FAILURE_RE.search(str(ev.get("reason") or ""))
+    )
+
+
+#: The corrective envelope statement. Deliberately concrete: the exact
+#: fence, the exact minimum a unified diff needs to apply (git apply
+#: rejects a bare @@ hunk with no ---/+++ headers), and one minimal
+#: example that would actually apply -- a rule the model can pattern-match
+#: against, not a rule it has to interpret.
+#:
+#: It must also be TRUE and must not contradict build_reply_shape_manifest,
+#: which ships in the same prompt. The first version did both wrong: it
+#: said the reply "is parsed by looking for a ```diff fenced block, and
+#: nothing else counts" and that prose is "discarded unread", while the
+#: manifest defines four legal shapes of which shape 1 (REQUEST) is a bare
+#: prose line with no diff and shape 4 REQUIRES 2-3 sentences of prose
+#: before the fence -- and the STRATEGY paragraph tells the worker to probe
+#: with VERIFY. A worker that believed the alert would stop issuing
+#: REQUEST/VERIFY, i.e. the alert would cost rounds instead of saving them.
+#: Two of its claims were also simply false, both in the strict direction:
+#: extract_diff ALSO accepts an unfenced reply starting with "diff --git"/
+#: "--- ", and DIFF_BLOCK_RE is a non-greedy search, so text after the
+#: closing fence is ignored rather than fatal. Every claim below is pinned
+#: to extract_diff's real behaviour by
+#: AdaptiveDiffFormatGuidanceTests.test_the_alert_makes_no_claim_
+#: extract_diff_contradicts.
+DIFF_FORMAT_REMEDIATION = """\
+FORMAT ALERT -- one or more of your recent rounds ended with no diff \
+extracted from your reply, so the round was wasted. This was NOT a code \
+problem, it is how the reply was packaged.
+
+The four reply shapes at the top of this prompt all still apply, and this \
+alert does not narrow them: REQUEST and VERIFY remain the right moves when \
+you are still investigating, and a Plan + diff reply is SUPPOSED to open \
+with 2-3 sentences of prose before the fence. What does not work is ending \
+a round with prose ALONE when you meant to deliver a change.
+
+Whenever your reply is meant to carry a change, it must contain the change \
+as a unified diff in EXACTLY ONE ```diff fenced block, complete, with \
+per-file ---/+++ headers -- a bare @@ hunk has nothing to apply against and \
+is rejected. A ```rust or ```patch fence is not read as a diff, and a diff \
+split across two fences loses everything after the first fence closes. \
+Minimal correct example:
+
+```diff
+--- a/src/parsers/jpeg/foo.rs
++++ b/src/parsers/jpeg/foo.rs
+@@ -10,6 +10,7 @@ fn parse(&self) {
+     let a = 1;
++    let b = 2;
+     let c = 3;
+```
+
+Text after the closing fence is ignored, so a closing sentence is harmless; \
+a SECOND ```diff block is not, because only the first is read. If the diff \
+is too large for one reply, use the "PATCH i/N" shape from the manifest \
+above -- each chunk is still ONE ```diff fenced block."""
+
+
+def build_diff_format_remediation(failure_count,
+                                  threshold=DEFAULT_DIFF_FORMAT_ESCALATION_THRESHOLD):
+    """The corrective envelope block for a worker that has recently hit
+    "no diff in model response", "" for one that hasn't (see
+    count_diff_format_failures for why this is per-worker)."""
+    if failure_count < threshold:
+        return ""
+    return (
+        f"\n\n{DIFF_FORMAT_REMEDIATION}\n(Triggered by {failure_count} recent "
+        "reply/replies of yours from which no diff could be extracted.)"
+    )
+
+
+# --- Section 6: learning-block composition ---------------------------------
+
+#: The learning block's fixed priority order, highest first. Whatever
+#: overflows learning_budget_tokens is shed from the TAIL of this list:
+#:
+#:   1. diff-format remediation -- tiny, adaptive (only present for a
+#:      worker that needs it), and targets ~40% of all recorded failures.
+#:      Useless if truncated, so it goes first.
+#:   2. the worker's own quarantine verdicts -- the only section that is
+#:      about THIS worker's own rejected code; without it the worker
+#:      rebuilds on top of it.
+#:   3. sweep reviews (K4) -- human verdicts, the scarcest signal there is.
+#:   4. module playbook (K3) -- the distiller's recurrence-ranked digest.
+#:   5. lessons tail (K1) -- raw rows, the most redundant with 4.
+#:
+#: 3/4/5 keep the order they had before 1/2 existed, so a worker with
+#: neither a quarantine record nor a format problem gets a byte-identical
+#: learning block to the one it got before (prompt-cache friendly, and
+#: the reason every pre-existing build_prompt test still passes unchanged).
+LEARNING_SECTION_ORDER = (
+    "diff_format", "quarantine", "sweep_reviews", "module_playbook", "lessons_tail",
+)
+
+
+def compose_learning_block(parts, budget_tokens):
+    """Assemble the learning block from `parts` ({name: text}) in
+    LEARNING_SECTION_ORDER and clamp the result to budget_tokens.
+
+    Each section is admitted whole while the budget allows; the first one
+    that doesn't fit is clamped to exactly what remains and every later
+    section is dropped. That makes the budget a hard bound no matter how
+    large the ledgers grow -- a 100k-row lessons.jsonl produces the same
+    number of prompt bytes as a 100-row one -- while guaranteeing that
+    the sections most likely to change a worker's behaviour are the ones
+    that survive the squeeze.
+
+    Unknown keys in `parts` are ignored rather than appended in dict
+    order: a section that isn't ranked has no defined position under
+    pressure, and silently giving it one is how an unranked section ends
+    up starving a ranked one.
+    """
+    budget_chars = max(0, budget_tokens) * 4
+    out = []
+    used = 0
+    for name in LEARNING_SECTION_ORDER:
+        text = parts.get(name) or ""
+        if not text:
+            continue
+        remaining = budget_chars - used
+        if remaining <= 0:
+            break
+        out.append(text[:remaining])
+        used += min(len(text), remaining)
+    return "".join(out)
 
 
 def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
@@ -2374,7 +2900,8 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                   knowledge_home=None, module_name=None,
                   learning_budget_tokens=DEFAULT_LEARNING_BUDGET_TOKENS,
                   parser_floor_tokens=DEFAULT_PARSER_FLOOR_TOKENS,
-                  lessons_tail_kb=DEFAULT_LESSONS_TAIL_KB):
+                  lessons_tail_kb=DEFAULT_LESSONS_TAIL_KB,
+                  worker_label=None):
     """Format one gap into a model prompt, capped so a huge format (e.g.
     JPEG with thousands of gaps and dozens of parser files) becomes an
     iterative, tractable request instead of one impossibly large prompt.
@@ -2417,17 +2944,34 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     <knowledge_home>/logs/knowledge/modules/<module_name>.md playbook to
     show (spec K3); None falls back to gap["format"] as the key. Also
     scopes the lessons-tail selection (module match takes priority over
-    format match -- see read_lessons_tail). Has no effect when
+    format match -- see select_module_lessons). Has no effect when
     knowledge_home is None.
 
     learning_budget_tokens/parser_floor_tokens/lessons_tail_kb are the
-    section-6 knobs: the learning block (pitfalls excerpt + module
-    playbook + sweep reviews + lessons tail -- everything knowledge_home
-    gates, plus sweep_review_log_path's section) is capped at
-    learning_budget_tokens and never dropped entirely; the parser-files
-    section never shrinks below parser_floor_tokens even under the worst
-    overflow; lessons_tail_kb bounds how much of the tail of
-    logs/lessons.jsonl read_lessons_tail seeks into.
+    section-6 knobs: the learning block (diff-format remediation + this
+    worker's own quarantine verdicts + sweep reviews + module playbook +
+    lessons tail -- everything knowledge_home gates, plus
+    sweep_review_log_path's section) is capped at learning_budget_tokens
+    and never dropped entirely; the parser-files section never shrinks
+    below parser_floor_tokens even under the worst overflow;
+    lessons_tail_kb bounds how much of the tail of logs/lessons.jsonl
+    read_lessons_tail_events seeks into. Within the learning block,
+    overflow is shed from the tail of LEARNING_SECTION_ORDER (see
+    compose_learning_block), so the budget bounds a growing ledger
+    without letting the low-value sections squeeze out the high-value
+    ones.
+
+    worker_label, if given, is this worker's fleet id (e.g. "canon-3" --
+    parallel_model_fix_loop's f"{squad}-{n}"). It gates the two
+    per-worker learning sections, both of which need to know WHOSE
+    history is being read: the quarantine verdicts for this worker's own
+    (squad, format) -- see read_own_quarantine -- and the adaptive
+    response-format remediation for a worker that has recently been
+    losing rounds to "no diff in model response" (see
+    count_diff_format_failures). None (the default) omits both, so every
+    existing caller's prompt is byte-identical. Like the rest of the
+    learning block it does nothing unless knowledge_home is also given
+    -- there is no ledger to read otherwise.
 
     neighbor_precedent_block is a pre-rendered string (see
     build_neighbor_precedent_block, built by the caller so build_prompt
@@ -2523,22 +3067,47 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                 + playbook_text
             )
 
-    # Section 6: lessons tail, also part of the learning block.
+    # Section 6: the three ledger-fed sections. All read the SAME bounded
+    # tail bytes once (read_lessons_tail_events), then scope them
+    # differently -- by module/format for the ranked lessons, by worker
+    # for the diff-format detector -- rather than seeking into a
+    # multi-megabyte ledger twice per prompt.
     lessons_tail_block = ""
+    diff_format_block = ""
+    quarantine_block = ""
     if knowledge_home is not None:
-        lessons_tail_block = format_lessons_tail(read_lessons_tail(
-            Path(knowledge_home) / "logs" / "lessons.jsonl",
-            module_name, gap["format"], tail_kb=lessons_tail_kb,
+        tail_events = read_lessons_tail_events(
+            Path(knowledge_home) / "logs" / "lessons.jsonl", tail_kb=lessons_tail_kb,
+        )
+        lessons_tail_block = format_lessons_tail(select_module_lessons(
+            tail_events, module_name, gap["format"],
+        ))
+        diff_format_block = build_diff_format_remediation(
+            count_diff_format_failures(tail_events, worker_label),
+        )
+        # squad_merge_loop.quarantine_ledger_path's layout, resolved
+        # inline: this module is a reader of that ledger, not a
+        # participant in the merge protocol, and importing the whole
+        # merger to spell one path would drag its git/subprocess surface
+        # into every worker prompt build.
+        quarantine_block = format_own_quarantine(read_own_quarantine(
+            Path(knowledge_home) / "logs" / "quarantine.jsonl",
+            worker_label, gap["format"],
         ))
 
-    # Spec section 6: the learning block (pitfalls excerpt sits in the
+    # Spec section 6: the learning block (the pitfalls excerpt sits in the
     # static prefix above for cache-prefix reasons -- see the docstring's
-    # "Section order otherwise unchanged" note; only the remaining three
-    # pieces share this reserved, never-emptied budget) is capped flat,
-    # independent of whatever else is squeezing the rest of the prompt.
-    learning_text = _clamp_section_tokens(
-        sweep_review_block + module_block + lessons_tail_block, learning_budget_tokens,
-    )
+    # "Section order otherwise unchanged" note; only the remaining pieces
+    # share this reserved, never-emptied budget) is capped flat,
+    # independent of whatever else is squeezing the rest of the prompt,
+    # and shed from the tail of LEARNING_SECTION_ORDER when it overflows.
+    learning_text = compose_learning_block({
+        "diff_format": diff_format_block,
+        "quarantine": quarantine_block,
+        "sweep_reviews": sweep_review_block,
+        "module_playbook": module_block,
+        "lessons_tail": lessons_tail_block,
+    }, learning_budget_tokens)
 
     attempts_block = format_previous_attempts(previous_attempts)
 
@@ -3704,6 +4273,9 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         learning_budget_tokens=config.get("learning_budget_tokens", DEFAULT_LEARNING_BUDGET_TOKENS),
         parser_floor_tokens=config.get("parser_floor_tokens", DEFAULT_PARSER_FLOOR_TOKENS),
         lessons_tail_kb=config.get("lessons_tail_kb", DEFAULT_LESSONS_TAIL_KB),
+        # Section 6: gates this worker's OWN quarantine verdicts and the
+        # adaptive response-format remediation -- see build_prompt.
+        worker_label=worker_label,
     )}]
 
     rounds = []  # every non-fixed round: {"diff", "reason", "critique"} -- see run_tag_loop
@@ -3768,7 +4340,17 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         )
         if not built:
             log_fn(f"[{fmt}] build failed: {reason}")
-            lesson("build_failed", reason, tag_key=_gap_primary_tag_key(gap))
+            # An infrastructure failure is NOT a build failure -- from in
+            # here a DNS error and a type error look identical, but only
+            # one of them is a lesson. critique_and_continue below writes
+            # the single `infra` row for it; writing a `build_failed` row
+            # too is what put 218 duplicate outage reasons on the live
+            # ledger (2026-07-25), each one a knowledge-file bullet and a
+            # line of some worker's prompt budget spent on a 429.
+            # distill_lessons.classify_event would now relabel the row
+            # anyway; not writing it at all also saves the append.
+            if not reason.startswith(INFRA_FAILURE_PREFIX):
+                lesson("build_failed", reason, tag_key=_gap_primary_tag_key(gap))
             outcome = critique_and_continue("build_failed", reason, round_index)
             if outcome:
                 return outcome
@@ -6307,6 +6889,10 @@ def main(argv=None):
             learning_budget_tokens=cfg.get("learning_budget_tokens", DEFAULT_LEARNING_BUDGET_TOKENS),
             parser_floor_tokens=cfg.get("parser_floor_tokens", DEFAULT_PARSER_FLOOR_TOKENS),
             lessons_tail_kb=cfg.get("lessons_tail_kb", DEFAULT_LESSONS_TAIL_KB),
+            # The preview must mirror fix_gap's real prompt exactly --
+            # the two per-worker learning sections included, or the log
+            # would show a prompt the model never saw.
+            worker_label=worker_label,
         )
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         banner = f"\n{'=' * 20} [{ts}] worker={worker_label} tag={tag_gap['tag_key']} {'=' * 20}\n"
