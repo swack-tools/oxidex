@@ -478,8 +478,15 @@ class ModelCallDeadlineExceeded(Exception):
 
 
 class ModelQuotaExhausted(Exception):
-    """Raised only after the FULL retry ladder was spent and every attempt
-    came back as an account/billing-quota 429.
+    """Raised after the retry ladder is spent and every attempt came back
+    as an account/billing-quota 429.
+
+    NOT fatal to a worker. attempt_build/review_verdict catch it with the
+    rest of the continue-on class (empty 200s, 429s, connection errors);
+    it becomes an INFRA_FAILURE_PREFIX reason, which run_tag_loop charges
+    nothing for -- no fail increment, no attempt history, no blacklist.
+    It exists so the reason string names billing rather than showing an
+    opaque 429.
 
     Policy: all 429s are retried, quota ones included -- the shared token
     bucket's global cooldown paces them, so a fleet waiting out even a
@@ -2775,11 +2782,11 @@ def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=ra
             config.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS),
             config.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),
         )
-    except ModelQuotaExhausted:
-        # A spent budget is not a verdict on the patch. Reporting it as a
-        # failed review would discard work that was never actually judged.
-        raise
     except Exception as e:
+        # Includes ModelQuotaExhausted: a reviewer that cannot be reached
+        # must not kill the worker. This is "not approved this round", not
+        # a judgement on the diff -- the tag comes back around and gets
+        # reviewed again once the provider is answering.
         return False, f"review call failed: {e}"
     verdict, reason = extract_review_verdict_full(reply)
     if verdict == "approve":
@@ -3002,15 +3009,15 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 config.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS),
                 config.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),
             )
-        except ModelQuotaExhausted:
-            # NOT a failure of this tag: the account is out of budget and
-            # every subsequent tag would "fail" identically. Swallowing it
-            # here would feed the cross-round 2-strikes skip-list and
-            # blacklist perfectly good tags over a billing problem --
-            # the same misattribution a DNS outage once caused (see
-            # call_model's URLError handling). Let it reach the operator.
-            raise
         except Exception as e:
+            # Deliberately catches ModelQuotaExhausted too (operator
+            # decision 2026-07-25: empty 200s, 429s and everything else in
+            # this class are things the fleet just continues past). It
+            # becomes an INFRA_FAILURE_PREFIX reason, and run_tag_loop's
+            # infra_only branch then charges NOTHING for it: no fail
+            # increment, no attempt history, no blacklist check. Letting
+            # it propagate instead would kill the worker outright, which
+            # is the opposite of continuing on.
             # Network/timeout/HTTP/malformed-response failures are a normal
             # cost of "any model" -- a single bad call must not kill the
             # whole loop. No repair round-trip here: retrying the same
