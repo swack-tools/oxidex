@@ -1494,17 +1494,30 @@ fn extract_nef_tags(metadata: &mut MetadataMap) {
 /// a coincidental `CMT1` byte sequence in image data is not mistaken for the
 /// box.
 fn find_cr3_cmt1_tiff(data: &[u8]) -> Option<&[u8]> {
+    let payload = find_cr3_box(data, b"CMT1")?;
+    if payload.starts_with(b"II*\0") || payload.starts_with(b"MM\x00*") {
+        Some(payload)
+    } else {
+        None
+    }
+}
+
+/// Locate a Canon CR3 box by its 4-byte type and return its payload.
+///
+/// CR3 is an ISO Base Media container. Each box has the structure:
+/// [size: u32 BE][type: 4 bytes][payload: size-8 bytes].
+/// The size includes the 8-byte header. size==0 and size==1 (extended size)
+/// are not handled here because Canon's metadata boxes use normal 32-bit sizes.
+fn find_cr3_box<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
     let mut cursor = 0;
     while cursor + 4 <= data.len() {
-        let rel = data[cursor..].windows(4).position(|w| w == b"CMT1")?;
+        let rel = data[cursor..].windows(4).position(|w| w == box_type)?;
         let type_offset = cursor + rel;
         cursor = type_offset + 4;
         if type_offset < 4 {
             continue;
         }
 
-        // ISO BMF box: [size: u32 BE][type: 4][payload]. Canon's CMT1 uses a
-        // normal 32-bit size, so the size==0/1 extended forms are ignored.
         let box_start = type_offset - 4;
         let box_size = u32::from_be_bytes([
             data[box_start],
@@ -1518,35 +1531,7 @@ fn find_cr3_cmt1_tiff(data: &[u8]) -> Option<&[u8]> {
             _ => continue,
         };
 
-        let payload = &data[payload_start..box_end];
-        if payload.starts_with(b"II*\0") || payload.starts_with(b"MM\x00*") {
-            return Some(payload);
-        }
-    }
-    None
-}
-
-/// Read an IFD0 tag from a CMT1 TIFF payload.
-///
-/// An entry that is present but contains an empty ASCII string still yields an
-/// empty-string value, distinct from an absent tag.
-fn extract_cr3_cmt1_ifd0_tag(tiff: &[u8], wanted_tag_id: u16) -> Option<TagValue> {
-    if tiff.len() < 8 {
-        return None;
-    }
-    let byte_order = detect_byte_order(tiff).ok()?;
-    let ifd0_offset = read_u32(&tiff[4..8], byte_order) as u64;
-    let reader = SliceReader::new(tiff);
-    let tags = parse_ifd(&reader, ifd0_offset, byte_order).ok()?;
-    for (tag_id, field_type, value_count, raw_bytes) in &tags {
-        if *tag_id == wanted_tag_id {
-            return Some(raw_bytes_to_simple_tag_value(
-                raw_bytes.as_ref(),
-                *field_type,
-                *value_count,
-                byte_order,
-            ));
-        }
+        return Some(&data[payload_start..box_end]);
     }
     None
 }
@@ -1558,16 +1543,102 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         TagValue::new_string(format!("{:?}", format)),
     );
 
-    // Full CR3 box parsing is still a TODO (CR3 uses ISO Base Media Format;
-    // a QuickTime-style box/atom parser will replace this). For now, extract
-    // standard IFD0 metadata from the CMT1 TIFF payload.
+    // Parse CMT1 box (standard TIFF IFD0 with optional EXIF IFD and MakerNote)
     if let Some(tiff) = find_cr3_cmt1_tiff(data) {
-        // ExifTool reports Artist even when its stored ASCII value is empty.
-        if let Some(artist) = extract_cr3_cmt1_ifd0_tag(tiff, 0x013B) {
-            metadata.insert(lookup_tag_name(0x013B, "IFD0"), artist);
+        if let Ok(byte_order) = detect_byte_order(tiff) {
+            let first_ifd_offset = read_u32(&tiff[4..8], byte_order) as u64;
+            let reader = SliceReader::new(tiff);
+
+            if let Ok(ifd0_tags) = parse_ifd(&reader, first_ifd_offset, byte_order) {
+                let mut exif_ifd_offset = None;
+                let mut makernote_data: Option<Vec<u8>> = None;
+                let mut camera_make: Option<String> = None;
+
+                for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
+                    let bytes = raw_bytes.as_ref();
+
+                    // EXIF IFD pointer
+                    if *tag_id == 0x8769 && bytes.len() >= 4 {
+                        exif_ifd_offset = Some(read_u32(bytes, byte_order) as u64);
+                        continue;
+                    }
+
+                    // Camera make (needed for MakerNote dispatch)
+                    if *tag_id == 0x010F && *field_type == 2 {
+                        camera_make = Some(
+                            String::from_utf8_lossy(bytes)
+                                .trim_end_matches('\0')
+                                .trim()
+                                .to_string(),
+                        );
+                    }
+
+                    // Insert IFD0 tag
+                    let tag_name = lookup_tag_name(*tag_id, "IFD0");
+                    let tag_value =
+                        raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order);
+                    metadata.insert(tag_name, tag_value);
+                }
+
+                // Parse EXIF Sub-IFD
+                if let Some(offset) = exif_ifd_offset {
+                    if let Ok(exif_tags) = parse_ifd(&reader, offset, byte_order) {
+                        for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                            let bytes = raw_bytes.as_ref();
+
+                            // MakerNote in EXIF IFD
+                            if *tag_id == 0x927C {
+                                makernote_data = Some(bytes.to_vec());
+                                continue;
+                            }
+
+                            let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
+                            let tag_value = raw_bytes_to_simple_tag_value(
+                                bytes,
+                                *field_type,
+                                *value_count,
+                                byte_order,
+                            );
+                            metadata.insert(tag_name, tag_value);
+                        }
+                    }
+                }
+
+                // Parse MakerNote from CMT1 EXIF IFD
+                if let (Some(make), Some(mn_data)) = (camera_make.as_ref(), makernote_data.as_ref())
+                {
+                    let mut makernote_tags = std::collections::HashMap::new();
+                    if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
+                        make,
+                        mn_data,
+                        byte_order,
+                        &mut makernote_tags,
+                    ) {
+                        eprintln!("Warning: Failed to parse MakerNote for {}: {}", make, e);
+                    } else {
+                        for (tag_name, tag_value) in makernote_tags {
+                            metadata.insert(tag_name, TagValue::new_string(tag_value));
+                        }
+                    }
+                }
+            }
         }
-        if let Some(copyright) = extract_cr3_cmt1_ifd0_tag(tiff, 0x8298) {
-            metadata.insert(lookup_tag_name(0x8298, "IFD0"), copyright);
+    }
+
+    // Some CR3 files store MakerNotes in CMT4 instead of CMT1 EXIF
+    if let Some(makernote_data) = find_cr3_box(data, b"CMT4") {
+        let mut makernote_tags = std::collections::HashMap::new();
+        if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
+            "Canon",
+            makernote_data,
+            ByteOrder::LittleEndian,
+            &mut makernote_tags,
+        ) {
+            eprintln!("Warning: Failed to parse CMT4 MakerNote: {}", e);
+        } else {
+            for (tag_name, tag_value) in makernote_tags {
+                metadata.insert(tag_name, TagValue::new_string(tag_value));
+            }
         }
     }
 
