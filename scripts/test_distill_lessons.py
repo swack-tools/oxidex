@@ -687,6 +687,34 @@ class RecurrenceRankingTests(unittest.TestCase):
         self.assertEqual(event_fingerprint_scoped(row),
                          fingerprint_scoped("wrong_value", "Canon.pm", "", "r"))
 
+    def test_free_prose_rows_are_singletons_and_degenerate_to_newest_first(self):
+        """A CHARACTERIZATION pin, not a fix: free-text prose carries no
+        repeatable identity, so recurrence ranking cannot apply to it and
+        the docstring no longer claims it does. Measured over the live
+        256KB tail 2026-07-25, the `critique` event is 112 rows -> 107
+        clusters, 106 of them singletons (95%), while build_failed is 78
+        rows -> 2 clusters with no singletons at all.
+
+        This pin exists so nobody "fixes" the degeneration by coarsening
+        the clustering key: folding distinct prose into one bucket would
+        fabricate an "xN" recurrence count that format_lessons_tail then
+        shows a worker as evidence of a repeated mistake. The real fix is
+        at the caller -- model_fix_loop.select_module_lessons drops
+        critique rows before ranking.
+        """
+        prose = [
+            "The model most likely assumed the missing tag belonged in the "
+            "top-level container parser rather than the submodule that hosts it.",
+            "The fixer most likely searched for a tag definition table, found "
+            "none, and incorrectly concluded no diff was needed.",
+            "You likely explained the fix in prose instead of emitting a patch.",
+        ]
+        events = [make_event(event="critique", reason=p) for p in prose]
+        ranked = rank_by_recurrence(events)
+        self.assertEqual([n for _, n in ranked], [1, 1, 1])
+        # ...and with every count equal, the order IS newest-first.
+        self.assertEqual([e["reason"] for e, _ in ranked], list(reversed(prose)))
+
 
 class CliTests(unittest.TestCase):
     def test_main_single_pass_returns_zero(self):

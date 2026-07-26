@@ -303,6 +303,27 @@ def rank_by_recurrence(events, max_entries=None):
     deterministic (count, then recency, then fingerprint) so the same
     input always renders the same prompt bytes -- prompt-cache friendly
     and testable.
+
+    LIMITATION, and it is the caller's to respect: this ranking is only
+    meaningful for rows whose identity is REPEATABLE -- a checklist_id, or
+    a machine-written reason (cargo output, a tag-key mismatch, a gap
+    count). fingerprint_key falls back to norm_reason, which is normalized
+    FREE TEXT, so rows carrying unbounded LLM prose share no key with each
+    other and every one of them is a singleton. Ties at count == 1 fall
+    through to recency, i.e. a bag of prose rows ranks newest-first --
+    exactly the ranking this function was written to replace.
+
+    Measured over the live 256KB lessons tail 2026-07-25 (235 rows), per
+    event: critique 112 rows -> 107 clusters, 106 singletons (95%);
+    build_failed 78 -> 2 clusters, 0 singletons; gap_not_closed 11 -> 1;
+    review_rejected 10 -> 2. The degeneration is exclusively the
+    free-prose `critique` event, so the fix belongs at the caller: see
+    model_fix_loop.select_module_lessons, which drops critique rows before
+    ranking (they are also duplicates of the specific event row written
+    beside them). Do NOT "fix" it here by coarsening the clustering key --
+    folding distinct prose into one bucket would fabricate an "xN"
+    recurrence count that format_lessons_tail then shows to a worker as
+    evidence of a repeated mistake.
     """
     clusters = {}
     for index, ev in enumerate(events):

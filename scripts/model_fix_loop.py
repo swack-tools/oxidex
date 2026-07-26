@@ -230,6 +230,15 @@ from distill_lessons import (
     rank_by_recurrence,
 )
 
+# validate_fix_commit.py is the canonical owner of "which squad does this
+# worker id belong to" -- it is the helper the merger itself uses when it
+# decides ownership of a candidate commit (see check_ownership). Reusing
+# it, rather than keeping a second regex here, is what guarantees the
+# prompt and the validator can never disagree about whose commit was
+# rejected. Same sibling-import shape as find_tag_gaps/distill_lessons
+# above; validate_fix_commit is stdlib-only and imports nothing from here.
+from validate_fix_commit import squad_from_worker
+
 # --- K1 lessons ledger (writer side; see distill_lessons.py for the ---------
 # --- canonical schema/fingerprint/append contract) --------------------------
 
@@ -2424,35 +2433,60 @@ def select_module_lessons(events, module_key, format_name,
     now buys `max_entries` DISTINCT lessons rather than `max_entries`
     samples.
 
-    "no diff in model response" rows are excluded outright. Ranking by
-    recurrence without this would be self-defeating: measured over the
-    live tail 2026-07-25 that one reason is 40 of 235 rows and duly
-    ranks FIRST for essentially every module, evicting the wrong_value
-    and structural lessons that are the only ones carrying ExifTool
-    knowledge. It is a response-format defect, it teaches a worker
-    nothing about the module, and it is already routed to the section
-    that can actually fix it (build_diff_format_remediation) -- so it
-    does not also get to spend a slot here.
+    Two row classes are excluded outright before ranking.
+
+    (1) "no diff in model response" rows. Ranking by recurrence without
+    this would be self-defeating: measured over the live tail 2026-07-25
+    that one reason is 40 of 235 rows and duly ranks FIRST for
+    essentially every module, evicting the wrong_value and structural
+    lessons that are the only ones carrying ExifTool knowledge. It is a
+    response-format defect, it teaches a worker nothing about the module,
+    and it is already routed to the section that can actually fix it
+    (build_diff_format_remediation) -- so it does not also get to spend a
+    slot here.
+
+    (2) `critique` rows, for two independent reasons that happen to have
+    the same fix.
+
+    First, they are DUPLICATES BY CONSTRUCTION. fix_gap writes two rows
+    per failed round, not one: the specific event (build_failed /
+    wrong_value / gap_not_closed / structural / test_regressed) and then
+    critique_and_continue's lesson("critique", critique). The critique row
+    is the critic's PARAPHRASE of the very failure the row beside it
+    already states, so ranking both double-counts one event. This is the
+    same duplicate-row shape already fixed for infra rows in fix_gap
+    (which stopped writing a build_failed row beside every `infra` row).
+    Excluding (1) by literal reason match could never catch the paraphrase
+    -- "The fixer likely emitted no diff because...", "provided a prose
+    description instead of an actual unified diff" contain no literal
+    "no diff in model response" -- so the diff-format failure went on
+    taking slots through its critique twin: 14 of 43 ranked slots across
+    the 6 live formats, 2026-07-25 (MRW 5 of 6, NEF 4 of 6).
+
+    Second, a critique reason is unbounded LLM prose, and recurrence
+    ranking cannot cluster prose. fingerprint_scoped's reason component is
+    normalized free text, so two critiques of the same mistake share no
+    key. Measured per event over the same 235-row tail: critique 112 rows
+    -> 107 clusters, 106 of them singletons (95%); build_failed 78 rows ->
+    2 clusters, 0 singletons; gap_not_closed 11 -> 1; review_rejected 10
+    -> 2. Every other event clusters; the critique event alone does not,
+    and a ranking whose entries are all singletons is just newest-first
+    with extra steps -- precisely the ranking this function replaced.
+
+    Nothing is lost by dropping them: the critique is fed back IN FULL and
+    unclamped to the worker that earned it, in the same conversation
+    (critique_and_continue appends it to `messages`). What was being
+    ranked here was a 240-char truncation of someone else's critique of
+    someone else's round.
     """
     if module_key:
         scoped = [ev for ev in events if ev.get("module") == module_key]
     else:
         scoped = [ev for ev in events if ev.get("format") == format_name]
     scoped = [ev for ev in scoped
-              if not DIFF_FORMAT_FAILURE_RE.search(str(ev.get("reason") or ""))]
+              if ev.get("event") != "critique"
+              and not DIFF_FORMAT_FAILURE_RE.search(str(ev.get("reason") or ""))]
     return rank_by_recurrence(scoped, max_entries=max_entries)
-
-
-def read_lessons_tail(lessons_path, module_key, format_name,
-                       tail_kb=DEFAULT_LESSONS_TAIL_KB,
-                       max_entries=DEFAULT_LESSONS_TAIL_MAX_ENTRIES):
-    """Bounded tail read + module/format scoping + recurrence ranking, in
-    one call -- the shape build_prompt used before the tail read was split
-    out so the per-worker diff-format detector could share its bytes."""
-    return select_module_lessons(
-        read_lessons_tail_events(lessons_path, tail_kb), module_key, format_name,
-        max_entries=max_entries,
-    )
 
 
 def format_lessons_tail(ranked):
@@ -2511,23 +2545,39 @@ DEFAULT_QUARANTINE_MAX_ENTRIES = 4
 #: clamped harder than a lesson's.
 QUARANTINE_REASON_DISPLAY_CHARS = 180
 
-_WORKER_SQUAD_RE = re.compile(r"^(?P<squad>.+)-(?P<index>\d+)$")
+#: The rendered flags list of ONE entry is capped at this many flags and
+#: this many chars.
+QUARANTINE_MAX_FLAGS = 4
+QUARANTINE_FLAGS_DISPLAY_CHARS = 200
+
+#: squad_merge_loop writes this literal when a candidate commit has no
+#: `Format:` trailer to read (squad_merge_loop.py:1111,
+#: `commit_format_trailer(...) or "UNKNOWN"`). It is a placeholder for a
+#: MISSING format, not a format, and must be read back as one -- see
+#: _quarantine_entry_format.
+QUARANTINE_UNKNOWN_FORMAT = "UNKNOWN"
 
 
-def squad_of_worker(worker_label):
-    """"canon-3" -> "canon"; "sony-minolta-2" -> "sony-minolta"; None for
-    a label with no "-<n>" suffix.
+def _quarantine_entry_format(entry):
+    """The format a quarantine entry actually pins itself to, or None for
+    a squad-wide verdict that pins itself to no format at all.
 
-    parallel_model_fix_loop.run_squad_round mints worker ids as
-    f"{squad}-{n}", and the quarantine ledger records `squad` (never the
-    worker), so this is the only link back from a running worker to its
-    own merge verdicts. The non-squad identities -- run_worker's bare
-    format name, main()'s default "1" -- correctly yield None, which
-    read_own_quarantine degrades to a format-only match rather than
-    guessing a squad from a string that never encoded one.
+    Two shapes mean "no format": JSON null (overlord_sweep's bisection
+    quarantines a whole squad with format_name=None) and the literal
+    "UNKNOWN" that squad_merge_loop substitutes when the commit carries no
+    Format: trailer. Only the first was recognised, and since "UNKNOWN" is
+    truthy the second was silently pinned to a format no worker ever has:
+    28 of 77 live rows (36%, exactly 2 per squad across all 14 squads,
+    2026-07-25) were invisible to every worker -- and ALL 28 carry
+    `missing-trailer:Format` as their first flag, so the single rejection
+    class whose defect IS the absent trailer was the one class this
+    feature could never report back. The worker therefore kept omitting
+    the trailer, and the ledger kept growing two more rows per squad.
     """
-    m = _WORKER_SQUAD_RE.match(str(worker_label or "").strip())
-    return m.group("squad") if m else None
+    fmt = str(entry.get("format") or "").strip()
+    if not fmt or fmt == QUARANTINE_UNKNOWN_FORMAT:
+        return None
+    return fmt
 
 
 def read_own_quarantine(quarantine_path, worker_label, format_name,
@@ -2537,21 +2587,38 @@ def read_own_quarantine(quarantine_path, worker_label, format_name,
 
     "Own" is (squad, format): the pair is what identifies a worker in the
     ledger, since squad_merge_loop records the squad and the commit's
-    Format trailer but not the worker id. A squad-wide verdict carries no
-    format at all (overlord_sweep's bisection quarantines a whole squad
-    with format_name=None) and so matches every member of that squad --
-    it rolled back their shared branch, they all need to know.
+    Format trailer but not the worker id. A verdict that pins itself to no
+    format (see _quarantine_entry_format: JSON null from overlord_sweep's
+    squad bisection, or the "UNKNOWN" placeholder for a commit with no
+    Format: trailer) matches every member of its squad -- it rolled back
+    or rejected work on the branch they all share, so they all need it.
 
     Another squad's rejections are deliberately NOT shown, and neither
     are the same squad's rejections on a different format: they name
     parser files this worker never touches, and the budget they would
-    spend is better spent on the module playbook. When the label carries
-    no squad (see squad_of_worker) the match degrades to format alone --
-    still this worker's format, just not provably its branch.
+    spend is better spent on the module playbook.
 
-    No worker_label at all is NOT the same as a label with no squad: an
-    absent label means there is no worker to be the owner of anything, so
-    it returns [] rather than degrading to a format match. That is what
+    Ownership is decided by validate_fix_commit.squad_from_worker -- the
+    SAME helper the merger uses to decide which squad a candidate commit
+    belongs to -- so a label with no "-<n>" suffix is its own squad name
+    and matches nothing in a ledger whose squads are real squad names.
+    That is a deliberate fail-closed default, and it is the only safe one:
+    the previous helper here returned None for such a label and the match
+    degraded to FORMAT ALONE, which is not an edge case but the DEFAULT
+    path -- parallel_model_fix_loop picks run_round unless --squad-mode,
+    run_worker labels those workers with the bare format name ("JPEG",
+    "CR2") and model_fix_loop's own CLI defaults the label to "1".
+    Measured against the live ledger 2026-07-25, the degrade returned
+    ps-docs/sony-minolta/thermal rejections for label "JPEG",
+    exif-core/canon for "CR2", and ps-docs/sony-minolta/thermal for the
+    bare "1" -- all rendered by format_own_quarantine under "YOUR OWN
+    commits that were REJECTED ... Fix the defect named by the flags
+    below". A legacy worker owns no ledger entries at all, so 100% of
+    what it was shown was another worker's rejected code asserted as its
+    own. Showing nothing is strictly better than showing a lie.
+
+    No worker_label at all returns [] before any of that: an absent label
+    means there is no worker to be the owner of anything. That is what
     keeps build_prompt hermetic by default -- a caller that never opted
     in must not be shown some arbitrary worker's rejections.
 
@@ -2575,7 +2642,7 @@ def read_own_quarantine(quarantine_path, worker_label, format_name,
     lines = data.split(b"\n")
     if offset > 0:
         lines = lines[1:]  # drop a possibly-partial leading fragment
-    squad = squad_of_worker(worker_label)
+    squad = squad_from_worker(str(worker_label).strip())
     entries = []
     for raw in lines:
         raw = raw.strip()
@@ -2587,17 +2654,65 @@ def read_own_quarantine(quarantine_path, worker_label, format_name,
             continue
         if not isinstance(entry, dict):
             continue
-        entry_squad = entry.get("squad")
-        entry_format = entry.get("format")
-        if squad:
-            # Squad-wide (formatless) verdicts apply to every member.
-            if entry_squad != squad or (entry_format and entry_format != format_name):
-                continue
-        elif entry_format != format_name:
+        if entry.get("squad") != squad:
+            continue
+        entry_format = _quarantine_entry_format(entry)
+        # A formatless verdict applies to every member of the squad.
+        if entry_format and entry_format != format_name:
             continue
         entries.append(entry)
     entries.reverse()  # ledger is append-order (oldest first); newest first
     return entries[:max_entries]
+
+
+def _clamp_quarantine_flags(raw_flags,
+                            max_flags=QUARANTINE_MAX_FLAGS,
+                            max_chars=QUARANTINE_FLAGS_DISPLAY_CHARS):
+    """Render one entry's `flags` as a bounded, deterministic string.
+
+    BOUNDED because the writer is unbounded: validate_fix_commit appends
+    one `printconv-mismatch:<48-char excerpt>` flag per unverifiable map
+    value with no cap of its own, so a commit adding a ~30-entry PrintConv
+    lookup emits 30 flags in a single entry (the live worst case is
+    already 11 flags / 512 chars, 2026-07-25). Four such entries rendered
+    a 5858-char section against a 4800-char learning budget, and since
+    LEARNING_SECTION_ORDER ranks this section SECOND, compose_learning_
+    block then admitted the quarantine block ALONE and dropped the K4
+    sweep reviews, the K3 module playbook and the lessons tail outright --
+    the knowledge spine went dark for that worker for as long as the entry
+    stayed in the 64KB window, which today is the whole ledger. The first
+    few flags already name the defect class; flags 5..30 are the same
+    class with different excerpts, so the tail costs budget and teaches
+    nothing. The "(+N more)" suffix keeps the true count visible.
+
+    DEFENSIVE because `flags` is written by another process. Every other
+    field in this read path is coerced; this one was consumed as
+    `", ".join(str(f) for f in entry["flags"])`, so a row whose flags is
+    a bare int raised TypeError straight out of build_prompt, through
+    fix_gap, and killed the worker -- from a section whose whole contract
+    (read_own_quarantine's docstring) is "advisory context, never a hard
+    dependency". A string is treated as ONE flag rather than as an
+    iterable of characters, which is the only reading a writer could have
+    meant; anything else non-list is reported as one opaque value.
+    """
+    if isinstance(raw_flags, str):
+        flags = [raw_flags]
+    elif isinstance(raw_flags, (list, tuple)):
+        flags = [str(f) for f in raw_flags]
+    elif not raw_flags:
+        flags = []
+    else:
+        flags = [str(raw_flags)]
+    flags = [f for f in flags if f]
+    if not flags:
+        return "(no flags)"
+    hidden = max(0, len(flags) - max_flags)
+    text = ", ".join(flags[:max_flags])
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "..."
+    if hidden:
+        text += f" (+{hidden} more)"
+    return text
 
 
 def format_own_quarantine(entries):
@@ -2607,15 +2722,17 @@ def format_own_quarantine(entries):
     the offending value inline (validate_fix_commit emits
     "printconv-mismatch:<the wrong string>", "multi-sample-fail:<tag>",
     "missing-trailer:<key>"); the reason is the human-readable tail and
-    is clamped hard. Deterministic, bounded output: at most
-    DEFAULT_QUARANTINE_MAX_ENTRIES lines, each at most flags +
-    QUARANTINE_REASON_DISPLAY_CHARS chars.
+    is clamped hard. Deterministic, bounded output -- and now actually
+    bounded, see _clamp_quarantine_flags: at most
+    DEFAULT_QUARANTINE_MAX_ENTRIES lines, each at most
+    QUARANTINE_FLAGS_DISPLAY_CHARS + QUARANTINE_REASON_DISPLAY_CHARS
+    chars plus a fixed rendering overhead.
     """
     if not entries:
         return ""
     lines = []
     for entry in entries:
-        flags = ", ".join(str(f) for f in (entry.get("flags") or [])) or "(no flags)"
+        flags = _clamp_quarantine_flags(entry.get("flags"))
         reason = _clamp_reason(entry.get("reason"), QUARANTINE_REASON_DISPLAY_CHARS)
         date = str(entry.get("ts") or "")[:10]
         stamp = f" [{date}]" if date else ""
@@ -2655,16 +2772,40 @@ def count_diff_format_failures(events, worker_label):
 #: rejects a bare @@ hunk with no ---/+++ headers), and one minimal
 #: example that would actually apply -- a rule the model can pattern-match
 #: against, not a rule it has to interpret.
+#:
+#: It must also be TRUE and must not contradict build_reply_shape_manifest,
+#: which ships in the same prompt. The first version did both wrong: it
+#: said the reply "is parsed by looking for a ```diff fenced block, and
+#: nothing else counts" and that prose is "discarded unread", while the
+#: manifest defines four legal shapes of which shape 1 (REQUEST) is a bare
+#: prose line with no diff and shape 4 REQUIRES 2-3 sentences of prose
+#: before the fence -- and the STRATEGY paragraph tells the worker to probe
+#: with VERIFY. A worker that believed the alert would stop issuing
+#: REQUEST/VERIFY, i.e. the alert would cost rounds instead of saving them.
+#: Two of its claims were also simply false, both in the strict direction:
+#: extract_diff ALSO accepts an unfenced reply starting with "diff --git"/
+#: "--- ", and DIFF_BLOCK_RE is a non-greedy search, so text after the
+#: closing fence is ignored rather than fatal. Every claim below is pinned
+#: to extract_diff's real behaviour by
+#: AdaptiveDiffFormatGuidanceTests.test_the_alert_makes_no_claim_
+#: extract_diff_contradicts.
 DIFF_FORMAT_REMEDIATION = """\
-FORMAT ALERT -- your recent replies were discarded before anyone read them, \
-because no diff could be extracted. This was NOT a code problem: the reply is \
-parsed by looking for a ```diff fenced block, and nothing else counts. Prose \
-describing the change, a ```rust or ```patch fence, a bare @@ hunk, or a diff \
-split across two fences are all discarded unread and the round is wasted.
+FORMAT ALERT -- one or more of your recent rounds ended with no diff \
+extracted from your reply, so the round was wasted. This was NOT a code \
+problem, it is how the reply was packaged.
 
-Your final reply must contain EXACTLY ONE ```diff fenced block holding the \
-COMPLETE unified diff, with per-file ---/+++ headers (a bare @@ hunk will not \
-apply). Minimal correct example:
+The four reply shapes at the top of this prompt all still apply, and this \
+alert does not narrow them: REQUEST and VERIFY remain the right moves when \
+you are still investigating, and a Plan + diff reply is SUPPOSED to open \
+with 2-3 sentences of prose before the fence. What does not work is ending \
+a round with prose ALONE when you meant to deliver a change.
+
+Whenever your reply is meant to carry a change, it must contain the change \
+as a unified diff in EXACTLY ONE ```diff fenced block, complete, with \
+per-file ---/+++ headers -- a bare @@ hunk has nothing to apply against and \
+is rejected. A ```rust or ```patch fence is not read as a diff, and a diff \
+split across two fences loses everything after the first fence closes. \
+Minimal correct example:
 
 ```diff
 --- a/src/parsers/jpeg/foo.rs
@@ -2675,9 +2816,10 @@ apply). Minimal correct example:
      let c = 3;
 ```
 
-Nothing may follow the closing fence. If the diff is too large for one \
-reply, use the "PATCH i/N" shape from the manifest above -- each chunk is \
-still ONE ```diff fenced block."""
+Text after the closing fence is ignored, so a closing sentence is harmless; \
+a SECOND ```diff block is not, because only the first is read. If the diff \
+is too large for one reply, use the "PATCH i/N" shape from the manifest \
+above -- each chunk is still ONE ```diff fenced block."""
 
 
 def build_diff_format_remediation(failure_count,
@@ -2802,7 +2944,7 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     <knowledge_home>/logs/knowledge/modules/<module_name>.md playbook to
     show (spec K3); None falls back to gap["format"] as the key. Also
     scopes the lessons-tail selection (module match takes priority over
-    format match -- see read_lessons_tail). Has no effect when
+    format match -- see select_module_lessons). Has no effect when
     knowledge_home is None.
 
     learning_budget_tokens/parser_floor_tokens/lessons_tail_kb are the
