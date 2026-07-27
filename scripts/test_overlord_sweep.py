@@ -1558,10 +1558,68 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
         return path
 
     def _failing_comparison_fn(self, repo_root, cache_dir, fmt, suffix):
-        """A duplicate emission that the sweep can never clear, because
-        the only way to clear it is to revert -- and reverting fails."""
+        """A duplicate emission the sweep INTRODUCES and can never clear,
+        because the only way to clear it is to revert -- and reverting fails.
+
+        It must be absent from the PRE report. The gate diffs pre against
+        post (a sweep is answerable for what it introduces, not for what
+        origin/main already carries), so a duplicate present on BOTH sides is
+        inherited and correctly does not block. This fixture used to return
+        ["JPEG:Dup"] for both, which described a pre-existing duplicate while
+        the docstring claimed an introduced one -- the test passed only
+        because the gate read POST alone."""
+        pre = suffix == "sweep-pre"
+        return {"gap_count": 5 if pre else 4,
+                "duplicate_emissions": [] if pre else ["JPEG:Dup"],
+                "extra_in_oxidex": []}
+
+    def _inherited_dup_comparison_fn(self, repo_root, cache_dir, fmt, suffix):
+        """The SAME duplicate on both sides: origin/main already had it."""
         return {"gap_count": 5 if suffix == "sweep-pre" else 4,
-                "duplicate_emissions": ["JPEG:Dup"], "extra_in_oxidex": []}
+                "duplicate_emissions": ["JPEG:Inherited"], "extra_in_oxidex": []}
+
+    def test_a_PRE_EXISTING_duplicate_does_not_veto_the_sweep(self):
+        """This is the LAST gate before a sweep PR is opened.
+
+        Reading duplicate_emissions off POST alone let any duplicate already
+        on origin/main veto publication outright -- NEF carries nine. That is
+        one reason no sweep PR had ever opened. A sweep is answerable for the
+        duplicates it INTRODUCES.
+        """
+        repo = self.make_repo()
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "src/a.rs", "fn a() {}\n", "fix JPEG:Foo",
+            trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:Foo"),
+                      ("Verified", "recheck-pass gaps=3->2")],
+        )
+        git(repo, "checkout", "-q", "main")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            squad_merge_loop.record_head(
+                squad_merge_loop.squad_status_file(home, "canon"), "workerhead",
+                status="consumed", patch_id="p1", format_name="JPEG",
+                squad_sha=canon_sha, now_fn=lambda: 100,
+            )
+            pushed, prs = [], []
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._inherited_dup_comparison_fn,
+                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                sweep_state_path=home / "sweep-state.json", origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                quarantine_path=home / "quarantine.jsonl",
+                cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
+                create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
+                fmt_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
+            )
+        # It must NOT abort on a duplicate it inherited.
+        self.assertNotEqual(result["status"], "sweep_aborted")
+        self.assertEqual(pushed, ["sweep/tags-2026-07-27-1"][:len(pushed)] or [])
+        self.assertTrue(pushed, "an inherited duplicate must not stop the sweep from pushing")
 
     def test_an_unrevertable_offender_refuses_to_push_instead_of_shipping(self):
         repo = self.make_repo()

@@ -90,7 +90,7 @@ import squad_merge_loop
 import validate_fix_commit
 import log_sweep_review
 from model_fix_loop import cargo_test_workspace as _real_cargo_test_workspace
-from model_fix_loop import new_oxidex_only_keys
+from model_fix_loop import new_oxidex_only_keys, newly_duplicated_emissions
 from distill_lessons import STALE_HEARTBEAT_SECONDS
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -546,7 +546,12 @@ def evaluate_post_merge(pre, post, verified_delta_sum):
         pre_count = (pre_report or {}).get("gap_count", 0)
         post_count = (post_report or {}).get("gap_count", 0)
         measured_delta += pre_count - post_count
-        dup = (post_report or {}).get("duplicate_emissions") or []
+        # Same rule as both squad_merge_loop gates: a sweep is answerable for
+        # the duplicates it INTRODUCES, not the ones origin/main already has.
+        # This is the LAST gate before a sweep PR is opened, so leaving it
+        # post-only meant a pre-existing duplicate in any swept format could
+        # veto publication outright -- and no sweep PR has ever opened.
+        dup = newly_duplicated_emissions(pre_report, post_report)
         if dup:
             problems.append(f"{fmt}: duplicate_emissions {dup}")
             has_dup_or_new = True
