@@ -906,6 +906,14 @@ fn format_exif_display_value(
             2 => Some("Hard".to_string()),
             _ => None,
         },
+        // TIFF-EPStandardID: stored as ASCII (type 2) or UNDEFINED (type 7),
+        // ExifTool PrintConv replaces spaces with dots.
+        0x9216 => {
+            let raw = String::from_utf8_lossy(bytes);
+            let trimmed = raw.trim_end_matches('\0');
+            let dotted = trimmed.replace(' ', ".");
+            Some(dotted)
+        }
         _ => None,
     }
 }
@@ -2719,8 +2727,11 @@ fn format_nef_subifd_tag(
         // JPEGInterchangeFormatLength -> JpgFromRawLength
         0x0202 => Some(("EXIF:JpgFromRawLength".to_string(), TagValue::new_integer(read_u32(bytes, byte_order) as i64))),
         // TIFF-EPStandardID: UNDEFINED[4] -> dotted version string
-        0x828F => {
-            let ver = format!("{}.{}.{}.{}", bytes.first().copied().unwrap_or(0), bytes.get(1).copied().unwrap_or(0), bytes.get(2).copied().unwrap_or(0), bytes.get(3).copied().unwrap_or(0));
+        0x9216 => {
+            // ExifTool PrintConv: '$val =~ tr/ /./; $val'
+            let raw = String::from_utf8_lossy(bytes);
+            let trimmed = raw.trim_end_matches('\0');
+            let ver = trimmed.replace(' ', ".");
             Some(("EXIF:TIFF-EPStandardID".to_string(), TagValue::new_string(ver)))
         }
         // CFARepeatPatternDim: two SHORT values -> "h v"
