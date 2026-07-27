@@ -54,6 +54,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from pathlib import Path
 
 from find_tag_gaps import OXIDEX_HOME, REPO_ROOT, group_gaps_by_format, load_comparison_report, run_full_comparison
@@ -765,18 +766,48 @@ def _real_cargo_test(repo_root):
 
 
 def _process_group_alive(pgid):
-    """True if any process in the group is still alive."""
+    """True if any process in OUR group is still alive.
+
+    killpg(pgid, 0) has three outcomes, and only two of them used to be
+    handled:
+      success -> the group exists and we may signal it: alive.
+      ESRCH (ProcessLookupError) -> no such group: exited.
+      EPERM (PermissionError) -> the group exists but is NOT ours.
+
+    EPERM means the pgid was recycled by a process group we do not own, so
+    our worker's own processes are gone -- "exited" is the correct answer
+    for the only question this function is ever asked. Treating it as alive
+    would spin until force_after and then try to SIGKILL a stranger's
+    process group.
+
+    Why this comment exists: on 2026-07-27 an uncaught PermissionError here
+    propagated out of _wait_for_process_group_exit, through process_format,
+    through the ThreadPoolExecutor future, and killed the whole dispatcher
+    mid-round -- 32 workers and the entire publish pipeline taken down by
+    one recycled pgid.
+    """
     try:
         os.killpg(pgid, 0)
         return True
     except ProcessLookupError:
         return False
+    except PermissionError:
+        return False
 
 
 def _kill_process_group(pgid, sig=signal.SIGKILL):
+    """Best-effort kill of a process group we started.
+
+    PermissionError is swallowed for the same reason it is treated as
+    "exited" above, and with more force: a pgid we cannot signal is not
+    ours, and the one thing we must never do is deliver SIGKILL to an
+    unrelated process group that happens to have inherited the number.
+    """
     try:
         os.killpg(pgid, sig)
     except ProcessLookupError:
+        pass
+    except PermissionError:
         pass
 
 
@@ -1639,9 +1670,26 @@ def run_round(args, config_path):
             for fmt in formats
         }
         for future in concurrent.futures.as_completed(futures):
-            fmt, result = future.result()
+            # future.result() re-raises whatever process_format raised, and an
+            # escaping exception here does not merely lose ONE format: it
+            # unwinds out of run_round, out of main(), and takes the whole
+            # dispatcher down mid-round -- every other worker and the entire
+            # publish pipeline with it. That happened on 2026-07-27, when a
+            # recycled pgid made os.killpg raise PermissionError; 32 workers
+            # died for one format's bookkeeping. Same principle as
+            # _run_auto_publish_safely: one tier's hiccup never sinks the fleet.
+            # Every format MUST land in results -- the merge loop below indexes
+            # results[fmt] for each requested format and would KeyError.
+            fmt = futures[future]
+            try:
+                fmt, result = future.result()
+            except Exception as exc:  # noqa: BLE001 -- deliberately broad
+                result = {"status": "crashed", "error": f"{type(exc).__name__}: {exc}"}
+                traceback.print_exc()
             results[fmt] = result
             extra = f" (exit {result['returncode']})" if "returncode" in result else ""
+            if result["status"] == "crashed":
+                extra = f" ({result['error']})"
             print(f"[{fmt}] {result['status']}{extra}")
 
     print("\nMerging completed worker branches...")
