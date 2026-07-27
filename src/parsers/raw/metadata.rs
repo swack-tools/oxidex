@@ -43,7 +43,9 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
         && matches!(
             tag_id,
             0xC616 // CFAPlaneColor
+                | 0xC61E // DefaultScale
                 | 0xC617 // CFALayout
+                | 0xC68E // MaskedAreas
                 | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
                 | 0xC61F // DefaultCropOrigin
@@ -839,6 +841,32 @@ fn format_dng_integer_array(
             };
             return Some(layout.to_string());
         }
+        0xC61E if field_type == 10 => {
+            // DefaultScale: SRATIONAL[2] – format each rational as an
+            // integer when the denominator is 1, or as a float otherwise.
+            let count = usize::try_from(value_count).ok()?;
+            let byte_len = count.checked_mul(8)?;
+            let values = bytes.get(..byte_len)?;
+            let formatted: Option<Vec<String>> = values
+                .chunks_exact(8)
+                .map(|chunk| {
+                    let num = read_tiff_i32(&chunk[..4], byte_order)?;
+                    let den = read_tiff_i32(&chunk[4..8], byte_order)?;
+                    if den == 0 {
+                        None
+                    } else if num % den == 0 {
+                        Some((num / den).to_string())
+                    } else {
+                        Some(format!("{:.2}", num as f64 / den as f64))
+                    }
+                })
+                .collect();
+            return Some(formatted?.join(" "));
+        }
+        0xC68E if field_type == 3 || field_type == 4 => {
+            // MaskedAreas: SHORT[4] (type 3) or LONG[4] (type 4).
+            // Fall through to the integer-array formatting below.
+        }
         _ => {}
     }
 
@@ -846,6 +874,8 @@ fn format_dng_integer_array(
         0xC619 if field_type == 3 => 2, // BlackLevelRepeatDim: SHORT[2]
         0xC68D if field_type == 4 => 4, // ActiveArea: LONG[4]
         0x828D if field_type == 3 => 2, // CFARepeatPatternDim: SHORT[2]
+        0xC68E if field_type == 3 => 2, // MaskedAreas: SHORT[4]
+        0xC68E if field_type == 4 => 4, // MaskedAreas: LONG[4]
         0x828E if field_type == 1 || field_type == 7 => 1, // CFAPattern2: BYTE[]
         0xC61F | 0xC620 if field_type == 3 => 2, // DefaultCropOrigin/Size: SHORT[2]
         0xC61F | 0xC620 if field_type == 4 => 4, // DefaultCropOrigin/Size: LONG[2]
@@ -889,6 +919,15 @@ fn format_dng_integer_array(
     };
 
     Some(formatted.join(" "))
+}
+
+/// Read a signed 32-bit integer from bytes in the given byte order.
+fn read_tiff_i32(bytes: &[u8], byte_order: ByteOrder) -> Option<i32> {
+    let bytes: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
+    Some(match byte_order {
+        ByteOrder::LittleEndian => i32::from_le_bytes(bytes),
+        ByteOrder::BigEndian => i32::from_be_bytes(bytes),
+    })
 }
 
 fn read_tiff_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
