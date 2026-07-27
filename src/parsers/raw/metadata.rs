@@ -225,6 +225,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut ifd_offset = first_ifd_offset;
     let mut ifd_index = 0;
 
+    // CR2 IFD0 thumbnail byte count for PreviewImage/PreviewImageLength
+    let mut cr2_thumbnail_length: Option<u32> = None;
+
     // Add format-specific tag to identify file type
     metadata.insert(
         "File:FileType".to_string(),
@@ -279,6 +282,14 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         let offset = read_u32(bytes, byte_order);
                         gps_ifd_offset = Some(offset as u64);
                         continue; // Don't add pointer tag to metadata
+                    }
+
+                    // CR2 IFD0: capture the StripByteCounts value for the
+                    // thumbnail JPEG preview (ExifTool EXIF:PreviewImage).
+                    if format == RawFormat::CanonCR2 && ifd_index == 0
+                        && *tag_id == 0x0117 && bytes.len() >= 4
+                    {
+                        cr2_thumbnail_length = Some(read_u32(bytes, byte_order));
                     }
 
                     // Check for SubIFD pointer (tag 0x014A) - common in RAW formats
@@ -609,6 +620,23 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
             extract_dng_tags(&mut metadata);
         }
         RawFormat::CanonCR2 => {
+            // Emit EXIF:PreviewImage / PreviewImageLength from the IFD0
+            // thumbnail JPEG byte count (StripByteCounts, 0x0117).
+            if let Some(length) = cr2_thumbnail_length {
+                if length > 0 {
+                    metadata.insert(
+                        "EXIF:PreviewImageLength".to_string(),
+                        TagValue::new_integer(length as i64),
+                    );
+                    metadata.insert(
+                        "EXIF:PreviewImage".to_string(),
+                        TagValue::new_string(format!(
+                            "(Binary data {} bytes, use -b option to extract)",
+                            length
+                        )),
+                    );
+                }
+            }
             extract_cr2_tags(&mut metadata);
         }
         RawFormat::NikonNEF | RawFormat::NikonNRW => {
