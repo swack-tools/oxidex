@@ -34,11 +34,26 @@ use crate::tag_db::lookup_tag_name;
 /// Some physical RAW IFD tags correspond to standard EXIF concepts but use
 /// format-specific IDs and representations.
 fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String {
-    if format == RawFormat::PanasonicRW2 && tag_id == 0x0009 {
-        // PanasonicRaw CFAPattern is stored at 0x0009, while the canonical
-        // EXIF CFAPattern name is registered under tag 0xA302. ExifTool
-        // assigns the Panasonic tag to its EXIF group.
-        lookup_tag_name(0xA302, "EXIF")
+    if format == RawFormat::PanasonicRW2 {
+        match tag_id {
+            0x0009 => {
+                // PanasonicRaw CFAPattern -> EXIF:CFAPattern
+                lookup_tag_name(0xA302, "EXIF")
+            }
+            0x000E => {
+                // PanasonicRaw LinearityLimitRed -> EXIF
+                "EXIF:LinearityLimitRed".to_string()
+            }
+            0x000F => {
+                // PanasonicRaw LinearityLimitGreen -> EXIF
+                "EXIF:LinearityLimitGreen".to_string()
+            }
+            0x0010 => {
+                // PanasonicRaw LinearityLimitBlue -> EXIF
+                "EXIF:LinearityLimitBlue".to_string()
+            }
+            _ => lookup_tag_name(tag_id, ifd_name),
+        }
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
@@ -452,23 +467,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             exif_make = Some(make_str.trim_end_matches('\0').trim().to_string());
                         }
 
-                        // Panasonic RW2: map SubIFD PanasonicRaw tags to EXIF group
-                        if format == RawFormat::PanasonicRW2 {
-                            match tag_id {
-                                0x0026 => {
-                                    metadata.insert("ExifIFD:LinearityLimitGreen".to_string(),
-                                        raw_bytes_to_simple_tag_value(raw_bytes.as_ref(), *field_type, *value_count, byte_order));
-                                    continue;
-                                }
-                                0x0027 => {
-                                    metadata.insert("ExifIFD:LinearityLimitBlue".to_string(),
-                                        raw_bytes_to_simple_tag_value(raw_bytes.as_ref(), *field_type, *value_count, byte_order));
-                                    continue;
-                                }
-                                _ => {}
-                            }
-                        }
-
+                        // Panasonic RW2 LinearityLimit* tags handled by lookup_raw_tag_name above
                         let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
                         let tag_value = if let Some(value) = format_exif_display_value(
                             *tag_id,
@@ -664,6 +663,21 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     let reader = SliceReader::new(tiff_data);
     let ifd0_tags = parse_ifd(&reader, first_ifd_offset, byte_order)?;
 
+    // Extract selected tags from preview IFD0 (e.g. ModifyDate)
+    for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
+        if *tag_id == 0x0132 {
+            // DateTime -> EXIF:ModifyDate
+            let bytes = raw_bytes.as_ref();
+            let s = String::from_utf8_lossy(bytes)
+                .trim_end_matches('\0')
+                .to_string();
+            metadata.insert(
+                "EXIF:ModifyDate".to_string(),
+                TagValue::new_string(s),
+            );
+        }
+    }
+
     let exif_ifd_offset =
         ifd0_tags
             .iter()
@@ -743,11 +757,11 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                         _ => raw,
                     };
                     metadata.insert(
-                        "InteropIFD:InteropIndex".to_string(),
+                        "EXIF:InteropIndex".to_string(),
                         TagValue::new_string(printed),
                     );
                 } else {
-                    let tag_name = lookup_tag_name(*tag_id, "InteropIFD");
+                    let tag_name = lookup_tag_name(*tag_id, "EXIF");
                     let tag_value = raw_bytes_to_simple_tag_value(
                         raw_bytes.as_ref(),
                         *field_type,
