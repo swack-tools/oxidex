@@ -38,6 +38,10 @@ const LANGUAGE_SPANISH_MACINTOSH: u16 = 6;
 const LANGUAGE_FINNISH_MACINTOSH: u16 = 13;
 const LANGUAGE_FRENCH_MACINTOSH: u16 = 1;
 const LANGUAGE_ITALIAN_MACINTOSH: u16 = 3;
+const LANGUAGE_DUTCH_MACINTOSH: u16 = 4;
+const LANGUAGE_NORWEGIAN_MACINTOSH: u16 = 9;
+const LANGUAGE_JAPANESE_MACINTOSH: u16 = 11;
+const LANGUAGE_KOREAN_MACINTOSH: u16 = 23;
 const LANGUAGE_DANISH_WINDOWS: u16 = 0x0406;
 const LANGUAGE_GERMAN_WINDOWS: u16 = 0x0407;
 const LANGUAGE_HEBREW_WINDOWS: u16 = 0x040d;
@@ -46,6 +50,10 @@ const LANGUAGE_FINNISH_WINDOWS: u16 = 0x040b;
 const LANGUAGE_FRENCH_WINDOWS: u16 = 0x040c;
 const LANGUAGE_ITALIAN_WINDOWS: u16 = 0x0410;
 const LANGUAGE_ENGLISH_WINDOWS: u16 = 0x0409;
+const LANGUAGE_JAPANESE_WINDOWS: u16 = 0x0411;
+const LANGUAGE_KOREAN_WINDOWS: u16 = 0x0412;
+const LANGUAGE_DUTCH_WINDOWS: u16 = 0x0413;
+const LANGUAGE_NORWEGIAN_WINDOWS: u16 = 0x0414;
 
 /// Name IDs for name table records
 const NAME_COPYRIGHT: u16 = 0;
@@ -239,20 +247,31 @@ impl TTFParser {
     /// Returns the ExifTool language suffix for supported localized name records.
     fn language_suffix(record: &NameRecord) -> Option<&'static str> {
         match (record.platform_id, record.language_id) {
-            (PLATFORM_MACINTOSH, LANGUAGE_DANISH_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_DANISH_WINDOWS) => Some("da"),
-            (PLATFORM_MACINTOSH, LANGUAGE_GERMAN_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_GERMAN_WINDOWS) => Some("de"),
-            (PLATFORM_MACINTOSH, LANGUAGE_HEBREW_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_HEBREW_WINDOWS) => Some("he"),
-            (PLATFORM_MACINTOSH, LANGUAGE_SPANISH_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_SPANISH_WINDOWS) => Some("es"),
-            (PLATFORM_MACINTOSH, LANGUAGE_FINNISH_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_FINNISH_WINDOWS) => Some("fi"),
-            (PLATFORM_MACINTOSH, LANGUAGE_FRENCH_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_FRENCH_WINDOWS) => Some("fr"),
-            (PLATFORM_MACINTOSH, LANGUAGE_ITALIAN_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_ITALIAN_WINDOWS) => Some("it"),
+            (PLATFORM_MACINTOSH, LANGUAGE_DANISH_MACINTOSH) => Some("da"),
+            (PLATFORM_MACINTOSH, LANGUAGE_GERMAN_MACINTOSH) => Some("de"),
+            (PLATFORM_MACINTOSH, LANGUAGE_HEBREW_MACINTOSH) => Some("he"),
+            (PLATFORM_MACINTOSH, LANGUAGE_SPANISH_MACINTOSH) => Some("es"),
+            (PLATFORM_MACINTOSH, LANGUAGE_FINNISH_MACINTOSH) => Some("fi"),
+            (PLATFORM_MACINTOSH, LANGUAGE_FRENCH_MACINTOSH) => Some("fr"),
+            (PLATFORM_MACINTOSH, LANGUAGE_ITALIAN_MACINTOSH) => Some("it"),
+            (PLATFORM_MACINTOSH, LANGUAGE_DUTCH_MACINTOSH) => Some("nl-NL"),
+            (PLATFORM_MACINTOSH, LANGUAGE_NORWEGIAN_MACINTOSH) => Some("no"),
+            (PLATFORM_MACINTOSH, LANGUAGE_JAPANESE_MACINTOSH) => Some("ja"),
+            (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH) => Some("ko"),
+            (PLATFORM_WINDOWS | PLATFORM_UNICODE, lang_id) => match lang_id {
+                LANGUAGE_DANISH_WINDOWS => Some("da"),
+                LANGUAGE_GERMAN_WINDOWS => Some("de"),
+                LANGUAGE_HEBREW_WINDOWS => Some("he"),
+                LANGUAGE_SPANISH_WINDOWS => Some("es"),
+                LANGUAGE_FINNISH_WINDOWS => Some("fi"),
+                LANGUAGE_FRENCH_WINDOWS => Some("fr"),
+                LANGUAGE_ITALIAN_WINDOWS => Some("it"),
+                LANGUAGE_JAPANESE_WINDOWS => Some("ja"),
+                LANGUAGE_KOREAN_WINDOWS => Some("ko"),
+                LANGUAGE_DUTCH_WINDOWS => Some("nl-NL"),
+                LANGUAGE_NORWEGIAN_WINDOWS => Some("no"),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -350,10 +369,11 @@ impl TTFParser {
             let Some(language) = Self::language_suffix(record) else {
                 continue;
             };
-            if let Some(value) = Self::extract_name_string(reader, table, record, string_offset)?
-                && !value.is_empty()
-            {
-                metadata.insert(format!("{base_key}-{language}"), TagValue::String(value));
+            match Self::extract_name_string(reader, table, record, string_offset) {
+                Ok(Some(value)) if !value.is_empty() => {
+                    metadata.insert(format!("{base_key}-{language}"), TagValue::String(value));
+                }
+                _ => {}
             }
         }
 
@@ -585,6 +605,10 @@ mod tests {
             (7, "da"),  // 7 => 'da'
             (10, "he"), // 10 => 'he'
             (13, "fi"), // 13 => 'fi'
+            (4, "nl-NL"), // 4 => 'nl-NL' (now claimed; was incorrectly unclaimed)
+            (9, "no"),    // 9 => 'no'
+            (11, "ja"),   // 11 => 'ja'
+            (23, "ko"),   // 23 => 'ko'
         ] {
             let record = mac_record(id);
             assert_eq!(
@@ -602,7 +626,6 @@ mod tests {
     #[test]
     fn unclaimed_macintosh_language_ids_stay_unmapped() {
         for id in [
-            4,  /* nl-NL */
             12, /* ar */
             5,  /* sv */
             8,  /* pt */
