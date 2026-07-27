@@ -21,13 +21,23 @@ const PLATFORM_MACINTOSH: u16 = 1;
 const PLATFORM_WINDOWS: u16 = 3;
 
 /// Platform-specific language IDs for localized name records.
+///
+/// The Macintosh values are the ones ExifTool lists in `%ttLang{Macintosh}`
+/// (Font.pm) -- every value below is quoted from that table, not inferred
+/// from the language's name or position. Two of them were originally wrong
+/// (Spanish as 12, Italian as 4) and the recheck still passed, because
+/// Font.ttf's Spanish and Italian records are 6 and 3: constant 12 matched
+/// nothing, and 4 matched the *Dutch* record, so `FontSubfamily-it` would
+/// have carried Dutch text. A sample only exercises the IDs it happens to
+/// contain, so these must be read off the table rather than trusted to a
+/// green recheck.
 const LANGUAGE_DANISH_MACINTOSH: u16 = 7;
 const LANGUAGE_GERMAN_MACINTOSH: u16 = 2;
 const LANGUAGE_HEBREW_MACINTOSH: u16 = 10;
-const LANGUAGE_SPANISH_MACINTOSH: u16 = 12;
+const LANGUAGE_SPANISH_MACINTOSH: u16 = 6;
 const LANGUAGE_FINNISH_MACINTOSH: u16 = 13;
 const LANGUAGE_FRENCH_MACINTOSH: u16 = 1;
-const LANGUAGE_ITALIAN_MACINTOSH: u16 = 4;
+const LANGUAGE_ITALIAN_MACINTOSH: u16 = 3;
 const LANGUAGE_DANISH_WINDOWS: u16 = 0x0406;
 const LANGUAGE_GERMAN_WINDOWS: u16 = 0x0407;
 const LANGUAGE_HEBREW_WINDOWS: u16 = 0x040d;
@@ -539,6 +549,73 @@ fn add_ttf_tag_aliases(metadata: &mut MetadataMap) {
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    /// A Macintosh name record carrying `language_id`. Only the platform and
+    /// language fields participate in language_suffix; the rest are filler.
+    fn mac_record(language_id: u16) -> NameRecord {
+        NameRecord {
+            platform_id: PLATFORM_MACINTOSH,
+            encoding_id: 0,
+            language_id,
+            name_id: 0,
+            length: 0,
+            offset: 0,
+        }
+    }
+
+    /// Pins every Macintosh language ID to ExifTool's `%ttLang{Macintosh}`
+    /// table (Font.pm). Transcribed from that table, not from memory.
+    ///
+    /// This exists because a green recheck does not prove these are right:
+    /// a sample only exercises the IDs it actually contains, so a wrong
+    /// constant is invisible unless the sample happens to hold a record
+    /// with that ID. Font.ttf holds Dutch (4) but constant-set Italian to
+    /// 4 as well, which silently routed Dutch text into FontSubfamily-it.
+    #[test]
+    fn macintosh_language_ids_match_exiftool_ttlang_table() {
+        // Literal IDs on purpose. Writing LANGUAGE_SPANISH_MACINTOSH here
+        // instead of 6 would make this a tautology -- it would feed the
+        // constant in and assert the constant's own meaning back out, and
+        // pass for any value it held. The literals ARE the table.
+        for (id, expected) in [
+            (1, "fr"),  // %ttLang{Macintosh}: 1 => 'fr'
+            (2, "de"),  // 2 => 'de'
+            (3, "it"),  // 3 => 'it'   (4 is nl-NL, not Italian)
+            (6, "es"),  // 6 => 'es'   (12 is ar, not Spanish)
+            (7, "da"),  // 7 => 'da'
+            (10, "he"), // 10 => 'he'
+            (13, "fi"), // 13 => 'fi'
+        ] {
+            let record = mac_record(id);
+            assert_eq!(
+                TTFParser::language_suffix(&record),
+                Some(expected),
+                "Macintosh language ID {id} must map to {expected:?} per ExifTool %ttLang",
+            );
+        }
+    }
+
+    /// The IDs ExifTool assigns to languages this parser does NOT claim.
+    /// Guards the specific failure mode above: mapping one of these to a
+    /// language we do support would emit that record's text under the
+    /// wrong suffix rather than simply leaving a gap open.
+    #[test]
+    fn unclaimed_macintosh_language_ids_stay_unmapped() {
+        for id in [
+            4,  /* nl-NL */
+            12, /* ar */
+            5,  /* sv */
+            8,  /* pt */
+        ] {
+            let record = mac_record(id);
+            assert_eq!(
+                TTFParser::language_suffix(&record),
+                None,
+                "Macintosh language ID {id} is not a language this parser claims; \
+                 mapping it would mislabel that record's text",
+            );
+        }
+    }
 
     #[test]
     fn test_ttf_signature_v1() {
