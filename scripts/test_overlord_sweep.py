@@ -1525,6 +1525,46 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         self.assertEqual(pushed, [])
 
 
+class EmptyRevertIsNotAFailureTests(unittest.TestCase):
+    """"Nothing to revert" and "cannot revert" are opposites.
+
+    git revert exits NON-ZERO with "nothing to commit, working tree clean"
+    when the revert would change nothing -- the contribution is already
+    absent. The handler read stderr, which git leaves EMPTY for this case
+    (the message goes to stdout), and reported failure.
+
+    Measured 2026-07-27 on the real sweep/tags-2026-07-27-5: squads
+    exif-core and panasonic-leica both contributed the SAME fix (identical
+    patch-id e906c487dec2709f5203d30d5d7ddf6a3b65de20), so the second merge
+    added nothing and reverting it was a no-op. That aborted the entire
+    sweep and blocked every other squad's verified work from publishing.
+    Against the real merge commit: current code returned (False, ''), the
+    fix returns (True, 'nothing to revert (contribution already absent)').
+    """
+
+    def test_empty_merge_revert_counts_as_reverted(self):
+        def run_git(args, repo_root, input_text=None):
+            if args[:1] == ["revert"] and "--abort" not in args:
+                # Exactly what git emits: rc 1, message on STDOUT, stderr empty.
+                return 1, "nothing to commit, working tree clean\n", ""
+            return 0, "", ""
+        ok, msg = overlord_sweep.revert_squad_contribution(
+            "/unused", {"mode": "merge", "merge_sha": "deadbeef", "squad": "x"}, run_git)
+        self.assertTrue(ok, "an already-absent contribution must count as reverted")
+        self.assertIn("nothing to revert", msg)
+
+    def test_a_GENUINE_revert_failure_is_still_a_failure(self):
+        """The distinction that matters: a conflict is not an empty diff."""
+        def run_git(args, repo_root, input_text=None):
+            if args[:1] == ["revert"] and "--abort" not in args:
+                return 1, "", "error: could not revert deadbeef... CONFLICT (content)\n"
+            return 0, "", ""
+        ok, msg = overlord_sweep.revert_squad_contribution(
+            "/unused", {"mode": "merge", "merge_sha": "deadbeef", "squad": "x"}, run_git)
+        self.assertFalse(ok, "a real conflict must still block the push")
+        self.assertIn("CONFLICT", msg)
+
+
 class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
     """DEFECT 1: bisect_sweep_failure INFERRED "the offender is no longer
     on the branch" from `offenders`/`surviving_squads` instead of
