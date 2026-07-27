@@ -42,6 +42,7 @@ const PID_LASTPRINTED: u32 = 0x0B;
 const PID_CREATE_DTM: u32 = 0x0C;
 const PID_LASTSAVE_DTM: u32 = 0x0D;
 const PID_PAGECOUNT: u32 = 0x0E;
+const PID_DOC_BYTES: u32 = 0x04;
 
 /// Property IDs for DocumentSummaryInformation
 const PID_COMPANY: u32 = 0x0F;
@@ -209,65 +210,86 @@ pub fn parse_property_set(data: &[u8]) -> Result<MetadataMap> {
         return Ok(metadata);
     }
 
-    // Parse first section header (FMTID + offset)
-    let section_offset = reader.u32_at(44).unwrap_or(0) as usize;
+    // Section identifiers begin at offset 32 (after 28-byte header + 4 reserved).
+    // Each section identifier: 16-byte FMTID + 4-byte offset = 20 bytes.
+    let mut section_list_off = 32usize;
 
-    if data.len() < section_offset + 8 {
-        return Ok(metadata);
-    }
-
-    // Parse section
-    let section_size = reader.u32_at(section_offset as u64).unwrap_or(0) as usize;
-    let num_properties = reader.u32_at((section_offset + 4) as u64).unwrap_or(0);
-
-    if num_properties == 0 || num_properties > 1000 {
-        return Ok(metadata);
-    }
-
-    // Parse property ID/offset pairs
-    let prop_list_offset = section_offset + 8;
-
-    for i in 0..num_properties as usize {
-        let entry_offset = prop_list_offset + (i * 8);
-        if data.len() < entry_offset + 8 {
+    for _sec in 0..num_sections as usize {
+        if data.len() < section_list_off + 20 {
             break;
         }
+        let fmtid = &data[section_list_off..section_list_off + 16];
+        let section_offset = reader.u32_at((section_list_off + 16) as u64).unwrap_or(0) as usize;
+        section_list_off += 20;
 
-        let prop_id = reader.u32_at(entry_offset as u64).unwrap_or(0);
-        let prop_offset = reader.u32_at((entry_offset + 4) as u64).unwrap_or(0) as usize;
-        let abs_offset = section_offset + prop_offset;
-
-        if data.len() < abs_offset + 4 {
+        if section_offset == 0 || data.len() < section_offset + 8 {
             continue;
         }
 
-        // Parse property type
-        let vt_type = reader.u16_at(abs_offset as u64).unwrap_or(0);
-        let value_offset = abs_offset + 4;
+        let section_size = reader.u32_at(section_offset as u64).unwrap_or(0) as usize;
+        let num_properties = reader.u32_at((section_offset + 4) as u64).unwrap_or(0);
 
-        if let Some(value) = parse_property_value(data, value_offset, vt_type) {
-            let tag_name = match prop_id {
-                PID_CODEPAGE => "FlashPix:CodePage",
-                PID_TITLE => "FlashPix:Title",
-                PID_SUBJECT => "FlashPix:Subject",
-                PID_AUTHOR => "FlashPix:Author",
-                PID_KEYWORDS => "FlashPix:Keywords",
-                PID_COMMENTS => "FlashPix:Comments",
-                PID_TEMPLATE => "FlashPix:Template",
-                PID_LASTAUTHOR => "FlashPix:LastModifiedBy",
-                PID_REVNUMBER => "FlashPix:RevisionNumber",
-                PID_EDITTIME => "FlashPix:TotalEditTime",
-                PID_LASTPRINTED => "FlashPix:LastPrinted",
-                PID_CREATE_DTM => "FlashPix:CreateDate",
-                PID_LASTSAVE_DTM => "FlashPix:ModifyDate",
-                PID_PAGECOUNT => "FlashPix:Pages",
-                PID_COMPANY => "FlashPix:Company",
-                PID_MANAGER => "FlashPix:Manager",
-                PID_CATEGORY => "FlashPix:Category",
-                _ => continue,
-            };
+        if num_properties == 0 || num_properties > 1000 {
+            continue;
+        }
 
-            metadata.insert(tag_name, value);
+        let is_summary = fmtid == FMTID_SUMMARY_INFO;
+        let is_doc = fmtid == FMTID_DOC_SUMMARY_INFO;
+        if !is_summary && !is_doc {
+            continue;
+        }
+
+        let prop_list_offset = section_offset + 8;
+
+        for i in 0..num_properties as usize {
+            let entry_offset = prop_list_offset + (i * 8);
+            if data.len() < entry_offset + 8 {
+                break;
+            }
+
+            let prop_id = reader.u32_at(entry_offset as u64).unwrap_or(0);
+            let prop_offset = reader.u32_at((entry_offset + 4) as u64).unwrap_or(0) as usize;
+            let abs_offset = section_offset + prop_offset;
+
+            if data.len() < abs_offset + 4 {
+                continue;
+            }
+
+            let vt_type = reader.u16_at(abs_offset as u64).unwrap_or(0);
+            let value_offset = abs_offset + 4;
+
+            if let Some(value) = parse_property_value(data, value_offset, vt_type) {
+                let tag_name = if is_summary {
+                    match prop_id {
+                        PID_CODEPAGE => "FlashPix:CodePage",
+                        PID_TITLE => "FlashPix:Title",
+                        PID_SUBJECT => "FlashPix:Subject",
+                        PID_AUTHOR => "FlashPix:Author",
+                        PID_KEYWORDS => "FlashPix:Keywords",
+                        PID_COMMENTS => "FlashPix:Comments",
+                        PID_TEMPLATE => "FlashPix:Template",
+                        PID_LASTAUTHOR => "FlashPix:LastModifiedBy",
+                        PID_REVNUMBER => "FlashPix:RevisionNumber",
+                        PID_EDITTIME => "FlashPix:TotalEditTime",
+                        PID_LASTPRINTED => "FlashPix:LastPrinted",
+                        PID_CREATE_DTM => "FlashPix:CreateDate",
+                        PID_LASTSAVE_DTM => "FlashPix:ModifyDate",
+                        PID_PAGECOUNT => "FlashPix:Pages",
+                        _ => continue,
+                    }
+                } else if is_doc {
+                    match prop_id {
+                        PID_CATEGORY => "FlashPix:Category",
+                        PID_MANAGER => "FlashPix:Manager",
+                        PID_COMPANY => "FlashPix:Company",
+                        PID_DOC_BYTES => "FlashPix:Bytes",
+                        _ => continue,
+                    }
+                } else {
+                    unreachable!();
+                };
+                metadata.insert(tag_name, value);
+            }
         }
     }
 
