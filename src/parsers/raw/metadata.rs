@@ -42,8 +42,12 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0xC619 // BlackLevelRepeatDim
+            0xC616 // CFAPlaneColor
+                | 0xC617 // CFALayout
+                | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
+                | 0xC61F // DefaultCropOrigin
+                | 0xC620 // DefaultCropSize
                 | 0xC62D // BayerGreenSplit
                 | 0xC632 // AntiAliasStrength
                 | 0xC65C // BestQualityScale
@@ -351,6 +355,44 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             })
                     } else if format == RawFormat::PanasonicRW2
                         && ifd_index == 0
+                        && *tag_id == 0x828E
+                    {
+                        // CFAPattern2 in DNG IFD0: format as space-separated bytes.
+                        // In SubIFD this is handled by the dedicated 0x828E path;
+                        // this arm services the rarer IFD0 placement.
+                        TagValue::new_string(format_cfa_pattern2(bytes, *value_count))
+                    } else if format == RawFormat::AdobeDNG
+                        && ifd_index == 0
+                        && *tag_id == 0xC616
+                    {
+                        // CFAPlaneColor: BYTE array → comma-separated color names.
+                        format_cfa_plane_color(bytes, *value_count)
+                            .map(TagValue::new_string)
+                            .unwrap_or_else(|| {
+                                raw_bytes_to_simple_tag_value(
+                                    bytes,
+                                    *field_type,
+                                    *value_count,
+                                    byte_order,
+                                )
+                            })
+                    } else if format == RawFormat::AdobeDNG
+                        && ifd_index == 0
+                        && *tag_id == 0xC617
+                    {
+                        // CFALayout: SHORT with PrintConv.
+                        format_cfa_layout(bytes, *field_type, *value_count, byte_order)
+                            .map(TagValue::new_string)
+                            .unwrap_or_else(|| {
+                                raw_bytes_to_simple_tag_value(
+                                    bytes,
+                                    *field_type,
+                                    *value_count,
+                                    byte_order,
+                                )
+                            })
+                    } else if format == RawFormat::PanasonicRW2
+                        && ifd_index == 0
                         && *tag_id == 0x000B
                     {
                         format_panasonic_raw_compression(
@@ -532,7 +574,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             // group for all formats, including NEF.
                             if tag_id == 0x828E {
                                 metadata.insert(
-                                    lookup_tag_name(tag_id, sub_ifd_name),
+                                    lookup_raw_tag_name(tag_id, sub_ifd_name, format),
                                     TagValue::new_string(format_cfa_pattern2(
                                         raw_bytes.as_ref(),
                                         value_count,
@@ -548,22 +590,32 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             };
                             let bytes = raw_bytes.as_ref();
                             let tag_value = if format == RawFormat::AdobeDNG {
-                                format_dng_integer_array(
+                                if let Some(value) = format_exif_display_value(
                                     tag_id,
                                     bytes,
                                     field_type,
                                     value_count,
                                     byte_order,
-                                )
-                                .map(TagValue::new_string)
-                                .unwrap_or_else(|| {
+                                ) {
+                                    TagValue::new_string(value)
+                                } else if let Some(value) =
+                                    format_dng_integer_array(
+                                        tag_id,
+                                        bytes,
+                                        field_type,
+                                        value_count,
+                                        byte_order,
+                                    )
+                                {
+                                    TagValue::new_string(value)
+                                } else {
                                     raw_bytes_to_simple_tag_value(
                                         bytes,
                                         field_type,
                                         value_count,
                                         byte_order,
                                     )
-                                })
+                                }
                             } else {
                                 raw_bytes_to_simple_tag_value(
                                     bytes,
@@ -767,9 +819,22 @@ fn format_dng_integer_array(
     value_count: u32,
     byte_order: ByteOrder,
 ) -> Option<String> {
-    let component_size = match tag_id {
-        0xC619 if field_type == 3 => 2, // BlackLevelRepeatDim: SHORT[2]
-        0xC68D if field_type == 4 => 4, // ActiveArea: LONG[4]
+    // DNG integer-array tags are SHORT or LONG arrays. Validate the
+    // type before reading, then format all components space-separated.
+    if !matches!(
+        tag_id,
+        0xC619 // BlackLevelRepeatDim
+            | 0xC68D // ActiveArea
+            | 0x828D // CFARepeatPatternDim
+            | 0xC61F // DefaultCropOrigin
+            | 0xC620 // DefaultCropSize
+    ) {
+        return None;
+    }
+
+    let component_size = match field_type {
+        3 => 2, // SHORT
+        4 => 4, // LONG
         _ => return None,
     };
 
@@ -910,6 +975,36 @@ fn format_exif_display_value(
             2 => Some("Hard".to_string()),
             _ => None,
         },
+        // CFAPlaneColor: BYTE array → comma-separated color names.
+        0xC616 if field_type == 1 => {
+            let count = usize::try_from(value_count).ok()?;
+            let color_bytes = bytes.get(..count)?;
+            if color_bytes.is_empty() {
+                return None;
+            }
+            let mut names = Vec::with_capacity(count);
+            for &c in color_bytes {
+                let name = match c {
+                    0 => "Red".to_string(),
+                    1 => "Green".to_string(),
+                    2 => "Blue".to_string(),
+                    3 => "Cyan".to_string(),
+                    4 => "Magenta".to_string(),
+                    5 => "Yellow".to_string(),
+                    6 => "White".to_string(),
+                    // ExifTool prints unrecognized values as decimal numbers
+                    _ => c.to_string(),
+                };
+                names.push(name);
+            }
+            Some(names.join(", "))
+        }
+        // CFALayout: SHORT → PrintConv.
+        0xC617 if field_type == 3 && value_count >= 1 => {
+            format_cfa_layout_value(read_tiff_u16(bytes, byte_order)?)
+        }
+        // CFAPattern2: BYTE array → space-separated integers.
+        0x828E if field_type == 1 => Some(format_cfa_pattern2(bytes, value_count)),
         _ => None,
     }
 }
@@ -949,6 +1044,59 @@ fn format_panasonic_cfa_pattern(
         _ => return None,
     };
     Some(pattern.to_string())
+}
+
+/// Format CFAPlaneColor (0xC616): BYTE array → comma-separated color names.
+fn format_cfa_plane_color(bytes: &[u8], value_count: u32) -> Option<String> {
+    let count = usize::try_from(value_count).ok()?;
+    let color_bytes = bytes.get(..count)?;
+    if color_bytes.is_empty() {
+        return None;
+    }
+    let mut names = Vec::with_capacity(count);
+    for &c in color_bytes {
+        let name = match c {
+            0 => "Red".to_string(),
+            1 => "Green".to_string(),
+            2 => "Blue".to_string(),
+            3 => "Cyan".to_string(),
+            4 => "Magenta".to_string(),
+            5 => "Yellow".to_string(),
+            6 => "White".to_string(),
+            _ => c.to_string(),
+        };
+        names.push(name);
+    }
+    Some(names.join(", "))
+}
+
+/// Format CFALayout value (SHORT) → PrintConv string.
+fn format_cfa_layout_value(value: u16) -> Option<String> {
+    match value {
+        1 => Some("Rectangular".to_string()),
+        2 => Some("Staggered layout A".to_string()),
+        3 => Some("Staggered layout B".to_string()),
+        4 => Some("Staggered layout C".to_string()),
+        5 => Some("Staggered layout D".to_string()),
+        6 => Some("Staggered layout E".to_string()),
+        7 => Some("Staggered layout F".to_string()),
+        8 => Some("Staggered layout G".to_string()),
+        9 => Some("Staggered layout H".to_string()),
+        _ => None,
+    }
+}
+
+/// Format CFALayout (0xC617): SHORT → PrintConv string.
+fn format_cfa_layout(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    if field_type != 3 || value_count < 1 {
+        return None;
+    }
+    format_cfa_layout_value(read_tiff_u16(bytes, byte_order)?)
 }
 
 fn format_panasonic_raw_compression(
