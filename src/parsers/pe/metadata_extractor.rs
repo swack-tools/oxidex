@@ -220,18 +220,44 @@ pub fn extract_optional_metadata(
         )),
     );
 
-    // Subsystem
+    // Subsystem.
+    //
+    // Display strings are ExifTool's, verbatim, from the `Subsystem` PrintConv at
+    // offset 44 of the PE optional header (EXE.pm lines 312-328, ExifTool 13.55):
+    //
+    // ```text
+    //     44 => {
+    //         Name => 'Subsystem',
+    //         PrintConv => {
+    //             0 => 'Unknown',
+    //             1 => 'Native',
+    //             2 => 'Windows GUI',
+    //             3 => 'Windows command line',
+    //             5 => 'OS/2 command line', #5
+    //             7 => 'POSIX command line',
+    //             9 => 'Windows CE GUI',
+    //             10 => 'EFI application',
+    //             11 => 'EFI boot service',
+    //             12 => 'EFI runtime driver',
+    //             13 => 'EFI ROM', #6
+    //             14 => 'XBOX', #6
+    //         },
+    //     },
+    // ```
+    //
+    // Note the lowercase "application"/"boot service"/"runtime driver" and the
+    // all-caps "XBOX" -- these are ExifTool's exact spellings, not typos.
     let subsystem_name = match nt_header.subsystem {
         subsystem_types::IMAGE_SUBSYSTEM_UNKNOWN => "Unknown",
-        subsystem_types::IMAGE_SUBSYSTEM_NATIVE => "Native (Driver)",
+        subsystem_types::IMAGE_SUBSYSTEM_NATIVE => "Native",
         subsystem_types::IMAGE_SUBSYSTEM_WINDOWS_GUI => "Windows GUI",
         subsystem_types::IMAGE_SUBSYSTEM_WINDOWS_CUI => "Windows command line",
-        subsystem_types::IMAGE_SUBSYSTEM_OS2_CUI => "OS/2 Console",
-        subsystem_types::IMAGE_SUBSYSTEM_POSIX_CUI => "POSIX Console",
-        subsystem_types::IMAGE_SUBSYSTEM_EFI_APPLICATION => "EFI Application",
-        subsystem_types::IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER => "EFI Boot Service Driver",
-        subsystem_types::IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER => "EFI Runtime Driver",
-        subsystem_types::IMAGE_SUBSYSTEM_XBOX => "Xbox",
+        subsystem_types::IMAGE_SUBSYSTEM_OS2_CUI => "OS/2 command line",
+        subsystem_types::IMAGE_SUBSYSTEM_POSIX_CUI => "POSIX command line",
+        subsystem_types::IMAGE_SUBSYSTEM_EFI_APPLICATION => "EFI application",
+        subsystem_types::IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER => "EFI boot service",
+        subsystem_types::IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER => "EFI runtime driver",
+        subsystem_types::IMAGE_SUBSYSTEM_XBOX => "XBOX",
         _ => "Unknown",
     };
     metadata.insert(
@@ -1203,30 +1229,41 @@ mod tests {
             base_of_code: 0x1000,
         };
 
-        // Test various subsystem types
-        let test_cases = vec![
-            (subsystem_types::IMAGE_SUBSYSTEM_NATIVE, "Native (Driver)"),
-            (subsystem_types::IMAGE_SUBSYSTEM_WINDOWS_GUI, "Windows GUI"),
-            (
-                subsystem_types::IMAGE_SUBSYSTEM_WINDOWS_CUI,
-                "Windows command line",
-            ),
-            (subsystem_types::IMAGE_SUBSYSTEM_OS2_CUI, "OS/2 Console"),
-            (subsystem_types::IMAGE_SUBSYSTEM_POSIX_CUI, "POSIX Console"),
-            (
-                subsystem_types::IMAGE_SUBSYSTEM_EFI_APPLICATION,
-                "EFI Application",
-            ),
-            (
-                subsystem_types::IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER,
-                "EFI Boot Service Driver",
-            ),
-            (
-                subsystem_types::IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER,
-                "EFI Runtime Driver",
-            ),
-            (subsystem_types::IMAGE_SUBSYSTEM_XBOX, "Xbox"),
+        // (raw subsystem value, ExifTool display string).
+        //
+        // Both columns are transcribed literally from the `Subsystem` PrintConv at
+        // offset 44 of the PE optional header, EXE.pm lines 315-326 (ExifTool 13.55):
+        // `1 => 'Native'`, `5 => 'OS/2 command line'`, `7 => 'POSIX command line'`,
+        // `10 => 'EFI application'`, `11 => 'EFI boot service'`,
+        // `12 => 'EFI runtime driver'`, `14 => 'XBOX'`.
+        //
+        // Raw numbers -- not the named constants -- are used on the left so this
+        // also pins the tag-value axis; the constants are checked against those
+        // numbers just below.
+        let test_cases: Vec<(u16, &str)> = vec![
+            (0, "Unknown"),
+            (1, "Native"),
+            (2, "Windows GUI"),
+            (3, "Windows command line"),
+            (5, "OS/2 command line"),
+            (7, "POSIX command line"),
+            (10, "EFI application"),
+            (11, "EFI boot service"),
+            (12, "EFI runtime driver"),
+            (14, "XBOX"),
         ];
+
+        // Value axis: the named constants must be the PE-spec numbers ExifTool keys on.
+        assert_eq!(subsystem_types::IMAGE_SUBSYSTEM_UNKNOWN, 0);
+        assert_eq!(subsystem_types::IMAGE_SUBSYSTEM_NATIVE, 1);
+        assert_eq!(subsystem_types::IMAGE_SUBSYSTEM_WINDOWS_GUI, 2);
+        assert_eq!(subsystem_types::IMAGE_SUBSYSTEM_WINDOWS_CUI, 3);
+        assert_eq!(subsystem_types::IMAGE_SUBSYSTEM_OS2_CUI, 5);
+        assert_eq!(subsystem_types::IMAGE_SUBSYSTEM_POSIX_CUI, 7);
+        assert_eq!(subsystem_types::IMAGE_SUBSYSTEM_EFI_APPLICATION, 10);
+        assert_eq!(subsystem_types::IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER, 11);
+        assert_eq!(subsystem_types::IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER, 12);
+        assert_eq!(subsystem_types::IMAGE_SUBSYSTEM_XBOX, 14);
 
         for (subsystem_type, expected_name) in test_cases {
             let nt_header = OptionalHeaderNT {
