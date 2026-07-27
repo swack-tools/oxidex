@@ -39,15 +39,24 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
         // EXIF CFAPattern name is registered under tag 0xA302. ExifTool
         // assigns the Panasonic tag to its EXIF group.
         lookup_tag_name(0xA302, "EXIF")
+    } else if format == RawFormat::AdobeDNG && tag_id == 0x828D {
+        "EXIF:CFARepeatPatternDim".to_string()
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0xC619 // BlackLevelRepeatDim
+            0x828E // CFAPattern2
+                | 0xC616 // CFAPlaneColor
+                | 0xC617 // CFALayout
+                | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
+                | 0xC61F // DefaultCropOrigin
+                | 0xC620 // DefaultCropSize
                 | 0xC62D // BayerGreenSplit
                 | 0xC632 // AntiAliasStrength
+                | 0xC61E // DefaultScale
                 | 0xC65C // BestQualityScale
                 | 0xC68D // ActiveArea
+                | 0xC68E // MaskedAreas
         )
     {
         lookup_tag_name(tag_id, "EXIF")
@@ -377,13 +386,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     ) {
                         TagValue::new_string(value)
                     } else if format == RawFormat::AdobeDNG {
-                        format_dng_integer_array(
+                        format_dng_display_value(
                             *tag_id,
                             bytes,
                             *field_type,
                             *value_count,
                             byte_order,
                         )
+                        .or_else(|| format_dng_integer_array(
+                            *tag_id, bytes, *field_type, *value_count, byte_order,
+                        ))
                         .map(TagValue::new_string)
                         .unwrap_or_else(|| {
                             raw_bytes_to_simple_tag_value(
@@ -451,6 +463,65 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     }
                 }
 
+                // Extract DNG preview images from SubIFDs (strip-based JPEG data)
+                if format == RawFormat::AdobeDNG && !sub_ifd_offsets.is_empty() {
+                    let mut preview_images: Vec<(u32, u32, Vec<u8>)> = Vec::new();
+                    for &sub_ifd_offset in &sub_ifd_offsets {
+                        if let Ok(sub_tags) = parse_ifd(&reader, sub_ifd_offset, byte_order) {
+                            let mut strip_offsets: Vec<u32> = Vec::new();
+                            let mut strip_byte_counts: Vec<u32> = Vec::new();
+                            for (tag_id, _field_type, _value_count, raw_bytes) in &sub_tags {
+                                let bytes = raw_bytes.as_ref();
+                                if *tag_id == 0x0111 {
+                                    // StripOffsets
+                                    let count = bytes.len() / 4;
+                                    for i in 0..count {
+                                        let offset_bytes = &bytes[i * 4..(i + 1) * 4];
+                                        strip_offsets.push(read_u32(offset_bytes, byte_order));
+                                    }
+                                } else if *tag_id == 0x0117 {
+                                    // StripByteCounts
+                                    let count = bytes.len() / 4;
+                                    for i in 0..count {
+                                        let offset_bytes = &bytes[i * 4..(i + 1) * 4];
+                                        strip_byte_counts.push(read_u32(offset_bytes, byte_order));
+                                    }
+                                }
+                            }
+                            if !strip_offsets.is_empty() && strip_offsets.len() == strip_byte_counts.len() {
+                                let mut image_data = Vec::new();
+                                for i in 0..strip_offsets.len() {
+                                    let off = strip_offsets[i] as usize;
+                                    let len = strip_byte_counts[i] as usize;
+                                    if off + len <= data.len() {
+                                        image_data.extend_from_slice(&data[off..off + len]);
+                                    }
+                                }
+                                if !image_data.is_empty() {
+                                    let start_offset = strip_offsets[0];
+                                    let total_length = strip_byte_counts.iter().sum::<u32>();
+                                    preview_images.push((start_offset, total_length, image_data));
+                                }
+                            }
+                        }
+                    }
+                    if !preview_images.is_empty() {
+                        let (off0, len0, data0) = &preview_images[0];
+                        metadata.insert("EXIF:PreviewImageStart".to_string(), TagValue::Integer(*off0 as i64));
+                        metadata.insert("EXIF:PreviewImageLength".to_string(), TagValue::Integer(*len0 as i64));
+                        metadata.insert("EXIF:PreviewImage".to_string(), TagValue::Binary(data0.clone()));
+                        if preview_images.len() >= 2 {
+                            let (off1, len1, data1) = &preview_images[1];
+                            metadata.insert("EXIF:JpgFromRawStart".to_string(), TagValue::Integer(*off1 as i64));
+                            metadata.insert("EXIF:JpgFromRawLength".to_string(), TagValue::Integer(*len1 as i64));
+                            metadata.insert("EXIF:JpgFromRaw".to_string(), TagValue::Binary(data1.clone()));
+                        } else {
+                            // only one preview available; ExifTool also emits JpgFromRaw as
+                            // the same data, but we skip to avoid duplication
+                        }
+                    }
+                }
+
                 // Parse MakerNote if present and we have the camera make
                 if let (Some(make), Some(mn_data)) = (camera_make.as_ref(), makernote_data.as_ref())
                 {
@@ -513,7 +584,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             // uses, for consistency.
                             if tag_id == 0x828E {
                                 metadata.insert(
-                                    lookup_tag_name(tag_id, sub_ifd_name),
+                                    lookup_raw_tag_name(tag_id, sub_ifd_name, format),
                                     TagValue::new_string(format_cfa_pattern2(
                                         raw_bytes.as_ref(),
                                         value_count,
@@ -521,10 +592,36 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 );
                                 continue;
                             }
+                            if tag_id == 0x828D {
+                                // CFARepeatPatternDim: SHORT[2]
+                                let bytes = raw_bytes.as_ref();
+                                if bytes.len() >= 4 {
+                                    let dim1 = read_tiff_u16(bytes, byte_order).unwrap_or(0);
+                                    let dim2 = read_tiff_u16(
+                                        bytes.get(2..).unwrap_or(&[]),
+                                        byte_order,
+                                    )
+                                    .unwrap_or(0);
+                                    let formatted = format!("{} {}", dim1, dim2);
+                                    metadata.insert(
+                                        lookup_raw_tag_name(tag_id, sub_ifd_name, format),
+                                        TagValue::new_string(formatted),
+                                    );
+                                }
+                                continue;
+                            }
 
                             let tag_name = lookup_raw_tag_name(tag_id, sub_ifd_name, format);
                             let bytes = raw_bytes.as_ref();
                             let tag_value = if format == RawFormat::AdobeDNG {
+                                format_dng_display_value(
+                                    tag_id,
+                                    bytes,
+                                    field_type,
+                                    value_count,
+                                    byte_order,
+                                )
+                                .or_else(|| {
                                 format_dng_integer_array(
                                     tag_id,
                                     bytes,
@@ -532,6 +629,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     value_count,
                                     byte_order,
                                 )
+                                })
                                 .map(TagValue::new_string)
                                 .unwrap_or_else(|| {
                                     raw_bytes_to_simple_tag_value(
@@ -746,7 +844,11 @@ fn format_dng_integer_array(
 ) -> Option<String> {
     let component_size = match tag_id {
         0xC619 if field_type == 3 => 2, // BlackLevelRepeatDim: SHORT[2]
+        0x828D if field_type == 3 => 2, // CFARepeatPatternDim: SHORT[2]
+        0xC61F if field_type == 3 => 2, // DefaultCropOrigin: SHORT[2]
+        0xC620 if field_type == 3 => 2, // DefaultCropSize: SHORT[2]
         0xC68D if field_type == 4 => 4, // ActiveArea: LONG[4]
+        0xC68E if field_type == 4 => 4, // MaskedAreas: LONG[4]
         _ => return None,
     };
 
@@ -783,6 +885,69 @@ fn format_dng_integer_array(
     };
 
     Some(formatted.join(" "))
+}
+
+/// Format DNG tags that require per-value PrintConv lookups.
+fn format_dng_display_value(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    match tag_id {
+        // CFAPattern2: BYTE array displayed as space-separated values.
+        0x828E if field_type == 1 => {
+            let count = usize::try_from(value_count).ok()?;
+            Some(format_cfa_pattern2(bytes, count as u32))
+        }
+        // DefaultScale: RATIONAL[2] — two scale factors.
+        0xC61E if field_type == 5 && value_count >= 2 => {
+            let values = bytes.get(..16)?;
+            let s1 = format_rational_as_string(&values[0..8], byte_order)?;
+            let s2 = format_rational_as_string(&values[8..16], byte_order)?;
+            Some(format!("{} {}", s1, s2))
+        }
+        // CFAPlaneColor: BYTE array, each byte maps to a color name.
+        0xC616 if field_type == 1 => {
+            let count = usize::try_from(value_count).ok()?;
+            let colors = bytes.get(..count)?;
+            if colors.is_empty() {
+                return None;
+            }
+            let mapped: Option<Vec<&str>> = colors
+                .iter()
+                .map(|&c| match c {
+                    0 => Some("Red"),
+                    1 => Some("Green"),
+                    2 => Some("Blue"),
+                    3 => Some("Cyan"),
+                    4 => Some("Magenta"),
+                    5 => Some("Yellow"),
+                    6 => Some("White"),
+                    _ => None,
+                })
+                .collect();
+            Some(mapped?.join(","))
+        }
+        // CFALayout: SHORT with enum.
+        0xC617 if field_type == 3 && value_count >= 1 => {
+            let layout = read_tiff_u16(bytes, byte_order)?;
+            match layout {
+                1 => Some("Rectangular".to_string()),
+                2 => Some("Even columns offset down 1/2 row".to_string()),
+                3 => Some("Even columns offset up 1/2 row".to_string()),
+                4 => Some("Even rows offset right 1/2 column".to_string()),
+                5 => Some("Even rows offset left 1/2 column".to_string()),
+                6 => Some("Even rows offset up 1/2 row, even columns offset left 1/2 column".to_string()),
+                7 => Some("Even rows offset up 1/2 row, even columns offset right 1/2 column".to_string()),
+                8 => Some("Even rows offset down 1/2 row, even columns offset left 1/2 column".to_string()),
+                9 => Some("Even rows offset down 1/2 row, even columns offset right 1/2 column".to_string()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 fn read_tiff_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
@@ -1070,6 +1235,41 @@ mod dng_integer_array_tests {
     }
 
     #[test]
+    fn formats_dng_integer_array_default_crop() {
+        // SHORT[2] little-endian
+        assert_eq!(
+            format_dng_integer_array(0xC61F, &[10, 0, 5, 0], 3, 2, ByteOrder::LittleEndian)
+                .as_deref(),
+            Some("10 5")
+        );
+        assert_eq!(
+            format_dng_integer_array(0xC620, &[128, 13, 0, 9], 3, 2, ByteOrder::LittleEndian)
+                .as_deref(),
+            Some("3456 2304")
+        );
+    }
+
+    #[test]
+    fn formats_dng_cfa_layout() {
+        assert_eq!(
+            format_dng_display_value(0xC617, &[1, 0], 3, 1, ByteOrder::LittleEndian).as_deref(),
+            Some("Rectangular")
+        );
+        assert_eq!(
+            format_dng_display_value(0xC617, &[2, 0], 3, 1, ByteOrder::LittleEndian).as_deref(),
+            Some("Even columns offset down 1/2 row")
+        );
+    }
+
+    #[test]
+    fn formats_dng_cfa_plane_color() {
+        assert_eq!(
+            format_dng_display_value(0xC616, &[0, 1, 2], 1, 3, ByteOrder::LittleEndian).as_deref(),
+            Some("Red,Green,Blue")
+        );
+    }
+
+    #[test]
     fn ignores_unrelated_dng_array_tags() {
         assert_eq!(
             format_dng_integer_array(0xC61A, &[1, 0], 3, 1, ByteOrder::LittleEndian),
@@ -1312,6 +1512,82 @@ fn extract_dng_tags(metadata: &mut MetadataMap) {
             "DNG:AvailableColorCalibration".to_string(),
             TagValue::new_string(available_color_tags.join(", ")),
         );
+    }
+
+    // --- PreviewImage / PreviewImageLength ---
+    // ExifTool extracts PreviewImage from the first IFD that contains a
+    // JPEG-compressed thumbnail (typically IFD0 for DNG files).
+    fn try_extract_preview(
+        metadata: &MetadataMap,
+        ifd_name: &str,
+    ) -> Option<(i64, i64)> {
+        let compression_key = lookup_tag_name(0x0103, ifd_name);
+        let jpeg_offset_key = lookup_tag_name(0x0201, ifd_name);
+        let jpeg_length_key = lookup_tag_name(0x0202, ifd_name);
+
+        let compression = metadata.get(&compression_key)?;
+        if *compression != TagValue::Integer(6) {
+            return None;
+        }
+
+        let offset = metadata
+            .get(&jpeg_offset_key)
+            .and_then(|v| if let TagValue::Integer(i) = v { Some(*i) } else { None })?;
+        let length = metadata
+            .get(&jpeg_length_key)
+            .and_then(|v| if let TagValue::Integer(i) = v { Some(*i) } else { None })?;
+
+        if length <= 0 {
+            return None;
+        }
+
+        Some((offset, length))
+    }
+
+    let preview_ifds = ["IFD0", "SubIFD0", "IFD1"];
+    let mut preview_emitted = false;
+    for ifd_name in &preview_ifds {
+        if let Some((_offset, length)) = try_extract_preview(metadata, ifd_name) {
+            if !preview_emitted {
+                metadata.insert(
+                    "EXIF:PreviewImage".to_string(),
+                    TagValue::new_string(format!(
+                        "(Binary data {} bytes, use -b option to extract)",
+                        length
+                    )),
+                );
+                metadata.insert(
+                    "EXIF:PreviewImageLength".to_string(),
+                    TagValue::new_integer(length),
+                );
+                preview_emitted = true;
+            }
+        }
+    }
+
+    // --- JpgFromRaw / JpgFromRawLength / JpgFromRawStart ---
+    // These are derived from the largest JPEG preview, which typically lives
+    // in SubIFD0 or IFD1.
+    let jpg_ifds = ["IFD1", "SubIFD0"];
+    for ifd_name in &jpg_ifds {
+        if let Some((offset, length)) = try_extract_preview(metadata, ifd_name) {
+            metadata.insert(
+                "EXIF:JpgFromRawStart".to_string(),
+                TagValue::new_integer(offset),
+            );
+            metadata.insert(
+                "EXIF:JpgFromRawLength".to_string(),
+                TagValue::new_integer(length),
+            );
+            metadata.insert(
+                "EXIF:JpgFromRaw".to_string(),
+                TagValue::new_string(format!(
+                    "(Binary data {} bytes, use -b option to extract)",
+                    length
+                )),
+            );
+            break;
+        }
     }
 }
 
