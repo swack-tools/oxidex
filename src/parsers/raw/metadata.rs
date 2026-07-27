@@ -265,6 +265,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         if let Err(error) = extract_rw2_embedded_exif_tags(bytes, &mut metadata) {
                             eprintln!("Warning: Failed to parse RW2 preview EXIF: {}", error);
                         }
+                        // Emit the JpgFromRaw binary itself (ExifTool EXIF:JpgFromRaw)
+                        metadata.insert(
+                            "EXIF:JpgFromRaw".to_string(),
+                            TagValue::Binary(bytes.to_vec()),
+                        );
+                        // Prevent further processing of this tag (generic code would emit it as a raw blob)
+                        continue;
                     }
 
                     // Check for EXIF Sub-IFD pointer (tag 0x8769)
@@ -449,6 +456,33 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if exif_make.is_some() {
                         camera_make = exif_make;
                     }
+
+                    // Parse Interoperability IFD (ExifIFD tag 0xA005) if present
+                    if let Some(interop_offset) = exif_tags.iter().find_map(|(tag_id, _, _, raw)| {
+                        if *tag_id == 0xA005 && raw.len() >= 4 {
+                            Some(read_u32(raw.as_ref(), byte_order) as u64)
+                        } else {
+                            None
+                        }
+                    }) {
+                        if let Ok(interop_tags) = parse_ifd(&reader, interop_offset, byte_order) {
+                            for (tag_id, field_type, value_count, raw_bytes) in interop_tags {
+                                let tag_name = lookup_tag_name(tag_id, "InteropIFD");
+                                let tag_value = if let Some(value) = format_exif_display_value(
+                                    tag_id,
+                                    raw_bytes.as_ref(),
+                                    field_type,
+                                    value_count,
+                                    byte_order,
+                                ) {
+                                    TagValue::new_string(value)
+                                } else {
+                                    raw_bytes_to_simple_tag_value(raw_bytes.as_ref(), field_type, value_count, byte_order)
+                                };
+                                metadata.insert(tag_name, tag_value);
+                            }
+                        }
+                    }
                 }
 
                 // Parse MakerNote if present and we have the camera make
@@ -502,6 +536,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
+                        let is_rw2 = format == RawFormat::PanasonicRW2;
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
                             // NEF maps SubIFD tags into the EXIF group and
                             // applies format-specific decoding where needed.
@@ -518,6 +553,20 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 }
                                 // Tags not handled specially fall through to the
                                 // generic path which renames them to EXIF: below.
+                            }
+
+                            // Panasonic RW2 maps its SubIFD (PanasonicRaw) tags into EXIF group
+                            // so that standard tags like ISO (0x8827) appear as EXIF:ISO.
+                            if is_rw2 {
+                                let tag_name = lookup_tag_name(tag_id, "EXIF");
+                                let tag_value = raw_bytes_to_simple_tag_value(
+                                    raw_bytes.as_ref(),
+                                    field_type,
+                                    value_count,
+                                    byte_order,
+                                );
+                                metadata.insert(tag_name, tag_value);
+                                continue;
                             }
 
                             // TIFF/EP tag 0x828E (CFAPattern2) is a plain
