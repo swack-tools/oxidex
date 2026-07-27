@@ -333,6 +333,15 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         (RawFormat::PanasonicRW2, 0, 0x001E) => {
                             format!("{}:BlackLevelBlue", ifd_name)
                         }
+                    (RawFormat::PanasonicRW2, 0, 0x0018) => {
+                        format!("{}:HighISOMultiplierRed", ifd_name)
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x0019) => {
+                        format!("{}:HighISOMultiplierGreen", ifd_name)
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x001A) => {
+                        format!("{}:HighISOMultiplierBlue", ifd_name)
+                    }
                         _ => lookup_raw_tag_name(canonical_tag_id, ifd_name, format),
                     };
                     let tag_value = if format == RawFormat::PanasonicRW2
@@ -350,6 +359,20 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 )
                             })
                     } else if format == RawFormat::PanasonicRW2
+                    && ifd_index == 0
+                    && matches!(*tag_id, 0x0018 | 0x0019 | 0x001A)
+                {
+                    format_panasonic_high_iso_multiplier(
+                        bytes,
+                        *field_type,
+                        *value_count,
+                        byte_order,
+                    )
+                    .map(TagValue::new_string)
+                    .unwrap_or_else(|| {
+                        raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
+                    })
+                } else if format == RawFormat::PanasonicRW2
                         && ifd_index == 0
                         && *tag_id == 0x000B
                     {
@@ -649,6 +672,8 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA402 // ExposureMode
                 | 0xA404 // DigitalZoomRatio
                 | 0xA408 // Contrast
+                | 0xA405 // FocalLengthIn35mmFormat
+                | 0xA407 // GainControl
         ) {
             continue;
         }
@@ -887,6 +912,19 @@ fn format_exif_display_value(
             2 => Some("Hard".to_string()),
             _ => None,
         },
+        // FocalLengthIn35mmFormat: SHORT[1], append " mm".
+        0xA405 if field_type == 3 && value_count >= 1 => {
+            read_tiff_u16(bytes, byte_order).map(|v| format!("{} mm", v))
+        }
+        // GainControl: SHORT[1], EXIF PrintConv mapping.
+        0xA407 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("None".to_string()),
+            1 => Some("Low gain up".to_string()),
+            2 => Some("High gain up".to_string()),
+            3 => Some("Low gain down".to_string()),
+            4 => Some("High gain down".to_string()),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -942,6 +980,23 @@ fn format_panasonic_raw_compression(
         34316 => Some("Panasonic RAW 1".to_string()),
         _ => None,
     }
+}
+
+/// Format PanasonicRaw HighISOMultiplier tags (0x0018–0x001A).
+///
+/// ExifTool's ValueConv divides the raw SHORT by 256.
+fn format_panasonic_high_iso_multiplier(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    if field_type != 3 || value_count < 1 {
+        return None;
+    }
+
+    let value = read_tiff_u16(bytes, byte_order)?;
+    Some(format!("{}", value as f64 / 256.0))
 }
 
 /// Decode EXIF tag 0xA302 (CFAPattern).
