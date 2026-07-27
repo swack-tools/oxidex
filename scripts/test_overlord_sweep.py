@@ -609,13 +609,41 @@ class EvaluatePostMergeTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(delta, 5)
 
-    def test_negative_component_fails(self):
+    def test_a_delta_shortfall_is_RECORDED_but_no_longer_blocks(self):
+        """The shortfall stays visible; it just stops gating the push.
+
+        measured is a MEASUREMENT of the merged whole, sum(Verified) is a SUM
+        of per-commit claims, and that comparison only holds when the claims
+        are disjoint. Across a sweep they routinely are not: two commits
+        fixing overlapping gaps in one format each honestly claim what they
+        closed, while the measurement counts each closed gap once.
+
+        Measured 2026-07-27 on three consecutive sweeps -- 40 < 101 and
+        35 < 65 -- each aborting the sweep and then sending bisection after an
+        offender that did not exist. In the last one that hunt MASKED a real
+        CR2 defect (a tag named 'EXIF:Higher resolution image exists', the
+        PrintConv value of OPIProxy used as a tag name), because no squad's
+        removal could clear a shortfall that was arithmetic, not causal.
+
+        Every claim is still verified per-commit twice over -- the worker's
+        recheck and the merger's targeted test plus comparison -- so nothing
+        is unguarded by demoting the sweep-level re-sum.
+        """
         pre = {"JPEG": {"gap_count": 10}}
         post = {"JPEG": {"gap_count": 10}}
         ok, delta, problems = overlord_sweep.evaluate_post_merge(pre, post, 2)
-        self.assertFalse(ok)
+        self.assertTrue(ok, "a delta shortfall alone must not block the sweep")
         self.assertEqual(delta, 0)
-        self.assertTrue(any("sum(Verified)" in p for p in problems))
+        self.assertTrue(any("sum(Verified)" in p for p in problems),
+                        "but it must still be RECORDED in the sweep problems")
+
+    def test_a_structural_problem_still_blocks_even_with_a_fine_delta(self):
+        """The clauses that say what the RESULT IS stay blocking."""
+        pre = {"JPEG": {"gap_count": 10, "extra_in_oxidex": []}}
+        post = {"JPEG": {"gap_count": 2, "extra_in_oxidex": [{"family": "EXIF", "name": "Bogus"}]}}
+        ok, _delta, problems = overlord_sweep.evaluate_post_merge(pre, post, 2)
+        self.assertFalse(ok)
+        self.assertTrue(any("new_oxidex_only" in p for p in problems))
 
     def test_duplicate_emission_fails_even_with_a_good_delta(self):
         pre = {"JPEG": {"gap_count": 10, "extra_in_oxidex": []}}
