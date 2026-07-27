@@ -238,8 +238,8 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         let ifd_name = match ifd_index {
             0 => "IFD0",
             1 => "IFD1",
-            n => {
-                eprintln!("Warning: Found IFD{} which is unusual", n);
+            _ => {
+                eprintln!("Warning: Found IFD{} which is unusual", ifd_index);
                 "IFD0" // Fallback
             }
         };
@@ -296,7 +296,19 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         continue; // Don't add pointer tag to metadata
                     }
 
-                    // Check for MakerNote tag (0x927C) - crucial for RAW format metadata
+                    // Canon CR2 IFD2 holds a JPEG preview whose length
+                    // ExifTool reports as EXIF:PreviewImageLength.
+                    if format == RawFormat::CanonCR2 && ifd_index == 2 && *tag_id == 0x0202 {
+                        let length = read_u32(bytes, byte_order);
+                        metadata.insert("EXIF:PreviewImageLength".to_string(), TagValue::new_integer(length as i64));
+                        metadata.insert("EXIF:PreviewImage".to_string(), TagValue::new_string(format!("(Binary data {} bytes, use -b option to extract)", length)));
+                        // Skip the rest of IFD2 tags to avoid introducing
+                        // oxidex-only groups (IFD2:Compression etc.).
+                        ifd_index += 1;
+                        continue;
+                    }
+
+                    // MakerNote tag (0x927C) - crucial for RAW format metadata
                     // MakerNotes contain manufacturer-specific camera settings
                     if *tag_id == 0x927C {
                         makernote_data = Some(bytes.to_vec());
@@ -1668,7 +1680,7 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 continue;
                             }
 
-                            let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
+                            let tag_name = lookup_tag_name(*tag_id, "EXIF");
                             let tag_value = raw_bytes_to_simple_tag_value(
                                 bytes,
                                 *field_type,
@@ -1697,6 +1709,51 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // CMT2 box: ExifIFD (standard EXIF tags like LensModel, OffsetTime)
+    if let Some(exif_tiff) = find_cr3_box(data, b"CMT2") {
+        if let Ok(byte_order) = detect_byte_order(exif_tiff) {
+            let first_offset = read_u32(&exif_tiff[4..8], byte_order) as u64;
+            let reader = SliceReader::new(exif_tiff);
+            if let Ok(exif_tags) = parse_ifd(&reader, first_offset, byte_order) {
+                for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                    let bytes = raw_bytes.as_ref();
+
+                    // EXIF IFD can contain MakerNote or Interop IFD pointers
+                    // that we ignore here (CMT3 is used for MakerNote).
+                    if *tag_id == 0x927C || *tag_id == 0xA005 {
+                        continue;
+                    }
+
+                    let tag_name = lookup_tag_name(*tag_id, "EXIF");
+                    let tag_value = raw_bytes_to_simple_tag_value(
+                        bytes,
+                        *field_type,
+                        *value_count,
+                        byte_order,
+                    );
+                    metadata.insert(tag_name, tag_value);
+                }
+            }
+        }
+    }
+
+    // CMT3 box: Canon MakerNote (may produce EXIF:OwnerName etc.)
+    if let Some(makernote_data) = find_cr3_box(data, b"CMT3") {
+        let mut makernote_tags = std::collections::HashMap::new();
+        if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
+            "Canon",
+            makernote_data,
+            ByteOrder::LittleEndian,
+            &mut makernote_tags,
+        ) {
+            eprintln!("Warning: Failed to parse CMT3 MakerNote: {}", e);
+        } else {
+            for (tag_name, tag_value) in makernote_tags {
+                metadata.insert(tag_name, TagValue::new_string(tag_value));
             }
         }
     }
