@@ -329,6 +329,10 @@ const TAG_COLOR_SPACE: u16 = 0xA001;
 const TAG_COMPONENTS_CONFIGURATION: u16 = 0x9101;
 const TAG_COMPRESSED_BITS_PER_PIXEL: u16 = 0x9102;
 const TAG_COMPRESSION: u16 = 0x0103;
+const TAG_COPYRIGHT: u16 = 0x8298;
+const TAG_DATETIME_ORIGINAL: u16 = 0x9003;
+const TAG_CREATE_DATE: u16 = 0x9004;
+const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
 
 /// Known compression values (IFD0 Compression tag)
 const COMPRESSION_LABELS: &[(u16, &str)] = &[
@@ -453,6 +457,16 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
                     .ok()?,
                 );
             }
+            TAG_COPYRIGHT if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    if !v.is_empty() {
+                        // Copyright lives in IFD0 per EXIF spec (0x8298 is IFD0 tag),
+                        // but ExifTool reports it under [EXIF] group for PDF images.
+                        let key = crate::tag_db::lookup_tag_name(TAG_COPYRIGHT, "IFD0");
+                        metadata.insert(key, crate::core::TagValue::new_string(v));
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -510,7 +524,12 @@ fn parse_exif_ifd(
                     );
                 }
             }
-            TAG_BRIGHTNESS_VALUE if field_type == 5 => {
+            TAG_BRIGHTNESS_VALUE if field_type == 5 || field_type == 10 => {
+                // type 5 = unsigned rational, type 10 = signed rational (SRATIONAL)
+                // Read as unsigned first; if type is 10, interpret as signed.
+                // The raw APEX value is simply num/den.
+                // We read both as u32, but for signed rational we'll cast to i32
+                // only when needed for negative values.
                 if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
                     let val_str = if den == 0 {
                         "0".to_string()
@@ -521,6 +540,54 @@ fn parse_exif_ifd(
                     };
                     let key = crate::tag_db::lookup_tag_name(TAG_BRIGHTNESS_VALUE, "ExifIFD");
                     metadata.insert(key, crate::core::TagValue::new_string(val_str));
+                }
+            }
+            TAG_COPYRIGHT if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    if !v.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_COPYRIGHT, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(v));
+                    }
+                }
+            }
+            TAG_DATETIME_ORIGINAL if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    if !v.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_DATETIME_ORIGINAL, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(v));
+                    }
+                }
+            }
+            TAG_CREATE_DATE if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    if !v.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_CREATE_DATE, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(v));
+                    }
+                }
+            }
+            TAG_EXIF_IMAGE_HEIGHT if field_type == 3 || field_type == 4 => {
+                // field_type 3 = SHORT (u16), field_type 4 = LONG (u32)
+                let val: Option<i64> = if field_type == 3 {
+                    read_short_value(data, base, byte_order).map(|v| v as i64)
+                } else {
+                    let val_off = get_entry_value_offset(data, base, 4, 1, byte_order)?;
+                    read_embedded_tiff_u32(data, val_off, byte_order).map(|v| v as i64)
+                };
+                if let Some(v) = val {
+                    let key = crate::tag_db::lookup_tag_name(TAG_EXIF_IMAGE_HEIGHT, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_integer(v));
+                }
+            }
+            TAG_COLOR_SPACE if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    let label = match raw {
+                        1 => "sRGB",
+                        0xFFFF => "Uncalibrated",
+                        _ => return None, // skip unrecognized
+                    };
+                    let key = crate::tag_db::lookup_tag_name(TAG_COLOR_SPACE, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                 }
             }
             TAG_COMPRESSED_BITS_PER_PIXEL if field_type == 5 => {
