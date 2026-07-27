@@ -542,6 +542,46 @@ class VerifiedDeltaTests(GitRepoTestCase):
         total = overlord_sweep.sum_verified_deltas(repo, [sha1, sha2], overlord_sweep.default_run_git)
         self.assertEqual(total, 4)
 
+    def test_the_SAME_patch_twice_is_counted_ONCE(self):
+        """This total is the right-hand side of `measured_delta >=
+        verified_delta_sum`, and the left-hand side is a MEASUREMENT -- a gap
+        closed twice still measures as one gap closed. Counting a claim once
+        per commit compares a deduplicated quantity against a duplicated one.
+
+        Measured 2026-07-27 on the live fleet: measured delta 40 against
+        sum(Verified)=101 over 41 commits that were only 9 distinct patches
+        (distinct sum: 27). The sweep closed 40 gaps against 27 claimed --
+        over-delivery, which this gate calls "bonus yield, never a failure" --
+        and was rejected for under-delivering. That aborted every sweep.
+        """
+        repo = self.make_repo()
+        sha1 = self.commit_file(repo, "a.txt", "1", "fix a",
+                                trailers=[("Verified", "recheck-pass gaps=3->1")])
+        # The identical change reaching the sweep by a second route --
+        # cherry-picked onto another squad branch, so a DIFFERENT sha with the
+        # SAME patch-id, which is how it actually happens.
+        git(repo, "checkout", "-q", "-b", "other", "HEAD~1")
+        # Same parent and same content, so the same DIFF and the same
+        # patch-id; a different subject so it is a different COMMIT. That is
+        # exactly the shape a cherry-pick onto a second squad branch produces.
+        sha2 = self.commit_file(repo, "a.txt", "1", "fix a (via another squad)",
+                                trailers=[("Verified", "recheck-pass gaps=3->1")])
+        self.assertNotEqual(sha1, sha2, "must be two distinct commits")
+        total = overlord_sweep.sum_verified_deltas(
+            repo, [sha1, sha2], overlord_sweep.default_run_git)
+        self.assertEqual(total, 2, "one patch, one claim -- not 4")
+
+    def test_two_DIFFERENT_patches_both_count(self):
+        """Dedup must not swallow genuinely separate work."""
+        repo = self.make_repo()
+        sha1 = self.commit_file(repo, "a.txt", "1", "fix a",
+                                trailers=[("Verified", "recheck-pass gaps=3->1")])
+        sha2 = self.commit_file(repo, "b.txt", "1", "fix b",
+                                trailers=[("Verified", "recheck-pass gaps=2->0")])
+        total = overlord_sweep.sum_verified_deltas(
+            repo, [sha1, sha2], overlord_sweep.default_run_git)
+        self.assertEqual(total, 4)
+
     def test_missing_verified_trailer_contributes_zero(self):
         repo = self.make_repo()
         sha = self.commit_file(repo, "a.txt", "1", "fix a, no trailer")

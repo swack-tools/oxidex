@@ -448,12 +448,44 @@ def parse_verified_delta(value):
 
 
 def sum_verified_deltas(repo_root, shas, run_git):
-    """Sum of every commit's Verified-trailer delta -- reuses
+    """Sum of every DISTINCT commit's Verified-trailer delta -- reuses
     validate_fix_commit's own commit_message/parse_trailers (`git
-    interpret-trailers --parse`), not a second hand-rolled trailer
-    parser, per spec M4's "reuse validate_fix_commit.py machinery"."""
+    interpret-trailers --parse`), not a second hand-rolled trailer parser,
+    per spec M4's "reuse validate_fix_commit.py machinery".
+
+    DISTINCT is load-bearing, and it is keyed on PATCH-ID. This total is
+    the right-hand side of evaluate_post_merge's `measured_delta >=
+    verified_delta_sum` assertion, and the left-hand side is a MEASUREMENT
+    -- a gap closed twice still measures as one gap closed. Summing a claim
+    once per merged commit therefore compares a deduplicated quantity
+    against a duplicated one, and the sweep fails for over-delivering.
+
+    Measured 2026-07-27 on the live fleet:
+
+        measured gap delta                     40
+        sum(Verified) over all 41 commits     101   <- what this compared to
+        distinct patches                        9
+        sum(Verified) over distinct patches    27   <- actually deliverable
+
+    So the sweep closed 40 gaps against 27 claimed -- over-delivery, which
+    this gate explicitly calls "bonus yield, never a failure" -- and was
+    rejected as `measured gap delta 40 < sum(Verified)=101`. That aborted
+    every sweep and is why no sweep PR had opened.
+
+    The duplication had a cause (#150: several squads consuming the same
+    patch) and that is fixed at the source, but this assertion must be
+    robust on its own: the same patch reaching the sweep twice by any route
+    must never inflate what the sweep is held to."""
     total = 0
+    counted = set()
     for sha in shas:
+        # Same identity the quarantine ledger and the merger use, so "the
+        # same patch" means the same thing everywhere in the pipeline.
+        diff_text = validate_fix_commit.commit_diff(sha, repo_root, run_git)
+        key = validate_fix_commit.compute_patch_id(diff_text, repo_root, run_git) or sha
+        if key in counted:
+            continue
+        counted.add(key)
         message = validate_fix_commit.commit_message(sha, repo_root, run_git)
         trailers = validate_fix_commit.parse_trailers(message, repo_root, run_git)
         for value in trailers.get("Verified", []):
