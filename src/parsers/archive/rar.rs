@@ -442,13 +442,16 @@ pub fn parse_rar_metadata(
             metadata.insert("ZIP:ArchivedFileName".to_string(), TagValue::String(name));
         }
         if let Some(os_byte) = entry.host_os {
-            metadata.insert(
-                "ZIP:OperatingSystem".to_string(),
-                TagValue::String(rar5_host_os(os_byte).to_string()),
-            );
+            // No PrintConv match in ExifTool means it prints the raw value,
+            // so an unmapped byte becomes its own number rather than a
+            // stand-in string -- see rar5_host_os.
+            let os = rar5_host_os(os_byte)
+                .map(str::to_string)
+                .unwrap_or_else(|| os_byte.to_string());
+            metadata.insert("ZIP:OperatingSystem".to_string(), TagValue::String(os));
         }
-        let version = RARParser::detect_version(reader)
-            .map_err(|e| format!("RAR parse error: {}", e))?;
+        let version =
+            RARParser::detect_version(reader).map_err(|e| format!("RAR parse error: {}", e))?;
         if version == "5.0" {
             metadata.insert(
                 "ZIP:FileVersion".to_string(),
@@ -563,14 +566,25 @@ struct Rar5FileEntry {
 }
 
 /// Mapping from RAR5 host OS byte to the string seen in ExifTool output.
-fn rar5_host_os(raw: u8) -> &'static str {
+///
+/// ExifTool's RAR5 table defines exactly two (ZIP.pm, the `OperatingSystem`
+/// entry in the RAR5 tag table): `0 => 'Win32', 1 => 'Unix'`. Anything else
+/// has no PrintConv, so ExifTool prints the raw number -- hence `None` here
+/// rather than a catch-all string. An earlier revision mapped 2/3/4 to
+/// MacOS/BeOS/OS-2 and everything else to "Unknown"; those come from the
+/// RAR *4* host-OS numbering, and the two tables disagree (ZIP.pm's other
+/// RAR table is 0=MS-DOS, 1=OS/2, 2=Win32, 3=Unix -- not a superset,
+/// a different assignment). The recheck passed anyway because the sample
+/// archive's host-OS byte is one of the two values that were correct.
+///
+/// Returning None matters more than it looks: substituting "Unknown" for an
+/// unrecognized byte replaces data ExifTool would have shown as a number,
+/// turning a visible unknown into an invisible one.
+fn rar5_host_os(raw: u8) -> Option<&'static str> {
     match raw {
-        0 => "Win32",
-        1 => "Unix",
-        2 => "MacOS",
-        3 => "BeOS",
-        4 => "OS/2",
-        _ => "Unknown",
+        0 => Some("Win32"),
+        1 => Some("Unix"),
+        _ => None,
     }
 }
 
@@ -626,7 +640,8 @@ fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry
             Ok(value) => value,
             Err(_) => break,
         };
-        let (header_flags, mut field_offset) = match RARParser::read_rar5_vint(block, flags_offset) {
+        let (header_flags, mut field_offset) = match RARParser::read_rar5_vint(block, flags_offset)
+        {
             Ok(value) => value,
             Err(_) => break,
         };
@@ -655,10 +670,11 @@ fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry
                 Err(_) => break,
             };
             // unpacked size vint
-            let (unpacked_size, after_unpacked) = match RARParser::read_rar5_vint(block, after_flags) {
-                Ok(v) => v,
-                Err(_) => break,
-            };
+            let (unpacked_size, after_unpacked) =
+                match RARParser::read_rar5_vint(block, after_flags) {
+                    Ok(v) => v,
+                    Err(_) => break,
+                };
             // attributes vint (skip)
             let (_, after_attr) = match RARParser::read_rar5_vint(block, after_unpacked) {
                 Ok(v) => v,
@@ -667,12 +683,16 @@ fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry
             let mut pos = after_attr;
             // mtime if bit 0
             if file_flags & 0x01 != 0 {
-                if pos + 4 > block.len() { break; }
+                if pos + 4 > block.len() {
+                    break;
+                }
                 pos += 4;
             }
             // data CRC if bit 1
             if file_flags & 0x02 != 0 {
-                if pos + 4 > block.len() { break; }
+                if pos + 4 > block.len() {
+                    break;
+                }
                 pos += 4;
             }
             // compression info if bit 2
@@ -725,6 +745,25 @@ fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    /// ExifTool's RAR5 OperatingSystem PrintConv is exactly {0: Win32,
+    /// 1: Unix} (ZIP.pm). Literal bytes on purpose -- naming a constant
+    /// here would assert the constant's own meaning back at itself.
+    #[test]
+    fn rar5_host_os_matches_exiftool_and_stops_there() {
+        assert_eq!(rar5_host_os(0), Some("Win32"));
+        assert_eq!(rar5_host_os(1), Some("Unix"));
+        // 2/3/4 are RAR *4* host-OS numbers, not RAR5 ones. Mapping them
+        // would print a stand-in where ExifTool prints the raw number.
+        for raw in [2u8, 3, 4, 5, 255] {
+            assert_eq!(
+                rar5_host_os(raw),
+                None,
+                "RAR5 host OS {raw} has no ExifTool PrintConv; it must fall \
+                 through to the raw value, not a substituted string",
+            );
+        }
+    }
 
     #[test]
     fn test_rar_signature() {
