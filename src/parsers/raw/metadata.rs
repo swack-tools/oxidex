@@ -796,12 +796,7 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA401 // CustomRendered
                 | 0xA402 // ExposureMode
                 | 0xA404 // DigitalZoomRatio
-                | 0xA405 // FocalLengthIn35mmFormat
-                | 0xA407 // GainControl
                 | 0xA408 // Contrast
-                | 0xA411 // HighISOMultiplierRed
-                | 0xA412 // HighISOMultiplierGreen
-                | 0xA413 // HighISOMultiplierBlue
         ) {
             continue;
         }

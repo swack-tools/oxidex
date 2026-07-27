@@ -544,10 +544,10 @@ fn rar5_compressed_size(reader: &dyn FileReader) -> Result<Option<i64>> {
 
         let data_size = if header_flags & HEADER_FLAG_DATA_AREA != 0 {
             match RARParser::read_rar5_vint(block, field_offset) {
-                Ok((value, next)) => {
-                    field_offset = next;
-                    value
-                }
+                // Offset deliberately discarded: this is the last field read
+                // from the block and every path below returns or breaks, so
+                // writing it back is a dead store `-D warnings` rejects.
+                Ok((value, _next)) => value,
                 Err(_) => break,
             }
         } else {
