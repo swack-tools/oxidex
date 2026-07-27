@@ -893,7 +893,14 @@ def run_batch_check(*, staging_path, squad, formats, cache_dir, comparison_fn,
         new_baselines[fmt] = report
         if report is None:
             continue
-        dup = report.get("duplicate_emissions") or []
+        # Diffed against the squad's own prior baseline, exactly like the
+        # new_oxidex_only check five lines below. #147 fixed this asymmetry in
+        # the PER-COMMIT gate and missed this BATCH one, so publication stayed
+        # blocked for every squad holding a format with pre-existing
+        # duplicates -- NEF carries nine on clean main. Measured 2026-07-27:
+        # the judgment daemon queued 57 of 58 entries, and the dominant reason
+        # was "squad '<x>' publication is blocked by a failed batch check".
+        dup = newly_duplicated_emissions(baselines.get(fmt), report)
         if dup:
             ok = False
             problems.append(f"{fmt}: duplicate_emissions {dup}")

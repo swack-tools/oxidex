@@ -754,6 +754,46 @@ class RunBatchCheckTests(unittest.TestCase):
         self.assertTrue(problems)
         self.assertTrue(any("ERROR" in line for line in logged))
 
+    def test_a_PRE_EXISTING_duplicate_does_not_block_publication(self):
+        """The batch gate diffs against the squad's own prior baseline.
+
+        #147 fixed this asymmetry in the per-commit gate and missed this
+        batch one. Measured 2026-07-27 with the full autonomous fleet up: the
+        judgment daemon queued 57 of 58 entries, and the dominant reason was
+        "squad '<x>' publication is blocked by a failed batch check" -- NEF
+        carries nine duplicate_emissions on clean main, so every squad
+        holding it was blocked from publishing anything, ever.
+        """
+        inherited = {"duplicate_emissions": ["EXIF:Compression"], "extra_in_oxidex": []}
+
+        def comparison_fn(staging, cache, fmt, suffix):
+            return dict(inherited)
+
+        ok, problems, baselines = sml.run_batch_check(
+            staging_path="/unused", squad="nikon", formats=["NEF"], cache_dir="/unused",
+            comparison_fn=comparison_fn, baselines={"NEF": dict(inherited)},
+            log_fn=lambda *a: None,
+        )
+        self.assertTrue(ok, f"an inherited duplicate must not block publication: {problems}")
+        self.assertEqual(problems, [])
+
+    def test_a_duplicate_introduced_since_the_baseline_still_blocks(self):
+        """The diff must not blind the batch gate to a genuinely new one."""
+        prior = {"duplicate_emissions": ["EXIF:Compression"], "extra_in_oxidex": []}
+
+        def comparison_fn(staging, cache, fmt, suffix):
+            return {"duplicate_emissions": ["EXIF:Compression", "NEF:Foo"],
+                    "extra_in_oxidex": []}
+
+        ok, problems, baselines = sml.run_batch_check(
+            staging_path="/unused", squad="nikon", formats=["NEF"], cache_dir="/unused",
+            comparison_fn=comparison_fn, baselines={"NEF": prior}, log_fn=lambda *a: None,
+        )
+        self.assertFalse(ok)
+        self.assertTrue(any("NEF:Foo" in p for p in problems))
+        self.assertFalse(any("EXIF:Compression" in p for p in problems),
+                         "must not headline the inherited one")
+
     def test_unexplained_new_oxidex_only_fails(self):
         prior = {"extra_in_oxidex": []}
 
