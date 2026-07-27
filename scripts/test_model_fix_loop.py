@@ -4,6 +4,9 @@ import io
 import json
 import multiprocessing
 import os
+import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -481,6 +484,24 @@ class AssemblePromptSectionsTests(unittest.TestCase):
         sections = [("protected", "p" * 100_000), ("elastic", "e" * 100_000)]
         result = assemble_prompt_sections(sections, {"elastic": 0}, max_tokens=10)
         self.assertIn("p" * 100_000, result)  # untouched even though huge
+
+    def test_shrink_order_comes_from_budgets_not_from_render_order(self):
+        """Render order and shrink priority are independent axes, and this
+        pins that they stay independent: since 2026-07-26 build_prompt
+        renders most-cacheable-first (PROMPT_SECTION_ORDER) while still
+        shedding least-essential-first (PROMPT_SHRINK_PRIORITY). Deriving
+        one from the other -- which the single `sections` list used to
+        invite -- would silently start truncating parser source before
+        attempt history."""
+        from model_fix_loop import assemble_prompt_sections
+        sections = [("rendered_first", "a" * 4000), ("rendered_second", "b" * 4000)]
+        # budgets deliberately lists them in the OPPOSITE order.
+        result = assemble_prompt_sections(
+            sections, {"rendered_second": 0, "rendered_first": 0}, max_tokens=1200,
+        )
+        self.assertIn("a" * 4000, result)          # rendered first, shrunk last
+        self.assertLess(result.count("b"), 4000)   # rendered last, shrunk first
+        self.assertLess(result.index("a"), result.index("b"))  # order preserved
 
 
 class CompactMessagesTests(unittest.TestCase):
@@ -2150,6 +2171,239 @@ class BuildPromptOrderingTests(unittest.TestCase):
         for needle in ("REQUEST:", "VERIFY", "PATCH 1/N", "Plan + diff",
                        ":<start>-<end>", "roughly 4096 tokens", "ephemeral"):
             self.assertIn(needle, manifest)
+
+
+# --- prompt-cache prefix ordering ------------------------------------------
+#
+# The fleet's worker pool leads with deepseek/deepseek-v4-pro, whose cache
+# READ price is $0.0036/M against $0.435/M for fresh input -- 120x. It is an
+# AUTOMATIC PREFIX cache: only a byte-identical LEADING run of a previous
+# request is discounted, so section render order is the entire lever (see
+# model_fix_loop.PROMPT_SECTION_ORDER for the measurements behind the order
+# these tests pin). Measured offline over 108 prompts rebuilt from real
+# saved fixer requests across 22 formats: the pre-2026-07-26 order left
+# 40.1% of a prompt cacheable against a sibling prompt for the same format
+# (17.0% at max_prompt_tokens=32768), the pinned order leaves 89.5% (85.1%).
+# Every test below fails on the old order.
+
+def _cache_order_gap(fmt, tag_name, parser_file):
+    return {
+        "format": fmt,
+        "missing_tags": [{"family": "EXIF", "name": tag_name, "value": "v",
+                          "tag_id": None, "source_file": None}],
+        "value_differences": [],
+        "gap_count": 1,
+        "parser_files": [parser_file],
+    }
+
+
+class PromptCachePrefixOrderTests(unittest.TestCase):
+    """Pins the render order build_prompt uses for provider prefix caching,
+    and the invariants that make it pay off. Hermetic: every optional
+    section is fed from a tempdir, nothing reads the real OXIDEX_HOME."""
+
+    #: The order as measured-and-shipped on 2026-07-26. A change here is a
+    #: change to the fleet's cache-hit rate and its bill; re-run the offline
+    #: prefix harness before editing it.
+    EXPECTED_ORDER = (
+        "invariants", "format_intro", "samples", "parser_files", "overview",
+        "learning", "exact_sample", "gaps", "perl_block", "neighbor",
+        "attempts", "tail",
+    )
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        (self.tmp / "src").mkdir()
+        (self.tmp / "src" / "nef.rs").write_text("// PARSER-SOURCE-MARKER\n" + "x" * 500)
+        (self.tmp / "src" / "cr2.rs").write_text("// OTHER-PARSER-MARKER\n" + "y" * 500)
+        self.samples = self.tmp / "samples"
+        self.samples.mkdir()
+        (self.samples / "a.nef").write_bytes(b"\x01\x02\x03NEFSAMPLE")
+        (self.samples / "a.cr2").write_bytes(b"\x04\x05\x06CR2SAMPLE")
+        # knowledge_home: only the module playbook, so the learning block
+        # is non-empty and deterministic (no lessons/quarantine ledgers).
+        modules = self.tmp / "home" / "logs" / "knowledge" / "modules"
+        modules.mkdir(parents=True)
+        (modules / "NEF.md").write_text("PLAYBOOK-MARKER for NEF")
+        (modules / "CR2.md").write_text("PLAYBOOK-MARKER for CR2")
+
+    def _prompt(self, fmt="NEF", tag_name="LensModel", parser="src/nef.rs",
+                sample="a.nef", **kw):
+        gap = _cache_order_gap(fmt, tag_name, parser)
+        gap["missing_tags"][0]["source_file"] = str(self.samples / sample)
+        kw.setdefault("neighbor_precedent_block", "\n\nNEIGHBOR-MARKER precedent")
+        return build_prompt(
+            gap, repo_root=self.tmp, max_tags=1, samples_dir=self.samples,
+            knowledge_home=self.tmp / "home", module_name=fmt,
+            max_prompt_tokens=100_000, **kw,
+        )
+
+    def test_render_order_constant_is_the_measured_stability_ranking(self):
+        self.assertEqual(model_fix_loop.PROMPT_SECTION_ORDER, self.EXPECTED_ORDER)
+
+    def test_rendered_prompt_follows_the_pinned_section_order(self):
+        prompt = self._prompt(previous_attempts=[
+            {"diff": "--- a/x\n", "status": "failed", "reason": "ATTEMPT-MARKER"},
+        ])
+        markers = [
+            ("invariants", "CRITICAL RUST ARCHITECTURE CONSTRAINTS"),
+            ("invariants/pitfalls", "Lessons from mistakes"),
+            ("invariants/manifest", "exactly one of these four shapes"),
+            ("invariants/primer", "How oxidex is structured, for orientation"),
+            ("format_intro", 'format "NEF"'),
+            ("samples", "Real sample files available for this format"),
+            ("parser_files", "PARSER-SOURCE-MARKER"),
+            ("learning", "PLAYBOOK-MARKER"),
+            ("exact_sample", "Real sample file containing the tag targeted below"),
+            ("gaps", "Missing entirely"),
+            ("gaps/diffs", "Value differences"),
+            ("neighbor", "NEIGHBOR-MARKER"),
+            ("attempts", "ATTEMPT-MARKER"),
+            ("tail", TERMINAL_REMINDER),
+        ]
+        positions = []
+        for name, needle in markers:
+            self.assertIn(needle, prompt, f"{name} section missing from prompt")
+            positions.append((name, prompt.index(needle)))
+        self.assertEqual(
+            positions, sorted(positions, key=lambda p: p[1]),
+            f"sections rendered out of order: {positions}",
+        )
+
+    def test_every_static_section_precedes_the_gap_list(self):
+        """The whole point of the reorder: the most volatile string in the
+        prompt used to sit at byte ~1871, in front of every large static
+        block, so all of them were re-billed at full price every call."""
+        prompt = self._prompt()
+        gap_pos = prompt.index("Missing entirely")
+        for needle in ("How oxidex is structured, for orientation",
+                       "Real sample files available for this format",
+                       "Likely relevant source files",
+                       "PARSER-SOURCE-MARKER",
+                       "PLAYBOOK-MARKER"):
+            self.assertLess(prompt.index(needle), gap_pos, needle)
+
+    def test_different_formats_still_share_the_whole_invariant_block(self):
+        """Tier 0 is shared fleet-wide, not just within one worker: a NEF
+        worker's prompt and a CR2 worker's prompt agree byte-for-byte
+        through the constraints, pitfalls, manifest and primer, and diverge
+        only at the format line."""
+        a = self._prompt(fmt="NEF", parser="src/nef.rs", sample="a.nef")
+        b = self._prompt(fmt="CR2", tag_name="Aperture", parser="src/cr2.rs",
+                         sample="a.cr2")
+        shared = os.path.commonprefix([a, b])
+        for needle in ("CRITICAL RUST ARCHITECTURE CONSTRAINTS",
+                       "Lessons from mistakes",
+                       "exactly one of these four shapes",
+                       "How oxidex is structured, for orientation"):
+            self.assertIn(needle, shared, needle)
+        # ...and nothing format-specific sneaked in ahead of the split.
+        self.assertNotIn("NEF", shared)
+        self.assertLess(len(shared) - len(shared.rstrip()), 5)
+
+    def test_same_format_different_tag_shares_the_parser_source(self):
+        """The 28 KB of parser source is the single biggest block in the
+        prompt; two different tags of one format must still share it."""
+        a = self._prompt(tag_name="LensModel")
+        b = self._prompt(tag_name="FocalLength")
+        shared = os.path.commonprefix([a, b])
+        self.assertIn("PARSER-SOURCE-MARKER", shared)
+        self.assertIn("PLAYBOOK-MARKER", shared)
+        self.assertGreater(len(shared) / len(a), 0.8)
+
+    def test_exact_sample_block_points_forward_at_the_gap_list(self):
+        """It renders ABOVE the gap list now (sibling tags share a sample
+        file, so it is the more stable of the two), which only reads
+        correctly because the lead-in no longer says "this exact tag"."""
+        prompt = self._prompt()
+        self.assertIn("Real sample file containing the tag targeted below", prompt)
+        self.assertNotIn("Real sample file containing this exact tag", prompt)
+        self.assertLess(
+            prompt.index("Real sample file containing the tag targeted below"),
+            prompt.index("Missing entirely"),
+        )
+
+    def test_per_tag_reference_blocks_stay_below_the_gap_list(self):
+        """perl_block and neighbor keep pointing BACK at the gap list, so
+        they must not be hoisted into an earlier tier."""
+        prompt = self._prompt()
+        self.assertGreater(prompt.index("NEIGHBOR-MARKER"),
+                           prompt.index("Missing entirely"))
+
+    def test_shrink_priority_is_not_the_render_order(self):
+        """PROMPT_SHRINK_PRIORITY ranks what a fixer can afford to LOSE;
+        PROMPT_SECTION_ORDER ranks what caches best. Conflating them would
+        start shedding parser source before attempt history."""
+        self.assertEqual(
+            model_fix_loop.PROMPT_SHRINK_PRIORITY,
+            ("attempts", "samples", "neighbor", "perl_block", "parser_files"),
+        )
+        rendered = [n for n in model_fix_loop.PROMPT_SECTION_ORDER
+                    if n in model_fix_loop.PROMPT_SHRINK_PRIORITY]
+        self.assertNotEqual(tuple(rendered), model_fix_loop.PROMPT_SHRINK_PRIORITY)
+
+    def test_build_prompt_passes_budgets_in_shrink_priority_order(self):
+        captured = {}
+        real = model_fix_loop.assemble_prompt_sections
+
+        def spy(sections, budgets, max_tokens):
+            captured["sections"] = [n for n, _ in sections]
+            captured["budgets"] = list(budgets)
+            return real(sections, budgets, max_tokens)
+
+        with patch.object(model_fix_loop, "assemble_prompt_sections", spy):
+            self._prompt()
+        self.assertEqual(tuple(captured["sections"]), self.EXPECTED_ORDER)
+        self.assertEqual(tuple(captured["budgets"]),
+                         model_fix_loop.PROMPT_SHRINK_PRIORITY)
+
+    def test_attempts_are_still_shed_before_parser_source(self):
+        """Behaviour under budget pressure is unchanged by the reorder."""
+        gap = _cache_order_gap("NEF", "LensModel", "src/nef.rs")
+        (self.tmp / "src" / "nef.rs").write_text("// PARSER-SOURCE-MARKER\n" + "x" * 40_000)
+        prompt = build_prompt(
+            gap, repo_root=self.tmp, max_tags=1, max_file_bytes=200_000,
+            max_prompt_tokens=3000, parser_floor_tokens=2000,
+            previous_attempts=[{"diff": "--- a/x\n", "status": "failed",
+                                "reason": "ATTEMPT-MARKER"}],
+        )
+        self.assertNotIn("ATTEMPT-MARKER", prompt)   # shed first
+        self.assertIn("PARSER-SOURCE-MARKER", prompt)  # floored, never emptied
+
+    def test_prompt_bytes_do_not_depend_on_hash_seed(self):
+        """Any set iteration, dict ordering, timestamp or random id anywhere
+        in the prefix destroys caching for every request behind it. Two
+        interpreters with different PYTHONHASHSEED must produce the same
+        bytes."""
+        script = self.tmp / "render.py"
+        script.write_text(
+            "import hashlib, sys\n"
+            f"sys.path.insert(0, {str(Path(model_fix_loop.__file__).parent)!r})\n"
+            "from pathlib import Path\n"
+            "import model_fix_loop as m\n"
+            f"tmp = Path({str(self.tmp)!r})\n"
+            "gap = {'format': 'NEF', 'gap_count': 1, 'parser_files': ['src/nef.rs'],\n"
+            "       'value_differences': [],\n"
+            "       'missing_tags': [{'family': 'EXIF', 'name': 'LensModel', 'value': 'v',\n"
+            "                         'tag_id': None,\n"
+            "                         'source_file': str(tmp / 'samples' / 'a.nef')}]}\n"
+            "p = m.build_prompt(gap, repo_root=tmp, max_tags=1,\n"
+            "                   samples_dir=tmp / 'samples',\n"
+            "                   knowledge_home=tmp / 'home', module_name='NEF',\n"
+            "                   worker_label='w-1', max_prompt_tokens=100000)\n"
+            "sys.stdout.write(hashlib.sha256(p.encode()).hexdigest())\n"
+        )
+        digests = set()
+        for seed in ("0", "1", "12345"):
+            env = dict(os.environ, PYTHONHASHSEED=seed)
+            out = subprocess.run(  # nosec B603 -- fixed argv, tempdir script
+                [sys.executable, str(script)], capture_output=True, text=True,
+                env=env, timeout=120, check=True,
+            )
+            digests.add(out.stdout.strip())
+        self.assertEqual(len(digests), 1, f"non-deterministic prompt: {digests}")
+        self.assertRegex(digests.pop(), r"^[0-9a-f]{64}$")  # a prompt was really built
 
 
 class RustArchitectureConstraintsTests(unittest.TestCase):

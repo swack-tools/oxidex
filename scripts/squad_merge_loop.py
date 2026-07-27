@@ -516,8 +516,15 @@ def append_quarantine(path, *, patch_id, sha, format_name, squad, reason, flags,
         prior_attempt = quarantine_entries[patch_id].get("attempt", 0)
     attempt = prior_attempt + 1
     backoff_seconds = min(3600, 60 * (2 ** (attempt - 1)))
+    stamped_at = now_fn()
     entry = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now_fn())),
+        # Same pair, same reasoning as record_head's: a human-readable
+        # local `ts` plus an unambiguous instant, from ONE clock read.
+        # Nothing orders the quarantine ledger by time today, which is
+        # exactly why the offset-free string is worth pairing before
+        # something does.
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(stamped_at)),
+        "ts_epoch": float(stamped_at),
         "patch_id": patch_id,
         "sha": sha,
         "format": format_name,
@@ -560,6 +567,25 @@ def load_squad_status(path):
     return data
 
 
+def stamp_order_key(sha_entry):
+    """Sort key for a (sha, squad-status entry) pair, newest last.
+
+    Orders by the entry's `ts_epoch` INSTANT when it has one and falls
+    back to the legacy naive-local-time `ts` string when it does not, so
+    a ledger written before 2026-07-26 keeps exactly the order it always
+    had. Legacy entries sort ahead of every epoch-stamped one (the
+    leading `is not None`), which is the truth of the matter: they can
+    only have been written earlier than the fix that added the field.
+
+    Shared by overlord_sweep.collect_green_stamps (which head is "the
+    newest news") and recut_squad_branch (which order to replay
+    cherry-picks in) so the two can never disagree about "newer".
+    """
+    entry = sha_entry[1]
+    epoch = entry.get("ts_epoch")
+    return (epoch is not None, float(epoch) if epoch is not None else 0.0, entry.get("ts") or "")
+
+
 def _write_squad_status(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -583,12 +609,36 @@ def record_head(path, sha, *, status, patch_id, format_name, work_done=True,
     if status not in ("consumed", "quarantined"):
         raise ValueError(f"status must be 'consumed' or 'quarantined', got {status!r}")
     data = load_squad_status(path)
+    # ONE clock read for both spellings of the same moment: `ts` and
+    # `ts_epoch` must describe the same instant, and now_fn is injectable
+    # (an advancing test clock would otherwise silently disagree).
+    stamped_at = now_fn()
     entry = {
         "status": status,
         "patch_id": patch_id,
         "format": format_name,
         "work_done": work_done,
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now_fn())),
+        # `ts` stays offset-free LOCAL time, for humans reading the
+        # ledger and for every consumer written before 2026-07-26.
+        # `ts_epoch` is the unambiguous INSTANT, and it is what
+        # overlord_sweep.collect_green_stamps orders by: inside the DST
+        # fall-back's repeated hour two different instants produce local
+        # strings that sort the WRONG WAY ROUND. Measured with
+        # TZ=America/Los_Angeles: 1793521800 -> "2026-11-01T01:30:00"
+        # (PDT) and 1793524500 -> "2026-11-01T01:15:00" (PST, 2700s
+        # LATER), and "01:15:00" < "01:30:00", so the later head was
+        # filtered out as "not news" and its already-validated commits
+        # waited for that squad's next stamp.
+        #
+        # Added ALONGSIDE `ts` rather than replacing it, deliberately.
+        # Swapping `ts` to UTC breaks the migration: cursors and stamps
+        # already on disk hold naive local strings, and in a
+        # positive-offset zone a fresh UTC string sorts BELOW the stored
+        # local cursor -- every squad would read "no news" for up to the
+        # length of the offset (9h in Asia/Tokyo), a real stall, worse
+        # than the once-a-year fold.
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(stamped_at)),
+        "ts_epoch": float(stamped_at),
     }
     if squad_sha is not None:
         entry["squad_sha"] = squad_sha
@@ -960,7 +1010,13 @@ def recut_squad_branch(*, repo_root, staging_path, squad, squad_branch, home,
         (sha, e) for sha, e in (status.get("heads") or {}).items()
         if e.get("status") == "consumed" and e.get("work_done", True) and e.get("squad_sha")
     ]
-    entries.sort(key=lambda kv: kv[1].get("ts") or "")
+    # Ordered by INSTANT where the stamp carries one (see record_head's
+    # `ts_epoch`): a recut replays cherry-picks in the order the mergers
+    # accepted them, and inside the DST fall-back the naive local strings
+    # sort two of them backwards. Legacy stamps (no ts_epoch) keep the
+    # string order they have always had, and sort ahead of epoch-stamped
+    # ones -- correct, since they were necessarily recorded earlier.
+    entries.sort(key=stamp_order_key)
 
     checkout_detached(staging_path, origin_ref)
     kept, dropped = [], []

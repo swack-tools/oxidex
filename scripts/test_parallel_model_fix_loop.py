@@ -2296,6 +2296,102 @@ class EnsureSweepWorktreeTests(GitRepoTestCase):
         self.assertTrue(any("skipping auto-publish" in line for line in logged))
 
 
+class EnsureSweepWorktreeLockRecoveryTests(GitRepoTestCase):
+    """A stale index.lock in the sweep worktree's gitdir made the reuse
+    branch's `checkout --force --detach` fail with rc=128 FOREVER:
+    _is_git_worktree answers True, so the prune + `worktree add`
+    self-heal the docstring reasons about was provably unreachable, and
+    auto-publish stayed off across dispatcher RESTARTS until a human
+    deleted one file.
+
+    The trigger is narrow (measured: SIGTERM and SIGINT to a git holding
+    the lock both clean it up, and SIGKILLing git's PARENT leaves the
+    orphaned git to clean up too -- only a SIGKILL/hard-crash of the git
+    process itself leaves the file), which is exactly why the recovery
+    must be BOUNDED: a live git may legitimately hold this lock, and
+    deleting a held lock risks a lost index write.
+    """
+
+    def lock_path(self, worktree):
+        rc, out, _err = parallel_model_fix_loop.default_run_git(
+            ["rev-parse", "--absolute-git-dir"], worktree,
+        )
+        self.assertEqual(rc, 0)
+        return Path(out.strip()) / "index.lock"
+
+    def _provisioned(self):
+        repo = self.make_repo()
+        path = self.tmp / "sweep-wt"
+        ensure_sweep_worktree(repo, path, origin_ref="main", log_fn=lambda *a: None)
+        git(path, "checkout", "-q", "-b", "sweep/tags-2026-07-25-1")
+        return repo, path
+
+    def test_a_stale_lock_is_cleared_and_the_worktree_is_reused(self):
+        repo, path = self._provisioned()
+        lock = self.lock_path(path)
+        lock.write_text("")
+        os.utime(lock, (time.time() - 3600, time.time() - 3600))
+        logged = []
+
+        result, message = ensure_sweep_worktree(
+            repo, path, origin_ref="main", log_fn=logged.append, sleep_fn=lambda s: None,
+        )
+
+        self.assertEqual(result, path)
+        self.assertFalse(lock.exists())
+        self.assertEqual(git_out(path, "rev-parse", "HEAD").strip(),
+                         git_out(repo, "rev-parse", "main").strip())
+        self.assertIn("index.lock", message)
+        # No-discard: the previous sweep branch ref survives the recovery.
+        self.assertEqual(
+            git(repo, "rev-parse", "--verify", "refs/heads/sweep/tags-2026-07-25-1",
+                check=False).returncode, 0,
+        )
+
+    def test_a_fresh_lock_is_left_alone_for_the_live_git_that_holds_it(self):
+        repo, path = self._provisioned()
+        lock = self.lock_path(path)
+        lock.write_text("")   # just created: mtime is now
+        logged = []
+
+        result, message = ensure_sweep_worktree(
+            repo, path, origin_ref="main", log_fn=logged.append, sleep_fn=lambda s: None,
+        )
+
+        self.assertIsNone(result)
+        # Nothing destructive: the lock is untouched, the worktree is
+        # still registered, and the round is simply skipped.
+        self.assertTrue(lock.exists())
+        self.assertTrue(parallel_model_fix_loop._is_git_worktree(
+            path, parallel_model_fix_loop.default_run_git))
+        self.assertIn("index.lock", message)
+        self.assertTrue(any("skipping auto-publish" in line for line in logged))
+
+    def test_a_persistently_unresettable_worktree_is_rebuilt_not_disabled(self):
+        # Any reason the force-detach keeps failing (permissions, a
+        # corrupt index, a wedged ref) gets the same bounded escalation:
+        # unregister the worktree and let the existing prune +
+        # `worktree add` path rebuild it, rather than returning
+        # (None, ...) for the life of the dispatcher.
+        repo, path = self._provisioned()
+
+        def detach_hostile_git(args, repo_root, input_text=None):
+            if args[:3] == ["checkout", "--force", "--detach"]:
+                return 128, "", "fatal: cannot reset this worktree"
+            return parallel_model_fix_loop.default_run_git(args, repo_root, input_text)
+
+        result, message = ensure_sweep_worktree(
+            repo, path, run_git=detach_hostile_git, origin_ref="main",
+            log_fn=lambda *a: None, sleep_fn=lambda s: None,
+        )
+
+        self.assertEqual(result, path)
+        self.assertIn("created", message)
+        self.assertEqual(git_out(path, "rev-parse", "HEAD").strip(),
+                         git_out(repo, "rev-parse", "main").strip())
+        self.assertEqual(git_out(path, "rev-parse", "--abbrev-ref", "HEAD").strip(), "HEAD")
+
+
 class PrRefFromResultTests(unittest.TestCase):
     def test_prefers_the_url_gh_printed(self):
         self.assertEqual(
@@ -2472,11 +2568,27 @@ class MergePrTests(unittest.TestCase):
         self.assertFalse(ok)
 
 
+def _gh_pr_entry(number, head, **overrides):
+    """One `gh pr list --json ...` record carrying the same field set the
+    production query asks for.
+
+    `gh` returns ONLY the fields requested, so a fake that omits isDraft/
+    baseRefName/isCrossRepository cannot express a draft or a fork PR at
+    all -- which is precisely why a draft sweep PR reached merge_pr and
+    produced merge_failed noise every round unnoticed.
+    """
+    entry = {"number": number, "url": f"https://github.com/o/r/pull/{number}",
+             "headRefName": head, "isDraft": False, "baseRefName": "main",
+             "isCrossRepository": False}
+    entry.update(overrides)
+    return entry
+
+
 def _gh_pr_list(*prs):
-    """A `gh pr list --json number,url,headRefName` payload."""
+    """A `gh pr list` payload; each pr is (number, headRefName) or a dict
+    from _gh_pr_entry."""
     return json.dumps([
-        {"number": n, "url": f"https://github.com/o/r/pull/{n}", "headRefName": head}
-        for n, head in prs
+        pr if isinstance(pr, dict) else _gh_pr_entry(*pr) for pr in prs
     ])
 
 
@@ -2517,6 +2629,19 @@ class ListOpenSweepPrsTests(unittest.TestCase):
             ("sweep/tags-2026-07-26-1-evil", False),  # not anchored at the end
             ("sweep/tags-2026-07-26", False),         # missing the counter
             ("sweep/tags-bogus-1", False),
+            # `\d` is Unicode-wide (the pattern compiles with UNICODE and
+            # no re.ASCII), so every one of these matched and was adopted
+            # -- `gh pr merge --squash --delete-branch` issued against a
+            # branch this automation provably did not cut, since
+            # next_sweep_branch_name is strftime('%Y-%m-%d') + an int and
+            # emits ASCII under every locale tested (C, ar_SA, ar_AE,
+            # fa_IR, ja_JP, hi_IN, th_TH). `git check-ref-format --branch`
+            # accepts all of them, so they are legal refs.
+            ("sweep/tags-٢٠٢٦-٠٧-٢٦-١", False),  # Arabic-Indic
+            ("sweep/tags-2026-07-26-١", False),  # Arabic-Indic counter
+            ("sweep/tags-2026-07-26-１", False),  # FULLWIDTH DIGIT ONE
+            ("sweep/tags-२०२६-07-26-1", False),  # Devanagari year
+            ("sweep/tags-2026-07-26-\U0001d7f6", False),  # MATHEMATICAL MONOSPACE DIGIT FOUR
         ):
             with self.subTest(head=head):
                 self.assertEqual(
@@ -2528,6 +2653,51 @@ class ListOpenSweepPrsTests(unittest.TestCase):
         # the searched text must still be rejected locally.
         payload = _gh_pr_list((150, "attacker/sweep/tags-2026-07-26-1"))
         self.assertEqual(list_open_sweep_prs("/repo", lambda args, repo: (0, payload, "")), [])
+
+    def test_the_query_asks_for_the_fields_the_gates_below_need(self):
+        # gh returns only the requested fields, so a gate on isDraft /
+        # baseRefName / isCrossRepository is unenforceable unless they are
+        # asked for here. Pinned because the omission is invisible: the
+        # keys simply read as missing and every PR looks adoptable.
+        calls = []
+        list_open_sweep_prs("/repo", lambda args, repo: calls.append(args) or (0, "[]", ""))
+        self.assertEqual(
+            calls,
+            [["pr", "list", "--state", "open", "--json",
+              "number,url,headRefName,isDraft,baseRefName,isCrossRepository",
+              "--search", "head:sweep/tags-", "--limit", "200"]],
+        )
+
+    def test_a_draft_sweep_pr_is_never_adopted(self):
+        # GitHub refuses to merge a draft server-side, so adopting one
+        # buys two wasted gh calls and one ERROR-shaped
+        # "could not merge adopted PR" line EVERY round, forever.
+        payload = _gh_pr_list(_gh_pr_entry(160, "sweep/tags-2026-07-26-4", isDraft=True))
+        self.assertEqual(list_open_sweep_prs("/repo", lambda args, repo: (0, payload, "")), [])
+
+    def test_a_cross_repository_pr_is_never_adopted(self):
+        # swack-tools/oxidex is PUBLIC with forks, and headRefName for a
+        # cross-repo PR is the BARE branch name -- so a fork branch named
+        # exactly sweep/tags-2026-07-26-9 satisfies SWEEP_BRANCH_RE. A
+        # branch name is not provenance; this is the load-bearing gate,
+        # not isDraft.
+        payload = _gh_pr_list(
+            _gh_pr_entry(161, "sweep/tags-2026-07-26-9", isCrossRepository=True),
+        )
+        self.assertEqual(list_open_sweep_prs("/repo", lambda args, repo: (0, payload, "")), [])
+
+    def test_a_pr_retargeted_away_from_main_is_never_adopted(self):
+        # real_create_pr always passes --base main; a PR whose base a
+        # human moved is no longer the thing this automation opened.
+        payload = _gh_pr_list(
+            _gh_pr_entry(162, "sweep/tags-2026-07-26-5", baseRefName="release/1.x"),
+        )
+        self.assertEqual(list_open_sweep_prs("/repo", lambda args, repo: (0, payload, "")), [])
+
+    def test_an_ordinary_open_sweep_pr_still_passes_every_new_gate(self):
+        payload = _gh_pr_list((163, "sweep/tags-2026-07-26-6"))
+        prs = list_open_sweep_prs("/repo", lambda args, repo: (0, payload, ""))
+        self.assertEqual([p["number"] for p in prs], [163])
 
 
 class AdoptOpenSweepPrsTests(unittest.TestCase):
@@ -2587,8 +2757,73 @@ class AdoptOpenSweepPrsTests(unittest.TestCase):
         self.assertEqual(adopt_open_sweep_prs(repo_root="/repo", run_gh=run_gh,
                                               log_fn=lambda *a: None), [])
         self.assertEqual(calls, [["pr", "list", "--state", "open", "--json",
-                                  "number,url,headRefName",
+                                  "number,url,headRefName,isDraft,baseRefName,isCrossRepository",
                                    "--search", "head:sweep/tags-", "--limit", "200"]])
+
+    def test_one_raising_gh_call_does_not_abandon_the_remaining_prs(self):
+        """A gh runner that RAISES (observed: BlockingIOError errno 35,
+        "Resource temporarily unavailable", from fork exhaustion on a box
+        already running min(20, CPU) workers each in `cargo test
+        --workspace`; also FileNotFoundError when `gh` is unlinked
+        mid-round by a `brew upgrade` during a weeks-long --infinite run)
+        aborted the whole adoption pass from inside the per-PR loop.
+        Measured cost: PR #10 merged, #11 raised, #12 never looked at,
+        the adoption record discarded, and the post-merge worktree sync
+        skipped for a merge that had already landed."""
+        payloads = {f"https://github.com/o/r/pull/{n}": self.GREEN for n in (10, 11, 12)}
+        run_gh, calls = self._run_gh(
+            _gh_pr_list((10, "sweep/tags-2026-07-26-1"), (11, "sweep/tags-2026-07-26-2"),
+                        (12, "sweep/tags-2026-07-26-3")),
+            payloads,
+        )
+
+        def flaky_gh(args, repo_root):
+            if args[:2] == ["pr", "checks"] and args[2].endswith("/11"):
+                raise BlockingIOError(35, "Resource temporarily unavailable")
+            return run_gh(args, repo_root)
+
+        adopted = adopt_open_sweep_prs(repo_root="/repo", run_gh=flaky_gh, log_fn=lambda *a: None)
+        self.assertEqual([a["pr"].rsplit("/", 1)[-1] for a in adopted], ["10", "11", "12"])
+        actions = {a["pr"].rsplit("/", 1)[-1]: a["action"] for a in adopted}
+        self.assertEqual(actions["10"], "merged")
+        self.assertEqual(actions["12"], "merged")
+        self.assertNotEqual(actions["11"], "merged")
+        self.assertNotIn(["pr", "merge", "https://github.com/o/r/pull/11", "--squash",
+                          "--delete-branch"], calls)
+
+
+class DefaultRunGhNeverRaisesTests(unittest.TestCase):
+    """Every consumer of a gh runner already copes with a failure tuple
+    (pr_checks_state -> "unknown", merge_pr -> merge_failed with the PR
+    left open, list_open_sweep_prs -> []), and exactly one of them --
+    list_open_sweep_prs -- had its own `except OSError`. Putting the
+    guard in the runner instead makes that redundant rather than
+    load-bearing."""
+
+    def _run(self, exc):
+        with patch("parallel_model_fix_loop.subprocess.run", side_effect=exc):
+            return parallel_model_fix_loop.default_run_gh(["pr", "checks", "1"], "/repo")
+
+    def test_a_blocking_io_error_becomes_a_failure_tuple(self):
+        # errno 35 from fork exhaustion, reproduced by lowering
+        # RLIMIT_NPROC and calling subprocess.run(["gh", "--version"]).
+        rc, out, err = self._run(BlockingIOError(35, "Resource temporarily unavailable"))
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(out, "")
+        self.assertIn("Resource temporarily unavailable", err)
+
+    def test_a_missing_gh_binary_becomes_a_failure_tuple(self):
+        rc, _out, err = self._run(FileNotFoundError(2, "No such file or directory: 'gh'"))
+        self.assertNotEqual(rc, 0)
+        self.assertIn("gh", err)
+
+    def test_the_failure_tuple_reads_as_unknown_not_green(self):
+        # The property that matters: an unrunnable gh must never be
+        # mistaken for a green PR.
+        with patch("parallel_model_fix_loop.subprocess.run",
+                   side_effect=BlockingIOError(35, "Resource temporarily unavailable")):
+            state, _detail = pr_checks_state("pr", "/repo", parallel_model_fix_loop.default_run_gh)
+        self.assertEqual(state, "unknown")
 
 
 class SyncWorktreesToOriginMainTests(GitRepoTestCase):
@@ -2800,7 +3035,7 @@ class AutoPublishRoundTests(unittest.TestCase):
         # One read-only `gh pr list` (the adoption pass) and nothing
         # else: no checks poll, no merge, no sync.
         self.assertEqual(self.gh_calls, [["pr", "list", "--state", "open", "--json",
-                                          "number,url,headRefName",
+                                          "number,url,headRefName,isDraft,baseRefName,isCrossRepository",
                                    "--search", "head:sweep/tags-", "--limit", "200"]])
         self.assertEqual(self.sync_calls, [])
 
@@ -2827,6 +3062,69 @@ class AutoPublishRoundTests(unittest.TestCase):
         self.assertEqual(result["status"], "no_worktree")
         self.assertEqual([a["action"] for a in result["adopted"]], ["merged"])
         self.assertEqual(len(self.sync_calls), 1)
+
+    def test_a_raising_gh_mid_adoption_still_syncs_and_still_sweeps(self):
+        # DEFECT 6, at the round level: the abort discarded the adoption
+        # record, so `adopted_sync = sync() if adopted_merges else None`
+        # (which sits AFTER the loop) never ran for a merge that HAD
+        # landed, and the round's own sweep never got a chance either.
+        swept = []
+        payloads = {f"https://github.com/o/r/pull/{n}": self.GREEN for n in (10, 11, 12)}
+        base = self._run_gh(self.GREEN,
+                            list_payload=_gh_pr_list((10, "sweep/tags-2026-07-26-1"),
+                                                     (11, "sweep/tags-2026-07-26-2"),
+                                                     (12, "sweep/tags-2026-07-26-3")))
+
+        def flaky_gh(args, repo_root):
+            if args[:2] == ["pr", "checks"] and args[2].endswith("/11"):
+                raise BlockingIOError(35, "Resource temporarily unavailable")
+            if args[:2] == ["pr", "checks"]:
+                self.gh_calls.append(args)
+                return 0, payloads[args[2]], ""
+            return base(args, repo_root)
+
+        result = self._publish(
+            {"status": "no_news"}, flaky_gh,
+            sweep_fn=lambda **kw: swept.append(1) or {"status": "no_news"},
+        )
+        self.assertEqual(result["status"], "no_news")
+        self.assertEqual(len(result["adopted"]), 3)
+        self.assertEqual(len(self.sync_calls), 1)
+        self.assertEqual(swept, [1])
+
+    def test_a_sweep_whose_bisection_left_the_recheck_failing_is_not_merged(self):
+        # Belt-and-braces on top of run_sweep's own hard stop: a future
+        # status regression must not be able to hand this function a
+        # branch that bisection could not clear. status == "ok" is not
+        # sufficient once a bisection happened.
+        sweep = dict(self.OK_SWEEP,
+                     bisection={"offenders": ["nikon"], "surviving_squads": ["canon"],
+                                "unrevertable": [], "recheck_passed": False})
+        result = self._publish(sweep, self._run_gh(self.GREEN))
+        self.assertEqual(result["status"], "bisection_unverified")
+        self.assertFalse(any(args[:2] == ["pr", "merge"] for args in self.gh_calls))
+        self.assertEqual(self.sync_calls, [])
+
+    def test_a_sweep_whose_bisection_cleared_the_recheck_still_merges(self):
+        sweep = dict(self.OK_SWEEP,
+                     bisection={"offenders": ["nikon"], "surviving_squads": ["canon"],
+                                "unrevertable": [], "recheck_passed": True})
+        self.assertEqual(self._publish(sweep, self._run_gh(self.GREEN))["status"], "merged")
+
+    def test_an_empty_diff_branch_is_not_polled_or_merged(self):
+        # The repo's DURABLE idempotency rule, applied at the consumer:
+        # compare the TREE, not the SHA. Pushing a tree-identical branch
+        # and squash-merging it puts an empty commit on main and burns a
+        # full CI cycle.
+        def run_git(args, repo_root):
+            if args[:2] == ["diff", "--quiet"]:
+                return 0, "", ""   # git's "no differences" exit code
+            return parallel_model_fix_loop.default_run_git(args, repo_root)
+
+        result = self._publish(self.OK_SWEEP, self._run_gh(self.GREEN), run_git=run_git)
+        self.assertEqual(result["status"], "zero_delta")
+        self.assertFalse(any(args[:2] == ["pr", "checks"] for args in self.gh_calls))
+        self.assertFalse(any(args[:2] == ["pr", "merge"] for args in self.gh_calls))
 
     def test_sweep_receives_the_sweep_worktree_and_a_home_scoped_cursor(self):
         seen = {}
@@ -3146,6 +3444,79 @@ class MainAutoPublishGatingTests(unittest.TestCase):
         self.assertEqual(kwargs["sweep_worktree_dir"], self.tmp / "sweep")
         self.assertEqual(kwargs["checks_timeout_seconds"], 60)
         self.assertEqual(kwargs["checks_interval_seconds"], 5)
+
+    def _main_rc(self, argv, publish_fn, **kwargs):
+        """main()'s ACTUAL return code for a one-shot round (no
+        KeyboardInterrupt escape hatch -- the whole point is the value it
+        returns)."""
+        return main(
+            ["--config", str(self.config_path), *argv],
+            run_round_fn=kwargs.pop("run_round_fn", lambda args, cfg: True),
+            auto_publish_fn=publish_fn, lock_path=self.lock_path,
+            pgids_path=self.pgids_path, **kwargs,
+        )
+
+    def test_a_one_shot_round_whose_publish_failed_exits_non_zero(self):
+        """_run_auto_publish_safely's return value was DISCARDED, so
+        `--auto-publish` without --infinite exited 0 for all 11 terminal
+        publish-failure statuses. That is the one genuinely
+        machine-invisible case: with --infinite, stdout already announces
+        every failure each round and adoption already retries, but a
+        one-shot operator/CI invocation has nothing else to read."""
+        for status in ("no_worktree", "push_failed", "pr_create_failed", "checks_red",
+                       "checks_timeout", "checks_unknown", "merge_failed",
+                       "branch_cut_failed", "sweep_aborted", "reattach_failed",
+                       "workspace_tests_failed", "bisection_unverified", "raised"):
+            with self.subTest(status=status):
+                rc = self._main_rc(["--auto-publish"], lambda **kw: {"status": status})
+                self.assertEqual(rc, 1)
+
+    def test_a_one_shot_round_that_published_or_had_nothing_to_do_exits_zero(self):
+        for status in ("merged", "no_news", "zero_delta"):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    self._main_rc(["--auto-publish"], lambda **kw: {"status": status}), 0,
+                )
+
+    def test_a_one_shot_round_with_publishing_off_is_unaffected(self):
+        # No publish ran, so the exit code must still be the dispatch
+        # result alone -- not a failure invented from a missing status.
+        self.assertEqual(self._main_rc([], lambda **kw: self.fail("must not publish")), 0)
+
+    def test_a_dispatch_failure_still_dominates_a_successful_publish(self):
+        rc = self._main_rc(["--auto-publish"], lambda **kw: {"status": "merged"},
+                           run_round_fn=lambda args, cfg: False)
+        self.assertEqual(rc, 1)
+
+    def test_repeated_non_publishing_rounds_escalate_once_they_stack_up(self):
+        # DEFECT 11's other half: a permanently wedged sweep worktree
+        # emits one WARNING per round, which is indistinguishable in a
+        # weeks-long log from a run of quiet rounds. A stall banner names
+        # the repeated status.
+        printed = []
+        with patch("builtins.print", side_effect=lambda *a, **kw: printed.append(" ".join(map(str, a)))):
+            self._main(["--infinite"], rounds=6, publish_fn=lambda **kw: {"status": "no_worktree"})
+        banners = [line for line in printed if "AUTO-PUBLISH STALLED" in line]
+        self.assertTrue(banners, printed[-8:])
+        self.assertIn("no_worktree", banners[0])
+
+    def test_a_healthy_round_resets_the_stall_counter(self):
+        statuses = iter(["no_worktree", "no_worktree", "merged", "no_worktree", "no_worktree"])
+        printed = []
+        with patch("builtins.print", side_effect=lambda *a, **kw: printed.append(" ".join(map(str, a)))):
+            self._main(["--infinite"], rounds=6, publish_fn=lambda **kw: {"status": next(statuses)})
+        self.assertEqual([line for line in printed if "AUTO-PUBLISH STALLED" in line], [])
+
+    def test_an_adopted_merge_counts_as_publishing_even_on_a_pass_through_status(self):
+        # A round whose own sweep found nothing but which merged a
+        # stranded PR from an earlier round DID publish -- it must not
+        # count toward a stall.
+        printed = []
+        with patch("builtins.print", side_effect=lambda *a, **kw: printed.append(" ".join(map(str, a)))):
+            self._main(["--infinite"], rounds=6, publish_fn=lambda **kw: {
+                "status": "push_failed", "adopted": [{"action": "merged"}],
+            })
+        self.assertEqual([line for line in printed if "AUTO-PUBLISH STALLED" in line], [])
 
     def test_a_raising_publish_never_stops_the_infinite_loop(self):
         # A gh outage, an expired token, a git hiccup: the round's fixes

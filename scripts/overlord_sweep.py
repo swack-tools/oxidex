@@ -262,6 +262,25 @@ def collect_green_stamps(home, squads, cursor):
     failure on every subsequent poll (the same "cannot re-enter -- no
     livelock" property spec M4 states for quarantined patch-ids).
 
+    "Newer" is decided by the stamp's `ts_epoch` INSTANT whenever both
+    sides have one, and only falls back to the legacy naive-local-time
+    `ts` string when either does not. The string alone is wrong twice a
+    year: inside the DST fall-back's repeated hour a LATER instant
+    produces a SMALLER string (measured with TZ=America/Los_Angeles:
+    1793521800 -> "2026-11-01T01:30:00" PDT, then 1793524500 ->
+    "2026-11-01T01:15:00" PST, 2700 real seconds later), so the newest
+    consumed head was filtered out as "not news" and that squad reported
+    no news until its next stamp.
+
+    Both fallbacks are load-bearing, not defensive padding -- they are
+    what makes this a migration rather than a stall. A cursor already on
+    disk holds only `last_ts`, and a squad-status file already on disk
+    holds only `ts`; comparing either against a fresh epoch would be
+    comparing incomparable things. Simply switching `ts` to UTC instead
+    would sort every new stamp BELOW the stored local cursor in any
+    positive-offset zone and stall every squad for the length of the
+    offset.
+
     Returns (stamps, new_cursor): stamps is
     {squad: {"squad_sha", "ts", "formats": [...]}}.
     """
@@ -271,23 +290,38 @@ def collect_green_stamps(home, squads, cursor):
     for squad in squads:
         status = squad_merge_loop.load_squad_status(squad_merge_loop.squad_status_file(home, squad))
         heads = status.get("heads") or {}
-        last_ts = (squads_cursor.get(squad) or {}).get("last_ts") or ""
+        squad_entry = squads_cursor.get(squad) or {}
+        last_ts = squad_entry.get("last_ts") or ""
+        last_epoch = squad_entry.get("last_ts_epoch")
+
+        def is_news(entry, last_ts=last_ts, last_epoch=last_epoch):
+            epoch = entry.get("ts_epoch")
+            if epoch is not None and last_epoch is not None:
+                return float(epoch) > float(last_epoch)
+            return (entry.get("ts") or "") > last_ts
+
         consumed = [
             (sha, entry) for sha, entry in heads.items()
             if entry.get("status") == "consumed" and entry.get("work_done") and entry.get("squad_sha")
-            and (entry.get("ts") or "") > last_ts
+            and is_news(entry)
         ]
         if not consumed:
             continue
-        consumed.sort(key=lambda kv: kv[1].get("ts") or "")
+        consumed.sort(key=squad_merge_loop.stamp_order_key)
         _newest_sha, newest_entry = consumed[-1]
         formats = sorted({entry.get("format") for _sha, entry in consumed if entry.get("format")})
         stamps[squad] = {
             "squad_sha": newest_entry["squad_sha"], "ts": newest_entry.get("ts"), "formats": formats,
         }
-        new_cursor["squads"][squad] = {
+        cursor_entry = {
             "last_ts": newest_entry.get("ts"), "last_squad_sha": newest_entry["squad_sha"],
         }
+        # Only recorded when the stamp actually carried one, so a cursor
+        # written from a legacy stamp keeps comparing by string rather
+        # than inventing an epoch nobody measured.
+        if newest_entry.get("ts_epoch") is not None:
+            cursor_entry["last_ts_epoch"] = float(newest_entry["ts_epoch"])
+        new_cursor["squads"][squad] = cursor_entry
     return stamps, new_cursor
 
 
@@ -610,10 +644,45 @@ def bisect_sweep_failure(*, repo_root, merge_infos, formats, cache_dir, comparis
     and reverted -- a fully-aborted sweep round rather than a silently
     shipped bad merge.
 
-    Returns {"offenders": [...], "surviving_squads": [...], "sweep_tip": sha}.
+    Returns {"offenders": [...], "surviving_squads": [...],
+             "unrevertable": [...], "recheck_passed": bool,
+             "sweep_tip": sha}.
+
+    ``unrevertable`` and ``recheck_passed`` exist because the caller must
+    NOT have to infer "whatever bisection rejected is no longer on this
+    branch" from ``offenders``/``surviving_squads``. Until 2026-07-26 it
+    did, and both loops here treat a FAILED ``git revert`` as "carry on"
+    -- the isolation loop ``continue``s, the full-abort loop just logs --
+    so a squad whose revert failed stayed in ``surviving``, run_sweep's
+    ``if not merge_infos:`` abort gate never fired, and the round returned
+    "ok" with the rejected content still on the branch it pushed (and,
+    since #129, auto-squash-merged on green). Both revert-failure
+    triggers are real git behaviour, verified 2026-07-26:
+
+      * empty-diff revert -- the squad's content is already on
+        origin/main under a different sha, so the ``--no-ff`` merge has an
+        empty diff against parent 1 and ``git revert --no-edit -m 1
+        <merge>`` exits 1 printing "nothing to commit, working tree
+        clean" with EMPTY stderr (then ``git revert --abort`` exits 128,
+        "no cherry-pick or revert in progress");
+      * revert CONFLICT -- two squads touching overlapping regions of a
+        shared emitter file merge cleanly but do not revert cleanly. This
+        is the likelier trigger, because the full-abort loop below is
+        ONLY reached on a genuine multi-squad interaction, i.e. exactly
+        when squads have overlapping content.
+
+    ``recheck_passed`` is taken from the recheck calls this function
+    already makes, never re-derived: the isolation loop's winning
+    ``recheck(squad)`` is evaluated at the FINAL HEAD (quarantine_squad
+    only appends to the ledger afterwards) over exactly the surviving
+    set, so it is the honest answer. It stays False on the
+    could-not-restore path, where the last recheck FAILED and the real
+    offender is still on the branch -- previously reported as "ok".
     """
     surviving = dict(merge_infos)
     offenders = []
+    unrevertable = []
+    recheck_passed = False
     quarantine_entries = squad_merge_loop.load_quarantine(quarantine_path)
 
     def quarantine_squad(squad, reason):
@@ -644,12 +713,16 @@ def bisect_sweep_failure(*, repo_root, merge_infos, formats, cache_dir, comparis
         info = merge_infos[squad]
         reverted, message = revert_squad_contribution(repo_root, info, run_git)
         if not reverted:
-            log_fn(f"bisection: could not revert squad/{squad}'s contribution ({message}) -- leaving it in place")
+            log_fn(f"bisection: could not revert squad/{squad}'s contribution ({message}) -- it is "
+                   "STILL ON THE BRANCH and was never cleared by a recheck, so this branch can no "
+                   "longer be pushed (see unrevertable)")
+            unrevertable.append(squad)
             continue
         if recheck(squad):
             log_fn(f"bisection: reverting squad/{squad} clears the sweep -- quarantining its commits")
             quarantine_squad(squad, "overlord sweep bisection: isolated as the offending squad")
             found = True
+            recheck_passed = True
             break
         restored, r_message = undo_last_revert(repo_root, run_git)
         if not restored:
@@ -668,10 +741,16 @@ def bisect_sweep_failure(*, repo_root, merge_infos, formats, cache_dir, comparis
             if reverted:
                 quarantine_squad(squad, "overlord sweep bisection: still failing after isolating every candidate")
             else:
-                log_fn(f"bisection: could not revert squad/{squad} during full abort ({message})")
+                log_fn(f"bisection: could not revert squad/{squad} during full abort ({message}) -- "
+                       "it is STILL ON THE BRANCH, which therefore cannot be pushed")
+                unrevertable.append(squad)
 
     return {
         "offenders": offenders, "surviving_squads": sorted(surviving),
+        # De-duplicated: a squad whose isolation-probe revert failed stays
+        # in `surviving`, so the full-abort loop tries and fails on it a
+        # second time. One entry per squad, one reason to refuse the push.
+        "unrevertable": sorted(set(unrevertable)), "recheck_passed": recheck_passed,
         "sweep_tip": head_sha(repo_root, run_git),
     }
 
@@ -751,9 +830,34 @@ def render_evidence_table(rows):
 
 
 def render_judgment_queue_section(judgment_entries):
+    """spec M4(e)'s queue, rendered for the PR body -- and rendered
+    HONESTLY, which it was not until 2026-07-26.
+
+    It used to say "flagged for human judgment-queue review before
+    merge". Nothing enforces that. `judgment_entries` is interpolated
+    here and echoed in run_sweep's return dict, and the string "judgment"
+    appears nowhere in parallel_model_fix_loop.py: auto_publish_round
+    branches only on run_sweep's status and on pr_checks_state, so a
+    flagged commit squash-merges on green exactly like an unflagged one.
+    run_sweep also writes verdict="machine_accepted" for every merged
+    commit, flagged ones included, BEFORE this classification runs.
+
+    Making the queue a hard merge gate is a POLICY change with a measured
+    throughput cost, not a wording fix, and it needs the classifier's
+    precision fixed first: both sweep PRs that have ever landed (#124 ->
+    4f3eb99 and #130 -> a2aa0df) are flagged with "touches a
+    value-map/PrintConv-like table", so an unconditional hold today would
+    have published nothing at all. Until then the PR body must not
+    promise a review that no code performs.
+    """
     if not judgment_entries:
         return "No commits in this sweep require judgment-queue review -- everything ships mechanically."
-    lines = ["The following commits are flagged for human judgment-queue review before merge:", ""]
+    lines = [
+        "The following commits are flagged for the judgment queue. This is ADVISORY: nothing in the "
+        "publish path blocks on it, so these commits merge with the rest of the sweep once CI is "
+        "green -- read them here, or after the fact in sweep-review-history.jsonl.",
+        "",
+    ]
     for sha, reasons in judgment_entries:
         lines.append(f"- `{sha[:12]}`: {', '.join(reasons)}")
     return "\n".join(lines)
@@ -885,9 +989,11 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
     """One full overlord sweep pass (spec M4). See module docstring for
     the step-by-step breakdown. Returns a summary dict whose "status"
     is one of: "no_news", "branch_cut_failed", "nothing_merged",
-    "sweep_aborted" (bisection quarantined every candidate),
-    "reattach_failed", "workspace_tests_failed", "push_failed",
-    "pr_create_failed", "ok".
+    "sweep_aborted" (bisection quarantined every candidate, could not
+    revert a candidate, or ended without a passing recheck -- see
+    bisect_sweep_failure), "reattach_failed", "zero_delta" (the assembled
+    branch is tree-identical to origin_ref: nothing to publish),
+    "workspace_tests_failed", "push_failed", "pr_create_failed", "ok".
     """
     run_git = run_git or default_run_git
     cargo_test_workspace_fn = cargo_test_workspace_fn or _real_cargo_test_workspace
@@ -987,7 +1093,37 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
             squad: info for squad, info in merge_infos.items()
             if squad in bisection_result["surviving_squads"]
         }
+        # The invariant "nothing bisection rejected is still on this
+        # branch" is now ESTABLISHED, not inferred. A squad whose revert
+        # failed is still on the branch and was never cleared by a
+        # recheck; a bisection that ended with its last recheck FAILING
+        # (the could-not-restore path) left the real offender on the
+        # branch while quarantining an innocent squad as "the offender".
+        # Either way the branch carries content this round rejected, and
+        # the answer is the same one the orphaned-revert fix landed
+        # yesterday: never push a branch bisection did not clear. Nothing
+        # is lost -- the branch is simply not pushed, the unrevertable /
+        # unverified squads are left OUT of durable_squads, so their
+        # cursor entry stays put and a later sweep retries them whole.
+        if bisection_result["unrevertable"]:
+            log_fn(f"bisection could not revert {bisection_result['unrevertable']} -- REFUSING to "
+                   f"push {branch}: it still carries content this round's recheck rejected. Their "
+                   "stamps are NOT consumed; a later sweep retries them once the revert can succeed.")
+            persist_cursor(durable_squads)
+            return {
+                "status": "sweep_aborted", "branch": branch, "bisection": bisection_result,
+                "failed_squads": failed_squads, "preflight": health,
+            }
         if not merge_infos:
+            persist_cursor(durable_squads)
+            return {
+                "status": "sweep_aborted", "branch": branch, "bisection": bisection_result,
+                "failed_squads": failed_squads, "preflight": health,
+            }
+        if not bisection_result["recheck_passed"]:
+            log_fn(f"bisection finished without a PASSING recheck over {sorted(merge_infos)} -- "
+                   f"REFUSING to push {branch}. Their stamps are NOT consumed; a later sweep "
+                   "retries them whole.")
             persist_cursor(durable_squads)
             return {
                 "status": "sweep_aborted", "branch": branch, "bisection": bisection_result,
@@ -1015,6 +1151,39 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
             "bisection": bisection_result, "failed_squads": failed_squads, "preflight": health,
         }
 
+    # The repo's DURABLE idempotency rule: compare the TREE, not the SHA.
+    # A cherry-pick or a squash gives identical content a fresh sha (fresh
+    # committer timestamp), so a stamp whose whole contribution is already
+    # on origin/main still yields a branch that is N commits "ahead" while
+    # being byte-identical in content -- and pushing it restarts CI for
+    # nothing. Two ways in, both measured 2026-07-26: the stamped
+    # squad_sha is already an ancestor of origin/main (real `gh pr create`
+    # then fails outright with "No commits between main and ..."), or
+    # origin/main carries the same content under a squash-created sha
+    # (a real no-op PR, a full CI cycle, and an empty squash commit on
+    # main). The only "did anything happen" gate upstream is
+    # evaluate_post_merge's `measured_delta >= verified_delta_sum`, which
+    # passes vacuously at 0 >= 0.
+    #
+    # Placed here deliberately: after reattach (so HEAD is the branch tip
+    # that would actually be pushed) and BEFORE the multi-minute workspace
+    # suite, the fmt commit, the push and the PR. `--quiet` implies
+    # --exit-code, so rc 0 means "no differences"; two dots, not three, so
+    # a merge that neutralised main's own content is caught too.
+    rc, _out, _err = run_git(["diff", "--quiet", f"{origin_ref}..HEAD"], repo_root)
+    if rc == 0:
+        log_fn(f"{branch} is tree-identical to {origin_ref} -- every stamped contribution is already "
+               "on main; skipping the workspace suite, the fmt commit, the push and the PR")
+        # Advancing IS correct here, and required: the content is
+        # demonstrably landed, so re-collecting these stamps would spin
+        # this same round forever.
+        durable_squads.update(merge_infos.keys())
+        persist_cursor(durable_squads)
+        return {
+            "status": "zero_delta", "branch": branch, "merged_squads": sorted(merge_infos),
+            "failed_squads": failed_squads, "bisection": bisection_result, "preflight": health,
+        }
+
     all_shas = []
     for squad, info in merge_infos.items():
         all_shas.extend(commits_contributed(repo_root, info, run_git))
@@ -1032,12 +1201,6 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
             "status": "workspace_tests_failed", "branch": branch, "bisection": bisection_result,
             "failed_squads": failed_squads, "workspace_output": workspace_output, "preflight": health,
         }
-
-    # Full success from here: every surviving squad's contribution sits on
-    # a cut, semantically-rechecked, workspace-tested sweep branch -- durable
-    # regardless of what happens to the push/PR-creation calls below.
-    durable_squads.update(merge_infos.keys())
-    persist_cursor(durable_squads)
 
     git_runner = log_sweep_review.make_git_runner(repo_root)
     written, _skipped = log_sweep_review.append_from_commits(
@@ -1064,8 +1227,22 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
 
     push_ok, push_message = push_branch_fn(repo_root, branch)
     if not push_ok:
-        log_fn(f"could not push {branch} to origin: {push_message} -- skipping PR creation "
-               "(the sweep branch and its commits are unaffected; retry the push/PR by hand)")
+        log_fn(f"could not push {branch} to origin: {push_message} -- skipping PR creation. The "
+               "sweep branch and its commits are unaffected, and the sweep-state cursor for "
+               f"{sorted(merge_infos)} has NOT advanced, so the next sweep re-collects these exact "
+               f"stamps and retries them whole (or retry by hand: git push -u origin {branch})")
+        # Deliberately NOT durable. Until 2026-07-26 the cursor advanced
+        # for every surviving squad here, on the rationale spelled out
+        # below the push -- "re-sweeping already-pushed content would open
+        # a SECOND PR carrying the same fixes and leave two branches
+        # racing to merge". That rationale is about content ORIGIN HAS. A
+        # failed push means origin has nothing: a retry cannot duplicate a
+        # PR or a branch, so consuming the stamps is pure downside.
+        # Measured 2026-07-26: round 1 push_failed consumed alpha's stamp,
+        # round 2 with a healthy push reported 'no_news', and the
+        # validated fix shipped only because that squad happened to stamp
+        # again later.
+        persist_cursor(durable_squads)
         return {
             "status": "push_failed", "branch": branch, "message": push_message,
             "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
@@ -1073,6 +1250,15 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
             "bisection": bisection_result, "judgment_entries": judgment_entries, "preflight": health,
             "sweep_review_written": len(written), "fmt": fmt_result,
         }
+
+    # The push landed, so origin now HAS this content: from here on
+    # re-sweeping the same stamps would push a second branch and open a
+    # second PR carrying identical fixes. That is what makes the advance
+    # correct at exactly this point -- not one line earlier (see the
+    # push-failure path above) and not one line later, since a failed
+    # `gh pr create` leaves the branch on origin either way.
+    durable_squads.update(merge_infos.keys())
+    persist_cursor(durable_squads)
 
     pr_result = create_pr_fn(title, body, branch, "main")
     # `gh pr create` fails routinely and quietly: an expired token, a
@@ -1094,8 +1280,11 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
     if isinstance(pr_result, dict) and "ok" in pr_result and not pr_result["ok"]:
         detail = (pr_result.get("stderr") or pr_result.get("stdout") or "").strip()
         log_fn(f"gh pr create FAILED for {branch}: {detail} -- the branch IS pushed and its "
-               "commits are safe; open the PR by hand (`gh pr create --head "
-               f"{branch} --base main`)")
+               "commits are safe, but the sweep-state cursor for "
+               f"{sorted(merge_infos)} has ALREADY advanced (the content is on origin, so "
+               "re-sweeping it would open a duplicate PR): NO future sweep re-collects these "
+               "stamps, and they ship only if you open the PR by hand (`gh pr create --head "
+               f"{branch} --base main`) or that squad produces another green stamp")
         return {
             "status": "pr_create_failed", "branch": branch, "pr": pr_result, "message": detail,
             "fmt": fmt_result, "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
@@ -1161,7 +1350,10 @@ def main(argv=None):
         print(f"  retry with: gh pr create --head {result.get('branch')} --base main")
     elif result.get("pr") is not None:
         print(f"PR: {result['pr']}")
-    return 0 if result.get("status") in ("ok", "no_news") else 1
+    # "zero_delta" joins the success set: the branch was tree-identical to
+    # origin/main, so there was genuinely nothing to publish -- the same
+    # kind of legitimate no-op as "no_news", not a failure to report.
+    return 0 if result.get("status") in ("ok", "no_news", "zero_delta") else 1
 
 
 if __name__ == "__main__":
