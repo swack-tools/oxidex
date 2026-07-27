@@ -12,6 +12,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -1191,11 +1192,10 @@ class ExtractorEvasionShapeTests(unittest.TestCase):
                 values, _ = extract_added_map_values(diff)
                 self.assertEqual(values, ["Fabricated Value"])
 
-    @unittest.skipUnless(
-        # nosec B603 -- list-argv, no shell, and the argv is a literal.
-        subprocess.run(["which", "rustfmt"], capture_output=True).returncode == 0,
-        "rustfmt not installed",
-    )
+    # shutil.which rather than `subprocess.run(["which", ...])`: it answers
+    # the same question without spawning a process, so Bandit's B603
+    # subprocess warning never arises and there is nothing to suppress.
+    @unittest.skipUnless(shutil.which("rustfmt"), "rustfmt not installed")
     def test_rustfmt_reflow_of_a_long_arm_keeps_the_check_on(self):
         # THE property that actually matters. Measured 2026-07-26 with
         # rustfmt 1.9.0 --edition 2021 by binary search: at indent 8 with
