@@ -54,6 +54,11 @@ const LANGUAGE_FINNISH_WINDOWS: u16 = 0x040b;
 const LANGUAGE_FRENCH_WINDOWS: u16 = 0x040c;
 const LANGUAGE_ITALIAN_WINDOWS: u16 = 0x0410;
 const LANGUAGE_ENGLISH_WINDOWS: u16 = 0x0409;
+const LANGUAGE_JAPANESE_WINDOWS: u16 = 0x0411;
+const LANGUAGE_KOREAN_WINDOWS: u16 = 0x0412;
+const LANGUAGE_DUTCH_NL_WINDOWS: u16 = 0x0413;
+const LANGUAGE_CHINESE_TW_WINDOWS: u16 = 0x0404;
+const LANGUAGE_CHINESE_CN_WINDOWS: u16 = 0x0804;
 
 /// Macintosh encoding (script) IDs from ExifTool's `%ttCharset{Macintosh}`
 /// (Font.pm). Only the two this parser can decode losslessly are named;
@@ -354,20 +359,13 @@ impl TTFParser {
     /// Returns the ExifTool language suffix for supported localized name records.
     fn language_suffix(record: &NameRecord) -> Option<&'static str> {
         match (record.platform_id, record.language_id) {
-            (PLATFORM_MACINTOSH, LANGUAGE_DANISH_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_DANISH_WINDOWS) => Some("da"),
-            (PLATFORM_MACINTOSH, LANGUAGE_GERMAN_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_GERMAN_WINDOWS) => Some("de"),
-            (PLATFORM_MACINTOSH, LANGUAGE_HEBREW_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_HEBREW_WINDOWS) => Some("he"),
-            (PLATFORM_MACINTOSH, LANGUAGE_SPANISH_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_SPANISH_WINDOWS) => Some("es"),
-            (PLATFORM_MACINTOSH, LANGUAGE_FINNISH_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_FINNISH_WINDOWS) => Some("fi"),
-            (PLATFORM_MACINTOSH, LANGUAGE_FRENCH_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_FRENCH_WINDOWS) => Some("fr"),
-            (PLATFORM_MACINTOSH, LANGUAGE_ITALIAN_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_ITALIAN_WINDOWS) => Some("it"),
+            (PLATFORM_MACINTOSH, LANGUAGE_DANISH_MACINTOSH) => Some("da"),
+            (PLATFORM_MACINTOSH, LANGUAGE_GERMAN_MACINTOSH) => Some("de"),
+            (PLATFORM_MACINTOSH, LANGUAGE_HEBREW_MACINTOSH) => Some("he"),
+            (PLATFORM_MACINTOSH, LANGUAGE_SPANISH_MACINTOSH) => Some("es"),
+            (PLATFORM_MACINTOSH, LANGUAGE_FINNISH_MACINTOSH) => Some("fi"),
+            (PLATFORM_MACINTOSH, LANGUAGE_FRENCH_MACINTOSH) => Some("fr"),
+            (PLATFORM_MACINTOSH, LANGUAGE_ITALIAN_MACINTOSH) => Some("it"),
             // Macintosh-only below. No Windows LCID is paired with these
             // because ExifTool's %ttLang{Windows} spells most of them with a
             // region subtag that %ttLang{Macintosh} does not use -- 0x0414
@@ -388,6 +386,36 @@ impl TTFParser {
             (PLATFORM_MACINTOSH, LANGUAGE_CHINESE_TW_MACINTOSH) => Some("zh-TW"),
             (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH) => Some("ko"),
             (PLATFORM_MACINTOSH, LANGUAGE_CHINESE_CN_MACINTOSH) => Some("zh-CN"),
+            // Windows LCIDs are a SEPARATE table with SEPARATE spellings.
+            // `ProcessTTF` looks the record up in `%ttLang{Windows}` and uses
+            // whatever string it finds verbatim, so the Windows suffix for a
+            // language is not interchangeable with its Macintosh suffix: the
+            // Macintosh side calls German 'de' while %ttLang{Windows} calls
+            // 0x0407 'de-DE'. Pairing the two arms -- which this function did
+            // until now -- emitted `FontSubfamily-de` for a record ExifTool
+            // reports as `FontSubfamily-de-DE`. Every value below is quoted
+            // from %ttLang{Windows} in Font.pm.
+            //
+            // 0x0409 is 'en-US', NOT 'en', so ExifTool suffixes it like any
+            // other language -- `$lang ne 'en'` is false only for the literal
+            // string 'en', which no Windows LCID maps to. Confirmed against
+            // the corpus: `exiftool -G1 combined-samples/Font.dfont`, whose
+            // name table is entirely Plat=3/Windows Lang=0x409, prints
+            // `FontSubfamily-en-US`, `Copyright-en-US`, `FontName-en-US` and
+            // so on for every nameID it carries.
+            (PLATFORM_WINDOWS, LANGUAGE_ENGLISH_WINDOWS) => Some("en-US"),
+            (PLATFORM_WINDOWS, LANGUAGE_DANISH_WINDOWS) => Some("da"),
+            (PLATFORM_WINDOWS, LANGUAGE_GERMAN_WINDOWS) => Some("de-DE"),
+            (PLATFORM_WINDOWS, LANGUAGE_HEBREW_WINDOWS) => Some("he"),
+            (PLATFORM_WINDOWS, LANGUAGE_SPANISH_WINDOWS) => Some("es-ES"),
+            (PLATFORM_WINDOWS, LANGUAGE_FINNISH_WINDOWS) => Some("fi"),
+            (PLATFORM_WINDOWS, LANGUAGE_FRENCH_WINDOWS) => Some("fr-FR"),
+            (PLATFORM_WINDOWS, LANGUAGE_ITALIAN_WINDOWS) => Some("it-IT"),
+            (PLATFORM_WINDOWS, LANGUAGE_JAPANESE_WINDOWS) => Some("ja"),
+            (PLATFORM_WINDOWS, LANGUAGE_KOREAN_WINDOWS) => Some("ko"),
+            (PLATFORM_WINDOWS, LANGUAGE_DUTCH_NL_WINDOWS) => Some("nl-NL"),
+            (PLATFORM_WINDOWS, LANGUAGE_CHINESE_TW_WINDOWS) => Some("zh-TW"),
+            (PLATFORM_WINDOWS, LANGUAGE_CHINESE_CN_WINDOWS) => Some("zh-CN"),
             _ => None,
         }
     }
@@ -742,6 +770,101 @@ mod tests {
                 "Macintosh language ID {id} must map to {expected:?} per ExifTool %ttLang",
             );
         }
+    }
+
+    /// A Windows name record carrying `language_id`.
+    fn windows_record(language_id: u16) -> NameRecord {
+        NameRecord {
+            platform_id: PLATFORM_WINDOWS,
+            encoding_id: 1,
+            language_id,
+            name_id: 0,
+            length: 0,
+            offset: 0,
+        }
+    }
+
+    /// Pins every Windows LCID to ExifTool's `%ttLang{Windows}` table
+    /// (Font.pm), which is a DIFFERENT table from `%ttLang{Macintosh}` with
+    /// DIFFERENT spellings for the same languages.
+    ///
+    /// `ProcessTTF` does `$lang = $ttLang{$sys}{$langID}` and then
+    /// `GetLangInfo($tagInfo, $lang)`, so the suffix is the table's string
+    /// verbatim -- there is no normalisation step that would strip a region
+    /// subtag. Four of these were previously aliased onto the Macintosh
+    /// suffix, so a German Windows record was emitted as `FontSubfamily-de`
+    /// where ExifTool reports `FontSubfamily-de-DE`. Font.ttf cannot expose
+    /// that: every one of its name records is platform 1 (Macintosh).
+    #[test]
+    fn windows_language_ids_match_exiftool_ttlang_table() {
+        // Literal LCIDs and literal ExifTool strings on purpose: naming the
+        // constants here would assert each constant's own value back at
+        // itself and pass for anything they held.
+        for (id, expected) in [
+            (0x0409, "en-US"), // 0x0409 => 'en-US'   (NOT bare 'en')
+            (0x0406, "da"),    // %ttLang{Windows}: 0x0406 => 'da'
+            (0x0407, "de-DE"), // 0x0407 => 'de-DE'   (NOT plain 'de')
+            (0x040b, "fi"),    // 0x040b => 'fi'
+            (0x040c, "fr-FR"), // 0x040c => 'fr-FR'   (NOT plain 'fr')
+            (0x040d, "he"),    // 0x040d => 'he'
+            (0x0410, "it-IT"), // 0x0410 => 'it-IT'   (NOT plain 'it')
+            (0x0411, "ja"),    // 0x0411 => 'ja'
+            (0x0412, "ko"),    // 0x0412 => 'ko'
+            (0x0413, "nl-NL"), // 0x0413 => 'nl-NL'
+            (0x0c0a, "es-ES"), // 0x0c0a => 'es-ES'   (NOT plain 'es')
+            (0x0404, "zh-TW"), // 0x0404 => 'zh-TW'
+            (0x0804, "zh-CN"), // 0x0804 => 'zh-CN'
+        ] {
+            let record = windows_record(id);
+            assert_eq!(
+                TTFParser::language_suffix(&record),
+                Some(expected),
+                "Windows LCID {id:#06x} must map to {expected:?} per ExifTool %ttLang{{Windows}}",
+            );
+        }
+    }
+
+    /// The Windows LCIDs three backlog patches wanted to claim under the
+    /// Macintosh spelling. `%ttLang{Windows}` gives 0x0414 => 'no-NO',
+    /// 0x0416 => 'pt-BR' and 0x041d => 'sv-SE'; claiming them as 'no', 'pt'
+    /// and 'sv' would emit a tag name ExifTool never produces. Leaving them
+    /// unmapped keeps the gap open instead of filling it with a wrong name.
+    #[test]
+    fn windows_region_tagged_language_ids_are_not_claimed_unqualified() {
+        for id in [
+            0x0414, /* no-NO, not 'no' */
+            0x0416, /* pt-BR, not 'pt' */
+            0x041d, /* sv-SE, not 'sv' */
+            0x0816, /* pt-PT, not 'pt' */
+        ] {
+            let record = windows_record(id);
+            assert_eq!(
+                TTFParser::language_suffix(&record),
+                None,
+                "Windows LCID {id:#06x} is spelled with a region subtag in \
+                 %ttLang{{Windows}}; claiming it unqualified would emit a tag \
+                 name ExifTool does not produce",
+            );
+        }
+    }
+
+    /// Macintosh and Windows suffixes for the same language must not be
+    /// assumed equal. This is the property the old paired match arms
+    /// violated.
+    #[test]
+    fn macintosh_and_windows_suffixes_differ_where_exiftool_differs() {
+        // Macintosh 2 => 'de' but Windows 0x0407 => 'de-DE'.
+        assert_eq!(TTFParser::language_suffix(&mac_record(2)), Some("de"));
+        assert_eq!(
+            TTFParser::language_suffix(&windows_record(0x0407)),
+            Some("de-DE")
+        );
+        // Macintosh 3 => 'it' but Windows 0x0410 => 'it-IT'.
+        assert_eq!(TTFParser::language_suffix(&mac_record(3)), Some("it"));
+        assert_eq!(
+            TTFParser::language_suffix(&windows_record(0x0410)),
+            Some("it-IT")
+        );
     }
 
     /// The IDs ExifTool assigns to languages this parser does NOT claim.
