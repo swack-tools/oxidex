@@ -310,6 +310,40 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         camera_make = Some(make_str.trim_end_matches('\0').trim().to_string());
                     }
 
+                    // CR2 IFD1 thumbnail/preview tags: ExifTool reports
+                    // PreviewImage and PreviewImageLength under the EXIF
+                    // group, derived from the IFD1 JPEGInterchangeFormat*
+                    // entries. The generic lookup_tag_name path indexes
+                    // these under their EXIF-spec names, so we name them
+                    // explicitly to match ExifTool's output.
+                    if format == RawFormat::CanonCR2 && ifd_index == 1 {
+                        match *tag_id {
+                            0x0201 if bytes.len() >= 4 => {
+                                let value = read_u32(bytes, byte_order);
+                                metadata.insert(
+                                    "EXIF:ThumbnailOffset".to_string(),
+                                    TagValue::new_integer(value as i64),
+                                );
+                                continue;
+                            }
+                            0x0202 if bytes.len() >= 4 => {
+                                let value = read_u32(bytes, byte_order);
+                                metadata.insert(
+                                    "EXIF:PreviewImageLength".to_string(),
+                                    TagValue::new_integer(value as i64),
+                                );
+                                metadata.insert(
+                                    "EXIF:PreviewImage".to_string(),
+                                    TagValue::new_string(format!(
+                                        "(Binary data {} bytes, use -b option to extract)",
+                                        value
+                                    )),
+                                );
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
                     // Convert tag to metadata
                     // Panasonic RW2 stores BitsPerSample in its proprietary
                     // IFD0 tag 0x000A and Compression in tag 0x000B instead
@@ -1672,6 +1706,17 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     let tag_name = lookup_tag_name(*tag_id, "IFD0");
                     let tag_value =
                         raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order);
+                    let tag_value = if let Some(value) = format_exif_display_value(
+                        *tag_id,
+                        bytes,
+                        *field_type,
+                        *value_count,
+                        byte_order,
+                    ) {
+                        TagValue::new_string(value)
+                    } else {
+                        tag_value
+                    };
                     metadata.insert(tag_name, tag_value);
                 }
 
@@ -1694,6 +1739,17 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 *value_count,
                                 byte_order,
                             );
+                            let tag_value = if let Some(value) = format_exif_display_value(
+                                *tag_id,
+                                bytes,
+                                *field_type,
+                                *value_count,
+                                byte_order,
+                            ) {
+                                TagValue::new_string(value)
+                            } else {
+                                tag_value
+                            };
                             metadata.insert(tag_name, tag_value);
                         }
                     }
@@ -1714,6 +1770,27 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         for (tag_name, tag_value) in makernote_tags {
                             metadata.insert(tag_name, TagValue::new_string(tag_value));
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // Some CR3 files store additional EXIF metadata in a CMT2 box
+    // (e.g. LensModel, LensSerialNumber, OffsetTime, OwnerName).
+    // Parse it the same way as CMT1.
+    if let Some(tiff) = find_cr3_box(data, b"CMT2") {
+        if tiff.starts_with(b"II*\0") || tiff.starts_with(b"MM\x00*") {
+            if let Ok(byte_order) = detect_byte_order(tiff) {
+                let first_ifd_offset = read_u32(&tiff[4..8], byte_order) as u64;
+                let reader = SliceReader::new(tiff);
+                if let Ok(ifd0_tags) = parse_ifd(&reader, first_ifd_offset, byte_order) {
+                    for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
+                        let bytes = raw_bytes.as_ref();
+                        let tag_name = lookup_tag_name(*tag_id, "EXIF");
+                        let tag_value =
+                            raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order);
+                        metadata.insert(tag_name, tag_value);
                     }
                 }
             }
