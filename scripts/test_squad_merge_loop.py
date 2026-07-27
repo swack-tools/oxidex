@@ -1211,6 +1211,52 @@ class ShouldRecutTests(GitRepoTestCase):
         ))
 
 
+    def test_true_when_main_moved_far_past_the_base_even_if_RECENT(self):
+        """Distance, not just age.
+
+        The time threshold assumes main moves slowly. It does not: with the
+        fleet publishing, main advanced 13 commits in about four hours on
+        2026-07-27, and every squad branch sat on a base that was HOURS old --
+        "fresh" by the time rule -- while being far enough behind that all
+        thirteen failed to merge. Simulated against main that day: merged
+        cleanly 0, conflicted 13.
+
+        The blocking commit was the sweep's own PR #154: main holds the
+        merged-and-formatted form of work the branches still carry pre-merge.
+        A branch is stale the moment its content lands upstream by another
+        route, and that is a distance question.
+        """
+        repo = self.make_repo()
+        git(repo, "branch", "squad/nikon")
+        base_sha = git_out(repo, "rev-parse", "main").strip()
+        commit_ts = int(git_out(repo, "log", "-1", "--format=%ct", base_sha).strip())
+        for i in range(10):
+            self.commit_file(repo, f"m{i}.txt", str(i), f"main moves {i}")
+        # Base is BRAND NEW by the clock -- the age clause alone says False.
+        self.assertFalse(sml.should_recut(
+            repo, "squad/nikon", origin_ref="main", staleness_seconds=10**9,
+            now_fn=lambda: commit_ts + 1, behind_commits=0,
+        ))
+        # ...but main is 10 commits past it, so the distance clause fires.
+        self.assertTrue(sml.should_recut(
+            repo, "squad/nikon", origin_ref="main", staleness_seconds=10**9,
+            now_fn=lambda: commit_ts + 1, behind_commits=8,
+        ))
+
+    def test_a_branch_only_slightly_behind_is_left_alone(self):
+        """Re-cutting is not free -- it must not fire on ordinary drift."""
+        repo = self.make_repo()
+        git(repo, "branch", "squad/nikon")
+        base_sha = git_out(repo, "rev-parse", "main").strip()
+        commit_ts = int(git_out(repo, "log", "-1", "--format=%ct", base_sha).strip())
+        for i in range(3):
+            self.commit_file(repo, f"m{i}.txt", str(i), f"main moves {i}")
+        self.assertFalse(sml.should_recut(
+            repo, "squad/nikon", origin_ref="main", staleness_seconds=10**9,
+            now_fn=lambda: commit_ts + 1, behind_commits=8,
+        ))
+
+
 class RecutSquadBranchTests(GitRepoTestCase):
     def test_recut_re_picks_only_still_open_novel_commits(self):
         repo = self.make_repo()
