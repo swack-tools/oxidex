@@ -436,6 +436,23 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             byte_order,
                         ) {
                             TagValue::new_string(value)
+                        } else if format == RawFormat::AdobeDNG {
+                            format_dng_integer_array(
+                                *tag_id,
+                                bytes,
+                                *field_type,
+                                *value_count,
+                                byte_order,
+                            )
+                            .map(TagValue::new_string)
+                            .unwrap_or_else(|| {
+                                raw_bytes_to_simple_tag_value(
+                                    bytes,
+                                    *field_type,
+                                    *value_count,
+                                    byte_order,
+                                )
+                            })
                         } else {
                             raw_bytes_to_simple_tag_value(
                                 bytes,
@@ -803,7 +820,7 @@ fn format_dng_integer_array(
                     _ => None,
                 })
                 .collect();
-            return Some(colors?.join(", "));
+            return Some(colors?.join(","));
         }
         0xC617 if field_type == 3 && value_count >= 1 => {
             // CFALayout: single SHORT with PrintConv.
@@ -1138,7 +1155,7 @@ mod dng_integer_array_tests {
         assert_eq!(
             format_dng_integer_array(0xC616, &[0, 1, 2], 1, 3, ByteOrder::LittleEndian)
                 .as_deref(),
-            Some("Red, Green, Blue")
+            Some("Red,Green,Blue")
         );
         // CFALayout (0xC617) as SHORT value 1
         assert_eq!(
