@@ -3223,3 +3223,315 @@ mod tests {
         assert!(has_ifd0 || has_ifd1, "Should have extracted tags from IFDs");
     }
 }
+
+/// Regression coverage for the RW2 JpgFromRaw EXIF PrintConv values that the
+/// corpus sample cannot reach.
+///
+/// Background (measured 2026-07-26): the six tags wired for RW2 were signed off
+/// by a `recheck-pass gaps=6->0` run against
+/// `/tmp/oxidex-exiftool-cache/combined-samples/Panasonic.rw2`. That sample only
+/// ever hits `CustomRendered = 0`, `ExposureMode = 0`, `DigitalZoomRatio = 0/10`
+/// and LONG-typed `ExifImageWidth/Height`, so exactly four of the seventeen
+/// added literals and branches were actually executed. A gap count dropping to
+/// zero therefore proves nothing about `1 => 'Custom'`, `1 => 'Manual'`,
+/// `2 => 'Auto bracket'`, the SHORT-typed dimension branch or the non-integral
+/// rational path.
+///
+/// That blind spot is not hypothetical. The same fleet run produced a TTF fix
+/// asserting Mac language Spanish = 12 (`%ttLang` says 12 => 'ar'; Spanish is 6)
+/// and a RAR5 fix inventing host-OS values 2/3/4 plus an "Unknown" catch-all
+/// (ExifTool's RAR5 table is exactly `{0 => 'Win32', 1 => 'Unix'}`). Both sat
+/// beside values the sample *did* exercise, so both rechecks came back green.
+///
+/// Every expectation below is a literal copied from the PrintConv hashes in
+/// `%Image::ExifTool::Exif::Main`
+/// (`/private/tmp/oxidex-exiftool-cache/exiftool/lib/Image/ExifTool/Exif.pm`,
+/// 0xa401 at line 2843, 0xa402 at line 2862), never a reference to the constant
+/// under test — an assertion phrased in terms of the constant itself passes for
+/// whatever value that constant happens to hold.
+#[cfg(test)]
+mod rw2_embedded_exif_printconv_tests {
+    use super::*;
+
+    /// One synthetic ExifIFD entry: `(tag_id, field_type, value_count, payload)`.
+    type Entry<'a> = (u16, u16, u32, &'a [u8]);
+
+    fn u16b(value: u16, big_endian: bool) -> [u8; 2] {
+        if big_endian {
+            value.to_be_bytes()
+        } else {
+            value.to_le_bytes()
+        }
+    }
+
+    fn u32b(value: u32, big_endian: bool) -> [u8; 4] {
+        if big_endian {
+            value.to_be_bytes()
+        } else {
+            value.to_le_bytes()
+        }
+    }
+
+    /// Build an RW2-shaped JpgFromRaw blob: SOI, then an APP1 `Exif\0\0`
+    /// segment whose TIFF holds an IFD0 carrying only the ExifIFD pointer
+    /// (0x8769) that `extract_rw2_embedded_exif_tags` follows.
+    fn build_preview_jpeg(entries: &[Entry<'_>], big_endian: bool) -> Vec<u8> {
+        // IFD0 sits at 8 and holds one 12-byte entry: 8 + 2 + 12 + 4 = 26.
+        const EXIF_IFD_OFFSET: u32 = 26;
+        let entry_count = u32::try_from(entries.len()).expect("test entry count fits in u32");
+        let overflow_start = EXIF_IFD_OFFSET + 2 + 12 * entry_count + 4;
+
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(if big_endian { b"MM\0*" } else { b"II*\0" });
+        tiff.extend_from_slice(&u32b(8, big_endian));
+
+        tiff.extend_from_slice(&u16b(1, big_endian));
+        tiff.extend_from_slice(&u16b(0x8769, big_endian));
+        tiff.extend_from_slice(&u16b(4, big_endian)); // LONG
+        tiff.extend_from_slice(&u32b(1, big_endian));
+        tiff.extend_from_slice(&u32b(EXIF_IFD_OFFSET, big_endian));
+        tiff.extend_from_slice(&u32b(0, big_endian)); // no IFD1
+        assert_eq!(tiff.len(), EXIF_IFD_OFFSET as usize);
+
+        let mut overflow = Vec::new();
+        tiff.extend_from_slice(&u16b(
+            u16::try_from(entries.len()).expect("test entry count fits in u16"),
+            big_endian,
+        ));
+        for (tag_id, field_type, value_count, payload) in entries {
+            tiff.extend_from_slice(&u16b(*tag_id, big_endian));
+            tiff.extend_from_slice(&u16b(*field_type, big_endian));
+            tiff.extend_from_slice(&u32b(*value_count, big_endian));
+            if payload.len() <= 4 {
+                // TIFF stores short values left-justified in the 4-byte field.
+                let mut inline = [0u8; 4];
+                inline[..payload.len()].copy_from_slice(payload);
+                tiff.extend_from_slice(&inline);
+            } else {
+                let at = overflow_start
+                    + u32::try_from(overflow.len()).expect("test overflow fits in u32");
+                tiff.extend_from_slice(&u32b(at, big_endian));
+                overflow.extend_from_slice(payload);
+            }
+        }
+        tiff.extend_from_slice(&u32b(0, big_endian)); // next IFD
+        assert_eq!(tiff.len(), overflow_start as usize);
+        tiff.extend_from_slice(&overflow);
+
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+        let segment_length =
+            u16::try_from(2 + 6 + tiff.len()).expect("test APP1 segment fits in u16");
+        jpeg.extend_from_slice(&segment_length.to_be_bytes());
+        jpeg.extend_from_slice(b"Exif\0\0");
+        jpeg.extend_from_slice(&tiff);
+        jpeg
+    }
+
+    fn extract(entries: &[Entry<'_>], big_endian: bool) -> MetadataMap {
+        let jpeg = build_preview_jpeg(entries, big_endian);
+        let mut metadata = MetadataMap::new();
+        extract_rw2_embedded_exif_tags(&jpeg, &mut metadata)
+            .expect("synthetic RW2 preview EXIF must parse");
+        metadata
+    }
+
+    fn short(value: u16, big_endian: bool) -> Vec<u8> {
+        u16b(value, big_endian).to_vec()
+    }
+
+    fn rational(numerator: u32, denominator: u32, big_endian: bool) -> Vec<u8> {
+        let mut bytes = u32b(numerator, big_endian).to_vec();
+        bytes.extend_from_slice(&u32b(denominator, big_endian));
+        bytes
+    }
+
+    /// Panasonic.rw2 carries `CustomRendered = 0`, so the `1 => 'Custom'` arm
+    /// was never executed by the recheck that approved it. Exif.pm:2852 reads
+    /// `1 => 'Custom',`.
+    #[test]
+    fn custom_rendered_one_is_custom() {
+        let payload = short(1, false);
+        let metadata = extract(&[(0xA401, 3, 1, &payload)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:CustomRendered"),
+            Some(&TagValue::new_string("Custom"))
+        );
+    }
+
+    /// The value the sample does hit, pinned so that a future edit cannot swap
+    /// the two arms and still pass. Exif.pm:2851 reads `0 => 'Normal',`.
+    #[test]
+    fn custom_rendered_zero_is_normal() {
+        let payload = short(0, false);
+        let metadata = extract(&[(0xA401, 3, 1, &payload)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:CustomRendered"),
+            Some(&TagValue::new_string("Normal"))
+        );
+    }
+
+    /// Not exercised by Panasonic.rw2 (`ExposureMode = 0`). Exif.pm:2868 reads
+    /// `1 => 'Manual',`.
+    #[test]
+    fn exposure_mode_one_is_manual() {
+        let payload = short(1, false);
+        let metadata = extract(&[(0xA402, 3, 1, &payload)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:ExposureMode"),
+            Some(&TagValue::new_string("Manual"))
+        );
+    }
+
+    /// Not exercised by Panasonic.rw2. Exif.pm:2869 reads
+    /// `2 => 'Auto bracket',`.
+    #[test]
+    fn exposure_mode_two_is_auto_bracket() {
+        let payload = short(2, false);
+        let metadata = extract(&[(0xA402, 3, 1, &payload)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:ExposureMode"),
+            Some(&TagValue::new_string("Auto bracket"))
+        );
+    }
+
+    /// Exif.pm:2867 reads `0 => 'Auto',`; pinned alongside 1 and 2 so the three
+    /// arms cannot rotate.
+    #[test]
+    fn exposure_mode_zero_is_auto() {
+        let payload = short(0, false);
+        let metadata = extract(&[(0xA402, 3, 1, &payload)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:ExposureMode"),
+            Some(&TagValue::new_string("Auto"))
+        );
+    }
+
+    /// Panasonic.rw2 stores this preview's EXIF little-endian, so the
+    /// big-endian read of every enum payload is unexercised by the corpus.
+    #[test]
+    fn enum_print_conv_is_byte_order_aware() {
+        let custom = short(1, true);
+        let bracket = short(2, true);
+        let metadata = extract(&[(0xA401, 3, 1, &custom), (0xA402, 3, 1, &bracket)], true);
+        assert_eq!(
+            metadata.get("ExifIFD:CustomRendered"),
+            Some(&TagValue::new_string("Custom"))
+        );
+        assert_eq!(
+            metadata.get("ExifIFD:ExposureMode"),
+            Some(&TagValue::new_string("Auto bracket"))
+        );
+    }
+
+    /// The RAR5-class guard. ExifTool's 0xa401 PrintConv does define
+    /// `2 => 'HDR (no original saved)'` (Exif.pm:2853, non-standard Apple iOS),
+    /// which oxidex has not wired yet — that is a coverage gap. What this test
+    /// pins is that the gap degrades to the raw number, which is exactly what
+    /// ExifTool prints when no PrintConv key matches, instead of substituting a
+    /// stand-in label. The rejected RAR5 commit failed precisely here: its
+    /// catch-all emitted "Unknown" and overwrote real data.
+    #[test]
+    fn out_of_table_custom_rendered_falls_back_to_raw_number() {
+        let payload = short(2, false);
+        let metadata = extract(&[(0xA401, 3, 1, &payload)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:CustomRendered"),
+            Some(&TagValue::new_integer(2))
+        );
+    }
+
+    /// Same guard for ExposureMode. Exif.pm:2870 notes value 3 has been seen
+    /// from Samsung EX1/NX30/NX200 and deliberately has no PrintConv entry, so
+    /// ExifTool prints `3`.
+    #[test]
+    fn out_of_table_exposure_mode_falls_back_to_raw_number() {
+        let payload = short(3, false);
+        let metadata = extract(&[(0xA402, 3, 1, &payload)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:ExposureMode"),
+            Some(&TagValue::new_integer(3))
+        );
+    }
+
+    /// Panasonic.rw2 stores both dimensions as LONG (type 4). ExifTool declares
+    /// them `Writable => 'int16u'` (Exif.pm:2705 and 2711), so the SHORT form is
+    /// the spec-typical encoding and is entirely unexercised by the corpus.
+    /// Neither tag has a PrintConv, so the raw number must survive verbatim.
+    #[test]
+    fn exif_image_dimensions_accept_short_encoding() {
+        let width = short(1920, false);
+        let height = short(1440, false);
+        let metadata = extract(&[(0xA002, 3, 1, &width), (0xA003, 3, 1, &height)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:ExifImageWidth"),
+            Some(&TagValue::new_integer(1920))
+        );
+        assert_eq!(
+            metadata.get("ExifIFD:ExifImageHeight"),
+            Some(&TagValue::new_integer(1440))
+        );
+    }
+
+    /// The LONG form the sample does use, pinned so the SHORT test above cannot
+    /// be "fixed" by breaking the branch that actually shipped.
+    #[test]
+    fn exif_image_dimensions_accept_long_encoding() {
+        let width = u32b(1920, false);
+        let height = u32b(1440, false);
+        let metadata = extract(&[(0xA002, 4, 1, &width), (0xA003, 4, 1, &height)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:ExifImageWidth"),
+            Some(&TagValue::new_integer(1920))
+        );
+        assert_eq!(
+            metadata.get("ExifIFD:ExifImageHeight"),
+            Some(&TagValue::new_integer(1440))
+        );
+    }
+
+    /// Panasonic.rw2 holds `DigitalZoomRatio = 0/10`, which only reaches the
+    /// `numerator % denominator == 0` shortcut. 0xa404 has no PrintConv
+    /// (Exif.pm:2886) and ExifTool prints the evaluated rational, so 3/2 must
+    /// render as "1.5" rather than "3/2".
+    #[test]
+    fn digital_zoom_ratio_integral_and_fractional() {
+        let integral = rational(0, 10, false);
+        let metadata = extract(&[(0xA404, 5, 1, &integral)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:DigitalZoomRatio"),
+            Some(&TagValue::new_string("0"))
+        );
+
+        let fractional = rational(3, 2, false);
+        let metadata = extract(&[(0xA404, 5, 1, &fractional)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:DigitalZoomRatio"),
+            Some(&TagValue::new_string("1.5"))
+        );
+    }
+
+    /// A zero denominator is unreachable from the corpus and must not panic or
+    /// invent a value; the display formatter declines and the generic RATIONAL
+    /// fallback keeps the raw pair.
+    #[test]
+    fn digital_zoom_ratio_zero_denominator_is_not_fabricated() {
+        let payload = rational(1, 0, false);
+        let metadata = extract(&[(0xA404, 5, 1, &payload)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:DigitalZoomRatio"),
+            Some(&TagValue::new_rational(1, 0))
+        );
+    }
+
+    /// FlashpixVersion has no PrintConv at all (Exif.pm:2678); ExifTool's only
+    /// transform is `RawConv => '$val=~s/\0+$//'`. The corpus sample carries an
+    /// unpadded `30 31 30 30`, so the padded case is unexercised.
+    #[test]
+    fn flashpix_version_is_raw_ascii() {
+        let metadata = extract(&[(0xA000, 7, 4, b"0100")], false);
+        assert_eq!(
+            metadata.get("ExifIFD:FlashpixVersion"),
+            Some(&TagValue::new_string("0100"))
+        );
+    }
+}
