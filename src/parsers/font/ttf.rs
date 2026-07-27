@@ -10,6 +10,7 @@
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
+use encoding_rs;
 
 /// TTF signature: 0x00 0x01 0x00 0x00 or "true"
 const TTF_SIGNATURE_1: &[u8] = &[0x00, 0x01, 0x00, 0x00];
@@ -42,10 +43,18 @@ const LANGUAGE_DANISH_WINDOWS: u16 = 0x0406;
 const LANGUAGE_GERMAN_WINDOWS: u16 = 0x0407;
 const LANGUAGE_HEBREW_WINDOWS: u16 = 0x040d;
 const LANGUAGE_SPANISH_WINDOWS: u16 = 0x0c0a;
+const LANGUAGE_DUTCH_WINDOWS: u16 = 0x0413;
+const LANGUAGE_JAPANESE_MACINTOSH: u16 = 11;
+const LANGUAGE_JAPANESE_WINDOWS: u16 = 0x0411;
+const LANGUAGE_KOREAN_MACINTOSH: u16 = 23;
+const LANGUAGE_KOREAN_WINDOWS: u16 = 0x0412;
+const LANGUAGE_NORWEGIAN_MACINTOSH: u16 = 9;
+const LANGUAGE_NORWEGIAN_WINDOWS: u16 = 0x0414;
 const LANGUAGE_FINNISH_WINDOWS: u16 = 0x040b;
 const LANGUAGE_FRENCH_WINDOWS: u16 = 0x040c;
 const LANGUAGE_ITALIAN_WINDOWS: u16 = 0x0410;
 const LANGUAGE_ENGLISH_WINDOWS: u16 = 0x0409;
+// LANGUAGE_DUTCH_MACINTOSH (4) is intentionally not claimed — see the unclaimed… test.
 
 /// Name IDs for name table records
 const NAME_COPYRIGHT: u16 = 0;
@@ -226,6 +235,15 @@ impl TTFParser {
                 // Macintosh encoding 0 is Mac Roman, not UTF-8.
                 Some(Self::decode_mac_roman(str_data))
             }
+            PLATFORM_MACINTOSH if record.encoding_id == 4 => {
+                // Macintosh encoding 4 is Mac Hebrew.
+                let (cow, _enc, _errors) = encoding_rs::Encoding::for_label(b"x-mac-hebrew")
+                    .ok_or_else(|| {
+                        ExifToolError::parse_error("missing x-mac-hebrew encoding")
+                    })?
+                    .decode(str_data);
+                Some(cow.into_owned())
+            }
             PLATFORM_MACINTOSH => {
                 // Preserve the previous behavior for unsupported Macintosh encodings.
                 String::from_utf8(str_data.to_vec()).ok()
@@ -247,6 +265,14 @@ impl TTFParser {
             | (PLATFORM_WINDOWS, LANGUAGE_HEBREW_WINDOWS) => Some("he"),
             (PLATFORM_MACINTOSH, LANGUAGE_SPANISH_MACINTOSH)
             | (PLATFORM_WINDOWS, LANGUAGE_SPANISH_WINDOWS) => Some("es"),
+            (PLATFORM_MACINTOSH, LANGUAGE_JAPANESE_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_JAPANESE_WINDOWS) => Some("ja"),
+            (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_KOREAN_WINDOWS) => Some("ko"),
+            (PLATFORM_MACINTOSH, LANGUAGE_NORWEGIAN_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_NORWEGIAN_WINDOWS) => Some("no"),
+            (PLATFORM_WINDOWS, LANGUAGE_DUTCH_WINDOWS) => Some("nl-NL"),
+            // Macintosh Dutch (4) is not mapped — see the unclaimed… test.
             (PLATFORM_MACINTOSH, LANGUAGE_FINNISH_MACINTOSH)
             | (PLATFORM_WINDOWS, LANGUAGE_FINNISH_WINDOWS) => Some("fi"),
             (PLATFORM_MACINTOSH, LANGUAGE_FRENCH_MACINTOSH)
