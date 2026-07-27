@@ -387,6 +387,43 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         (RawFormat::PanasonicRW2, 0, 0x001E) => {
                             format!("{}:BlackLevelBlue", ifd_name)
                         }
+                        // PanasonicRaw.pm IFD0 tags with no standard TIFF
+                        // counterpart. Verbatim from PanasonicRaw.pm:
+                        //   0x0e => { Name => 'LinearityLimitRed',   Writable => 'int16u' },
+                        //   0x0f => { Name => 'LinearityLimitGreen', Writable => 'int16u' },
+                        //   0x10 => { Name => 'LinearityLimitBlue',  Writable => 'int16u' },
+                        //   0x17 => { Name => 'ISO', Writable => 'int16u' },
+                        //   0x18 => { Name => 'HighISOMultiplierRed',   ValueConv => '$val / 256' },
+                        //   0x19 => { Name => 'HighISOMultiplierGreen', ValueConv => '$val / 256' },
+                        //   0x1a => { Name => 'HighISOMultiplierBlue',  ValueConv => '$val / 256' },
+                        // Before this, oxidex emitted them under their raw hex
+                        // ids (measured 2026-07-27: "EXIF:0x000E" ... "EXIF:0x001A").
+                        (RawFormat::PanasonicRW2, 0, 0x000E) => {
+                            format!("{}:LinearityLimitRed", ifd_name)
+                        }
+                        (RawFormat::PanasonicRW2, 0, 0x000F) => {
+                            format!("{}:LinearityLimitGreen", ifd_name)
+                        }
+                        (RawFormat::PanasonicRW2, 0, 0x0010) => {
+                            format!("{}:LinearityLimitBlue", ifd_name)
+                        }
+                        (RawFormat::PanasonicRW2, 0, 0x0017) => format!("{}:ISO", ifd_name),
+                        (RawFormat::PanasonicRW2, 0, 0x0018) => {
+                            format!("{}:HighISOMultiplierRed", ifd_name)
+                        }
+                        (RawFormat::PanasonicRW2, 0, 0x0019) => {
+                            format!("{}:HighISOMultiplierGreen", ifd_name)
+                        }
+                        (RawFormat::PanasonicRW2, 0, 0x001A) => {
+                            format!("{}:HighISOMultiplierBlue", ifd_name)
+                        }
+                        // TIFF/EP tag 0x9216 (TIFF-EPStandardID) lives in NEF
+                        // IFD0. lookup_tag_name has no entry for it under the
+                        // IFD0 group, so oxidex emitted "IFD0:0x9216" with a
+                        // raw 4-byte blob (measured 2026-07-27 on Nikon.nef).
+                        (RawFormat::NikonNEF, 0, 0x9216) | (RawFormat::NikonNRW, 0, 0x9216) => {
+                            "EXIF:TIFF-EPStandardID".to_string()
+                        }
                         _ => lookup_raw_tag_name(canonical_tag_id, ifd_name, format),
                     };
                     let tag_value = if format == RawFormat::PanasonicRW2
@@ -422,6 +459,31 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 byte_order,
                             )
                         })
+                    } else if format == RawFormat::PanasonicRW2
+                        && ifd_index == 0
+                        && matches!(*tag_id, 0x0018 | 0x0019 | 0x001A)
+                    {
+                        format_panasonic_high_iso_multiplier(
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        )
+                        .map(TagValue::new_string)
+                        .unwrap_or_else(|| {
+                            raw_bytes_to_simple_tag_value(
+                                bytes,
+                                *field_type,
+                                *value_count,
+                                byte_order,
+                            )
+                        })
+                    } else if matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW)
+                        && ifd_index == 0
+                        && *tag_id == 0x9216
+                        && let Some(value) = format_tiff_ep_standard_id(bytes, *value_count)
+                    {
+                        TagValue::new_string(value)
                     } else if let Some(value) = format_exif_display_value(
                         *tag_id,
                         bytes,
@@ -591,7 +653,46 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         let is_rw2 = format == RawFormat::PanasonicRW2;
+
+                        // DNG: StripOffsets/StripByteCounts are renamed by
+                        // ExifTool in the embedded-image SubIFDs. Exif.pm 0x111
+                        // (Notes, verbatim): "called StripOffsets in most
+                        // locations, but it is PreviewImageStart in IFD0 of CR2
+                        // images and various IFD's of DNG images except for
+                        // SubIFD2 where it is JpgFromRawStart".
+                        //
+                        // The gate is the Condition on the StripOffsets branch:
+                        //   not ($$self{TIFF_TYPE} =~ /^(DNG|TIFF)$/ and
+                        //        $$self{Compression} eq '7' and
+                        //        $$self{SubfileType} ne '0')
+                        // i.e. only JPEG-compressed (7) reduced-resolution
+                        // (SubfileType != 0) SubIFDs are renamed.
+                        if format == RawFormat::AdobeDNG {
+                            extract_dng_subifd_preview(
+                                data,
+                                &sub_tags,
+                                sub_index,
+                                byte_order,
+                                &mut metadata,
+                            );
+                        }
+
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+                            // CFARepeatPatternDim (Exif.pm 0x828d, Count => 2)
+                            // is a SHORT[2] that ExifTool prints as the two
+                            // dimensions separated by a space ("2 2"). The
+                            // generic decoder emits only the first component.
+                            if tag_id == 0x828D
+                                && let Some(dim) =
+                                    format_cfa_repeat_pattern_dim(raw_bytes.as_ref(), byte_order)
+                            {
+                                metadata.insert(
+                                    "EXIF:CFARepeatPatternDim".to_string(),
+                                    TagValue::new_string(dim),
+                                );
+                                continue;
+                            }
+
                             // NEF maps SubIFD tags into the EXIF group and
                             // applies format-specific decoding where needed.
                             if is_nef {
@@ -774,20 +875,27 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
         return Ok(());
     };
 
-    for (tag_id, field_type, value_count, raw_bytes) in
-        parse_ifd(&reader, exif_ifd_offset, byte_order)?
-    {
+    let exif_tags = parse_ifd(&reader, exif_ifd_offset, byte_order)?;
+
+    for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+        let (tag_id, field_type, value_count) = (*tag_id, *field_type, *value_count);
         // Filter to the exact set of EXIF tags that ExifTool extracts from
         // the RW2 JpgFromRaw preview EXIF IFD.
+        //
+        // NOTE (2026-07-27): 0xA411/0xA412/0xA413 were previously listed here
+        // as HighISOMultiplierRed/Green/Blue. No such EXIF tags exist -- those
+        // ids appear nowhere in ExifTool 13.55 (`grep -n '0xa411' *.pm` over
+        // .../Image/ExifTool/ returns nothing). The real HighISOMultiplier
+        // tags are PanasonicRaw.pm IFD0 0x18/0x19/0x1a and are handled on the
+        // outer IFD0 path. The invented ids are dropped so they cannot emit a
+        // hex-named oxidex-only tag if some file happens to carry them.
         if !matches!(
             tag_id,
             0x9101 // ComponentsConfiguration
                 | 0x9102 // CompressedBitsPerPixel
+                | 0x9208 // LightSource
                 | 0xA405 // FocalLengthIn35mmFormat
                 | 0xA407 // GainControl
-                | 0xA411 // HighISOMultiplierRed
-                | 0xA412 // HighISOMultiplierGreen
-                | 0xA413 // HighISOMultiplierBlue
                 | 0xA000 // FlashpixVersion
                 | 0xA001 // ColorSpace
                 | 0xA002 // ExifImageWidth
@@ -816,7 +924,73 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
         metadata.insert(tag_name, tag_value);
     }
 
+    // The preview EXIF also carries an Interoperability IFD (ExifIFD tag
+    // 0xA005 -> InteropOffset). ExifTool reports [InteropIFD] InteropIndex for
+    // Panasonic.rw2; oxidex never descended into it (measured gap 2026-07-27).
+    // Only InteropIndex is taken: InteropVersion is not among the gaps the
+    // comparator reports for RW2, so emitting it would add an unmatched tag.
+    if let Some(interop_offset) =
+        exif_tags
+            .iter()
+            .find_map(|(tag_id, field_type, value_count, raw_bytes)| {
+                if *tag_id == 0xA005 && *field_type == 4 && *value_count >= 1 {
+                    read_tiff_u32(raw_bytes.as_ref(), byte_order).map(u64::from)
+                } else {
+                    None
+                }
+            })
+    {
+        extract_interop_index(&reader, interop_offset, byte_order, metadata);
+    }
+
     Ok(())
+}
+
+/// Emit InteropIFD tag 0x0001 (InteropIndex) with ExifTool's PrintConv.
+///
+/// Exif.pm, Image::ExifTool::Exif::Main InteropIFD table, verbatim:
+/// ```text
+///     Name => 'InteropIndex',
+///     Description => 'Interoperability Index',
+///     ...
+///     PrintConv => {
+///         R98 => 'R98 - DCF basic file (sRGB)',
+///         R03 => 'R03 - DCF option file (Adobe RGB)',
+///         THM => 'THM - DCF thumbnail file',
+///     },
+/// ```
+///
+/// Values outside the table are printed unconverted by ExifTool, so an
+/// unrecognised index falls through to the trimmed raw string.
+fn extract_interop_index(
+    reader: &SliceReader<'_>,
+    interop_offset: u64,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let Ok(interop_tags) = parse_ifd(reader, interop_offset, byte_order) else {
+        eprintln!("Warning: Failed to parse Interoperability IFD");
+        return;
+    };
+
+    for (tag_id, _field_type, _value_count, raw_bytes) in &interop_tags {
+        if *tag_id != 0x0001 {
+            continue;
+        }
+        let raw = String::from_utf8_lossy(raw_bytes.as_ref())
+            .trim_end_matches('\0')
+            .to_string();
+        let printed = match raw.as_str() {
+            "R98" => "R98 - DCF basic file (sRGB)".to_string(),
+            "R03" => "R03 - DCF option file (Adobe RGB)".to_string(),
+            "THM" => "THM - DCF thumbnail file".to_string(),
+            _ => raw,
+        };
+        metadata.insert(
+            "InteropIFD:InteropIndex".to_string(),
+            TagValue::new_string(printed),
+        );
+    }
 }
 
 /// Locate the TIFF header in a JPEG APP1 EXIF segment.
@@ -949,6 +1123,95 @@ fn read_tiff_u32(bytes: &[u8], byte_order: ByteOrder) -> Option<u32> {
     })
 }
 
+fn read_tiff_i32(bytes: &[u8], byte_order: ByteOrder) -> Option<i32> {
+    let bytes: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
+    Some(match byte_order {
+        ByteOrder::LittleEndian => i32::from_le_bytes(bytes),
+        ByteOrder::BigEndian => i32::from_be_bytes(bytes),
+    })
+}
+
+/// Port of `Image::ExifTool::Exif::PrintExposureTime` (Exif.pm line 5606):
+///
+/// ```text
+///     my $secs = shift;
+///     return $secs unless Image::ExifTool::IsFloat($secs);
+///     if ($secs < 0.25001 and $secs > 0) {
+///         return sprintf("1/%d",int(0.5 + 1/$secs));
+///     }
+///     $_ = sprintf("%.1f",$secs);
+///     s/\.0$//;
+///     return $_;
+/// ```
+fn print_exposure_time(secs: f64) -> String {
+    if secs < 0.25001 && secs > 0.0 {
+        return format!("1/{}", (0.5 + 1.0 / secs) as i64);
+    }
+    let formatted = format!("{:.1}", secs);
+    formatted
+        .strip_suffix(".0")
+        .map(str::to_string)
+        .unwrap_or(formatted)
+}
+
+/// Port of `Image::ExifTool::Exif::PrintFNumber` (Exif.pm line 5620):
+///
+/// ```text
+///     my $val = shift;
+///     if (Image::ExifTool::IsFloat($val) and $val > 0) {
+///         # round to 1 decimal place, or 2 for values < 1.0
+///         $val = sprintf(($val<1 ? "%.2f" : "%.1f"), $val);
+///     }
+///     return $val;
+/// ```
+fn print_f_number(value: f64) -> String {
+    if value > 0.0 {
+        if value < 1.0 {
+            format!("{:.2}", value)
+        } else {
+            format!("{:.1}", value)
+        }
+    } else {
+        format!("{}", value)
+    }
+}
+
+/// Port of `Image::ExifTool::Exif::PrintFraction` (Exif.pm line 5421):
+///
+/// ```text
+///     $val *= 1.00001;    # avoid round-off errors
+///     if (not $val) {
+///         $str = '0';
+///     } elsif (int($val)/$val > 0.999) {
+///         $str = sprintf("%+d", int($val));
+///     } elsif ((int($val*2))/($val*2) > 0.999) {
+///         $str = sprintf("%+d/2", int($val * 2));
+///     } elsif ((int($val*3))/($val*3) > 0.999) {
+///         $str = sprintf("%+d/3", int($val * 3));
+///     } else {
+///         $str = sprintf("%+.3g", $val);
+///     }
+/// ```
+fn print_fraction(value: f64) -> String {
+    let value = value * 1.00001;
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    if value.trunc() / value > 0.999 {
+        return format!("{:+}", value.trunc() as i64);
+    }
+    let doubled = value * 2.0;
+    if doubled.trunc() / doubled > 0.999 {
+        return format!("{:+}/2", doubled.trunc() as i64);
+    }
+    let tripled = value * 3.0;
+    if tripled.trunc() / tripled > 0.999 {
+        return format!("{:+}/3", tripled.trunc() as i64);
+    }
+    // Perl's "%+.3g": three significant digits, sign always shown.
+    format!("{:+.3}", value)
+}
+
 /// Format EXIF values whose raw TIFF representation differs from ExifTool's
 /// default text output.
 fn format_exif_display_value(
@@ -1002,20 +1265,159 @@ fn format_exif_display_value(
             0xffff => Some("Uncalibrated".to_string()),
             _ => None,
         },
-        // FocalLengthIn35mmFormat: SHORT[1] -> "24 mm".
-        0xA405 if field_type == 3 && value_count >= 1 => {
-            let value = read_tiff_u16(bytes, byte_order)?;
-            Some(format!("{} mm", value))
+        // ExposureTime: RATIONAL[1]. Exif.pm 0x829a PrintConv is
+        // Image::ExifTool::Exif::PrintExposureTime.
+        0x829A if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                None
+            } else {
+                Some(print_exposure_time(
+                    f64::from(numerator) / f64::from(denominator),
+                ))
+            }
         }
-        // GainControl: SHORT[1].
-        0xA407 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
-            0 => Some("None".to_string()),
-            1 => Some("Low gain up".to_string()),
-            2 => Some("High gain up".to_string()),
-            3 => Some("Low gain down".to_string()),
-            4 => Some("High gain down".to_string()),
+        // FNumber: RATIONAL[1]. Exif.pm 0x829d PrintConv is
+        // Image::ExifTool::Exif::PrintFNumber.
+        0x829D if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                None
+            } else {
+                Some(print_f_number(
+                    f64::from(numerator) / f64::from(denominator),
+                ))
+            }
+        }
+        // ExposureProgram: SHORT[1]. Exif.pm 0x8822 PrintConv, verbatim:
+        //     0 => 'Not Defined',
+        //     1 => 'Manual',
+        //     2 => 'Program AE',
+        //     3 => 'Aperture-priority AE',
+        //     4 => 'Shutter speed priority AE',
+        //     5 => 'Creative (Slow speed)',
+        //     6 => 'Action (High speed)',
+        //     7 => 'Portrait',
+        //     8 => 'Landscape',
+        //     9 => 'Bulb', #25
+        0x8822 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Not Defined".to_string()),
+            1 => Some("Manual".to_string()),
+            2 => Some("Program AE".to_string()),
+            3 => Some("Aperture-priority AE".to_string()),
+            4 => Some("Shutter speed priority AE".to_string()),
+            5 => Some("Creative (Slow speed)".to_string()),
+            6 => Some("Action (High speed)".to_string()),
+            7 => Some("Portrait".to_string()),
+            8 => Some("Landscape".to_string()),
+            9 => Some("Bulb".to_string()),
             _ => None,
         },
+        // ExifVersion: UNDEFINED. Exif.pm 0x9000 has no PrintConv, only
+        //     RawConv => '$val=~s/\0+$//; $val',  # (some idiots add null terminators)
+        0x9000 if field_type == 7 => {
+            let count = usize::try_from(value_count).ok()?;
+            let version = bytes.get(..count)?;
+            let trimmed = String::from_utf8_lossy(version)
+                .trim_end_matches('\0')
+                .to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        }
+        // ExposureCompensation: SRATIONAL[1]. Exif.pm 0x9204 PrintConv is
+        // Image::ExifTool::Exif::PrintFraction.
+        0x9204 if field_type == 10 && value_count >= 1 => {
+            let numerator = read_tiff_i32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_i32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                None
+            } else {
+                Some(print_fraction(
+                    f64::from(numerator) / f64::from(denominator),
+                ))
+            }
+        }
+        // LightSource: SHORT[1]. Exif.pm 0x9208 PrintConv => \%lightSource,
+        // whose full table (Exif.pm lines 139-162) is reproduced verbatim.
+        0x9208 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Unknown".to_string()),
+            1 => Some("Daylight".to_string()),
+            2 => Some("Fluorescent".to_string()),
+            3 => Some("Tungsten (Incandescent)".to_string()),
+            4 => Some("Flash".to_string()),
+            9 => Some("Fine Weather".to_string()),
+            10 => Some("Cloudy".to_string()),
+            11 => Some("Shade".to_string()),
+            12 => Some("Daylight Fluorescent".to_string()),
+            13 => Some("Day White Fluorescent".to_string()),
+            14 => Some("Cool White Fluorescent".to_string()),
+            15 => Some("White Fluorescent".to_string()),
+            16 => Some("Warm White Fluorescent".to_string()),
+            17 => Some("Standard Light A".to_string()),
+            18 => Some("Standard Light B".to_string()),
+            19 => Some("Standard Light C".to_string()),
+            20 => Some("D55".to_string()),
+            21 => Some("D65".to_string()),
+            22 => Some("D75".to_string()),
+            23 => Some("D50".to_string()),
+            24 => Some("ISO Studio Tungsten".to_string()),
+            255 => Some("Other".to_string()),
+            _ => None,
+        },
+        // Flash: SHORT[1]. Exif.pm 0x9209 PrintConv => \%flash, whose full
+        // table (Exif.pm lines 172-199) is reproduced verbatim.
+        0x9209 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0x00 => Some("No Flash".to_string()),
+            0x01 => Some("Fired".to_string()),
+            0x05 => Some("Fired, Return not detected".to_string()),
+            0x07 => Some("Fired, Return detected".to_string()),
+            0x08 => Some("On, Did not fire".to_string()),
+            0x09 => Some("On, Fired".to_string()),
+            0x0d => Some("On, Return not detected".to_string()),
+            0x0f => Some("On, Return detected".to_string()),
+            0x10 => Some("Off, Did not fire".to_string()),
+            0x14 => Some("Off, Did not fire, Return not detected".to_string()),
+            0x18 => Some("Auto, Did not fire".to_string()),
+            0x19 => Some("Auto, Fired".to_string()),
+            0x1d => Some("Auto, Fired, Return not detected".to_string()),
+            0x1f => Some("Auto, Fired, Return detected".to_string()),
+            0x20 => Some("No flash function".to_string()),
+            0x30 => Some("Off, No flash function".to_string()),
+            0x41 => Some("Fired, Red-eye reduction".to_string()),
+            0x45 => Some("Fired, Red-eye reduction, Return not detected".to_string()),
+            0x47 => Some("Fired, Red-eye reduction, Return detected".to_string()),
+            0x49 => Some("On, Red-eye reduction".to_string()),
+            0x4d => Some("On, Red-eye reduction, Return not detected".to_string()),
+            0x4f => Some("On, Red-eye reduction, Return detected".to_string()),
+            0x50 => Some("Off, Red-eye reduction".to_string()),
+            0x58 => Some("Auto, Did not fire, Red-eye reduction".to_string()),
+            0x59 => Some("Auto, Fired, Red-eye reduction".to_string()),
+            0x5d => Some("Auto, Fired, Red-eye reduction, Return not detected".to_string()),
+            0x5f => Some("Auto, Fired, Red-eye reduction, Return detected".to_string()),
+            _ => None,
+        },
+        // FileSource: UNDEFINED. Exif.pm 0xa300 PrintConv, verbatim:
+        //     1 => 'Film Scanner',
+        //     2 => 'Reflection Print Scanner',
+        //     3 => 'Digital Camera',
+        //     # handle the case where Sigma incorrectly gives this tag a count of 4
+        //     "\3\0\0\0" => 'Sigma Digital Camera',
+        0xA300 if field_type == 7 => {
+            let count = usize::try_from(value_count).ok()?;
+            let source = bytes.get(..count)?;
+            match source {
+                b"\x03\x00\x00\x00" => Some("Sigma Digital Camera".to_string()),
+                [1] => Some("Film Scanner".to_string()),
+                [2] => Some("Reflection Print Scanner".to_string()),
+                [3] => Some("Digital Camera".to_string()),
+                _ => None,
+            }
+        }
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
         0xA302 if field_type == 7 => decode_exif_cfa_pattern(bytes, byte_order),
         // FlashpixVersion: UNDEFINED 4 bytes printed as e.g. "0100".
@@ -1120,6 +1522,37 @@ fn format_panasonic_raw_compression(
     match read_tiff_u16(bytes, byte_order)? {
         34316 => Some("Panasonic RAW 1".to_string()),
         _ => None,
+    }
+}
+
+/// Format PanasonicRaw IFD0 tags 0x18-0x1A (HighISOMultiplierRed/Green/Blue).
+///
+/// PanasonicRaw.pm, verbatim (0x19 and 0x1a are identical but for the name):
+/// ```text
+///     0x18 => { #IB
+///         Name => 'HighISOMultiplierRed',
+///         Writable => 'int16u',
+///         ValueConv => '$val / 256',
+/// ```
+///
+/// There is no PrintConv, so ExifTool prints the ValueConv result directly:
+/// an integer when the division is exact (measured: all three are 0 on
+/// Panasonic.rw2, 2026-07-27), otherwise a decimal.
+fn format_panasonic_high_iso_multiplier(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    if field_type != 3 || value_count < 1 {
+        return None;
+    }
+
+    let value = read_tiff_u16(bytes, byte_order)?;
+    if value % 256 == 0 {
+        Some((value / 256).to_string())
+    } else {
+        Some(format!("{}", f64::from(value) / 256.0))
     }
 }
 
@@ -2304,11 +2737,21 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                         // emits for SigmaDP2.x3f.
                                         if !matches!(
                                             *tag_id,
-                                            0x9003 // DateTimeOriginal
+                                            0x829A // ExposureTime
+                                                | 0x829D // FNumber
+                                                | 0x8822 // ExposureProgram
+                                                | 0x9000 // ExifVersion
+                                                | 0x9003 // DateTimeOriginal
                                                 | 0x9004 // CreateDate
                                                 | 0x9101 // ComponentsConfiguration
+                                                | 0x9204 // ExposureCompensation
+                                                | 0x9209 // Flash
                                                 | 0xA001 // ColorSpace
+                                                | 0xA002 // ExifImageWidth
+                                                | 0xA003 // ExifImageHeight
+                                                | 0xA300 // FileSource
                                                 | 0xA401 // CustomRendered
+                                                | 0xA402 // ExposureMode
                                         ) {
                                             continue;
                                         }
@@ -2336,11 +2779,21 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                 }
                             }
 
-                            // Parse IFD1 for Compression (0x0103).  The
-                            // next-IFD offset follows IFD0's entries:
-                            //   2 bytes count + N*12 bytes entries + 4 bytes next.
+                            // Parse IFD1 for Compression (0x0103). The
+                            // next-IFD pointer sits immediately after IFD0's
+                            // entries: 2 bytes count + N*12 bytes entries.
+                            //
+                            // This previously added a further "+ 4", reading
+                            // the four bytes *after* the pointer instead of the
+                            // pointer itself. Measured on SigmaDP2.x3f
+                            // (2026-07-27): IFD0 is at 8 with 10 entries, so
+                            // the pointer is at 130 and holds 2230 (a valid
+                            // IFD1 whose 0x0103 is 6 => "JPEG (old-style)");
+                            // reading at 134 yielded 1397311309, which is not
+                            // a valid IFD offset, so parse_ifd failed and
+                            // EXIF:Compression was never emitted.
                             let ifd0_entry_count = ifd0_tags.len() as u64;
-                            let ifd1_pos = first_ifd_offset + 2 + ifd0_entry_count * 12 + 4;
+                            let ifd1_pos = first_ifd_offset + 2 + ifd0_entry_count * 12;
                             if ifd1_pos + 4 <= tiff_data.len() as u64 {
                                 let ifd1_offset = read_u32(
                                     &tiff_data[ifd1_pos as usize..(ifd1_pos + 4) as usize],
@@ -3168,30 +3621,148 @@ fn format_nef_subifd_tag(
             "EXIF:JpgFromRawLength".to_string(),
             TagValue::new_integer(read_u32(bytes, byte_order) as i64),
         )),
-        // TIFF-EPStandardID: UNDEFINED[4] -> dotted version string
-        0x828F => {
-            let ver = format!(
-                "{}.{}.{}.{}",
-                bytes.first().copied().unwrap_or(0),
-                bytes.get(1).copied().unwrap_or(0),
-                bytes.get(2).copied().unwrap_or(0),
-                bytes.get(3).copied().unwrap_or(0)
-            );
-            Some((
-                "EXIF:TIFF-EPStandardID".to_string(),
-                TagValue::new_string(ver),
-            ))
-        }
-        // CFARepeatPatternDim: two SHORT values -> "h v"
-        0x828D => {
-            let h = read_tiff_u16(bytes, byte_order)?;
-            let v = read_tiff_u16(bytes.get(2..)?, byte_order)?;
-            Some((
-                "EXIF:CFARepeatPatternDim".to_string(),
-                TagValue::new_string(format!("{} {}", h, v)),
-            ))
-        }
+        // NOTE (2026-07-27): tag 0x828F was previously mapped here to
+        // TIFF-EPStandardID. That was wrong and emitted false metadata:
+        // Exif.pm line 1766 defines
+        //     0x828f => { #12
+        //         Name => 'BatteryLevel',
+        // and TIFF-EPStandardID is 0x9216 (Exif.pm line 2451):
+        //     0x9216 => { Name => 'TIFF-EPStandardID', PrintConv => '$val =~ tr/ /./; $val' },
+        // The real 0x9216 is handled on the IFD0 path (see
+        // format_tiff_ep_standard_id); 0x828F now falls through to the
+        // generic lookup so it is named BatteryLevel.
+        //
+        // CFARepeatPatternDim (0x828D) is handled by the shared SubIFD path
+        // for every TIFF-based RAW format, not just NEF.
         _ => None,
+    }
+}
+
+/// Format TIFF/EP tag 0x9216 (TIFF-EPStandardID).
+///
+/// Exif.pm line 2451, verbatim:
+/// ```text
+///     0x9216 => { Name => 'TIFF-EPStandardID', PrintConv => '$val =~ tr/ /./; $val' },
+/// ```
+///
+/// The value is a BYTE[4]; ExifTool renders the array space-separated and the
+/// PrintConv turns the spaces into dots, so `01 00 00 00` prints as "1.0.0.0".
+fn format_tiff_ep_standard_id(bytes: &[u8], value_count: u32) -> Option<String> {
+    let count = usize::try_from(value_count).ok()?;
+    let components = bytes.get(..count)?;
+    if components.is_empty() {
+        return None;
+    }
+    Some(
+        components
+            .iter()
+            .map(|component| component.to_string())
+            .collect::<Vec<_>>()
+            .join("."),
+    )
+}
+
+/// Format TIFF/EP tag 0x828D (CFARepeatPatternDim).
+///
+/// Exif.pm line 1751:
+/// ```text
+///     0x828d => { #12
+///         Name => 'CFARepeatPatternDim',
+///         ...
+///         Writable => 'int16u',
+///         Count => 2,
+/// ```
+///
+/// ExifTool prints the two SHORT components space-separated (e.g. "2 2");
+/// oxidex's generic decoder only rendered the first component.
+fn format_cfa_repeat_pattern_dim(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    let rows = read_tiff_u16(bytes, byte_order)?;
+    let cols = read_tiff_u16(bytes.get(2..)?, byte_order)?;
+    Some(format!("{} {}", rows, cols))
+}
+
+/// Emit the renamed embedded-image tags from one DNG SubIFD.
+///
+/// ExifTool renames StripOffsets/StripByteCounts (0x111/0x117) in DNG SubIFDs
+/// that hold a JPEG-compressed reduced-resolution image. Exif.pm 0x111,
+/// StripOffsets branch Condition (verbatim):
+/// ```text
+///     not ($$self{TIFF_TYPE} =~ /^(DNG|TIFF)$/ and $$self{Compression} eq '7'
+///          and $$self{SubfileType} ne '0')
+/// ```
+/// and the following two branches, in order:
+/// ```text
+///     Condition => '$$self{DIR_NAME} ne "SubIFD2"'  =>  PreviewImageStart
+///     (fallthrough)                                 =>  JpgFromRawStart
+/// ```
+///
+/// So SubIFD2 (the third SubIFD) carries JpgFromRaw* and every other qualifying
+/// SubIFD carries PreviewImage*. Measured on DNG.dng (2026-07-27): SubIFD1 ->
+/// PreviewImageStart 12780 / Length 26, SubIFD2 -> JpgFromRawStart 13070 /
+/// Length 29, matching `exiftool -G1 -a -s`.
+fn extract_dng_subifd_preview(
+    data: &[u8],
+    sub_tags: &[(u16, u16, u32, impl AsRef<[u8]>)],
+    sub_index: usize,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let mut compression: Option<u16> = None;
+    let mut subfile_type: Option<u32> = None;
+    let mut strip_offset: Option<u32> = None;
+    let mut strip_length: Option<u32> = None;
+
+    for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+        let bytes = raw_bytes.as_ref();
+        match *tag_id {
+            0x0103 => compression = read_tiff_u16(bytes, byte_order),
+            0x00FE => subfile_type = read_tiff_u32(bytes, byte_order),
+            // Only single-strip images are renamed as a whole preview; a
+            // multi-strip image has no single Start/Length pair to report.
+            0x0111 if *value_count == 1 => strip_offset = read_tiff_u32(bytes, byte_order),
+            0x0117 if *value_count == 1 => strip_length = read_tiff_u32(bytes, byte_order),
+            _ => {}
+        }
+        let _ = field_type;
+    }
+
+    // Compression eq '7' (JPEG) and SubfileType ne '0' (reduced resolution).
+    if compression != Some(7) || subfile_type == Some(0) || subfile_type.is_none() {
+        return;
+    }
+    let (Some(offset), Some(length)) = (strip_offset, strip_length) else {
+        return;
+    };
+
+    let (start_key, length_key, image_key) = if sub_index == 2 {
+        (
+            "EXIF:JpgFromRawStart",
+            "EXIF:JpgFromRawLength",
+            "EXIF:JpgFromRaw",
+        )
+    } else {
+        (
+            "EXIF:PreviewImageStart",
+            "EXIF:PreviewImageLength",
+            "EXIF:PreviewImage",
+        )
+    };
+
+    metadata.insert(
+        start_key.to_string(),
+        TagValue::new_integer(i64::from(offset)),
+    );
+    metadata.insert(
+        length_key.to_string(),
+        TagValue::new_integer(i64::from(length)),
+    );
+
+    let start = offset as usize;
+    let end = start.saturating_add(length as usize);
+    if end <= data.len()
+        && let Some(image) = data.get(start..end)
+    {
+        metadata.insert(image_key.to_string(), TagValue::Binary(image.to_vec()));
     }
 }
 
@@ -4056,5 +4627,373 @@ mod rw2_embedded_exif_printconv_tests {
             metadata.get("ExifIFD:FlashpixVersion"),
             Some(&TagValue::new_string("0100"))
         );
+    }
+}
+
+/// Tests for the 2026-07-27 backlog-group-1 tag wiring.
+///
+/// Every expected string in this module is a LITERAL copied out of ExifTool
+/// 13.55's own tables, not a value read back from the constant under test.
+/// Where a table entry is not exercised by the corpus sample, the test says so
+/// — a green `tag-comparison` recheck only proves the values the sample
+/// happens to contain.
+#[cfg(test)]
+mod backlog_group_1_printconv_tests {
+    use super::*;
+
+    // ---- TIFF-EPStandardID (Exif.pm:2451) --------------------------------
+
+    /// `exiftool -G1 -a -s Nikon.nef` prints `[IFD0] TIFF-EPStandardID : 1.0.0.0`
+    /// and the raw IFD0 entry is BYTE[4] `01 00 00 00`.
+    #[test]
+    fn tiff_ep_standard_id_joins_bytes_with_dots() {
+        assert_eq!(
+            format_tiff_ep_standard_id(&[1, 0, 0, 0], 4).as_deref(),
+            Some("1.0.0.0")
+        );
+    }
+
+    /// The PrintConv is `$val =~ tr/ /./`, i.e. it substitutes on however many
+    /// components the array has — it is not hard-coded to four.
+    #[test]
+    fn tiff_ep_standard_id_honours_value_count() {
+        assert_eq!(
+            format_tiff_ep_standard_id(&[2, 1, 0, 0], 2).as_deref(),
+            Some("2.1")
+        );
+        assert_eq!(format_tiff_ep_standard_id(&[1, 0, 0, 0], 0), None);
+    }
+
+    // ---- CFARepeatPatternDim (Exif.pm:1751, Count => 2) ------------------
+
+    /// `exiftool -G1 -a -s DNG.dng` prints `[SubIFD] CFARepeatPatternDim : 2 2`.
+    /// The generic decoder returned only "2".
+    #[test]
+    fn cfa_repeat_pattern_dim_prints_both_components() {
+        assert_eq!(
+            format_cfa_repeat_pattern_dim(&[0, 2, 0, 2], ByteOrder::BigEndian).as_deref(),
+            Some("2 2")
+        );
+    }
+
+    /// Asymmetric dimensions pin the component order (rows then columns) so a
+    /// swap cannot pass; DNG.dng is 2x2 and could never catch it.
+    #[test]
+    fn cfa_repeat_pattern_dim_is_order_and_byte_order_aware() {
+        assert_eq!(
+            format_cfa_repeat_pattern_dim(&[2, 0, 4, 0], ByteOrder::LittleEndian).as_deref(),
+            Some("2 4")
+        );
+        assert_eq!(
+            format_cfa_repeat_pattern_dim(&[0, 2, 0, 4], ByteOrder::BigEndian).as_deref(),
+            Some("2 4")
+        );
+        assert_eq!(
+            format_cfa_repeat_pattern_dim(&[0, 2], ByteOrder::BigEndian),
+            None
+        );
+    }
+
+    // ---- HighISOMultiplier (PanasonicRaw.pm:144-161) ---------------------
+
+    /// Panasonic.rw2 stores 0 in all three, so `$val / 256` is only ever
+    /// exercised at zero by the corpus. 256 and 384 pin the divisor itself.
+    #[test]
+    fn high_iso_multiplier_divides_by_256() {
+        let f = |raw: u16| {
+            format_panasonic_high_iso_multiplier(&raw.to_le_bytes(), 3, 1, ByteOrder::LittleEndian)
+        };
+        assert_eq!(f(0).as_deref(), Some("0"));
+        assert_eq!(f(256).as_deref(), Some("1"));
+        assert_eq!(f(384).as_deref(), Some("1.5"));
+        assert_eq!(f(512).as_deref(), Some("2"));
+    }
+
+    /// PanasonicRaw.pm declares `Writable => 'int16u'`; a non-SHORT entry must
+    /// fall through to the generic decoder rather than be misread.
+    #[test]
+    fn high_iso_multiplier_rejects_non_short() {
+        assert_eq!(
+            format_panasonic_high_iso_multiplier(&[0, 1, 0, 0], 4, 1, ByteOrder::LittleEndian),
+            None
+        );
+    }
+
+    // ---- LightSource (Exif.pm %lightSource, lines 139-162) ---------------
+
+    /// Panasonic.rw2 only hits `0 => 'Unknown'`. The other entries here are
+    /// copied verbatim from Exif.pm; the far end of the table (23, 24, 255) is
+    /// entirely unexercised by the corpus.
+    #[test]
+    fn light_source_print_conv_matches_exiftool_table() {
+        let f = |raw: u16| {
+            format_exif_display_value(0x9208, &raw.to_le_bytes(), 3, 1, ByteOrder::LittleEndian)
+        };
+        assert_eq!(f(0).as_deref(), Some("Unknown"));
+        assert_eq!(f(3).as_deref(), Some("Tungsten (Incandescent)"));
+        assert_eq!(f(11).as_deref(), Some("Shade"));
+        assert_eq!(f(15).as_deref(), Some("White Fluorescent"));
+        assert_eq!(f(23).as_deref(), Some("D50"));
+        assert_eq!(f(24).as_deref(), Some("ISO Studio Tungsten"));
+        assert_eq!(f(255).as_deref(), Some("Other"));
+    }
+
+    /// 5-8 are absent from %lightSource. ExifTool prints the bare number for a
+    /// key it has no entry for, so oxidex must fall through rather than invent
+    /// a stand-in label.
+    #[test]
+    fn light_source_gap_values_have_no_label() {
+        for raw in [5u16, 6, 7, 8, 25] {
+            assert_eq!(
+                format_exif_display_value(
+                    0x9208,
+                    &raw.to_le_bytes(),
+                    3,
+                    1,
+                    ByteOrder::LittleEndian
+                ),
+                None,
+                "value {} is not in %lightSource and must not be labelled",
+                raw
+            );
+        }
+    }
+
+    // ---- FileSource (Exif.pm:2757) --------------------------------------
+
+    /// The whole table, verbatim from Exif.pm:2761-2767. SigmaDP2.x3f carries
+    /// only `03` (count 1), so 1, 2 and the 4-byte Sigma form are unexercised
+    /// by the corpus — and 1/2 are exactly where an off-by-one relabelling
+    /// ("Scanner"/"Film Scanner") would hide.
+    #[test]
+    fn file_source_print_conv_matches_exiftool_table() {
+        let f = |payload: &[u8]| {
+            format_exif_display_value(
+                0xA300,
+                payload,
+                7,
+                payload.len() as u32,
+                ByteOrder::BigEndian,
+            )
+        };
+        assert_eq!(f(&[1]).as_deref(), Some("Film Scanner"));
+        assert_eq!(f(&[2]).as_deref(), Some("Reflection Print Scanner"));
+        assert_eq!(f(&[3]).as_deref(), Some("Digital Camera"));
+        assert_eq!(f(&[3, 0, 0, 0]).as_deref(), Some("Sigma Digital Camera"));
+        assert_eq!(f(&[0]), None);
+    }
+
+    // ---- Flash (Exif.pm %flash, lines 165-199) --------------------------
+
+    /// SigmaDP2.x3f carries `0x00` only. 0x5f is the last row of the table and
+    /// is the longest label in it, so a truncated transcription cannot pass.
+    #[test]
+    fn flash_print_conv_matches_exiftool_table() {
+        let f = |raw: u16| {
+            format_exif_display_value(0x9209, &raw.to_le_bytes(), 3, 1, ByteOrder::LittleEndian)
+        };
+        assert_eq!(f(0x00).as_deref(), Some("No Flash"));
+        assert_eq!(f(0x01).as_deref(), Some("Fired"));
+        assert_eq!(f(0x0d).as_deref(), Some("On, Return not detected"));
+        assert_eq!(f(0x20).as_deref(), Some("No flash function"));
+        assert_eq!(
+            f(0x5d).as_deref(),
+            Some("Auto, Fired, Red-eye reduction, Return not detected")
+        );
+        assert_eq!(
+            f(0x5f).as_deref(),
+            Some("Auto, Fired, Red-eye reduction, Return detected")
+        );
+        // 0x02 has no entry in %flash.
+        assert_eq!(f(0x02), None);
+    }
+
+    // ---- ExposureProgram (Exif.pm:2083) ---------------------------------
+
+    /// SigmaDP2.x3f carries 2 only. 3 and 4 are the pair most likely to be
+    /// shortened ("Aperture Priority" / "Shutter Priority"), so both full
+    /// Exif.pm spellings are pinned.
+    #[test]
+    fn exposure_program_print_conv_matches_exiftool_table() {
+        let f = |raw: u16| {
+            format_exif_display_value(0x8822, &raw.to_le_bytes(), 3, 1, ByteOrder::LittleEndian)
+        };
+        assert_eq!(f(0).as_deref(), Some("Not Defined"));
+        assert_eq!(f(2).as_deref(), Some("Program AE"));
+        assert_eq!(f(3).as_deref(), Some("Aperture-priority AE"));
+        assert_eq!(f(4).as_deref(), Some("Shutter speed priority AE"));
+        assert_eq!(f(5).as_deref(), Some("Creative (Slow speed)"));
+        assert_eq!(f(6).as_deref(), Some("Action (High speed)"));
+        assert_eq!(f(9).as_deref(), Some("Bulb"));
+        assert_eq!(f(10), None);
+    }
+
+    // ---- ExifVersion (Exif.pm:2213) -------------------------------------
+
+    /// SigmaDP2.x3f carries an unpadded `30 32 32 31`. The RawConv
+    /// `$val=~s/\0+$//` only matters for the padded form, which the corpus
+    /// never produces.
+    #[test]
+    fn exif_version_strips_trailing_nulls() {
+        assert_eq!(
+            format_exif_display_value(0x9000, b"0221", 7, 4, ByteOrder::BigEndian).as_deref(),
+            Some("0221")
+        );
+        assert_eq!(
+            format_exif_display_value(0x9000, b"0230\0", 7, 5, ByteOrder::BigEndian).as_deref(),
+            Some("0230")
+        );
+    }
+
+    // ---- PrintExposureTime / PrintFNumber / PrintFraction ---------------
+
+    /// Exif.pm:5606. The `< 0.25001` branch is what SigmaDP2.x3f hits (1/10);
+    /// the `%.1f` branch and its `s/\.0$//` are not exercised by the corpus.
+    #[test]
+    fn print_exposure_time_matches_perl() {
+        assert_eq!(print_exposure_time(0.1), "1/10");
+        assert_eq!(print_exposure_time(1.0 / 8000.0), "1/8000");
+        assert_eq!(print_exposure_time(0.25), "1/4");
+        assert_eq!(print_exposure_time(0.5), "0.5");
+        assert_eq!(print_exposure_time(2.0), "2");
+        assert_eq!(print_exposure_time(30.0), "30");
+    }
+
+    /// Exif.pm:5620. SigmaDP2.x3f hits only the `>= 1` branch (2.8); the
+    /// two-decimal sub-f/1.0 branch is unexercised by the corpus.
+    #[test]
+    fn print_f_number_matches_perl() {
+        assert_eq!(print_f_number(2.8), "2.8");
+        assert_eq!(print_f_number(4.0), "4.0");
+        assert_eq!(print_f_number(0.95), "0.95");
+    }
+
+    /// Exif.pm:5421. SigmaDP2.x3f hits only `not $val` (0). Every other branch
+    /// — +d, +d/2, +d/3 — is unexercised by the corpus.
+    #[test]
+    fn print_fraction_matches_perl() {
+        assert_eq!(print_fraction(0.0), "0");
+        assert_eq!(print_fraction(1.0), "+1");
+        assert_eq!(print_fraction(-2.0), "-2");
+        assert_eq!(print_fraction(0.5), "+1/2");
+        assert_eq!(print_fraction(-0.5), "-1/2");
+        assert_eq!(print_fraction(1.0 / 3.0), "+1/3");
+        assert_eq!(print_fraction(-1.0 / 3.0), "-1/3");
+    }
+
+    // ---- DNG SubIFD preview naming (Exif.pm 0x111/0x117 Conditions) -----
+
+    fn dng_sub_tags(
+        compression: u16,
+        subfile_type: u32,
+        strip_offset: u32,
+        strip_length: u32,
+    ) -> Vec<(u16, u16, u32, Vec<u8>)> {
+        vec![
+            (0x00FE, 4, 1, subfile_type.to_be_bytes().to_vec()),
+            (0x0103, 3, 1, compression.to_be_bytes().to_vec()),
+            (0x0111, 4, 1, strip_offset.to_be_bytes().to_vec()),
+            (0x0117, 4, 1, strip_length.to_be_bytes().to_vec()),
+        ]
+    }
+
+    /// `exiftool -G1 -a -s DNG.dng` prints
+    ///   [SubIFD1] PreviewImageStart : 12780 / PreviewImageLength : 26
+    ///   [SubIFD2] JpgFromRawStart   : 13070 / JpgFromRawLength   : 29
+    /// The split is by SubIFD index, per the Exif.pm 0x111 Condition
+    /// `$$self{DIR_NAME} ne "SubIFD2"`.
+    #[test]
+    fn dng_subifd1_is_preview_and_subifd2_is_jpg_from_raw() {
+        let data = vec![0u8; 200];
+
+        let mut preview = MetadataMap::new();
+        extract_dng_subifd_preview(
+            &data,
+            &dng_sub_tags(7, 1, 10, 20),
+            1,
+            ByteOrder::BigEndian,
+            &mut preview,
+        );
+        assert_eq!(
+            preview.get("EXIF:PreviewImageStart"),
+            Some(&TagValue::new_integer(10))
+        );
+        assert_eq!(
+            preview.get("EXIF:PreviewImageLength"),
+            Some(&TagValue::new_integer(20))
+        );
+        assert!(preview.get("EXIF:JpgFromRawStart").is_none());
+
+        let mut jpg = MetadataMap::new();
+        extract_dng_subifd_preview(
+            &data,
+            &dng_sub_tags(7, 1, 30, 40),
+            2,
+            ByteOrder::BigEndian,
+            &mut jpg,
+        );
+        assert_eq!(
+            jpg.get("EXIF:JpgFromRawStart"),
+            Some(&TagValue::new_integer(30))
+        );
+        assert_eq!(
+            jpg.get("EXIF:JpgFromRawLength"),
+            Some(&TagValue::new_integer(40))
+        );
+        assert!(jpg.get("EXIF:PreviewImageStart").is_none());
+    }
+
+    /// The Exif.pm 0x111 StripOffsets Condition only diverts DNG IFDs where
+    /// `$$self{Compression} eq '7' and $$self{SubfileType} ne '0'`. DNG.dng's
+    /// first SubIFD is SubfileType 0 (full-resolution), so it must keep the
+    /// StripOffsets naming — the corpus cannot distinguish this from an
+    /// index-only rule because that SubIFD uses TileOffsets instead.
+    #[test]
+    fn dng_full_resolution_subifd_is_not_renamed() {
+        let data = vec![0u8; 200];
+
+        let mut full_res = MetadataMap::new();
+        extract_dng_subifd_preview(
+            &data,
+            &dng_sub_tags(7, 0, 10, 20),
+            1,
+            ByteOrder::BigEndian,
+            &mut full_res,
+        );
+        assert!(full_res.is_empty(), "SubfileType 0 must not be renamed");
+
+        let mut uncompressed = MetadataMap::new();
+        extract_dng_subifd_preview(
+            &data,
+            &dng_sub_tags(1, 1, 10, 20),
+            1,
+            ByteOrder::BigEndian,
+            &mut uncompressed,
+        );
+        assert!(
+            uncompressed.is_empty(),
+            "Compression != 7 must not be renamed"
+        );
+    }
+
+    /// A strip range that runs past the end of the file must not panic and
+    /// must not emit a truncated image blob; the Start/Length pair still
+    /// reports what the IFD claims, exactly as ExifTool does.
+    #[test]
+    fn dng_out_of_range_strip_emits_offsets_without_image() {
+        let data = vec![0u8; 16];
+        let mut metadata = MetadataMap::new();
+        extract_dng_subifd_preview(
+            &data,
+            &dng_sub_tags(7, 1, 12, 4096),
+            2,
+            ByteOrder::BigEndian,
+            &mut metadata,
+        );
+        assert_eq!(
+            metadata.get("EXIF:JpgFromRawStart"),
+            Some(&TagValue::new_integer(12))
+        );
+        assert!(metadata.get("EXIF:JpgFromRaw").is_none());
     }
 }
