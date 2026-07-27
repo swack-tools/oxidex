@@ -834,6 +834,21 @@ fn format_exif_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // ExifVersion: UNDEFINED bytes, strip trailing nulls.
+        0x9000 if field_type == 7 => {
+            let count = usize::try_from(value_count).ok()?;
+            let ver_bytes = bytes.get(..count)?;
+            let end = ver_bytes
+                .iter()
+                .rposition(|&b| b != 0)
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            if end == 0 {
+                return Some(String::new());
+            }
+            let ver_str = std::str::from_utf8(&ver_bytes[..end]).ok()?;
+            Some(ver_str.to_string())
+        }
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -2177,6 +2192,11 @@ fn extract_x3f_preview_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) {
                 let tag_name = match *tag_id {
                     0x9003 => "EXIF:DateTimeOriginal",
                     0x9101 => "ExifIFD:ComponentsConfiguration",
+                    0x9000 => "EXIF:ExifVersion",
+                    0x9204 => "EXIF:ExposureCompensation",
+                    0xA002 => "EXIF:ExifImageWidth",
+                    0xA003 => "EXIF:ExifImageHeight",
+                    0xA402 => "EXIF:ExposureMode",
                     0xA001 => "ExifIFD:ColorSpace",
                     0xA401 => "ExifIFD:CustomRendered",
                     _ => continue,
