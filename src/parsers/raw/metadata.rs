@@ -40,6 +40,8 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
         // EXIF CFAPattern name is registered under tag 0xA302. ExifTool
         // assigns the Panasonic tag to its EXIF group.
         lookup_tag_name(0xA302, "EXIF")
+    } else if format == RawFormat::AdobeDNG && tag_id == 0x828D {
+        "EXIF:CFARepeatPatternDim".to_string()
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
