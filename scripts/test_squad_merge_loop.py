@@ -618,6 +618,56 @@ class ProcessCommitTests(SquadProcessFixture):
         self.assertIn("duplicate_emissions", result["reason"])
         self.assertEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), pre_tip)
 
+    def test_a_PRE_EXISTING_duplicate_does_not_quarantine(self):
+        """The commit is answerable for what it INTRODUCES, not what it
+        inherits.
+
+        Measured 2026-07-27: NEF carries nine duplicate_emissions on clean
+        main (EXIF:BitsPerSample, Compression, ImageHeight, ImageWidth,
+        PhotometricInterpretation, RowsPerStrip, SamplesPerPixel,
+        StripOffsets, SubfileType). The gate read duplicate_emissions
+        straight off the POST report while diffing extra_in_oxidex properly,
+        so every NEF commit was quarantined for inheriting them -- the
+        pipeline could never consume NEF work at all. The commit that
+        tripped it (d8168e7b) introduced none of the nine.
+
+        This could only bite once #135 made duplicate detection work; before
+        that the field was always empty and the missing diff was invisible.
+        """
+        repo, staging, home, sha = self._setup_squad()
+        pre_tip = git_out(repo, "rev-parse", "squad/nikon").strip()
+        inherited = ["EXIF:BitsPerSample", "EXIF:Compression", "EXIF:ImageHeight"]
+
+        def comparison_fn(staging_path, cache_dir, fmt, suffix):
+            # Identical before and after: the commit changed nothing about them.
+            return {"duplicate_emissions": list(inherited), "extra_in_oxidex": []}
+
+        result = self._process(repo, staging, home, sha, comparison_fn=comparison_fn)
+
+        self.assertEqual(result["outcome"], "consumed")
+        self.assertNotEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), pre_tip)
+
+    def test_a_duplicate_introduced_ON_TOP_of_pre_existing_ones_still_quarantines(self):
+        """The diff must not blind the gate to a real new duplicate."""
+        repo, staging, home, sha = self._setup_squad()
+        pre_tip = git_out(repo, "rev-parse", "squad/nikon").strip()
+        calls = {"n": 0}
+
+        def comparison_fn(staging_path, cache_dir, fmt, suffix):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"duplicate_emissions": ["EXIF:Compression"], "extra_in_oxidex": []}
+            return {"duplicate_emissions": ["EXIF:Compression", "NEF:Foo"],
+                    "extra_in_oxidex": []}
+
+        result = self._process(repo, staging, home, sha, comparison_fn=comparison_fn)
+
+        self.assertEqual(result["outcome"], "quarantined")
+        self.assertIn("NEF:Foo", result["reason"])
+        # ...and it must NOT headline the inherited one.
+        self.assertNotIn("EXIF:Compression", result["reason"])
+        self.assertEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), pre_tip)
+
     def test_new_oxidex_only_key_recheck_quarantines(self):
         repo, staging, home, sha = self._setup_squad()
         pre_tip = git_out(repo, "rev-parse", "squad/nikon").strip()

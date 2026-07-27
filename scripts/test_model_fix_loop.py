@@ -126,6 +126,7 @@ from model_fix_loop import (
     make_single_tag_gap,
     models_for_phase,
     new_oxidex_only_keys,
+    newly_duplicated_emissions,
     parse_request_range,
     refresh_worktree,
     resolve_request,
@@ -6926,6 +6927,42 @@ class TagStillOpenTests(unittest.TestCase):
         match = {"missing_tags": [], "value_differences": [],
                  "duplicate_emissions": ["EXIF:SomeOtherTag"]}
         self.assertIsNone(tag_still_open(match, self.MISSING_GAP))
+
+
+class NewlyDuplicatedEmissionsTests(unittest.TestCase):
+    """The other half of the same gate, which was reading POST directly.
+
+    Measured 2026-07-27: NEF carries NINE duplicate_emissions on clean main
+    (EXIF:BitsPerSample, Compression, ImageHeight, ImageWidth,
+    PhotometricInterpretation, RowsPerStrip, SamplesPerPixel, StripOffsets,
+    SubfileType), so every NEF commit was quarantined for inheriting them --
+    including d8168e7b, which introduced none. A commit is answerable for
+    the duplicates it INTRODUCES, never for the ones it inherits.
+    """
+
+    def test_pre_existing_duplicates_are_NOT_blamed_on_the_commit(self):
+        nine = ["EXIF:BitsPerSample", "EXIF:Compression", "EXIF:ImageHeight"]
+        pre = {"duplicate_emissions": nine}
+        post = {"duplicate_emissions": nine}
+        self.assertEqual(newly_duplicated_emissions(pre, post), [])
+
+    def test_an_introduced_duplicate_is_reported(self):
+        pre = {"duplicate_emissions": ["EXIF:Compression"]}
+        post = {"duplicate_emissions": ["EXIF:Compression", "GIF:BackgroundColor"]}
+        self.assertEqual(newly_duplicated_emissions(pre, post), ["GIF:BackgroundColor"])
+
+    def test_multiple_introduced_are_sorted(self):
+        pre = {"duplicate_emissions": []}
+        post = {"duplicate_emissions": ["MakerNotes:Z", "EXIF:A"]}
+        self.assertEqual(newly_duplicated_emissions(pre, post), ["EXIF:A", "MakerNotes:Z"])
+
+    def test_a_duplicate_the_commit_REMOVED_is_not_reported(self):
+        pre = {"duplicate_emissions": ["EXIF:A"]}
+        post = {"duplicate_emissions": []}
+        self.assertEqual(newly_duplicated_emissions(pre, post), [])
+
+    def test_missing_reports_are_treated_as_empty(self):
+        self.assertEqual(newly_duplicated_emissions(None, None), [])
 
 
 class NewOxidexOnlyKeysTests(unittest.TestCase):
