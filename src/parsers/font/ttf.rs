@@ -10,6 +10,7 @@
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
+use encoding_rs::Encoding;
 
 /// TTF signature: 0x00 0x01 0x00 0x00 or "true"
 const TTF_SIGNATURE_1: &[u8] = &[0x00, 0x01, 0x00, 0x00];
@@ -53,6 +54,14 @@ const LANGUAGE_JAPANESE_WINDOWS: u16 = 0x0411;
 const LANGUAGE_KOREAN_WINDOWS: u16 = 0x0412;
 const LANGUAGE_DUTCH_NL_WINDOWS: u16 = 0x0413;
 const LANGUAGE_NORWEGIAN_WINDOWS: u16 = 0x0414;
+const LANGUAGE_PORTUGUESE_MACINTOSH: u16 = 8;      // ExifTool %ttLang{Macintosh}
+const LANGUAGE_PORTUGUESE_WINDOWS: u16 = 0x0816;    // Portuguese (Portugal) LCID
+
+/// Macintosh encoding IDs for script-specific charsets
+const ENCODING_MAC_ROMAN: u16 = 0;
+const ENCODING_MAC_JAPANESE: u16 = 1;
+const ENCODING_MAC_KOREAN: u16 = 3;
+const ENCODING_MAC_HEBREW: u16 = 5;
 
 /// Name IDs for name table records
 const NAME_COPYRIGHT: u16 = 0;
@@ -234,11 +243,27 @@ impl TTFParser {
                 Some(Self::decode_mac_roman(str_data))
             }
             PLATFORM_MACINTOSH => {
-                // Preserve the previous behavior for unsupported Macintosh encodings.
+                let encoding_label = match record.encoding_id {
+                    ENCODING_MAC_JAPANESE => Some("x-mac-japanese"),
+                    ENCODING_MAC_KOREAN => Some("x-mac-korean"),
+                    ENCODING_MAC_HEBREW => Some("x-mac-hebrew"),
+                    _ => None,
+                };
+                if let Some(label) = encoding_label {
+                    if let Some(enc) = Encoding::for_label(label.as_bytes()) {
+                        let (decoded, _had_errors) = enc.decode_without_bom_handling(str_data);
+                        Some(decoded.into_owned())
+                    } else {
+                        None
+                    }
+                } else {
+                    String::from_utf8(str_data.to_vec()).ok()
+                }
+            }
+            _ => {
                 String::from_utf8(str_data.to_vec()).ok()
             }
-            _ => String::from_utf8(str_data.to_vec()).ok(),
-        };
+         };
 
         Ok(decoded)
     }
@@ -282,13 +307,18 @@ impl TTFParser {
             (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH)
             | (PLATFORM_WINDOWS, LANGUAGE_KOREAN_WINDOWS)
             | (PLATFORM_UNICODE, LANGUAGE_KOREAN_WINDOWS) => Some("ko"),
-            // Dutch (Netherlands) — only Windows/Unicode; Mac ID 4 is intentionally excluded
-            (PLATFORM_WINDOWS, LANGUAGE_DUTCH_NL_WINDOWS)
+            // Dutch (Netherlands) — Mac 4, Windows 0x0413, Unicode 0x0413
+            (PLATFORM_MACINTOSH, 4)
+            | (PLATFORM_WINDOWS, LANGUAGE_DUTCH_NL_WINDOWS)
             | (PLATFORM_UNICODE, LANGUAGE_DUTCH_NL_WINDOWS) => Some("nl-NL"),
             // Norwegian
             (PLATFORM_MACINTOSH, LANGUAGE_NORWEGIAN_MACINTOSH)
             | (PLATFORM_WINDOWS, LANGUAGE_NORWEGIAN_WINDOWS)
             | (PLATFORM_UNICODE, LANGUAGE_NORWEGIAN_WINDOWS) => Some("no"),
+            // Portuguese (Portugal) — Mac 8, Windows 0x0816, Unicode 0x0816
+            (PLATFORM_MACINTOSH, LANGUAGE_PORTUGUESE_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_PORTUGUESE_WINDOWS)
+            | (PLATFORM_UNICODE, LANGUAGE_PORTUGUESE_WINDOWS) => Some("pt"),
             _ => None,
         }
     }
@@ -613,6 +643,7 @@ mod tests {
         // instead of 6 would make this a tautology -- it would feed the
         // constant in and assert the constant's own meaning back out, and
         // pass for any value it held. The literals ARE the table.
+        // Dutch 4 and Portuguese 8 are now mapped; 12 (ar) and 5 (sv) stay unmapped.
         for (id, expected) in [
             (1, "fr"),  // %ttLang{Macintosh}: 1 => 'fr'
             (2, "de"),  // 2 => 'de'
@@ -621,6 +652,8 @@ mod tests {
             (7, "da"),  // 7 => 'da'
             (10, "he"), // 10 => 'he'
             (13, "fi"), // 13 => 'fi'
+            (4, "nl-NL"), // 4 => 'nl-NL'
+            (8, "pt"),  // 8 => 'pt'
         ] {
             let record = mac_record(id);
             assert_eq!(
@@ -638,10 +671,8 @@ mod tests {
     #[test]
     fn unclaimed_macintosh_language_ids_stay_unmapped() {
         for id in [
-            4,  /* nl-NL */
             12, /* ar */
             5,  /* sv */
-            8,  /* pt */
         ] {
             let record = mac_record(id);
             assert_eq!(
