@@ -334,6 +334,9 @@ const TAG_CREATE_DATE: u16 = 0x9004;
 const TAG_DATE_TIME_ORIGINAL: u16 = 0x9003;
 const TAG_EXIF_IMAGE_WIDTH: u16 = 0xA002;
 const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
+const TAG_EXIF_VERSION: u16 = 0x9000;
+const TAG_EXPOSURE_PROGRAM: u16 = 0x8822;
+const TAG_EXPOSURE_COMPENSATION: u16 = 0x9204;
 
 /// Known compression values (IFD0 Compression tag)
 const COMPRESSION_LABELS: &[(u16, &str)] = &[
@@ -346,6 +349,20 @@ const COMPRESSION_LABELS: &[(u16, &str)] = &[
     (7, "JPEG"),
     (8, "Adobe Deflate"),
     (32773, "PackBits"),
+];
+
+/// ExposureProgram lookup table (ExifTool PrintConv)
+const EXPOSURE_PROGRAM_LABELS: &[(u16, &str)] = &[
+    (0, "Not Defined"),
+    (1, "Manual"),
+    (2, "Program AE"),
+    (3, "Aperture-priority AE"),
+    (4, "Shutter speed priority AE"),
+    (5, "Creative (Slow speed)"),
+    (6, "Action (High speed)"),
+    (7, "Portrait"),
+    (8, "Landscape"),
+    (9, "Bulb"),
 ];
 
 #[derive(Clone, Copy)]
@@ -508,6 +525,38 @@ fn parse_exif_ifd(
         let count = read_embedded_tiff_u32(data, base.checked_add(4)?, byte_order)?;
 
         match tag {
+            TAG_EXIF_VERSION if field_type == 7 && count == 4 => {
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
+                    let s = String::from_utf8_lossy(&bytes).into_owned();
+                    let key = crate::tag_db::lookup_tag_name(TAG_EXIF_VERSION, "EXIF");
+                    metadata.insert(key, crate::core::TagValue::new_string(s));
+                }
+            }
+            TAG_EXPOSURE_PROGRAM if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    if let Some(label) = EXPOSURE_PROGRAM_LABELS
+                        .iter()
+                        .find(|&&(id, _)| id == raw)
+                        .map(|&(_, s)| s)
+                    {
+                        let key = crate::tag_db::lookup_tag_name(TAG_EXPOSURE_PROGRAM, "EXIF");
+                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                    }
+                }
+            }
+            TAG_EXPOSURE_COMPENSATION if field_type == 10 => {
+                if let Some((num, den)) = read_signed_rational_value(data, base, byte_order) {
+                    let val_str = if den == 0 {
+                        "0".to_string()
+                    } else if den == 1 {
+                        format!("{}", num)
+                    } else {
+                        format!("{}", num as f64 / den as f64)
+                    };
+                    let key = crate::tag_db::lookup_tag_name(TAG_EXPOSURE_COMPENSATION, "EXIF");
+                    metadata.insert(key, crate::core::TagValue::new_string(val_str));
+                }
+            }
             TAG_APERTURE_VALUE if field_type == 5 => {
                 if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
                     let apex = if den != 0 {
@@ -752,6 +801,31 @@ fn read_embedded_tiff_u32(
         EmbeddedTiffByteOrder::Little => u32::from_le_bytes(bytes),
         EmbeddedTiffByteOrder::Big => u32::from_be_bytes(bytes),
     })
+}
+
+fn read_embedded_tiff_i32(
+    data: &[u8],
+    offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<i32> {
+    let end = offset.checked_add(4)?;
+    let bytes: [u8; 4] = data.get(offset..end)?.try_into().ok()?;
+    let uval = match byte_order {
+        EmbeddedTiffByteOrder::Little => u32::from_le_bytes(bytes),
+        EmbeddedTiffByteOrder::Big => u32::from_be_bytes(bytes),
+    };
+    Some(uval as i32)
+}
+
+fn read_signed_rational_value(
+    data: &[u8],
+    entry_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<(i32, i32)> {
+    let val_off = get_entry_value_offset(data, entry_offset, 8, 1, byte_order)?;
+    let num = read_embedded_tiff_i32(data, val_off, byte_order)?;
+    let den = read_embedded_tiff_i32(data, val_off.checked_add(4)?, byte_order)?;
+    Some((num, den))
 }
 
 #[cfg(test)]
