@@ -323,7 +323,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         (RawFormat::PanasonicRW2, 0, 0x000B) => 0x0103,
                         _ => *tag_id,
                     };
-                    let tag_name = match (format, ifd_index, *tag_id) {
+                    let tag_name: String = match (format, ifd_index, *tag_id) {
                         (RawFormat::PanasonicRW2, 0, 0x001C) => {
                             format!("{}:BlackLevelRed", ifd_name)
                         }
@@ -332,6 +332,20 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
                         (RawFormat::PanasonicRW2, 0, 0x001E) => {
                             format!("{}:BlackLevelBlue", ifd_name)
+                        }
+                        (RawFormat::PanasonicRW2, 0, 0x0023) => {
+                            // ISO is stored in PanasonicRaw tag 0x0023; ExifTool
+                            // maps it to the standard EXIF group.
+                            "EXIF:ISO".to_string()
+                        }
+                        (RawFormat::PanasonicRW2, 0, 0x0018) => {
+                            "EXIF:HighISOMultiplierRed".to_string()
+                        }
+                        (RawFormat::PanasonicRW2, 0, 0x0019) => {
+                            "EXIF:HighISOMultiplierGreen".to_string()
+                        }
+                        (RawFormat::PanasonicRW2, 0, 0x001A) => {
+                            "EXIF:HighISOMultiplierBlue".to_string()
                         }
                         _ => lookup_raw_tag_name(canonical_tag_id, ifd_name, format),
                     };
@@ -671,13 +685,19 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA401 // CustomRendered
                 | 0xA402 // ExposureMode
                 | 0xA404 // DigitalZoomRatio
-                | 0xA408 // Contrast
                 | 0xA405 // FocalLengthIn35mmFormat
+                | 0xA407 // GainControl
+                | 0xA408 // Contrast
             ) {
             continue;
         }
 
-        let tag_name = lookup_tag_name(tag_id, "ExifIFD");
+        let tag_name = match tag_id {
+            // ISO is sourced from IFD0, not the preview, but GainControl
+            // must avoid a "Composite:" prefix from the tag database.
+            0xA407 => "EXIF:GainControl".to_string(),
+            _ => lookup_tag_name(tag_id, "ExifIFD"),
+        };
         let tag_value = if let Some(value) = format_exif_display_value(
             tag_id,
             raw_bytes.as_ref(),
@@ -897,6 +917,15 @@ fn format_exif_display_value(
             0 => Some("Auto".to_string()),
             1 => Some("Manual".to_string()),
             2 => Some("Auto bracket".to_string()),
+            _ => None,
+        },
+        // GainControl: SHORT[1].
+        0xA407 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("None".to_string()),
+            1 => Some("Low gain up".to_string()),
+            2 => Some("High gain up".to_string()),
+            3 => Some("Low gain down".to_string()),
+            4 => Some("High gain down".to_string()),
             _ => None,
         },
         // DigitalZoomRatio: RATIONAL[1].
