@@ -124,6 +124,14 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
         TagValue::Integer(header.filetype as i64),
     );
 
+    // ObjectFileType (ExifTool PrintConv)
+    metadata.insert(
+        "EXE:ObjectFileType".to_string(),
+        TagValue::String(
+            super::structures::exiftool_object_file_type_name(header.filetype).to_string(),
+        ),
+    );
+
     // Is 64-bit
     metadata.insert(
         "EXE:Is64Bit".to_string(),
@@ -132,16 +140,19 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
 
     // Byte order
     metadata.insert(
-        "EXE:ByteOrder".to_string(),
+        "EXE:CPUByteOrder".to_string(),
         TagValue::String(
-            if header.is_swapped {
-                "Little Endian"
-            } else {
-                "Big Endian"
-            }
-            .to_string(),
+            if header.is_swapped { "Little endian" } else { "Big endian" }.to_string(),
         ),
     );
+    // Keep original ByteOrder tag (existing clients may depend on it)
+    metadata.insert(
+        "EXE:ByteOrder".to_string(),
+        TagValue::String(
+            if header.is_swapped { "Little endian" } else { "Big endian" }.to_string(),
+        ),
+    );
+
 
     // Is byte swapped (relative to original PPC big-endian format)
     metadata.insert(
@@ -174,6 +185,12 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
             "EXE:FlagsDecoded".to_string(),
             TagValue::String(flag_names.join(", ")),
         );
+    }
+
+    // ObjectFlags (ExifTool style summary)
+    let objflags = super::structures::exiftool_object_flags_string(header.flags);
+    if !objflags.is_empty() {
+        metadata.insert("EXE:ObjectFlags".to_string(), TagValue::String(objflags));
     }
 
     // Specific flag indicators

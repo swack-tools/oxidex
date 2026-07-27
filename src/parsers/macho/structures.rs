@@ -567,7 +567,7 @@ impl MachHeader {
     pub fn cpu_type_name(&self) -> &'static str {
         match self.cputype {
             cpu_type::CPU_TYPE_I386 => "i386",
-            cpu_type::CPU_TYPE_X86_64 => "x86_64",
+            cpu_type::CPU_TYPE_X86_64 => "x86 64-bit",
             cpu_type::CPU_TYPE_ARM => "ARM",
             cpu_type::CPU_TYPE_ARM64 => "ARM64",
             cpu_type::CPU_TYPE_ARM64_32 => "ARM64_32",
@@ -580,17 +580,21 @@ impl MachHeader {
     /// Returns human-readable CPU subtype name
     pub fn cpu_subtype_name(&self) -> String {
         match self.cputype {
-            cpu_type::CPU_TYPE_ARM64 => match self.cpusubtype & 0xFF {
-                cpu_subtype_arm64::CPU_SUBTYPE_ARM64_ALL => "ALL".to_string(),
-                cpu_subtype_arm64::CPU_SUBTYPE_ARM64E => "ARM64E".to_string(),
-                cpu_subtype_arm64::CPU_SUBTYPE_ARM64_V8 => "V8".to_string(),
-                _ => format!("Unknown ({})", self.cpusubtype),
-            },
             cpu_type::CPU_TYPE_X86_64 => match self.cpusubtype & 0xFF {
-                cpu_subtype_x86_64::CPU_SUBTYPE_X86_64_ALL => "ALL".to_string(),
-                cpu_subtype_x86_64::CPU_SUBTYPE_X86_64_H => "Haswell".to_string(),
+                cpu_subtype_x86_64::CPU_SUBTYPE_X86_64_ALL => "i386 (all) 64-bit".to_string(),
+                cpu_subtype_x86_64::CPU_SUBTYPE_X86_64_H => format!(
+                    "i386 (haswell) 64-bit",
+                ),
                 _ => format!("Unknown ({})", self.cpusubtype),
             },
+            cpu_type::CPU_TYPE_ARM64 => match self.cpusubtype & 0xFF {
+                cpu_subtype_arm64::CPU_SUBTYPE_ARM64_ALL => "ARM64 (all)".to_string(),
+                cpu_subtype_arm64::CPU_SUBTYPE_ARM64E => "ARM64 (e)".to_string(),
+                cpu_subtype_arm64::CPU_SUBTYPE_ARM64_V8 => "ARM64 (v8)".to_string(),
+                _ => format!("Unknown ({})", self.cpusubtype),
+            },
+            // For i386, ExifTool uses subtypes like "i386 (all)", etc.
+            // The constants are not yet defined in this module; fallback.
             _ => format!("{}", self.cpusubtype),
         }
     }
@@ -604,6 +608,96 @@ impl MachHeader {
     pub fn flag_names(&self) -> Vec<&'static str> {
         decode_flags(self.flags)
     }
+}
+
+// =============================================================================
+/// ExifTool PrintConv for ObjectFileType
+pub fn exiftool_object_file_type_name(filetype: u32) -> &'static str {
+    match filetype {
+        0x0 => "Static library",
+        0x1 => "Object",
+        0x2 => "Demand paged executable",
+        0x3 => "Fixed VM shared library",
+        0x4 => "Core file",
+        0x5 => "Preloaded executable",
+        0x6 => "Dynamically bound shared library",
+        0x7 => "Dynamic link editor",
+        0x8 => "Dynamically bound bundle",
+        0x9 => "Shared library stub for static linking",
+        0xA => "Debug information",
+        0xB => "x86_64 kexts",
+        0xC => "Fileset",
+        _ => "Unknown",
+    }
+}
+
+/// ExifTool ObjectFlags summary string (flag bits translated to ExifTool's PrintConv strings)
+pub fn exiftool_object_flags_string(flags: u32) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if flags & flags::MH_NOUNDEFS != 0 {
+        parts.push("No undefs");
+    }
+    if flags & flags::MH_INCRLINK != 0 {
+        parts.push("Incrementa link");
+    }
+    if flags & flags::MH_DYLDLINK != 0 {
+        parts.push("Dyld link");
+    }
+    if flags & flags::MH_BINDATLOAD != 0 {
+        parts.push("Bind at load");
+    }
+    if flags & flags::MH_PREBOUND != 0 {
+        parts.push("Prebound");
+    }
+    if flags & flags::MH_SPLIT_SEGS != 0 {
+        parts.push("Split segs");
+    }
+    if flags & flags::MH_LAZY_INIT != 0 {
+        parts.push("Lazy init");
+    }
+    if flags & flags::MH_TWOLEVEL != 0 {
+        parts.push("Two level");
+    }
+    if flags & flags::MH_FORCE_FLAT != 0 {
+        parts.push("Force flat");
+    }
+    if flags & flags::MH_NOMULTIDEFS != 0 {
+        parts.push("No multidefs");
+    }
+    if flags & flags::MH_NOFIXPREBINDING != 0 {
+        parts.push("No fix prebinding");
+    }
+    if flags & flags::MH_ALLMODSBOUND != 0 {
+        parts.push("All mods bound");
+    }
+    if flags & flags::MH_SUBSECTIONS_VIA_SYMBOLS != 0 {
+        parts.push("Subsections via symbols");
+    }
+    if flags & flags::MH_CANONICAL != 0 {
+        parts.push("Canonical");
+    }
+    if flags & flags::MH_WEAK_DEFINES != 0 {
+        parts.push("Weak defines");
+    }
+    if flags & flags::MH_BINDS_TO_WEAK != 0 {
+        parts.push("Binds to weak");
+    }
+    if flags & flags::MH_ALLOW_STACK_EXECUTION != 0 {
+        parts.push("Allow stack execution");
+    }
+    if flags & flags::MH_ROOT_SAFE != 0 {
+        parts.push("Root safe");
+    }
+    if flags & flags::MH_SETUID_SAFE != 0 {
+        parts.push("Setuid safe");
+    }
+    if flags & flags::MH_NO_REEXPORTED_DYLIBS != 0 {
+        parts.push("No reexported dylibs");
+    }
+    if flags & flags::MH_PIE != 0 {
+        parts.push("Random address");
+    }
+    parts.join(", ")
 }
 
 // =============================================================================
