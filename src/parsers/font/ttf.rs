@@ -72,6 +72,7 @@ const NAME_FULL_FONT_NAME: u16 = 4;
 const NAME_FONT_UNIQUE_ID: u16 = 3;
 const NAME_VERSION: u16 = 5;
 const NAME_POSTSCRIPT_NAME: u16 = 6;
+const NAME_MANUFACTURER: u16 = 8;
 const NAME_DESIGNER: u16 = 9;
 const NAME_VENDOR_URL: u16 = 11;
 const NAME_LICENSE: u16 = 13;
@@ -229,7 +230,7 @@ impl TTFParser {
 
         // Decode based on platform
         let decoded = match record.platform_id {
-            PLATFORM_WINDOWS | PLATFORM_UNICODE => {
+            PLATFORM_WINDOWS | PLATFORM_UNICODE | PLATFORM_OPENTYPE => {
                 // Windows and Unicode platform strings use UTF-16BE.
                 if !str_len.is_multiple_of(2) {
                     return Ok(None);
@@ -314,6 +315,8 @@ impl TTFParser {
                 _ => None,
             },
             (PLATFORM_OPENTYPE, lang_id) => match lang_id {
+                LANGUAGE_HEBREW_WINDOWS => Some("he"),
+                LANGUAGE_CHINESE_SIMPLIFIED_WINDOWS => Some("zh-CN"),
                 LANGUAGE_PORTUGUESE_WINDOWS => Some("pt"),
                 LANGUAGE_SWEDISH_WINDOWS => Some("sv"),
                 _ => None,
@@ -364,11 +367,12 @@ impl TTFParser {
         // Map of name IDs to metadata keys
         let name_mappings = [
             (NAME_COPYRIGHT, "Copyright"),
-            (NAME_FONT_FAMILY, "FontFamily"),
-            (NAME_FONT_SUBFAMILY, "FontSubfamily"),
-            (NAME_FULL_FONT_NAME, "FontName"),
-            (NAME_VERSION, "FontVersion"),
-            (NAME_POSTSCRIPT_NAME, "PostScriptName"),
+            (NAME_FONT_FAMILY, "Font:FontFamily"),
+            (NAME_FONT_SUBFAMILY, "Font:FontSubfamily"),
+            (NAME_FULL_FONT_NAME, "Font:FontName"),
+            (NAME_VERSION, "Font:NameTableVersion"),
+            (NAME_POSTSCRIPT_NAME, "Font:PostScriptFontName"),
+            (NAME_MANUFACTURER, "Font:Manufacturer"),
             (NAME_DESIGNER, "Designer"),
             (NAME_VENDOR_URL, "VendorURL"),
             (NAME_LICENSE, "License"),
@@ -393,9 +397,9 @@ impl TTFParser {
                 // Font group as well.
                 let font_key = match *name_id {
                     NAME_COPYRIGHT => Some("Font:Copyright"),
-                    NAME_FONT_FAMILY => Some("Font:FontFamily"),
-                    NAME_FULL_FONT_NAME => Some("Font:FontName"),
-                    NAME_FONT_SUBFAMILY => Some("Font:FontSubfamily"),
+                    // NAME_FONT_FAMILY, NAME_FULL_FONT_NAME, NAME_FONT_SUBFAMILY
+                    // are already emitted as prefix-only keys above.
+                    // Others are emitted directly, no secondary font key needed.
                     _ => None,
                 };
                 if let Some(font_key) = font_key {
@@ -423,6 +427,7 @@ impl TTFParser {
 
         // ExifTool exposes localized name table records with a language suffix.
         for record in &records {
+            // Only emit for name IDs that produce localized Font tags.
             let base_key = match record.name_id {
                 NAME_FONT_FAMILY => Some("Font:FontFamily"),
                 NAME_FULL_FONT_NAME => Some("Font:FontName"),
@@ -609,9 +614,9 @@ pub fn parse_ttf_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
 fn add_ttf_tag_aliases(metadata: &mut MetadataMap) {
     // Create aliases with TTF prefix
     let mappings = [
-        ("FontName", "TTF:FontName"),
-        ("FontFamily", "TTF:FamilyName"),
-        ("FontSubfamily", "TTF:StyleName"),
+        ("Font:FontName", "TTF:FontName"),
+        ("Font:FontFamily", "TTF:FamilyName"),
+        ("Font:FontSubfamily", "TTF:StyleName"),
         ("UnitsPerEm", "TTF:UnitsPerEm"),
     ];
 
@@ -801,7 +806,7 @@ mod tests {
             Some(&TagValue::String("2048".to_string()))
         );
         assert_eq!(
-            metadata.get("FontFamily"),
+            metadata.get("Font:FontFamily"),
             Some(&TagValue::String("Test".to_string()))
         );
         assert_eq!(
