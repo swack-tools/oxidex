@@ -112,6 +112,8 @@ const KNOWN_TAGS: &[&str] = &[
     "STB1",
     "STB3",
     "STB4",
+    "STB5",
+    "STB6",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -718,6 +720,34 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:STB4".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus STB5 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("STB5") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:STB5".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus STB6 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("STB6") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:STB6".to_string(), app12_value);
+            }
+
+            // TagS is an Olympus Picture Info field that ExifTool exposes
+            // as a string in the APP12 group (values like "v").
+            if key.eq_ignore_ascii_case("TagS") {
+                metadata.insert("APP12:TagS".to_string(), TagValue::String(value.clone()));
             }
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
@@ -1991,6 +2021,8 @@ mod tests {
             "APP12:STB1",
             "APP12:STB3",
             "APP12:STB4",
+            "APP12:STB5",
+            "APP12:STB6",
         ] {
             assert!(
                 !metadata.contains_key(key),
