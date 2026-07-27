@@ -811,6 +811,16 @@ fn format_exif_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // Compression: SHORT[1] (IFD0). ExifTool prints the string label.
+        0x0103 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("Uncompressed".to_string()),
+            2 => Some("CCIRLE".to_string()),
+            3 => Some("CCITT Group 3".to_string()),
+            4 => Some("CCITT Group 4".to_string()),
+            5 => Some("LZW".to_string()),
+            6 => Some("JPEG (old-style)".to_string()),
+            _ => None,
+        },
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -2035,6 +2045,10 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
             "MakerNotes:PreviewImageSize".to_string(),
             TagValue::new_string(format!("{}x{}", columns, rows)),
         );
+        // Extract missing EXIF tags from the preview JPEG.
+        if let Err(e) = parse_x3f_preview_exif(data, metadata) {
+            eprintln!("Warning: Failed to extract preview EXIF: {}", e);
+        }
     }
 
     // For RAW type (1), look for embedded TIFF/EXIF data
@@ -2079,6 +2093,72 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
             }
         }
     }
+}
+
+/// Extract only the specific EXIF tags that are otherwise missing from X3F.
+///
+/// We avoid copying all tags to prevent leaking sub‑IFD pointers or
+/// raw exposure values that would trigger unwanted oxidex Composite derivations.
+fn parse_x3f_preview_exif(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
+    let jpeg = data.get(28..).unwrap_or(&[]);
+    let Some(tiff_data) = find_jpeg_exif_tiff(jpeg)? else {
+        return Ok(());
+    };
+
+    let byte_order = detect_byte_order(tiff_data)?;
+    let first_ifd_offset = read_u32(&tiff_data[4..8], byte_order) as u64;
+    let reader = SliceReader::new(tiff_data);
+
+    let ifd0_tags = parse_ifd(&reader, first_ifd_offset, byte_order)?;
+    let mut exif_ifd_offset = None;
+
+    // Compression (0x0103) is in IFD0 but reported under the EXIF prefix.
+    for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
+        let bytes = raw_bytes.as_ref();
+        if *tag_id == 0x8769 && bytes.len() >= 4 {
+            exif_ifd_offset = Some(read_u32(bytes, byte_order) as u64);
+            continue;
+        }
+        if *tag_id == 0x0103 {
+            let key = "EXIF:Compression".to_string();
+            if !metadata.contains_key(&key) {
+                let value = format_exif_display_value(
+                    0x0103, bytes, *field_type, *value_count, byte_order,
+                )
+                .map(TagValue::new_string)
+                .unwrap_or_else(|| raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order));
+                metadata.insert(key, value);
+            }
+        }
+    }
+
+    if let Some(offset) = exif_ifd_offset {
+        if let Ok(exif_tags) = parse_ifd(&reader, offset, byte_order) {
+            for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                let name = match *tag_id {
+                    0x9003 => "DateTimeOriginal",
+                    0x9004 => "CreateDate",
+                    0x9101 => "ComponentsConfiguration",
+                    0xA001 => "ColorSpace",
+                    0xA401 => "CustomRendered",
+                    _ => continue,
+                };
+                let key = format!("EXIF:{}", name);
+                if metadata.contains_key(&key) {
+                    continue;
+                }
+                let bytes = raw_bytes.as_ref();
+                let value = format_exif_display_value(
+                    *tag_id, bytes, *field_type, *value_count, byte_order,
+                )
+                .map(TagValue::new_string)
+                .unwrap_or_else(|| raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order));
+                metadata.insert(key, value);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Parse Minolta MRW format
