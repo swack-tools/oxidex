@@ -32,6 +32,7 @@ const ICC_PROFILE: u16 = 0x040F; // ICC profile
 const RESOLUTION_INFO: u16 = 0x03ED; // Resolution info
 const PRINT_FLAGS: u16 = 0x03F1; // Print flags
 const COPYRIGHT_FLAG: u16 = 0x040A; // Copyright flag
+const PHOTOMECHANIC_SOFTEDIT: u16 = 0x0432; // PhotoMechanic SoftEdit tags
 
 /// Parser for Adobe Photoshop (PSD) document files
 ///
@@ -225,6 +226,9 @@ impl PSDParser {
                 IPTC_NAA_RECORD => {
                     Self::parse_iptc_data(resource_data, metadata);
                 }
+                PHOTOMECHANIC_SOFTEDIT => {
+                    Self::parse_photomechanic_softedit(resource_data, metadata);
+                }
                 _ => {}
             }
 
@@ -238,6 +242,103 @@ impl PSDParser {
         }
 
         Ok(())
+    }
+
+    /// Parse PhotoMechanic SoftEdit image resource (0x0432).
+    ///
+    /// ExifTool's PhotoMechanic.pm parses these tags from a block that begins
+    /// with a 2-byte version (0x0001) and a 2-byte entry count. That many
+    /// records follow; each: tagID (u16) + length (u16) + value bytes.
+    fn parse_photomechanic_softedit(data: &[u8], metadata: &mut MetadataMap) {
+        if data.len() < 4 {
+            return;
+        }
+
+        let reader = EndianReader::big_endian(data);
+        let version = reader.u16_at(0).unwrap_or(0);
+        // Version 1 is the only known format; bail if unexpected.
+        if version != 1 {
+            return;
+        }
+        let entry_count = reader.u16_at(2).unwrap_or(0) as usize;
+        if entry_count == 0 {
+            return;
+        }
+
+        let mut pos: usize = 4;
+
+        for _ in 0..entry_count {
+            if pos + 4 > data.len() {
+                break;
+            }
+            let rec_reader = EndianReader::big_endian(&data[pos..]);
+            let tag_id = rec_reader.u16_at(0).unwrap_or(0);
+            let value_len = rec_reader.u16_at(2).unwrap_or(0) as usize;
+            pos += 4;
+
+            if pos + value_len > data.len() {
+                break;
+            }
+
+            let value_bytes = &data[pos..pos + value_len];
+
+            // Tag IDs from ExifTool's FotoStation::SoftEdit table
+            let (name, value): (&str, TagValue) = match tag_id {
+                0x0001 => {
+                    // Tagged: single byte, non-zero means Yes
+                    let s = if !value_bytes.is_empty() && value_bytes[0] != 0 {
+                        "Yes"
+                    } else {
+                        "No"
+                    };
+                    ("Tagged", TagValue::String(s.to_string()))
+                }
+                0x0002 => {
+                    let v = if value_bytes.len() >= 2 {
+                        u16::from_be_bytes([value_bytes[0], value_bytes[1]]) as i64
+                    } else {
+                        0
+                    };
+                    ("Rotation", TagValue::Integer(v))
+                }
+                0x0008 => {
+                    let v = if value_bytes.len() >= 2 {
+                        u16::from_be_bytes([value_bytes[0], value_bytes[1]]) as i64
+                    } else {
+                        0
+                    };
+                    ("CropRight", TagValue::Integer(v))
+                }
+                0x0009 => {
+                    let v = if value_bytes.len() >= 2 {
+                        u16::from_be_bytes([value_bytes[0], value_bytes[1]]) as i64
+                    } else {
+                        0
+                    };
+                    ("CropBottom", TagValue::Integer(v))
+                }
+                0x000A => {
+                    let v = if value_bytes.len() >= 2 {
+                        u16::from_be_bytes([value_bytes[0], value_bytes[1]]) as i64
+                    } else {
+                        0
+                    };
+                    ("CropLeft", TagValue::Integer(v))
+                }
+                0x000B => {
+                    let v = if value_bytes.len() >= 2 {
+                        u16::from_be_bytes([value_bytes[0], value_bytes[1]]) as i64
+                    } else {
+                        0
+                    };
+                    ("CropTop", TagValue::Integer(v))
+                }
+                _ => continue,
+            };
+
+            metadata.insert(format!("PhotoMechanic:{}", name), value);
+            pos += value_len;
+        }
     }
 
     /// Parse resolution info resource
