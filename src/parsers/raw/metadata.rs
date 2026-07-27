@@ -1674,6 +1674,44 @@ fn extract_cr2_tags(metadata: &mut MetadataMap) {
             TagValue::new_string("true".to_string()),
         );
     }
+
+    // Extract PreviewImage / PreviewImageLength from the first IFD
+    // that contains a JPEG-compressed thumbnail (Compression=6).
+    // ExifTool reports these under the EXIF group.
+    let preview_ifds = ["IFD0", "IFD1", "SubIFD0"];
+    for ifd_name in &preview_ifds {
+        let compression_key = lookup_tag_name(0x0103, ifd_name);
+        let jpeg_length_key = lookup_tag_name(0x0202, ifd_name);
+
+        let compression = match metadata.get(&compression_key) {
+            Some(TagValue::Integer(c)) if *c == 6 => true,
+            _ => false,
+        };
+        if !compression {
+            continue;
+        }
+
+        let length = metadata
+            .get(&jpeg_length_key)
+            .and_then(|v| {
+                if let TagValue::Integer(i) = v {
+                    Some(*i)
+                } else {
+                    None
+                }
+            });
+
+        if let Some(len) = length {
+            if len > 0 {
+                metadata.insert("EXIF:PreviewImage".to_string(),
+                    TagValue::new_string(format!(
+                        "(Binary data {} bytes, use -b option to extract)", len)));
+                metadata.insert("EXIF:PreviewImageLength".to_string(),
+                    TagValue::new_integer(len));
+                break;
+            }
+        }
+    }
 }
 
 /// Extract NEF-specific tags from metadata
@@ -1947,6 +1985,50 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     } else {
                         for (tag_name, tag_value) in makernote_tags {
                             metadata.insert(tag_name, TagValue::new_string(tag_value));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Some CR3 files store additional EXIF tags in a separate CMT2 box
+    // (LensModel, LensSerialNumber, OffsetTime, OwnerName, etc.).
+    // The CMT2 TIFF has a flat IFD0 with standard EXIF tags directly
+    // in its entry list (no separate EXIF Sub-IFD).
+    if let Some(tiff) = find_cr3_box(data, b"CMT2") {
+        if tiff.starts_with(b"II*\0") || tiff.starts_with(b"MM\x00*") {
+            if let Ok(byte_order) = detect_byte_order(tiff) {
+                let first_ifd_offset = read_u32(&tiff[4..8], byte_order) as u64;
+                let reader = SliceReader::new(tiff);
+
+                if let Ok(ifd0_tags) = parse_ifd(&reader, first_ifd_offset, byte_order) {
+                    for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
+                        let bytes = raw_bytes.as_ref();
+
+                        // Only extract the tags known to live in CMT2.
+                        // Other CMT2 tags duplicate CMT1 or MakerNote data.
+                        if !matches!(
+                            *tag_id,
+                            0xA430 // OwnerName
+                                | 0xA434 // LensModel
+                                | 0xA435 // LensSerialNumber
+                                | 0x9010 // OffsetTime
+                        ) {
+                            continue;
+                        }
+
+                        let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
+                        let tag_value = raw_bytes_to_simple_tag_value(
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        );
+                        // Only insert if not already present (CMT1 may
+                        // have a different value for the same tag ID).
+                        if !metadata.contains_key(&tag_name) {
+                            metadata.insert(tag_name, tag_value);
                         }
                     }
                 }
