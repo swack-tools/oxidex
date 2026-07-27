@@ -42,7 +42,11 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0xC619 // BlackLevelRepeatDim
+            0xC616 // CFAPlaneColor
+                | 0xC617 // CFALayout
+                | 0xC61F // DefaultCropOrigin
+                | 0xC620 // DefaultCropSize
+                | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
                 | 0xC62D // BayerGreenSplit
                 | 0xC632 // AntiAliasStrength
@@ -51,6 +55,10 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
         )
     {
         lookup_tag_name(tag_id, "EXIF")
+    } else if format == RawFormat::AdobeDNG && tag_id == 0x828D {
+        "EXIF:CFARepeatPatternDim".to_string()
+    } else if format == RawFormat::AdobeDNG && tag_id == 0x828E {
+        "EXIF:CFAPattern2".to_string()
     } else {
         lookup_tag_name(tag_id, ifd_name)
     }
@@ -431,22 +439,48 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     ) {
                         TagValue::new_string(value)
                     } else if format == RawFormat::AdobeDNG {
-                        format_dng_integer_array(
-                            *tag_id,
-                            bytes,
-                            *field_type,
-                            *value_count,
-                            byte_order,
-                        )
-                        .map(TagValue::new_string)
-                        .unwrap_or_else(|| {
-                            raw_bytes_to_simple_tag_value(
+                        match *tag_id {
+                            0xC616 => {
+                                format_cfa_plane_color(bytes)
+                                    .map(TagValue::new_string)
+                                    .unwrap_or_else(|| {
+                                        raw_bytes_to_simple_tag_value(
+                                            bytes,
+                                            *field_type,
+                                            *value_count,
+                                            byte_order,
+                                        )
+                                    })
+                            }
+                            0xC617 => {
+                                if let Some(val) = read_tiff_u16(bytes, byte_order) {
+                                    TagValue::new_string(format_cfa_layout(val))
+                                } else {
+                                    raw_bytes_to_simple_tag_value(
+                                        bytes,
+                                        *field_type,
+                                        *value_count,
+                                        byte_order,
+                                    )
+                                }
+                            }
+                            _ => format_dng_integer_array(
+                                *tag_id,
                                 bytes,
                                 *field_type,
                                 *value_count,
                                 byte_order,
                             )
-                        })
+                            .map(TagValue::new_string)
+                            .unwrap_or_else(|| {
+                                raw_bytes_to_simple_tag_value(
+                                    bytes,
+                                    *field_type,
+                                    *value_count,
+                                    byte_order,
+                                )
+                            }),
+                        }
                     } else {
                         raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
                     };
@@ -633,9 +667,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             // loop uses, for consistency.
                             // CFAPattern2 stays under its physical SubIFD
                             // group for all formats, including NEF.
+                            // For DNG, the physical SubIFD group is mapped to EXIF
+                            // via lookup_raw_tag_name (which returns EXIF:CFAPattern2).
                             if tag_id == 0x828E {
                                 metadata.insert(
-                                    lookup_tag_name(tag_id, sub_ifd_name),
+                                    lookup_raw_tag_name(tag_id, sub_ifd_name, format),
                                     TagValue::new_string(format_cfa_pattern2(
                                         raw_bytes.as_ref(),
                                         value_count,
@@ -651,22 +687,48 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             };
                             let bytes = raw_bytes.as_ref();
                             let tag_value = if format == RawFormat::AdobeDNG {
-                                format_dng_integer_array(
-                                    tag_id,
-                                    bytes,
-                                    field_type,
-                                    value_count,
-                                    byte_order,
-                                )
-                                .map(TagValue::new_string)
-                                .unwrap_or_else(|| {
-                                    raw_bytes_to_simple_tag_value(
+                                match tag_id {
+                                    0xC616 => {
+                                        format_cfa_plane_color(bytes)
+                                            .map(TagValue::new_string)
+                                            .unwrap_or_else(|| {
+                                                raw_bytes_to_simple_tag_value(
+                                                    bytes,
+                                                    field_type,
+                                                    value_count,
+                                                    byte_order,
+                                                )
+                                            })
+                                    }
+                                    0xC617 => {
+                                        if let Some(val) = read_tiff_u16(bytes, byte_order) {
+                                            TagValue::new_string(format_cfa_layout(val))
+                                        } else {
+                                            raw_bytes_to_simple_tag_value(
+                                                bytes,
+                                                field_type,
+                                                value_count,
+                                                byte_order,
+                                            )
+                                        }
+                                    }
+                                    _ => format_dng_integer_array(
+                                        tag_id,
                                         bytes,
                                         field_type,
                                         value_count,
                                         byte_order,
                                     )
-                                })
+                                    .map(TagValue::new_string)
+                                    .unwrap_or_else(|| {
+                                        raw_bytes_to_simple_tag_value(
+                                            bytes,
+                                            field_type,
+                                            value_count,
+                                            byte_order,
+                                        )
+                                    }),
+                                }
                             } else {
                                 raw_bytes_to_simple_tag_value(
                                     bytes,
@@ -892,10 +954,21 @@ fn format_dng_integer_array(
     value_count: u32,
     byte_order: ByteOrder,
 ) -> Option<String> {
-    let component_size = match tag_id {
-        0xC619 if field_type == 3 => 2, // BlackLevelRepeatDim: SHORT[2]
-        0xC68D if field_type == 4 => 4, // ActiveArea: LONG[4]
-        _ => return None,
+    // Determine per-component size (bytes) from tag and field type.
+    // Some DNG tags may be stored as either SHORT or LONG depending on the
+    // writer; we accept both for the well-known array tags.
+    let component_size = {
+        let size_from_type = match field_type {
+            3 => 2, // SHORT
+            4 => 4, // LONG
+            _ => return None,
+        };
+        match tag_id {
+            0xC619 | 0x828D if size_from_type == 2 => 2,
+            0xC68D if size_from_type == 4 => 4,
+            0xC61F | 0xC620 => size_from_type, // accept SHORT or LONG
+            _ => return None,
+        }
     };
 
     let value_count = usize::try_from(value_count).ok()?;
@@ -947,6 +1020,36 @@ fn read_tiff_u32(bytes: &[u8], byte_order: ByteOrder) -> Option<u32> {
         ByteOrder::LittleEndian => u32::from_le_bytes(bytes),
         ByteOrder::BigEndian => u32::from_be_bytes(bytes),
     })
+}
+
+/// Format CFAPlaneColor byte array to comma-separated color names.
+fn format_cfa_plane_color(bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let colors: Vec<String> = bytes.iter().map(|&b| match b {
+        0 => "Red".to_string(),
+        1 => "Green".to_string(),
+        2 => "Blue".to_string(),
+        3 => "Cyan".to_string(),
+        4 => "Magenta".to_string(),
+        5 => "Yellow".to_string(),
+        6 => "White".to_string(),
+        _ => format!("Unknown ({})", b),
+    }).collect();
+    Some(colors.join(","))
+}
+
+/// Format CFALayout value to display string.
+fn format_cfa_layout(value: u16) -> String {
+    match value {
+        1 => "Rectangular".to_string(),
+        2 => "Even columns offset down 1/2 row".to_string(),
+        3 => "Even columns offset up 1/2 row".to_string(),
+        4 => "Even rows offset right 1/2 column".to_string(),
+        5 => "Even rows offset left 1/2 column".to_string(),
+        _ => format!("Unknown ({})", value),
+    }
 }
 
 /// Format EXIF values whose raw TIFF representation differs from ExifTool's
