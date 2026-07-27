@@ -465,7 +465,7 @@ const SENSOR_INFO_BLACK_MASK_BOTTOM_BORDER: usize = 12;
 //
 // ExifTool `%Image::ExifTool::Canon::AFInfo` (Canon.pm:6432) is a *serial* record
 // (`PROCESS_PROC => \&ProcessSerialData`, `FORMAT => 'int16u'`) with no leading length
-// word (Canon.pm:1603 "this record does not begin with a length word"). Keys 0..7 are
+// word (Canon.pm:1602 "this record does not begin with a length word"). Keys 0..7 are
 // scalars, so the raw int16 index equals the Perl key up to and including key 7:
 //
 // ```text
