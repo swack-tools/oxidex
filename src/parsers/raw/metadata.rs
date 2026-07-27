@@ -56,6 +56,7 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
                 | 0xC61E // DefaultScale
                 | 0xC65C // BestQualityScale
                 | 0xC68D // ActiveArea
+                | 0xC68E // MaskedAreas
         )
     {
         lookup_tag_name(tag_id, "EXIF")
@@ -788,6 +789,7 @@ fn format_dng_integer_array(
         0xC61F if field_type == 3 => 2, // DefaultCropOrigin: SHORT[2]
         0xC620 if field_type == 3 => 2, // DefaultCropSize: SHORT[2]
         0xC68D if field_type == 4 => 4, // ActiveArea: LONG[4]
+        0xC68E if field_type == 4 => 4, // MaskedAreas: LONG[4]
         _ => return None,
     };
 
@@ -1453,33 +1455,79 @@ fn extract_dng_tags(metadata: &mut MetadataMap) {
         );
     }
 
-    // --- JpgFromRaw / JpgFromRawLength / JpgFromRawStart ---
-    // These are derived from the IFD1 thumbnail when it is a JPEG preview.
-    let thumbnail_offset_key = lookup_tag_name(0x0201, "IFD1");
-    let thumbnail_length_key = lookup_tag_name(0x0202, "IFD1");
-    let compression_key = lookup_tag_name(0x0103, "IFD1");
+    // --- PreviewImage / PreviewImageLength ---
+    // ExifTool extracts PreviewImage from the first IFD that contains a
+    // JPEG-compressed thumbnail (typically IFD0 for DNG files).
+    fn try_extract_preview(
+        metadata: &MetadataMap,
+        ifd_name: &str,
+    ) -> Option<(i64, i64)> {
+        let compression_key = lookup_tag_name(0x0103, ifd_name);
+        let jpeg_offset_key = lookup_tag_name(0x0201, ifd_name);
+        let jpeg_length_key = lookup_tag_name(0x0202, ifd_name);
 
-    if let (Some(compression), Some(offset_val), Some(length_val)) = (
-        metadata.get(&compression_key),
-        metadata.get(&thumbnail_offset_key).and_then(|v| if let TagValue::Integer(i) = v { Some(*i) } else { None }),
-        metadata.get(&thumbnail_length_key).and_then(|v| if let TagValue::Integer(i) = v { Some(*i) } else { None }),
-    ) {
-        if *compression == TagValue::Integer(6) {
+        let compression = metadata.get(&compression_key)?;
+        if *compression != TagValue::Integer(6) {
+            return None;
+        }
+
+        let offset = metadata
+            .get(&jpeg_offset_key)
+            .and_then(|v| if let TagValue::Integer(i) = v { Some(*i) } else { None })?;
+        let length = metadata
+            .get(&jpeg_length_key)
+            .and_then(|v| if let TagValue::Integer(i) = v { Some(*i) } else { None })?;
+
+        if length <= 0 {
+            return None;
+        }
+
+        Some((offset, length))
+    }
+
+    let preview_ifds = ["IFD0", "SubIFD0", "IFD1"];
+    let mut preview_emitted = false;
+    for ifd_name in &preview_ifds {
+        if let Some((_offset, length)) = try_extract_preview(metadata, ifd_name) {
+            if !preview_emitted {
+                metadata.insert(
+                    "EXIF:PreviewImage".to_string(),
+                    TagValue::new_string(format!(
+                        "(Binary data {} bytes, use -b option to extract)",
+                        length
+                    )),
+                );
+                metadata.insert(
+                    "EXIF:PreviewImageLength".to_string(),
+                    TagValue::new_integer(length),
+                );
+                preview_emitted = true;
+            }
+        }
+    }
+
+    // --- JpgFromRaw / JpgFromRawLength / JpgFromRawStart ---
+    // These are derived from the largest JPEG preview, which typically lives
+    // in SubIFD0 or IFD1.
+    let jpg_ifds = ["IFD1", "SubIFD0"];
+    for ifd_name in &jpg_ifds {
+        if let Some((offset, length)) = try_extract_preview(metadata, ifd_name) {
             metadata.insert(
                 "EXIF:JpgFromRawStart".to_string(),
-                TagValue::new_integer(offset_val),
+                TagValue::new_integer(offset),
             );
             metadata.insert(
                 "EXIF:JpgFromRawLength".to_string(),
-                TagValue::new_integer(length_val),
+                TagValue::new_integer(length),
             );
             metadata.insert(
                 "EXIF:JpgFromRaw".to_string(),
                 TagValue::new_string(format!(
                     "(Binary data {} bytes, use -b option to extract)",
-                    length_val
+                    length
                 )),
             );
+            break;
         }
     }
 }
