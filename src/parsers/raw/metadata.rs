@@ -262,9 +262,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // carries a handful of standard EXIF tags omitted from the
                     // outer Panasonic RAW IFDs.
                     if format == RawFormat::PanasonicRW2 && ifd_index == 0 && *tag_id == 0x002e {
+                        let jpg_len = bytes.len();
                         if let Err(error) = extract_rw2_embedded_exif_tags(bytes, &mut metadata) {
                             eprintln!("Warning: Failed to parse RW2 preview EXIF: {}", error);
                         }
+                        // Emit JpgFromRaw placeholder matching ExifTool
+                        metadata.insert(
+                            "IFD0:JpgFromRaw".to_string(),
+                            TagValue::new_string(format!("(Binary data {} bytes, use -b option to extract)", jpg_len)),
+                        );
+                        continue; // don't emit the raw 0x002e tag
                     }
 
                     // Check for EXIF Sub-IFD pointer (tag 0x8769)
@@ -443,6 +450,23 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         if *tag_id == 0x010F && *field_type == 2 {
                             let make_str = String::from_utf8_lossy(bytes);
                             exif_make = Some(make_str.trim_end_matches('\0').trim().to_string());
+                        }
+
+                        // Panasonic RW2: map SubIFD PanasonicRaw tags to EXIF group
+                        if format == RawFormat::PanasonicRW2 {
+                            match tag_id {
+                                0x0026 => {
+                                    metadata.insert("ExifIFD:LinearityLimitGreen".to_string(),
+                                        raw_bytes_to_simple_tag_value(raw_bytes.as_ref(), *field_type, *value_count, byte_order));
+                                    continue;
+                                }
+                                0x0027 => {
+                                    metadata.insert("ExifIFD:LinearityLimitBlue".to_string(),
+                                        raw_bytes_to_simple_tag_value(raw_bytes.as_ref(), *field_type, *value_count, byte_order));
+                                    continue;
+                                }
+                                _ => {}
+                            }
                         }
 
                         let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
@@ -674,6 +698,7 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA408 // Contrast
                 | 0xA405 // FocalLengthIn35mmFormat
                 | 0xA407 // GainControl
+                | 0x9208 // LightSource
         ) {
             continue;
         }
@@ -691,6 +716,50 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
             raw_bytes_to_simple_tag_value(raw_bytes.as_ref(), field_type, value_count, byte_order)
         };
         metadata.insert(tag_name, tag_value);
+    }
+
+    // Parse Interoperability IFD for InteropIndex (tag 0x0001)
+    let interop_ifd_offset = ifd0_tags
+        .iter()
+        .find_map(|(tag_id, field_type, value_count, raw_bytes)| {
+            if *tag_id == 0xA005 && *field_type == 4 && *value_count >= 1 {
+                read_tiff_u32(raw_bytes.as_ref(), byte_order).map(u64::from)
+            } else {
+                None
+            }
+        });
+    if let Some(offset) = interop_ifd_offset {
+        if let Ok(interop_tags) = parse_ifd(&reader, offset, byte_order) {
+            for (tag_id, field_type, value_count, raw_bytes) in &interop_tags {
+                if *tag_id == 0x0001 {
+                    // InteropIndex with PrintConv from ExifTool
+                    let raw = String::from_utf8_lossy(raw_bytes.as_ref())
+                        .trim_end_matches('\0')
+                        .to_string();
+                    let printed = match raw.as_str() {
+                        "R98" => "R98 - DCF basic file (sRGB)".to_string(),
+                        "R03" => "R03 - DCF option file (Adobe RGB)".to_string(),
+                        "THM" => "THM - DCF thumbnail file".to_string(),
+                        _ => raw,
+                    };
+                    metadata.insert(
+                        "InteropIFD:InteropIndex".to_string(),
+                        TagValue::new_string(printed),
+                    );
+                } else {
+                    let tag_name = lookup_tag_name(*tag_id, "InteropIFD");
+                    let tag_value = raw_bytes_to_simple_tag_value(
+                        raw_bytes.as_ref(),
+                        *field_type,
+                        *value_count,
+                        byte_order,
+                    );
+                    metadata.insert(tag_name, tag_value);
+                }
+            }
+        } else {
+            eprintln!("Warning: Failed to parse RW2 preview Interop IFD");
+        }
     }
 
     Ok(())
@@ -877,6 +946,17 @@ fn format_exif_display_value(
         0xA001 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
             1 => Some("sRGB".to_string()),
             0xffff => Some("Uncalibrated".to_string()),
+            _ => None,
+        },
+        // LightSource: SHORT[1].
+        0x9208 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Unknown".to_string()),
+            1 => Some("Daylight".to_string()),
+            2 => Some("Fluorescent".to_string()),
+            3 => Some("Tungsten (Incandescent)".to_string()),
+            4 => Some("Flash".to_string()),
+            9 => Some("Fine Weather".to_string()),
+            10 => Some("Cloudy".to_string()),
             _ => None,
         },
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
