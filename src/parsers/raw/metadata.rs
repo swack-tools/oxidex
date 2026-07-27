@@ -654,9 +654,26 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
         return Ok(());
     };
 
+    // Capture MakerNote and camera make from the preview EXIF IFD
+    let mut makernote_data: Option<Vec<u8>> = None;
+    let mut camera_make: Option<String> = None;
+
     for (tag_id, field_type, value_count, raw_bytes) in
         parse_ifd(&reader, exif_ifd_offset, byte_order)?
     {
+        let bytes = raw_bytes.as_ref();
+
+        // Capture MakerNote for dispatch after the loop
+        if tag_id == 0x927C {
+            makernote_data = Some(bytes.to_vec());
+            continue;
+        }
+        // Capture camera make for MakerNote dispatch
+        if tag_id == 0x010F && field_type == 2 {
+            let make_str = String::from_utf8_lossy(bytes);
+            camera_make = Some(make_str.trim_end_matches('\0').trim().to_string());
+        }
+
         // Filter to the exact set of EXIF tags that ExifTool extracts from
         // the RW2 JpgFromRaw preview EXIF IFD.
         if !matches!(
@@ -671,6 +688,8 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA401 // CustomRendered
                 | 0xA402 // ExposureMode
                 | 0xA404 // DigitalZoomRatio
+                | 0xA405 // FocalLengthIn35mmFormat
+                | 0xA407 // GainControl
                 | 0xA408 // Contrast
         ) {
             continue;
@@ -689,6 +708,24 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
             raw_bytes_to_simple_tag_value(raw_bytes.as_ref(), field_type, value_count, byte_order)
         };
         metadata.insert(tag_name, tag_value);
+    }
+
+    // Dispatch MakerNote from the preview EXIF IFD (contains Panasonic-specific
+    // tags like HighISOMultiplierRed/Green/Blue and base ISO).
+    if let (Some(make), Some(mn_data)) = (camera_make.as_ref(), makernote_data.as_ref()) {
+        let mut makernote_tags = std::collections::HashMap::new();
+        if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
+            make,
+            mn_data,
+            byte_order,
+            &mut makernote_tags,
+        ) {
+            eprintln!("Warning: Failed to parse RW2 preview MakerNote for {}: {}", make, e);
+        } else {
+            for (tag_name, tag_value) in makernote_tags {
+                metadata.insert(tag_name, TagValue::new_string(tag_value));
+            }
+        }
     }
 
     Ok(())
@@ -903,6 +940,20 @@ fn format_exif_display_value(
             // Reuse the same rational formatting as CompressedBitsPerPixel (0x9102).
             format_rational_as_string(bytes, byte_order)
         }
+        // FocalLengthIn35mmFormat: SHORT[1] with " mm" suffix.
+        0xA405 if field_type == 3 && value_count >= 1 => {
+            let value = read_tiff_u16(bytes, byte_order)?;
+            Some(format!("{} mm", value))
+        }
+        // GainControl: SHORT[1].
+        0xA407 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("None".to_string()),
+            1 => Some("Low gain up".to_string()),
+            2 => Some("High gain up".to_string()),
+            3 => Some("Low gain down".to_string()),
+            4 => Some("High gain down".to_string()),
+            _ => None,
+        },
         // Contrast: SHORT[1].
         0xA408 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
             0 => Some("Normal".to_string()),
