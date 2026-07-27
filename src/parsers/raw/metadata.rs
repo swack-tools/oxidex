@@ -507,7 +507,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             // applies format-specific decoding where needed.
                             if is_nef {
                                 if let Some((tag_name, tag_value)) = format_nef_subifd_tag(
-                                    tag_id, field_type, value_count, raw_bytes.as_ref(), byte_order,
+                                    tag_id,
+                                    field_type,
+                                    value_count,
+                                    raw_bytes.as_ref(),
+                                    byte_order,
                                 ) {
                                     metadata.insert(tag_name, tag_value);
                                     continue;
@@ -2709,25 +2713,46 @@ fn format_nef_subifd_tag(
         // Compression: Nikon lossless compressed (34713) -> "Nikon NEF Compressed"
         0x0103 => {
             if bytes.len() >= 4 && read_u32(bytes, byte_order) == 34713 {
-                Some(("EXIF:Compression".to_string(), TagValue::new_string("Nikon NEF Compressed".to_string())))
+                Some((
+                    "EXIF:Compression".to_string(),
+                    TagValue::new_string("Nikon NEF Compressed".to_string()),
+                ))
             } else {
                 None // uncompressed/JPEG: let generic path emit integer
             }
         }
         // JPEGInterchangeFormat -> JpgFromRawStart
-        0x0201 => Some(("EXIF:JpgFromRawStart".to_string(), TagValue::new_integer(read_u32(bytes, byte_order) as i64))),
+        0x0201 => Some((
+            "EXIF:JpgFromRawStart".to_string(),
+            TagValue::new_integer(read_u32(bytes, byte_order) as i64),
+        )),
         // JPEGInterchangeFormatLength -> JpgFromRawLength
-        0x0202 => Some(("EXIF:JpgFromRawLength".to_string(), TagValue::new_integer(read_u32(bytes, byte_order) as i64))),
+        0x0202 => Some((
+            "EXIF:JpgFromRawLength".to_string(),
+            TagValue::new_integer(read_u32(bytes, byte_order) as i64),
+        )),
         // TIFF-EPStandardID: UNDEFINED[4] -> dotted version string
         0x828F => {
-            let ver = format!("{}.{}.{}.{}", bytes.first().copied().unwrap_or(0), bytes.get(1).copied().unwrap_or(0), bytes.get(2).copied().unwrap_or(0), bytes.get(3).copied().unwrap_or(0));
-            Some(("EXIF:TIFF-EPStandardID".to_string(), TagValue::new_string(ver)))
+            let ver = format!(
+                "{}.{}.{}.{}",
+                bytes.first().copied().unwrap_or(0),
+                bytes.get(1).copied().unwrap_or(0),
+                bytes.get(2).copied().unwrap_or(0),
+                bytes.get(3).copied().unwrap_or(0)
+            );
+            Some((
+                "EXIF:TIFF-EPStandardID".to_string(),
+                TagValue::new_string(ver),
+            ))
         }
         // CFARepeatPatternDim: two SHORT values -> "h v"
         0x828D => {
             let h = read_tiff_u16(bytes, byte_order)?;
             let v = read_tiff_u16(bytes.get(2..)?, byte_order)?;
-            Some(("EXIF:CFARepeatPatternDim".to_string(), TagValue::new_string(format!("{} {}", h, v))))
+            Some((
+                "EXIF:CFARepeatPatternDim".to_string(),
+                TagValue::new_string(format!("{} {}", h, v)),
+            ))
         }
         _ => None,
     }

@@ -114,7 +114,7 @@ fn test_parse_minimal_pe_structure() {
     assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
     assert_eq!(
         metadata.get_string("EXE:Subsystem").unwrap(),
-            "Windows command line"
+        "Windows command line"
     );
     assert_eq!(metadata.get_string("EXE:ImageFormat").unwrap(), "PE32");
 }

@@ -447,10 +447,14 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
                 }
             }
             TAG_EXIF_IFD if field_type == 4 || field_type == 13 => {
-                exif_ifd_offset =
-                    Some(usize::try_from(
-                        read_embedded_tiff_u32(data, base.checked_add(8)?, byte_order)?,
-                    ).ok()?);
+                exif_ifd_offset = Some(
+                    usize::try_from(read_embedded_tiff_u32(
+                        data,
+                        base.checked_add(8)?,
+                        byte_order,
+                    )?)
+                    .ok()?,
+                );
             }
             _ => {}
         }
@@ -495,9 +499,7 @@ fn parse_exif_ifd(
 
         match tag {
             TAG_APERTURE_VALUE if field_type == 5 => {
-                if let Some((num, den)) =
-                    read_unsigned_rational_value(data, base, byte_order)
-                {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
                     let apex = if den != 0 {
                         f64::from(num) / f64::from(den)
                     } else {
@@ -505,13 +507,14 @@ fn parse_exif_ifd(
                     };
                     let f_number = 2.0_f64.powf(apex / 2.0);
                     let key = crate::tag_db::lookup_tag_name(TAG_APERTURE_VALUE, "ExifIFD");
-                    metadata.insert(key, crate::core::TagValue::new_string(format!("{}", f_number)));
+                    metadata.insert(
+                        key,
+                        crate::core::TagValue::new_string(format!("{}", f_number)),
+                    );
                 }
             }
             TAG_BRIGHTNESS_VALUE if field_type == 5 => {
-                if let Some((num, den)) =
-                    read_unsigned_rational_value(data, base, byte_order)
-                {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
                     let val_str = if den == 0 {
                         "0".to_string()
                     } else if den == 1 {
@@ -519,15 +522,12 @@ fn parse_exif_ifd(
                     } else {
                         format!("{}", num as f64 / den as f64)
                     };
-                    let key =
-                        crate::tag_db::lookup_tag_name(TAG_BRIGHTNESS_VALUE, "ExifIFD");
+                    let key = crate::tag_db::lookup_tag_name(TAG_BRIGHTNESS_VALUE, "ExifIFD");
                     metadata.insert(key, crate::core::TagValue::new_string(val_str));
                 }
             }
             TAG_COMPRESSED_BITS_PER_PIXEL if field_type == 5 => {
-                if let Some((num, den)) =
-                    read_unsigned_rational_value(data, base, byte_order)
-                {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
                     let val_str = if den == 0 {
                         "0".to_string()
                     } else if den == 1 {
@@ -536,12 +536,14 @@ fn parse_exif_ifd(
                         let d = num as f64 / den as f64;
                         let s = format!("{:.9}", d);
                         let trimmed = s.trim_end_matches('0').trim_end_matches('.');
-                        if trimmed.is_empty() { "0".to_string() } else { trimmed.to_string() }
+                        if trimmed.is_empty() {
+                            "0".to_string()
+                        } else {
+                            trimmed.to_string()
+                        }
                     };
-                    let key = crate::tag_db::lookup_tag_name(
-                        TAG_COMPRESSED_BITS_PER_PIXEL,
-                        "ExifIFD",
-                    );
+                    let key =
+                        crate::tag_db::lookup_tag_name(TAG_COMPRESSED_BITS_PER_PIXEL, "ExifIFD");
                     metadata.insert(key, crate::core::TagValue::new_string(val_str));
                 }
             }
@@ -557,9 +559,7 @@ fn parse_exif_ifd(
                 }
             }
             TAG_COMPONENTS_CONFIGURATION if field_type == 7 => {
-                if let Some(bytes) =
-                    read_undefined_value(data, base, byte_order, count)
-                {
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
                     let components: Vec<String> = bytes
                         .iter()
                         .map(|&b| match b {
@@ -573,11 +573,12 @@ fn parse_exif_ifd(
                             _ => "?".to_string(),
                         })
                         .collect();
-                    let key = crate::tag_db::lookup_tag_name(
-                        TAG_COMPONENTS_CONFIGURATION,
-                        "ExifIFD",
+                    let key =
+                        crate::tag_db::lookup_tag_name(TAG_COMPONENTS_CONFIGURATION, "ExifIFD");
+                    metadata.insert(
+                        key,
+                        crate::core::TagValue::new_string(components.join(", ")),
                     );
-                    metadata.insert(key, crate::core::TagValue::new_string(components.join(", ")));
                 }
             }
             _ => {}
@@ -606,8 +607,7 @@ fn get_entry_value_offset(
     if total <= 4 {
         entry_offset.checked_add(8)
     } else {
-        let value_off =
-            read_embedded_tiff_u32(data, entry_offset.checked_add(8)?, byte_order)?;
+        let value_off = read_embedded_tiff_u32(data, entry_offset.checked_add(8)?, byte_order)?;
         Some(usize::try_from(value_off).ok()?)
     }
 }
@@ -711,8 +711,7 @@ mod embedded_exif_tests {
         pdf.extend_from_slice(b"\x00\x00\x00\x00Phil Harvey\0");
         pdf.extend_from_slice(b"\nendstream\n%%EOF");
 
-        let map = find_embedded_exif_tags(&pdf)
-            .expect("should find embedded EXIF tags");
+        let map = find_embedded_exif_tags(&pdf).expect("should find embedded EXIF tags");
         let artist = map
             .get_string("IFD0:Artist")
             .expect("must contain Artist tag");

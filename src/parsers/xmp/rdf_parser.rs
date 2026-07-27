@@ -506,7 +506,10 @@ fn extract_artwork_title_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)
                 if artwork_depth.is_none()
                     && mwg_rs_depth.is_none()
                     && is_property_in_namespace(
-                        &tag_name, "ArtworkOrObject", IPTC_EXT_NS, &resolver,
+                        &tag_name,
+                        "ArtworkOrObject",
+                        IPTC_EXT_NS,
+                        &resolver,
                     )
                 {
                     artwork_depth = Some(depth);
@@ -528,16 +531,12 @@ fn extract_artwork_title_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)
                     alt_depth = Some(depth);
                 }
 
-                if alt_depth.is_some()
-                    && li_depth.is_none()
-                    && is_rdf_li(&tag_name, &resolver)
-                {
+                if alt_depth.is_some() && li_depth.is_none() && is_rdf_li(&tag_name, &resolver) {
                     li_depth = Some(depth);
                     current_lang = None;
                     current_value.clear();
                     for attr in e.attributes().flatten() {
-                        let key =
-                            std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                        let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                         if key == "xml:lang" {
                             if let Ok(val) = std::str::from_utf8(&attr.value) {
                                 current_lang = Some(val.to_string());
@@ -565,31 +564,21 @@ fn extract_artwork_title_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)
                     current_lang = None;
                 }
 
-                if alt_depth == Some(depth)
-                    && is_collection_container(&tag_name, &resolver)
-                {
+                if alt_depth == Some(depth) && is_collection_container(&tag_name, &resolver) {
                     alt_depth = None;
                 }
 
                 if ao_title_depth == Some(depth)
-                    && is_property_in_namespace(
-                        &tag_name, "AOTitle", IPTC_EXT_NS, &resolver,
-                    )
+                    && is_property_in_namespace(&tag_name, "AOTitle", IPTC_EXT_NS, &resolver)
                 {
                     // Emit base tag with x-default value
                     if let Some(ref default_val) = x_default_value {
-                        results.push((
-                            "XMP:ArtworkTitle".to_string(),
-                            default_val.clone(),
-                        ));
+                        results.push(("XMP:ArtworkTitle".to_string(), default_val.clone()));
                     }
                     // Emit language-qualified tags
                     for (lang, val) in &lang_values {
                         if lang != "x-default" {
-                            results.push((
-                                format!("XMP:ArtworkTitle-{}", lang),
-                                val.clone(),
-                            ));
+                            results.push((format!("XMP:ArtworkTitle-{}", lang), val.clone()));
                         }
                     }
                     ao_title_depth = None;
@@ -599,7 +588,10 @@ fn extract_artwork_title_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)
 
                 if artwork_depth == Some(depth)
                     && is_property_in_namespace(
-                        &tag_name, "ArtworkOrObject", IPTC_EXT_NS, &resolver,
+                        &tag_name,
+                        "ArtworkOrObject",
+                        IPTC_EXT_NS,
+                        &resolver,
                     )
                 {
                     artwork_depth = None;
@@ -618,8 +610,8 @@ fn extract_artwork_title_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)
                 if li_depth.is_some()
                     && let Ok(decoded) = e.xml10_content()
                 {
-                    let unescaped = quick_xml::escape::unescape(&decoded)
-                        .unwrap_or_else(|_| decoded.clone());
+                    let unescaped =
+                        quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
                     current_value.push_str(&unescaped);
                 }
             }
@@ -687,16 +679,12 @@ fn extract_b_test_tag_field1_values(xml_bytes: &[u8]) -> Result<Vec<(String, Str
                     alt_depth = Some(depth);
                 }
 
-                if alt_depth.is_some()
-                    && li_depth.is_none()
-                    && is_rdf_li(&tag_name, &resolver)
-                {
+                if alt_depth.is_some() && li_depth.is_none() && is_rdf_li(&tag_name, &resolver) {
                     li_depth = Some(depth);
                     current_lang = None;
                     current_value.clear();
                     for attr in e.attributes().flatten() {
-                        let key =
-                            std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                        let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                         if key == "xml:lang" {
                             if let Ok(val) = std::str::from_utf8(&attr.value) {
                                 current_lang = Some(val.to_string());
@@ -721,9 +709,7 @@ fn extract_b_test_tag_field1_values(xml_bytes: &[u8]) -> Result<Vec<(String, Str
                     current_lang = None;
                 }
 
-                if alt_depth == Some(depth)
-                    && is_collection_container(&tag_name, &resolver)
-                {
+                if alt_depth == Some(depth) && is_collection_container(&tag_name, &resolver) {
                     alt_depth = None;
                 }
 
@@ -732,10 +718,7 @@ fn extract_b_test_tag_field1_values(xml_bytes: &[u8]) -> Result<Vec<(String, Str
                 {
                     // BTestTagField1: only emit language-qualified tags, no base
                     for (lang, val) in &lang_values {
-                        results.push((
-                            format!("XMP:BTestTagField1-{}", lang),
-                            val.clone(),
-                        ));
+                        results.push((format!("XMP:BTestTagField1-{}", lang), val.clone()));
                     }
                     field1_depth = None;
                     lang_values.clear();
@@ -754,8 +737,8 @@ fn extract_b_test_tag_field1_values(xml_bytes: &[u8]) -> Result<Vec<(String, Str
                 if li_depth.is_some()
                     && let Ok(decoded) = e.xml10_content()
                 {
-                    let unescaped = quick_xml::escape::unescape(&decoded)
-                        .unwrap_or_else(|_| decoded.clone());
+                    let unescaped =
+                        quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
                     current_value.push_str(&unescaped);
                 }
             }

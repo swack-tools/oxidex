@@ -55,9 +55,12 @@ pub fn extract_coff_metadata(header: &CoffHeader, metadata: &mut MetadataMap) {
 
     // Timestamp (converted to human-readable date with timezone, matching ExifTool)
     if header.time_date_stamp > 0 {
-        use chrono::{TimeZone, Utc, Local};
+        use chrono::{Local, TimeZone, Utc};
         // Try local time first (matching ExifTool behavior), fall back to UTC
-        let timestamp_str = if let Some(dt) = Local.timestamp_opt(header.time_date_stamp as i64, 0).single() {
+        let timestamp_str = if let Some(dt) = Local
+            .timestamp_opt(header.time_date_stamp as i64, 0)
+            .single()
+        {
             dt.format("%Y:%m:%d %H:%M:%S%:z").to_string()
         } else if let Some(dt) = Utc.timestamp_opt(header.time_date_stamp as i64, 0).single() {
             dt.format("%Y:%m:%d %H:%M:%S+00:00").to_string()
