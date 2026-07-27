@@ -2175,7 +2175,7 @@ fn extract_x3f_preview_exif_tags(
                 // and MakerNote (0x927C).
                 if !matches!(
                     *tag_id,
-                    0x9101 | 0xA001 | 0xA401 | 0x9003 | 0x9004
+                    0x9101 | 0x9204 | 0xA001 | 0xA002 | 0xA003 | 0xA401 | 0xA402 | 0x9003 | 0x9004
                 ) {
                     continue;
                 }
