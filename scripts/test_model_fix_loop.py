@@ -1,4 +1,5 @@
 import datetime
+import difflib
 import email.utils
 import io
 import json
@@ -108,9 +109,14 @@ from model_fix_loop import (
     read_own_quarantine,
     select_module_lessons,
     squad_from_worker,
+    describe_missing_path,
+    FORCED_DIFF_DEMAND,
     git_apply,
+    git_apply_with_rung,
+    GIT_APPLY_LADDER,
     git_checkout_clean,
     git_commit,
+    render_request_budget_footer,
     governor_acquire,
     governor_report,
     load_landed_tags,
@@ -1500,21 +1506,235 @@ class CallModelTemperatureTests(unittest.TestCase):
 
 class GitApplyTests(unittest.TestCase):
     @patch("model_fix_loop.subprocess.run")
-    def test_success_returns_true(self, mock_run):
+    def test_first_rung_is_exact_and_nothing_looser_runs_when_it_applies(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stderr="")
         ok, msg = git_apply("diff text", Path("/fake/repo"))
         self.assertTrue(ok)
+        self.assertEqual(msg, "applied")
+        # Exactly one exec: the ladder must stop at the rung that worked.
+        self.assertEqual(mock_run.call_count, 1)
         args, kwargs = mock_run.call_args
-        self.assertEqual(args[0], ["git", "apply", "--reject", "--recount", "-"])
+        # No --reject: it makes git apply non-atomic, which would leave the
+        # next rung matching against a half-patched tree.
+        self.assertEqual(args[0], ["git", "apply", "--recount", "-"])
+        self.assertNotIn("--reject", args[0])
         self.assertEqual(kwargs["input"], "diff text")
         self.assertEqual(kwargs["cwd"], Path("/fake/repo"))
 
     @patch("model_fix_loop.subprocess.run")
-    def test_failure_returns_stderr(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=1, stderr="patch does not apply")
-        ok, msg = git_apply("bad diff", Path("/fake/repo"))
+    def test_every_rung_is_tried_before_failing(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stderr="patch does not apply\n", stdout="")
+        ok, msg, rung = git_apply_with_rung("bad diff", Path("/fake/repo"))
         self.assertFalse(ok)
-        self.assertEqual(msg, "patch does not apply")
+        self.assertIsNone(rung)
+        applies = [c.args[0] for c in mock_run.call_args_list if c.args[0][:2] == ["git", "apply"]]
+        self.assertEqual(applies, [argv for _, argv in GIT_APPLY_LADDER])
+        # The STRICT rung's stderr is what comes back (it names the context
+        # git searched for), plus a note that looser rungs were already tried
+        # so the model doesn't waste its retry on a whitespace tweak.
+        self.assertTrue(msg.startswith("patch does not apply"))
+        self.assertIn("ignore-whitespace", msg)
+        self.assertIn("3way", msg)
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_reports_which_rung_applied(self, mock_run):
+        results = [
+            MagicMock(returncode=1, stderr="nope\n", stdout=""),   # exact
+            MagicMock(returncode=1, stderr="nope\n", stdout=""),   # ignore-whitespace
+            MagicMock(returncode=0, stderr="", stdout=""),         # context1
+        ]
+        mock_run.side_effect = results
+        ok, msg, rung = git_apply_with_rung("drifted diff", Path("/fake/repo"))
+        self.assertTrue(ok)
+        self.assertEqual(rung, "context1")
+        self.assertIn("context1", msg)
+        self.assertEqual(mock_run.call_count, 3)
+
+
+class GitApplyLadderIntegrationTests(unittest.TestCase):
+    """The ladder against a real git binary in a tempdir repo -- mocks can't
+    tell us whether -C1 actually rescues a drifted hunk, nor whether a failed
+    rung leaves the tree clean for the next one (the property the whole
+    ladder rests on)."""
+
+    def _make_repo(self, tmpdir, content):
+        import subprocess as sp
+        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+        repo = Path(tmpdir) / "repo"
+        repo.mkdir()
+
+        def git(*args, input_text=None, check=True):
+            return sp.run(
+                ["git", *args], cwd=repo, input=input_text, capture_output=True,
+                text=True, check=check, env=env,
+            )
+
+        git("init", "-q")
+        git("config", "user.email", "fleet@example.com")
+        git("config", "user.name", "Fleet Test")
+        git("config", "commit.gpgsign", "false")
+        (repo / "f.rs").write_text(content)
+        git("add", "-A")
+        git("commit", "-q", "-m", "base")
+        return repo, git
+
+    BASE = "".join(f"line{i}\n" for i in range(1, 21))
+
+    def _model_diff(self, before, after, path="f.rs"):
+        """A unified diff of `before` -> `after` in the shape a MODEL emits:
+        correct hunk headers, 3 lines of context, and no `index <blob>..`
+        line (models never have blob hashes -- which is also why the 3way
+        rung can't help them; the tests that need it build their diff with
+        `git diff` instead)."""
+        return "".join(difflib.unified_diff(
+            before.splitlines(keepends=True), after.splitlines(keepends=True),
+            fromfile=f"a/{path}", tofile=f"b/{path}",
+        ))
+
+    def test_exact_rung_applies_a_clean_diff(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _ = self._make_repo(tmpdir, self.BASE)
+            diff = self._model_diff(self.BASE, self.BASE.replace("line10\n", "PATCHED\n"))
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            content = (repo / "f.rs").read_text()
+        self.assertTrue(ok, msg)
+        self.assertEqual(rung, "exact")
+        self.assertEqual(content.splitlines()[9], "PATCHED")
+
+    def test_indentation_slip_is_rescued_by_ignore_whitespace(self):
+        # The classic model slip, measured 2026-07-26: it re-typed the block
+        # with tabs where the file uses spaces (2-space-vs-4-space behaves
+        # identically). Note the limit of this rung -- a model that drops the
+        # indentation ENTIRELY is not rescued here, because that's a
+        # whitespace-vs-nothing difference, not a whitespace-amount one.
+        on_disk = "".join(f"    line{i}\n" for i in range(1, 21))
+        tabbed = "".join(f"\tline{i}\n" for i in range(1, 21))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _ = self._make_repo(tmpdir, on_disk)
+            diff = self._model_diff(tabbed, tabbed.replace("\tline10\n", "\tPATCHED\n"))
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            content = (repo / "f.rs").read_text()
+        self.assertTrue(ok, msg)
+        self.assertEqual(rung, "ignore-whitespace")
+        self.assertIn("PATCHED", content.splitlines()[9])
+
+    def test_context_drift_is_rescued_by_c1(self):
+        # The outer context lines moved on (another worker's fix landed
+        # there, or the model only ever saw an excerpt); the -/+ lines and
+        # the immediate neighbours still match.
+        drifted = self.BASE.replace("line8\n", "MOVED_ON_8\n").replace("line12\n", "MOVED_ON_12\n")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _ = self._make_repo(tmpdir, drifted)
+            diff = self._model_diff(self.BASE, self.BASE.replace("line10\n", "PATCHED\n"))
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            content = (repo / "f.rs").read_text()
+        self.assertTrue(ok, msg)
+        self.assertEqual(rung, "context1")
+        # Rescued, not mangled: the change landed exactly where line10 was,
+        # and the drifted neighbours are untouched.
+        self.assertEqual(content.splitlines()[9], "PATCHED")
+        self.assertEqual(content.splitlines()[7], "MOVED_ON_8")
+        self.assertEqual(content.splitlines()[11], "MOVED_ON_12")
+
+    def test_unlocatable_change_still_fails_at_every_rung(self):
+        # No fuzz anywhere in the ladder: a hunk whose removed line does not
+        # exist must NOT be applied somewhere plausible-looking.
+        imaginary = "".join(f"imaginary{i}\n" for i in range(1, 21))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _ = self._make_repo(tmpdir, self.BASE)
+            diff = self._model_diff(imaginary, imaginary.replace("imaginary10\n", "PATCHED\n"))
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            content = (repo / "f.rs").read_text()
+        self.assertFalse(ok)
+        self.assertIsNone(rung)
+        self.assertEqual(content, self.BASE)
+
+    def test_failed_rung_leaves_the_tree_byte_identical_for_the_next_one(self):
+        # The ladder's core invariant. A 2-file patch that fails on one file
+        # must not leave the OTHER file modified -- that was exactly what
+        # --reject used to do, and it would make a later rung's "success"
+        # mean a doubly-applied edit.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, git = self._make_repo(tmpdir, self.BASE)
+            (repo / "g.rs").write_text(self.BASE)
+            git("add", "-A")
+            git("commit", "-q", "-m", "add g")
+            imaginary = "".join(f"imaginary{i}\n" for i in range(1, 21))
+            diff = (
+                # g.rs: applies cleanly on its own.
+                self._model_diff(self.BASE, self.BASE.replace("line10\n", "PATCHED_G\n"), "g.rs")
+                # f.rs: unlocatable, so the patch as a whole must fail.
+                + self._model_diff(imaginary, imaginary.replace("imaginary10\n", "PATCHED_F\n"))
+            )
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            status = git("status", "--porcelain").stdout
+            g_content = (repo / "g.rs").read_text()
+        self.assertFalse(ok)
+        self.assertEqual(status, "", f"tree left dirty by a failed apply: {status!r}")
+        self.assertNotIn("PATCHED_G", g_content)
+
+    def test_three_way_finishes_a_half_landed_patch_and_leaves_it_unstaged(self):
+        # The one shape measured (2026-07-26) where rungs 1-4 all fail and
+        # --3way genuinely rescues: a two-change patch where one change has
+        # ALREADY landed. Rungs 1-4 fail as a unit ("patch does not apply")
+        # because the second hunk's preimage is gone; the 3-way merge sees
+        # ours-already-has-B and applies only A.
+        #
+        # It must come back UNSTAGED. --3way implies --index, so without
+        # _restore_after_three_way the change is staged, and
+        # git_checkout_clean's `git checkout -- .` restores the worktree FROM
+        # the index -- i.e. a 3way-applied change would survive the revert
+        # after a failed build and leak into the next round.
+        both = self.BASE.replace("line10\n", "PATCHED_A\n").replace("line18\n", "PATCHED_B\n")
+        half = self.BASE.replace("line18\n", "PATCHED_B\n")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, git = self._make_repo(tmpdir, self.BASE)
+            (repo / "f.rs").write_text(both)
+            git("add", "-A")
+            diff = git("diff", "--cached").stdout   # carries index/blob lines
+            git("reset", "-q", "--hard")
+            (repo / "f.rs").write_text(half)
+            git("add", "-A")
+            git("commit", "-q", "-m", "half of it already landed")
+
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            status = git("status", "--porcelain").stdout
+            content = (repo / "f.rs").read_text()
+            self.assertTrue(ok, msg)
+            self.assertEqual(rung, "3way")
+            self.assertIn("PATCHED_A", content)
+            self.assertIn("PATCHED_B", content)
+            # " M" = unstaged modification; "M " (staged) is the bug this pins.
+            self.assertTrue(status.startswith(" M"), f"3way left the change staged: {status!r}")
+            # And the revert the loop actually performs must undo it.
+            git_checkout_clean(repo)
+            self.assertEqual(git("status", "--porcelain").stdout, "")
+            self.assertNotIn("PATCHED_A", (repo / "f.rs").read_text())
+
+    def test_three_way_conflict_leaves_no_unmerged_entries_behind(self):
+        # A conflicting --3way exits 1 having written conflict markers AND an
+        # unmerged index entry. git_checkout_clean runs `git checkout -- .`
+        # with check=True, which ERRORS on an unmerged path -- i.e. this
+        # state used to be able to kill the worker outright.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, git = self._make_repo(tmpdir, self.BASE)
+            (repo / "f.rs").write_text(self.BASE.replace("line10\n", "OURS\n"))
+            git("add", "-A")
+            diff = git("diff", "--cached").stdout
+            git("reset", "-q", "--hard")
+            (repo / "f.rs").write_text(self.BASE.replace("line10\n", "THEIRS\n"))
+            git("add", "-A")
+            git("commit", "-q", "-m", "conflicting change")
+
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            status = git("status", "--porcelain").stdout
+            content = (repo / "f.rs").read_text()
+            self.assertFalse(ok)
+            self.assertNotIn("U", status)
+            self.assertNotIn("<<<<<<<", content)
+            self.assertEqual(status, "", f"3way conflict left the tree dirty: {status!r}")
+            # And the real cleanup path (check=True) must not blow up on it.
+            git_checkout_clean(repo)
 
 
 class GitCheckoutCleanTests(unittest.TestCase):
@@ -2169,7 +2389,8 @@ class BuildPromptOrderingTests(unittest.TestCase):
     def test_manifest_lists_all_four_shapes_and_range_syntax(self):
         manifest = build_reply_shape_manifest(4096)
         for needle in ("REQUEST:", "VERIFY", "PATCH 1/N", "Plan + diff",
-                       ":<start>-<end>", "roughly 4096 tokens", "ephemeral"):
+                       ":40-120", ":400-", ":-120", ":400",
+                       "roughly 4096 tokens", "ephemeral"):
             self.assertIn(needle, manifest)
 
 
@@ -2513,6 +2734,38 @@ class ParseRequestRangeTests(unittest.TestCase):
     def test_non_numeric_suffix_is_just_part_of_the_path(self):
         self.assertEqual(parse_request_range("src/x.rs:a-b"), ("src/x.rs:a-b", None, None))
 
+    # --- open-ended and bare-line forms ------------------------------------
+    #
+    # The RW2 transcript (deepseek-v4-pro, 2026-07-26T21:23) opened with
+    # "REQUEST: src/parsers/xmp/rdf_parser.rs:400-" and got a
+    # could-not-resolve rejection, because the START-END-only regex left
+    # ":400-" glued to the filename.
+
+    def test_open_ended_range_means_to_end_of_file(self):
+        self.assertEqual(parse_request_range("src/x.rs:400-"), ("src/x.rs", 400, None))
+
+    def test_open_start_range_means_from_line_one(self):
+        self.assertEqual(parse_request_range("src/x.rs:-120"), ("src/x.rs", 1, 120))
+
+    def test_bare_line_number_becomes_a_window_around_it(self):
+        path, start, end = parse_request_range("src/x.rs:400")
+        self.assertEqual(path, "src/x.rs")
+        self.assertEqual(start, 400 - model_fix_loop.REQUEST_SINGLE_LINE_CONTEXT_BEFORE)
+        self.assertEqual(end, 400 + model_fix_loop.REQUEST_SINGLE_LINE_CONTEXT_AFTER)
+
+    def test_bare_line_number_window_is_clamped_at_the_top_of_the_file(self):
+        self.assertEqual(parse_request_range("src/x.rs:3")[1], 1)
+
+    def test_zero_forms_strip_the_suffix_and_fall_back_to_whole_file(self):
+        # Same forgiving degrade-to-whole-file rule the START-END form has
+        # had: a typo'd range must not fail the whole request.
+        for typo in ("src/x.rs:0-", "src/x.rs:-0", "src/x.rs:0"):
+            self.assertEqual(parse_request_range(typo), ("src/x.rs", None, None), typo)
+
+    def test_non_numeric_open_forms_stay_part_of_the_path(self):
+        for shape in ("src/x.rs:abc-", "src/x.rs:-abc", "src/x.rs:abc"):
+            self.assertEqual(parse_request_range(shape), (shape, None, None), shape)
+
 
 class ResolveRequestRangeTests(unittest.TestCase):
     def _make_repo(self, tmpdir):
@@ -2549,6 +2802,123 @@ class ResolveRequestRangeTests(unittest.TestCase):
             (samples / "EXE.dylib").write_bytes(b"\xfe\xed\xfa\xcf1234")
             answer = resolve_request("EXE.dylib:1-2", Path("/nonexistent"), samples)
         self.assertIn("Hex dump of EXE.dylib", answer)
+
+    def test_open_ended_range_serves_through_end_of_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:97-", repo, None)
+        self.assertIn("Lines 97-100 of src/big.rs", answer)
+        self.assertIn("97: line97", answer)
+        self.assertIn("100: line100", answer)
+        self.assertNotIn("96: line96", answer)
+
+    def test_open_ended_range_past_eof_says_so_with_readable_bounds(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:500-", repo, None)
+        self.assertIn("only 100 lines", answer)
+        self.assertIn("500-EOF", answer)   # not "500-None"
+
+    def test_open_start_range_serves_from_line_one(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:-3", repo, None)
+        self.assertIn("Lines 1-3 of src/big.rs", answer)
+        self.assertIn("1: line1", answer)
+        self.assertNotIn("4: line4", answer)
+
+    def test_bare_line_number_serves_a_window_around_it(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:50", repo, None)
+        self.assertIn("30: line30", answer)   # 50 - CONTEXT_BEFORE
+        self.assertIn("50: line50", answer)
+        self.assertIn("100: line100", answer)  # window clamped to EOF
+        self.assertNotIn("29: line29", answer)
+
+
+class ResolveRequestRejectionTests(unittest.TestCase):
+    """A could-not-resolve rejection has to be self-correcting.
+
+    In the RW2 transcript (2026-07-26T21:23) the model asked for
+    src/parsers/xmp/artwork_parser.rs -- a plausible name that does not
+    exist -- and the rejection told it to "try a path from the list shown"
+    while showing it nothing; the prompt's file list was thousands of tokens
+    back in a ~17K-token conversation. It then guessed again."""
+
+    def _make_repo(self, tmpdir):
+        repo = Path(tmpdir)
+        xmp = repo / "src" / "parsers" / "xmp"
+        xmp.mkdir(parents=True)
+        for name in ("history_parser.rs", "mod.rs", "namespace_mapping.rs",
+                     "namespace_resolver.rs", "rdf_parser.rs"):
+            (xmp / name).write_text("// stub\n")
+        (xmp / "namespaces").mkdir()
+        return repo
+
+    def test_lists_the_real_siblings_when_the_parent_exists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/parsers/xmp/artwork_parser.rs", repo, None)
+        self.assertIn("Could not resolve", answer)
+        self.assertIn("src/parsers/xmp/ actually contains", answer)
+        for name in ("history_parser.rs", "mod.rs", "namespace_mapping.rs",
+                     "namespace_resolver.rs", "rdf_parser.rs"):
+            self.assertIn(name, answer)
+        self.assertIn("namespaces/", answer)   # directories marked as such
+
+    def test_offers_a_did_you_mean_for_a_near_miss(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/parsers/xmp/rdf_parsr.rs", repo, None)
+        self.assertIn("Did you mean", answer)
+        self.assertIn("src/parsers/xmp/rdf_parser.rs", answer)
+
+    def test_walks_up_to_the_nearest_existing_ancestor(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/parsers/nosuchdir/deeper/x.rs", repo, None)
+        self.assertIn("src/parsers/ actually contains", answer)
+        self.assertIn("xmp/", answer)
+
+    def test_listing_is_bounded_and_reports_the_overflow(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            for i in range(60):
+                (repo / "src" / f"p{i:02d}.rs").write_text("// stub\n")
+            answer = resolve_request("src/missing.rs", repo, None)
+        self.assertIn("(+20 more)", answer)
+        self.assertIn("p00.rs", answer)
+        self.assertNotIn("p59.rs", answer)
+
+    def test_a_range_suffix_does_not_leak_into_the_rejection(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/parsers/xmp/artwork_parser.rs:400-", repo, None)
+        self.assertIn("'src/parsers/xmp/artwork_parser.rs'", answer)
+        self.assertNotIn(":400-", answer)
+
+    def test_traversal_out_of_the_roots_lists_nothing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("../../../etc/passwd", repo, None)
+        self.assertIn("Could not resolve", answer)
+        self.assertNotIn("actually contains", answer)
+
+    def test_samples_dir_entries_are_listed_too(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            samples = Path(tmpdir) / "samples"
+            samples.mkdir()
+            (samples / "XMP5.xmp").write_bytes(b"<x/>")
+            answer = resolve_request("XMP9.xmp", Path(tmpdir) / "nonexistent-repo", samples)
+        self.assertIn("XMP5.xmp", answer)
+
+    def test_empty_listing_falls_back_to_the_bare_rejection(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir) / "does-not-exist"
+            answer = describe_missing_path("src/x.rs", repo, None)
+        self.assertEqual(answer, "")
 
 
 class LoadRecentSweepReviewsTests(unittest.TestCase):
@@ -4492,8 +4862,8 @@ class AttemptBuildTests(unittest.TestCase):
                 # that's what must trigger the nudge instead of an
                 # immediate silent failure.
                 return "REQUEST: src/parsers/jpeg/mod.rs"
-            # 6th call: this is the post-nudge turn -- submit a real diff.
-            self.assertIn("No more file requests", messages[-1]["content"])
+            # 6th call: this is the forced-diff turn -- submit a real diff.
+            self.assertIn("reply with a diff and nothing else", messages[-1]["content"])
             return "```diff\n--- a/x\n+++ b/x\n```\n"
 
         built, reason, diff, messages = attempt_build(
@@ -4507,6 +4877,135 @@ class AttemptBuildTests(unittest.TestCase):
         )
         self.assertTrue(built)
         self.assertEqual(len(calls), 6)
+
+    # --- investigation-budget visibility (defect 3) -------------------------
+    #
+    # RW2 transcript, 2026-07-26T21:23: the model spent turn 24 on yet another
+    # REQUEST because nothing in the conversation ever told it how many
+    # investigation turns it had or how many were left, and the one
+    # "stop investigating" message only arrived AFTER the budget was gone.
+
+    def test_every_request_answer_ends_with_the_remaining_budget(self):
+        seen = []
+
+        def fake_call_model(messages, *a):
+            if messages[-1]["role"] == "user" and len(seen) < 3:
+                seen.append(messages[-1]["content"])
+            if len(seen) < 3:
+                return "REQUEST: src/x.rs"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("fn a() {}\n")
+            attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=5),
+                repo_root=repo,
+            )
+        # seen[0] is the original prompt; seen[1..] are REQUEST answers.
+        self.assertIn("(investigation turn 1 of 5 -- 4 left)", seen[1])
+        self.assertIn("(investigation turn 2 of 5 -- 3 left)", seen[2])
+        # ...and the counter must be the LAST thing in the message: it changes
+        # every turn, so anywhere but the tail it would break the provider's
+        # cached prefix for every later call in the attempt.
+        self.assertTrue(seen[1].rstrip().endswith("4 left)"), seen[1])
+        self.assertIn("fn a() {}", seen[1])   # the answer itself still comes first
+
+    def test_final_investigation_turn_is_told_so_before_it_is_spent(self):
+        answers = []
+
+        def fake_call_model(messages, *a):
+            if len(answers) < 2:
+                answers.append(messages[-1]["content"])
+                return "REQUEST: src/x.rs"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("fn a() {}\n")
+            attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=1),
+                repo_root=repo,
+            )
+        final = answers[1]   # the answer to the one and only allowed REQUEST
+        self.assertIn("this was your LAST", final)
+        self.assertIn("another REQUEST will be discarded", final)
+        self.assertIn("best-effort diff", final)
+
+    def test_budget_footer_wording(self):
+        self.assertEqual(render_request_budget_footer(3, 5),
+                         "(investigation turn 3 of 5 -- 2 left)")
+        last = render_request_budget_footer(5, 5)
+        self.assertIn("this was your LAST", last)
+        self.assertNotIn("2 left", last)
+
+    def test_dead_end_pivot_message_also_carries_the_budget(self):
+        # The max_request_repeats dead-end branch is still a consumed
+        # investigation turn, so it must show the same counter.
+        seen = []
+
+        def fake_call_model(messages, *a):
+            seen.append(messages[-1]["content"])
+            if len(seen) <= 4:
+                return "REQUEST: src/x.rs"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("fn a() {}\n")
+            attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=8, max_request_repeats=3),
+                repo_root=repo,
+            )
+        pivot = [m for m in seen if "requested 'src/x.rs' 3 times" in m]
+        self.assertEqual(len(pivot), 1)
+        self.assertIn("(investigation turn 3 of 8 -- 5 left)", pivot[0])
+
+    def test_request_with_no_turns_left_forces_exactly_one_diff_only_retry(self):
+        calls = []
+
+        def fake_call_model(messages, *a):
+            calls.append(messages[-1]["content"])
+            return "REQUEST: src/parsers/jpeg/mod.rs"   # never gives up
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=dict(CONFIG, max_request_turns=2),
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertEqual(reason, "no diff in model response (exhausted request budget)")
+        # 2 budgeted REQUEST turns + the one that overran + exactly ONE forced
+        # retry = 4 calls. A 5th would mean the forced retry can loop.
+        self.assertEqual(len(calls), 4)
+        forced = [c for c in calls if c == FORCED_DIFF_DEMAND]
+        self.assertEqual(len(forced), 1)
+        # It must demand a diff and NOTHING else -- no "or a REQUEST if you
+        # must" escape hatch, which is how the transcript kept investigating.
+        self.assertIn("DISCARDED", FORCED_DIFF_DEMAND)
+        self.assertIn("reply with a diff and nothing else", FORCED_DIFF_DEMAND)
 
     def test_fails_with_specific_reason_if_model_keeps_requesting_after_the_nudge(self):
         built, reason, diff, messages = attempt_build(
