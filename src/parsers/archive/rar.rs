@@ -64,8 +64,9 @@ impl RARParser {
 
         let header = reader.read(0, 8)?;
         if header.len() >= 7 && &header[0..4] == RAR_SIGNATURE {
-            // RAR5 has 0x01 at offset 7
-            if header.len() >= 8 && header[7] == RAR5_MARKER {
+            // RAR5 marker is the 7th byte (index 6): "Rar!\x1a\x07\x01"
+            // Index 7 is the first CRC byte of the archive header.
+            if header.len() >= 7 && header[6] == RAR5_MARKER {
                 Ok("5.0")
             } else {
                 Ok("4.x")
@@ -543,7 +544,10 @@ fn rar5_compressed_size(reader: &dyn FileReader) -> Result<Option<i64>> {
 
         let data_size = if header_flags & HEADER_FLAG_DATA_AREA != 0 {
             match RARParser::read_rar5_vint(block, field_offset) {
-                Ok((value, _)) => value,
+                // Offset deliberately discarded: this is the last field read
+                // from the block and every path below returns or breaks, so
+                // writing it back is a dead store `-D warnings` rejects.
+                Ok((value, _next)) => value,
                 Err(_) => break,
             }
         } else {
@@ -666,7 +670,10 @@ fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry
 
         let data_size = if header_flags & HEADER_FLAG_DATA_AREA != 0 {
             match RARParser::read_rar5_vint(block, field_offset) {
-                Ok((value, _)) => value,
+                Ok((value, next)) => {
+                    field_offset = next;
+                    value
+                }
                 Err(_) => break,
             }
         } else {
@@ -804,6 +811,18 @@ mod tests {
             );
         }
 
+        // ZIP:FileVersion is set via parse_rar_metadata for RAR5 archives
+        // when detect_version correctly identifies the format.
+        assert_eq!(
+            metadata.get("ZIP:FileVersion"),
+            Some(&TagValue::String("RAR v5".to_string())),
+            "RAR5 archives should report ZIP:FileVersion = 'RAR v5'",
+        );
+        assert_eq!(
+            metadata.get("ZIP:UncompressedSize"),
+            Some(&TagValue::Integer(5)),
+            "ZIP:UncompressedSize should be parsed as 5 from the file header",
+        );
         assert_no_divergent_prefixed_duplicates(&metadata);
     }
 
