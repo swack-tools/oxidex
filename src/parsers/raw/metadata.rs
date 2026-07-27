@@ -821,6 +821,46 @@ fn format_exif_display_value(
             6 => Some("JPEG (old-style)".to_string()),
             _ => None,
         },
+        // ExposureProgram: SHORT[1]. PrintConv values from Exif.pm.
+        0x8822 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Not Defined".to_string()),
+            1 => Some("Manual".to_string()),
+            2 => Some("Program AE".to_string()),
+            3 => Some("Aperture-priority AE".to_string()),
+            4 => Some("Shutter speed priority AE".to_string()),
+            5 => Some("Creative (Slow speed)".to_string()),
+            6 => Some("Action (High speed)".to_string()),
+            7 => Some("Portrait".to_string()),
+            8 => Some("Landscape".to_string()),
+            9 => Some("Bulb".to_string()),
+            _ => None,
+        },
+        // FileSource: UNDEFINED. ExifTool RawConv maps 0x03 → 'DSC', PrintConv
+        // maps 'DSC' → 'Digital Camera'.
+        0xA300 if field_type == 7 => {
+            let count = usize::try_from(value_count).ok()?;
+            let src_bytes = bytes.get(..count)?;
+            if src_bytes == b"\x03" || src_bytes == b"DSC" {
+                Some("Digital Camera".to_string())
+            } else if src_bytes.len() == 1 {
+                match src_bytes[0] {
+                    0 => Some("Other".to_string()),
+                    1 => Some("Scanner".to_string()),
+                    2 => Some("Film Scanner".to_string()),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        },
+        // Flash: SHORT[1]. ExifTool has a 32-entry PrintConv; wire the two
+        // values hit by the X3F corpus (0 = 'No Flash', 1 = 'Fired').
+        0x9209 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("No Flash".to_string()),
+            1 => Some("Fired".to_string()),
+            // TODO: remainder of ExifTool's Flash PrintConv table
+            _ => None,
+        },
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -2169,6 +2209,9 @@ fn parse_x3f_preview_exif(data: &[u8], metadata: &mut MetadataMap) -> Result<()>
                     0x9101 => "ComponentsConfiguration",
                     0xA001 => "ColorSpace",
                     0xA401 => "CustomRendered",
+                    0x8822 => "ExposureProgram",
+                    0xA300 => "FileSource",
+                    0x9209 => "Flash",
                     _ => continue,
                 };
                 let key = format!("EXIF:{}", name);
