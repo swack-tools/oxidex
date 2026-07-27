@@ -293,8 +293,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                     // CR2 IFD0: capture the StripByteCounts value for the
                     // thumbnail JPEG preview (ExifTool EXIF:PreviewImage).
-                    if format == RawFormat::CanonCR2 && ifd_index == 0
-                        && *tag_id == 0x0117 && bytes.len() >= 4
+                    if format == RawFormat::CanonCR2
+                        && ifd_index == 0
+                        && *tag_id == 0x0117
+                        && bytes.len() >= 4
                     {
                         cr2_thumbnail_length = Some(read_u32(bytes, byte_order));
                     }
@@ -503,13 +505,15 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     }
 
                     // Parse Interoperability IFD (ExifIFD tag 0xA005) if present
-                    if let Some(interop_offset) = exif_tags.iter().find_map(|(tag_id, _, _, raw)| {
-                        if *tag_id == 0xA005 && raw.len() >= 4 {
-                            Some(read_u32(raw.as_ref(), byte_order) as u64)
-                        } else {
-                            None
-                        }
-                    }) {
+                    if let Some(interop_offset) =
+                        exif_tags.iter().find_map(|(tag_id, _, _, raw)| {
+                            if *tag_id == 0xA005 && raw.len() >= 4 {
+                                Some(read_u32(raw.as_ref(), byte_order) as u64)
+                            } else {
+                                None
+                            }
+                        })
+                    {
                         if let Ok(interop_tags) = parse_ifd(&reader, interop_offset, byte_order) {
                             for (tag_id, field_type, value_count, raw_bytes) in interop_tags {
                                 let tag_name = lookup_tag_name(tag_id, "InteropIFD");
@@ -522,7 +526,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 ) {
                                     TagValue::new_string(value)
                                 } else {
-                                    raw_bytes_to_simple_tag_value(raw_bytes.as_ref(), field_type, value_count, byte_order)
+                                    raw_bytes_to_simple_tag_value(
+                                        raw_bytes.as_ref(),
+                                        field_type,
+                                        value_count,
+                                        byte_order,
+                                    )
                                 };
                                 metadata.insert(tag_name, tag_value);
                             }
@@ -1887,8 +1896,12 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
                         let bytes = raw_bytes.as_ref();
                         let tag_name = lookup_tag_name(*tag_id, "EXIF");
-                        let tag_value =
-                            raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order);
+                        let tag_value = raw_bytes_to_simple_tag_value(
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        );
                         metadata.insert(tag_name, tag_value);
                     }
                 }
@@ -2290,12 +2303,8 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                             // InteropOffset here adds oxidex-only tags and
                             // triggers spurious composite generation.
                             if let Some(offset) = exif_ifd_offset {
-                                if let Ok(exif_tags) =
-                                    parse_ifd(&reader, offset, byte_order)
-                                {
-                                    for (tag_id, field_type, value_count, raw_bytes) in
-                                        &exif_tags
-                                    {
+                                if let Ok(exif_tags) = parse_ifd(&reader, offset, byte_order) {
+                                    for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
                                         // Whitelist: exact tag IDs ExifTool
                                         // emits for SigmaDP2.x3f.
                                         if !matches!(
@@ -2310,23 +2319,23 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                         }
                                         let bytes = raw_bytes.as_ref();
                                         let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
-                                        let tag_value =
-                                            if let Some(value) = format_exif_display_value(
+                                        let tag_value = if let Some(value) =
+                                            format_exif_display_value(
                                                 *tag_id,
                                                 bytes,
                                                 *field_type,
                                                 *value_count,
                                                 byte_order,
                                             ) {
-                                                TagValue::new_string(value)
-                                            } else {
-                                                raw_bytes_to_simple_tag_value(
-                                                    bytes,
-                                                    *field_type,
-                                                    *value_count,
-                                                    byte_order,
-                                                )
-                                            };
+                                            TagValue::new_string(value)
+                                        } else {
+                                            raw_bytes_to_simple_tag_value(
+                                                bytes,
+                                                *field_type,
+                                                *value_count,
+                                                byte_order,
+                                            )
+                                        };
                                         metadata.insert(tag_name, tag_value);
                                     }
                                 }
@@ -2346,7 +2355,9 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                     if let Ok(ifd1_tags) =
                                         parse_ifd(&reader, ifd1_offset as u64, byte_order)
                                     {
-                                        for (tag_id, field_type, value_count, raw_bytes) in &ifd1_tags {
+                                        for (tag_id, field_type, value_count, raw_bytes) in
+                                            &ifd1_tags
+                                        {
                                             if *tag_id == 0x0103 {
                                                 let bytes = raw_bytes.as_ref();
                                                 let tag_value = format_x3f_compression(
@@ -2394,11 +2405,8 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                     continue;
                                 }
                                 // Compression (0x0103) – ExifTool reports "JPEG (old-style)"
-                                if *tag_id == 0x0103
-                                    && !metadata.contains_key("EXIF:Compression")
-                                {
-                                    let comp_val =
-                                        read_tiff_u16(bytes, byte_order).unwrap_or(0);
+                                if *tag_id == 0x0103 && !metadata.contains_key("EXIF:Compression") {
+                                    let comp_val = read_tiff_u16(bytes, byte_order).unwrap_or(0);
                                     let comp_str = match comp_val {
                                         1 => "Uncompressed",
                                         6 => "JPEG (old-style)",
@@ -2417,12 +2425,36 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                         let (tag_name, opt_display) = match *tag_id {
                                             0x9003 => ("EXIF:DateTimeOriginal", None),
                                             0x9004 => ("EXIF:CreateDate", None),
-                                            0x9101 => ("EXIF:ComponentsConfiguration",
-                                                format_exif_display_value(*tag_id, bytes, *field_type, *value_count, byte_order)),
-                                            0xA001 => ("EXIF:ColorSpace",
-                                                format_exif_display_value(*tag_id, bytes, *field_type, *value_count, byte_order)),
-                                            0xA401 => ("EXIF:CustomRendered",
-                                                format_exif_display_value(*tag_id, bytes, *field_type, *value_count, byte_order)),
+                                            0x9101 => (
+                                                "EXIF:ComponentsConfiguration",
+                                                format_exif_display_value(
+                                                    *tag_id,
+                                                    bytes,
+                                                    *field_type,
+                                                    *value_count,
+                                                    byte_order,
+                                                ),
+                                            ),
+                                            0xA001 => (
+                                                "EXIF:ColorSpace",
+                                                format_exif_display_value(
+                                                    *tag_id,
+                                                    bytes,
+                                                    *field_type,
+                                                    *value_count,
+                                                    byte_order,
+                                                ),
+                                            ),
+                                            0xA401 => (
+                                                "EXIF:CustomRendered",
+                                                format_exif_display_value(
+                                                    *tag_id,
+                                                    bytes,
+                                                    *field_type,
+                                                    *value_count,
+                                                    byte_order,
+                                                ),
+                                            ),
                                             _ => continue,
                                         };
                                         if metadata.contains_key(tag_name) {
@@ -2431,7 +2463,12 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                         let value = if let Some(display) = opt_display {
                                             TagValue::new_string(display)
                                         } else {
-                                            raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
+                                            raw_bytes_to_simple_tag_value(
+                                                bytes,
+                                                *field_type,
+                                                *value_count,
+                                                byte_order,
+                                            )
                                         };
                                         metadata.insert(tag_name.to_string(), value);
                                     }

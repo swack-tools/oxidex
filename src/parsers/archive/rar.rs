@@ -544,7 +544,10 @@ fn rar5_compressed_size(reader: &dyn FileReader) -> Result<Option<i64>> {
 
         let data_size = if header_flags & HEADER_FLAG_DATA_AREA != 0 {
             match RARParser::read_rar5_vint(block, field_offset) {
-                Ok((value, next)) => { field_offset = next; value }
+                Ok((value, next)) => {
+                    field_offset = next;
+                    value
+                }
                 Err(_) => break,
             }
         } else {
@@ -667,7 +670,10 @@ fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry
 
         let data_size = if header_flags & HEADER_FLAG_DATA_AREA != 0 {
             match RARParser::read_rar5_vint(block, field_offset) {
-                Ok((value, next)) => { field_offset = next; value }
+                Ok((value, next)) => {
+                    field_offset = next;
+                    value
+                }
                 Err(_) => break,
             }
         } else {
