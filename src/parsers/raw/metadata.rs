@@ -897,6 +897,29 @@ fn format_exif_display_value(
             2 => Some("Hard".to_string()),
             _ => None,
         },
+        // ExifVersion: UNDEFINED[4] printed as e.g. "0221".
+        0x9000 if field_type == 7 => {
+            let count = usize::try_from(value_count).ok()?;
+            let ver_bytes = bytes.get(..count.min(4))?;
+            Some(String::from_utf8_lossy(ver_bytes).into_owned())
+        }
+        // ExposureCompensation: SRATIONAL[1].
+        0x9204 if field_type == 10 && value_count >= 1 => {
+            let numerator_raw = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator_raw = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator_raw == 0 {
+                None
+            } else {
+                let numerator = numerator_raw as i32;
+                let denominator = denominator_raw as i32;
+                let value = numerator as f64 / denominator as f64;
+                if value.fract() == 0.0 {
+                    Some(format!("{}", numerator / denominator))
+                } else {
+                    Some(format!("{}", value))
+                }
+            }
+        }
         _ => None,
     }
 }
@@ -2137,6 +2160,11 @@ fn parse_x3f_preview_exif(data: &[u8], metadata: &mut MetadataMap) -> Result<()>
             for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
                 let name = match *tag_id {
                     0x9003 => "DateTimeOriginal",
+                    0x9000 => "ExifVersion",
+                    0x9204 => "ExposureCompensation",
+                    0xA002 => "ExifImageWidth",
+                    0xA003 => "ExifImageHeight",
+                    0xA402 => "ExposureMode",
                     0x9004 => "CreateDate",
                     0x9101 => "ComponentsConfiguration",
                     0xA001 => "ColorSpace",
