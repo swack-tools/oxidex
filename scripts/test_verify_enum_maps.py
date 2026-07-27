@@ -617,6 +617,32 @@ class VerifyTests(unittest.TestCase):
         self.assertEqual(v.mismatches, [])
         self.assertEqual(len(v.catch_all_arms), 1)
 
+    def test_a_catch_all_alone_does_NOT_convict_when_no_table_resolved(self):
+        # The mirror of the test above, and the distinction that matters:
+        # there the table RESOLVED, so we know ExifTool has no fallback and a
+        # `_ =>` arm really does replace a raw number. Here nothing resolved,
+        # so we cannot know whether ExifTool has an OTHER sub covering exactly
+        # those keys -- and a `_ =>` fallback is idiomatic Rust present in most
+        # parsers.
+        #
+        # Measured 2026-07-27: convicting unconditionally produced FALSE
+        # REJECTS for two verified-good archived patches (pdf-a1a411f67e3f,
+        # which measures a real -4 gap closure, and elf-4b5a26e97cb8, whose
+        # 9/9 CPUType and 5/5 ObjectFileType pairs match EXE.pm). "fabricated"
+        # is terminal, so a wrong one permanently discards good work, while
+        # "cannot-verify" merely defers.
+        # NO table hint, deliberately. With an explicit hint an unresolvable
+        # table already short-circuits to cannot-verify before the verdict is
+        # computed, so only the AUTO-BINDING path could ever exhibit this --
+        # and that is exactly how pdf/elf were adjudicated (no --table).
+        # An earlier version of this test passed a bogus hint instead and was
+        # therefore vacuous: it stayed green with the fix reverted.
+        d = diff("src/x.rs", 1, ['+        0 => "Whatever",', '+        _ => "Unknown",'])
+        v = verify(d, self.pm, None)
+        self.assertEqual(v.status, "cannot-verify")
+        self.assertEqual(v.pairs_checked, 0)
+        self.assertTrue(v.catch_all_arms, "the catch-all must still be REPORTED, just not convicted on")
+
     def test_none_catch_all_does_not_fail(self):
         d = diff("src/x.rs", 1, ['+        0 => Some("Win32".to_string()),', "+        _ => None,"])
         v = verify(d, self.pm, "RAR5.OperatingSystem")

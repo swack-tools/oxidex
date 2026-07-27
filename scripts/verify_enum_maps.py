@@ -1622,7 +1622,31 @@ def verify(
         mismatches.extend(m)
         unreachable.extend(u)
         checked += c
-    if mismatches or catch_alls:
+    # A catch-all arm may only convict once a table has actually RESOLVED.
+    #
+    # Measured 2026-07-27, adjudicating 8 real archived patches against a human
+    # pass: this returned "fabricated" for pdf-a1a411f67e3f and
+    # elf-4b5a26e97cb8 with pairs_checked=0 and reason=no-such-table -- the
+    # verdict rested entirely on a `_ =>` arm while no ExifTool table had been
+    # found at all. Both are verified-good work (PDF measures a real -4 gap
+    # closure; ELF's 9/9 CPUType and 5/5 ObjectFileType pairs match EXE.pm), so
+    # both were FALSE REJECTS.
+    #
+    # Why resolution is the right precondition: a resolved table is known to
+    # have no ExifTool fallback, because OTHER and BITMASK both force
+    # PerlTable(pairs=None) upstream (see "table-has-OTHER"). So against a
+    # resolved table, a Rust catch-all really does substitute a string where
+    # ExifTool prints the raw number. With NO table resolved we cannot know
+    # whether ExifTool has an OTHER sub covering exactly those keys, and a
+    # `_ =>` fallback is idiomatic Rust present in most parsers -- convicting
+    # on it unconditionally mis-fires broadly.
+    #
+    # Direction matters: "fabricated" is terminal, so a wrong one permanently
+    # discards good work, while "cannot-verify" merely defers. When the
+    # evidence is absent, defer.
+    if mismatches:
+        status = "fabricated"
+    elif catch_alls and any_resolved:
         status = "fabricated"
     elif not any_resolved or checked == 0:
         status = "cannot-verify"
