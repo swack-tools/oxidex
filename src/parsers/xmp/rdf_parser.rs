@@ -98,8 +98,16 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
     let mut results = Vec::new();
     let mut buf = Vec::new();
 
+    // Pre-register the standard RDF namespace so that rdf:Description,
+    // rdf:Bag, rdf:Seq, rdf:Alt, and rdf:li are always recognised,
+    // even when the specialised sub-parsers create their own resolvers.
+    resolver.register_namespace(
+        "rdf",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    );
+
     // State tracking
-    let mut inside_description = false;
+    let mut inside_description = 0usize;   // nesting depth counter
     let mut current_property: Option<String> = None;
     let mut current_value = String::new();
     let mut depth = 0;
@@ -121,12 +129,12 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
                 if is_xmpmeta(&tag_name) {
                     extract_xmpmeta_attributes(&e, &mut results)?;
                 }
-                // Check if this is an rdf:Description element
+                // Check if this is an rdf:Description element (nestable)
                 else if is_rdf_description(&tag_name, &resolver) {
-                    inside_description = true;
+                    inside_description += 1;
                     // Extract rdf:about and property attributes from Description
                     extract_description_attributes(&e, &resolver, &mut results)?;
-                } else if inside_description && current_property.is_none() {
+                } else if inside_description > 0 && current_property.is_none() {
                     // This is a property element inside rdf:Description
                     // Check if it's a complex structure we should skip
                     if is_simple_property(&tag_name, &resolver) {
@@ -149,7 +157,7 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
                 let tag_name = extract_tag_name_from_bytes(e.name().as_ref())?;
 
                 if is_rdf_description(&tag_name, &resolver) {
-                    inside_description = false;
+                    inside_description = inside_description.saturating_sub(1);
                 } else if is_rdf_li(&tag_name, &resolver) && inside_collection {
                     // End of rdf:li - save the collected value
                     if !current_value.trim().is_empty() {
@@ -322,6 +330,11 @@ fn extract_about_cv_term_values(xml_bytes: &[u8]) -> Result<(Vec<String>, Vec<St
     reader.config_mut().trim_text(true);
 
     let mut resolver = NamespaceResolver::new();
+    // Pre-register the standard RDF namespace (same reason as parse_xmp).
+    resolver.register_namespace(
+        "rdf",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    );
     let mut cv_ids = Vec::new();
     let mut cv_term_names = Vec::new();
     let mut buf = Vec::new();
@@ -490,6 +503,11 @@ fn extract_artwork_title_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)
     reader.config_mut().trim_text(true);
 
     let mut resolver = NamespaceResolver::new();
+    // Pre-register the standard RDF namespace.
+    resolver.register_namespace(
+        "rdf",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    );
     let mut results = Vec::new();
     let mut buf = Vec::new();
     let mut depth = 0usize;
@@ -661,6 +679,12 @@ fn extract_b_test_tag_field1_values(xml_bytes: &[u8]) -> Result<Vec<(String, Str
     reader.config_mut().trim_text(true);
 
     let mut resolver = NamespaceResolver::new();
+    // Pre-register the standard RDF namespace so that rdf:Alt and rdf:li
+    // are recognised even if the `rdf` prefix hasn't been declared yet.
+    resolver.register_namespace(
+        "rdf",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    );
     let mut results = Vec::new();
     let mut buf = Vec::new();
     let mut depth = 0usize;
