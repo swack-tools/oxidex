@@ -334,7 +334,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             format!("{}:BlackLevelBlue", ifd_name)
                         }
                         (RawFormat::NikonNEF, 0, 0x9216) | (RawFormat::NikonNRW, 0, 0x9216) => {
-                            lookup_tag_name(0x9216, "EXIF")
+                            "EXIF:TIFF-EPStandardID".to_string()
                         }
                         _ => lookup_raw_tag_name(canonical_tag_id, ifd_name, format),
                     };
