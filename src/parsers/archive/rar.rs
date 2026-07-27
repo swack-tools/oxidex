@@ -664,18 +664,18 @@ fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry
             field_offset = next_offset;
         }
 
-        let data_size = if header_flags & HEADER_FLAG_DATA_AREA != 0 {
+        let (data_size, after_data) = if header_flags & HEADER_FLAG_DATA_AREA != 0 {
             match RARParser::read_rar5_vint(block, field_offset) {
-                Ok((value, _)) => value,
+                Ok((value, new_offset)) => (value, new_offset),
                 Err(_) => break,
             }
         } else {
-            0
+            (0, field_offset)
         };
 
         if header_type == RAR5_HEADER_FILE {
             // file flags vint
-            let (file_flags, after_flags) = match RARParser::read_rar5_vint(block, field_offset) {
+            let (file_flags, after_flags) = match RARParser::read_rar5_vint(block, after_data) {
                 Ok(v) => v,
                 Err(_) => break,
             };
