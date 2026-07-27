@@ -1066,6 +1066,17 @@ fn format_exif_display_value(
             2 => Some("Hard".to_string()),
             _ => None,
         },
+            // ExifVersion (0x9000): UNDEFINED/ASCII 4 bytes, trim trailing nulls.
+            0x9000 => {
+                let count = usize::try_from(value_count).ok()?;
+                let ver_bytes = bytes.get(..count.min(4))?;
+                let s = String::from_utf8_lossy(ver_bytes);
+                let s = s.trim_end_matches('\0');
+                Some(s.to_string())
+            }
+            // ExposureCompensation (0x9204): SRATIONAL or RATIONAL, format as signed decimal.
+            0x9204 if field_type == 10 => format_srational_as_string(bytes, byte_order),
+            0x9204 if field_type == 5 => format_rational_as_string(bytes, byte_order),
         _ => None,
     }
 }
@@ -1081,6 +1092,27 @@ fn format_rational_as_string(bytes: &[u8], byte_order: ByteOrder) -> Option<Stri
         return Some((numerator / denominator).to_string());
     }
     Some(format!("{}", f64::from(numerator) / f64::from(denominator)))
+}
+
+/// Format a signed rational (SRATIONAL) as a string.
+fn format_srational_as_string(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    if bytes.len() < 8 {
+        return None;
+    }
+    let reader = match byte_order {
+        ByteOrder::LittleEndian => EndianReader::little_endian(bytes),
+        ByteOrder::BigEndian => EndianReader::big_endian(bytes),
+    };
+    let numerator = reader.i32_at(0)?;
+    let denominator = reader.i32_at(4)?;
+    if denominator == 0 {
+        return None;
+    }
+    if numerator % denominator == 0 {
+        Some((numerator / denominator).to_string())
+    } else {
+        Some(format!("{}", f64::from(numerator) / f64::from(denominator)))
+    }
 }
 
 /// Format PanasonicRaw tag 0x0009 (CFAPattern).
@@ -2304,16 +2336,21 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                         // emits for SigmaDP2.x3f.
                                         if !matches!(
                                             *tag_id,
-                                            0x9003 // DateTimeOriginal
+                                            0x9000 // ExifVersion
+                                                | 0x9003 // DateTimeOriginal
                                                 | 0x9004 // CreateDate
                                                 | 0x9101 // ComponentsConfiguration
                                                 | 0xA001 // ColorSpace
                                                 | 0xA401 // CustomRendered
+                                                | 0xA002 // ExifImageWidth
+                                                | 0xA003 // ExifImageHeight
+                                                | 0x9204 // ExposureCompensation
+                                                | 0xA402 // ExposureMode
                                         ) {
                                             continue;
                                         }
                                         let bytes = raw_bytes.as_ref();
-                                        let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
+                                        let tag_name = lookup_tag_name(*tag_id, "EXIF");
                                         let tag_value = if let Some(value) =
                                             format_exif_display_value(
                                                 *tag_id,
@@ -2362,7 +2399,7 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                                     byte_order,
                                                 );
                                                 metadata.insert(
-                                                    "ExifIFD:Compression".to_string(),
+                                            "EXIF:Compression".to_string(),
                                                     tag_value,
                                                 );
                                             }
@@ -2418,6 +2455,7 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                     for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
                                         let bytes = raw_bytes.as_ref();
                                         let (tag_name, opt_display) = match *tag_id {
+                                            0x9000 => ("EXIF:ExifVersion", format_exif_display_value(*tag_id, bytes, *field_type, *value_count, byte_order)),
                                             0x9003 => ("EXIF:DateTimeOriginal", None),
                                             0x9004 => ("EXIF:CreateDate", None),
                                             0x9101 => (
@@ -2442,6 +2480,18 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                             ),
                                             0xA401 => (
                                                 "EXIF:CustomRendered",
+                                                format_exif_display_value(
+                                                    *tag_id,
+                                                    bytes,
+                                                    *field_type,
+                                                    *value_count,
+                                                    byte_order,
+                                                ),
+                                            ),
+                                            0xA002 => ("EXIF:ExifImageWidth", None),
+                                            0xA003 => ("EXIF:ExifImageHeight", None),
+                                            0x9204 => ("EXIF:ExposureCompensation", format_exif_display_value(*tag_id, bytes, *field_type, *value_count, byte_order)),
+                                            0xA402 => ("EXIF:ExposureMode",
                                                 format_exif_display_value(
                                                     *tag_id,
                                                     bytes,
