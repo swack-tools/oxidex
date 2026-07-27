@@ -959,6 +959,57 @@ fn format_exif_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // Compression (0x0103): SHORT[1] -> "JPEG (old-style)" etc.
+        0x0103 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("Uncompressed".to_string()),
+            6 => Some("JPEG (old-style)".to_string()),
+            _ => None,
+        },
+        // ExposureProgram (0x8822): SHORT[1] with PrintConv
+        0x8822 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Not Defined".to_string()),
+            1 => Some("Manual".to_string()),
+            2 => Some("Program AE".to_string()),
+            3 => Some("Aperture-priority AE".to_string()),
+            4 => Some("Shutter speed priority AE".to_string()),
+            5 => Some("Creative (Slow speed)".to_string()),
+            6 => Some("Action (High speed)".to_string()),
+            7 => Some("Portrait".to_string()),
+            8 => Some("Landscape".to_string()),
+            9 => Some("Bulb".to_string()),
+            _ => None,
+        },
+        // FileSource (0xA300): UNDEFINED[1] -> "Digital Camera" etc.
+        0xA300 if field_type == 7 => {
+            let count = usize::try_from(value_count).ok()?;
+            let src = bytes.get(..count.min(1))?;
+            match src.first()? {
+                0 => Some("Other".to_string()),
+                1 => Some("Scanner of Transparency".to_string()),
+                2 => Some("Scanner of Reflection".to_string()),
+                3 => Some("Digital Camera".to_string()),
+                _ => None,
+            }
+        }
+        // Flash (0x9209): SHORT[1] with bitmask PrintConv
+        0x9209 if field_type == 3 && value_count >= 1 => {
+            let value = read_tiff_u16(bytes, byte_order)?;
+            match value {
+                0x0 => Some("No Flash".to_string()),
+                0x1 => Some("Fired".to_string()),
+                0x5 => Some("Fired, Return not detected".to_string()),
+                0x7 => Some("Fired, Return detected".to_string()),
+                0x8 => Some("On, Did not fire".to_string()),
+                0x9 => Some("On, Fired".to_string()),
+                0xd => Some("On, Return not detected".to_string()),
+                0xf => Some("On, Return detected".to_string()),
+                0x10 => Some("Off, Did not fire".to_string()),
+                0x14 => Some("Off, Did not fire, Return not detected".to_string()),
+                0x18 => Some("Auto, Did not fire".to_string()),
+                0x19 => Some("Auto, Fired".to_string()),
+                _ => None,
+            }
+        }
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -2346,6 +2397,10 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                                 | 0xA003 // ExifImageHeight
                                                 | 0x9204 // ExposureCompensation
                                                 | 0xA402 // ExposureMode
+                                                | 0x0103 // Compression
+                                                | 0x8822 // ExposureProgram
+                                                | 0x9209 // Flash
+                                                | 0xA300 // FileSource
                                         ) {
                                             continue;
                                         }
@@ -2494,6 +2549,42 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                             0xA402 => ("EXIF:ExposureMode",
                                                 format_exif_display_value(
                                                     *tag_id,
+                                                     bytes,
+                                                     *field_type,
+                                                     *value_count,
+                                                     byte_order,
+                                                 ),
+                                             ),
+                                             0x0103 => ("EXIF:Compression",
+                                                 format_exif_display_value(
+                                                     *tag_id,
+                                                     bytes,
+                                                     *field_type,
+                                                     *value_count,
+                                                     byte_order,
+                                                 ),
+                                             ),
+                                             0x8822 => ("EXIF:ExposureProgram",
+                                                 format_exif_display_value(
+                                                     *tag_id,
+                                                     bytes,
+                                                     *field_type,
+                                                     *value_count,
+                                                     byte_order,
+                                                 ),
+                                             ),
+                                             0x9209 => ("EXIF:Flash",
+                                                 format_exif_display_value(
+                                                     *tag_id,
+                                                     bytes,
+                                                     *field_type,
+                                                     *value_count,
+                                                     byte_order,
+                                                 ),
+                                             ),
+                                             0xA300 => ("EXIF:FileSource",
+                                                 format_exif_display_value(
+                                                     *tag_id,
                                                     bytes,
                                                     *field_type,
                                                     *value_count,
