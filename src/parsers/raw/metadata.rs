@@ -2051,6 +2051,9 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
     let _image_format = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
     let columns = u32::from_le_bytes([data[16], data[17], data[18], data[19]]);
     let rows = u32::from_le_bytes([data[20], data[21], data[22], data[23]]);
+    // Row stride at bytes 24-27 is not used for metadata extraction but
+    // is part of the SECi header layout.
+    let _row_stride = u32::from_le_bytes([data[24], data[25], data[26], data[27]]);
 
     // Store preview image dimensions for type 2/3
     if (image_type == 2 || image_type == 3) && columns > 0 && rows > 0 {
@@ -2058,6 +2061,119 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
             "MakerNotes:PreviewImageSize".to_string(),
             TagValue::new_string(format!("{}x{}", columns, rows)),
         );
+
+        // Image types 2 (thumbnail) and 3 (preview JPEG) contain JPEG data
+        // with an APP1 EXIF segment. Parse it to extract the specific EXIF
+        // tags that ExifTool reports for X3F but oxidex currently misses:
+        //   DateTimeOriginal (0x9003), CreateDate (0x9004),
+        //   ComponentsConfiguration (0x9101), ColorSpace (0xA001),
+        //   CustomRendered (0xA401), Compression (0x0103 from IFD1).
+        //
+        // We intentionally skip MakerNote, InteropOffset, and all other
+        // tags to match ExifTool's X3F output exactly and avoid triggering
+        // unwanted composite tag generation.
+        if data.len() > 28 {
+            let jpeg_data = &data[28..];
+            if let Ok(Some(tiff_data)) = find_jpeg_exif_tiff(jpeg_data) {
+                if let Ok(byte_order) = detect_byte_order(tiff_data) {
+                    if tiff_data.len() >= 8 {
+                        let first_ifd_offset = read_u32(&tiff_data[4..8], byte_order) as u64;
+                        let reader = SliceReader::new(tiff_data);
+
+                        if let Ok(ifd0_tags) = parse_ifd(&reader, first_ifd_offset, byte_order) {
+                            let mut exif_ifd_offset: Option<u64> = None;
+
+                            for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
+                                if *tag_id == 0x8769 && raw_bytes.as_ref().len() >= 4 {
+                                    exif_ifd_offset =
+                                        Some(read_u32(raw_bytes.as_ref(), byte_order) as u64);
+                                }
+                            }
+
+                            // Parse ExifIFD: only the tags ExifTool reports
+                            // for X3F files.  Extracting MarkerNote or
+                            // InteropOffset here adds oxidex-only tags and
+                            // triggers spurious composite generation.
+                            if let Some(offset) = exif_ifd_offset {
+                                if let Ok(exif_tags) =
+                                    parse_ifd(&reader, offset, byte_order)
+                                {
+                                    for (tag_id, field_type, value_count, raw_bytes) in
+                                        &exif_tags
+                                    {
+                                        // Whitelist: exact tag IDs ExifTool
+                                        // emits for SigmaDP2.x3f.
+                                        if !matches!(
+                                            *tag_id,
+                                            0x9003 // DateTimeOriginal
+                                                | 0x9004 // CreateDate
+                                                | 0x9101 // ComponentsConfiguration
+                                                | 0xA001 // ColorSpace
+                                                | 0xA401 // CustomRendered
+                                        ) {
+                                            continue;
+                                        }
+                                        let bytes = raw_bytes.as_ref();
+                                        let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
+                                        let tag_value =
+                                            if let Some(value) = format_exif_display_value(
+                                                *tag_id,
+                                                bytes,
+                                                *field_type,
+                                                *value_count,
+                                                byte_order,
+                                            ) {
+                                                TagValue::new_string(value)
+                                            } else {
+                                                raw_bytes_to_simple_tag_value(
+                                                    bytes,
+                                                    *field_type,
+                                                    *value_count,
+                                                    byte_order,
+                                                )
+                                            };
+                                        metadata.insert(tag_name, tag_value);
+                                    }
+                                }
+                            }
+
+                            // Parse IFD1 for Compression (0x0103).  The
+                            // next-IFD offset follows IFD0's entries:
+                            //   2 bytes count + N*12 bytes entries + 4 bytes next.
+                            let ifd0_entry_count = ifd0_tags.len() as u64;
+                            let ifd1_pos = first_ifd_offset + 2 + ifd0_entry_count * 12 + 4;
+                            if ifd1_pos + 4 <= tiff_data.len() as u64 {
+                                let ifd1_offset = read_u32(
+                                    &tiff_data[ifd1_pos as usize..(ifd1_pos + 4) as usize],
+                                    byte_order,
+                                );
+                                if ifd1_offset != 0 {
+                                    if let Ok(ifd1_tags) =
+                                        parse_ifd(&reader, ifd1_offset as u64, byte_order)
+                                    {
+                                        for (tag_id, field_type, value_count, raw_bytes) in &ifd1_tags {
+                                            if *tag_id == 0x0103 {
+                                                let bytes = raw_bytes.as_ref();
+                                                let tag_value = format_x3f_compression(
+                                                    bytes,
+                                                    *field_type,
+                                                    *value_count,
+                                                    byte_order,
+                                                );
+                                                metadata.insert(
+                                                    "ExifIFD:Compression".to_string(),
+                                                    tag_value,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // For RAW type (1), look for embedded TIFF/EXIF data
@@ -2279,6 +2395,26 @@ fn parse_canon_crw(_data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
     Ok(metadata)
 }
+
+/// Format the Compression tag value (0x0103) from the X3F JPEG preview's
+/// IFD1.  ExifTool reports value 6 as "JPEG (old-style)".
+fn format_x3f_compression(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> TagValue {
+    if field_type == 3 && value_count >= 1 && bytes.len() >= 2 {
+        let value = read_tiff_u16(bytes, byte_order).unwrap_or(0);
+        if value == 6 {
+            return TagValue::new_string("JPEG (old-style)".to_string());
+        }
+    }
+    // Fall back to the standard simple tag value for other values.
+    raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order)
+}
+
+// ===== Fujifilm RAF Format Parsing =====
 
 /// Parse Fujifilm RAF format
 ///
