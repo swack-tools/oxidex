@@ -2176,6 +2176,80 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
         }
     }
 
+    // For JPEG image sections (type 2/3), extract the standard EXIF tags that
+    // ExifTool reports from the embedded JPEG preview (ColorSpace,
+    // ComponentsConfiguration, CustomRendered, CreateDate, DateTimeOriginal,
+    // Compression, etc.).  We parse the TIFF inside the APP1 segment ourselves
+    // so we can be selective and avoid pulling in thumbnail pointers,
+    // InteropOffset, or composite tags that ExifTool does not emit for X3F.
+    if image_type == 2 || image_type == 3 {
+        if data.len() > 28 + 2 && &data[28..30] == b"\xff\xd8" {
+            let jpeg_data = &data[28..];
+            if let Ok(Some(tiff_data)) = find_jpeg_exif_tiff(jpeg_data) {
+                if let Ok(byte_order) = detect_byte_order(tiff_data) {
+                    if tiff_data.len() >= 8 {
+                        let ifd0_offset = read_u32(&tiff_data[4..8], byte_order) as u64;
+                        let reader = SliceReader::new(tiff_data);
+                        if let Ok(ifd0_tags) = parse_ifd(&reader, ifd0_offset, byte_order) {
+                            let mut exif_ifd_offset = None;
+                            for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
+                                let bytes = raw_bytes.as_ref();
+                                if *tag_id == 0x8769 && bytes.len() >= 4 {
+                                    exif_ifd_offset = Some(read_u32(bytes, byte_order) as u64);
+                                    continue;
+                                }
+                                // Compression (0x0103) – ExifTool reports "JPEG (old-style)"
+                                if *tag_id == 0x0103
+                                    && !metadata.contains_key("EXIF:Compression")
+                                {
+                                    let comp_val =
+                                        read_tiff_u16(bytes, byte_order).unwrap_or(0);
+                                    let comp_str = match comp_val {
+                                        1 => "Uncompressed",
+                                        6 => "JPEG (old-style)",
+                                        _ => "unknown",
+                                    };
+                                    metadata.insert(
+                                        "EXIF:Compression".to_string(),
+                                        TagValue::new_string(comp_str.to_string()),
+                                    );
+                                }
+                            }
+                            if let Some(offset) = exif_ifd_offset {
+                                if let Ok(exif_tags) = parse_ifd(&reader, offset, byte_order) {
+                                    for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                                        let bytes = raw_bytes.as_ref();
+                                        let (tag_name, opt_display) = match *tag_id {
+                                            0x9003 => ("EXIF:DateTimeOriginal", None),
+                                            0x9004 => ("EXIF:CreateDate", None),
+                                            0x9101 => ("EXIF:ComponentsConfiguration",
+                                                format_exif_display_value(*tag_id, bytes, *field_type, *value_count, byte_order)),
+                                            0xA001 => ("EXIF:ColorSpace",
+                                                format_exif_display_value(*tag_id, bytes, *field_type, *value_count, byte_order)),
+                                            0xA401 => ("EXIF:CustomRendered",
+                                                format_exif_display_value(*tag_id, bytes, *field_type, *value_count, byte_order)),
+                                            _ => continue,
+                                        };
+                                        if metadata.contains_key(tag_name) {
+                                            continue;
+                                        }
+                                        let value = if let Some(display) = opt_display {
+                                            TagValue::new_string(display)
+                                        } else {
+                                            raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
+                                        };
+                                        metadata.insert(tag_name.to_string(), value);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     // For RAW type (1), look for embedded TIFF/EXIF data
     // TIFF can be embedded at various offsets, so we search for TIFF headers
     if image_type == 1 {
