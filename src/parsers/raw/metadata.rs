@@ -663,6 +663,11 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
             tag_id,
             0x9101 // ComponentsConfiguration
                 | 0x9102 // CompressedBitsPerPixel
+                | 0xA405 // FocalLengthIn35mmFormat
+                | 0xA407 // GainControl
+                | 0xA411 // HighISOMultiplierRed
+                | 0xA412 // HighISOMultiplierGreen
+                | 0xA413 // HighISOMultiplierBlue
                 | 0xA000 // FlashpixVersion
                 | 0xA001 // ColorSpace
                 | 0xA002 // ExifImageWidth
@@ -875,6 +880,20 @@ fn format_exif_display_value(
         0xA001 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
             1 => Some("sRGB".to_string()),
             0xffff => Some("Uncalibrated".to_string()),
+            _ => None,
+        },
+        // FocalLengthIn35mmFormat: SHORT[1] -> "24 mm".
+        0xA405 if field_type == 3 && value_count >= 1 => {
+            let value = read_tiff_u16(bytes, byte_order)?;
+            Some(format!("{} mm", value))
+        }
+        // GainControl: SHORT[1].
+        0xA407 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("None".to_string()),
+            1 => Some("Low gain up".to_string()),
+            2 => Some("High gain up".to_string()),
+            3 => Some("Low gain down".to_string()),
+            4 => Some("High gain down".to_string()),
             _ => None,
         },
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
