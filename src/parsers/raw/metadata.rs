@@ -619,12 +619,18 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             let tag_name = lookup_raw_tag_name(tag_id, sub_ifd_name, format);
                             let bytes = raw_bytes.as_ref();
                             let tag_value = if format == RawFormat::AdobeDNG {
-                                format_dng_display_value(
-                                    tag_id,
-                                    bytes,
-                                    field_type,
-                                    value_count,
-                                    byte_order,
+                                format_exif_display_value(
+                                    tag_id, bytes, field_type, value_count, byte_order,
+                                )
+                                .or_else(|| {
+                                    format_dng_display_value(
+                                        tag_id,
+                                        bytes,
+                                        field_type,
+                                        value_count,
+                                        byte_order,
+                                    )
+                                }
                                 )
                                 .or_else(|| {
                                 format_dng_integer_array(
@@ -1600,6 +1606,46 @@ fn extract_dng_tags(metadata: &mut MetadataMap) {
             );
             metadata.insert(
                 "EXIF:JpgFromRaw".to_string(),
+                TagValue::new_string(format!(
+                    "(Binary data {} bytes, use -b option to extract)",
+                    length
+                )),
+            );
+            break;
+        }
+    }
+
+    // --- ThumbnailTIFF ---
+    // DNG files may contain an uncompressed TIFF thumbnail in IFD0 or IFD1
+    // (Compression == 1, with StripByteCounts). ExifTool reports this as
+    // EXIF:ThumbnailTIFF with a binary-placeholder string.
+    fn try_extract_tiff_thumbnail(
+        metadata: &MetadataMap,
+        ifd_name: &str,
+    ) -> Option<i64> {
+        let compression_key = lookup_tag_name(0x0103, ifd_name);
+        let strip_byte_counts_key = lookup_tag_name(0x0117, ifd_name);
+
+        // If compression is explicitly JPEG (6), this IFD holds a JPEG
+        // preview rather than a TIFF thumbnail.
+        if let Some(compression) = metadata.get(&compression_key) {
+            if *compression == TagValue::Integer(6) {
+                return None;
+            }
+        }
+        // No compression tag defaults to 1 (uncompressed), so proceed.
+
+        metadata
+            .get(&strip_byte_counts_key)
+            .and_then(|v| if let TagValue::Integer(i) = v { Some(*i) } else { None })
+            .filter(|&count| count > 0)
+    }
+
+    let tiff_ifds = ["IFD0", "IFD1"];
+    for ifd_name in &tiff_ifds {
+        if let Some(length) = try_extract_tiff_thumbnail(metadata, ifd_name) {
+            metadata.insert(
+                "EXIF:ThumbnailTIFF".to_string(),
                 TagValue::new_string(format!(
                     "(Binary data {} bytes, use -b option to extract)",
                     length
