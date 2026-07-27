@@ -966,16 +966,25 @@ fn format_exif_display_value(
             _ => None,
         },
         // FileSource: UNDEFINED[1] (Exif.pm 0x920A).
-        0x920A if field_type == 7 && value_count >= 1 => {
+        0xA300 if field_type == 7 && value_count >= 1 => {
+            // Sigma writes this tag with count=4: check for the 4-byte value
+            if value_count >= 4 && bytes.len() >= 4 {
+                if bytes[0] == 3 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0 {
+                    return Some("Sigma Digital Camera".to_string());
+                }
+            }
             let val = bytes.first()?;
             Some(match val {
-                0 => "Other".to_string(),
-                1 => "Scanner of Transparency".to_string(),
-                2 => "Scanner of Reflection".to_string(),
+                1 => "Film Scanner".to_string(),
+                2 => "Reflection Print Scanner".to_string(),
                 3 => "Digital Camera".to_string(),
                 _ => return None,
             })
         },
+        // ExposureTime: RATIONAL (Exif.pm 0x829A).
+        0x829A if field_type == 5 && value_count >= 1 => format_exposure_time(bytes, byte_order),
+        // FNumber: RATIONAL (Exif.pm 0x829D).
+        0x829D if field_type == 5 && value_count >= 1 => format_fnumber(bytes, byte_order),
         // Flash: SHORT[1] (Exif.pm 0x9209).
         0x9209 if field_type == 3 && value_count >= 1 => {
             let val = read_tiff_u16(bytes, byte_order)?;
@@ -990,6 +999,38 @@ fn format_exif_display_value(
     }
 }
 
+/// Format an ExposureTime RATIONAL as e.g. "1/10" or "2.5".
+fn format_exposure_time(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+    let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+    if denominator == 0 {
+        return None;
+    }
+    if numerator >= denominator && numerator % denominator == 0 {
+        return Some((numerator / denominator).to_string());
+    }
+    let g = gcd(numerator, denominator);
+    let num = numerator / g;
+    let den = denominator / g;
+    Some(format!("{}/{}", num, den))
+}
+
+/// Format an FNumber RATIONAL as e.g. "2.8".
+fn format_fnumber(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+    let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+    if denominator == 0 {
+        return None;
+    }
+    let val = numerator as f64 / denominator as f64;
+    Some(format!("{:.1}", val))
+}
+
+/// Greatest common divisor of two u32 values.
+fn gcd(mut a: u32, mut b: u32) -> u32 {
+    while b != 0 { let t = b; b = a % b; a = t; }
+    a
+}
 /// Format a RATIONAL pair whose value_count >= 1.
 fn format_rational_as_string(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
     let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
@@ -2260,7 +2301,9 @@ fn extract_x3f_preview_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) {
                     0xA001 => "ExifIFD:ColorSpace",
                     0xA401 => "ExifIFD:CustomRendered",
                     0x8822 => "EXIF:ExposureProgram",
-                    0x920A => "EXIF:FileSource",
+                    0xA300 => "EXIF:FileSource",
+                    0x829A => "EXIF:ExposureTime",
+                    0x829D => "EXIF:FNumber",
                     0x9209 => "EXIF:Flash",
                     _ => continue,
                 };
