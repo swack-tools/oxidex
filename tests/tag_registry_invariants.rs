@@ -14,9 +14,13 @@
 //! Reading every element with an `id` attribute as a tag turns those `<key>`
 //! rows into sibling *tag* entries, which is how the registry came to hold
 //! 16,005 of them — ids restarting at `0x0001` mid-table because they are
-//! PrintConv keys, not tag ids. Those entries reached real output: a CR2
-//! sweep aborted on `EXIF:Higher resolution image exists`, which is
-//! OPIProxy's PrintConv value for 1.
+//! PrintConv keys, not tag ids.
+//!
+//! They did not reach output, but only because `src/tag_db/mod.rs` grew a
+//! hand-maintained blocklist (`is_valid_tag_name`) that filters names like
+//! `Manual` and `Portrait` back out at index-build time. These tests exist so
+//! the data stays correct at the source rather than being suppressed downstream
+//! by a list that has to keep growing.
 //!
 //! Display strings belong in the enum decoders that already own them (see
 //! `1 => "Reduced-resolution image"` in src/parsers/tiff/tiff_enums.rs), not
@@ -37,7 +41,8 @@ struct Entry {
 }
 
 fn domain_yaml(domain: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("oxidex-tags-{domain}/src/{domain}_tags.yaml"))
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("oxidex-tags-{domain}/src/{domain}_tags.yaml"))
 }
 
 /// Deliberately a line scanner rather than `serde_yaml` + the crate's own
@@ -70,7 +75,11 @@ fn entries(domain: &str) -> Vec<Entry> {
 }
 
 fn exiftool_listx() -> Option<String> {
-    let out = Command::new("exiftool").arg("-f").arg("-listx").output().ok()?;
+    let out = Command::new("exiftool")
+        .arg("-f")
+        .arg("-listx")
+        .output()
+        .ok()?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
