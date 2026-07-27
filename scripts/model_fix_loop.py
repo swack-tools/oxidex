@@ -381,6 +381,15 @@ def assemble_prompt_sections(sections, budgets, max_tokens):
     parser_files, with parser_files's floor set to parser_floor_tokens
     (never squeezed below that no matter how much overflow remains).
 
+    The two arguments are INDEPENDENT axes and this function keeps them
+    that way: render order comes only from `sections`, shrink order only
+    from `budgets`. build_prompt relies on that -- since 2026-07-26 its
+    render order is chosen to maximise the byte-identical prefix a
+    provider's prompt cache can reuse (PROMPT_SECTION_ORDER), which is a
+    completely different ranking from what a fixer can afford to lose
+    under budget pressure (PROMPT_SHRINK_PRIORITY). Do not "simplify"
+    this back into deriving one from the other.
+
     Algorithm: if the assembled total already fits max_tokens, return it
     unchanged (no section is ever shrunk when there's no pressure to).
     Otherwise walk `budgets` in order; each section not yet at its own
@@ -1992,14 +2001,23 @@ How oxidex is structured, for orientation (see the actual parser file(s) below f
 """.strip()
 
 
-def build_format_overview_block(lib_dir, perl_reference_block):
-    """Combine ExifTool's own NOTES documentation for this gap's relevant
-    Perl module(s) -- extracted from whichever files build_perl_reference_block
-    already found tags in, so no redundant module discovery -- with a
-    short, always-included primer on how oxidex's own parsers are
-    organized. The per-tag Perl snippets and the full parser file
-    contents (see build_prompt's other sections) already show the
-    specifics; this section is deliberately just orientation."""
+def build_perl_notes_block(lib_dir, perl_reference_block):
+    """ExifTool's own NOTES documentation for this gap's relevant Perl
+    module(s) -- extracted from whichever files build_perl_reference_block
+    already found tags in, so no redundant module discovery. "" when
+    nothing is found.
+
+    Split out of build_format_overview_block (2026-07-26) purely for
+    prompt-cache reasons: the primer half of that block is byte-identical
+    for every worker/format/tag forever, while this half tracks whichever
+    Perl module the CURRENT tag lives in and so varies within a format.
+    Measured over 216 renders of real gaps across 22 formats: the primer
+    had 1 distinct value across all of them, these NOTES had 19 (and
+    varied tag-to-tag within 6 of the 22 formats). Keeping them in one
+    section forced the invariant primer to sit behind a per-tag string,
+    which ends the cacheable prefix early -- build_prompt now emits them
+    in different stability tiers. build_format_overview_block below keeps
+    its original combined contract for every other caller."""
     notes_blocks = []
     if lib_dir is not None:
         module_table_pairs = sorted(set(PERL_MODULE_HEADER_RE.findall(perl_reference_block)))
@@ -2009,14 +2027,22 @@ def build_format_overview_block(lib_dir, perl_reference_block):
                 label = f"{name}, table {table_name}" if table_name else name
                 notes_blocks.append(f"--- {label} ---\n{notes}")
 
-    notes_section = ""
-    if notes_blocks:
-        notes_section = (
-            "\n\nExifTool's own documentation for this format (from the Perl source's NOTES):\n\n"
-            + "\n\n".join(notes_blocks)
-        )
+    if not notes_blocks:
+        return ""
+    return (
+        "\n\nExifTool's own documentation for this format (from the Perl source's NOTES):\n\n"
+        + "\n\n".join(notes_blocks)
+    )
 
-    return f"\n\n{ARCHITECTURE_PRIMER}{notes_section}"
+
+def build_format_overview_block(lib_dir, perl_reference_block):
+    """Combine ExifTool's own NOTES documentation for this gap's relevant
+    Perl module(s) (see build_perl_notes_block) with a short,
+    always-included primer on how oxidex's own parsers are organized. The
+    per-tag Perl snippets and the full parser file contents (see
+    build_prompt's other sections) already show the specifics; this
+    section is deliberately just orientation."""
+    return f"\n\n{ARCHITECTURE_PRIMER}{build_perl_notes_block(lib_dir, perl_reference_block)}"
 
 
 RUST_ARCHITECTURE_CONSTRAINTS = """
@@ -2278,6 +2304,16 @@ def build_exact_sample_block(gap, samples_dir):
     exact file and its size and point at the REQUEST: protocol, rather
     than leaving it to be found (or missed) among samples_block's
     generic per-format list.
+
+    The lead-in says "the tag targeted below", not "this exact tag":
+    build_prompt renders this section ABOVE the gap list (2026-07-26),
+    because different tags of one format very often come from the SAME
+    sample file -- measured over 216 renders of real gaps, this block had
+    only 1.86 distinct values per format against the gap list's 4.73, so
+    putting the hex dump in front of the gap list keeps a mean 1.2 KB of
+    prefix cacheable that the old order re-billed every call (81.6% ->
+    87.6% of the prompt cacheable in the offline harness). The wording
+    has to point forwards for that to read correctly.
     """
     all_entries = gap["missing_tags"] + gap["value_differences"]
     if len(all_entries) != 1:
@@ -2299,11 +2335,11 @@ def build_exact_sample_block(gap, samples_dir):
     if size <= DEFAULT_INLINE_SAMPLE_MAX_BYTES:
         data = path.read_bytes()
         return (
-            f"\n\nReal sample file containing this exact tag ({shown_path}, {size} bytes) "
+            f"\n\nReal sample file containing the tag targeted below ({shown_path}, {size} bytes) "
             f"-- full hex dump:\n{hex_dump(data, max_bytes=DEFAULT_INLINE_SAMPLE_MAX_BYTES)}"
         )
     return (
-        f"\n\nReal sample file containing this exact tag: {shown_path} ({size} bytes, too "
+        f"\n\nReal sample file containing the tag targeted below: {shown_path} ({size} bytes, too "
         f"large to inline here). Respond with \"REQUEST: {shown_path}\" instead of a diff if "
         "you need to see its raw bytes."
     )
@@ -2927,6 +2963,105 @@ def compose_learning_block(parts, budget_tokens):
     return "".join(out)
 
 
+# --- prompt-cache section ordering (2026-07-26) -----------------------------
+#
+# The fleet's worker pool now leads with deepseek/deepseek-v4-pro on
+# OpenRouter: input $0.435/M, output $0.87/M, CACHE READ $0.0036/M -- a
+# 120x discount on any leading run of tokens that is byte-identical to a
+# recent request. DeepSeek's cache is AUTOMATIC PREFIX caching: there is
+# no cache_control to place (apply_prompt_cache_markers' Anthropic-style
+# breakpoints are a no-op here, which is why config ships
+# prompt_cache = "auto"), so the ONLY lever is the order the sections are
+# rendered in. One varying byte ends the prefix and everything after it is
+# re-billed at 120x.
+#
+# The order below is derived from measurement, not intuition: 216 renders
+# of real gap dicts reconstructed from the fleet's own saved fixer
+# requests (~/.oxidex/logs/model-fix-requests), covering 22 formats x 6
+# gaps x 2 worker ids, with the live samples dir / ExifTool Perl lib /
+# knowledge home wired in. Per section: distinct rendered values across
+# ALL renders, mean distinct values WITHIN one format, and whether it
+# changes when only the worker id changes:
+#
+#   section        mean chars   distinct/all   distinct/format   per-worker
+#   constraints          1785              1              1.00          no
+#   pitfalls             5103              1              1.00          no
+#   manifest             1917              1              1.00          no
+#   primer               1363              1              1.00          no
+#   format line            86             22              1.00          no
+#   samples               174             20              1.00          no
+#   parser_files        28707             24              1.64          no
+#   perl NOTES           1363             19              1.64          no
+#   learning             3223             40              2.00         YES
+#   missing+diffs         ~90            104              4.73          no
+#   exact_sample         2337             25              1.86          no
+#   perl_block            791             83              4.27          no
+#   tail                  331              1              1.00          no
+#
+# The first four rows were one section ("intro") together with the format
+# line and the missing-tag list, which is why the old order lost the
+# prefix at ~1.8 KB (cross-format) / ~7 KB (same format) out of a ~17.5 KB
+# prompt: the single most volatile string in the whole prompt sat at byte
+# 1871, in front of the 28 KB of parser source. Splitting it is the
+# single highest-value change here.
+#
+# Two placements are deliberate and worth not "fixing" later:
+#   * learning ABOVE the gap list. It reads as per-worker orientation, and
+#     the measurement says it is genuinely more stable than the gap list:
+#     for a fixed worker it was identical across all 6 tags of a format
+#     (2.00 distinct/format == exactly the 2 worker ids probed), while the
+#     gap list changed on every tag (4.73 distinct/format). Workers
+#     process tags back to back, so this is the common case.
+#   * exact_sample ABOVE the gap list, which is where it did NOT used to
+#     be. Different tags of one format usually come from the same sample
+#     file (1.86 distinct values per format, against the gap list's 4.73),
+#     so it belongs in the more stable tier -- worth 81.6% -> 87.6% in the
+#     offline harness. Its lead-in was reworded from "this exact tag" to
+#     "the tag targeted below" so the reference still resolves.
+#   * perl_block / neighbor BELOW the gap list, where they already were.
+#     Same argument would move perl_block up, but it is worth only ~0.2
+#     points (791 mean chars, 4.27 distinct/format -- it tracks the tag
+#     almost exactly) and its lead-in text is shared with the critique and
+#     foundation-job prompts, where the tags ARE listed above it. Not
+#     worth rewording a string three prompts depend on.
+#
+# Measured end to end over the same 22-format corpus with max_prompt_
+# tokens=4096: 40.1% -> 87.6% of a prompt cacheable against another prompt
+# for the same format, and 1864 -> 8133 bytes cacheable against a prompt
+# for a DIFFERENT format (i.e. across the whole fleet, not just one
+# worker) -- see the ordering-variant sweep recorded in the commit body.
+PROMPT_SECTION_ORDER = (
+    "invariants",     # tier 0: identical for every worker/format/tag
+    "format_intro",   # tier 1: per format
+    "samples",        # tier 1: per format
+    "parser_files",   # tier 2: per format, occasionally per tag
+    "overview",       # tier 2: per format, occasionally per tag
+    "learning",       # tier 3: per worker
+    "exact_sample",   # tier 3: per sample file, shared across sibling tags
+    "gaps",           # tier 4: per tag -- the volatile payload
+    "perl_block",     # tier 5: per tag, must follow the gap list
+    "neighbor",       # tier 5: per tag, must follow the gap list
+    "attempts",       # tier 6: append-only, grows every failed round
+    "tail",           # invariant, but its whole job is to be last
+)
+
+#: Which sections assemble_prompt_sections may shrink when a prompt
+#: overflows max_prompt_tokens, in the order it sheds them: least
+#: essential first. This is a SEPARATE axis from PROMPT_SECTION_ORDER
+#: above and must stay that way -- render order is chosen for cache
+#: prefix length, shrink order for what the fixer can most afford to
+#: lose. They used to be the same tuple by accident (one `sections` list
+#: whose order fed both), so reordering for cache would silently have
+#: started shedding parser source before attempt history.
+#: assemble_prompt_sections reads render order from its `sections`
+#: argument and shrink order from its `budgets` argument, and never
+#: conflates them; test_shrink_priority_is_independent_of_render_order
+#: pins that.
+PROMPT_SHRINK_PRIORITY = (
+    "attempts", "samples", "neighbor", "perl_block", "parser_files",
+)
+
+
 def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                   max_file_bytes=DEFAULT_MAX_PROMPT_FILE_BYTES, samples_dir=None,
                   max_samples_listed=DEFAULT_MAX_SAMPLE_FILES_LISTED, previous_attempts=None,
@@ -3014,16 +3149,21 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     itself stays free of subprocess calls) inserted after the Perl
     reference in the stable per-tag section; "" (the default) omits it.
 
-    Sections are ordered static-first (constraints/pitfalls/manifest),
-    then per-tag content, then volatile history, so the byte-stable
-    prefix is maximal for provider prompt caching. Section 6: overflow
-    beyond max_prompt_tokens is shed via graduated per-section truncation
-    (see assemble_prompt_sections) rather than plain head-keeping --
-    attempts, then samples, then neighbor precedent, then perl_block,
-    then the parser-files section down to (never below)
-    parser_floor_tokens, in that priority order; the learning block is
-    never part of that squeeze (it gets its own flat, never-emptied
-    budget instead).
+    Sections render in PROMPT_SECTION_ORDER: most-stable-first, so the
+    byte-identical leading run a provider's automatic prefix cache can
+    reuse is as long as possible (see that constant for the measured
+    per-section stability the order is derived from, and for why
+    `learning` sits above the gap list while the per-tag reference
+    blocks sit below it).
+
+    Section 6: overflow beyond max_prompt_tokens is shed via graduated
+    per-section truncation (see assemble_prompt_sections) rather than
+    plain head-keeping -- attempts, then samples, then neighbor
+    precedent, then perl_block, then the parser-files section down to
+    (never below) parser_floor_tokens, in that priority order
+    (PROMPT_SHRINK_PRIORITY, which is deliberately independent of the
+    render order); the learning block is never part of that squeeze (it
+    gets its own flat, never-emptied budget instead).
     """
     missing_shown = gap["missing_tags"][:max_tags]
     missing_omitted = len(gap["missing_tags"]) - len(missing_shown)
@@ -3077,7 +3217,10 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
 
     perl_block = build_perl_reference_block(gap, perl_lib_dir)
 
-    overview_block = build_format_overview_block(perl_lib_dir, perl_block)
+    # Split, not build_format_overview_block: the invariant primer half
+    # goes in the tier-0 section and only these per-tag NOTES stay down
+    # here. See build_perl_notes_block and PROMPT_SECTION_ORDER.
+    perl_notes_block = build_perl_notes_block(perl_lib_dir, perl_block)
 
     # Spec K2: fresh read every call, falls back to the KNOWN_PITFALLS
     # constant when knowledge_home is omitted (hermetic by default -- see
@@ -3131,10 +3274,10 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
             worker_label, gap["format"],
         ))
 
-    # Spec section 6: the learning block (the pitfalls excerpt sits in the
-    # static prefix above for cache-prefix reasons -- see the docstring's
-    # "Section order otherwise unchanged" note; only the remaining pieces
-    # share this reserved, never-emptied budget) is capped flat,
+    # Spec section 6: the learning block (the pitfalls excerpt is NOT part
+    # of it -- that sits in the tier-0 "invariants" section for
+    # cache-prefix reasons, see PROMPT_SECTION_ORDER; only the remaining
+    # pieces share this reserved, never-emptied budget) is capped flat,
     # independent of whatever else is squeezing the rest of the prompt,
     # and shed from the tail of LEARNING_SECTION_ORDER when it overflows.
     learning_text = compose_learning_block({
@@ -3148,42 +3291,72 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     attempts_block = format_previous_attempts(previous_attempts)
 
     manifest = build_reply_shape_manifest(max_prompt_tokens)
-    sections = [
-        ("intro", (
+    texts = {
+        # Tier 0 -- byte-identical for every worker, every format, every
+        # tag, forever. Everything downstream of a single varying byte is
+        # re-billed at full input price, so this is the whole prefix's
+        # foundation and nothing interpolated may leak into it.
+        "invariants": (
             f"{RUST_ARCHITECTURE_CONSTRAINTS}\n\n"
-            f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
             f"{pitfalls_text}\n\n"
             f"{manifest}\n\n"
-            f"Missing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
-        )),
-        ("gaps", f"Value differences (both extract it, values disagree):\n{diffs}"),
-        ("overview", f"{overview_block}\n\nLikely relevant source files:\n"),
-        ("parser_files", files),
-        ("samples", samples_block),
-        ("exact_sample", exact_sample_block),
-        ("perl_block", perl_block),
-        ("neighbor", neighbor_precedent_block),
-        ("learning", learning_text),
-        ("attempts", attempts_block),
-        ("tail", (
+            f"{ARCHITECTURE_PRIMER}"
+        ),
+        # Tier 1 -- per FORMAT, identical for every tag in it. No trailing
+        # newline: every section below opens with its own "\n\n", and a
+        # section that renders empty must not leave a ragged blank run.
+        "format_intro": (
+            "\n\nYou are fixing ExifTool tag-coverage gaps in the oxidex Rust "
+            f"codebase, format \"{gap['format']}\"."
+        ),
+        "samples": samples_block,
+        # Tier 2 -- per format, but a tag in an unusual module/subtree can
+        # pull in a different file set or a different Perl table's NOTES.
+        # The "Likely relevant source files:" label rides on parser_files
+        # (not on the NOTES above it) so the two stay adjacent no matter
+        # which is empty, and so a floor-clamped parser_files still keeps
+        # its introduction -- see PROMPT_SECTION_ORDER.
+        "parser_files": f"\n\nLikely relevant source files:\n{files}",
+        "overview": perl_notes_block,
+        # Tier 3 -- per worker: same ledger for every tag this worker
+        # takes, so it is MORE stable than the gap list below it.
+        "learning": learning_text,
+        # Tier 3 -- per sample FILE, which sibling tags share; its lead-in
+        # points forwards at the gap list rather than back at it.
+        "exact_sample": exact_sample_block,
+        # Tier 4 -- the volatile payload: what actually changes every call.
+        "gaps": (
+            f"\n\nMissing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
+            f"Value differences (both extract it, values disagree):\n{diffs}"
+        ),
+        # Tier 5 -- per tag, and referring back to the gap list above
+        # ("these tags", the neighbouring-tag precedent).
+        "perl_block": perl_block,
+        "neighbor": neighbor_precedent_block,
+        # Tier 6 -- append-only, grows with every failed round.
+        "attempts": attempts_block,
+        "tail": (
             "\n\nFor value differences, only fix genuine bugs, not benign formatting differences. "
             "If more gaps exist than are shown above, that's expected -- fix what's shown here; "
             "future rounds will address the rest.\n\n"
             f"{TERMINAL_REMINDER}"
-        )),
-    ]
-    # Section 6 shrink-priority order: attempts, then samples, then
-    # neighbor precedent, then perl_block, then parser files down to
-    # (never below) parser_floor_tokens. "learning" is deliberately
-    # absent -- its own flat cap above already gives it the "reserved,
-    # never dropped entirely" guarantee independent of this squeeze.
-    budgets = {
+        ),
+    }
+    sections = [(name, texts[name]) for name in PROMPT_SECTION_ORDER]
+    # Section 6 shrink-priority order, deliberately NOT the render order
+    # above: attempts, then samples, then neighbor precedent, then
+    # perl_block, then parser files down to (never below)
+    # parser_floor_tokens. "learning" is deliberately absent -- its own
+    # flat cap above already gives it the "reserved, never dropped
+    # entirely" guarantee independent of this squeeze.
+    floors = {
         "attempts": 0,
         "samples": 0,
         "neighbor": 0,
         "perl_block": 0,
         "parser_files": parser_floor_tokens,
     }
+    budgets = {name: floors[name] for name in PROMPT_SHRINK_PRIORITY}
     return assemble_prompt_sections(sections, budgets, max_prompt_tokens)
 
 
