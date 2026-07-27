@@ -14,6 +14,8 @@ const ISO_SIGNATURE: &[u8] = b"CD001";
 const ISO_SIGNATURE_OFFSET: u64 = 32769;
 /// Primary Volume Descriptor starts at sector 16 (offset 32768)
 const PVD_OFFSET: u64 = 32768;
+/// Sector size (ISO 9660)
+const SECTOR_SIZE: u64 = 2048;
 
 /// ISO parser for extracting metadata from ISO disc images
 pub struct ISOParser;
@@ -91,6 +93,90 @@ impl ISOParser {
         Ok(())
     }
 
+    /// Extracts BootSystem from a Boot Record descriptor at given sector offset.
+    /// Returns Ok(true) if Boot Record found and data extracted, Ok(false) if not.
+    fn extract_boot_system(
+        reader: &dyn FileReader,
+        metadata: &mut MetadataMap,
+        sector_offset: u64,
+    ) -> Result<bool> {
+        // Verify signature exists at this sector
+        if reader.size() < sector_offset + (ISO_SIGNATURE_OFFSET - PVD_OFFSET) + 5 {
+            return Ok(false);
+        }
+        let sig_offset = sector_offset + (ISO_SIGNATURE_OFFSET - PVD_OFFSET);
+        let signature = reader.read(sig_offset, 5)?;
+        if signature != ISO_SIGNATURE {
+            return Ok(false);
+        }
+        // Check descriptor type == 0 (Boot Record)
+        let desc_type = reader.read(sector_offset, 1)?;
+        if desc_type[0] != 0 {
+            return Ok(false);
+        }
+        // Read boot system identifier at offset 7 (string[32])
+        let data = reader.read(sector_offset + 7, 32)?;
+        let s = String::from_utf8_lossy(&data)
+            .trim_end_matches(|c: char| c.is_whitespace() || c == '\0')
+            .to_string();
+        if !s.is_empty() {
+            metadata.insert("BootSystem".to_string(), TagValue::String(s));
+        }
+        Ok(true)
+    }
+
+    /// Parses the 7-byte directory date/time and returns formatted string "YYYY:MM:DD HH:MM:SS+HH:MM"
+    fn parse_dir_date(reader: &dyn FileReader, offset: u64) -> Result<Option<String>> {
+        if reader.size() < offset + 7 {
+            return Ok(None);
+        }
+        let data = reader.read(offset, 7)?;
+        // All zeros means no date set
+        if data.iter().all(|&b| b == 0) {
+            return Ok(None);
+        }
+        let year_since_1900 = data[0] as u32;
+        let month = data[1];
+        let day = data[2];
+        let hour = data[3];
+        let minute = data[4];
+        let second = data[5];
+        let tz_raw = data[6] as i8; // signed, 15-minute intervals
+        // Validate ranges (basic sanity)
+        if month == 0 || month > 12 || day == 0 || day > 31 || hour > 23 || minute > 59 || second > 59 {
+            return Ok(None);
+        }
+        let year = 1900 + year_since_1900;
+        // Calculate timezone offset
+        let tz_minutes = tz_raw as i32 * 15;
+        let tz_hours = tz_minutes / 60;
+        let tz_mins = (tz_minutes % 60).abs();
+        let tz_sign = if tz_minutes < 0 { "-" } else { "+" };
+        let tz_str = format!("{}{:02}:{:02}", tz_sign, tz_hours.abs(), tz_mins);
+        Ok(Some(format!(
+            "{:04}:{:02}:{:02} {:02}:{:02}:{:02}{}",
+            year, month, day, hour, minute, second, tz_str
+        )))
+    }
+
+    /// Inserts RootDirectoryCreateDate from the root directory record in PVD
+    fn insert_root_dir_date(
+        reader: &dyn FileReader,
+        metadata: &mut MetadataMap,
+        pvd_offset: u64,
+    ) -> Result<()> {
+        // Root directory record starts at offset 156 in PVD
+        // Date field is at offset 18 within the directory record
+        let date_offset = pvd_offset + 156 + 18;
+        if let Some(date_str) = Self::parse_dir_date(reader, date_offset)? {
+            metadata.insert(
+                "RootDirectoryCreateDate".to_string(),
+                TagValue::String(date_str),
+            );
+        }
+        Ok(())
+    }
+
     /// Extracts metadata from Primary Volume Descriptor
     fn extract_pvd_metadata(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
         // String fields
@@ -100,6 +186,10 @@ impl ISOParser {
         Self::insert_pvd_string(reader, metadata, "PublisherID", PVD_OFFSET + 318, 128)?;
         Self::insert_pvd_string(reader, metadata, "DataPreparerID", PVD_OFFSET + 446, 128)?;
         Self::insert_pvd_string(reader, metadata, "ApplicationID", PVD_OFFSET + 574, 128)?;
+        Self::insert_pvd_string(reader, metadata, "Publisher", PVD_OFFSET + 318, 128)?;
+        Self::insert_pvd_string(reader, metadata, "DataPreparer", PVD_OFFSET + 446, 128)?;
+        Self::insert_pvd_string(reader, metadata, "Software", PVD_OFFSET + 574, 128)?;
+        Self::insert_pvd_string(reader, metadata, "CopyrightFileName", PVD_OFFSET + 702, 38)?;
 
         // Volume size calculation
         let volume_sectors = Self::read_u32_both(reader, PVD_OFFSET + 80)?;
@@ -118,6 +208,9 @@ impl ISOParser {
         Self::insert_iso_date(reader, metadata, "ModificationDate", PVD_OFFSET + 830)?;
         Self::insert_iso_date(reader, metadata, "ExpirationDate", PVD_OFFSET + 847)?;
         Self::insert_iso_date(reader, metadata, "EffectiveDate", PVD_OFFSET + 864)?;
+
+        // Root directory date
+        Self::insert_root_dir_date(reader, metadata, PVD_OFFSET)?;
 
         Ok(())
     }
@@ -147,6 +240,26 @@ impl FormatParser for ISOParser {
 
         // Extract Primary Volume Descriptor metadata
         Self::extract_pvd_metadata(reader, &mut metadata)?;
+
+        // Look for Boot Record to extract BootSystem
+        // Check first sector (16) for Boot Record
+        if !Self::extract_boot_system(reader, &mut metadata, PVD_OFFSET)? {
+            // If not found at sector 16, try sector 17 (common for El Torito boot+primary pair)
+            let sector17 = PVD_OFFSET + SECTOR_SIZE;
+            if reader.size() > sector17 + 2000 {
+                Self::extract_boot_system(reader, &mut metadata, sector17)?;
+            }
+            // Optionally continue scanning up to a limit (e.g., 64 sectors) to be thorough
+            for i in 2..64 {
+                let offset = PVD_OFFSET + SECTOR_SIZE * i;
+                if reader.size() < offset + 2048 {
+                    break;
+                }
+                if Self::extract_boot_system(reader, &mut metadata, offset)? {
+                    break;
+                }
+            }
+        }
 
         Ok(metadata)
     }
