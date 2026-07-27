@@ -329,6 +329,11 @@ const TAG_COLOR_SPACE: u16 = 0xA001;
 const TAG_COMPONENTS_CONFIGURATION: u16 = 0x9101;
 const TAG_COMPRESSED_BITS_PER_PIXEL: u16 = 0x9102;
 const TAG_COMPRESSION: u16 = 0x0103;
+const TAG_COPYRIGHT: u16 = 0x8298;
+const TAG_CREATE_DATE: u16 = 0x9004;
+const TAG_DATE_TIME_ORIGINAL: u16 = 0x9003;
+const TAG_EXIF_IMAGE_WIDTH: u16 = 0xA002;
+const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
 
 /// Known compression values (IFD0 Compression tag)
 const COMPRESSION_LABELS: &[(u16, &str)] = &[
@@ -427,6 +432,14 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
                 if let Some(v) = read_ascii_value(data, base, byte_order, count) {
                     if !v.is_empty() {
                         let key = crate::tag_db::lookup_tag_name(TIFF_ARTIST_TAG, "IFD0");
+                        metadata.insert(key, crate::core::TagValue::new_string(v));
+                    }
+                }
+            }
+            TAG_COPYRIGHT if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    if !v.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_COPYRIGHT, "IFD0");
                         metadata.insert(key, crate::core::TagValue::new_string(v));
                     }
                 }
@@ -555,6 +568,48 @@ fn parse_exif_ifd(
                     metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                 }
             }
+            TAG_COPYRIGHT if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    if !v.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_COPYRIGHT, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(v));
+                    }
+                }
+            }
+            TAG_CREATE_DATE if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    if !v.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_CREATE_DATE, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(v));
+                    }
+                }
+            }
+            TAG_DATE_TIME_ORIGINAL if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    if !v.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_DATE_TIME_ORIGINAL, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(v));
+                    }
+                }
+            }
+            TAG_EXIF_IMAGE_WIDTH => {
+                let val = match field_type {
+                    3 => i64::from(read_short_value(data, base, byte_order)?),
+                    4 => i64::try_from(read_long_value(data, base, byte_order)?).ok()?,
+                    _ => return None,
+                };
+                let key = crate::tag_db::lookup_tag_name(TAG_EXIF_IMAGE_WIDTH, "ExifIFD");
+                metadata.insert(key, crate::core::TagValue::new_integer(val));
+            }
+            TAG_EXIF_IMAGE_HEIGHT => {
+                let val = match field_type {
+                    3 => i64::from(read_short_value(data, base, byte_order)?),
+                    4 => i64::try_from(read_long_value(data, base, byte_order)?).ok()?,
+                    _ => return None,
+                };
+                let key = crate::tag_db::lookup_tag_name(TAG_EXIF_IMAGE_HEIGHT, "ExifIFD");
+                metadata.insert(key, crate::core::TagValue::new_integer(val));
+            }
             TAG_COMPONENTS_CONFIGURATION if field_type == 7 => {
                 if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
                     let components: Vec<String> = bytes
@@ -634,6 +689,15 @@ fn read_short_value(
 ) -> Option<u16> {
     let val_off = get_entry_value_offset(data, entry_offset, 2, 1, byte_order)?;
     read_embedded_tiff_u16(data, val_off, byte_order)
+}
+
+fn read_long_value(
+    data: &[u8],
+    entry_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<u32> {
+    let val_off = get_entry_value_offset(data, entry_offset, 4, 1, byte_order)?;
+    read_embedded_tiff_u32(data, val_off, byte_order)
 }
 
 fn read_unsigned_rational_value(
