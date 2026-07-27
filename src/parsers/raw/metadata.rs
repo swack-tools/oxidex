@@ -226,6 +226,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut ifd_index = 0;
 
     // CR2 IFD0 thumbnail byte count for PreviewImage/PreviewImageLength
+        let mut cr2_thumbnail_offset: Option<u32> = None;
     let mut cr2_thumbnail_length: Option<u32> = None;
 
     // Add format-specific tag to identify file type
@@ -284,6 +285,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         continue; // Don't add pointer tag to metadata
                     }
 
+                    // CR2 IFD0: capture the StripOffsets value for the
+                    // thumbnail JPEG preview start offset (ExifTool EXIF:PreviewImageStart).
+                    if format == RawFormat::CanonCR2 && ifd_index == 0
+                        && *tag_id == 0x0111 && bytes.len() >= 4
+                    {
+                        cr2_thumbnail_offset = Some(read_u32(bytes, byte_order));
+                    }
                     // CR2 IFD0: capture the StripByteCounts value for the
                     // thumbnail JPEG preview (ExifTool EXIF:PreviewImage).
                     if format == RawFormat::CanonCR2 && ifd_index == 0
@@ -621,6 +629,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         }
         RawFormat::CanonCR2 => {
             // Emit EXIF:PreviewImage / PreviewImageLength from the IFD0
+            if let Some(offset) = cr2_thumbnail_offset {
+                metadata.insert(
+                    "EXIF:PreviewImageStart".to_string(),
+                    TagValue::new_integer(offset as i64),
+                );
+            }
             // thumbnail JPEG byte count (StripByteCounts, 0x0117).
             if let Some(length) = cr2_thumbnail_length {
                 if length > 0 {
@@ -1724,6 +1738,34 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             metadata.insert(tag_name, TagValue::new_string(tag_value));
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // Parse CMT2 box — Canon CR3 stores a second TIFF in this box that
+    // carries ExifIFD tags (LensModel, OffsetTime, RecommendedExposureIndex
+    // and others) that are not present in the CMT1 TIFF.
+    if let Some(tiff) = find_cr3_box(data, b"CMT2") {
+        if let Ok(byte_order) = detect_byte_order(tiff) {
+            let first_ifd_offset = read_u32(&tiff[4..8], byte_order) as u64;
+            let reader = SliceReader::new(tiff);
+            if let Ok(exif_tags) = parse_ifd(&reader, first_ifd_offset, byte_order) {
+                for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                    let bytes = raw_bytes.as_ref();
+                    let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
+                    let tag_value = if let Some(value) = format_exif_display_value(
+                        *tag_id,
+                        bytes,
+                        *field_type,
+                        *value_count,
+                        byte_order,
+                    ) {
+                        TagValue::new_string(value)
+                    } else {
+                        raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
+                    };
+                    metadata.insert(tag_name, tag_value);
                 }
             }
         }
