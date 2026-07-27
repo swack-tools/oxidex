@@ -106,6 +106,12 @@ const KNOWN_TAGS: &[&str] = &[
     "IMgg",
     "IMrb",
     "IMrr",
+    "Protect",
+    "REV",
+    "S0",
+    "STB1",
+    "STB3",
+    "STB4",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -644,6 +650,43 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:ContTake".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Protect diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("Protect") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:Protect".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the REV diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("REV") {
+                metadata.insert("APP12:REV".to_string(), TagValue::String(value.clone()));
+            }
+
+            // ExifTool exposes the S0 diagnostic field in the
+            // APP12 group using its original name (comma-separated hex values).
+            if key.eq_ignore_ascii_case("S0") {
+                metadata.insert("APP12:S0".to_string(), TagValue::String(value.clone()));
+            }
+
+            // ExifTool exposes the Olympus STB1, STB3, STB4 diagnostic
+            // fields in the APP12 group using their original names.
+            let stb_upper = key.to_ascii_uppercase();
+            if matches!(stb_upper.as_str(), "STB1" | "STB3" | "STB4") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert(
+                    format!("APP12:{}", stb_upper),
+                    app12_value,
+                );
             }
 
             // MTR1 is an Olympus Picture Info diagnostic field. ExifTool
