@@ -323,6 +323,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         continue; // Don't add raw MakerNote to metadata, will be parsed separately
                     }
 
+                        // NEF IFD0 holds a small thumbnail; the authoritative
+                        // image tags live in the SubIFD.  Defer them so only
+                        // a single EXIF: entry is emitted.
+                        if matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW) && ifd_index == 0 && matches!(*tag_id, 0x0100 | 0x0101 | 0x0102 | 0x0103 | 0x0106) {
+                            continue;
+                        }
+
                     // Check for Make tag (0x010F) - needed for MakerNote dispatcher
                     if *tag_id == 0x010F && *field_type == 2 {
                         // Extract camera make for MakerNote parsing (ASCII type)
@@ -591,6 +598,21 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         let is_rw2 = format == RawFormat::PanasonicRW2;
+
+                        // NEF files store multiple SubIFDs: a reduced-resolution
+                        // thumbnail (NewSubFileType == 1) and the full-resolution
+                        // RAW image (NewSubFileType == 0).  ExifTool picks the
+                        // latter.  Skip the thumbnail SubIFD so we emit the
+                        // correct dimensions, compression, and CFA-related tags.
+                        if is_nef {
+                            if let Some(thumbnail) = sub_tags.iter().find(|(tag_id, _, _, _)| *tag_id == 0x00FE) {
+                                let bytes = thumbnail.3.as_ref();
+                                if bytes.len() >= 4 && read_u32(bytes, byte_order) == 1 {
+                                    continue; // skip thumbnail SubIFD
+                                }
+                            }
+                        }
+
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
                             // NEF maps SubIFD tags into the EXIF group and
                             // applies format-specific decoding where needed.
