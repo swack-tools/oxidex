@@ -295,15 +295,36 @@ def locate_parser_files(format_name, repo_root=REPO_ROOT):
 def group_gaps_by_format(report, repo_root=REPO_ROOT):
     """Group a ComparisonReport's by_format map into a sorted gap list.
 
-    Returns entries only for formats with at least one missing_in_oxidex or
-    value_differences entry, sorted by combined gap count descending.
+    Returns entries for formats with at least one missing_in_oxidex or
+    value_differences entry, OR at least one duplicate_emissions entry,
+    sorted by combined gap count descending.
+
+    duplicate_emissions keeps a format in the list even at gap_count == 0
+    (2026-07-26). Every publish gate reads duplicates through a per-format
+    entry this function produced -- squad_merge_loop.real_format_match is
+    `next((g for g in group_gaps_by_format(...) if g["format"] == fmt),
+    None)`, and process_commit/run_batch_check then do
+    `(post or {}).get("duplicate_emissions") or []`, as does
+    overlord_sweep.evaluate_post_merge. Dropping a zero-gap format made
+    that `None`, so the gates read `[]` and passed. A format at 100%
+    parity that emits one tag twice under two keys is exactly where the
+    old behavior was worst: there was no gap left to draw anyone's eye,
+    and the double emission -- the thing that made GIF's gap list flip
+    between runs on an unchanged tree -- was silently unreportable.
+
+    These entries carry gap_count 0 with empty missing_tags/
+    value_differences, so they sort last and contribute no work units:
+    model_fix_loop.expand_gaps_to_tags iterates exactly those two lists,
+    so a duplicate-only entry expands to zero tag_gaps and can never
+    dispatch a worker at a format with nothing to fix.
     """
     gaps = []
     for fmt, comp in (report.get("by_format") or {}).items():
         missing = comp.get("missing_in_oxidex") or []
         diffs = comp.get("value_differences") or []
+        duplicates = comp.get("duplicate_emissions") or []
         gap_count = len(missing) + len(diffs)
-        if gap_count == 0:
+        if gap_count == 0 and not duplicates:
             continue
         gaps.append({
             "format": fmt,
@@ -314,7 +335,7 @@ def group_gaps_by_format(report, repo_root=REPO_ROOT):
             # Spec M3: threaded straight from the Rust ComparisonReport so
             # tag_still_open's duplicate_emission check and
             # new_oxidex_only_keys (model_fix_loop.py) can see them.
-            "duplicate_emissions": comp.get("duplicate_emissions") or [],
+            "duplicate_emissions": duplicates,
             "extra_in_oxidex": comp.get("extra_in_oxidex") or [],
         })
     gaps.sort(key=lambda g: g["gap_count"], reverse=True)
