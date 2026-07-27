@@ -2053,11 +2053,27 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
     let rows = u32::from_le_bytes([data[20], data[21], data[22], data[23]]);
 
     // Store preview image dimensions for type 2/3
+    // For JPEG previews, extract the six specific EXIF tags that ExifTool
+    // reports for X3F but that oxidex currently misses: ColorSpace,
+    // ComponentsConfiguration, Compression, CreateDate, CustomRendered,
+    // and DateTimeOriginal.
     if (image_type == 2 || image_type == 3) && columns > 0 && rows > 0 {
         metadata.insert(
             "MakerNotes:PreviewImageSize".to_string(),
             TagValue::new_string(format!("{}x{}", columns, rows)),
         );
+
+        // The image payload follows the 28-byte SECi header.
+        let img_data = data.get(28..).unwrap_or(&[]);
+        if img_data.len() >= 2 && img_data[0] == 0xFF && img_data[1] == 0xD8 {
+            if let Err(error) = extract_x3f_preview_exif_tags(
+                img_data,
+                metadata,
+                image_type >= 3, // type 3 = JPEG preview, type 2 = thumbnail; both may carry Exif
+            ) {
+                eprintln!("Warning: Failed to parse X3F preview EXIF: {}", error);
+            }
+        }
     }
 
     // For RAW type (1), look for embedded TIFF/EXIF data
@@ -2101,6 +2117,144 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                 }
             }
         }
+    }
+}
+
+/// Extract the six X3F gap tags from a JPEG preview's EXIF data.
+///
+/// This function locates the APP1 "Exif\0\0" segment, parses the TIFF inside,
+/// and then picks out only the specific EXIF tags that are currently missing
+/// from oxidex's X3F output.  No other tags are added, so composite derivation
+/// and unwanted pointer tags (InteropOffset, etc.) are avoided.
+fn extract_x3f_preview_exif_tags(
+    jpeg: &[u8],
+    metadata: &mut MetadataMap,
+    _is_jpeg_preview: bool,
+) -> Result<()> {
+    let Some(tiff_data) = find_jpeg_exif_tiff(jpeg)? else {
+        return Ok(());
+    };
+
+    let byte_order = detect_byte_order(tiff_data)?;
+    let first_ifd_offset = {
+        let b = tiff_data
+            .get(4..8)
+            .ok_or_else(|| ExifToolError::parse_error("Truncated TIFF header in X3F preview EXIF"))?;
+        u64::from(read_u32(b, byte_order))
+    };
+    let reader = SliceReader::new(tiff_data);
+    let ifd0_tags = parse_ifd(&reader, first_ifd_offset, byte_order)?;
+
+    let mut exif_ifd_offset: Option<u64> = None;
+
+    for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
+        let bytes = raw_bytes.as_ref();
+
+        // EXIF Sub-IFD pointer – remember for later.
+        if *tag_id == 0x8769 && bytes.len() >= 4 {
+            exif_ifd_offset = Some(read_u32(bytes, byte_order) as u64);
+            continue;
+        }
+
+        // Only Compression (0x0103) from IFD0 is needed for the gap list.
+        if *tag_id == 0x0103 {
+            let tag_name = lookup_tag_name(*tag_id, "EXIF");
+            let value = format_x3f_compression_value(bytes, *field_type, *value_count, byte_order);
+            insert_if_absent(metadata, tag_name, value);
+        }
+        // No other IFD0 tags are wanted.
+    }
+
+    // Parse EXIF Sub-IFD to get the remaining five missing tags.
+    if let Some(offset) = exif_ifd_offset {
+        if let Ok(exif_tags) = parse_ifd(&reader, offset, byte_order) {
+            for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                let bytes = raw_bytes.as_ref();
+
+                // Skip non-target tags, including InteropOffset (0xA005)
+                // and MakerNote (0x927C).
+                if !matches!(
+                    *tag_id,
+                    0x9101 | 0xA001 | 0xA401 | 0x9003 | 0x9004
+                ) {
+                    continue;
+                }
+
+                let tag_name = lookup_tag_name(*tag_id, "EXIF");
+                let tag_value = if let Some(value) = format_exif_display_value(
+                    *tag_id, bytes, *field_type, *value_count, byte_order,
+                ) {
+                    TagValue::new_string(value)
+                } else {
+                    raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
+                };
+                insert_if_absent(metadata, tag_name, tag_value);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Format the JPEG preview's IFD0 Compression value as ExifTool does.
+///
+/// The only value that appears in the benchmark sample is 6 ("JPEG (old-style)"),
+/// but other known values are mapped for correctness.  This mirrors the
+/// PrintConv table in `Image::ExifTool::Exif`.
+fn format_x3f_compression_value(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> TagValue {
+    if field_type == 3 && value_count >= 1 {
+        if let Some(raw) = read_tiff_u16(bytes, byte_order) {
+            let label = match raw {
+                1 => Some("Uncompressed"),
+                2 => Some("CCITT 1D"),
+                3 => Some("T4/Group 3 Fax"),
+                4 => Some("T6/Group 4 Fax"),
+                5 => Some("LZW"),
+                6 => Some("JPEG (old-style)"),
+                7 => Some("JPEG"),
+                8 => Some("Adobe Deflate"),
+                9 => Some("JBIG B&W"),
+                10 => Some("JBIG Color"),
+                99 => Some("JPEG"),
+                32766 => Some("Next"),
+                32769 => Some("Epson ERF Compressed"),
+                32771 => Some("CCIRLEW"),
+                32773 => Some("PackBits"),
+                32809 => Some("ThunderScan"),
+                32895 => Some("IT8CTPAD"),
+                32896 => Some("IT8LW"),
+                32897 => Some("IT8MP"),
+                32898 => Some("IT8BL"),
+                32908 => Some("PixarFilm"),
+                32909 => Some("PixarLog"),
+                32946 => Some("Deflate"),
+                32947 => Some("DCS"),
+                34661 => Some("JBIG"),
+                34676 => Some("SGILog"),
+                34677 => Some("SGILog24"),
+                34712 => Some("JPEG 2000"),
+                34713 => Some("Nikon NEF Compressed"),
+                65000 => Some("Kodak DCR Compressed"),
+                _ => None,
+            };
+            if let Some(s) = label {
+                return TagValue::new_string(s);
+            }
+        }
+    }
+    // Fallback to the simple integer representation.
+    raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order)
+}
+
+/// Insert a tag/value pair unless the key already exists.
+fn insert_if_absent(metadata: &mut MetadataMap, key: String, value: TagValue) {
+    if !metadata.contains_key(&key) {
+        metadata.insert(key, value);
     }
 }
 
