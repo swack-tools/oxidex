@@ -13,7 +13,7 @@ use crate::io::EndianReader;
 const RAR_SIGNATURE: &[u8] = b"Rar!";
 
 /// RAR5 signature (additional marker at offset 7)
-const RAR5_MARKER: u8 = 0x01;
+const RAR5_MARKER: u8 = 0x00;
 
 /// RAR4 block types
 const RAR4_BLOCK_ARCHIVE: u8 = 0x73;
@@ -543,7 +543,10 @@ fn rar5_compressed_size(reader: &dyn FileReader) -> Result<Option<i64>> {
 
         let data_size = if header_flags & HEADER_FLAG_DATA_AREA != 0 {
             match RARParser::read_rar5_vint(block, field_offset) {
-                Ok((value, _)) => value,
+                Ok((value, next_pos)) => {
+                    field_offset = next_pos;
+                    value
+                }
                 Err(_) => break,
             }
         } else {
@@ -666,7 +669,10 @@ fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry
 
         let data_size = if header_flags & HEADER_FLAG_DATA_AREA != 0 {
             match RARParser::read_rar5_vint(block, field_offset) {
-                Ok((value, _)) => value,
+                Ok((value, next_pos)) => {
+                    field_offset = next_pos;
+                    value
+                }
                 Err(_) => break,
             }
         } else {
@@ -794,6 +800,15 @@ mod tests {
             Some(&TagValue::Integer(5)),
             "the ZIP: keys are the ExifTool-named ones and carry the parsed size",
         );
+        assert_eq!(
+            metadata.get("ZIP:UncompressedSize"),
+            Some(&TagValue::Integer(5)),
+            "ZIP:UncompressedSize should be 5, matching exiftool output",
+        );
+        assert_eq!(
+            metadata.get("ZIP:FileVersion"),
+            Some(&TagValue::String("RAR v5".to_string())),
+        );
         for fabricated in ["RAR:CompressedSize", "RAR:UncompressedSize"] {
             assert_eq!(
                 metadata.get(fabricated),
@@ -837,8 +852,8 @@ mod tests {
     #[test]
     fn test_rar5_detection() {
         let mut data = b"Rar!".to_vec();
-        data.extend_from_slice(&[0x1A, 0x07, 0x01, 0x01]);
-        let reader = TestReader::new(data);
+        data.extend_from_slice(&[0x1A, 0x07, 0x01, 0x00]);
+        let reader = TestReader::new(data.clone());
         assert_eq!(RARParser::detect_version(&reader).unwrap(), "5.0");
     }
 
