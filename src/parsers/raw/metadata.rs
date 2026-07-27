@@ -333,6 +333,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         (RawFormat::PanasonicRW2, 0, 0x001E) => {
                             format!("{}:BlackLevelBlue", ifd_name)
                         }
+                        (RawFormat::NikonNEF, 0, 0x9216) | (RawFormat::NikonNRW, 0, 0x9216) => {
+                            lookup_tag_name(0x9216, "EXIF")
+                        }
                         _ => lookup_raw_tag_name(canonical_tag_id, ifd_name, format),
                     };
                     let tag_value = if format == RawFormat::PanasonicRW2
@@ -502,6 +505,17 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
+                        // NEF can have multiple SubIFDs: one for the raw sensor
+                        // data (with CFA pattern tags) and one for a
+                        // thumbnail/preview. Only the raw sensor SubIFD should
+                        // contribute tags under the EXIF group; the thumbnail
+                        // SubIFD would overwrite them with smaller dimensions.
+                        if is_nef
+                            && !sub_tags.iter().any(|(id, ..)| matches!(*id, 0x828D | 0x828E | 0xA302))
+                        {
+                            eprintln!("Warning: NEF SubIFD at offset {} skipped (no CFA tags)", sub_offset);
+                            continue;
+                        }
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
                             // NEF maps SubIFD tags into the EXIF group and
                             // applies format-specific decoding where needed.
