@@ -1479,7 +1479,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-iptcExt:ArtworkSourceInvURL` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:ArtworkSourceInventoryNo` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:ArtworkStylePeriod` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
-| `XMP-iptcExt:ArtworkTitle` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
+| `XMP-iptcExt:ArtworkTitle` | `XMP:ArtworkTitle` | — | `OxTest` |
 | `XMP-iptcExt:AudioBitrate` | `XMP-iptcExt:AudioBitRate` | — | `3` |
 | `XMP-iptcExt:AudioBitrateMode` | `XMP-iptcExt:AudioBitRateMode` | — | `Fixed` |
 | `XMP-iptcExt:AudioBitsPerSample` | `XMP-iptcExt:AudioBitsPerSample` | — | `3` |
