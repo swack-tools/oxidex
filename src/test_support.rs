@@ -14,7 +14,8 @@
 //! }
 //! ```
 
-use crate::core::FileReader;
+use crate::core::{FileReader, MetadataMap, TagValue};
+use std::collections::BTreeMap;
 use std::io;
 
 /// In-memory FileReader implementation for unit testing.
@@ -57,4 +58,72 @@ impl FileReader for TestReader {
     fn size(&self) -> u64 {
         self.data.len() as u64
     }
+}
+
+/// Renders a `TagValue` the way a consumer comparing against ExifTool text
+/// output would see it, so that a benign `String("8")` / `Integer(8)` pair does
+/// not read as a divergence.
+fn rendered_value(value: &TagValue) -> String {
+    match value {
+        TagValue::String(s) => s.clone(),
+        TagValue::Integer(n) => n.to_string(),
+        TagValue::Float(f) => f.to_string(),
+        other => format!("{:?}", other),
+    }
+}
+
+/// Asserts that no two emitted tag keys that are equal after stripping a leading
+/// `"<Group>:"` prefix carry different rendered values.
+///
+/// This pins the defect class found by the 2026-07-26 duplicate-emission audit.
+/// oxidex has a convention of emitting a tag twice -- once under ExifTool's own
+/// key and once under a `"<Group>:"` alias -- which is only safe when both
+/// inserts carry the same value. Eight sites had drifted, the sharpest being
+/// GIF, where `BackgroundColor: 0` was emitted alongside
+/// `GIF:BackgroundColor: #00` from the same local screen descriptor.
+///
+/// This is invisible to the fleet's `duplicate_emissions` detector, which keys
+/// on the exact tag string (see
+/// `docs/plans/specs/2026-07-24-fleet-knowledge-and-scaling-design.md:449`):
+/// `"BackgroundColor"` and `"GIF:BackgroundColor"` are two distinct strings each
+/// emitted once, so it scores 0. The comparison layer, which strips the group
+/// prefix before matching, then picks between the two emissions
+/// non-deterministically -- the same source tree reported GIF BackgroundColor as
+/// a value difference at 22:17 and as 35/35 with `value_differences=0` at 22:37
+/// on 2026-07-26.
+pub fn assert_no_divergent_prefixed_duplicates(metadata: &MetadataMap) {
+    let mut by_bare_name: BTreeMap<&str, Vec<(&str, String)>> = BTreeMap::new();
+    for (key, value) in metadata.iter() {
+        let bare = key
+            .split_once(':')
+            .map_or(key.as_str(), |(_group, rest)| rest);
+        by_bare_name
+            .entry(bare)
+            .or_default()
+            .push((key.as_str(), rendered_value(value)));
+    }
+
+    let divergent: Vec<String> = by_bare_name
+        .iter()
+        .filter(|(_, emissions)| {
+            emissions.len() > 1
+                && emissions
+                    .iter()
+                    .any(|(_, rendered)| *rendered != emissions[0].1)
+        })
+        .map(|(bare, emissions)| {
+            let rendered: Vec<String> = emissions
+                .iter()
+                .map(|(key, rendered)| format!("{key}={rendered:?}"))
+                .collect();
+            format!("{bare}: {}", rendered.join(" vs "))
+        })
+        .collect();
+
+    assert!(
+        divergent.is_empty(),
+        "one logical tag emitted under >1 key with different values, which makes \
+         the ExifTool comparison harness non-deterministic:\n  {}",
+        divergent.join("\n  ")
+    );
 }

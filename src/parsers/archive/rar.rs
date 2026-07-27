@@ -388,11 +388,21 @@ impl FormatParser for RARParser {
             TagValue::new_string("Unknown".to_string()),
         );
 
-        // RAR:CompressedSize and RAR:UncompressedSize
-        // These would require scanning all file entries; for now set to 0
-        metadata.insert("RAR:CompressedSize".to_string(), TagValue::new_integer(0));
-
-        metadata.insert("RAR:UncompressedSize".to_string(), TagValue::new_integer(0));
+        // No RAR:CompressedSize / RAR:UncompressedSize here.
+        //
+        // Until 2026-07-26 this emitted a hardcoded 0 for both, which collided
+        // with the real values parse_rar_metadata() puts under the ZIP: keys:
+        //   $ oxidex ZIP.rar | rg -i compressedsize
+        //   RAR:CompressedSize: 0        <- fabricated placeholder
+        //   ZIP:CompressedSize: 5        <- parsed from the RAR5 file header
+        //   $ exiftool -G1 ZIP.rar
+        //   [ZIP]  Compressed Size  : 5
+        // ExifTool 13.55 reports RAR-family archives in the ZIP group (there is
+        // no RAR group), so the ZIP: keys are the ExifTool-correct ones and the
+        // RAR: placeholders were both wrong and a source of prefix-stripped
+        // duplicate tags that make the comparison harness non-deterministic.
+        // Emitting nothing when the size is unknown is an honest gap; emitting 0
+        // is a fabrication that reads as a real value.
 
         // RAR:HeaderCRC - placeholder
         metadata.insert(
@@ -745,6 +755,57 @@ fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+    use crate::test_support::assert_no_divergent_prefixed_duplicates;
+
+    /// ExifTool's own `ZIP.rar` sample, 74 bytes, embedded verbatim so this
+    /// test does not depend on the sample corpus being present:
+    /// `md5(ZIP.rar) = a19da0e9c47e4155119620dc369869cc`. It is a RAR5 archive
+    /// holding one 5-byte file, `1.txt`.
+    const ZIP_RAR_SAMPLE: &[u8] = &[
+        0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00, 0x33, 0x92, 0xb5, 0xe5, 0x0a, 0x01, 0x05,
+        0x06, 0x00, 0x05, 0x01, 0x01, 0x80, 0x80, 0x00, 0x64, 0xe8, 0xc3, 0x50, 0x21, 0x02, 0x03,
+        0x0b, 0x85, 0x00, 0x04, 0x85, 0x00, 0x20, 0x82, 0x89, 0xd1, 0xf7, 0x80, 0x00, 0x00, 0x05,
+        0x31, 0x2e, 0x74, 0x78, 0x74, 0x0a, 0x03, 0x02, 0x86, 0x76, 0xf3, 0x66, 0x60, 0x10, 0xd9,
+        0x01, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x1d, 0x77, 0x56, 0x51, 0x03, 0x05, 0x04, 0x00,
+    ];
+
+    /// ExifTool 13.55 has no RAR group -- it reports RAR-family archives under
+    /// ZIP -- and it reads the real size out of the file header:
+    ///
+    /// ```text
+    /// $ exiftool -G1 -CompressedSize -UncompressedSize \
+    ///     /tmp/oxidex-exiftool-cache/combined-samples/ZIP.rar
+    /// [ZIP]           Compressed Size                 : 5
+    /// [ZIP]           Uncompressed Size               : 5
+    /// ```
+    ///
+    /// Until 2026-07-26 `RARParser::parse` unconditionally inserted a hardcoded
+    /// `RAR:CompressedSize: 0` / `RAR:UncompressedSize: 0`, so this exact file
+    /// produced `RAR:CompressedSize: 0` alongside `ZIP:CompressedSize: 5`. The
+    /// comparison harness strips the group prefix before matching, so which of
+    /// the two it scored was a coin flip.
+    #[test]
+    fn rar_emits_no_fabricated_size_placeholder_beside_the_zip_keys() {
+        let reader = TestReader::from_slice(ZIP_RAR_SAMPLE);
+        let metadata = parse_rar_metadata(&reader).unwrap();
+
+        assert_eq!(
+            metadata.get("ZIP:CompressedSize"),
+            Some(&TagValue::Integer(5)),
+            "the ZIP: keys are the ExifTool-named ones and carry the parsed size",
+        );
+        for fabricated in ["RAR:CompressedSize", "RAR:UncompressedSize"] {
+            assert_eq!(
+                metadata.get(fabricated),
+                None,
+                "{fabricated} was a hardcoded 0 placeholder that collided with \
+                 the real ZIP: value; an absent tag is an honest gap, a 0 is a \
+                 fabrication",
+            );
+        }
+
+        assert_no_divergent_prefixed_duplicates(&metadata);
+    }
 
     /// ExifTool's RAR5 OperatingSystem PrintConv is exactly {0: Win32,
     /// 1: Unix} (ZIP.pm). Literal bytes on purpose -- naming a constant

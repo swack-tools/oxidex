@@ -76,6 +76,9 @@ impl ExifToolExtractor {
             return Ok(ExtractionResult {
                 tags: Vec::new(),
                 files_processed: 0,
+                // ExifTool is the reference implementation; a duplicate
+                // emission is only ever an oxidex-side defect.
+                duplicate_emissions: Vec::new(),
             });
         }
 
@@ -138,6 +141,9 @@ impl ExifToolExtractor {
         let result = ExtractionResult {
             tags,
             files_processed,
+            // ExifTool is the reference implementation; a duplicate
+            // emission is only ever an oxidex-side defect.
+            duplicate_emissions: Vec::new(),
         };
 
         // Cache the result in memory and on disk

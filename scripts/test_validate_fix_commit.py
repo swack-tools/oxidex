@@ -20,6 +20,7 @@ from pathlib import Path
 
 import validate_fix_commit
 from validate_fix_commit import (
+    check_trailer_truth,
     check_ownership,
     extract_added_map_values,
     find_samples_carrying_tag,
@@ -131,6 +132,91 @@ RUST_QUALITY_OK = (
     "    }\n"
     "}\n"
 )
+
+
+class TrailerTruthTests(unittest.TestCase):
+    """A trailer can be PRESENT and FALSE.
+
+    On 2026-07-27 a JPEG fix passed the whole gate citing
+    `Perl-Ref: NikonCustom.pm` for six APP12 tags that module does not
+    define. These pin the discriminator that tells a wrong citation from a
+    right one -- see check_trailer_truth and _defines_tag.
+    """
+
+    def _lib(self, tmp, **modules):
+        lib = Path(tmp) / "lib" / "Image" / "ExifTool"
+        lib.mkdir(parents=True)
+        for name, body in modules.items():
+            (lib / f"{name}.pm").write_text(body)
+        return Path(tmp) / "lib"
+
+    def test_module_defining_the_tag_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = self._lib(tmp, APP12="%Table = (\n    Protect     => { },\n);\n")
+            self.assertEqual(
+                check_trailer_truth(
+                    {"Tag": ["APP12:Protect"], "Perl-Ref": ["APP12.pm"]}, perl_lib=lib
+                ),
+                [],
+            )
+
+    def test_module_that_only_MENTIONS_the_name_is_rejected(self):
+        # The exact shape that made presence-checking useless: NikonCustom.pm
+        # holds `24 => 'Protect'`, a custom-setting VALUE that collides with
+        # the tag name. Both modules "mention Protect"; only one defines it.
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = self._lib(
+                tmp,
+                APP12="%Table = (\n    Protect     => { },\n);\n",
+                NikonCustom="PrintConv => {\n        24 => 'Protect',\n    },\n",
+            )
+            self.assertEqual(
+                check_trailer_truth(
+                    {"Tag": ["APP12:Protect"], "Perl-Ref": ["NikonCustom.pm"]},
+                    perl_lib=lib,
+                ),
+                ["perl-ref-documents-none:NikonCustom.pm"],
+            )
+
+    def test_hex_keyed_table_naming_the_tag_counts_as_defining_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = self._lib(
+                tmp,
+                Exif="    0xa402 => {\n        Name => 'ExposureMode',\n    },\n",
+            )
+            self.assertEqual(
+                check_trailer_truth(
+                    {"Tag": ["EXIF:ExposureMode"], "Perl-Ref": ["Exif.pm"]},
+                    perl_lib=lib,
+                ),
+                [],
+            )
+
+    def test_runtime_named_tags_never_flag_a_correct_module(self):
+        # ExifTool names some tags at runtime (ProcessAPP12's `ucfirst $tag`
+        # produces REV/STB1), so they appear in NO table anywhere. A commit
+        # fixing only those must not be flagged against a correct Perl-Ref --
+        # nothing in the corpus can disprove the citation.
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = self._lib(tmp, APP12="sub ProcessAPP12 { ucfirst $tag }\n")
+            self.assertEqual(
+                check_trailer_truth(
+                    {"Tag": ["APP12:REV", "APP12:STB1"], "Perl-Ref": ["APP12.pm"]},
+                    perl_lib=lib,
+                ),
+                [],
+            )
+
+    def test_no_perl_lib_yields_no_flag(self):
+        # Conservative in the same direction as the rest of the module: an
+        # absent corpus cannot disprove anything, so it must not accuse.
+        self.assertEqual(
+            check_trailer_truth(
+                {"Tag": ["APP12:Protect"], "Perl-Ref": ["NikonCustom.pm"]},
+                perl_lib=None,
+            ),
+            [],
+        )
 
 
 class TrailerTests(unittest.TestCase):

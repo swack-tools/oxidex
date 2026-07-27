@@ -105,65 +105,6 @@ pub fn parse_avi_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
     parser.parse(reader).map_err(|e| e.to_string())
 }
 
-/// Convert AVI FourCC codec code to human-readable codec name
-///
-/// Maps standard FourCC codes for video and audio codecs to user-friendly names.
-/// FourCC stands for "Four-Character Code" and is a common way to identify codecs in AVI.
-///
-/// # Arguments
-///
-/// * `fourcc` - The FourCC string (e.g., "H264", "DIVX", "MJPEG")
-/// * `is_video` - Whether this is a video codec (true) or audio codec (false)
-///
-/// # Returns
-///
-/// A human-readable codec name or the original FourCC if not recognized
-fn convert_fourcc_to_codec_name(fourcc: &str, is_video: bool) -> String {
-    let upper = fourcc.to_uppercase();
-
-    if is_video {
-        match upper.as_str() {
-            // Video codecs
-            "H264" | "AVC1" | "DAVC" => "H.264".to_string(),
-            "H265" | "HEVC" => "H.265".to_string(),
-            "AV01" => "AV1".to_string(),
-            "VP80" => "VP8".to_string(),
-            "VP90" => "VP9".to_string(),
-            "DIVX" | "DX50" => "DivX".to_string(),
-            "MPEG" => "MPEG1".to_string(),
-            "MPG4" | "MP4V" => "MPEG4".to_string(),
-            "MJPG" | "MJPS" => "Motion JPEG".to_string(),
-            "UNCOMPRESSED" => "Uncompressed".to_string(),
-            "RLE " => "RLE".to_string(),
-            "WMVP" | "WMV3" => "Windows Media Video".to_string(),
-            "VC1 " => "VC-1".to_string(),
-            "XVID" => "Xvid".to_string(),
-            "FFV1" => "FFV1".to_string(),
-            "THEORA" => "Theora".to_string(),
-            "I263" => "Intel H.263".to_string(),
-            "CVID" => "Cinepak".to_string(),
-            "WMV1" => "WMV1".to_string(),
-            "WMV2" => "WMV2".to_string(),
-            _ => upper.to_string(),
-        }
-    } else {
-        // Audio codecs
-        match upper.as_str() {
-            "PCM " => "PCM".to_string(),
-            "MP3 " | "55" => "MP3".to_string(),
-            "AAC " => "AAC".to_string(),
-            "AC3 " => "AC-3".to_string(),
-            "DTS " => "DTS".to_string(),
-            "FLAC" => "FLAC".to_string(),
-            "OPUS" => "Opus".to_string(),
-            "VORBIS" | "VORB" => "Vorbis".to_string(),
-            "WAVPACK4" => "WavPack".to_string(),
-            "ALAC" => "ALAC".to_string(),
-            _ => upper.to_string(),
-        }
-    }
-}
-
 /// Formats a float the way Perl's default number stringification would: no
 /// trailing zeros or unnecessary decimal point.
 fn format_trimmed_decimal(v: f64) -> String {
@@ -434,16 +375,18 @@ fn parse_avih_chunk(
         // places and printed without trailing zeros (matching Perl's default
         // number stringification).
         let rounded = ((frame_rate * 1000.0 + 0.5).floor()) / 1000.0;
+        let frame_rate_str = format_trimmed_decimal(rounded);
         metadata.insert(
             "RIFF:FrameRate".to_string(),
-            TagValue::new_string(format_trimmed_decimal(rounded)),
+            TagValue::new_string(frame_rate_str.clone()),
         );
         metadata.insert(
             "RIFF:VideoFrameRate".to_string(),
             TagValue::new_integer(frame_rate.round() as i64),
         );
-        // Add AVI:FrameRate tag with human-readable format
-        let frame_rate_str = format!("{:.3} fps", frame_rate);
+        // AVI:FrameRate is an oxidex-only alias; ExifTool has no AVI group and
+        // reports AVI tags under RIFF. It therefore MUST mirror RIFF:FrameRate
+        // verbatim -- see the 2026-07-26 note on AVI:Duration below.
         metadata.insert(
             "AVI:FrameRate".to_string(),
             TagValue::new_string(frame_rate_str),
@@ -495,12 +438,25 @@ fn parse_avih_chunk(
             "RIFF:Duration".to_string(),
             TagValue::new_string(duration_str.clone()),
         );
-        // Add AVI:Duration tag in mm:ss.ms format
-        let total_secs = duration_secs.round() as u64;
-        let mins = total_secs / 60;
-        let secs = total_secs % 60;
-        let formatted = format!("{}:{:02}", mins, secs);
-        metadata.insert("AVI:Duration".to_string(), TagValue::new_string(formatted));
+        // AVI:Duration is an oxidex-only alias and MUST mirror RIFF:Duration.
+        //
+        // ExifTool 13.55 has no AVI group at all -- it reports AVI tags under
+        // RIFF (and Duration under Composite):
+        //   $ exiftool -G1 -Duration RIFF.avi
+        //   [Composite]  Duration  : 15.53 s
+        //   $ exiftool -G1 -Duration Pentax.avi
+        //   [Composite]  Duration  : 25.00 s
+        // Until 2026-07-26 this insert re-derived the value as `mm:ss`, so
+        // RIFF.avi emitted `RIFF:Duration: 15.53` next to `AVI:Duration: 0:16`
+        // (Pentax.avi: `25.00` next to `0:25`). Because the comparison harness
+        // strips the group prefix before matching, one logical tag with two
+        // renderings makes the gap list non-deterministic; its
+        // duplicate_emissions detector keys on the exact tag string and so
+        // scores 0 for this shape.
+        metadata.insert(
+            "AVI:Duration".to_string(),
+            TagValue::new_string(duration_str),
+        );
     }
 
     Ok(())
@@ -717,11 +673,16 @@ fn parse_stream_header(
             "RIFF:VideoCodec".to_string(),
             TagValue::new_string(fourcc_str.clone()),
         );
-        // Add AVI:VideoCodec with human-readable codec name
-        let codec_name = convert_fourcc_to_codec_name(&fourcc_str, true);
+        // AVI:VideoCodec mirrors RIFF:VideoCodec. ExifTool 13.55 prints the raw
+        // FourCC, never a friendly name:
+        //   $ exiftool -G1 -VideoCodec RIFF.avi
+        //   [RIFF]  Video Codec  : mjpg
+        // Until 2026-07-26 this insert ran the FourCC through
+        // convert_fourcc_to_codec_name(), so RIFF.avi and Pentax.avi both
+        // emitted `RIFF:VideoCodec: mjpg` next to `AVI:VideoCodec: Motion JPEG`.
         metadata.insert(
             "AVI:VideoCodec".to_string(),
-            TagValue::new_string(codec_name),
+            TagValue::new_string(fourcc_str.clone()),
         );
     } else if stream_type == *b"auds" && is_first_audio {
         // Audio codec from strh is usually empty, strf has more info; ExifTool
@@ -731,14 +692,17 @@ fn parse_stream_header(
         } else {
             String::new()
         };
-        metadata.insert("RIFF:AudioCodec".to_string(), TagValue::new_string(value));
-        // Add AVI:AudioCodec with human-readable codec name if not empty
+        metadata.insert(
+            "RIFF:AudioCodec".to_string(),
+            TagValue::new_string(value.clone()),
+        );
+        // Same rule as AVI:VideoCodec above: mirror the RIFF: value rather than
+        // re-deriving a friendly name. Both AVI samples in combined-samples have
+        // an empty audio FourCC (`[RIFF] Audio Codec :` for RIFF.avi and
+        // Pentax.avi under exiftool 13.55), so this branch is exercised by the
+        // synthetic-strh unit test rather than by a corpus file.
         if fourcc_is_present {
-            let codec_name = convert_fourcc_to_codec_name(&fourcc_str, false);
-            metadata.insert(
-                "AVI:AudioCodec".to_string(),
-                TagValue::new_string(codec_name),
-            );
+            metadata.insert("AVI:AudioCodec".to_string(), TagValue::new_string(value));
         }
     }
 
@@ -953,6 +917,119 @@ fn parse_audio_format(
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+    use crate::test_support::assert_no_divergent_prefixed_duplicates;
+
+    /// Builds a minimal `RIFF....AVI ` file containing a `hdrl` LIST with one
+    /// `avih` chunk and one `strl` LIST per supplied stream header.
+    ///
+    /// `strh_streams` entries are `(stream_type, codec_fourcc)` pairs, e.g.
+    /// `(b"vids", b"MJPG")`.
+    fn synthetic_avi(
+        microsec_per_frame: u32,
+        total_frames: u32,
+        strh_streams: &[(&[u8; 4], &[u8; 4])],
+    ) -> Vec<u8> {
+        fn chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
+            let mut out = id.to_vec();
+            out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            out.extend_from_slice(body);
+            out
+        }
+
+        let mut avih = vec![0u8; 56];
+        avih[0..4].copy_from_slice(&microsec_per_frame.to_le_bytes()); // dwMicroSecPerFrame
+        avih[16..20].copy_from_slice(&total_frames.to_le_bytes()); // dwTotalFrames
+        avih[32..36].copy_from_slice(&8u32.to_le_bytes()); // dwWidth
+        avih[36..40].copy_from_slice(&8u32.to_le_bytes()); // dwHeight
+
+        let mut hdrl = b"hdrl".to_vec();
+        hdrl.extend_from_slice(&chunk(b"avih", &avih));
+        for (stream_type, codec_fourcc) in strh_streams {
+            let mut strh = vec![0u8; 56];
+            strh[0..4].copy_from_slice(*stream_type); // fccType
+            strh[4..8].copy_from_slice(*codec_fourcc); // fccHandler
+            let mut strl = b"strl".to_vec();
+            strl.extend_from_slice(&chunk(b"strh", &strh));
+            hdrl.extend_from_slice(&chunk(b"LIST", &strl));
+        }
+
+        let mut riff_body = b"AVI ".to_vec();
+        riff_body.extend_from_slice(&chunk(b"LIST", &hdrl));
+        chunk(b"RIFF", &riff_body)
+    }
+
+    /// ExifTool 13.55 has no AVI group at all -- it reports AVI tags under
+    /// RIFF -- so every `AVI:` key oxidex emits is an alias that must mirror
+    /// its `RIFF:` counterpart verbatim:
+    ///
+    /// ```text
+    /// $ exiftool -G1 -FrameRate -Duration -VideoCodec -AudioCodec \
+    ///     /tmp/oxidex-exiftool-cache/combined-samples/RIFF.avi
+    /// [RIFF]          Frame Rate                      : 15
+    /// [Composite]     Duration                        : 15.53 s
+    /// [RIFF]          Video Codec                     : mjpg
+    /// [RIFF]          Audio Codec                     :
+    /// ```
+    ///
+    /// Before 2026-07-26 oxidex emitted, from that same file, `RIFF:FrameRate:
+    /// 15` next to `AVI:FrameRate: 15.000 fps`, `RIFF:Duration: 15.53` next to
+    /// `AVI:Duration: 0:16`, and `RIFF:VideoCodec: mjpg` next to
+    /// `AVI:VideoCodec: Motion JPEG`.
+    ///
+    /// 40000 us/frame is 25 fps and 391 frames is 15.64 s, chosen so the old
+    /// renderings ("25.000 fps", "0:16") differ from the correct ones ("25",
+    /// "15.64") in both digits and shape.
+    #[test]
+    fn avi_aliases_mirror_their_riff_counterparts() {
+        let data = synthetic_avi(40_000, 391, &[(b"vids", b"MJPG"), (b"auds", b"VORB")]);
+        let reader = TestReader::new(data);
+        let metadata = parse_avi_metadata(&reader).unwrap();
+
+        // Collected rather than asserted pair-by-pair so a regression in any
+        // one alias is reported even when an earlier one has already drifted.
+        let mut drifted = Vec::new();
+        for (riff_key, avi_key) in [
+            ("RIFF:FrameRate", "AVI:FrameRate"),
+            ("RIFF:Duration", "AVI:Duration"),
+            ("RIFF:VideoCodec", "AVI:VideoCodec"),
+            ("RIFF:AudioCodec", "AVI:AudioCodec"),
+        ] {
+            let riff = metadata.get(riff_key);
+            assert!(riff.is_some(), "{riff_key} should have been emitted");
+            if metadata.get(avi_key) != riff {
+                drifted.push(format!(
+                    "{avi_key}={:?} does not mirror {riff_key}={:?}",
+                    metadata.get(avi_key),
+                    riff,
+                ));
+            }
+        }
+        assert!(
+            drifted.is_empty(),
+            "AVI: aliases must mirror their RIFF: counterparts; a re-derived \
+             value here is what made the tag-comparison harness \
+             non-deterministic:\n  {}",
+            drifted.join("\n  "),
+        );
+
+        // Pin the RIFF: side against ExifTool's own renderings so the mirror
+        // assertions above cannot be satisfied by making both sides wrong.
+        assert_eq!(
+            metadata.get("RIFF:FrameRate"),
+            Some(&TagValue::String("25".to_string())),
+        );
+        assert_eq!(
+            metadata.get("RIFF:Duration"),
+            Some(&TagValue::String("15.64".to_string())),
+        );
+        assert_eq!(
+            metadata.get("RIFF:VideoCodec"),
+            Some(&TagValue::String("MJPG".to_string())),
+            "ExifTool prints the raw FourCC, not a friendly codec name",
+        );
+
+        assert_no_divergent_prefixed_duplicates(&metadata);
+    }
 
     #[test]
     fn test_avi_signature_valid() {

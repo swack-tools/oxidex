@@ -47,6 +47,67 @@ class GroupGapsByFormatTests(unittest.TestCase):
         self.assertEqual(jpeg["value_differences"][0]["tag_key"], "EXIF:ISO")
 
 
+class DuplicateEmissionVisibilityTests(unittest.TestCase):
+    """A format at 100% parity that still emits one tag twice must stay
+    visible to the publish gates (2026-07-26).
+
+    This is the GIF.gif shape: BackgroundColor was emitted both bare and
+    as GIF:BackgroundColor, both normalize to GIF:BackgroundColor, and
+    which value survived was a per-process coin flip -- so the format
+    alternated between "one value difference" and "35/35, nothing to
+    report" on an unchanged tree. Once the winner is deterministic and
+    happens to match ExifTool, gap_count is 0 and the old
+    `if gap_count == 0: continue` dropped the format from the list
+    entirely, taking its duplicate_emissions with it.
+    """
+
+    def _report(self, duplicates):
+        return {"by_format": {"GIF": {
+            "missing_in_oxidex": [], "value_differences": [],
+            "duplicate_emissions": duplicates,
+        }}}
+
+    def test_zero_gap_format_with_duplicate_emissions_is_still_listed(self):
+        gaps = group_gaps_by_format(self._report(["GIF:BackgroundColor"]))
+        self.assertEqual([g["format"] for g in gaps], ["GIF"])
+        self.assertEqual(gaps[0]["duplicate_emissions"], ["GIF:BackgroundColor"])
+        self.assertEqual(gaps[0]["gap_count"], 0)
+
+    def test_zero_gap_format_without_duplicates_is_still_skipped(self):
+        self.assertEqual(group_gaps_by_format(self._report([])), [])
+
+    def test_publish_gate_lookup_sees_the_duplicate(self):
+        """The exact shape squad_merge_loop.real_format_match uses, and
+        the exact read process_commit / run_batch_check /
+        evaluate_post_merge then perform. Before this change the lookup
+        returned None and every one of them read `[]` -- a silent pass.
+        """
+        gaps = group_gaps_by_format(self._report(["GIF:BackgroundColor"]))
+        match = next((g for g in gaps if g["format"] == "GIF"), None)
+        self.assertIsNotNone(match, "real_format_match would have returned None")
+        self.assertEqual((match or {}).get("duplicate_emissions") or [],
+                         ["GIF:BackgroundColor"])
+
+    def test_duplicate_only_entry_dispatches_no_work(self):
+        """Surfacing a zero-gap format must not put a worker to work on a
+        format with nothing to fix: run_tag_loop's unit of work comes from
+        expand_gaps_to_tags, which reads only missing_tags and
+        value_differences.
+        """
+        from model_fix_loop import expand_gaps_to_tags
+        gaps = group_gaps_by_format(self._report(["GIF:BackgroundColor"]))
+        self.assertEqual(expand_gaps_to_tags(gaps), [])
+
+    def test_duplicate_only_entry_sorts_after_real_gaps(self):
+        report = {"by_format": {
+            "GIF": {"missing_in_oxidex": [], "value_differences": [],
+                    "duplicate_emissions": ["GIF:BackgroundColor"]},
+            "NEF": {"missing_in_oxidex": [{"family": "EXIF", "name": "LensModel"}],
+                    "value_differences": [], "duplicate_emissions": []},
+        }}
+        self.assertEqual([g["format"] for g in group_gaps_by_format(report)], ["NEF", "GIF"])
+
+
 class LocateParserFilesTests(unittest.TestCase):
     def test_jpeg_maps_to_a_real_directory(self):
         files = locate_parser_files("JPEG")
