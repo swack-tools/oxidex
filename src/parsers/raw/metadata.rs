@@ -493,6 +493,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                 // Parse SubIFD(s) if present - crucial for RAW formats
                 // SubIFDs contain RAW image data, compression info, and RAW-specific tags
+                let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                 for (sub_index, sub_offset) in sub_ifd_offsets.iter().enumerate() {
                     // Use SubIFD0, SubIFD1, etc. for tag naming
                     let sub_ifd_name = if sub_index == 0 {
@@ -504,21 +505,14 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     };
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
-                        let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
-                        // NEF can have multiple SubIFDs: one for the raw sensor
-                        // data (with CFA pattern tags) and one for a
-                        // thumbnail/preview. Only the raw sensor SubIFD should
-                        // contribute tags under the EXIF group; the thumbnail
-                        // SubIFD would overwrite them with smaller dimensions.
-                        if is_nef
-                            && !sub_tags.iter().any(|(id, ..)| matches!(*id, 0x828D | 0x828E | 0xA302))
-                        {
-                            eprintln!("Warning: NEF SubIFD at offset {} skipped (no CFA tags)", sub_offset);
-                            continue;
-                        }
+                        // Track whether this SubIFD is the raw sensor IFD
+                        // (NewSubfileType absent or zero) vs. a thumbnail
+                        // (NewSubfileType == 1). The raw IFD's tags take
+                        // precedence for keys that appear in both.
+                        let is_raw_subifd = !is_nef || sub_tags.iter().all(|(tag_id, field_type, value_count, raw_bytes)| {
+                            *tag_id != 0x00FE || *field_type != 4 || *value_count < 1 || raw_bytes.as_ref().len() < 4 || read_u32(raw_bytes.as_ref(), byte_order) == 0
+                        });
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
-                            // NEF maps SubIFD tags into the EXIF group and
-                            // applies format-specific decoding where needed.
                             if is_nef {
                                 if let Some((tag_name, tag_value)) = format_nef_subifd_tag(
                                     tag_id, field_type, value_count, raw_bytes.as_ref(), byte_order,
@@ -526,8 +520,6 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     metadata.insert(tag_name, tag_value);
                                     continue;
                                 }
-                                // Tags not handled specially fall through to the
-                                // generic path which renames them to EXIF: below.
                             }
 
                             // TIFF/EP tag 0x828E (CFAPattern2) is a plain
@@ -551,10 +543,15 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 continue;
                             }
 
-                            let tag_name = if is_nef {
-                                lookup_tag_name(tag_id, "EXIF")
+                            let (group, tag_id_for_lookup) = if is_nef {
+                                ("EXIF", tag_id)
                             } else {
-                                lookup_raw_tag_name(tag_id, sub_ifd_name, format)
+                                (sub_ifd_name, tag_id)
+                            };
+                            let tag_name = if is_nef {
+                                lookup_tag_name(tag_id_for_lookup, group)
+                            } else {
+                                lookup_raw_tag_name(tag_id_for_lookup, group, format)
                             };
                             let bytes = raw_bytes.as_ref();
                             let tag_value = if format == RawFormat::AdobeDNG {
@@ -582,7 +579,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     byte_order,
                                 )
                             };
-                            metadata.insert(tag_name, tag_value);
+                            // For NEF, raw SubIFD tags overwrite any earlier
+                            // thumbnail values; thumbnail SubIFD tags are only
+                            // inserted for keys not already set by the raw IFD.
+                            if is_nef {
+                                if is_raw_subifd || !metadata.contains_key(&tag_name) {
+                                    metadata.insert(tag_name, tag_value);
+                                }
+                            } else {
+                                metadata.insert(tag_name, tag_value);
+                            }
                         }
                     }
                 }
@@ -921,11 +927,15 @@ fn format_exif_display_value(
             _ => None,
         },
         // TIFF-EPStandardID: stored as ASCII (type 2) or UNDEFINED (type 7),
-        // ExifTool PrintConv replaces spaces with dots.
+        // ExifTool formats UNDEFINED bytes as space-separated decimal, then
+        // PrintConv replaces spaces with dots.
         0x9216 => {
-            let raw = String::from_utf8_lossy(bytes);
-            let trimmed = raw.trim_end_matches('\0');
-            let dotted = trimmed.replace(' ', ".");
+            let formatted: String = bytes
+                .iter()
+                .map(|b| b.to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let dotted = formatted.replace(' ', ".");
             Some(dotted)
         }
         _ => None,
@@ -2742,10 +2752,14 @@ fn format_nef_subifd_tag(
         0x0202 => Some(("EXIF:JpgFromRawLength".to_string(), TagValue::new_integer(read_u32(bytes, byte_order) as i64))),
         // TIFF-EPStandardID: UNDEFINED[4] -> dotted version string
         0x9216 => {
-            // ExifTool PrintConv: '$val =~ tr/ /./; $val'
-            let raw = String::from_utf8_lossy(bytes);
-            let trimmed = raw.trim_end_matches('\0');
-            let ver = trimmed.replace(' ', ".");
+            // ExifTool formats UNDEFINED bytes as space-separated decimal,
+            // then PrintConv replaces spaces with dots.
+            let formatted: String = bytes
+                .iter()
+                .map(|b| b.to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let ver = formatted.replace(' ', ".");
             Some(("EXIF:TIFF-EPStandardID".to_string(), TagValue::new_string(ver)))
         }
         // CFARepeatPatternDim: two SHORT values -> "h v"
