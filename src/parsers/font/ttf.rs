@@ -47,6 +47,15 @@ const LANGUAGE_FRENCH_WINDOWS: u16 = 0x040c;
 const LANGUAGE_ITALIAN_WINDOWS: u16 = 0x0410;
 const LANGUAGE_ENGLISH_WINDOWS: u16 = 0x0409;
 
+const LANGUAGE_JAPANESE_MACINTOSH: u16 = 11;
+const LANGUAGE_KOREAN_MACINTOSH: u16 = 23;
+const LANGUAGE_NORWEGIAN_MACINTOSH: u16 = 9;
+
+const LANGUAGE_JAPANESE_WINDOWS: u16 = 0x0411;
+const LANGUAGE_KOREAN_WINDOWS: u16 = 0x0412;
+const LANGUAGE_DUTCH_WINDOWS: u16 = 0x0413;
+const LANGUAGE_NORWEGIAN_WINDOWS: u16 = 0x0414;
+
 /// Name IDs for name table records
 const NAME_COPYRIGHT: u16 = 0;
 const NAME_FONT_FAMILY: u16 = 1;
@@ -226,6 +235,10 @@ impl TTFParser {
                 // Macintosh encoding 0 is Mac Roman, not UTF-8.
                 Some(Self::decode_mac_roman(str_data))
             }
+            PLATFORM_MACINTOSH if record.encoding_id == 5 => {
+                // Macintosh Hebrew encoding.
+                Self::decode_mac_hebrew(str_data)
+            }
             PLATFORM_MACINTOSH => {
                 // Preserve the previous behavior for unsupported Macintosh encodings.
                 String::from_utf8(str_data.to_vec()).ok()
@@ -253,6 +266,13 @@ impl TTFParser {
             | (PLATFORM_WINDOWS, LANGUAGE_FRENCH_WINDOWS) => Some("fr"),
             (PLATFORM_MACINTOSH, LANGUAGE_ITALIAN_MACINTOSH)
             | (PLATFORM_WINDOWS, LANGUAGE_ITALIAN_WINDOWS) => Some("it"),
+            (PLATFORM_MACINTOSH, LANGUAGE_JAPANESE_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_JAPANESE_WINDOWS) => Some("ja"),
+            (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_KOREAN_WINDOWS) => Some("ko"),
+            (PLATFORM_WINDOWS, LANGUAGE_DUTCH_WINDOWS) => Some("nl-NL"),
+            (PLATFORM_MACINTOSH, LANGUAGE_NORWEGIAN_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_NORWEGIAN_WINDOWS) => Some("no"),
             _ => None,
         }
     }
@@ -375,6 +395,16 @@ impl TTFParser {
         }
 
         Ok(metadata)
+    }
+
+    /// Decodes a MacHebrew encoded byte slice into a UTF-8 String.
+    /// Uses the encoding_rs crate rather than a hand-rolled table.
+    fn decode_mac_hebrew(data: &[u8]) -> Option<String> {
+        use encoding_rs::Encoding;
+        let enc = Encoding::for_label(b"x-mac-hebrew")?;
+        let (cow, _enc, _had_errors) = enc.decode(data);
+        // Filter control characters just to be conservative.
+        Some(cow.replace('\0', ""))
     }
 
     /// Converts Mac timestamp (seconds since 1904) to ISO 8601 string
