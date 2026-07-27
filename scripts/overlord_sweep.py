@@ -1011,6 +1011,21 @@ def real_cargo_fmt(repo_root):
     return result.returncode == 0, (result.stdout + result.stderr).strip()
 
 
+def real_cargo_lint(repo_root):
+    """The EXACT lint gate CI runs -> (ok, output). Injectable (``lint_fn``).
+
+    `cargo clippy --all-features -- -D warnings`, verbatim from
+    .github/workflows/ci.yml. Not `cargo clippy`, and not `--lib`: a laxer
+    invocation than CI's passes locally and fails in CI, which is how a
+    dead assignment reached a PR on 2026-07-27 (#144).
+    """
+    result = subprocess.run(  # nosec B603
+        ["cargo", "clippy", "--all-features", "--", "-D", "warnings"],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    return result.returncode == 0, (result.stdout + result.stderr).strip()
+
+
 def format_sweep_branch(repo_root, run_git, fmt_fn=None, log_fn=print):
     """Run cargo fmt over the assembled sweep branch and commit the
     result, if and only if it changed something. Returns
@@ -1082,7 +1097,7 @@ def real_create_pr(title, body, branch, base="main", repo_root=REPO_ROOT):
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
+def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn=None,
              squads_toml_path=DEFAULT_SQUADS_TOML, cargo_test_workspace_fn=None, create_pr_fn=None,
              push_branch_fn=None, fmt_fn=None, run_git=None, now_fn=time.time, log_fn=print,
              sweep_state_path=None, quarantine_path=None, sweep_review_log_path=None,
@@ -1325,6 +1340,43 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
     # moves whitespace, so re-running a multi-minute workspace suite
     # afterwards would double the sweep's wall clock for no semantic gain.
     fmt_result = format_sweep_branch(repo_root, run_git, fmt_fn=fmt_fn, log_fn=log_fn)
+
+    # The lint gate CI will apply, applied BEFORE the push rather than after.
+    #
+    # The sweep already runs cargo fmt here and commits the result, so style
+    # was covered -- but nothing ran clippy, and CI runs
+    # `cargo clippy --all-features -- -D warnings`. Measured 2026-07-27 on
+    # sweep/tags-2026-07-27-8 (PR #154), the first sweep PR this pipeline
+    # opened autonomously: fmt clean, 70 tag trailers, and SIX clippy errors
+    # -- one dead assignment and five `unreachable pattern`s, because two
+    # squads had independently fixed the same X3F/RW2 tags with DIFFERENT
+    # code. Different code means different patch-ids, so the cross-squad
+    # dedup (#150) correctly let both through, and they collided only once
+    # merged.
+    #
+    # A sweep that opens a PR which cannot merge is worse than one that opens
+    # none: it consumes the stamps, looks like success in the log, and leaves
+    # a red branch for a human to untangle.
+    #
+    # Cursor semantics deliberately match the push_failed path below: origin
+    # has nothing, so a retry cannot duplicate a PR or a branch, and the
+    # stamps must NOT be consumed.
+    lint_fn = lint_fn or real_cargo_lint
+    lint_ok, lint_output = lint_fn(repo_root)
+    if not lint_ok:
+        tail = lint_output[-2000:]
+        log_fn(f"REFUSING to push {branch}: it does not pass the lint gate CI applies "
+               f"(cargo clippy --all-features -- -D warnings). The branch and its commits are "
+               f"unaffected and the sweep-state cursor for {sorted(merge_infos)} has NOT advanced, "
+               f"so a later sweep retries these stamps whole.\n{tail}")
+        persist_cursor(durable_squads)
+        return {
+            "status": "lint_failed", "branch": branch, "message": tail,
+            "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
+            "measured_delta": measured_delta, "verified_delta_sum": sum(verified_deltas.values()),
+            "bisection": bisection_result, "judgment_entries": judgment_entries,
+            "preflight": health, "sweep_review_written": len(written), "fmt": fmt_result,
+        }
 
     push_ok, push_message = push_branch_fn(repo_root, branch)
     if not push_ok:
