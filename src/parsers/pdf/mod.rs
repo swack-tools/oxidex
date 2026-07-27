@@ -329,6 +329,9 @@ const TAG_COLOR_SPACE: u16 = 0xA001;
 const TAG_COMPONENTS_CONFIGURATION: u16 = 0x9101;
 const TAG_COMPRESSED_BITS_PER_PIXEL: u16 = 0x9102;
 const TAG_COMPRESSION: u16 = 0x0103;
+const TAG_EXIF_VERSION: u16 = 0x9000;
+const TAG_EXPOSURE_PROGRAM: u16 = 0x8822;
+const TAG_EXPOSURE_COMPENSATION: u16 = 0x9204;
 
 /// Known compression values (IFD0 Compression tag)
 const COMPRESSION_LABELS: &[(u16, &str)] = &[
@@ -341,6 +344,22 @@ const COMPRESSION_LABELS: &[(u16, &str)] = &[
     (7, "JPEG"),
     (8, "Adobe Deflate"),
     (32773, "PackBits"),
+];
+
+/// ExposureProgram (0x8822) PrintConv, transcribed verbatim from ExifTool
+/// 13.55 Exif.pm lines 2088-2098. Value 9 is non-standard EXIF (Canon) but
+/// ExifTool still decodes it, so it is kept here.
+const EXPOSURE_PROGRAM_LABELS: &[(u16, &str)] = &[
+    (0, "Not Defined"),
+    (1, "Manual"),
+    (2, "Program AE"),
+    (3, "Aperture-priority AE"),
+    (4, "Shutter speed priority AE"),
+    (5, "Creative (Slow speed)"),
+    (6, "Action (High speed)"),
+    (7, "Portrait"),
+    (8, "Landscape"),
+    (9, "Bulb"),
 ];
 
 #[derive(Clone, Copy)]
@@ -495,6 +514,55 @@ fn parse_exif_ifd(
         let count = read_embedded_tiff_u32(data, base.checked_add(4)?, byte_order)?;
 
         match tag {
+            // ExifTool 13.55 Exif.pm 0x9000 has no PrintConv, only
+            // `RawConv => '$val=~s/\0+$//; $val'`, so the four undef bytes are
+            // emitted verbatim minus any trailing NULs ("0210" for PDF.pdf).
+            TAG_EXIF_VERSION if field_type == 7 && count == 4 => {
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
+                    let text_end = bytes
+                        .iter()
+                        .rposition(|&b| b != 0)
+                        .map_or(0, |last| last.saturating_add(1));
+                    let s = String::from_utf8_lossy(&bytes[..text_end]).into_owned();
+                    if !s.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_EXIF_VERSION, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(s));
+                    }
+                }
+            }
+            TAG_EXPOSURE_PROGRAM if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    // Unknown values are dropped rather than guessed: ExifTool
+                    // would print the bare number, and emitting a made-up label
+                    // is worse than leaving the gap open.
+                    if let Some(label) = EXPOSURE_PROGRAM_LABELS
+                        .iter()
+                        .find(|&&(id, _)| id == raw)
+                        .map(|&(_, s)| s)
+                    {
+                        let key = crate::tag_db::lookup_tag_name(TAG_EXPOSURE_PROGRAM, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                    }
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0x9204 carries `Format => 'rational64s'`
+            // with the comment "Leica M8 patch (incorrectly written as
+            // rational64u)", i.e. the stored type is overridden and the value
+            // is always read signed - so rational64u (5) is accepted too.
+            TAG_EXPOSURE_COMPENSATION if field_type == 10 || field_type == 5 => {
+                if let Some((num, den)) = read_signed_rational_value(data, base, byte_order) {
+                    if den != 0 {
+                        let key =
+                            crate::tag_db::lookup_tag_name(TAG_EXPOSURE_COMPENSATION, "ExifIFD");
+                        metadata.insert(
+                            key,
+                            crate::core::TagValue::new_string(print_fraction(
+                                f64::from(num) / f64::from(den),
+                            )),
+                        );
+                    }
+                }
+            }
             TAG_APERTURE_VALUE if field_type == 5 => {
                 if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
                     let apex = if den != 0 {
@@ -647,6 +715,94 @@ fn read_unsigned_rational_value(
     Some((num, den))
 }
 
+fn read_signed_rational_value(
+    data: &[u8],
+    entry_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<(i32, i32)> {
+    let val_off = get_entry_value_offset(data, entry_offset, 8, 1, byte_order)?;
+    let num = read_embedded_tiff_u32(data, val_off, byte_order)? as i32;
+    let den = read_embedded_tiff_u32(data, val_off.checked_add(4)?, byte_order)? as i32;
+    Some((num, den))
+}
+
+/// Port of `Image::ExifTool::Exif::PrintFraction` (ExifTool 13.55 Exif.pm
+/// lines 5421-5440), used by ExposureCompensation and friends.
+///
+/// The archived patch this code comes from (pdf-bff9296f5e84, 2026-07-27)
+/// instead wrote `format!("{}", num as f64 / den as f64)` and still passed its
+/// recheck, because the only sample it was measured against - PDF.pdf - stores
+/// 0/100, and both spellings print "0" for that. Every non-zero value diverges:
+/// ExifTool prints 1/3 EV as "+1/3", the decimal form printed
+/// "0.3333333333333333". Verified on 2026-07-27 by running the verbatim Perl
+/// body of PrintFraction over the 27 inputs asserted in
+/// `print_fraction_matches_exiftool_reference_outputs`.
+fn print_fraction(val: f64) -> String {
+    // ExifTool's own comment: "avoid round-off errors".
+    let val = val * 1.00001;
+    if val == 0.0 {
+        return "0".to_string();
+    }
+    // Perl's int() truncates toward zero, matching f64::trunc.
+    if val.trunc() / val > 0.999 {
+        return format!("{:+}", val.trunc() as i64);
+    }
+    if (val * 2.0).trunc() / (val * 2.0) > 0.999 {
+        return format!("{:+}/2", (val * 2.0).trunc() as i64);
+    }
+    if (val * 3.0).trunc() / (val * 3.0) > 0.999 {
+        return format!("{:+}/3", (val * 3.0).trunc() as i64);
+    }
+    format_signed_g3(val)
+}
+
+/// Reproduces Perl's `sprintf("%+.3g", $val)`: three significant digits, `%e`
+/// style when the decimal exponent falls outside `-4 <= exp < 3`, trailing
+/// zeros stripped, sign always present.
+fn format_signed_g3(val: f64) -> String {
+    const SIG_DIGITS: i32 = 3;
+
+    // Round to SIG_DIGITS first so the exponent is the post-rounding one, the
+    // way C's %g defines it (0.9999 -> 1.00e+00, exponent 0, not -1).
+    let sci = format!("{:.*e}", (SIG_DIGITS - 1) as usize, val);
+    let (mantissa, exp) = match sci.split_once('e') {
+        Some((m, e)) => (m, e.parse::<i32>().unwrap_or(0)),
+        None => (sci.as_str(), 0),
+    };
+
+    let body = if exp < -4 || exp >= SIG_DIGITS {
+        format!(
+            "{}e{}{:02}",
+            trim_zeros(mantissa),
+            sign_char(exp),
+            exp.abs()
+        )
+    } else {
+        let decimals = usize::try_from(SIG_DIGITS - 1 - exp).unwrap_or(0);
+        trim_zeros(&format!("{:.*}", decimals, val)).to_string()
+    };
+
+    if body.starts_with('-') {
+        body
+    } else {
+        format!("+{}", body)
+    }
+}
+
+fn sign_char(exp: i32) -> char {
+    if exp < 0 { '-' } else { '+' }
+}
+
+/// Strips the trailing zeros (and any orphaned decimal point) that C's `%g`
+/// removes but Rust's `{:.*}` keeps.
+fn trim_zeros(s: &str) -> &str {
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        s
+    }
+}
+
 fn read_undefined_value(
     data: &[u8],
     entry_offset: usize,
@@ -713,6 +869,158 @@ mod embedded_exif_tests {
             .get_string("IFD0:Artist")
             .expect("must contain Artist tag");
         assert_eq!(artist, "Phil Harvey");
+    }
+
+    /// Builds a PDF-ish buffer wrapping a little-endian TIFF whose IFD0 points
+    /// at an ExifIFD holding ExposureProgram, ExifVersion and
+    /// ExposureCompensation (num/den supplied by the caller).
+    fn pdf_with_exif_ifd(exposure_program: u16, num: i32, den: i32) -> Vec<u8> {
+        let mut pdf = b"%PDF-1.4\nstream\n".to_vec();
+        // TIFF header, IFD0 at TIFF-relative offset 8.
+        pdf.extend_from_slice(b"II\x2a\x00\x08\x00\x00\x00");
+        // IFD0: one entry, ExifIFD (0x8769) long, pointing at offset 26.
+        pdf.extend_from_slice(b"\x01\x00");
+        pdf.extend_from_slice(b"\x69\x87\x04\x00\x01\x00\x00\x00\x1a\x00\x00\x00");
+        pdf.extend_from_slice(b"\x00\x00\x00\x00");
+        // ExifIFD at 26: three entries.
+        pdf.extend_from_slice(b"\x03\x00");
+        // 0x8822 ExposureProgram, int16u[1], inline.
+        pdf.extend_from_slice(b"\x22\x88\x03\x00\x01\x00\x00\x00");
+        pdf.extend_from_slice(&exposure_program.to_le_bytes());
+        pdf.extend_from_slice(b"\x00\x00");
+        // 0x9000 ExifVersion, undef[4], inline, NUL-padded to prove the
+        // RawConv trailing-NUL strip runs.
+        pdf.extend_from_slice(b"\x00\x90\x07\x00\x04\x00\x00\x00021\x00");
+        // 0x9204 ExposureCompensation, rational64s[1], value at offset 68.
+        pdf.extend_from_slice(b"\x04\x92\x0a\x00\x01\x00\x00\x00\x44\x00\x00\x00");
+        // Next-IFD pointer, then the rational at offset 68.
+        pdf.extend_from_slice(b"\x00\x00\x00\x00");
+        pdf.extend_from_slice(&num.to_le_bytes());
+        pdf.extend_from_slice(&den.to_le_bytes());
+        pdf.extend_from_slice(b"\nendstream\n%%EOF");
+        pdf
+    }
+
+    fn exif_tags(exposure_program: u16, num: i32, den: i32) -> MetadataMap {
+        find_embedded_exif_tags(&pdf_with_exif_ifd(exposure_program, num, den))
+            .expect("should find embedded EXIF tags")
+    }
+
+    #[test]
+    fn extracts_exif_version_stripping_trailing_nulls() {
+        // ExifTool 13.55 Exif.pm 0x9000: RawConv => '$val=~s/\0+$//; $val'
+        let map = exif_tags(2, 0, 100);
+        assert_eq!(
+            map.get_string("ExifIFD:ExifVersion")
+                .expect("must contain ExifVersion"),
+            "021"
+        );
+    }
+
+    #[test]
+    fn extracts_exposure_program_label() {
+        // ExifTool 13.55 Exif.pm 0x8822 PrintConv: 2 => 'Program AE'
+        let map = exif_tags(2, 0, 100);
+        assert_eq!(
+            map.get_string("ExifIFD:ExposureProgram")
+                .expect("must contain ExposureProgram"),
+            "Program AE"
+        );
+
+        // 4 => 'Shutter speed priority AE' - the full string, not a truncation.
+        let map = exif_tags(4, 0, 100);
+        assert_eq!(
+            map.get_string("ExifIFD:ExposureProgram")
+                .expect("must contain ExposureProgram"),
+            "Shutter speed priority AE"
+        );
+
+        // 5 => 'Creative (Slow speed)'
+        let map = exif_tags(5, 0, 100);
+        assert_eq!(
+            map.get_string("ExifIFD:ExposureProgram")
+                .expect("must contain ExposureProgram"),
+            "Creative (Slow speed)"
+        );
+    }
+
+    #[test]
+    fn drops_unknown_exposure_program_rather_than_guessing() {
+        // 42 is absent from the ExifTool table; leaving the gap open beats
+        // emitting an invented label.
+        let map = exif_tags(42, 0, 100);
+        assert!(map.get_string("ExifIFD:ExposureProgram").is_none());
+    }
+
+    #[test]
+    fn formats_exposure_compensation_as_exiftool_fraction() {
+        // PDF.pdf itself stores 0/100; every other case exercises the
+        // PrintFraction branches a plain decimal format would get wrong.
+        for (num, den, expected) in [
+            (0, 100, "0"),
+            (1, 3, "+1/3"),
+            (-1, 3, "-1/3"),
+            (2, 3, "+2/3"),
+            (1, 2, "+1/2"),
+            (-3, 2, "-3/2"),
+            (1, 1, "+1"),
+            (-3, 1, "-3"),
+            (7, 10, "+0.7"),
+        ] {
+            let map = exif_tags(2, num, den);
+            assert_eq!(
+                map.get_string("ExifIFD:ExposureCompensation")
+                    .as_deref()
+                    .expect("must contain ExposureCompensation"),
+                expected,
+                "{}/{} should print as {}",
+                num,
+                den,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn print_fraction_matches_exiftool_reference_outputs() {
+        // Expected strings produced by running the verbatim Perl body of
+        // Image::ExifTool::Exif::PrintFraction (Exif.pm 5421-5440) on
+        // 2026-07-27; they are literals, not re-derived from our own code.
+        for (input, expected) in [
+            (0.0, "0"),
+            (1.0, "+1"),
+            (-1.0, "-1"),
+            (2.0, "+2"),
+            (0.5, "+1/2"),
+            (-0.5, "-1/2"),
+            (1.0 / 3.0, "+1/3"),
+            (-1.0 / 3.0, "-1/3"),
+            (2.0 / 3.0, "+2/3"),
+            (-2.0 / 3.0, "-2/3"),
+            (4.0 / 3.0, "+4/3"),
+            (-4.0 / 3.0, "-4/3"),
+            (1.5, "+3/2"),
+            (-1.5, "-3/2"),
+            (0.7, "+0.7"),
+            (-0.7, "-0.7"),
+            (0.25, "+0.25"),
+            (-0.25, "-0.25"),
+            (-0.0625, "-0.0625"),
+            (0.3, "+0.3"),
+            (0.1, "+0.1"),
+            (3.7, "+3.7"),
+            (5.0, "+5"),
+            (-3.0, "-3"),
+            (1234.0, "+1234"),
+            (0.0001, "+0.0001"),
+            (1e-6, "+1e-06"),
+        ] {
+            assert_eq!(
+                super::print_fraction(input),
+                expected,
+                "PrintFraction({input})"
+            );
+        }
     }
 }
 
