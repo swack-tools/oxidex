@@ -310,6 +310,48 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         camera_make = Some(make_str.trim_end_matches('\0').trim().to_string());
                     }
 
+                    // CR2 IFD0: ExifTool renames StripOffsets (0x0111) and
+                    // StripByteCounts (0x0117) to PreviewImageStart/Length
+                    // under the EXIF group when TIFF_TYPE is "CR2".
+                    if format == RawFormat::CanonCR2 && ifd_index == 0 {
+                        match *tag_id {
+                            0x0111 => {
+                                let value = raw_bytes_to_simple_tag_value(
+                                    bytes, *field_type, *value_count, byte_order,
+                                );
+                                metadata.insert("EXIF:PreviewImageStart".to_string(), value);
+                                continue;
+                            }
+                            0x0117 => {
+                                let value = raw_bytes_to_simple_tag_value(
+                                    bytes, *field_type, *value_count, byte_order,
+                                );
+                                metadata.insert("EXIF:PreviewImageLength".to_string(), value);
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // CR2 IFD1: remap ThumbnailOffset/Length to EXIF group.
+                    // ExifTool reports IFD1 tags 0x0201/0x0202 as
+                    // EXIF:ThumbnailOffset and EXIF:ThumbnailLength.
+                    if format == RawFormat::CanonCR2 && ifd_index == 1 {
+                        match *tag_id {
+                            0x0201 if bytes.len() >= 4 => {
+                                let off = read_u32(bytes, byte_order) as i64;
+                                metadata.insert("EXIF:ThumbnailOffset".to_string(), TagValue::new_integer(off));
+                                continue;
+                            }
+                            0x0202 if bytes.len() >= 4 => {
+                                let len = read_u32(bytes, byte_order) as i64;
+                                metadata.insert("EXIF:ThumbnailLength".to_string(), TagValue::new_integer(len));
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+
                     // Convert tag to metadata
                     // Panasonic RW2 stores BitsPerSample in its proprietary
                     // IFD0 tag 0x000A and Compression in tag 0x000B instead
@@ -610,6 +652,29 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         }
         RawFormat::CanonCR2 => {
             extract_cr2_tags(&mut metadata);
+            // Extract binary thumbnail and preview image placeholders
+            // from IFD1 (ThumbnailOffset/Length) and IFD0
+            // (PreviewImageStart/Length, ex. StripOffsets/StripByteCounts).
+            for (off_key, len_key, img_key) in &[
+                ("EXIF:ThumbnailOffset", "EXIF:ThumbnailLength", "EXIF:ThumbnailImage"),
+                ("EXIF:PreviewImageStart", "EXIF:PreviewImageLength", "EXIF:PreviewImage"),
+            ] {
+                if let (Some(TagValue::Integer(off)), Some(TagValue::Integer(len))) =
+                    (metadata.get(*off_key), metadata.get(*len_key))
+                {
+                    let start = *off as usize;
+                    let length = *len as usize;
+                    if start + length <= data.len() {
+                        metadata.insert(
+                            (*img_key).to_string(),
+                            TagValue::new_string(format!(
+                                "(Binary data {} bytes, use -b option to extract)",
+                                length
+                            )),
+                        );
+                    }
+                }
+            }
         }
         RawFormat::NikonNEF | RawFormat::NikonNRW => {
             extract_nef_tags(&mut metadata);
