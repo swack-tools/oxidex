@@ -46,6 +46,10 @@ const LANGUAGE_PORTUGUESE_MACINTOSH: u16 = 8;
 const LANGUAGE_SWEDISH_MACINTOSH: u16 = 5;
 const LANGUAGE_KOREAN_MACINTOSH: u16 = 23;
 const LANGUAGE_DANISH_WINDOWS: u16 = 0x0406;
+const LANGUAGE_CHINESE_SIMPLIFIED_MACINTOSH: u16 = 33;
+const LANGUAGE_CHINESE_TRADITIONAL_MACINTOSH: u16 = 19;
+const LANGUAGE_CHINESE_SIMPLIFIED_WINDOWS: u16 = 0x0804;
+const LANGUAGE_CHINESE_TRADITIONAL_WINDOWS: u16 = 0x0404;
 const LANGUAGE_GERMAN_WINDOWS: u16 = 0x0407;
 const LANGUAGE_HEBREW_WINDOWS: u16 = 0x040d;
 const LANGUAGE_SPANISH_WINDOWS: u16 = 0x0c0a;
@@ -65,6 +69,7 @@ const NAME_COPYRIGHT: u16 = 0;
 const NAME_FONT_FAMILY: u16 = 1;
 const NAME_FONT_SUBFAMILY: u16 = 2;
 const NAME_FULL_FONT_NAME: u16 = 4;
+const NAME_FONT_UNIQUE_ID: u16 = 3;
 const NAME_VERSION: u16 = 5;
 const NAME_POSTSCRIPT_NAME: u16 = 6;
 const NAME_DESIGNER: u16 = 9;
@@ -240,12 +245,9 @@ impl TTFParser {
                 Some(Self::decode_mac_roman(str_data))
             }
             PLATFORM_MACINTOSH => {
-                // Handle non‑Roman Macintosh encodings.
+                // Handle non‑Roman Macintosh encodings, with fallback to UTF-8.
                 Self::decode_mac_encoding(record.encoding_id, str_data)
-            }
-            PLATFORM_MACINTOSH => {
-                // Preserve the previous behavior for unsupported Macintosh encodings.
-                String::from_utf8(str_data.to_vec()).ok()
+                    .or_else(|| String::from_utf8(str_data.to_vec()).ok())
             }
             _ => String::from_utf8(str_data.to_vec()).ok(),
         };
@@ -263,6 +265,7 @@ impl TTFParser {
             3 => "euc-kr",          // Mac Korean
             4 => "windows-1256",    // Mac Arabic
             5 => "x-mac-hebrew",    // Mac Hebrew
+            25 => "x-mac-chinesesimp", // Mac Simplified Chinese
             _ => return String::from_utf8(data.to_vec()).ok(),
         };
         let enc = Encoding::for_label(label.as_bytes())?;
@@ -290,6 +293,8 @@ impl TTFParser {
             (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH) => Some("ko"),
             (PLATFORM_MACINTOSH, LANGUAGE_PORTUGUESE_MACINTOSH) => Some("pt"),
             (PLATFORM_MACINTOSH, LANGUAGE_SWEDISH_MACINTOSH) => Some("sv"),
+            (PLATFORM_MACINTOSH, LANGUAGE_CHINESE_SIMPLIFIED_MACINTOSH) => Some("zh-CN"),
+            (PLATFORM_MACINTOSH, LANGUAGE_CHINESE_TRADITIONAL_MACINTOSH) => Some("zh-TW"),
             (PLATFORM_WINDOWS | PLATFORM_UNICODE, lang_id) => match lang_id {
                 LANGUAGE_DANISH_WINDOWS => Some("da"),
                 LANGUAGE_GERMAN_WINDOWS => Some("de"),
@@ -304,6 +309,8 @@ impl TTFParser {
                 LANGUAGE_NORWEGIAN_WINDOWS => Some("no"),
                 LANGUAGE_PORTUGUESE_WINDOWS => Some("pt"),
                 LANGUAGE_SWEDISH_WINDOWS => Some("sv"),
+                LANGUAGE_CHINESE_SIMPLIFIED_WINDOWS => Some("zh-CN"),
+                LANGUAGE_CHINESE_TRADITIONAL_WINDOWS => Some("zh-TW"),
                 _ => None,
             },
             (PLATFORM_OPENTYPE, lang_id) => match lang_id {
@@ -394,6 +401,23 @@ impl TTFParser {
                 if let Some(font_key) = font_key {
                     metadata.insert(font_key.to_string(), tag_value);
                 }
+            }
+        }
+
+        // Emit Font:FontSubfamilyID using name ID 3 (Unique font identifier)
+        if let Some(rec) = records
+            .iter()
+            .filter(|r| r.name_id == NAME_FONT_UNIQUE_ID)
+            .min_by_key(|record| Self::name_record_priority(record))
+        {
+            if let Ok(Some(value)) =
+                Self::extract_name_string(reader, table, rec, string_offset)
+                && !value.is_empty()
+            {
+                metadata.insert(
+                    "Font:FontSubfamilyID".to_string(),
+                    TagValue::String(value),
+                );
             }
         }
 
