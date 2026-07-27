@@ -325,6 +325,9 @@ const TIFF_ARTIST_TAG: u16 = 0x013b;
 const TAG_EXIF_IFD: u16 = 0x8769;
 const TAG_APERTURE_VALUE: u16 = 0x9202;
 const TAG_BRIGHTNESS_VALUE: u16 = 0x9203;
+const TAG_EXIF_VERSION: u16 = 0x9000;
+const TAG_EXPOSURE_COMPENSATION: u16 = 0x9204;
+const TAG_EXPOSURE_PROGRAM: u16 = 0x8822;
 const TAG_COLOR_SPACE: u16 = 0xA001;
 const TAG_COMPONENTS_CONFIGURATION: u16 = 0x9101;
 const TAG_COMPRESSED_BITS_PER_PIXEL: u16 = 0x9102;
@@ -333,6 +336,7 @@ const TAG_COPYRIGHT: u16 = 0x8298;
 const TAG_DATE_TIME_ORIGINAL: u16 = 0x9003;
 const TAG_CREATE_DATE: u16 = 0x9004;
 const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
+const TAG_EXIF_IMAGE_WIDTH: u16 = 0xA002;
 
 /// Known compression values (IFD0 Compression tag)
 const COMPRESSION_LABELS: &[(u16, &str)] = &[
@@ -345,6 +349,20 @@ const COMPRESSION_LABELS: &[(u16, &str)] = &[
     (7, "JPEG"),
     (8, "Adobe Deflate"),
     (32773, "PackBits"),
+];
+
+/// Known ExposureProgram values (ExifIFD 0x8822)
+const EXPOSURE_PROGRAM_LABELS: &[(u16, &str)] = &[
+    (0, "Not Defined"),
+    (1, "Manual"),
+    (2, "Program AE"),
+    (3, "Aperture-priority AE"),
+    (4, "Shutter speed priority AE"),
+    (5, "Creative (Slow speed)"),
+    (6, "Action (High speed)"),
+    (7, "Portrait"),
+    (8, "Landscape"),
+    (9, "Bulb"),
 ];
 
 #[derive(Clone, Copy)]
@@ -435,13 +453,14 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
                     }
                 }
             }
-            TAG_COMPRESSION if field_type == 3 => {
-                if let Some(raw) = read_short_value(data, base, byte_order) {
-                    if let Some(label) = COMPRESSION_LABELS
-                        .iter()
-                        .find(|&&(id, _)| id == raw)
-                        .map(|&(_, s)| s)
-                    {
+            TAG_COMPRESSION if field_type == 3 || field_type == 4 => {
+                let raw = if field_type == 3 {
+                    read_short_value(data, base, byte_order)
+                } else {
+                    read_long_value(data, base, byte_order).map(|v| v as u16)
+                };
+                if let Some(raw_val) = raw {
+                    if let Some(label) = COMPRESSION_LABELS.iter().find(|&&(id, _)| id == raw_val).map(|&(_, s)| s) {
                         let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "IFD0");
                         metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                     }
@@ -630,6 +649,67 @@ fn parse_exif_ifd(
                     );
                 }
             }
+            TAG_EXIF_VERSION if field_type == 7 => {
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, std::cmp::min(count, 4)) {
+                    let text = String::from_utf8_lossy(&bytes)
+                        .trim_end_matches('\0')
+                        .to_string();
+                    if !text.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_EXIF_VERSION, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(text));
+                    }
+                }
+            }
+            TAG_BRIGHTNESS_VALUE if field_type == 10 => {
+                if let Some((num, den)) = read_signed_rational_value(data, base, byte_order) {
+                    let val_str = if den == 0 {
+                        "0".to_string()
+                    } else if den == 1 {
+                        num.to_string()
+                    } else {
+                        format!("{}", num as f64 / den as f64)
+                    };
+                    let key = crate::tag_db::lookup_tag_name(TAG_BRIGHTNESS_VALUE, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(val_str));
+                }
+            }
+            TAG_EXPOSURE_COMPENSATION if field_type == 10 => {
+                if let Some((num, den)) = read_signed_rational_value(data, base, byte_order) {
+                    let val_str = if den == 0 {
+                        "0".to_string()
+                    } else if den == 1 {
+                        num.to_string()
+                    } else {
+                        format!("{}", num as f64 / den as f64)
+                    };
+                    let key = crate::tag_db::lookup_tag_name(TAG_EXPOSURE_COMPENSATION, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(val_str));
+                }
+            }
+            TAG_EXPOSURE_PROGRAM if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    if let Some(label) = EXPOSURE_PROGRAM_LABELS
+                        .iter()
+                        .find(|&&(id, _)| id == raw)
+                        .map(|&(_, s)| s)
+                    {
+                        let key = crate::tag_db::lookup_tag_name(TAG_EXPOSURE_PROGRAM, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                    }
+                }
+            }
+            TAG_EXIF_IMAGE_WIDTH if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_EXIF_IMAGE_WIDTH, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(raw.to_string()));
+                }
+            }
+            TAG_EXIF_IMAGE_WIDTH if field_type == 4 => {
+                if let Some(raw) = read_long_value(data, base, byte_order) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_EXIF_IMAGE_WIDTH, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(raw.to_string()));
+                }
+            }
             _ => {}
         }
     }
@@ -709,6 +789,18 @@ fn read_unsigned_rational_value(
     Some((num, den))
 }
 
+/// Read a signed rational (SRATIONAL) value from a TIFF entry.
+fn read_signed_rational_value(
+    data: &[u8],
+    entry_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<(i32, i32)> {
+    let val_off = get_entry_value_offset(data, entry_offset, 8, 1, byte_order)?;
+    let num = read_embedded_tiff_i32(data, val_off, byte_order)?;
+    let den = read_embedded_tiff_i32(data, val_off.checked_add(4)?, byte_order)?;
+    Some((num, den))
+}
+
 fn read_undefined_value(
     data: &[u8],
     entry_offset: usize,
@@ -749,6 +841,19 @@ fn read_embedded_tiff_u32(
     Some(match byte_order {
         EmbeddedTiffByteOrder::Little => u32::from_le_bytes(bytes),
         EmbeddedTiffByteOrder::Big => u32::from_be_bytes(bytes),
+    })
+}
+
+fn read_embedded_tiff_i32(
+    data: &[u8],
+    offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<i32> {
+    let end = offset.checked_add(4)?;
+    let bytes: [u8; 4] = data.get(offset..end)?.try_into().ok()?;
+    Some(match byte_order {
+        EmbeddedTiffByteOrder::Little => i32::from_le_bytes(bytes),
+        EmbeddedTiffByteOrder::Big => i32::from_be_bytes(bytes),
     })
 }
 
