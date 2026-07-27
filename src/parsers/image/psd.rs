@@ -488,6 +488,9 @@ fn lookup_ifd1_tag_name(tag_id: u16) -> String {
             return format!("{group}:ThumbnailOffset");
         }
     }
+    if tag_id == 0x0202 {
+        return "IFD1:ThumbnailLength".to_string();
+    }
 
     // ExifTool names 0x0202 ThumbnailLength when it occurs in IFD1.
     if tag_id == 0x0202 {
