@@ -42,7 +42,8 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0xC616 // CFAPlaneColor
+            0x828E // CFAPattern2
+                | 0xC616 // CFAPlaneColor
                 | 0xC617 // CFALayout
                 | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
@@ -50,6 +51,7 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
                 | 0xC620 // DefaultCropSize
                 | 0xC62D // BayerGreenSplit
                 | 0xC632 // AntiAliasStrength
+                | 0xC61E // DefaultScale
                 | 0xC65C // BestQualityScale
                 | 0xC68D // ActiveArea
         )
@@ -381,13 +383,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     ) {
                         TagValue::new_string(value)
                     } else if format == RawFormat::AdobeDNG {
-                        format_dng_integer_array(
+                        format_dng_display_value(
                             *tag_id,
                             bytes,
                             *field_type,
                             *value_count,
                             byte_order,
                         )
+                        .or_else(|| format_dng_integer_array(
+                            *tag_id, bytes, *field_type, *value_count, byte_order,
+                        ))
                         .map(TagValue::new_string)
                         .unwrap_or_else(|| {
                             raw_bytes_to_simple_tag_value(
@@ -777,6 +782,7 @@ fn format_dng_integer_array(
 ) -> Option<String> {
     let component_size = match tag_id {
         0xC619 if field_type == 3 => 2, // BlackLevelRepeatDim: SHORT[2]
+        0x828D if field_type == 3 => 2, // CFARepeatPatternDim: SHORT[2]
         0xC61F if field_type == 3 => 2, // DefaultCropOrigin: SHORT[2]
         0xC620 if field_type == 3 => 2, // DefaultCropSize: SHORT[2]
         0xC68D if field_type == 4 => 4, // ActiveArea: LONG[4]
@@ -827,6 +833,18 @@ fn format_dng_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // CFAPattern2: BYTE array displayed as space-separated values.
+        0x828E if field_type == 1 => {
+            let count = usize::try_from(value_count).ok()?;
+            Some(format_cfa_pattern2(bytes, count as u32))
+        }
+        // DefaultScale: RATIONAL[2] — two scale factors.
+        0xC61E if field_type == 5 && value_count >= 2 => {
+            let values = bytes.get(..16)?;
+            let s1 = format_rational_as_string(&values[0..8], byte_order)?;
+            let s2 = format_rational_as_string(&values[8..16], byte_order)?;
+            Some(format!("{} {}", s1, s2))
+        }
         // CFAPlaneColor: BYTE array, each byte maps to a color name.
         0xC616 if field_type == 1 => {
             let count = usize::try_from(value_count).ok()?;
@@ -1431,6 +1449,36 @@ fn extract_dng_tags(metadata: &mut MetadataMap) {
             "DNG:AvailableColorCalibration".to_string(),
             TagValue::new_string(available_color_tags.join(", ")),
         );
+    }
+
+    // --- JpgFromRaw / JpgFromRawLength / JpgFromRawStart ---
+    // These are derived from the IFD1 thumbnail when it is a JPEG preview.
+    let thumbnail_offset_key = lookup_tag_name(0x0201, "IFD1");
+    let thumbnail_length_key = lookup_tag_name(0x0202, "IFD1");
+    let compression_key = lookup_tag_name(0x0103, "IFD1");
+
+    if let (Some(compression), Some(offset_val), Some(length_val)) = (
+        metadata.get(&compression_key),
+        metadata.get(&thumbnail_offset_key).and_then(|v| if let TagValue::Integer(i) = v { Some(*i) } else { None }),
+        metadata.get(&thumbnail_length_key).and_then(|v| if let TagValue::Integer(i) = v { Some(*i) } else { None }),
+    ) {
+        if *compression == TagValue::Integer(6) {
+            metadata.insert(
+                "EXIF:JpgFromRawStart".to_string(),
+                TagValue::new_integer(offset_val),
+            );
+            metadata.insert(
+                "EXIF:JpgFromRawLength".to_string(),
+                TagValue::new_integer(length_val),
+            );
+            metadata.insert(
+                "EXIF:JpgFromRaw".to_string(),
+                TagValue::new_string(format!(
+                    "(Binary data {} bytes, use -b option to extract)",
+                    length_val
+                )),
+            );
+        }
     }
 }
 
