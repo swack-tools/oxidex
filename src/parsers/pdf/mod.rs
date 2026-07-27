@@ -338,6 +338,10 @@ const TAG_EXIF_IMAGE_WIDTH: u16 = 0xA002;
 const TAG_EXIF_VERSION: u16 = 0x9000;
 const TAG_EXPOSURE_COMPENSATION: u16 = 0x9204;
 const TAG_EXPOSURE_PROGRAM: u16 = 0x8822;
+const TAG_FILE_SOURCE: u16 = 0xA300;
+const TAG_FLASH: u16 = 0x9209;
+const TAG_FLASHPIX_VERSION: u16 = 0xA000;
+const TAG_FOCAL_PLANE_RESOLUTION_UNIT: u16 = 0xA210;
 
 /// Known compression values (IFD0 Compression tag)
 const COMPRESSION_LABELS: &[(u16, &str)] = &[
@@ -697,6 +701,62 @@ fn parse_exif_ifd(
                         let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "EXIF");
                         metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                     }
+                }
+            }
+            TAG_FILE_SOURCE if field_type == 7 => {
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
+                    let source_str = match bytes.first().copied() {
+                        Some(3) => "Digital Camera",
+                        _ => "Unknown",
+                    };
+                    let key = crate::tag_db::lookup_tag_name(TAG_FILE_SOURCE, "EXIF");
+                    metadata.insert(key, crate::core::TagValue::new_string(source_str.to_string()));
+                }
+            }
+            TAG_FLASH if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    let mut parts = Vec::new();
+                    if raw & 1 != 0 {
+                        parts.push("Fired");
+                    }
+                    if raw & (1 << 1) != 0 {
+                        parts.push("Return detected");
+                    }
+                    if raw & (1 << 2) != 0 {
+                        parts.push("Return not detected");
+                    }
+                    if raw & (1 << 3) != 0 {
+                        parts.push("Auto");
+                    }
+                    if raw & (1 << 4) != 0 {
+                        parts.push("No flash function");
+                    }
+                    if raw & (1 << 5) != 0 {
+                        parts.push("Red-eye reduction");
+                    }
+                    let label = if parts.is_empty() { "No Flash".to_string() } else { parts.join(", ") };
+                    let key = crate::tag_db::lookup_tag_name(TAG_FLASH, "EXIF");
+                    metadata.insert(key, crate::core::TagValue::new_string(label));
+                }
+            }
+            TAG_FLASHPIX_VERSION if field_type == 7 => {
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
+                    if bytes.len() == 4 {
+                        let version_str = String::from_utf8_lossy(&bytes).into_owned();
+                        let key = crate::tag_db::lookup_tag_name(TAG_FLASHPIX_VERSION, "EXIF");
+                        metadata.insert(key, crate::core::TagValue::new_string(version_str));
+                    }
+                }
+            }
+            TAG_FOCAL_PLANE_RESOLUTION_UNIT if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    let unit_str = match raw {
+                        2 => "inches",
+                        3 => "cm",
+                        _ => "Unknown",
+                    };
+                    let key = crate::tag_db::lookup_tag_name(TAG_FOCAL_PLANE_RESOLUTION_UNIT, "EXIF");
+                    metadata.insert(key, crate::core::TagValue::new_string(unit_str.to_string()));
                 }
             }
             _ => {}
