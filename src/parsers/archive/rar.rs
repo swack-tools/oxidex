@@ -12,7 +12,7 @@ use crate::io::EndianReader;
 /// RAR signature: "Rar!" (0x52 0x61 0x72 0x21)
 const RAR_SIGNATURE: &[u8] = b"Rar!";
 
-/// RAR5 signature (additional marker at offset 7)
+/// RAR5 signature (additional marker at offset 6)
 const RAR5_MARKER: u8 = 0x01;
 
 /// RAR4 block types
@@ -64,8 +64,8 @@ impl RARParser {
 
         let header = reader.read(0, 8)?;
         if header.len() >= 7 && &header[0..4] == RAR_SIGNATURE {
-            // RAR5 has 0x01 at offset 7
-            if header.len() >= 8 && header[7] == RAR5_MARKER {
+            // RAR5 has 0x01 at offset 6
+            if header.len() >= 7 && header[6] == RAR5_MARKER {
                 Ok("5.0")
             } else {
                 Ok("4.x")
