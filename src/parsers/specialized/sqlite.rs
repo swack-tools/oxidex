@@ -279,10 +279,22 @@ impl FormatParser for SQLiteParser {
             "PageSize".to_string(),
             TagValue::String(format!("{} bytes", page_size)),
         );
-        // Add SQLITE:PageSize for Worker 29 compatibility
+        // Add SQLITE:PageSize for Worker 29 compatibility.
+        //
+        // Must mirror the unprefixed PageSize value. Until 2026-07-26 this
+        // inserted a bare integer while PageSize carried "<n> bytes", so a real
+        // database emitted both at once:
+        //   $ oxidex dup.db | rg -i pagesize
+        //   PageSize: 4096 bytes
+        //   SQLITE:PageSize: 4096
+        // There is no ExifTool ground truth to arbitrate the two -- exiftool
+        // 13.55 answers `Error : Unknown file type` for a SQLite database -- so
+        // the tiebreak is the representation the existing tests already pin
+        // ("4096 bytes" at tests/forensic/sqlite_tests.rs:137 and the 65536
+        // special case at :155).
         metadata.insert(
             "SQLITE:PageSize".to_string(),
-            TagValue::new_integer(page_size as i64),
+            TagValue::String(format!("{} bytes", page_size)),
         );
 
         let write_version = Self::read_write_version(reader)?;
@@ -492,6 +504,7 @@ pub fn parse_sqlite_metadata(reader: &dyn FileReader) -> std::result::Result<Met
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+    use crate::test_support::assert_no_divergent_prefixed_duplicates;
 
     /// Creates a minimal valid SQLite header for testing
     fn create_test_header() -> Vec<u8> {
@@ -690,5 +703,34 @@ mod tests {
             SQLiteParser::read_sqlite_version_number(&reader).unwrap(),
             3040001
         );
+    }
+
+    /// `PageSize` and `SQLITE:PageSize` are one logical tag and must render
+    /// identically.
+    ///
+    /// There is no ExifTool ground truth to arbitrate the representation --
+    /// `exiftool -G1 dup.db` answers `[ExifTool] Error : Unknown file type` for
+    /// a real SQLite database under 13.55 -- so the tiebreak is the rendering
+    /// the surrounding tests already pin ("4096 bytes", and "65536 bytes" for
+    /// the page-size-1 special case). Until 2026-07-26 the SQLITE: alias
+    /// carried a bare integer, so a real database emitted `PageSize: 4096
+    /// bytes` next to `SQLITE:PageSize: 4096`; the comparison harness strips
+    /// the group prefix before matching and could score either one.
+    #[test]
+    fn sqlite_page_size_agrees_across_prefixed_and_bare_keys() {
+        let reader = TestReader::new(create_test_header());
+        let metadata = parse_sqlite_metadata(&reader).unwrap();
+
+        assert_eq!(
+            metadata.get("PageSize"),
+            Some(&TagValue::String("4096 bytes".to_string())),
+        );
+        assert_eq!(
+            metadata.get("SQLITE:PageSize"),
+            metadata.get("PageSize"),
+            "the SQLITE: alias must carry the same value as the bare key",
+        );
+
+        assert_no_divergent_prefixed_duplicates(&metadata);
     }
 }
