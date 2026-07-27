@@ -501,16 +501,31 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     };
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
+                        let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+                            // NEF maps SubIFD tags into the EXIF group and
+                            // applies format-specific decoding where needed.
+                            if is_nef {
+                                if let Some((tag_name, tag_value)) = format_nef_subifd_tag(
+                                    tag_id, field_type, value_count, raw_bytes.as_ref(), byte_order,
+                                ) {
+                                    metadata.insert(tag_name, tag_value);
+                                    continue;
+                                }
+                                // Tags not handled specially fall through to the
+                                // generic path which renames them to EXIF: below.
+                            }
+
                             // TIFF/EP tag 0x828E (CFAPattern2) is a plain
                             // int8u array with no dimension header, unlike
                             // EXIF tag 0xA302 (CFAPattern). The generic
                             // decoder below has no BYTE-array case and falls
                             // back to raw TagValue::Binary, so this still
                             // needs its own formatting -- but the name comes
-                            // from the same lookup_tag_name(tag_id,
-                            // sub_ifd_name) every other tag in this loop
-                            // uses, for consistency.
+                            // from the same lookup every other tag in this
+                            // loop uses, for consistency.
+                            // CFAPattern2 stays under its physical SubIFD
+                            // group for all formats, including NEF.
                             if tag_id == 0x828E {
                                 metadata.insert(
                                     lookup_tag_name(tag_id, sub_ifd_name),
@@ -522,7 +537,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 continue;
                             }
 
-                            let tag_name = lookup_raw_tag_name(tag_id, sub_ifd_name, format);
+                            let tag_name = if is_nef {
+                                lookup_tag_name(tag_id, "EXIF")
+                            } else {
+                                lookup_raw_tag_name(tag_id, sub_ifd_name, format)
+                            };
                             let bytes = raw_bytes.as_ref();
                             let tag_value = if format == RawFormat::AdobeDNG {
                                 format_dng_integer_array(
@@ -2670,6 +2689,48 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     }
 
     Ok(metadata)
+}
+
+/// Map NEF SubIFD tags to EXIF group names and apply format-specific decoding.
+///
+/// Returns `Some((tag_name, tag_value))` when the tag requires special handling
+/// (Nikon-specific compression string, JPEG offset aliases, TIFF-EPStandardID
+/// version formatting, CFARepeatPatternDim multi-value formatting). Returns
+/// `None` to let the generic SubIFD path assign the tag with `EXIF:` prefix
+/// via `lookup_tag_name(tag_id, "EXIF")` and `raw_bytes_to_simple_tag_value`.
+fn format_nef_subifd_tag(
+    tag_id: u16,
+    _field_type: u16,
+    _value_count: u32,
+    bytes: &[u8],
+    byte_order: ByteOrder,
+) -> Option<(String, TagValue)> {
+    match tag_id {
+        // Compression: Nikon lossless compressed (34713) -> "Nikon NEF Compressed"
+        0x0103 => {
+            if bytes.len() >= 4 && read_u32(bytes, byte_order) == 34713 {
+                Some(("EXIF:Compression".to_string(), TagValue::new_string("Nikon NEF Compressed".to_string())))
+            } else {
+                None // uncompressed/JPEG: let generic path emit integer
+            }
+        }
+        // JPEGInterchangeFormat -> JpgFromRawStart
+        0x0201 => Some(("EXIF:JpgFromRawStart".to_string(), TagValue::new_integer(read_u32(bytes, byte_order) as i64))),
+        // JPEGInterchangeFormatLength -> JpgFromRawLength
+        0x0202 => Some(("EXIF:JpgFromRawLength".to_string(), TagValue::new_integer(read_u32(bytes, byte_order) as i64))),
+        // TIFF-EPStandardID: UNDEFINED[4] -> dotted version string
+        0x828F => {
+            let ver = format!("{}.{}.{}.{}", bytes.first().copied().unwrap_or(0), bytes.get(1).copied().unwrap_or(0), bytes.get(2).copied().unwrap_or(0), bytes.get(3).copied().unwrap_or(0));
+            Some(("EXIF:TIFF-EPStandardID".to_string(), TagValue::new_string(ver)))
+        }
+        // CFARepeatPatternDim: two SHORT values -> "h v"
+        0x828D => {
+            let h = read_tiff_u16(bytes, byte_order)?;
+            let v = read_tiff_u16(bytes.get(2..)?, byte_order)?;
+            Some(("EXIF:CFARepeatPatternDim".to_string(), TagValue::new_string(format!("{} {}", h, v))))
+        }
+        _ => None,
+    }
 }
 
 // ===== Helper Functions =====
