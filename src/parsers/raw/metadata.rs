@@ -925,6 +925,67 @@ fn format_exif_display_value(
             2 => Some("Hard".to_string()),
             _ => None,
         },
+        // Compression: SHORT[1] (Exif.pm 0x0103 -> %compression).
+        0x0103 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("Uncompressed".to_string()),
+            2 => Some("CCITT 1D".to_string()),
+            3 => Some("T4/Group 3 Fax".to_string()),
+            4 => Some("T6/Group 4 Fax".to_string()),
+            5 => Some("LZW".to_string()),
+            6 => Some("JPEG (old-style)".to_string()),
+            7 => Some("JPEG".to_string()),
+            8 => Some("Adobe Deflate".to_string()),
+            9 => Some("JBIG B&W".to_string()),
+            10 => Some("JBIG Color".to_string()),
+            32766 => Some("Next".to_string()),
+            32767 => Some("Sony RAW".to_string()),
+            32769 => Some("Packed RAW".to_string()),
+            32770 => Some("Samsung SRW".to_string()),
+            32771 => Some("CCIRLEW".to_string()),
+            32772 => Some("Samsung SRW v2".to_string()),
+            32773 => Some("PackBits".to_string()),
+            32774 => Some("Perceptive Pack".to_string()),
+            34712 => Some("JPEG 2000".to_string()),
+            34713 => Some("Nikon NEF Compressed".to_string()),
+            65000 => Some("Kodak DCR Compressed".to_string()),
+            65535 => Some("Pentax PEF Compressed".to_string()),
+            _ => None,
+        },
+        // ExposureProgram: SHORT[1] (Exif.pm 0x8822 PrintConv).
+        0x8822 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Not Defined".to_string()),
+            1 => Some("Manual".to_string()),
+            2 => Some("Program AE".to_string()),
+            3 => Some("Aperture-priority AE".to_string()),
+            4 => Some("Shutter speed priority AE".to_string()),
+            5 => Some("Creative (Slow speed)".to_string()),
+            6 => Some("Action (High speed)".to_string()),
+            7 => Some("Portrait".to_string()),
+            8 => Some("Landscape".to_string()),
+            9 => Some("Bulb".to_string()),
+            _ => None,
+        },
+        // FileSource: UNDEFINED[1] (Exif.pm 0x920A).
+        0x920A if field_type == 7 && value_count >= 1 => {
+            let val = bytes.first()?;
+            Some(match val {
+                0 => "Other".to_string(),
+                1 => "Scanner of Transparency".to_string(),
+                2 => "Scanner of Reflection".to_string(),
+                3 => "Digital Camera".to_string(),
+                _ => return None,
+            })
+        },
+        // Flash: SHORT[1] (Exif.pm 0x9209).
+        0x9209 if field_type == 3 && value_count >= 1 => {
+            let val = read_tiff_u16(bytes, byte_order)?;
+            Some(match val {
+                0 => "No Flash".to_string(),
+                1 => "Fired".to_string(),
+                5 => "Fired, Return not detected".to_string(),
+                _ => format!("{}", val),
+            })
+        },
         _ => None,
     }
 }
@@ -2175,12 +2236,11 @@ fn extract_x3f_preview_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) {
         if *tag_id == 0x8769 && bytes.len() >= 4 {
             exif_ifd_offset = Some(read_u32(bytes, byte_order) as u64);
         } else if *tag_id == 0x0103 && !metadata.contains_key("EXIF:Compression") {
-            let compression = read_u32(bytes, byte_order);
-            if compression == 6 {
-                metadata.insert(
-                    "EXIF:Compression".to_string(),
-                    TagValue::new_string("JPEG (old-style)"),
-                );
+            if let Some(formatted) = format_exif_display_value(
+                *tag_id, bytes, *_field_type, *_value_count, byte_order,
+            ) {
+                metadata.insert("EXIF:Compression".to_string(),
+                              TagValue::new_string(formatted));
             }
         }
     }
@@ -2199,6 +2259,9 @@ fn extract_x3f_preview_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) {
                     0xA402 => "EXIF:ExposureMode",
                     0xA001 => "ExifIFD:ColorSpace",
                     0xA401 => "ExifIFD:CustomRendered",
+                    0x8822 => "EXIF:ExposureProgram",
+                    0x920A => "EXIF:FileSource",
+                    0x9209 => "EXIF:Flash",
                     _ => continue,
                 };
                 if metadata.contains_key(tag_name) {
