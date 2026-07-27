@@ -168,6 +168,17 @@ CONDITIONAL_TRAILERS = tuple(k for k in REQUIRED_TRAILERS if k != "Perl-Ref")
 #      overlord_sweep.classify_for_judgment_queue -- which shares this
 #      extractor -- returned no reason, i.e. the commit shipped as
 #      machine_accepted with no human ever seeing the value
+#   7  evidence trailers are checked for TRUTH, not just presence
+#      (2026-07-27): a JPEG fix passed the whole gate citing
+#      `Perl-Ref: NikonCustom.pm` for six APP12 tags that module does not
+#      contain, and `Sample: ExifTool.jpg`, an Agfa file four of the six
+#      tags never appear in and whose bytes the edited code path does not
+#      even route (the APP12 router compares b"AGFA"; the file says
+#      "Agfa"). Zero of its six tags were reachable through its own cited
+#      evidence. This matters most because the judgment-queue daemon
+#      re-derives trailers to clear the ~378 missing-trailer quarantines,
+#      so a trailer that can be plausible and false is a mechanism for
+#      manufacturing evidence at scale
 #
 # NOTE ON DIRECTION: the paragraph above frames a bump as "a rejection
 # can become an acceptance", because that is the case the merger's retry
@@ -178,7 +189,7 @@ CONDITIONAL_TRAILERS = tuple(k for k in REQUIRED_TRAILERS if k != "Perl-Ref")
 # human reading quarantine.jsonl months from now knows which ruleset
 # produced a verdict, and a stricter rule still changes what a re-offered
 # head is measured against.
-POLICY_VERSION = 6
+POLICY_VERSION = 7
 
 # Flags that are recorded for the human record but do NOT block
 # admission. `ownership:` says the fix landed outside the worker's squad
@@ -724,6 +735,120 @@ def check_trailers(trailers, require_perl_ref=True):
         if not values:
             flags.append(f"missing-trailer:{key}")
     return flags
+
+
+def check_trailer_truth(trailers, perl_lib=None, samples_cache=None):
+    """Flags for evidence trailers that are PRESENT but NOT TRUE.
+
+    check_trailers above only asks whether a trailer exists. Nothing asked
+    whether it was accurate, and on 2026-07-27 a JPEG fix commit passed the
+    whole gate while citing:
+
+      Perl-Ref: NikonCustom.pm   -- Nikon custom-settings binary tables,
+                                    containing NONE of the six APP12 tags
+                                    it claimed to fix (the truth is APP12.pm)
+      Sample:   ExifTool.jpg     -- an Agfa file. Four of the six tags do not
+                                    appear in it at all, and the edited code
+                                    path never executes on it, because the
+                                    APP12 router byte-compares b"AGFA" while
+                                    that file begins "Agfa".
+
+    So ZERO of its six tags were reachable through its own cited evidence.
+    The code happened to be correct -- unrelated Olympus samples did the real
+    validating, since the recheck reports a per-FORMAT gap count rather than a
+    per-sample one -- but the evidence chain attesting to it was fiction.
+
+    That matters far beyond one commit: the judgment-queue daemon re-derives
+    trailers to clear the ~378 missing-trailer quarantines, so a trailer that
+    can be plausible and false is a mechanism for manufacturing evidence at
+    scale. These checks make a wrong citation as visible as an absent one.
+
+    Both checks are conservative in the same direction as the rest of this
+    module: a missing --perl-lib, an unresolvable module, or an empty samples
+    cache yields NO flag rather than a guess. Only positive disproof -- the
+    file exists and demonstrably lacks the tag -- is reported.
+    """
+    flags = []
+    tags = [t for t in trailers.get("Tag", []) if t]
+    if not tags:
+        return flags
+
+    # --- Perl-Ref names a module that actually documents these tags -------
+    perl_refs = [r for r in trailers.get("Perl-Ref", []) if r]
+    if perl_lib is not None and perl_refs:
+        for ref in perl_refs:
+            module = resolve_perl_module(ref, Path(perl_lib))
+            if module is None:
+                continue  # unresolvable: already covered by other flags
+            try:
+                text = module.read_text(errors="replace")
+            except OSError:
+                continue
+            # DEFINES, not merely mentions. Presence alone cannot tell the
+            # right module from the wrong one: NikonCustom.pm contains
+            # `24 => 'Protect'` -- a Nikon custom-setting VALUE that happens
+            # to share the name -- while the true source, APP12.pm, has
+            # `Protect => { }`, the tag definition. Both "mention Protect".
+            # Only the table-key position distinguishes them.
+            if any(_defines_tag(text, _tag_local_name(t)) for t in tags):
+                continue
+            # The cited module defines none of them. Before calling that a
+            # miscitation, confirm the tags are documentable AT ALL: ExifTool
+            # names some tags at runtime (ProcessAPP12's `ucfirst $tag`
+            # fallback produces REV/S0/STB1/STB3/STB4, which appear in no
+            # table anywhere), and a commit fixing only those would otherwise
+            # be flagged against a perfectly correct Perl-Ref.
+            # _perl_lib_corpus returns BYTES (it exists for byte-exact
+            # PrintConv comparison); decode before regex-matching text.
+            corpus = _perl_lib_corpus(Path(perl_lib))
+            if isinstance(corpus, bytes):
+                corpus = corpus.decode("utf-8", errors="replace")
+            if any(_defines_tag(corpus, _tag_local_name(t)) for t in tags):
+                flags.append(f"perl-ref-documents-none:{Path(ref).name}")
+
+    # --- Sample names a file that actually carries these tags -------------
+    samples = [s for s in trailers.get("Sample", []) if s]
+    if samples_cache is not None and samples:
+        cache = Path(samples_cache)
+        cited = {Path(s).name for s in samples}
+        for tag in tags:
+            carriers = find_samples_carrying_tag(cache, tag)
+            if not carriers:
+                continue  # nothing known about this tag: cannot disprove
+            if not (cited & {Path(c).name for c in carriers}):
+                flags.append(f"sample-lacks-tag:{_flag_token(tag)}")
+    return flags
+
+
+def _defines_tag(perl_text, name):
+    """True if `name` appears in TABLE-KEY position in Perl source.
+
+    ExifTool tag tables are `Name => { ... }` or `Name => 'Something'`, with
+    the name at the start of an element. A tag NAME used as a PrintConv
+    VALUE is the other way round -- `24 => 'Protect'` -- and matching that
+    is what made a wrong-module citation indistinguishable from a right one
+    (NikonCustom.pm and APP12.pm both "mention Protect"; only APP12.pm
+    defines it). Hex/decimal-keyed tables spell the name on the following
+    Name => line instead, so that form counts too.
+    """
+    key_form = rf"(?m)^\s*{re.escape(name)}\s*=>"
+    name_form = rf"(?m)^\s*Name\s*=>\s*'{re.escape(name)}'"
+    return bool(re.search(key_form, perl_text) or re.search(name_form, perl_text))
+
+
+def _tag_local_name(tag):
+    """"APP12:Protect" -> "Protect". A Perl tag table spells the tag's own
+    name; the family prefix is oxidex's output convention, not ExifTool's
+    source convention, so it must be stripped before searching a .pm."""
+    _, sep, name = tag.partition(":")
+    return name if sep else tag
+
+
+def _flag_token(value):
+    """Flags are joined into a single comma-separated ledger field, so a
+    token carrying a comma or whitespace would split into two bogus flags
+    downstream. Same defensive shape as _clamp_quarantine_flags."""
+    return re.sub(r"[,\s]+", "_", value.strip())
 
 
 # ---------------------------------------------------------------------------
@@ -1405,6 +1530,12 @@ def validate_commit(
     # every fix whose diff is pure wiring).
     trailer_flags = check_trailers(
         trailers, require_perl_ref=bool(extract_added_map_values(diff_text)[0])
+    )
+    # Presence is not truth -- see check_trailer_truth. Runs after the
+    # presence check because a missing trailer is already flagged there and
+    # has nothing to disprove.
+    trailer_flags += check_trailer_truth(
+        trailers, perl_lib=perl_lib, samples_cache=samples_cache
     )
 
     globs_by_squad = load_squad_globs(squads_toml) if squads_toml else {}
