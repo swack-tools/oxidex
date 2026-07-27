@@ -322,7 +322,7 @@ fn extract_header_metadata(header: &ElfHeader, metadata: &mut MetadataMap) {
     // ExifTool-compatible ObjectFileType (PrintConv strings)
     metadata.insert(
         "EXE:ObjectFileType".to_string(),
-        TagValue::String(header.object_file_type_str().to_string()),
+        TagValue::String(header.object_file_type_str()),
     );
 
     // Object type
@@ -339,7 +339,7 @@ fn extract_header_metadata(header: &ElfHeader, metadata: &mut MetadataMap) {
     // ExifTool-compatible CPUType (PrintConv strings)
     metadata.insert(
         "EXE:CPUType".to_string(),
-        TagValue::String(header.cpu_type_str().to_string()),
+        TagValue::String(header.cpu_type_str()),
     );
 
     metadata.insert(
