@@ -4,7 +4,7 @@
 use anyhow::{Context, Result};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A single ExifTool tag as reported by `exiftool -f -listx`.
 #[derive(Debug, Clone, PartialEq)]
@@ -110,6 +110,65 @@ pub fn parse_listx(xml: &str) -> Result<Vec<TagRecord>> {
     }
 
     Ok(tags)
+}
+
+/// Per table, the set of PrintConv *display values* its tags map to.
+///
+/// `-listx` nests a tag's PrintConv table inside the tag itself:
+///
+/// ```xml
+/// <tag id='41986' name='ExposureMode'>
+///   <values><key id='1'><val lang='en'>Manual</val></key></values>
+/// </tag>
+/// ```
+///
+/// Those `<key>` elements are value rows, not tags. Reading them as tags is
+/// what produced 16,005 bogus entries in the YAML registry (a tag literally
+/// named `Higher resolution image exists`), so
+/// `tests/tag_registry_invariants.rs` uses this to assert the registry never
+/// lists a display value as a tag again.
+pub fn parse_listx_print_conv_values(xml: &str) -> Result<HashMap<String, HashSet<String>>> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut out: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut current_table = String::new();
+    let mut capturing_en_val = false;
+    let mut buf = Vec::new();
+
+    loop {
+        match reader
+            .read_event_into(&mut buf)
+            .context("failed to read XML event from exiftool -listx output")?
+        {
+            Event::Start(e) | Event::Empty(e) if e.name().as_ref() == b"table" => {
+                current_table = attr_value(&e, "name").unwrap_or_default();
+            }
+            Event::Start(e) if e.name().as_ref() == b"val" => {
+                capturing_en_val = attr_value(&e, "lang").as_deref() == Some("en");
+            }
+            Event::Text(t) if capturing_en_val => {
+                let decoded = t
+                    .decode()
+                    .context("invalid text content in <val> element")?;
+                let text = quick_xml::escape::unescape(&decoded)
+                    .unwrap_or_else(|_| decoded.clone())
+                    .into_owned();
+                out.entry(current_table.clone())
+                    .or_default()
+                    .insert(text.trim().to_string());
+                capturing_en_val = false;
+            }
+            Event::End(e) if e.name().as_ref() == b"val" => {
+                capturing_en_val = false;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(out)
 }
 
 /// Routes an ExifTool table name (e.g. `Canon::AFConfig`, `Exif::Main`) to
