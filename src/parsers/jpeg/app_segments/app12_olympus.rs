@@ -112,6 +112,12 @@ const KNOWN_TAGS: &[&str] = &[
     "STB1",
     "STB3",
     "STB4",
+    "STB5",
+    "STB6",
+    "TagQ",
+    "TagR",
+    "TagS",
+    "ThmLen",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -678,7 +684,7 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             // ExifTool exposes the Olympus STB1, STB3, STB4 diagnostic
             // fields in the APP12 group using their original names.
             let stb_upper = key.to_ascii_uppercase();
-            if matches!(stb_upper.as_str(), "STB1" | "STB3" | "STB4") {
+            if matches!(stb_upper.as_str(), "STB1" | "STB3" | "STB4" | "STB5" | "STB6") {
                 let app12_value = value
                     .parse::<i64>()
                     .map(TagValue::Integer)
@@ -700,6 +706,43 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:MTR1".to_string(), app12_value);
+            }
+
+            // ExifTool exposes TagQ, TagR, TagS, ThmLen in the APP12 group
+            // from Picture Info records (e.g. ExifTool.jpg, OlympusD340L.jpg).
+            if key.eq_ignore_ascii_case("TagQ") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:TagQ".to_string(), app12_value);
+            }
+
+            if key.eq_ignore_ascii_case("TagR") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:TagR".to_string(), app12_value);
+            }
+
+            // TagS is a string value (e.g. "v" in OlympusD340L.jpg).
+            // ExifTool exposes it in the APP12 group verbatim.
+            if key.eq_ignore_ascii_case("TagS") {
+                metadata.insert(
+                    "APP12:TagS".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
+            // ThmLen is a thumbnail-length integer value. ExifTool exposes
+            // it in the APP12 group (e.g. 3802 in ExifTool.jpg).
+            if key.eq_ignore_ascii_case("ThmLen") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:ThmLen".to_string(), app12_value);
             }
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
