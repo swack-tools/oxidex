@@ -151,13 +151,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Compare with baseline for regression detection
                         let t_compare = std::time::Instant::now();
                         let previous = baseline.as_ref().and_then(|b| b.by_format.get(&format));
-                        let comparison = ComparisonEngine::compare(
+                        let extractor_duplicates = oxidex_result.duplicate_emissions.clone();
+                        let mut comparison = ComparisonEngine::compare(
                             oxidex_result.tags,
                             exiftool_result.tags,
                             &format,
                             files_tested,
                             previous,
                         );
+                        // Union, not assignment. `compare` keeps its own
+                        // per-(source_file, key) distinct-value check for
+                        // duplicates that reach it through `tags`; the
+                        // extractor reports the ones `flatten_metadata`
+                        // already collapsed, which `compare` cannot see at
+                        // all (2026-07-26 -- this is the channel that made
+                        // duplicate_emissions permanently empty).
+                        comparison.duplicate_emissions.extend(extractor_duplicates);
+                        comparison.duplicate_emissions.sort();
+                        comparison.duplicate_emissions.dedup();
                         println!(
                             "  Result: {} [compare {:.2}s]",
                             comparison.summary(),
