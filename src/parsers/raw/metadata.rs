@@ -323,6 +323,25 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         continue; // Don't add raw MakerNote to metadata, will be parsed separately
                     }
 
+                        // NEF IFD0 holds a small thumbnail; the authoritative
+                        // image tags live in the SubIFD.  Defer them so only
+                        // a single EXIF: entry is emitted.
+                        if matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW) && ifd_index == 0 && matches!(*tag_id,
+                            0x0100 | 0x0101 | 0x0102 | 0x0103 | 0x0106   // ImageWidth/Height, BitsPerSample, Compression, Photometric
+                            | 0x0111 | 0x0115 | 0x0116 | 0x0117           // StripOffsets, SamplesPerPixel, RowsPerStrip, StripByteCounts
+                            | 0x011A | 0x011B                              // XResolution, YResolution
+                        ) {
+                            continue;
+                        }
+
+                        // NEF IFD0: TIFF-EPStandardID (0x9216) is a BYTE[4]
+                        // version code.  Format as dotted string under the
+                        // EXIF group (matching ExifTool).
+                        if matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW) && ifd_index == 0 && *tag_id == 0x9216 {
+                            metadata.insert("EXIF:TIFF-EPStandardID".to_string(), format_tiff_ep_standard_id(bytes));
+                            continue;
+                        }
+
                     // Check for Make tag (0x010F) - needed for MakerNote dispatcher
                     if *tag_id == 0x010F && *field_type == 2 {
                         // Extract camera make for MakerNote parsing (ASCII type)
@@ -591,6 +610,33 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         let is_rw2 = format == RawFormat::PanasonicRW2;
+
+                        // NEF files store multiple SubIFDs: a reduced-resolution
+                        // thumbnail (NewSubFileType == 1) and the full-resolution
+                        // RAW image (NewSubFileType == 0).  ExifTool picks the
+                        // latter.  Skip the thumbnail SubIFD so we emit the
+                        // correct dimensions, compression, and CFA-related tags.
+                        if is_nef {
+                            if let Some(thumbnail) = sub_tags.iter().find(|(tag_id, _, _, _)| *tag_id == 0x00FE) {
+                                let bytes = thumbnail.3.as_ref();
+                                let is_thumbnail = bytes.len() >= 4 && read_u32(bytes, byte_order) == 1;
+                                if is_thumbnail {
+                                    // Thumbnail SubIFD: emit JpgFromRawStart
+                                    // and JpgFromRawLength before skipping.
+                                    for (stag_id, _sfield_type, _svalue_count, sraw_bytes) in &sub_tags {
+                                        match *stag_id {
+                                            0x0201 => { metadata.insert("EXIF:JpgFromRawStart".to_string(), TagValue::new_integer(read_u32(sraw_bytes.as_ref(), byte_order) as i64)); }
+                                            0x0202 => { metadata.insert("EXIF:JpgFromRawLength".to_string(), TagValue::new_integer(read_u32(sraw_bytes.as_ref(), byte_order) as i64)); }
+                                            _ => {}
+                                        }
+                                    }
+                                    continue;
+                                }
+                                // Non-thumbnail SubIFD: fall through to normal
+                                // processing (CFAPattern2, etc.)
+                            }
+                        }
+
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
                             // NEF maps SubIFD tags into the EXIF group and
                             // applies format-specific decoding where needed.
@@ -3196,6 +3242,17 @@ fn format_nef_subifd_tag(
 }
 
 // ===== Helper Functions =====
+
+/// Format a TIFF-EPStandardID (either 0x828F or 0x9216) as a dotted version.
+fn format_tiff_ep_standard_id(bytes: &[u8]) -> TagValue {
+    TagValue::new_string(format!(
+        "{}.{}.{}.{}",
+        bytes.first().copied().unwrap_or(0),
+        bytes.get(1).copied().unwrap_or(0),
+        bytes.get(2).copied().unwrap_or(0),
+        bytes.get(3).copied().unwrap_or(0)
+    ))
+}
 
 /// Detect byte order from TIFF header
 ///
