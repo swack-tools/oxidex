@@ -42,8 +42,12 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0xC619 // BlackLevelRepeatDim
+            0xC616 // CFAPlaneColor
+                | 0xC617 // CFALayout
+                | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
+                | 0xC61F // DefaultCropOrigin
+                | 0xC620 // DefaultCropSize
                 | 0xC62D // BayerGreenSplit
                 | 0xC632 // AntiAliasStrength
                 | 0xC65C // BestQualityScale
@@ -513,7 +517,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             // uses, for consistency.
                             if tag_id == 0x828E {
                                 metadata.insert(
-                                    lookup_tag_name(tag_id, sub_ifd_name),
+                                    lookup_raw_tag_name(tag_id, sub_ifd_name, format),
                                     TagValue::new_string(format_cfa_pattern2(
                                         raw_bytes.as_ref(),
                                         value_count,
@@ -521,10 +525,36 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 );
                                 continue;
                             }
+                            if tag_id == 0x828D {
+                                // CFARepeatPatternDim: SHORT[2]
+                                let bytes = raw_bytes.as_ref();
+                                if bytes.len() >= 4 {
+                                    let dim1 = read_tiff_u16(bytes, byte_order).unwrap_or(0);
+                                    let dim2 = read_tiff_u16(
+                                        bytes.get(2..).unwrap_or(&[]),
+                                        byte_order,
+                                    )
+                                    .unwrap_or(0);
+                                    let formatted = format!("{} {}", dim1, dim2);
+                                    metadata.insert(
+                                        lookup_raw_tag_name(tag_id, sub_ifd_name, format),
+                                        TagValue::new_string(formatted),
+                                    );
+                                }
+                                continue;
+                            }
 
                             let tag_name = lookup_raw_tag_name(tag_id, sub_ifd_name, format);
                             let bytes = raw_bytes.as_ref();
                             let tag_value = if format == RawFormat::AdobeDNG {
+                                format_dng_display_value(
+                                    tag_id,
+                                    bytes,
+                                    field_type,
+                                    value_count,
+                                    byte_order,
+                                )
+                                .or_else(|| {
                                 format_dng_integer_array(
                                     tag_id,
                                     bytes,
@@ -532,6 +562,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     value_count,
                                     byte_order,
                                 )
+                                })
                                 .map(TagValue::new_string)
                                 .unwrap_or_else(|| {
                                     raw_bytes_to_simple_tag_value(
@@ -746,6 +777,8 @@ fn format_dng_integer_array(
 ) -> Option<String> {
     let component_size = match tag_id {
         0xC619 if field_type == 3 => 2, // BlackLevelRepeatDim: SHORT[2]
+        0xC61F if field_type == 3 => 2, // DefaultCropOrigin: SHORT[2]
+        0xC620 if field_type == 3 => 2, // DefaultCropSize: SHORT[2]
         0xC68D if field_type == 4 => 4, // ActiveArea: LONG[4]
         _ => return None,
     };
@@ -783,6 +816,57 @@ fn format_dng_integer_array(
     };
 
     Some(formatted.join(" "))
+}
+
+/// Format DNG tags that require per-value PrintConv lookups.
+fn format_dng_display_value(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    match tag_id {
+        // CFAPlaneColor: BYTE array, each byte maps to a color name.
+        0xC616 if field_type == 1 => {
+            let count = usize::try_from(value_count).ok()?;
+            let colors = bytes.get(..count)?;
+            if colors.is_empty() {
+                return None;
+            }
+            let mapped: Option<Vec<&str>> = colors
+                .iter()
+                .map(|&c| match c {
+                    0 => Some("Red"),
+                    1 => Some("Green"),
+                    2 => Some("Blue"),
+                    3 => Some("Cyan"),
+                    4 => Some("Magenta"),
+                    5 => Some("Yellow"),
+                    6 => Some("White"),
+                    _ => None,
+                })
+                .collect();
+            Some(mapped?.join(","))
+        }
+        // CFALayout: SHORT with enum.
+        0xC617 if field_type == 3 && value_count >= 1 => {
+            let layout = read_tiff_u16(bytes, byte_order)?;
+            match layout {
+                1 => Some("Rectangular".to_string()),
+                2 => Some("Even columns offset down 1/2 row".to_string()),
+                3 => Some("Even columns offset up 1/2 row".to_string()),
+                4 => Some("Even rows offset right 1/2 column".to_string()),
+                5 => Some("Even rows offset left 1/2 column".to_string()),
+                6 => Some("Even rows offset up 1/2 row, even columns offset left 1/2 column".to_string()),
+                7 => Some("Even rows offset up 1/2 row, even columns offset right 1/2 column".to_string()),
+                8 => Some("Even rows offset down 1/2 row, even columns offset left 1/2 column".to_string()),
+                9 => Some("Even rows offset down 1/2 row, even columns offset right 1/2 column".to_string()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 fn read_tiff_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
@@ -1066,6 +1150,41 @@ mod dng_integer_array_tests {
         assert_eq!(
             format_dng_integer_array(0xC68D, &[14, 0, 0, 0], 4, 4, ByteOrder::LittleEndian,),
             None
+        );
+    }
+
+    #[test]
+    fn formats_dng_integer_array_default_crop() {
+        // SHORT[2] little-endian
+        assert_eq!(
+            format_dng_integer_array(0xC61F, &[10, 0, 5, 0], 3, 2, ByteOrder::LittleEndian)
+                .as_deref(),
+            Some("10 5")
+        );
+        assert_eq!(
+            format_dng_integer_array(0xC620, &[128, 13, 0, 9], 3, 2, ByteOrder::LittleEndian)
+                .as_deref(),
+            Some("3456 2304")
+        );
+    }
+
+    #[test]
+    fn formats_dng_cfa_layout() {
+        assert_eq!(
+            format_dng_display_value(0xC617, &[1, 0], 3, 1, ByteOrder::LittleEndian).as_deref(),
+            Some("Rectangular")
+        );
+        assert_eq!(
+            format_dng_display_value(0xC617, &[2, 0], 3, 1, ByteOrder::LittleEndian).as_deref(),
+            Some("Even columns offset down 1/2 row")
+        );
+    }
+
+    #[test]
+    fn formats_dng_cfa_plane_color() {
+        assert_eq!(
+            format_dng_display_value(0xC616, &[0, 1, 2], 1, 3, ByteOrder::LittleEndian).as_deref(),
+            Some("Red,Green,Blue")
         );
     }
 
