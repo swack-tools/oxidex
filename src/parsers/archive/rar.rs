@@ -429,13 +429,35 @@ pub fn parse_rar_metadata(
         .parse(reader)
         .map_err(|e| format!("RAR parse error: {}", e))?;
 
-    if let Some(compressed_size) =
-        rar5_compressed_size(reader).map_err(|e| format!("RAR parse error: {}", e))?
+    if let Some(entry) =
+        rar5_first_file_entry(reader).map_err(|e| format!("RAR parse error: {}", e))?
     {
-        metadata.insert(
-            "ZIP:CompressedSize".to_string(),
-            TagValue::Integer(compressed_size),
-        );
+        if let Some(size) = entry.compressed_size {
+            metadata.insert("ZIP:CompressedSize".to_string(), TagValue::Integer(size));
+        }
+        if let Some(size) = entry.uncompressed_size {
+            metadata.insert("ZIP:UncompressedSize".to_string(), TagValue::Integer(size));
+        }
+        if let Some(name) = entry.file_name {
+            metadata.insert("ZIP:ArchivedFileName".to_string(), TagValue::String(name));
+        }
+        if let Some(os_byte) = entry.host_os {
+            // No PrintConv match in ExifTool means it prints the raw value,
+            // so an unmapped byte becomes its own number rather than a
+            // stand-in string -- see rar5_host_os.
+            let os = rar5_host_os(os_byte)
+                .map(str::to_string)
+                .unwrap_or_else(|| os_byte.to_string());
+            metadata.insert("ZIP:OperatingSystem".to_string(), TagValue::String(os));
+        }
+        let version =
+            RARParser::detect_version(reader).map_err(|e| format!("RAR parse error: {}", e))?;
+        if version == "5.0" {
+            metadata.insert(
+                "ZIP:FileVersion".to_string(),
+                TagValue::String("RAR v5".to_string()),
+            );
+        }
     }
 
     Ok(metadata)
@@ -535,10 +557,213 @@ fn rar5_compressed_size(reader: &dyn FileReader) -> Result<Option<i64>> {
     Ok(None)
 }
 
+/// Fields extracted from the first RAR5 file entry.
+struct Rar5FileEntry {
+    compressed_size: Option<i64>,
+    uncompressed_size: Option<i64>,
+    host_os: Option<u8>,
+    file_name: Option<String>,
+}
+
+/// Mapping from RAR5 host OS byte to the string seen in ExifTool output.
+///
+/// ExifTool's RAR5 table defines exactly two (ZIP.pm, the `OperatingSystem`
+/// entry in the RAR5 tag table): `0 => 'Win32', 1 => 'Unix'`. Anything else
+/// has no PrintConv, so ExifTool prints the raw number -- hence `None` here
+/// rather than a catch-all string. An earlier revision mapped 2/3/4 to
+/// MacOS/BeOS/OS-2 and everything else to "Unknown"; those come from the
+/// RAR *4* host-OS numbering, and the two tables disagree (ZIP.pm's other
+/// RAR table is 0=MS-DOS, 1=OS/2, 2=Win32, 3=Unix -- not a superset,
+/// a different assignment). The recheck passed anyway because the sample
+/// archive's host-OS byte is one of the two values that were correct.
+///
+/// Returning None matters more than it looks: substituting "Unknown" for an
+/// unrecognized byte replaces data ExifTool would have shown as a number,
+/// turning a visible unknown into an invisible one.
+fn rar5_host_os(raw: u8) -> Option<&'static str> {
+    match raw {
+        0 => Some("Win32"),
+        1 => Some("Unix"),
+        _ => None,
+    }
+}
+
+/// Scan RAR5 blocks to extract the first file entry's metadata.
+fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry>> {
+    const HEADER_FLAG_EXTRA_AREA: u64 = 0x0001;
+    const HEADER_FLAG_DATA_AREA: u64 = 0x0002;
+    const MAX_BLOCKS: usize = 10_000;
+
+    let file_size = reader.size();
+    if file_size < 8 {
+        return Ok(None);
+    }
+
+    let signature = reader.read(0, 8)?;
+    if signature != b"Rar!\x1a\x07\x01\x00" {
+        return Ok(None);
+    }
+
+    let mut offset = 8u64;
+    for _ in 0..MAX_BLOCKS {
+        if offset >= file_size {
+            break;
+        }
+        let remaining = file_size - offset;
+        let prefix_len = remaining.min(1024) as usize;
+        if prefix_len < 6 {
+            break;
+        }
+        let block = reader.read(offset, prefix_len)?;
+
+        let (_, size_offset) = match RARParser::read_rar5_u32(block, 0) {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+        let (header_size, header_offset) = match RARParser::read_rar5_vint(block, size_offset) {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+        if header_size == 0 {
+            break;
+        }
+        let header_prefix_size = match u64::try_from(header_offset) {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+        let block_header_size = match header_prefix_size.checked_add(header_size) {
+            Some(value) if value <= remaining => value,
+            _ => break,
+        };
+
+        let (header_type, flags_offset) = match RARParser::read_rar5_vint(block, header_offset) {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+        let (header_flags, mut field_offset) = match RARParser::read_rar5_vint(block, flags_offset)
+        {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+
+        if header_flags & HEADER_FLAG_EXTRA_AREA != 0 {
+            let (_, next_offset) = match RARParser::read_rar5_vint(block, field_offset) {
+                Ok(value) => value,
+                Err(_) => break,
+            };
+            field_offset = next_offset;
+        }
+
+        let data_size = if header_flags & HEADER_FLAG_DATA_AREA != 0 {
+            match RARParser::read_rar5_vint(block, field_offset) {
+                Ok((value, _)) => value,
+                Err(_) => break,
+            }
+        } else {
+            0
+        };
+
+        if header_type == RAR5_HEADER_FILE {
+            // file flags vint
+            let (file_flags, after_flags) = match RARParser::read_rar5_vint(block, field_offset) {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            // unpacked size vint
+            let (unpacked_size, after_unpacked) =
+                match RARParser::read_rar5_vint(block, after_flags) {
+                    Ok(v) => v,
+                    Err(_) => break,
+                };
+            // attributes vint (skip)
+            let (_, after_attr) = match RARParser::read_rar5_vint(block, after_unpacked) {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            let mut pos = after_attr;
+            // mtime if bit 0
+            if file_flags & 0x01 != 0 {
+                if pos + 4 > block.len() {
+                    break;
+                }
+                pos += 4;
+            }
+            // data CRC if bit 1
+            if file_flags & 0x02 != 0 {
+                if pos + 4 > block.len() {
+                    break;
+                }
+                pos += 4;
+            }
+            // compression info if bit 2
+            if file_flags & 0x04 != 0 {
+                let (_, after_comp) = match RARParser::read_rar5_vint(block, pos) {
+                    Ok(v) => v,
+                    Err(_) => break,
+                };
+                pos = after_comp;
+            }
+            // host OS vint
+            let (host_os, after_os) = match RARParser::read_rar5_vint(block, pos) {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            pos = after_os;
+            // file name length vint
+            let (name_len, after_name_len) = match RARParser::read_rar5_vint(block, pos) {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            let name_len_usize = usize::try_from(name_len).unwrap_or(usize::MAX);
+            if after_name_len + name_len_usize > block.len() {
+                break;
+            }
+            let name_bytes = &block[after_name_len..after_name_len + name_len_usize];
+            let file_name = String::from_utf8_lossy(name_bytes).into_owned();
+            return Ok(Some(Rar5FileEntry {
+                compressed_size: i64::try_from(data_size).ok(),
+                uncompressed_size: i64::try_from(unpacked_size).ok(),
+                host_os: Some(host_os as u8),
+                file_name: Some(file_name),
+            }));
+        }
+
+        // advance to next block
+        offset = match offset
+            .checked_add(block_header_size)
+            .and_then(|value| value.checked_add(data_size))
+        {
+            Some(value) if value > offset && value <= file_size => value,
+            _ => break,
+        };
+    }
+
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    /// ExifTool's RAR5 OperatingSystem PrintConv is exactly {0: Win32,
+    /// 1: Unix} (ZIP.pm). Literal bytes on purpose -- naming a constant
+    /// here would assert the constant's own meaning back at itself.
+    #[test]
+    fn rar5_host_os_matches_exiftool_and_stops_there() {
+        assert_eq!(rar5_host_os(0), Some("Win32"));
+        assert_eq!(rar5_host_os(1), Some("Unix"));
+        // 2/3/4 are RAR *4* host-OS numbers, not RAR5 ones. Mapping them
+        // would print a stand-in where ExifTool prints the raw number.
+        for raw in [2u8, 3, 4, 5, 255] {
+            assert_eq!(
+                rar5_host_os(raw),
+                None,
+                "RAR5 host OS {raw} has no ExifTool PrintConv; it must fall \
+                 through to the raw value, not a substituted string",
+            );
+        }
+    }
 
     #[test]
     fn test_rar_signature() {
