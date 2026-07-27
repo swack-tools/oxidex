@@ -227,6 +227,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
     // CR2 IFD0 thumbnail byte count for PreviewImage/PreviewImageLength
     let mut cr2_thumbnail_length: Option<u32> = None;
+    // CR2 IFD0 thumbnail offset (StripOffsets) for EXIF:PreviewImageStart
+    let mut cr2_strip_offset: Option<u32> = None;
+    // BitsPerSample multi‑value override
+    let mut cr2_bits_per_sample: Option<String> = None;
 
     // Add format-specific tag to identify file type
     metadata.insert(
@@ -299,6 +303,24 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         && bytes.len() >= 4
                     {
                         cr2_thumbnail_length = Some(read_u32(bytes, byte_order));
+                    }
+
+                    // CR2 IFD0: capture StripOffsets for PreviewImageStart
+                    if format == RawFormat::CanonCR2
+                        && ifd_index == 0
+                        && *tag_id == 0x0111
+                        && bytes.len() >= 4
+                    {
+                        cr2_strip_offset = Some(read_u32(bytes, byte_order));
+                    }
+
+                    // BitsPerSample (0x0102) multi‑value formatting
+                    if *tag_id == 0x0102 && *value_count > 1 {
+                        cr2_bits_per_sample =
+                            Some(format_multi_value(bytes, *field_type, *value_count, byte_order));
+                        // Skip default insertion; will be emitted later with
+                        // the formatted string.
+                        continue;
                     }
 
                     // Check for SubIFD pointer (tag 0x014A) - common in RAW formats
@@ -450,6 +472,14 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     } else {
                         raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
                     };
+
+                    // BitsPerSample: if we previously saved the formatted
+                    // multi‑value string, emit that instead.
+                    if *tag_id == 0x0102 && let Some(ref formatted) = cr2_bits_per_sample {
+                        metadata.insert(tag_name, TagValue::new_string(formatted.clone()));
+                        continue;
+                    }
+
                     metadata.insert(tag_name, tag_value);
                 }
 
@@ -591,7 +621,28 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         let is_rw2 = format == RawFormat::PanasonicRW2;
+                        let is_cr2 = format == RawFormat::CanonCR2;
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+                            // CR2 SubIFD: CFAPattern (0xA302) → EXIF:CR2CFAPattern
+                            if is_cr2 && tag_id == 0xA302 && field_type == 7 {
+                                let bytes = raw_bytes.as_ref();
+                                if let Some(pattern) = decode_exif_cfa_pattern(bytes, byte_order) {
+                                    metadata.insert(
+                                        "EXIF:CR2CFAPattern".to_string(),
+                                        TagValue::new_string(pattern),
+                                    );
+                                    continue;
+                                }
+                            }
+                            // RawImageSegmentation (0x4001) multi‑value
+                            if is_cr2 && tag_id == 0x4001 && value_count > 1 {
+                                let bytes = raw_bytes.as_ref();
+                                metadata.insert(
+                                    "EXIF:RawImageSegmentation".to_string(),
+                                    TagValue::new_string(format_multi_value(bytes, field_type, value_count, byte_order)),
+                                );
+                                continue;
+                            }
                             // NEF maps SubIFD tags into the EXIF group and
                             // applies format-specific decoding where needed.
                             if is_nef {
@@ -727,7 +778,24 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             length
                         )),
                     );
+                    metadata.insert(
+                        "EXIF:ThumbnailLength".to_string(),
+                        TagValue::new_integer(length as i64),
+                    );
+                    metadata.insert(
+                        "EXIF:ThumbnailImage".to_string(),
+                        TagValue::new_string(format!(
+                            "(Binary data {} bytes, use -b option to extract)",
+                            length
+                        )),
+                    );
                 }
+            }
+            if let Some(offset) = cr2_strip_offset {
+                metadata.insert(
+                    "EXIF:PreviewImageStart".to_string(),
+                    TagValue::new_integer(offset as i64),
+                );
             }
             extract_cr2_tags(&mut metadata);
         }
@@ -1806,6 +1874,21 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     }
 
                     // Insert IFD0 tag
+                    // BitsPerSample multi‑value formatting for CR3
+                    if *tag_id == 0x0102 && *value_count > 1 {
+                        let formatted = format_multi_value(
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        );
+                        metadata.insert(
+                            lookup_tag_name(*tag_id, "IFD0"),
+                            TagValue::new_string(formatted),
+                        );
+                        continue;
+                    }
+
                     let tag_name = lookup_tag_name(*tag_id, "IFD0");
                     let tag_value =
                         raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order);
@@ -2713,6 +2796,49 @@ fn format_x3f_compression(
     }
     // Fall back to the standard simple tag value for other values.
     raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order)
+}
+
+/// Format a multi-value integer field as space-separated decimal values.
+fn format_multi_value(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> String {
+    let count = usize::try_from(value_count).unwrap_or(0);
+    let component_size = match field_type {
+        3 => 2, // SHORT
+        4 => 4, // LONG
+        _ => return String::new(),
+    };
+    let needed = count * component_size;
+    let values = if bytes.len() >= needed {
+        &bytes[..needed]
+    } else {
+        bytes
+    };
+    match component_size {
+        2 => values
+            .chunks_exact(2)
+            .map(|chunk| {
+                let val = match byte_order {
+                    ByteOrder::LittleEndian => u16::from_le_bytes([chunk[0], chunk[1]]),
+                    ByteOrder::BigEndian => u16::from_be_bytes([chunk[0], chunk[1]]),
+                };
+                val.to_string()
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        4 => values
+            .chunks_exact(4)
+            .map(|chunk| {
+                let val = read_u32(chunk, byte_order);
+                val.to_string()
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => String::new(),
+    }
 }
 
 // ===== Fujifilm RAF Format Parsing =====
