@@ -1619,6 +1619,41 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         TagValue::new_string(format!("{:?}", format)),
     );
 
+    // Parse CMT2 box as standalone EXIF IFD.
+    // Canon CR3 stores the EXIF IFD (with tags like LensModel,
+    // OffsetTime, OwnerName, etc.) in the CMT2 box, separate from
+    // the IFD0 in CMT1.
+    if let Some(cmt2) = find_cr3_box(data, b"CMT2") {
+        if let Ok(byte_order) = detect_byte_order(cmt2) {
+            let first_ifd_offset = read_u32(&cmt2[4..8], byte_order) as u64;
+            let reader = SliceReader::new(cmt2);
+            if let Ok(exif_tags) = parse_ifd(&reader, first_ifd_offset, byte_order) {
+                for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                    let bytes = raw_bytes.as_ref();
+
+                    // Skip MakerNote pointer in CMT2; MakerNote is in CMT3/CMT4.
+                    if *tag_id == 0x927C {
+                        continue;
+                    }
+
+                    let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
+                    let tag_value = if let Some(value) = format_exif_display_value(
+                        *tag_id,
+                        bytes,
+                        *field_type,
+                        *value_count,
+                        byte_order,
+                    ) {
+                        TagValue::new_string(value)
+                    } else {
+                        raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
+                    };
+                    metadata.insert(tag_name, tag_value);
+                }
+            }
+        }
+    }
+
     // Parse CMT1 box (standard TIFF IFD0 with optional EXIF IFD and MakerNote)
     if let Some(tiff) = find_cr3_cmt1_tiff(data) {
         if let Ok(byte_order) = detect_byte_order(tiff) {
