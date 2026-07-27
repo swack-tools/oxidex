@@ -129,6 +129,23 @@ DEFAULT_BATCH_SECONDS = 900
 # number in the spec.
 DEFAULT_RECUT_STALENESS_SECONDS = 3 * 24 * 3600
 
+#: Re-cut once origin/main has moved this far past the squad branch's base,
+#: regardless of how RECENT that base is.
+#:
+#: The time threshold above assumes main moves slowly. It does not: with the
+#: fleet publishing, main advanced 13 commits in about four hours on
+#: 2026-07-27, and every squad branch sat on a base that was hours old and
+#: therefore "fresh" by the time rule -- while being far enough behind that
+#: ALL THIRTEEN failed to merge. Simulated against current main that day:
+#: merged cleanly 0, conflicted 13.
+#:
+#: The conflict is not incidental. The blocking commit was b9d0245d, the
+#: sweep's own PR #154: main now holds the merged-and-formatted form of work
+#: the squad branches still carry in pre-merge form. A branch is stale the
+#: moment its content lands upstream by another route, which is a DISTANCE
+#: question, not an age one.
+DEFAULT_RECUT_BEHIND_COMMITS = 8
+
 ORIGIN_MAIN = "origin/main"
 
 
@@ -1097,16 +1114,29 @@ def run_batch_check(*, staging_path, squad, formats, cache_dir, comparison_fn,
 # ---------------------------------------------------------------------------
 
 def should_recut(repo_root, squad_branch, origin_ref=ORIGIN_MAIN,
-                  staleness_seconds=DEFAULT_RECUT_STALENESS_SECONDS, now_fn=time.time):
-    """True when squad/<squad>'s merge-base with origin_ref is older than
-    `staleness_seconds` (spec M5 re-cut trigger). False when either ref
-    is missing (nothing to recut yet) or the merge-base can't be dated."""
+                  staleness_seconds=DEFAULT_RECUT_STALENESS_SECONDS, now_fn=time.time,
+                  behind_commits=DEFAULT_RECUT_BEHIND_COMMITS):
+    """True when squad/<squad> is stale by EITHER measure (spec M5 re-cut
+    trigger): its merge-base with origin_ref is older than
+    `staleness_seconds`, OR origin_ref has moved more than `behind_commits`
+    past that base.
+
+    The distance clause exists because the age clause alone cannot see the
+    failure it is meant to prevent -- see DEFAULT_RECUT_BEHIND_COMMITS. False
+    when either ref is missing (nothing to recut yet) or the merge-base
+    cannot be resolved.
+    """
     if not branch_exists(repo_root, squad_branch):
         return False
     merge_base = _git(["merge-base", squad_branch, origin_ref], repo_root, check=False)
     if merge_base.returncode != 0:
         return False
     sha = merge_base.stdout.strip()
+    if behind_commits:
+        behind = _git(["rev-list", "--count", f"{sha}..{origin_ref}"], repo_root, check=False)
+        if behind.returncode == 0 and behind.stdout.strip().isdigit():
+            if int(behind.stdout.strip()) > behind_commits:
+                return True
     committed = _git(["log", "-1", "--format=%ct", sha], repo_root, check=False)
     if committed.returncode != 0 or not committed.stdout.strip():
         return False
