@@ -440,6 +440,28 @@ pub fn parse_rar_metadata(
         .parse(reader)
         .map_err(|e| format!("RAR parse error: {}", e))?;
 
+    // ExifTool emits FileVersion from the signature alone, before it walks a
+    // single block, so an archive with no file entries still reports it
+    // (ZIP.pm, ProcessRAR):
+    //
+    // ```text
+    //     if ($buff eq "Rar!\x1a\x07\0") { # RARv4 (ref 4)
+    //         ...
+    //         $et->HandleTag($tagTablePtr, 'FileVersion', 'RAR v4');
+    //     ...
+    //     } else { # RARv5 (ref 7, github#203)
+    //         ...
+    //         $et->HandleTag($tagTablePtr, 'FileVersion', 'RAR v5');
+    // ```
+    let version =
+        RARParser::detect_version(reader).map_err(|e| format!("RAR parse error: {}", e))?;
+    if let Some(file_version) = rar_file_version(version) {
+        metadata.insert(
+            "ZIP:FileVersion".to_string(),
+            TagValue::String(file_version.to_string()),
+        );
+    }
+
     if let Some(entry) =
         rar5_first_file_entry(reader).map_err(|e| format!("RAR parse error: {}", e))?
     {
@@ -461,17 +483,23 @@ pub fn parse_rar_metadata(
                 .unwrap_or_else(|| os_byte.to_string());
             metadata.insert("ZIP:OperatingSystem".to_string(), TagValue::String(os));
         }
-        let version =
-            RARParser::detect_version(reader).map_err(|e| format!("RAR parse error: {}", e))?;
-        if version == "5.0" {
-            metadata.insert(
-                "ZIP:FileVersion".to_string(),
-                TagValue::String("RAR v5".to_string()),
-            );
-        }
     }
 
     Ok(metadata)
+}
+
+/// Maps the detected RAR generation to ExifTool's `FileVersion` string.
+///
+/// The two literals are the only ones ExifTool ever emits for this tag; see
+/// the `HandleTag(..., 'FileVersion', ...)` calls quoted in
+/// [`parse_rar_metadata`]. `Unknown` (the third value `detect_version` can
+/// return) is not a RAR archive at all, so it gets no tag.
+fn rar_file_version(detected: &str) -> Option<&'static str> {
+    match detected {
+        "5.0" => Some("RAR v5"),
+        "4.x" => Some("RAR v4"),
+        _ => None,
+    }
 }
 
 /// Extracts the packed-data size from the first RAR5 file block.
@@ -603,9 +631,47 @@ fn rar5_host_os(raw: u8) -> Option<&'static str> {
 }
 
 /// Scan RAR5 blocks to extract the first file entry's metadata.
+///
+/// The field order inside a RAR5 file header, and which fields are optional,
+/// is taken from ExifTool's `ProcessRAR` (ZIP.pm):
+///
+/// ```text
+///     my $fileFlag = ReadULEB($rafHdr);
+///     my $uncompressedSize = ReadULEB($rafHdr);
+///     $et->HandleTag($tagTablePtr, 'UncompressedSize', $uncompressedSize) unless $fileFlag & 0x0008;
+///     ReadULEB($rafHdr);                  # skip file attributes
+///     if ($fileFlag & 0x0002) {
+///         $rafHdr->Read($buff, 4) == 4 or last;
+///         # (untested)
+///         $et->HandleTag($tagTablePtr, 'ModifyDate', unpack('V', $buff));
+///     }
+///     $rafHdr->Seek(4, 1) if $fileFlag & 0x0004;  # skip CRC if present
+///
+///     ReadULEB($rafHdr);                  # skip compressionInfo
+///
+///     # get operating system
+///     my $os = ReadULEB($rafHdr);
+/// ```
+///
+/// Until this was corrected the flag numbering here was shifted by one bit --
+/// 0x0001 gated the mtime, 0x0002 the CRC32, and 0x0004 the compression-info
+/// vint that is in fact unconditional. `ZIP.rar`, the only RAR sample in the
+/// corpus, still round-tripped: its file flags are 0x0004, so the old code
+/// skipped no CRC and then swallowed the four CRC bytes into the
+/// compression-info vint -- which only worked because that particular CRC
+/// (`82 89 d1 f7`) happens to have the continuation bit set in every byte.
+/// Flip one CRC byte below 0x80 and the same code reported
+/// `OperatingSystem: 2` and a garbage `ArchivedFileName`, i.e. fabricated
+/// metadata, for 15 of every 16 archives.
 fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry>> {
     const HEADER_FLAG_EXTRA_AREA: u64 = 0x0001;
     const HEADER_FLAG_DATA_AREA: u64 = 0x0002;
+    /// Unix mtime field follows the attributes vint.
+    const FILE_FLAG_MTIME: u64 = 0x0002;
+    /// Unpacked-data CRC32 field is present.
+    const FILE_FLAG_CRC32: u64 = 0x0004;
+    /// The unpacked size field holds no usable value.
+    const FILE_FLAG_UNPACKED_SIZE_UNKNOWN: u64 = 0x0008;
     const MAX_BLOCKS: usize = 10_000;
 
     let file_size = reader.size();
@@ -698,28 +764,26 @@ fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry
                 Err(_) => break,
             };
             let mut pos = after_attr;
-            // mtime if bit 0
-            if file_flags & 0x01 != 0 {
+            // Unix mtime, present only when FILE_FLAG_MTIME is set.
+            if file_flags & FILE_FLAG_MTIME != 0 {
                 if pos + 4 > block.len() {
                     break;
                 }
                 pos += 4;
             }
-            // data CRC if bit 1
-            if file_flags & 0x02 != 0 {
+            // Unpacked-data CRC32, present only when FILE_FLAG_CRC32 is set.
+            if file_flags & FILE_FLAG_CRC32 != 0 {
                 if pos + 4 > block.len() {
                     break;
                 }
                 pos += 4;
             }
-            // compression info if bit 2
-            if file_flags & 0x04 != 0 {
-                let (_, after_comp) = match RARParser::read_rar5_vint(block, pos) {
-                    Ok(v) => v,
-                    Err(_) => break,
-                };
-                pos = after_comp;
-            }
+            // Compression information -- unconditional, not flag-gated.
+            let (_, after_comp) = match RARParser::read_rar5_vint(block, pos) {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            pos = after_comp;
             // host OS vint
             let (host_os, after_os) = match RARParser::read_rar5_vint(block, pos) {
                 Ok(v) => v,
@@ -736,10 +800,22 @@ fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry
                 break;
             }
             let name_bytes = &block[after_name_len..after_name_len + name_len_usize];
-            let file_name = String::from_utf8_lossy(name_bytes).into_owned();
+            // `$buff =~ s/\0+$//;  # remove trailing nulls (if any)` (ZIP.pm).
+            let file_name = String::from_utf8_lossy(name_bytes)
+                .trim_end_matches('\0')
+                .to_string();
+            // `HandleTag(... 'UncompressedSize' ...) unless $fileFlag & 0x0008`
+            // (ZIP.pm): the flag means the unpacked size field is a
+            // placeholder, so ExifTool suppresses the tag rather than
+            // reporting the placeholder as a size.
+            let uncompressed_size = if file_flags & FILE_FLAG_UNPACKED_SIZE_UNKNOWN != 0 {
+                None
+            } else {
+                i64::try_from(unpacked_size).ok()
+            };
             return Ok(Some(Rar5FileEntry {
                 compressed_size: i64::try_from(data_size).ok(),
-                uncompressed_size: i64::try_from(unpacked_size).ok(),
+                uncompressed_size,
                 host_os: Some(host_os as u8),
                 file_name: Some(file_name),
             }));
@@ -824,6 +900,148 @@ mod tests {
             "ZIP:UncompressedSize should be parsed as 5 from the file header",
         );
         assert_no_divergent_prefixed_duplicates(&metadata);
+    }
+
+    /// Byte offsets into [`ZIP_RAR_SAMPLE`], all inside the single RAR5 file
+    /// header that starts at byte 28. Verified by hand against ExifTool's own
+    /// field order and confirmed with `exiftool -v3` (`RAR5 file directory,
+    /// 33 bytes`).
+    const FILE_FLAGS_OFFSET: usize = 33;
+    const DATA_CRC32_OFFSET: usize = 37;
+    const FILE_NAME_LAST_BYTE: usize = 49;
+
+    fn zip_rar_sample_with(patches: &[(usize, u8)]) -> Vec<u8> {
+        let mut bytes = ZIP_RAR_SAMPLE.to_vec();
+        for &(offset, value) in patches {
+            bytes[offset] = value;
+        }
+        bytes
+    }
+
+    /// The RAR5 file-header flag bits used to be shifted by one position, and
+    /// `ZIP.rar` hid it: its file flags are 0x0004, and the four CRC32 bytes it
+    /// happens to carry (`82 89 d1 f7`) all have the vint continuation bit set,
+    /// so reading them as a compression-info vint consumed exactly the right
+    /// number of bytes by luck. This archive is `ZIP.rar` with the CRC32
+    /// replaced by `01 02 03 04` -- four bytes whose high bit is clear -- which
+    /// is what 15 of every 16 real archives look like.
+    ///
+    /// ExifTool is unmoved by the substitution because it skips the CRC on the
+    /// 0x0004 flag instead of swallowing it:
+    ///
+    /// ```text
+    /// $ exiftool -G1 -s -OperatingSystem -ArchivedFileName rar-lowcrc.rar
+    /// [ZIP]           OperatingSystem                 : Win32
+    /// [ZIP]           ArchivedFileName                : 1.txt
+    /// ```
+    ///
+    /// The pre-fix parser answered `OperatingSystem: 2` and a lone replacement
+    /// character for the name -- both invented.
+    #[test]
+    fn rar5_file_header_survives_a_crc32_without_continuation_bits() {
+        let bytes = zip_rar_sample_with(&[
+            (DATA_CRC32_OFFSET, 0x01),
+            (DATA_CRC32_OFFSET + 1, 0x02),
+            (DATA_CRC32_OFFSET + 2, 0x03),
+            (DATA_CRC32_OFFSET + 3, 0x04),
+        ]);
+        let reader = TestReader::from_slice(&bytes);
+        let metadata = parse_rar_metadata(&reader).unwrap();
+
+        assert_eq!(
+            metadata.get("ZIP:OperatingSystem"),
+            Some(&TagValue::String("Win32".to_string())),
+            "host OS must be read after the CRC32, not out of it",
+        );
+        assert_eq!(
+            metadata.get("ZIP:ArchivedFileName"),
+            Some(&TagValue::String("1.txt".to_string())),
+            "the archived name must be read after the CRC32, not out of it",
+        );
+        assert_eq!(
+            metadata.get("ZIP:UncompressedSize"),
+            Some(&TagValue::Integer(5)),
+        );
+    }
+
+    /// `HandleTag(... 'UncompressedSize' ...) unless $fileFlag & 0x0008`
+    /// (ZIP.pm). With flag 0x0008 set the unpacked-size field is a placeholder,
+    /// and ExifTool drops the tag rather than printing the placeholder:
+    ///
+    /// ```text
+    /// $ exiftool -G1 -s -CompressedSize -UncompressedSize rar-unksize.rar
+    /// [ZIP]           CompressedSize                  : 5
+    /// ```
+    #[test]
+    fn rar5_omits_uncompressed_size_when_the_unknown_size_flag_is_set() {
+        // 0x04 (CRC32 present, as in the untouched sample) | 0x08 (size unknown)
+        let bytes = zip_rar_sample_with(&[(FILE_FLAGS_OFFSET, 0x0c)]);
+        let reader = TestReader::from_slice(&bytes);
+        let metadata = parse_rar_metadata(&reader).unwrap();
+
+        assert_eq!(
+            metadata.get("ZIP:UncompressedSize"),
+            None,
+            "flag 0x0008 means the field is a placeholder; reporting it would \
+             be a fabricated size",
+        );
+        assert_eq!(
+            metadata.get("ZIP:CompressedSize"),
+            Some(&TagValue::Integer(5)),
+            "the packed size comes from the block's data-area size and is \
+             unaffected",
+        );
+    }
+
+    /// `$buff =~ s/\0+$//;  # remove trailing nulls (if any)` (ZIP.pm). This is
+    /// the sample with the final byte of `1.txt` overwritten by NUL:
+    ///
+    /// ```text
+    /// $ exiftool -G1 -s -ArchivedFileName rar-nulname.rar
+    /// [ZIP]           ArchivedFileName                : 1.tx
+    /// ```
+    #[test]
+    fn rar5_archived_file_name_drops_trailing_nulls() {
+        let bytes = zip_rar_sample_with(&[(FILE_NAME_LAST_BYTE, 0x00)]);
+        let reader = TestReader::from_slice(&bytes);
+        let metadata = parse_rar_metadata(&reader).unwrap();
+
+        assert_eq!(
+            metadata.get("ZIP:ArchivedFileName"),
+            Some(&TagValue::String("1.tx".to_string())),
+        );
+    }
+
+    /// ExifTool emits FileVersion for RAR v4 too, straight off the signature:
+    ///
+    /// ```text
+    ///     if ($buff eq "Rar!\x1a\x07\0") { # RARv4 (ref 4)
+    ///         $et->HandleTag($tagTablePtr, 'FileVersion', 'RAR v4');
+    /// ```
+    ///
+    /// Confirmed on a minimal v4 archive:
+    ///
+    /// ```text
+    /// $ exiftool -G1 -s -FileVersion rar4-min.rar
+    /// [ZIP]           FileVersion                     : RAR v4
+    /// ```
+    #[test]
+    fn rar4_reports_its_own_file_version() {
+        let mut data = b"Rar!".to_vec();
+        data.extend_from_slice(&[0x1A, 0x07, 0x00]); // RAR4 signature
+        data.extend_from_slice(&[0x33, 0x92, 0x73, 0x00, 0x00, 0x0D, 0x00]);
+        data.extend_from_slice(&[0x00; 6]);
+
+        let reader = TestReader::new(data);
+        let metadata = parse_rar_metadata(&reader).unwrap();
+
+        assert_eq!(
+            metadata.get("ZIP:FileVersion"),
+            Some(&TagValue::String("RAR v4".to_string())),
+            "'RAR v4' is ExifTool's literal, not a string derived from the \
+             detected version",
+        );
+        assert_eq!(rar_file_version("Unknown"), None);
     }
 
     /// ExifTool's RAR5 OperatingSystem PrintConv is exactly {0: Win32,
