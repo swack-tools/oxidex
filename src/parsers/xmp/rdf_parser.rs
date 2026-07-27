@@ -275,10 +275,22 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
         }
     }
 
-    // BTestTagField1 is a test property that ExifTool emits as
-    // language-qualified tags.
-    let b_test_tags = extract_b_test_tag_field1_values(xml_bytes)?;
-    for (tag, value) in &b_test_tags {
+    // Flatten top-level `rdf:parseType="Resource"` structures into
+    // ParentField tags, the way ExifTool's XMP::GetXMPTagID builds tag IDs
+    // ("$tag .= ucfirst($nm)", XMP.pm). This is what produces e.g.
+    // exif:Flash/exif:Mode -> FlashMode and test:BareStruct/test:Item1 ->
+    // BareStructItem1.
+    let struct_fields = extract_top_level_struct_values(xml_bytes)?;
+    for (tag, value) in &struct_fields {
+        if !results.iter().any(|(t, _)| t == tag) {
+            results.push((tag.clone(), value.clone()));
+        }
+    }
+
+    // PLUS CopyrightOwner is a Seq of structures rather than a bare struct,
+    // so the generic pass above does not reach it.
+    let copyright_owner = extract_plus_copyright_owner_name(xml_bytes)?;
+    for (tag, value) in &copyright_owner {
         if !results.iter().any(|(t, _)| t == tag) {
             results.push((tag.clone(), value.clone()));
         }
@@ -630,26 +642,56 @@ fn extract_artwork_title_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)
     Ok(results)
 }
 
-/// Extracts language-qualified BTestTagField1 values from any namespace,
-/// skipping those nested inside mwg-rs:Regions.
-fn extract_b_test_tag_field1_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
-    const MWG_RS_NS: &str = "http://www.metadataworkinggroup.com/schemas/regions/";
-
+/// Flattens top-level `rdf:parseType="Resource"` structures into ExifTool's
+/// `ParentField` tag names.
+///
+/// ExifTool builds an XMP tag ID by walking the RDF property path and
+/// concatenating the capitalised local names, skipping the RDF structural
+/// properties (`XMP.pm`, `GetXMPTagID`):
+///
+/// ```text
+/// $tag .= ucfirst($nm);       # add to tag name
+/// ```
+///
+/// So `test:BareStruct` / `test:Item1` becomes `BareStructItem1`, and
+/// `exif:Flash` / `exif:Mode` becomes `FlashMode`. The general RDF pass in
+/// [`parse_xmp`] treats a struct property as one opaque value and drops the
+/// fields, which is why this focused second pass exists (same pattern as
+/// `extract_about_cv_term_values`).
+///
+/// Deliberately limited to structures that are a *direct* child of an
+/// `rdf:Description`:
+/// - Nested structures reached through a `rdf:Bag`/`rdf:Seq` of `rdf:li`
+///   (e.g. `Iptc4xmpExt:LocationCreated`) are List-valued in ExifTool and need
+///   list semantics this pass does not implement.
+/// - Fields inside `mwg-rs:Regions` flatten to a different name entirely
+///   (`RegionExtensionsFlashMode`, not `FlashMode`), and `Regions` reaches
+///   them through a `rdf:Bag`, so the direct-child rule already excludes them.
+///
+/// A field whose content is a language alternative (`rdf:Alt` of `rdf:li` with
+/// `xml:lang`, optionally wrapped in a `rdf:Bag`) is emitted once per language
+/// as `ParentField-<lang>`, with `x-default` emitted under the bare name --
+/// matching ExifTool's `GetLangInfo` naming.
+fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
     let mut reader = Reader::from_reader(xml_bytes);
     reader.config_mut().trim_text(true);
 
     let mut resolver = NamespaceResolver::new();
-    let mut results = Vec::new();
+    let mut results: Vec<(String, String)> = Vec::new();
     let mut buf = Vec::new();
     let mut depth = 0usize;
 
-    let mut mwg_rs_depth: Option<usize> = None;
-    let mut field1_depth: Option<usize> = None;
-    let mut alt_depth: Option<usize> = None;
+    let mut description_depth: Option<usize> = None;
+    let mut struct_depth: Option<usize> = None;
+    let mut struct_name = String::new();
+    let mut field_depth: Option<usize> = None;
+    let mut field_name = String::new();
+    let mut field_text = String::new();
     let mut li_depth: Option<usize> = None;
-    let mut current_lang: Option<String> = None;
-    let mut current_value = String::new();
+    let mut li_lang: Option<String> = None;
+    let mut li_text = String::new();
     let mut lang_values: Vec<(String, String)> = Vec::new();
+    let mut nested_depth: Option<usize> = None;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -658,83 +700,208 @@ fn extract_b_test_tag_field1_values(xml_bytes: &[u8]) -> Result<Vec<(String, Str
                 register_namespaces_from_element(&e, &mut resolver)?;
                 let tag_name = extract_tag_name(&e)?;
 
-                if mwg_rs_depth.is_none()
-                    && is_property_in_namespace(&tag_name, "Regions", MWG_RS_NS, &resolver)
+                if is_rdf_description(&tag_name, &resolver) {
+                    description_depth = Some(depth);
+                } else if struct_depth.is_none()
+                    && description_depth.is_some_and(|d| depth == d + 1)
+                    && !is_rdf_namespace(&tag_name, &resolver)
+                    && has_parse_type_resource(&e)
                 {
-                    mwg_rs_depth = Some(depth);
-                }
-
-                if field1_depth.is_none()
-                    && mwg_rs_depth.is_none()
-                    && NamespaceResolver::extract_local_name(&tag_name) == "BTestTagField1"
-                {
-                    field1_depth = Some(depth);
-                    lang_values.clear();
-                }
-
-                if field1_depth.is_some()
-                    && alt_depth.is_none()
-                    && is_collection_container(&tag_name, &resolver)
-                {
-                    alt_depth = Some(depth);
-                }
-
-                if alt_depth.is_some() && li_depth.is_none() && is_rdf_li(&tag_name, &resolver) {
-                    li_depth = Some(depth);
-                    current_lang = None;
-                    current_value.clear();
-                    for attr in e.attributes().flatten() {
-                        let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
-                        if key == "xml:lang" {
-                            if let Ok(val) = std::str::from_utf8(&attr.value) {
-                                current_lang = Some(val.to_string());
-                            }
+                    struct_depth = Some(depth);
+                    struct_name = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
+                } else if let Some(sd) = struct_depth {
+                    if field_depth.is_none()
+                        && depth == sd + 1
+                        && !is_rdf_namespace(&tag_name, &resolver)
+                    {
+                        field_depth = Some(depth);
+                        field_name = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
+                        field_text.clear();
+                        lang_values.clear();
+                    } else if field_depth.is_some() && nested_depth.is_none() {
+                        if !is_rdf_namespace(&tag_name, &resolver) {
+                            // A non-RDF element inside the field means a
+                            // sub-structure, which flattens to a longer name
+                            // than this pass builds -- mwg-rs:Regions/RegionList
+                            // reaches lang-alt entries whose real ExifTool names
+                            // are RegionExtensionsArtworkTitle-de and friends,
+                            // not RegionsRegionList-de. Measured on XMP5.xmp
+                            // 2026-07-27: without this guard the pass emitted
+                            // exactly those three bogus tags.
+                            nested_depth = Some(depth);
+                        } else if li_depth.is_none()
+                            && is_rdf_li(&tag_name, &resolver)
+                            && let Some(lang) = xml_lang_attribute(&e)
+                        {
+                            li_depth = Some(depth);
+                            li_lang = Some(lang);
+                            li_text.clear();
                         }
                     }
                 }
             }
 
-            Ok(Event::End(e)) => {
-                let tag_name = extract_tag_name_from_bytes(e.name().as_ref())?;
+            Ok(Event::End(_)) => {
+                if nested_depth == Some(depth) {
+                    nested_depth = None;
+                }
 
-                if li_depth == Some(depth) && is_rdf_li(&tag_name, &resolver) {
-                    let value = current_value.trim().to_string();
-                    if !value.is_empty() {
-                        if let Some(ref lang) = current_lang {
-                            lang_values.push((lang.clone(), value));
+                if li_depth == Some(depth) {
+                    let value = li_text.trim().to_string();
+                    if let (Some(lang), false) = (li_lang.take(), value.is_empty()) {
+                        lang_values.push((lang, value));
+                    }
+                    li_depth = None;
+                    li_text.clear();
+                }
+
+                if field_depth == Some(depth) {
+                    let flat_id = format!("{struct_name}{field_name}");
+                    let reported = exiftool_flat_tag_name(&flat_id);
+                    if lang_values.is_empty() {
+                        let value = field_text.trim().to_string();
+                        if !value.is_empty() {
+                            results.push((format!("XMP:{reported}"), value));
+                        }
+                    } else {
+                        for (lang, value) in &lang_values {
+                            let tag = if lang == "x-default" {
+                                format!("XMP:{reported}")
+                            } else {
+                                format!("XMP:{reported}-{lang}")
+                            };
+                            // ExifTool keeps every entry of a List-valued
+                            // lang-alt (XMP5.xmp has two en-US entries for
+                            // BTestTagField1); emitting the tag twice would
+                            // just be a duplicate emission here, so first
+                            // wins.
+                            if !results.iter().any(|(t, _)| *t == tag) {
+                                results.push((tag, value.clone()));
+                            }
                         }
                     }
-                    current_value.clear();
-                    li_depth = None;
-                    current_lang = None;
-                }
-
-                if alt_depth == Some(depth) && is_collection_container(&tag_name, &resolver) {
-                    alt_depth = None;
-                }
-
-                if field1_depth == Some(depth)
-                    && NamespaceResolver::extract_local_name(&tag_name) == "BTestTagField1"
-                {
-                    // BTestTagField1: only emit language-qualified tags, no base
-                    for (lang, val) in &lang_values {
-                        results.push((format!("XMP:BTestTagField1-{}", lang), val.clone()));
-                    }
-                    field1_depth = None;
+                    field_depth = None;
+                    field_text.clear();
                     lang_values.clear();
+                    nested_depth = None;
                 }
 
-                if mwg_rs_depth == Some(depth)
-                    && is_property_in_namespace(&tag_name, "Regions", MWG_RS_NS, &resolver)
-                {
-                    mwg_rs_depth = None;
+                if struct_depth == Some(depth) {
+                    struct_depth = None;
+                    struct_name.clear();
+                }
+
+                if description_depth == Some(depth) {
+                    description_depth = None;
                 }
 
                 depth = depth.saturating_sub(1);
             }
 
             Ok(Event::Text(e)) => {
-                if li_depth.is_some()
+                if let Ok(decoded) = e.xml10_content() {
+                    let unescaped =
+                        quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
+                    if li_depth.is_some() {
+                        li_text.push_str(&unescaped);
+                    } else if field_depth == Some(depth) {
+                        field_text.push_str(&unescaped);
+                    }
+                }
+            }
+
+            Ok(Event::Empty(e)) => {
+                register_namespaces_from_element(&e, &mut resolver)?;
+            }
+
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        buf.clear();
+    }
+
+    Ok(results)
+}
+
+/// Extracts `plus:CopyrightOwnerName` from the PLUS `CopyrightOwner` sequence.
+///
+/// `PLUS.pm` defines the structure and its flattened name:
+///
+/// ```text
+/// my %plusCopyrightOwner = (
+///     STRUCT_NAME => 'CopyrightOwner',
+///     NAMESPACE   => 'plus',
+///     CopyrightOwnerID    => { },
+///     CopyrightOwnerName  => { },
+/// );
+/// ...
+///     CopyrightOwner => {
+///         FlatName => '',
+///         Struct => \%plusCopyrightOwner,
+///         List => 'Seq',
+///     },
+/// ```
+///
+/// `FlatName => ''` means the container contributes nothing to the flattened
+/// name, so the field is reported as plain `CopyrightOwnerName` rather than
+/// `CopyrightOwnerCopyrightOwnerName`. The `plus` prefix URI is
+/// `http://ns.useplus.org/ldf/xmp/1.0/` (`XMP.pm` `%nsURI`, line 166).
+///
+/// `List => 'Seq'` allows several owners; multiple values are joined the same
+/// way `extract_about_cv_term_values` joins its list.
+fn extract_plus_copyright_owner_name(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    const PLUS_NS: &str = "http://ns.useplus.org/ldf/xmp/1.0/";
+
+    let mut reader = Reader::from_reader(xml_bytes);
+    reader.config_mut().trim_text(true);
+
+    let mut resolver = NamespaceResolver::new();
+    let mut names: Vec<String> = Vec::new();
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+
+    let mut owner_depth: Option<usize> = None;
+    let mut name_depth: Option<usize> = None;
+    let mut current_value = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+
+                if owner_depth.is_none()
+                    && is_property_in_namespace(&tag_name, "CopyrightOwner", PLUS_NS, &resolver)
+                {
+                    owner_depth = Some(depth);
+                } else if owner_depth.is_some()
+                    && name_depth.is_none()
+                    && is_property_in_namespace(&tag_name, "CopyrightOwnerName", PLUS_NS, &resolver)
+                {
+                    name_depth = Some(depth);
+                    current_value.clear();
+                }
+            }
+
+            Ok(Event::End(_)) => {
+                if name_depth == Some(depth) {
+                    let value = current_value.trim().to_string();
+                    if !value.is_empty() {
+                        names.push(value);
+                    }
+                    name_depth = None;
+                    current_value.clear();
+                }
+                if owner_depth == Some(depth) {
+                    owner_depth = None;
+                }
+                depth = depth.saturating_sub(1);
+            }
+
+            Ok(Event::Text(e)) => {
+                if name_depth.is_some()
                     && let Ok(decoded) = e.xml10_content()
                 {
                     let unescaped =
@@ -749,12 +916,233 @@ fn extract_b_test_tag_field1_values(xml_bytes: &[u8]) -> Result<Vec<(String, Str
 
             Ok(Event::Eof) => break,
             Ok(_) => {}
-            Err(_e) => break,
+            Err(_) => break,
         }
         buf.clear();
     }
 
-    Ok(results)
+    if names.is_empty() {
+        Ok(Vec::new())
+    } else {
+        Ok(vec![(
+            "XMP:CopyrightOwnerName".to_string(),
+            names.join(", "),
+        )])
+    }
+}
+
+/// ExifTool tag names for flattened structure fields whose reported name is
+/// not the concatenated tag ID.
+///
+/// `AddFlattenedTags` builds the tag *ID* by concatenation, but a table may
+/// pre-define that ID with its own `Name`, which is what gets reported --
+/// e.g. `Iptc4xmpCore:CreatorContactInfo`/`CiAdrCity` has ID
+/// `CreatorContactInfoCiAdrCity` but prints as `CreatorCity`. Without this
+/// mapping the flattening pass emitted four such tags under their raw IDs on
+/// SonyDSC-P2.jpg (measured 2026-07-27), which is four wrong tag names rather
+/// than four closed gaps.
+///
+/// Transcribed mechanically from every `Flat => 1` entry that overrides
+/// `Name` in ExifTool 13.55; entries the top-level pass cannot reach are
+/// inert but kept so the table stays a faithful copy of its source.
+const FLAT_TAG_RENAMES: &[(&str, &str)] = &[
+    // XMP.pm:2688
+    ("CreatorContactInfoCiAdrCity", "CreatorCity"),
+    // XMP.pm:2689
+    ("CreatorContactInfoCiAdrCtry", "CreatorCountry"),
+    // XMP.pm:2690
+    ("CreatorContactInfoCiAdrExtadr", "CreatorAddress"),
+    // XMP.pm:2691
+    ("CreatorContactInfoCiAdrPcode", "CreatorPostalCode"),
+    // XMP.pm:2692
+    ("CreatorContactInfoCiAdrRegion", "CreatorRegion"),
+    // XMP.pm:2693
+    ("CreatorContactInfoCiEmailWork", "CreatorWorkEmail"),
+    // XMP.pm:2694
+    ("CreatorContactInfoCiTelWork", "CreatorWorkTelephone"),
+    // XMP.pm:2695
+    ("CreatorContactInfoCiUrlWork", "CreatorWorkURL"),
+    // DarwinCore.pm:95
+    ("EventEventDate", "EventDate"),
+    // DarwinCore.pm:96
+    ("EventEventID", "EventID"),
+    // DarwinCore.pm:97
+    ("EventEventRemarks", "EventRemarks"),
+    // DarwinCore.pm:98
+    ("EventEventTime", "EventTime"),
+    // XMP.pm:1193
+    ("FontsComposite", "FontComposite"),
+    // XMP.pm:1192
+    ("FontsVersionString", "FontVersion"),
+    // MWG.pm:506
+    ("KeywordsHierarchy", "HierarchicalKeywords"),
+    // MWG.pm:508
+    ("KeywordsHierarchyApplied", "HierarchicalKeywords1Applied"),
+    // MWG.pm:509
+    ("KeywordsHierarchyChildren", "HierarchicalKeywords1Children"),
+    // MWG.pm:511
+    (
+        "KeywordsHierarchyChildrenApplied",
+        "HierarchicalKeywords2Applied",
+    ),
+    // MWG.pm:512
+    (
+        "KeywordsHierarchyChildrenChildren",
+        "HierarchicalKeywords2Children",
+    ),
+    // MWG.pm:514
+    (
+        "KeywordsHierarchyChildrenChildrenApplied",
+        "HierarchicalKeywords3Applied",
+    ),
+    // MWG.pm:515
+    (
+        "KeywordsHierarchyChildrenChildrenChildren",
+        "HierarchicalKeywords3Children",
+    ),
+    // MWG.pm:517
+    (
+        "KeywordsHierarchyChildrenChildrenChildrenApplied",
+        "HierarchicalKeywords4Applied",
+    ),
+    // MWG.pm:518
+    (
+        "KeywordsHierarchyChildrenChildrenChildrenChildren",
+        "HierarchicalKeywords4Children",
+    ),
+    // MWG.pm:520
+    (
+        "KeywordsHierarchyChildrenChildrenChildrenChildrenApplied",
+        "HierarchicalKeywords5Applied",
+    ),
+    // MWG.pm:521
+    (
+        "KeywordsHierarchyChildrenChildrenChildrenChildrenChildren",
+        "HierarchicalKeywords5Children",
+    ),
+    // MWG.pm:523
+    (
+        "KeywordsHierarchyChildrenChildrenChildrenChildrenChildrenApplied",
+        "HierarchicalKeywords6Applied",
+    ),
+    // MWG.pm:522
+    (
+        "KeywordsHierarchyChildrenChildrenChildrenChildrenChildrenKeyword",
+        "HierarchicalKeywords6",
+    ),
+    // MWG.pm:519
+    (
+        "KeywordsHierarchyChildrenChildrenChildrenChildrenKeyword",
+        "HierarchicalKeywords5",
+    ),
+    // MWG.pm:516
+    (
+        "KeywordsHierarchyChildrenChildrenChildrenKeyword",
+        "HierarchicalKeywords4",
+    ),
+    // MWG.pm:513
+    (
+        "KeywordsHierarchyChildrenChildrenKeyword",
+        "HierarchicalKeywords3",
+    ),
+    // MWG.pm:510
+    ("KeywordsHierarchyChildrenKeyword", "HierarchicalKeywords2"),
+    // MWG.pm:507
+    ("KeywordsHierarchyKeyword", "HierarchicalKeywords1"),
+    // DarwinCore.pm:151
+    ("MaterialSampleMaterialSampleID", "MaterialSampleID"),
+    // DarwinCore.pm:207
+    ("OccurrenceOccurrenceDetails", "OccurrenceDetails"),
+    // DarwinCore.pm:208
+    ("OccurrenceOccurrenceID", "OccurrenceID"),
+    // DarwinCore.pm:209
+    ("OccurrenceOccurrenceRemarks", "OccurrenceRemarks"),
+    // DarwinCore.pm:210
+    ("OccurrenceOccurrenceStatus", "OccurrenceStatus"),
+    // DarwinCore.pm:224
+    ("OrganismOrganismID", "OrganismID"),
+    // DarwinCore.pm:225
+    ("OrganismOrganismName", "OrganismName"),
+    // DarwinCore.pm:226
+    ("OrganismOrganismRemarks", "OrganismRemarks"),
+    // DarwinCore.pm:227
+    ("OrganismOrganismScope", "OrganismScope"),
+    // XMP.pm:1073
+    ("PageInfoImage", "PageImage"),
+    // Microsoft.pm:347
+    (
+        "RegionInfoRegionsPersonDisplayName",
+        "RegionPersonDisplayName",
+    ),
+    // Microsoft.pm:348
+    (
+        "RegionInfoRegionsPersonEmailDigest",
+        "RegionPersonEmailDigest",
+    ),
+    // Microsoft.pm:349
+    ("RegionInfoRegionsPersonLiveIdCID", "RegionPersonLiveIdCID"),
+    // Microsoft.pm:350
+    ("RegionInfoRegionsPersonSourceID", "RegionPersonSourceID"),
+    // Microsoft.pm:346
+    ("RegionInfoRegionsRectangle", "RegionRectangle"),
+    // MWG.pm:481
+    ("RegionsRegionList", "RegionList"),
+    // XMP.pm:1208
+    ("SwatchGroupsGroupName", "SwatchGroupName"),
+    // XMP.pm:1209
+    ("SwatchGroupsGroupType", "SwatchGroupType"),
+    // DarwinCore.pm:307
+    ("TaxonTaxonConceptID", "TaxonConceptID"),
+    // DarwinCore.pm:308
+    ("TaxonTaxonID", "TaxonID"),
+    // DarwinCore.pm:309
+    ("TaxonTaxonRank", "TaxonRank"),
+    // DarwinCore.pm:310
+    ("TaxonTaxonRemarks", "TaxonRemarks"),
+];
+
+/// Maps a concatenated flattened tag ID to the name ExifTool reports for it.
+fn exiftool_flat_tag_name(flat_id: &str) -> &str {
+    FLAT_TAG_RENAMES
+        .iter()
+        .find(|(id, _)| *id == flat_id)
+        .map_or(flat_id, |(_, name)| *name)
+}
+
+/// Checks whether a qualified name resolves to the RDF namespace.
+fn is_rdf_namespace(tag_name: &str, resolver: &NamespaceResolver) -> bool {
+    NamespaceResolver::extract_prefix(tag_name)
+        .and_then(|prefix| resolver.resolve_prefix(prefix))
+        .is_some_and(|uri| uri == "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
+}
+
+/// Reports whether an element carries `rdf:parseType="Resource"`.
+fn has_parse_type_resource(element: &BytesStart) -> bool {
+    element.attributes().flatten().any(|attr| {
+        std::str::from_utf8(attr.key.as_ref()).is_ok_and(|key| key.ends_with(":parseType"))
+            && attr.value.as_ref() == b"Resource"
+    })
+}
+
+/// Returns the `xml:lang` attribute value of an element, if present.
+fn xml_lang_attribute(element: &BytesStart) -> Option<String> {
+    element.attributes().flatten().find_map(|attr| {
+        if std::str::from_utf8(attr.key.as_ref()).ok()? == "xml:lang" {
+            Some(std::str::from_utf8(&attr.value).ok()?.to_string())
+        } else {
+            None
+        }
+    })
+}
+
+/// Capitalises the first character, as ExifTool's `ucfirst` does when building
+/// flattened XMP tag names.
+fn ucfirst(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 /// Checks a property's local name and resolved namespace URI.
@@ -1116,6 +1504,8 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         "YCbCrPositioning" => decode_xmp_ycbcr_positioning(value),
         "ColorMode" => decode_xmp_color_mode(value),
         "PhotometricInterpretation" => decode_xmp_photometric_interpretation(value),
+        "FlashMode" => decode_xmp_flash_mode(value),
+        "FlashReturn" => decode_xmp_flash_return(value),
 
         // Camera Raw Settings - numeric parameters
         "ProcessingParameters" => format_camera_raw_parameters(value),
@@ -1134,6 +1524,45 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         "Quality" => format_photoshop_quality(value),
 
         // Default: return original value unchanged
+        _ => value.to_string(),
+    }
+}
+
+/// Decode the `exif:Mode` field of the XMP `exif:Flash` structure.
+///
+/// Verbatim from the `Flash` structure in `XMP.pm` (`Mode` field PrintConv):
+///
+/// ```text
+/// 0 => 'Unknown',
+/// 1 => 'On',
+/// 2 => 'Off',
+/// 3 => 'Auto',
+/// ```
+fn decode_xmp_flash_mode(value: &str) -> String {
+    match value.trim() {
+        "0" => "Unknown".to_string(),
+        "1" => "On".to_string(),
+        "2" => "Off".to_string(),
+        "3" => "Auto".to_string(),
+        _ => value.to_string(),
+    }
+}
+
+/// Decode the `exif:Return` field of the XMP `exif:Flash` structure.
+///
+/// Verbatim from the `Flash` structure in `XMP.pm` (`Return` field PrintConv);
+/// note that 1 is deliberately absent there, so it falls through unchanged:
+///
+/// ```text
+/// 0 => 'No return detection',
+/// 2 => 'Return not detected',
+/// 3 => 'Return detected',
+/// ```
+fn decode_xmp_flash_return(value: &str) -> String {
+    match value.trim() {
+        "0" => "No return detection".to_string(),
+        "2" => "Return not detected".to_string(),
+        "3" => "Return detected".to_string(),
         _ => value.to_string(),
     }
 }
@@ -2361,5 +2790,283 @@ mod tests {
         assert_eq!(format_exif_shutter_speed("0.004"), "0.004");
         assert_eq!(format_exif_shutter_speed("1/250"), "1/250");
         assert_eq!(format_exif_shutter_speed("0.5"), "0.500");
+    }
+}
+
+#[cfg(test)]
+mod top_level_struct_tests {
+    use super::*;
+
+    fn tag<'a>(tags: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        tags.iter()
+            .find(|(t, _)| t == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// `test:BareStruct` / `test:Item1` flattens to `BareStructItem1`, per
+    /// ExifTool's `GetXMPTagID` (`$tag .= ucfirst($nm)`). Values are the
+    /// literals `exiftool -G1 -a -s XMP4.xmp` reports for XMP-test.
+    #[test]
+    fn flattens_bare_struct_fields() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description rdf:about="" xmlns:test="http://ns.test.com/">
+                <test:BareStruct rdf:parseType="Resource">
+                  <test:Item1>a1</test:Item1>
+                  <test:Item2>a2</test:Item2>
+                </test:BareStruct>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        let tags = extract_top_level_struct_values(xml).unwrap();
+        assert_eq!(tag(&tags, "XMP:BareStructItem1"), Some("a1"));
+        assert_eq!(tag(&tags, "XMP:BareStructItem2"), Some("a2"));
+    }
+
+    /// `myXMPns:BTestTag` / `myXMPns:Field1` holds a Bag of lang-alts, which
+    /// ExifTool reports as `BTestTagField1-<lang>`. Values are the literals
+    /// `exiftool -G1 -a -s XMP5.xmp` reports for XMP-myXMPns.
+    #[test]
+    fn flattens_lang_alternatives_in_struct_field() {
+        let xml = "
+            <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+              <rdf:Description rdf:about='' xmlns:myXMPns='http://ns.exiftool.org/t/XMP.t'>
+                <myXMPns:BTestTag rdf:parseType='Resource'>
+                  <myXMPns:Field1>
+                    <rdf:Bag>
+                      <rdf:li>
+                        <rdf:Alt>
+                          <rdf:li xml:lang='en-CA'>eh?</rdf:li>
+                          <rdf:li xml:lang='en-US'>huh?</rdf:li>
+                        </rdf:Alt>
+                      </rdf:li>
+                      <rdf:li>
+                        <rdf:Alt>
+                          <rdf:li xml:lang='en-US'>groovy</rdf:li>
+                          <rdf:li xml:lang='fr'>ing\u{e9}nieux</rdf:li>
+                        </rdf:Alt>
+                      </rdf:li>
+                    </rdf:Bag>
+                  </myXMPns:Field1>
+                </myXMPns:BTestTag>
+              </rdf:Description>
+            </rdf:RDF>
+        "
+        .as_bytes();
+
+        let tags = extract_top_level_struct_values(xml).unwrap();
+        assert_eq!(tag(&tags, "XMP:BTestTagField1-en-CA"), Some("eh?"));
+        assert_eq!(tag(&tags, "XMP:BTestTagField1-fr"), Some("ingénieux"));
+        // ExifTool prints en-US twice ("huh?" then "groovy") because the
+        // field is List-valued; we keep the first and never emit the tag
+        // twice.
+        assert_eq!(tag(&tags, "XMP:BTestTagField1-en-US"), Some("huh?"));
+        assert_eq!(
+            tags.iter()
+                .filter(|(t, _)| t == "XMP:BTestTagField1-en-US")
+                .count(),
+            1
+        );
+    }
+
+    /// A lang-alt buried under a sub-structure belongs to a longer flattened
+    /// name (ExifTool calls this one `RegionExtensionsArtworkTitle-de`), so
+    /// this pass must not claim it as `RegionsRegionList-de`.
+    #[test]
+    fn does_not_flatten_through_substructures() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description rdf:about=""
+                  xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+                  xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/">
+                <mwg-rs:Regions rdf:parseType="Resource">
+                  <mwg-rs:RegionList>
+                    <rdf:Bag>
+                      <rdf:li rdf:parseType="Resource">
+                        <mwg-rs:Extensions rdf:parseType="Resource">
+                          <Iptc4xmpExt:AOTitle>
+                            <rdf:Alt><rdf:li xml:lang="de">verfaenglich</rdf:li></rdf:Alt>
+                          </Iptc4xmpExt:AOTitle>
+                        </mwg-rs:Extensions>
+                      </rdf:li>
+                    </rdf:Bag>
+                  </mwg-rs:RegionList>
+                </mwg-rs:Regions>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        let tags = extract_top_level_struct_values(xml).unwrap();
+        assert!(
+            !tags
+                .iter()
+                .any(|(t, _)| t.starts_with("XMP:RegionsRegionList")),
+            "sub-structure leaked into the parent field name: {tags:?}"
+        );
+    }
+
+    /// ExifTool capitalises each path component (`ucfirst`), so the lowercase
+    /// `stRef:instanceID` field of `xapMM:DerivedFrom` becomes
+    /// `DerivedFromInstanceID` -- exactly what `exiftool -G1 -a -s XMP.inx`
+    /// reports for XMP-xmpMM.
+    #[test]
+    fn capitalises_lowercase_field_names() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description rdf:about=""
+                  xmlns:xapMM="http://ns.adobe.com/xap/1.0/mm/"
+                  xmlns:stRef="http://ns.adobe.com/xap/1.0/sType/ResourceRef#">
+                <xapMM:DerivedFrom rdf:parseType="Resource">
+                  <stRef:instanceID>f0d208df-dc56-11df-95ac-e273561c7691</stRef:instanceID>
+                  <stRef:documentID>adobe:docid:indd:0419e6d7</stRef:documentID>
+                </xapMM:DerivedFrom>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        let tags = extract_top_level_struct_values(xml).unwrap();
+        assert_eq!(
+            tag(&tags, "XMP:DerivedFromInstanceID"),
+            Some("f0d208df-dc56-11df-95ac-e273561c7691")
+        );
+        assert_eq!(
+            tag(&tags, "XMP:DerivedFromDocumentID"),
+            Some("adobe:docid:indd:0419e6d7")
+        );
+    }
+
+    /// The `exif:Flash` struct flattens to FlashMode/FlashReturn, and those
+    /// carry PrintConv tables in XMP.pm: Mode 2 => 'Off', Return 0 => 'No
+    /// return detection'.
+    #[test]
+    fn decodes_flash_struct_enums() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/">
+                <exif:Flash rdf:parseType="Resource">
+                  <exif:Mode>2</exif:Mode>
+                  <exif:Return>0</exif:Return>
+                </exif:Flash>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        let tags = parse_xmp(xml).unwrap();
+        assert_eq!(tag(&tags, "XMP:FlashMode"), Some("Off"));
+        assert_eq!(tag(&tags, "XMP:FlashReturn"), Some("No return detection"));
+    }
+
+    /// XMP.pm Flash struct PrintConv tables, asserted as literals.
+    #[test]
+    fn flash_printconv_tables_match_exiftool() {
+        assert_eq!(decode_xmp_flash_mode("0"), "Unknown");
+        assert_eq!(decode_xmp_flash_mode("1"), "On");
+        assert_eq!(decode_xmp_flash_mode("2"), "Off");
+        assert_eq!(decode_xmp_flash_mode("3"), "Auto");
+        assert_eq!(decode_xmp_flash_return("0"), "No return detection");
+        assert_eq!(decode_xmp_flash_return("2"), "Return not detected");
+        assert_eq!(decode_xmp_flash_return("3"), "Return detected");
+        // 1 is absent from ExifTool's Return table, so it passes through.
+        assert_eq!(decode_xmp_flash_return("1"), "1");
+    }
+
+    /// `Iptc4xmpCore:CreatorContactInfo` fields have concatenated tag IDs but
+    /// are reported under the shorter names XMP.pm pre-defines for them.
+    /// Values are the literals `exiftool -G1 -a -s Sony/SonyDSC-P2.jpg`
+    /// reports for XMP-iptcCore.
+    #[test]
+    fn renames_flattened_creator_contact_info() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description rdf:about=""
+                  xmlns:Iptc4xmpCore="http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/">
+                <Iptc4xmpCore:CreatorContactInfo rdf:parseType="Resource">
+                  <Iptc4xmpCore:CiAdrCity>Amsterdam</Iptc4xmpCore:CiAdrCity>
+                  <Iptc4xmpCore:CiAdrCtry>Netherlands</Iptc4xmpCore:CiAdrCtry>
+                  <Iptc4xmpCore:CiAdrExtadr>Govert Flinkstraat 302hs</Iptc4xmpCore:CiAdrExtadr>
+                  <Iptc4xmpCore:CiAdrPcode>1073 CH</Iptc4xmpCore:CiAdrPcode>
+                </Iptc4xmpCore:CreatorContactInfo>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        let tags = extract_top_level_struct_values(xml).unwrap();
+        assert_eq!(tag(&tags, "XMP:CreatorCity"), Some("Amsterdam"));
+        assert_eq!(tag(&tags, "XMP:CreatorCountry"), Some("Netherlands"));
+        assert_eq!(
+            tag(&tags, "XMP:CreatorAddress"),
+            Some("Govert Flinkstraat 302hs")
+        );
+        assert_eq!(tag(&tags, "XMP:CreatorPostalCode"), Some("1073 CH"));
+        assert!(
+            !tags
+                .iter()
+                .any(|(t, _)| t.starts_with("XMP:CreatorContactInfoCi")),
+            "raw flattened IDs leaked instead of ExifTool names: {tags:?}"
+        );
+    }
+
+    /// Spot-check of the rename table against the literal names in ExifTool
+    /// 13.55, and of the pass-through for IDs it does not cover.
+    #[test]
+    fn flat_tag_rename_table_matches_exiftool() {
+        assert_eq!(
+            exiftool_flat_tag_name("CreatorContactInfoCiUrlWork"),
+            "CreatorWorkURL"
+        );
+        assert_eq!(exiftool_flat_tag_name("RegionsRegionList"), "RegionList");
+        assert_eq!(
+            exiftool_flat_tag_name("KeywordsHierarchy"),
+            "HierarchicalKeywords"
+        );
+        assert_eq!(exiftool_flat_tag_name("EventEventDate"), "EventDate");
+        assert_eq!(exiftool_flat_tag_name("PageInfoImage"), "PageImage");
+        // Not renamed by any table: the concatenated ID is the reported name.
+        assert_eq!(exiftool_flat_tag_name("BareStructItem1"), "BareStructItem1");
+        assert_eq!(exiftool_flat_tag_name("FlashMode"), "FlashMode");
+    }
+
+    /// PLUS.pm gives `CopyrightOwner` `FlatName => ''`, so the field keeps its
+    /// own name. Value is what `exiftool -G1 -a -s PLUS.xmp` reports.
+    #[test]
+    fn extracts_plus_copyright_owner_name() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description rdf:about="" xmlns:plus="http://ns.useplus.org/ldf/xmp/1.0/">
+                <plus:CopyrightOwner>
+                  <rdf:Seq>
+                    <rdf:li rdf:parseType="Resource">
+                      <plus:CopyrightOwnerName>Phil Harvey</plus:CopyrightOwnerName>
+                    </rdf:li>
+                  </rdf:Seq>
+                </plus:CopyrightOwner>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        let tags = extract_plus_copyright_owner_name(xml).unwrap();
+        assert_eq!(tag(&tags, "XMP:CopyrightOwnerName"), Some("Phil Harvey"));
+    }
+
+    /// The same local name in a foreign namespace must not be mistaken for the
+    /// PLUS field.
+    #[test]
+    fn ignores_copyright_owner_name_outside_plus_namespace() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description rdf:about="" xmlns:plus="http://example.invalid/not-plus/">
+                <plus:CopyrightOwner>
+                  <rdf:Seq>
+                    <rdf:li rdf:parseType="Resource">
+                      <plus:CopyrightOwnerName>Nobody</plus:CopyrightOwnerName>
+                    </rdf:li>
+                  </rdf:Seq>
+                </plus:CopyrightOwner>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        assert!(extract_plus_copyright_owner_name(xml).unwrap().is_empty());
     }
 }
