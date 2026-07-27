@@ -328,6 +328,10 @@ const TAG_BRIGHTNESS_VALUE: u16 = 0x9203;
 const TAG_COLOR_SPACE: u16 = 0xA001;
 const TAG_COMPONENTS_CONFIGURATION: u16 = 0x9101;
 const TAG_COMPRESSED_BITS_PER_PIXEL: u16 = 0x9102;
+const TAG_COPYRIGHT: u16 = 0x8298;
+const TAG_CREATE_DATE: u16 = 0x9004;
+const TAG_DATE_TIME_ORIGINAL: u16 = 0x9003;
+const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
 const TAG_COMPRESSION: u16 = 0x0103;
 
 /// Known compression values (IFD0 Compression tag)
@@ -524,6 +528,13 @@ fn parse_exif_ifd(
                     metadata.insert(key, crate::core::TagValue::new_string(val_str));
                 }
             }
+            TAG_BRIGHTNESS_VALUE if field_type == 10 => {
+                if let Some((num, den)) = read_signed_rational_value(data, base, byte_order) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_BRIGHTNESS_VALUE, "ExifIFD");
+                    let val_str = signed_rational_to_string(num, den);
+                    metadata.insert(key, crate::core::TagValue::new_string(val_str));
+                }
+            }
             TAG_COMPRESSED_BITS_PER_PIXEL if field_type == 5 => {
                 if let Some((num, den)) =
                     read_unsigned_rational_value(data, base, byte_order)
@@ -578,6 +589,55 @@ fn parse_exif_ifd(
                         "ExifIFD",
                     );
                     metadata.insert(key, crate::core::TagValue::new_string(components.join(", ")));
+                }
+            }
+            TAG_COPYRIGHT if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    if !v.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_COPYRIGHT, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(v));
+                    }
+                }
+            }
+            TAG_CREATE_DATE if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    if !v.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_CREATE_DATE, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(v));
+                    }
+                }
+            }
+            TAG_DATE_TIME_ORIGINAL if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    if !v.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_DATE_TIME_ORIGINAL, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(v));
+                    }
+                }
+            }
+            TAG_EXIF_IMAGE_HEIGHT if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_EXIF_IMAGE_HEIGHT, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(format!("{}", raw)));
+                }
+            }
+            TAG_EXIF_IMAGE_HEIGHT if field_type == 4 => {
+                if let Some(raw) = read_long_value(data, base, byte_order) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_EXIF_IMAGE_HEIGHT, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(format!("{}", raw)));
+                }
+            }
+            TAG_COMPRESSION if field_type == 3 => {
+                // Some PDFs carry Compression in ExifIFD
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    if let Some(label) = COMPRESSION_LABELS
+                        .iter()
+                        .find(|&&(id, _)| id == raw)
+                        .map(|&(_, s)| s)
+                    {
+                        let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                    }
                 }
             }
             _ => {}
@@ -691,6 +751,39 @@ fn read_embedded_tiff_u32(
         EmbeddedTiffByteOrder::Little => u32::from_le_bytes(bytes),
         EmbeddedTiffByteOrder::Big => u32::from_be_bytes(bytes),
     })
+}
+
+/// Reads a signed rational value (SRational, type 10) from a TIFF IFD entry.
+fn read_signed_rational_value(
+    data: &[u8],
+    entry_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<(i32, i32)> {
+    let val_off = get_entry_value_offset(data, entry_offset, 8, 1, byte_order)?;
+    let num = read_embedded_tiff_u32(data, val_off, byte_order)? as i32;
+    let den = read_embedded_tiff_u32(data, val_off.checked_add(4)?, byte_order)? as i32;
+    Some((num, den))
+}
+
+/// Reads a LONG (u32) value from an entry that fits in the value field.
+fn read_long_value(
+    data: &[u8],
+    entry_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<u32> {
+    let val_off = get_entry_value_offset(data, entry_offset, 4, 1, byte_order)?;
+    read_embedded_tiff_u32(data, val_off, byte_order)
+}
+
+/// Formats a signed rational as a decimal string (e.g., "2", "2.5").
+fn signed_rational_to_string(num: i32, den: i32) -> String {
+    if den == 0 {
+        return "0".to_string();
+    }
+    let d = num as f64 / den as f64;
+    let s = format!("{:.9}", d);
+    let trimmed = s.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() { "0".to_string() } else { trimmed.to_string() }
 }
 
 #[cfg(test)]
