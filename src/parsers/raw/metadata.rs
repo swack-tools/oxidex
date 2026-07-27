@@ -48,6 +48,11 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
                 | 0xC632 // AntiAliasStrength
                 | 0xC65C // BestQualityScale
                 | 0xC68D // ActiveArea
+                | 0xC616 // CFAPlaneColor
+                | 0xC617 // CFALayout
+                | 0xC61F // DefaultCropOrigin
+                | 0xC620 // DefaultCropSize
+                | 0x828E // CFAPattern2
         )
     {
         lookup_tag_name(tag_id, "EXIF")
@@ -377,22 +382,25 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     ) {
                         TagValue::new_string(value)
                     } else if format == RawFormat::AdobeDNG {
-                        format_dng_integer_array(
-                            *tag_id,
-                            bytes,
-                            *field_type,
-                            *value_count,
-                            byte_order,
-                        )
-                        .map(TagValue::new_string)
-                        .unwrap_or_else(|| {
-                            raw_bytes_to_simple_tag_value(
-                                bytes,
-                                *field_type,
-                                *value_count,
-                                byte_order,
-                            )
-                        })
+                        format_dng_value(*tag_id, bytes, *field_type, *value_count, byte_order)
+                            .or_else(|| {
+                                format_dng_integer_array(
+                                    *tag_id,
+                                    bytes,
+                                    *field_type,
+                                    *value_count,
+                                    byte_order,
+                                )
+                                .map(TagValue::new_string)
+                            })
+                            .unwrap_or_else(|| {
+                                raw_bytes_to_simple_tag_value(
+                                    bytes,
+                                    *field_type,
+                                    *value_count,
+                                    byte_order,
+                                )
+                            })
                     } else {
                         raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
                     };
@@ -530,7 +538,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             // loop uses, for consistency.
                             // CFAPattern2 stays under its physical SubIFD
                             // group for all formats, including NEF.
-                            if tag_id == 0x828E {
+                            if tag_id == 0x828E && format != RawFormat::AdobeDNG {
                                 metadata.insert(
                                     lookup_tag_name(tag_id, sub_ifd_name),
                                     TagValue::new_string(format_cfa_pattern2(
@@ -541,6 +549,19 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 continue;
                             }
 
+                            // DNG stores CFARepeatPatternDim (tag 0x828D) in SubIFD
+                            // but it isn't registered in the tag database under EXIF,
+                            // so we name it manually, matching ExifTool's output.
+                            if format == RawFormat::AdobeDNG && tag_id == 0x828D && field_type == 3 && value_count >= 2 {
+                                if let (Some(h), Some(v)) = (read_tiff_u16(raw_bytes.as_ref(), byte_order), read_tiff_u16(&raw_bytes.as_ref()[2..], byte_order)) {
+                                    metadata.insert(
+                                        "EXIF:CFARepeatPatternDim".to_string(),
+                                        TagValue::new_string(format!("{} {}", h, v)),
+                                    );
+                                    continue;
+                                }
+                            }
+
                             let tag_name = if is_nef {
                                 lookup_tag_name(tag_id, "EXIF")
                             } else {
@@ -548,22 +569,25 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             };
                             let bytes = raw_bytes.as_ref();
                             let tag_value = if format == RawFormat::AdobeDNG {
-                                format_dng_integer_array(
-                                    tag_id,
-                                    bytes,
-                                    field_type,
-                                    value_count,
-                                    byte_order,
-                                )
-                                .map(TagValue::new_string)
-                                .unwrap_or_else(|| {
-                                    raw_bytes_to_simple_tag_value(
-                                        bytes,
-                                        field_type,
-                                        value_count,
-                                        byte_order,
-                                    )
-                                })
+                                format_dng_value(tag_id, bytes, field_type, value_count, byte_order)
+                                    .or_else(|| {
+                                        format_dng_integer_array(
+                                            tag_id,
+                                            bytes,
+                                            field_type,
+                                            value_count,
+                                            byte_order,
+                                        )
+                                        .map(TagValue::new_string)
+                                    })
+                                    .unwrap_or_else(|| {
+                                        raw_bytes_to_simple_tag_value(
+                                            bytes,
+                                            field_type,
+                                            value_count,
+                                            byte_order,
+                                        )
+                                    })
                             } else {
                                 raw_bytes_to_simple_tag_value(
                                     bytes,
@@ -806,6 +830,59 @@ fn format_dng_integer_array(
     };
 
     Some(formatted.join(" "))
+}
+
+fn format_dng_value(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<TagValue> {
+    match tag_id {
+        0xC617 if field_type == 3 && value_count >= 1 => {
+            // CFALayout: SHORT[1] enum
+            let value = read_tiff_u16(bytes, byte_order)?;
+            let s = match value {
+                1 => "Rectangular".to_string(),
+                _ => value.to_string(),
+            };
+            Some(TagValue::new_string(s))
+        }
+        0xC616 => {
+            // CFAPlaneColor: BYTE array
+            let count = usize::try_from(value_count).ok()?;
+            let colors = bytes.get(..count)?;
+            let names: Vec<&str> = colors
+                .iter()
+                .map(|&c| Some(match c {
+                    0 => "Red",
+                    1 => "Green",
+                    2 => "Blue",
+                    _ => return None,
+                }))
+                .collect::<Option<Vec<_>>>()?;
+            Some(TagValue::new_string(names.join(",")))
+        }
+        0x828E => {
+            // CFAPattern2: BYTE array
+            Some(TagValue::new_string(format_cfa_pattern2(bytes, value_count)))
+        }
+        0xC61F | 0xC620 if (field_type == 3 || field_type == 4) && value_count >= 2 => {
+            if field_type == 3 && bytes.len() >= 4 {
+                let h = read_tiff_u16(bytes, byte_order)?;
+                let v = read_tiff_u16(&bytes[2..], byte_order)?;
+                Some(TagValue::new_string(format!("{} {}", h, v)))
+            } else if field_type == 4 && bytes.len() >= 8 {
+                let h = read_tiff_u32(bytes, byte_order)?;
+                let v = read_tiff_u32(&bytes[4..], byte_order)?;
+                Some(TagValue::new_string(format!("{} {}", h, v)))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 fn read_tiff_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
