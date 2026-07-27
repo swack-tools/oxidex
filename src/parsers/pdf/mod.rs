@@ -358,7 +358,6 @@ enum EmbeddedTiffByteOrder {
 fn extract_embedded_exif_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> crate::error::Result<crate::core::MetadataMap> {
-    let mut metadata = crate::core::MetadataMap::with_capacity(1);
     let file_size = usize::try_from(reader.size()).map_err(|_| {
         crate::error::ExifToolError::parse_error(
             "PDF is too large to scan for embedded EXIF metadata",
@@ -366,9 +365,7 @@ fn extract_embedded_exif_metadata(
     })?;
     let data = reader.read(0, file_size)?;
 
-    metadata = find_embedded_exif_tags(data).unwrap_or_default();
-
-    Ok(metadata)
+    Ok(find_embedded_exif_tags(data).unwrap_or_default())
 }
 
 /// Searches raw PDF bytes for embedded TIFF/EXIF headers and returns
