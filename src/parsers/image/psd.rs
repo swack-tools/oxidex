@@ -613,4 +613,104 @@ mod tests {
         assert!(tag_name.ends_with(":ThumbnailOffset"));
         assert_eq!(metadata.get(&tag_name), Some(&TagValue::Integer(390)));
     }
+
+    #[test]
+    fn parses_thumbnail_length_from_embedded_exif_ifd1() {
+        // Ground truth, Exif.pm line 1295-1297: the FIRST variant of the 0x202
+        // conditional list is `Name => 'ThumbnailLength'`, gated on
+        // `$$self{DIR_NAME} eq 'IFD1'`. PSD-embedded EXIF reaches this code with
+        // DIR_NAME == IFD1, so that variant is the one that matches.
+        //
+        // Measured 2026-07-26 on
+        // /tmp/oxidex-exiftool-cache/combined-samples/Photoshop.psd:
+        //   exiftool -G1 -a -s  ->  [IFD1] ThumbnailLength : 0
+        //   oxidex (post-fix)   ->  IFD1:ThumbnailLength: 0
+        //
+        // The key is asserted as a LITERAL rather than via lookup_ifd1_tag_name()
+        // so the test cannot pass by agreeing with whatever the function returns.
+        // Deleting the 0x0202 branch makes the key fall back to "IFD1:0x0202"
+        // and this test goes red.
+        let mut data = vec![0u8; 32];
+        data[0..2].copy_from_slice(b"II");
+        data[2..4].copy_from_slice(&42u16.to_le_bytes());
+        data[4..8].copy_from_slice(&8u32.to_le_bytes());
+
+        // Empty IFD0 followed by its next-IFD pointer.
+        data[8..10].copy_from_slice(&0u16.to_le_bytes());
+        data[10..14].copy_from_slice(&14u32.to_le_bytes());
+
+        // IFD1 with one inline LONG entry: 0x0202 = 0, exactly as the sample
+        // stores it (IFD1 entry #5, `- Tag 0x0202 (4 bytes, int32u[1])`).
+        data[14..16].copy_from_slice(&1u16.to_le_bytes());
+        data[16..18].copy_from_slice(&0x0202u16.to_le_bytes());
+        data[18..20].copy_from_slice(&4u16.to_le_bytes()); // LONG
+        data[20..24].copy_from_slice(&1u32.to_le_bytes());
+        data[24..28].copy_from_slice(&0u32.to_le_bytes());
+        // Bytes 28..32 are the zero next-IFD pointer.
+
+        let mut metadata = MetadataMap::new();
+        PSDParser::parse_exif_data(&data, &mut metadata);
+
+        assert_eq!(
+            metadata.get("IFD1:ThumbnailLength"),
+            Some(&TagValue::Integer(0)),
+            "0x0202 in IFD1 must be named ThumbnailLength (Exif.pm:1297)"
+        );
+        assert!(
+            metadata.get("IFD1:0x0202").is_none(),
+            "0x0202 must not also survive under its unnamed hex fallback"
+        );
+    }
+
+    #[test]
+    fn thumbnail_length_rename_is_confined_to_ifd1() {
+        // BLIND-SPOT REGRESSION TEST. Photoshop.psd carries 0x0202 only in IFD1,
+        // so no sample in the corpus exercises 0x0202 in any other directory. A
+        // green "recheck-pass gaps=1->0" therefore says nothing about whether the
+        // rename leaked into IFD0/ExifIFD -- which is exactly the hole that let
+        // the TTF (%ttLang Spanish=12) and RAR (RAR5 host-OS 2/3/4) fabrications
+        // ship on 2026-07-26 beside values the sample did happen to hit.
+        //
+        // ThumbnailLength is NOT 0x202's universal name. Exif.pm lists nine
+        // conditional variants; outside IFD1 the same ID is PreviewImageLength
+        // (DIR_NAME eq "MakerNotes", line ~1347), JpgFromRawLength (SubIFD /
+        // IFD2, ~1368), or OtherImageLength (SubIFD1 / SubIFD2, ~1388). So
+        // renaming 0x0202 unconditionally would replace real data with a wrong
+        // tag name in every one of those directories.
+        //
+        // parse_exif_data routes IFD0 through lookup_tag_name(id, "IFD0") and
+        // only IFD1 through lookup_ifd1_tag_name(), so this pins the scope of the
+        // fix at the call site rather than trusting the branch to stay put.
+        let mut data = vec![0u8; 32];
+        data[0..2].copy_from_slice(b"II");
+        data[2..4].copy_from_slice(&42u16.to_le_bytes());
+        data[4..8].copy_from_slice(&8u32.to_le_bytes());
+
+        // IFD0 holding 0x0202 directly, with no IFD1 chained after it.
+        data[8..10].copy_from_slice(&1u16.to_le_bytes());
+        data[10..12].copy_from_slice(&0x0202u16.to_le_bytes());
+        data[12..14].copy_from_slice(&4u16.to_le_bytes()); // LONG
+        data[14..18].copy_from_slice(&1u32.to_le_bytes());
+        data[18..22].copy_from_slice(&12345u32.to_le_bytes());
+        // Bytes 22..26 are the zero next-IFD pointer.
+
+        let mut metadata = MetadataMap::new();
+        PSDParser::parse_exif_data(&data, &mut metadata);
+
+        assert!(
+            metadata
+                .iter()
+                .all(|(name, _)| !name.ends_with(":ThumbnailLength")),
+            "0x0202 outside IFD1 must not be renamed ThumbnailLength; got {:?}",
+            metadata.iter().map(|(n, _)| n).collect::<Vec<_>>()
+        );
+        // Same guard for the sibling 0x0201 special case, which shares the
+        // identical IFD1-only condition in Exif.pm (line 1149).
+        assert!(
+            metadata
+                .iter()
+                .all(|(name, _)| !name.ends_with(":ThumbnailOffset")),
+            "0x0201 was never present; no ThumbnailOffset should appear"
+        );
+    }
 }
