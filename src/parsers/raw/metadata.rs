@@ -36,9 +36,15 @@ use crate::tag_db::lookup_tag_name;
 fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String {
     if format == RawFormat::PanasonicRW2 && tag_id == 0x0009 {
         // PanasonicRaw CFAPattern is stored at 0x0009, while the canonical
-        // EXIF CFAPattern name is registered under tag 0xA302. ExifTool
-        // assigns the Panasonic tag to its EXIF group.
         lookup_tag_name(0xA302, "EXIF")
+    } else if format == RawFormat::PanasonicRW2 && tag_id == 0x0023 {
+        "EXIF:ISO".to_string()
+    } else if format == RawFormat::PanasonicRW2 && tag_id == 0x002C {
+        "EXIF:LinearityLimitGreen".to_string()
+    } else if format == RawFormat::PanasonicRW2 && tag_id == 0x002D {
+        "EXIF:LinearityLimitBlue".to_string()
+    } else if format == RawFormat::PanasonicRW2 && tag_id == 0x002E {
+        "EXIF:JpgFromRaw".to_string()
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
@@ -390,6 +396,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         byte_order,
                     ) {
                         TagValue::new_string(value)
+                    } else if format == RawFormat::PanasonicRW2
+                        && ifd_index == 0
+                        && *tag_id == 0x002E
+                        && *value_count > 0
+                    {
+                        let len = bytes.len();
+                        TagValue::new_string(format!(
+                            "(Binary data {} bytes, use -b option to extract)",
+                            len
+                        ))
                     } else if format == RawFormat::AdobeDNG {
                         format_dng_integer_array(
                             *tag_id,
@@ -420,6 +436,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // Also check EXIF IFD for MakerNote and Make tags
                     let mut exif_makernote: Option<Vec<u8>> = None;
                     let mut exif_make: Option<String> = None;
+                    let mut interop_ifd_offset: Option<u64> = None;
 
                     for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
                         let bytes = raw_bytes.as_ref();
@@ -434,6 +451,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         if *tag_id == 0x010F && *field_type == 2 {
                             let make_str = String::from_utf8_lossy(bytes);
                             exif_make = Some(make_str.trim_end_matches('\0').trim().to_string());
+                        }
+
+                        if *tag_id == 0xA005 && bytes.len() >= 4 {
+                            interop_ifd_offset = Some(read_u32(bytes, byte_order) as u64);
+                            continue;
                         }
 
                         let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
@@ -454,6 +476,36 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             )
                         };
                         metadata.insert(tag_name, tag_value);
+                    }
+
+                    // Parse Interop IFD if present
+                    if let Some(interop_offset) = interop_ifd_offset
+                        && let Ok(interop_tags) = parse_ifd(&reader, interop_offset, byte_order)
+                    {
+                        for (tag_id, field_type, value_count, raw_bytes) in &interop_tags {
+                            let bytes = raw_bytes.as_ref();
+                            if *tag_id == 0x0001 {
+                                let raw = String::from_utf8_lossy(bytes)
+                                    .trim_end_matches('\0')
+                                    .to_string();
+                                let printed = match raw.as_str() {
+                                    "R98" => "R98 - DCF basic file (sRGB)".to_string(),
+                                    "R03" => "R03 - DCF option file (Adobe RGB)".to_string(),
+                                    "THM" => "THM - DCF thumbnail file".to_string(),
+                                    _ => raw,
+                                };
+                                metadata.insert(
+                                    "EXIF:InteropIndex".to_string(),
+                                    TagValue::new_string(printed),
+                                );
+                            } else {
+                                let tag_name = lookup_tag_name(*tag_id, "InteropIFD");
+                                let tag_value = raw_bytes_to_simple_tag_value(
+                                    bytes, *field_type, *value_count, byte_order,
+                                );
+                                metadata.insert(tag_name, tag_value);
+                            }
+                        }
                     }
 
                     // Prefer EXIF IFD MakerNote/Make over IFD0 versions
@@ -932,6 +984,34 @@ fn format_exif_display_value(
         0xA404 if field_type == 5 && value_count >= 1 => {
             // Reuse the same rational formatting as CompressedBitsPerPixel (0x9102).
             format_rational_as_string(bytes, byte_order)
+        }
+        // LightSource: SHORT[1].
+        0x9208 if field_type == 3 && value_count >= 1 => {
+            match read_tiff_u16(bytes, byte_order)? {
+                0 => Some("Unknown".to_string()),
+                1 => Some("Daylight".to_string()),
+                2 => Some("Fluorescent".to_string()),
+                3 => Some("Tungsten (Incandescent)".to_string()),
+                4 => Some("Flash".to_string()),
+                9 => Some("Fine Weather".to_string()),
+                10 => Some("Cloudy".to_string()),
+                11 => Some("Shade".to_string()),
+                12 => Some("Daylight Fluorescent".to_string()),
+                13 => Some("Day White Fluorescent".to_string()),
+                14 => Some("Cool White Fluorescent".to_string()),
+                15 => Some("White Fluorescent".to_string()),
+                16 => Some("Warm White Fluorescent".to_string()),
+                17 => Some("Standard Light A".to_string()),
+                18 => Some("Standard Light B".to_string()),
+                19 => Some("Standard Light C".to_string()),
+                20 => Some("D55".to_string()),
+                21 => Some("D65".to_string()),
+                22 => Some("D75".to_string()),
+                23 => Some("D50".to_string()),
+                24 => Some("ISO Studio Tungsten".to_string()),
+                255 => Some("Other".to_string()),
+                _ => None,
+            }
         }
         // Contrast: SHORT[1].
         0xA408 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
