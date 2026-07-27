@@ -438,6 +438,14 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
                     }
                 }
             }
+            TAG_COPYRIGHT if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    if !v.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_COPYRIGHT, "EXIF");
+                        metadata.insert(key, crate::core::TagValue::new_string(v));
+                    }
+                }
+            }
             TAG_COMPRESSION if field_type == 3 => {
                 if let Some(raw) = read_short_value(data, base, byte_order) {
                     if let Some(label) = COMPRESSION_LABELS
@@ -445,7 +453,7 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
                         .find(|&&(id, _)| id == raw)
                         .map(|&(_, s)| s)
                     {
-                        let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "IFD0");
+                        let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "EXIF");
                         metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                     }
                 }
@@ -594,7 +602,7 @@ fn parse_exif_ifd(
             TAG_COPYRIGHT if field_type == 2 => {
                 if let Some(v) = read_ascii_value(data, base, byte_order, count) {
                     if !v.is_empty() {
-                        let key = crate::tag_db::lookup_tag_name(TAG_COPYRIGHT, "ExifIFD");
+                        let key = crate::tag_db::lookup_tag_name(TAG_COPYRIGHT, "EXIF");
                         metadata.insert(key, crate::core::TagValue::new_string(v));
                     }
                 }
@@ -635,7 +643,7 @@ fn parse_exif_ifd(
                         .find(|&&(id, _)| id == raw)
                         .map(|&(_, s)| s)
                     {
-                        let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "ExifIFD");
+                        let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "EXIF");
                         metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                     }
                 }
