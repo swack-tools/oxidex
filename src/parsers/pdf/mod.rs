@@ -332,8 +332,23 @@ const TAG_COMPRESSION: u16 = 0x0103;
 const TAG_EXIF_VERSION: u16 = 0x9000;
 const TAG_EXPOSURE_PROGRAM: u16 = 0x8822;
 const TAG_EXPOSURE_COMPENSATION: u16 = 0x9204;
+const TAG_COPYRIGHT: u16 = 0x8298;
+const TAG_DATE_TIME_ORIGINAL: u16 = 0x9003;
+const TAG_CREATE_DATE: u16 = 0x9004;
+const TAG_FLASH: u16 = 0x9209;
+const TAG_FLASHPIX_VERSION: u16 = 0xA000;
+const TAG_EXIF_IMAGE_WIDTH: u16 = 0xA002;
+const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
+const TAG_FOCAL_PLANE_RESOLUTION_UNIT: u16 = 0xA210;
+const TAG_FILE_SOURCE: u16 = 0xA300;
 
-/// Known compression values (IFD0 Compression tag)
+/// `%compression` from ExifTool 13.55 Exif.pm, transcribed in full.
+///
+/// The archived patches this parser grew from carried a nine-entry excerpt
+/// ending at `32773 => 'PackBits'`. A truncated PrintConv table is the exact
+/// shape that shipped `32767 => "Sony RAW"` instead of
+/// `'Sony ARW Compressed'` elsewhere in this codebase, so the whole table is
+/// reproduced here rather than the handful of values PDF.pdf happens to hit.
 const COMPRESSION_LABELS: &[(u16, &str)] = &[
     (1, "Uncompressed"),
     (2, "CCITT 1D"),
@@ -343,7 +358,119 @@ const COMPRESSION_LABELS: &[(u16, &str)] = &[
     (6, "JPEG (old-style)"),
     (7, "JPEG"),
     (8, "Adobe Deflate"),
+    (9, "JBIG B&W"),
+    (10, "JBIG Color"),
+    (99, "JPEG"),
+    (262, "Kodak 262"),
+    (32766, "NeXt or Sony ARW Compressed 2"),
+    (32767, "Sony ARW Compressed"),
+    (32769, "Packed RAW"),
+    (32770, "Samsung SRW Compressed"),
+    (32771, "CCIRLEW"),
+    (32772, "Samsung SRW Compressed 2"),
     (32773, "PackBits"),
+    (32809, "Thunderscan"),
+    (32867, "Kodak KDC Compressed"),
+    (32895, "IT8CTPAD"),
+    (32896, "IT8LW"),
+    (32897, "IT8MP"),
+    (32898, "IT8BL"),
+    (32908, "PixarFilm"),
+    (32909, "PixarLog"),
+    (32946, "Deflate"),
+    (32947, "DCS"),
+    (33003, "Aperio JPEG 2000 YCbCr"),
+    (33005, "Aperio JPEG 2000 RGB"),
+    (34661, "JBIG"),
+    (34676, "SGILog"),
+    (34677, "SGILog24"),
+    (34712, "JPEG 2000"),
+    (34713, "Nikon NEF Compressed"),
+    (34715, "JBIG2 TIFF FX"),
+    (34718, "Microsoft Document Imaging (MDI) Binary Level Codec"),
+    (
+        34719,
+        "Microsoft Document Imaging (MDI) Progressive Transform Codec",
+    ),
+    (34720, "Microsoft Document Imaging (MDI) Vector"),
+    (34887, "ESRI Lerc"),
+    (34892, "Lossy JPEG"),
+    (34925, "LZMA2"),
+    (34926, "Zstd (old)"),
+    (34927, "WebP (old)"),
+    (34933, "PNG"),
+    (34934, "JPEG XR"),
+    (50000, "Zstd"),
+    (50001, "WebP"),
+    (50002, "JPEG XL (old)"),
+    (52546, "JPEG XL"),
+    (65000, "Kodak DCR Compressed"),
+    (65535, "Pentax PEF Compressed"),
+];
+
+/// `%flash` from ExifTool 13.55 Exif.pm, transcribed in full.
+///
+/// Three archived patches decoded this tag by OR-ing bit meanings together
+/// (`bit 3 => "Auto"`, and so on). That is not what ExifTool does: 0x08 is a
+/// single table entry meaning `'On, Did not fire'`, not "Auto". The bitwise
+/// spelling only agreed with ExifTool for the one value PDF.pdf stores (1),
+/// which is why it survived its recheck.
+const FLASH_LABELS: &[(u16, &str)] = &[
+    (0x00, "No Flash"),
+    (0x01, "Fired"),
+    (0x05, "Fired, Return not detected"),
+    (0x07, "Fired, Return detected"),
+    (0x08, "On, Did not fire"),
+    (0x09, "On, Fired"),
+    (0x0d, "On, Return not detected"),
+    (0x0f, "On, Return detected"),
+    (0x10, "Off, Did not fire"),
+    (0x14, "Off, Did not fire, Return not detected"),
+    (0x18, "Auto, Did not fire"),
+    (0x19, "Auto, Fired"),
+    (0x1d, "Auto, Fired, Return not detected"),
+    (0x1f, "Auto, Fired, Return detected"),
+    (0x20, "No flash function"),
+    (0x30, "Off, No flash function"),
+    (0x41, "Fired, Red-eye reduction"),
+    (0x45, "Fired, Red-eye reduction, Return not detected"),
+    (0x47, "Fired, Red-eye reduction, Return detected"),
+    (0x49, "On, Red-eye reduction"),
+    (0x4d, "On, Red-eye reduction, Return not detected"),
+    (0x4f, "On, Red-eye reduction, Return detected"),
+    (0x50, "Off, Red-eye reduction"),
+    (0x58, "Auto, Did not fire, Red-eye reduction"),
+    (0x59, "Auto, Fired, Red-eye reduction"),
+    (0x5d, "Auto, Fired, Red-eye reduction, Return not detected"),
+    (0x5f, "Auto, Fired, Red-eye reduction, Return detected"),
+];
+
+/// FocalPlaneResolutionUnit (0xa210) PrintConv, ExifTool 13.55 Exif.pm.
+/// Values 1, 4 and 5 are flagged there as non-standard EXIF but are still
+/// decoded, so all five are kept.
+const FOCAL_PLANE_RESOLUTION_UNIT_LABELS: &[(u16, &str)] =
+    &[(1, "None"), (2, "inches"), (3, "cm"), (4, "mm"), (5, "um")];
+
+/// FileSource (0xa300) PrintConv, ExifTool 13.55 Exif.pm.
+///
+/// Two archived patches wrote `3 => "Digital Camera", _ => "Unknown"`. The
+/// "Unknown" fallback is invented - ExifTool prints the undecoded number - and
+/// dropping 1 and 2 would have re-created the `1 => 'Scanner'` class of bug,
+/// since 1 is `'Film Scanner'`, not a generic scanner.
+const FILE_SOURCE_LABELS: &[(u8, &str)] = &[
+    (1, "Film Scanner"),
+    (2, "Reflection Print Scanner"),
+    (3, "Digital Camera"),
+];
+
+/// ColorSpace (0xa001) PrintConv, ExifTool 13.55 Exif.pm. The inherited code
+/// carried only `1` and `0xffff`.
+const COLOR_SPACE_LABELS: &[(u16, &str)] = &[
+    (1, "sRGB"),
+    (2, "Adobe RGB"),
+    (0xfffd, "Wide Gamut RGB"),
+    (0xfffe, "ICC Profile"),
+    (0xffff, "Uncalibrated"),
 ];
 
 /// ExposureProgram (0x8822) PrintConv, transcribed verbatim from ExifTool
@@ -462,6 +589,16 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
                     }
                 }
             }
+            // ExifTool 13.55 Exif.pm 0x8298: Name => 'Copyright',
+            // WriteGroup => 'IFD0', Format => 'undef', Writable => 'string'.
+            // PDF.pdf stores it with the ASCII field type and the Format
+            // override only affects the raw read, so the string arm applies.
+            TAG_COPYRIGHT if field_type == 2 || field_type == 7 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_COPYRIGHT, "IFD0");
+                    metadata.insert(key, crate::core::TagValue::new_string(v));
+                }
+            }
             TAG_EXIF_IFD if field_type == 4 || field_type == 13 => {
                 exif_ifd_offset = Some(
                     usize::try_from(read_embedded_tiff_u32(
@@ -473,6 +610,20 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
                 );
             }
             _ => {}
+        }
+    }
+
+    // ---- IFD1 (thumbnail IFD) ----------------------------------------------
+    // The Compression tag PDF.pdf reports lives in IFD1, not IFD0: ExifTool
+    // prints it as `[IFD1] Compression : JPEG (old-style)`. The inherited code
+    // only ever looked in IFD0 and the ExifIFD, so its Compression arms could
+    // never fire - every archived patch in this group re-listed
+    // `EXIF:Compression` as still missing for exactly that reason.
+    if let Some(ifd1_offset) = read_next_ifd_offset(data, ifd0_offset, entry_count, byte_order) {
+        if let Some(sub_tags) = parse_ifd1(data, ifd1_offset, byte_order) {
+            for (k, v) in sub_tags.iter() {
+                metadata.insert(k.clone(), v.clone());
+            }
         }
     }
 
@@ -490,6 +641,76 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
     } else {
         Some(metadata)
     }
+}
+
+/// Reads the next-IFD pointer that follows an IFD's entry array, returning
+/// `None` when it is absent, zero (end of chain) or points back at the IFD
+/// itself (a loop some malformed files contain).
+fn read_next_ifd_offset(
+    data: &[u8],
+    ifd_offset: usize,
+    entry_count: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<usize> {
+    let pointer_offset = ifd_offset
+        .checked_add(2)?
+        .checked_add(entry_count.checked_mul(12)?)?;
+    let next = usize::try_from(read_embedded_tiff_u32(data, pointer_offset, byte_order)?).ok()?;
+
+    if next == 0 || next == ifd_offset {
+        None
+    } else {
+        Some(next)
+    }
+}
+
+/// Parses the thumbnail IFD (IFD1) and returns the tags decoded from it.
+fn parse_ifd1(
+    data: &[u8],
+    ifd_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<MetadataMap> {
+    let entry_count = usize::from(read_embedded_tiff_u16(data, ifd_offset, byte_order)?);
+    let entries_offset = ifd_offset.checked_add(2)?;
+    let entries_len = entry_count.checked_mul(12)?;
+    let entries_end = entries_offset.checked_add(entries_len)?;
+    data.get(entries_offset..entries_end)?;
+
+    let mut metadata = MetadataMap::with_capacity(2);
+
+    for i in 0..entry_count {
+        let base = entries_offset.checked_add(i.checked_mul(12)?)?;
+        let tag = read_embedded_tiff_u16(data, base, byte_order)?;
+        let field_type = read_embedded_tiff_u16(data, base.checked_add(2)?, byte_order)?;
+
+        if tag == TAG_COMPRESSION && field_type == 3 {
+            if let Some(raw) = read_short_value(data, base, byte_order) {
+                if let Some(label) = lookup_label(COMPRESSION_LABELS, raw) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "IFD1");
+                    metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                }
+            }
+        }
+    }
+
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(metadata)
+    }
+}
+
+/// Looks a raw value up in one of the transcribed ExifTool PrintConv tables.
+///
+/// Unknown values return `None` so the caller drops the tag: ExifTool would
+/// print the bare number, and inventing an "Unknown" label - as two archived
+/// patches did for FileSource and FocalPlaneResolutionUnit - emits metadata
+/// that ExifTool never produces.
+fn lookup_label<T: Copy + PartialEq>(table: &[(T, &'static str)], raw: T) -> Option<&'static str> {
+    table
+        .iter()
+        .find(|&&(id, _)| id == raw)
+        .map(|&(_, label)| label)
 }
 
 /// Parse a single ExifIFD (pointed to by the ExifIFD tag in IFD0) and return
@@ -563,6 +784,12 @@ fn parse_exif_ifd(
                     }
                 }
             }
+            // ExifTool 13.55 Exif.pm 0x9202:
+            //   ValueConv => '2 ** ($val / 2)',
+            //   PrintConv => 'sprintf("%.1f",$val)',
+            // The inherited code stopped after the ValueConv and printed the
+            // full f64, so PDF.pdf reported "3.4822022531844965" where
+            // ExifTool reports "3.5".
             TAG_APERTURE_VALUE if field_type == 5 => {
                 if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
                     let apex = if den != 0 {
@@ -574,8 +801,99 @@ fn parse_exif_ifd(
                     let key = crate::tag_db::lookup_tag_name(TAG_APERTURE_VALUE, "ExifIFD");
                     metadata.insert(
                         key,
-                        crate::core::TagValue::new_string(format!("{}", f_number)),
+                        crate::core::TagValue::new_string(format!("{:.1}", f_number)),
                     );
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0x9203: Writable => 'rational64s', no
+            // PrintConv. PDF.pdf stores it as rational64s (field type 10);
+            // the inherited unsigned-only arm could never fire there.
+            TAG_BRIGHTNESS_VALUE if field_type == 10 => {
+                if let Some((num, den)) = read_signed_rational_value(data, base, byte_order) {
+                    if den != 0 {
+                        let key = crate::tag_db::lookup_tag_name(TAG_BRIGHTNESS_VALUE, "ExifIFD");
+                        metadata.insert(
+                            key,
+                            crate::core::TagValue::new_string(format_rational(
+                                f64::from(num) / f64::from(den),
+                            )),
+                        );
+                    }
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0x9003 / 0x9004: Writable => 'string',
+            // PrintConv => '$self->ConvertDateTime($val)', which is a no-op
+            // without -d, so the stored "YYYY:MM:DD HH:MM:SS" is emitted as-is.
+            TAG_DATE_TIME_ORIGINAL if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_DATE_TIME_ORIGINAL, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(v));
+                }
+            }
+            TAG_CREATE_DATE if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_CREATE_DATE, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(v));
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0xa002 / 0xa003: Writable => 'int16u',
+            // no PrintConv. PDF.pdf writes them as int32u (field type 4) -
+            // patches that only handled int16u closed nothing here.
+            TAG_EXIF_IMAGE_WIDTH if field_type == 3 || field_type == 4 => {
+                if let Some(raw) = read_short_or_long_value(data, base, byte_order, field_type) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_EXIF_IMAGE_WIDTH, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(raw.to_string()));
+                }
+            }
+            TAG_EXIF_IMAGE_HEIGHT if field_type == 3 || field_type == 4 => {
+                if let Some(raw) = read_short_or_long_value(data, base, byte_order, field_type) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_EXIF_IMAGE_HEIGHT, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(raw.to_string()));
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0xa000: Writable => 'undef', no
+            // PrintConv, RawConv => '$val=~s/\0+$//; $val'.
+            TAG_FLASHPIX_VERSION if field_type == 7 => {
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
+                    if let Some(s) = trim_trailing_nuls(&bytes) {
+                        let key = crate::tag_db::lookup_tag_name(TAG_FLASHPIX_VERSION, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(s));
+                    }
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0x9209: PrintConv => \%flash.
+            TAG_FLASH if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    if let Some(label) = lookup_label(FLASH_LABELS, raw) {
+                        let key = crate::tag_db::lookup_tag_name(TAG_FLASH, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                    }
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0xa210 PrintConv.
+            TAG_FOCAL_PLANE_RESOLUTION_UNIT if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    if let Some(label) = lookup_label(FOCAL_PLANE_RESOLUTION_UNIT_LABELS, raw) {
+                        let key = crate::tag_db::lookup_tag_name(
+                            TAG_FOCAL_PLANE_RESOLUTION_UNIT,
+                            "ExifIFD",
+                        );
+                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                    }
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0xa300: Writable => 'undef', PrintConv
+            // keyed on the single stored byte.
+            TAG_FILE_SOURCE if field_type == 7 => {
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
+                    if let Some(label) = bytes
+                        .first()
+                        .copied()
+                        .and_then(|b| lookup_label(FILE_SOURCE_LABELS, b))
+                    {
+                        let key = crate::tag_db::lookup_tag_name(TAG_FILE_SOURCE, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                    }
                 }
             }
             TAG_BRIGHTNESS_VALUE if field_type == 5 => {
@@ -612,15 +930,16 @@ fn parse_exif_ifd(
                     metadata.insert(key, crate::core::TagValue::new_string(val_str));
                 }
             }
+            // ExifTool 13.55 Exif.pm 0xa001 PrintConv. The inherited code
+            // carried only two of the five entries and, worse, did
+            // `_ => return None` on anything else - abandoning the whole
+            // ExifIFD (and every tag after ColorSpace) over one unknown value.
             TAG_COLOR_SPACE if field_type == 3 => {
                 if let Some(raw) = read_short_value(data, base, byte_order) {
-                    let label = match raw {
-                        1 => "sRGB",
-                        0xFFFF => "Uncalibrated",
-                        _ => return None,
-                    };
-                    let key = crate::tag_db::lookup_tag_name(TAG_COLOR_SPACE, "ExifIFD");
-                    metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                    if let Some(label) = lookup_label(COLOR_SPACE_LABELS, raw) {
+                        let key = crate::tag_db::lookup_tag_name(TAG_COLOR_SPACE, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                    }
                 }
             }
             TAG_COMPONENTS_CONFIGURATION if field_type == 7 => {
@@ -713,6 +1032,45 @@ fn read_unsigned_rational_value(
     let num = read_embedded_tiff_u32(data, val_off, byte_order)?;
     let den = read_embedded_tiff_u32(data, val_off.checked_add(4)?, byte_order)?;
     Some((num, den))
+}
+
+/// Reads a SHORT (type 3) or LONG (type 4) scalar as a `u32`.
+fn read_short_or_long_value(
+    data: &[u8],
+    entry_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+    field_type: u16,
+) -> Option<u32> {
+    if field_type == 4 {
+        let val_off = get_entry_value_offset(data, entry_offset, 4, 1, byte_order)?;
+        read_embedded_tiff_u32(data, val_off, byte_order)
+    } else {
+        read_short_value(data, entry_offset, byte_order).map(u32::from)
+    }
+}
+
+/// Applies ExifTool's `RawConv => '$val=~s/\0+$//; $val'` to an undef value,
+/// returning `None` when nothing is left.
+fn trim_trailing_nuls(bytes: &[u8]) -> Option<String> {
+    let text_end = bytes
+        .iter()
+        .rposition(|&b| b != 0)
+        .map_or(0, |last| last.saturating_add(1));
+    let s = String::from_utf8_lossy(bytes.get(..text_end)?).into_owned();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// Renders a rational as a decimal string the way the already-validated
+/// CompressedBitsPerPixel path does: nine decimal places, trailing zeros
+/// stripped (`16/13` -> `1.230769231`, `200/100` -> `2`).
+fn format_rational(value: f64) -> String {
+    let s = format!("{:.9}", value);
+    let trimmed = s.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() || trimmed == "-" {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn read_signed_rational_value(
@@ -977,6 +1335,357 @@ mod embedded_exif_tests {
                 num,
                 den,
                 expected
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // IFD0 / ExifIFD / IFD1 fixture
+    //
+    // Mirrors the directory layout of
+    // /tmp/oxidex-exiftool-cache/combined-samples/PDF.pdf as reported by
+    // `exiftool -v3`: Copyright in IFD0, an ExifIFD pointer, and an IFD1
+    // holding Compression. Every expected string below is a literal copied
+    // from ExifTool 13.55 Exif.pm, never read back out of our own tables.
+    // -----------------------------------------------------------------------
+
+    fn entry(tag: u16, field_type: u16, count: u32, value: [u8; 4]) -> Vec<u8> {
+        let mut e = Vec::with_capacity(12);
+        e.extend_from_slice(&tag.to_le_bytes());
+        e.extend_from_slice(&field_type.to_le_bytes());
+        e.extend_from_slice(&count.to_le_bytes());
+        e.extend_from_slice(&value);
+        e
+    }
+
+    struct ExifFixture {
+        copyright: &'static str,
+        date_time_original: &'static str,
+        create_date: &'static str,
+        aperture: (u32, u32),
+        brightness: (i32, i32),
+        flash: u16,
+        flashpix: [u8; 4],
+        color_space: u16,
+        exif_width_type: u16,
+        exif_width: u32,
+        exif_height: u32,
+        focal_plane_unit: u16,
+        file_source: u8,
+        compression: u16,
+    }
+
+    impl Default for ExifFixture {
+        /// The values PDF.pdf actually stores.
+        fn default() -> Self {
+            Self {
+                copyright: "Copyright 2004 Phil Harvey",
+                date_time_original: "2001:05:19 18:36:41",
+                create_date: "2001:05:19 18:36:41",
+                aperture: (360, 100),
+                brightness: (200, 100),
+                flash: 1,
+                flashpix: *b"0100",
+                color_space: 1,
+                // PDF.pdf writes both dimensions as int32u, not int16u.
+                exif_width_type: 4,
+                exif_width: 8,
+                exif_height: 8,
+                focal_plane_unit: 3,
+                file_source: 3,
+                compression: 6,
+            }
+        }
+    }
+
+    impl ExifFixture {
+        fn build(&self) -> Vec<u8> {
+            const IFD0_ENTRIES: usize = 2;
+            const EXIF_ENTRIES: usize = 11;
+            const IFD1_ENTRIES: usize = 1;
+
+            let ifd0_off = 8usize;
+            let exif_off = ifd0_off + 2 + 12 * IFD0_ENTRIES + 4;
+            let ifd1_off = exif_off + 2 + 12 * EXIF_ENTRIES + 4;
+            let heap_off = ifd1_off + 2 + 12 * IFD1_ENTRIES + 4;
+
+            let mut heap: Vec<u8> = Vec::new();
+            let mut push_heap = |bytes: &[u8]| -> [u8; 4] {
+                let at = u32::try_from(heap_off + heap.len()).expect("fixture fits in u32");
+                heap.extend_from_slice(bytes);
+                at.to_le_bytes()
+            };
+
+            let mut nul_terminated = |s: &str| -> (u32, [u8; 4]) {
+                let mut bytes = s.as_bytes().to_vec();
+                bytes.push(0);
+                let count = u32::try_from(bytes.len()).expect("fixture string is short");
+                (count, push_heap(&bytes))
+            };
+
+            let (copyright_count, copyright_at) = nul_terminated(self.copyright);
+            let (dto_count, dto_at) = nul_terminated(self.date_time_original);
+            let (create_count, create_at) = nul_terminated(self.create_date);
+
+            let mut rational = |num: [u8; 4], den: [u8; 4]| -> [u8; 4] {
+                let mut bytes = num.to_vec();
+                bytes.extend_from_slice(&den);
+                push_heap(&bytes)
+            };
+            let aperture_at =
+                rational(self.aperture.0.to_le_bytes(), self.aperture.1.to_le_bytes());
+            let brightness_at = rational(
+                self.brightness.0.to_le_bytes(),
+                self.brightness.1.to_le_bytes(),
+            );
+
+            let short = |v: u16| -> [u8; 4] {
+                let mut b = [0u8; 4];
+                b[..2].copy_from_slice(&v.to_le_bytes());
+                b
+            };
+
+            let mut ifd0 = Vec::new();
+            ifd0.extend_from_slice(&entry(0x8298, 2, copyright_count, copyright_at));
+            ifd0.extend_from_slice(&entry(
+                0x8769,
+                4,
+                1,
+                u32::try_from(exif_off).expect("fits").to_le_bytes(),
+            ));
+
+            let mut exif = Vec::new();
+            exif.extend_from_slice(&entry(0x9003, 2, dto_count, dto_at));
+            exif.extend_from_slice(&entry(0x9004, 2, create_count, create_at));
+            exif.extend_from_slice(&entry(0x9202, 5, 1, aperture_at));
+            exif.extend_from_slice(&entry(0x9203, 10, 1, brightness_at));
+            exif.extend_from_slice(&entry(0x9209, 3, 1, short(self.flash)));
+            exif.extend_from_slice(&entry(0xa000, 7, 4, self.flashpix));
+            exif.extend_from_slice(&entry(0xa001, 3, 1, short(self.color_space)));
+            exif.extend_from_slice(&entry(
+                0xa002,
+                self.exif_width_type,
+                1,
+                if self.exif_width_type == 4 {
+                    self.exif_width.to_le_bytes()
+                } else {
+                    short(u16::try_from(self.exif_width).expect("fixture width fits in u16"))
+                },
+            ));
+            exif.extend_from_slice(&entry(0xa003, 4, 1, self.exif_height.to_le_bytes()));
+            exif.extend_from_slice(&entry(0xa210, 3, 1, short(self.focal_plane_unit)));
+            exif.extend_from_slice(&entry(0xa300, 7, 1, [self.file_source, 0, 0, 0]));
+
+            let mut ifd1 = Vec::new();
+            ifd1.extend_from_slice(&entry(0x0103, 3, 1, short(self.compression)));
+
+            let mut tiff = Vec::new();
+            tiff.extend_from_slice(b"II\x2a\x00");
+            tiff.extend_from_slice(&u32::try_from(ifd0_off).expect("fits").to_le_bytes());
+            tiff.extend_from_slice(&u16::try_from(IFD0_ENTRIES).expect("fits").to_le_bytes());
+            tiff.extend_from_slice(&ifd0);
+            // IFD0's next-IFD pointer is IFD1.
+            tiff.extend_from_slice(&u32::try_from(ifd1_off).expect("fits").to_le_bytes());
+            tiff.extend_from_slice(&u16::try_from(EXIF_ENTRIES).expect("fits").to_le_bytes());
+            tiff.extend_from_slice(&exif);
+            tiff.extend_from_slice(&0u32.to_le_bytes());
+            tiff.extend_from_slice(&u16::try_from(IFD1_ENTRIES).expect("fits").to_le_bytes());
+            tiff.extend_from_slice(&ifd1);
+            tiff.extend_from_slice(&0u32.to_le_bytes());
+            assert_eq!(tiff.len(), heap_off, "fixture layout must match offsets");
+            tiff.extend_from_slice(&heap);
+
+            let mut pdf = b"%PDF-1.4\nstream\n".to_vec();
+            pdf.extend_from_slice(&tiff);
+            pdf.extend_from_slice(b"\nendstream\n%%EOF");
+            pdf
+        }
+
+        fn tags(&self) -> MetadataMap {
+            find_embedded_exif_tags(&self.build()).expect("fixture must yield EXIF tags")
+        }
+    }
+
+    fn get(map: &MetadataMap, key: &str) -> String {
+        map.get_string(key)
+            .unwrap_or_else(|| panic!("must contain {key}"))
+            .to_string()
+    }
+
+    #[test]
+    fn extracts_pdf_sample_tags_with_exiftool_values() {
+        // Every expectation here is the literal string `exiftool -G1 -s
+        // PDF.pdf` prints for that tag under ExifTool 13.55.
+        let map = ExifFixture::default().tags();
+
+        assert_eq!(get(&map, "IFD0:Copyright"), "Copyright 2004 Phil Harvey");
+        assert_eq!(get(&map, "IFD1:Compression"), "JPEG (old-style)");
+        assert_eq!(get(&map, "ExifIFD:DateTimeOriginal"), "2001:05:19 18:36:41");
+        assert_eq!(get(&map, "ExifIFD:CreateDate"), "2001:05:19 18:36:41");
+        assert_eq!(get(&map, "ExifIFD:BrightnessValue"), "2");
+        assert_eq!(get(&map, "ExifIFD:ExifImageWidth"), "8");
+        assert_eq!(get(&map, "ExifIFD:ExifImageHeight"), "8");
+        assert_eq!(get(&map, "ExifIFD:Flash"), "Fired");
+        assert_eq!(get(&map, "ExifIFD:FlashpixVersion"), "0100");
+        assert_eq!(get(&map, "ExifIFD:ColorSpace"), "sRGB");
+        assert_eq!(get(&map, "ExifIFD:FocalPlaneResolutionUnit"), "cm");
+        assert_eq!(get(&map, "ExifIFD:FileSource"), "Digital Camera");
+        // Exif.pm 0x9202 PrintConv => 'sprintf("%.1f",$val)' on
+        // ValueConv => '2 ** ($val / 2)': 2**(3.6/2) = 3.4822... -> "3.5".
+        assert_eq!(get(&map, "ExifIFD:ApertureValue"), "3.5");
+    }
+
+    #[test]
+    fn decodes_exif_image_dimensions_stored_as_int16u() {
+        // Exif.pm declares 0xa002/0xa003 Writable => 'int16u'; PDF.pdf writes
+        // int32u. Both spellings must decode.
+        let map = ExifFixture {
+            exif_width_type: 3,
+            exif_width: 640,
+            ..Default::default()
+        }
+        .tags();
+        assert_eq!(get(&map, "ExifIFD:ExifImageWidth"), "640");
+    }
+
+    #[test]
+    fn decodes_flash_from_the_table_not_from_bit_arithmetic() {
+        // These four are exactly where the bitwise decoding the archived
+        // patches used diverges from ExifTool's %flash table.
+        for (raw, expected) in [
+            (0x00u16, "No Flash"),
+            (0x08, "On, Did not fire"),
+            (0x18, "Auto, Did not fire"),
+            (0x5f, "Auto, Fired, Red-eye reduction, Return detected"),
+        ] {
+            let map = ExifFixture {
+                flash: raw,
+                ..Default::default()
+            }
+            .tags();
+            assert_eq!(get(&map, "ExifIFD:Flash"), expected, "Flash 0x{raw:02x}");
+        }
+    }
+
+    #[test]
+    fn decodes_file_source_scanner_values_in_full() {
+        // Exif.pm 0xa300: 1 => 'Film Scanner', not a bare 'Scanner'.
+        for (raw, expected) in [
+            (1u8, "Film Scanner"),
+            (2, "Reflection Print Scanner"),
+            (3, "Digital Camera"),
+        ] {
+            let map = ExifFixture {
+                file_source: raw,
+                ..Default::default()
+            }
+            .tags();
+            assert_eq!(get(&map, "ExifIFD:FileSource"), expected);
+        }
+    }
+
+    #[test]
+    fn decodes_focal_plane_resolution_unit_including_non_standard_values() {
+        for (raw, expected) in [
+            (1u16, "None"),
+            (2, "inches"),
+            (3, "cm"),
+            (4, "mm"),
+            (5, "um"),
+        ] {
+            let map = ExifFixture {
+                focal_plane_unit: raw,
+                ..Default::default()
+            }
+            .tags();
+            assert_eq!(get(&map, "ExifIFD:FocalPlaneResolutionUnit"), expected);
+        }
+    }
+
+    #[test]
+    fn decodes_compression_values_beyond_the_truncated_excerpt() {
+        // The inherited table stopped at 32773; these entries are the ones a
+        // truncation would have silently mislabelled.
+        for (raw, expected) in [
+            (6u16, "JPEG (old-style)"),
+            (32767, "Sony ARW Compressed"),
+            (32770, "Samsung SRW Compressed"),
+            (34713, "Nikon NEF Compressed"),
+            (65535, "Pentax PEF Compressed"),
+        ] {
+            let map = ExifFixture {
+                compression: raw,
+                ..Default::default()
+            }
+            .tags();
+            assert_eq!(get(&map, "IFD1:Compression"), expected, "Compression {raw}");
+        }
+    }
+
+    #[test]
+    fn decodes_color_space_without_abandoning_the_rest_of_the_ifd() {
+        let map = ExifFixture {
+            color_space: 2,
+            ..Default::default()
+        }
+        .tags();
+        assert_eq!(get(&map, "ExifIFD:ColorSpace"), "Adobe RGB");
+
+        // An unrecognised ColorSpace must drop only that tag; the previous
+        // `_ => return None` threw away the whole ExifIFD.
+        let map = ExifFixture {
+            color_space: 0x1234,
+            ..Default::default()
+        }
+        .tags();
+        assert!(map.get_string("ExifIFD:ColorSpace").is_none());
+        assert_eq!(get(&map, "ExifIFD:FileSource"), "Digital Camera");
+    }
+
+    #[test]
+    fn drops_unknown_print_conv_values_rather_than_inventing_labels() {
+        let map = ExifFixture {
+            file_source: 9,
+            focal_plane_unit: 42,
+            flash: 0x7777,
+            ..Default::default()
+        }
+        .tags();
+        assert!(map.get_string("ExifIFD:FileSource").is_none());
+        assert!(map.get_string("ExifIFD:FocalPlaneResolutionUnit").is_none());
+        assert!(map.get_string("ExifIFD:Flash").is_none());
+        // The rest of the directory still comes through.
+        assert_eq!(get(&map, "ExifIFD:ExifImageWidth"), "8");
+    }
+
+    #[test]
+    fn strips_trailing_nulls_from_flashpix_version() {
+        // Exif.pm 0xa000 RawConv => '$val=~s/\0+$//; $val'
+        let map = ExifFixture {
+            flashpix: *b"010\0",
+            ..Default::default()
+        }
+        .tags();
+        assert_eq!(get(&map, "ExifIFD:FlashpixVersion"), "010");
+    }
+
+    #[test]
+    fn formats_brightness_value_as_a_signed_rational() {
+        for (num, den, expected) in [
+            (200, 100, "2"),
+            (-200, 100, "-2"),
+            (16, 13, "1.230769231"),
+            (-1, 3, "-0.333333333"),
+        ] {
+            let map = ExifFixture {
+                brightness: (num, den),
+                ..Default::default()
+            }
+            .tags();
+            assert_eq!(
+                get(&map, "ExifIFD:BrightnessValue"),
+                expected,
+                "{num}/{den}"
             );
         }
     }
