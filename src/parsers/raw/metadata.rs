@@ -463,6 +463,65 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     }
                 }
 
+                // Extract DNG preview images from SubIFDs (strip-based JPEG data)
+                if format == RawFormat::AdobeDNG && !sub_ifd_offsets.is_empty() {
+                    let mut preview_images: Vec<(u32, u32, Vec<u8>)> = Vec::new();
+                    for &sub_ifd_offset in &sub_ifd_offsets {
+                        if let Ok(sub_tags) = parse_ifd(&reader, sub_ifd_offset, byte_order) {
+                            let mut strip_offsets: Vec<u32> = Vec::new();
+                            let mut strip_byte_counts: Vec<u32> = Vec::new();
+                            for (tag_id, _field_type, _value_count, raw_bytes) in &sub_tags {
+                                let bytes = raw_bytes.as_ref();
+                                if *tag_id == 0x0111 {
+                                    // StripOffsets
+                                    let count = bytes.len() / 4;
+                                    for i in 0..count {
+                                        let offset_bytes = &bytes[i * 4..(i + 1) * 4];
+                                        strip_offsets.push(read_u32(offset_bytes, byte_order));
+                                    }
+                                } else if *tag_id == 0x0117 {
+                                    // StripByteCounts
+                                    let count = bytes.len() / 4;
+                                    for i in 0..count {
+                                        let offset_bytes = &bytes[i * 4..(i + 1) * 4];
+                                        strip_byte_counts.push(read_u32(offset_bytes, byte_order));
+                                    }
+                                }
+                            }
+                            if !strip_offsets.is_empty() && strip_offsets.len() == strip_byte_counts.len() {
+                                let mut image_data = Vec::new();
+                                for i in 0..strip_offsets.len() {
+                                    let off = strip_offsets[i] as usize;
+                                    let len = strip_byte_counts[i] as usize;
+                                    if off + len <= data.len() {
+                                        image_data.extend_from_slice(&data[off..off + len]);
+                                    }
+                                }
+                                if !image_data.is_empty() {
+                                    let start_offset = strip_offsets[0];
+                                    let total_length = strip_byte_counts.iter().sum::<u32>();
+                                    preview_images.push((start_offset, total_length, image_data));
+                                }
+                            }
+                        }
+                    }
+                    if !preview_images.is_empty() {
+                        let (off0, len0, data0) = &preview_images[0];
+                        metadata.insert("EXIF:PreviewImageStart".to_string(), TagValue::Integer(*off0 as i64));
+                        metadata.insert("EXIF:PreviewImageLength".to_string(), TagValue::Integer(*len0 as i64));
+                        metadata.insert("EXIF:PreviewImage".to_string(), TagValue::Binary(data0.clone()));
+                        if preview_images.len() >= 2 {
+                            let (off1, len1, data1) = &preview_images[1];
+                            metadata.insert("EXIF:JpgFromRawStart".to_string(), TagValue::Integer(*off1 as i64));
+                            metadata.insert("EXIF:JpgFromRawLength".to_string(), TagValue::Integer(*len1 as i64));
+                            metadata.insert("EXIF:JpgFromRaw".to_string(), TagValue::Binary(data1.clone()));
+                        } else {
+                            // only one preview available; ExifTool also emits JpgFromRaw as
+                            // the same data, but we skip to avoid duplication
+                        }
+                    }
+                }
+
                 // Parse MakerNote if present and we have the camera make
                 if let (Some(make), Some(mn_data)) = (camera_make.as_ref(), makernote_data.as_ref())
                 {
