@@ -468,6 +468,13 @@ fn lookup_ifd1_tag_name(tag_id: u16) -> String {
         }
     }
 
+    // ExifTool names 0x0202 ThumbnailLength when it occurs in IFD1.
+    if tag_id == 0x0202 {
+        if let Some((group, _)) = database_name.rsplit_once(':') {
+            return format!("{group}:ThumbnailLength");
+        }
+    }
+
     database_name
 }
 
