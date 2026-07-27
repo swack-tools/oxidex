@@ -106,6 +106,12 @@ const KNOWN_TAGS: &[&str] = &[
     "IMgg",
     "IMrb",
     "IMrr",
+    "Protect",
+    "REV",
+    "S0",
+    "STB1",
+    "STB3",
+    "STB4",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -657,6 +663,67 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:MTR1".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus Protect field in the APP12 group.
+            if key.eq_ignore_ascii_case("Protect") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:Protect".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus REV field (firmware revision
+            // string, such as "DCPT") in the APP12 group.
+            if key.eq_ignore_ascii_case("REV") {
+                metadata.insert(
+                    "APP12:REV".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
+            // ExifTool exposes the Olympus S0 diagnostic field in the APP12
+            // group as a comma-separated string of hex values.
+            if key.eq_ignore_ascii_case("S0") {
+                metadata.insert(
+                    "APP12:S0".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
+            // ExifTool exposes the Olympus STB1 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("STB1") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:STB1".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus STB3 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("STB3") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:STB3".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus STB4 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("STB4") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:STB4".to_string(), app12_value);
             }
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
