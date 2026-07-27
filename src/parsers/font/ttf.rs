@@ -19,6 +19,7 @@ const TTF_SIGNATURE_2: &[u8] = b"true";
 const PLATFORM_UNICODE: u16 = 0;
 const PLATFORM_MACINTOSH: u16 = 1;
 const PLATFORM_WINDOWS: u16 = 3;
+const PLATFORM_OPENTYPE: u16 = 0x16;
 
 /// Platform-specific language IDs for localized name records.
 ///
@@ -41,6 +42,8 @@ const LANGUAGE_ITALIAN_MACINTOSH: u16 = 3;
 const LANGUAGE_DUTCH_MACINTOSH: u16 = 4;
 const LANGUAGE_NORWEGIAN_MACINTOSH: u16 = 9;
 const LANGUAGE_JAPANESE_MACINTOSH: u16 = 11;
+const LANGUAGE_PORTUGUESE_MACINTOSH: u16 = 8;
+const LANGUAGE_SWEDISH_MACINTOSH: u16 = 5;
 const LANGUAGE_KOREAN_MACINTOSH: u16 = 23;
 const LANGUAGE_DANISH_WINDOWS: u16 = 0x0406;
 const LANGUAGE_GERMAN_WINDOWS: u16 = 0x0407;
@@ -54,6 +57,8 @@ const LANGUAGE_JAPANESE_WINDOWS: u16 = 0x0411;
 const LANGUAGE_KOREAN_WINDOWS: u16 = 0x0412;
 const LANGUAGE_DUTCH_WINDOWS: u16 = 0x0413;
 const LANGUAGE_NORWEGIAN_WINDOWS: u16 = 0x0414;
+const LANGUAGE_PORTUGUESE_WINDOWS: u16 = 0x0416;
+const LANGUAGE_SWEDISH_WINDOWS: u16 = 0x041d;
 
 /// Name IDs for name table records
 const NAME_COPYRIGHT: u16 = 0;
@@ -235,6 +240,10 @@ impl TTFParser {
                 Some(Self::decode_mac_roman(str_data))
             }
             PLATFORM_MACINTOSH => {
+                // Handle non‑Roman Macintosh encodings.
+                Self::decode_mac_encoding(record.encoding_id, str_data)
+            }
+            PLATFORM_MACINTOSH => {
                 // Preserve the previous behavior for unsupported Macintosh encodings.
                 String::from_utf8(str_data.to_vec()).ok()
             }
@@ -242,6 +251,27 @@ impl TTFParser {
         };
 
         Ok(decoded)
+    }
+
+    /// Decodes data from the Macintosh platform using encoding_id.
+    fn decode_mac_encoding(encoding_id: u16, data: &[u8]) -> Option<String> {
+        use encoding_rs::Encoding;
+        let label = match encoding_id {
+            // 0 is handled separately as MacRoman.
+            1 => "shift_jis",       // Mac Japanese
+            2 => "big5",            // Mac Traditional Chinese
+            3 => "euc-kr",          // Mac Korean
+            4 => "windows-1256",    // Mac Arabic
+            5 => "x-mac-hebrew",    // Mac Hebrew
+            _ => return String::from_utf8(data.to_vec()).ok(),
+        };
+        let enc = Encoding::for_label(label.as_bytes())?;
+        let (cow, _encoding, had_errors) = enc.decode(data);
+        if had_errors {
+            None
+        } else {
+            Some(cow.into_owned())
+        }
     }
 
     /// Returns the ExifTool language suffix for supported localized name records.
@@ -258,6 +288,8 @@ impl TTFParser {
             (PLATFORM_MACINTOSH, LANGUAGE_NORWEGIAN_MACINTOSH) => Some("no"),
             (PLATFORM_MACINTOSH, LANGUAGE_JAPANESE_MACINTOSH) => Some("ja"),
             (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH) => Some("ko"),
+            (PLATFORM_MACINTOSH, LANGUAGE_PORTUGUESE_MACINTOSH) => Some("pt"),
+            (PLATFORM_MACINTOSH, LANGUAGE_SWEDISH_MACINTOSH) => Some("sv"),
             (PLATFORM_WINDOWS | PLATFORM_UNICODE, lang_id) => match lang_id {
                 LANGUAGE_DANISH_WINDOWS => Some("da"),
                 LANGUAGE_GERMAN_WINDOWS => Some("de"),
@@ -270,6 +302,13 @@ impl TTFParser {
                 LANGUAGE_KOREAN_WINDOWS => Some("ko"),
                 LANGUAGE_DUTCH_WINDOWS => Some("nl-NL"),
                 LANGUAGE_NORWEGIAN_WINDOWS => Some("no"),
+                LANGUAGE_PORTUGUESE_WINDOWS => Some("pt"),
+                LANGUAGE_SWEDISH_WINDOWS => Some("sv"),
+                _ => None,
+            },
+            (PLATFORM_OPENTYPE, lang_id) => match lang_id {
+                LANGUAGE_PORTUGUESE_WINDOWS => Some("pt"),
+                LANGUAGE_SWEDISH_WINDOWS => Some("sv"),
                 _ => None,
             },
             _ => None,
@@ -279,7 +318,9 @@ impl TTFParser {
     /// Whether this record is the default English-language form of a name.
     fn is_default_language(record: &NameRecord) -> bool {
         match record.platform_id {
-            PLATFORM_WINDOWS => record.language_id == LANGUAGE_ENGLISH_WINDOWS,
+            PLATFORM_WINDOWS | PLATFORM_OPENTYPE => {
+                record.language_id == LANGUAGE_ENGLISH_WINDOWS
+            }
             PLATFORM_MACINTOSH | PLATFORM_UNICODE => record.language_id == 0,
             _ => false,
         }
@@ -290,6 +331,7 @@ impl TTFParser {
         (
             u8::from(!Self::is_default_language(record)),
             match record.platform_id {
+                PLATFORM_OPENTYPE => 0,
                 PLATFORM_WINDOWS => 0,
                 PLATFORM_UNICODE => 1,
                 PLATFORM_MACINTOSH => 2,
@@ -627,8 +669,8 @@ mod tests {
     fn unclaimed_macintosh_language_ids_stay_unmapped() {
         for id in [
             12, /* ar */
-            5,  /* sv */
-            8,  /* pt */
+            // 5 (sv) and 8 (pt) are now claimed by LANGUAGE_SWEDISH_MACINTOSH
+            // and LANGUAGE_PORTUGUESE_MACINTOSH; removed from unclaimed.
         ] {
             let record = mac_record(id);
             assert_eq!(
