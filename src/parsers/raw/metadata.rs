@@ -676,7 +676,12 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA401 // CustomRendered
                 | 0xA402 // ExposureMode
                 | 0xA404 // DigitalZoomRatio
+                | 0xA405 // FocalLengthIn35mmFormat
+                | 0xA407 // GainControl
                 | 0xA408 // Contrast
+                | 0xA411 // HighISOMultiplierRed
+                | 0xA412 // HighISOMultiplierGreen
+                | 0xA413 // HighISOMultiplierBlue
         ) {
             continue;
         }
@@ -904,6 +909,23 @@ fn format_exif_display_value(
             let ver_bytes = bytes.get(..count.min(4))?;
             Some(String::from_utf8_lossy(ver_bytes).into_owned())
         }
+        // FocalLengthIn35mmFormat: SHORT[1] with " mm" suffix.
+        // Exif.pm PrintConv: $val .= " mm"
+        0xA405 if field_type == 3 && value_count >= 1 => {
+            let value = read_tiff_u16(bytes, byte_order)?;
+            Some(format!("{} mm", value))
+        }
+        // GainControl: SHORT[1] with PrintConv table.
+        // Exif.pm: 0=>'None', 1=>'Low gain up', 2=>'High gain up',
+        //          3=>'Low gain down', 4=>'High gain down'
+        0xA407 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("None".to_string()),
+            1 => Some("Low gain up".to_string()),
+            2 => Some("High gain up".to_string()),
+            3 => Some("Low gain down".to_string()),
+            4 => Some("High gain down".to_string()),
+            _ => None,
+        },
         // CustomRendered: SHORT[1].
         0xA401 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
             0 => Some("Normal".to_string()),
