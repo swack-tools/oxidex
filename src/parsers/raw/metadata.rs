@@ -644,7 +644,7 @@ fn extract_rw2_embedded_exif_tags(
     for (tag_id, field_type, value_count, raw_bytes) in
         parse_ifd(&reader, exif_ifd_offset, byte_order)?
     {
-        if !matches!(tag_id, 0x9101 | 0x9102 | 0xA001 | 0xA302 | 0xA408) {
+        if !matches!(tag_id, 0x9101 | 0x9102 | 0xA001 | 0xA302 | 0xA408 | 0xA000 | 0xA002 | 0xA003 | 0xA401 | 0xA402 | 0xA404) {
             continue;
         }
 
@@ -859,6 +859,51 @@ fn format_exif_display_value(
                 1 => Some("Soft".to_string()),
                 2 => Some("Hard".to_string()),
                 _ => None,
+            }
+        }
+        // FlashpixVersion: UNDEFINED[4].
+        0xA000 if field_type == 7 => {
+            let count = usize::try_from(value_count).ok()?;
+            let version_bytes = bytes.get(..count)?;
+            Some(String::from_utf8_lossy(version_bytes).into_owned())
+        }
+        // ExifImageWidth/ExifImageHeight: SHORT or LONG.
+        0xA002 | 0xA003 if field_type == 3 && value_count >= 1 => {
+            let val = read_tiff_u16(bytes, byte_order)?;
+            Some(val.to_string())
+        }
+        0xA002 | 0xA003 if field_type == 4 && value_count >= 1 => {
+            let val = read_tiff_u32(bytes, byte_order)?;
+            Some(val.to_string())
+        }
+        // CustomRendered: SHORT enum.
+        0xA401 if field_type == 3 && value_count >= 1 => {
+            match read_tiff_u16(bytes, byte_order)? {
+                0 => Some("Normal".to_string()),
+                1 => Some("Custom".to_string()),
+                2 => Some("HDR".to_string()),
+                _ => None,
+            }
+        }
+        // ExposureMode: SHORT enum.
+        0xA402 if field_type == 3 && value_count >= 1 => {
+            match read_tiff_u16(bytes, byte_order)? {
+                0 => Some("Auto".to_string()),
+                1 => Some("Manual".to_string()),
+                2 => Some("Auto bracket".to_string()),
+                _ => None,
+            }
+        }
+        // DigitalZoomRatio: RATIONAL.
+        0xA404 if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                None
+            } else if numerator % denominator == 0 {
+                Some((numerator / denominator).to_string())
+            } else {
+                Some(format!("{}", f64::from(numerator) / f64::from(denominator)))
             }
         }
         _ => None,
