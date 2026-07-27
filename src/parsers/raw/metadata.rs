@@ -57,6 +57,11 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
                 | 0xC65C // BestQualityScale
                 | 0xC68D // ActiveArea
                 | 0xC68E // MaskedAreas
+                | 0x0142 // TileWidth
+                | 0x0143 // TileLength
+                | 0x0144 // TileOffsets
+                | 0x0145 // TileByteCounts
+                | 0x0214 // ReferenceBlackWhite
         )
     {
         lookup_tag_name(tag_id, "EXIF")
@@ -1052,6 +1057,20 @@ fn format_exif_display_value(
             2 => Some("Hard".to_string()),
             _ => None,
         },
+        // ReferenceBlackWhite: RATIONAL[6] displayed as space-separated
+        // integers (ExifTool prints each numerator).
+        0x0214 if field_type == 5 && value_count >= 6 => {
+            let values = bytes.get(..48)?;
+            let mut parts = Vec::with_capacity(6);
+            for i in 0..6 {
+                let chunk = values.get(i * 8..(i + 1) * 8)?;
+                let num = read_tiff_u32(&chunk[0..4], byte_order)?;
+                // denominator is in chunk[4..8]; ExifTool ignores it
+                // and prints only the numerator for each pair.
+                parts.push(num.to_string());
+            }
+            Some(parts.join(" "))
+        }
         _ => None,
     }
 }
