@@ -67,6 +67,108 @@ fn format_cfa_pattern2(bytes: &[u8], value_count: u32) -> String {
         .join(" ")
 }
 
+/// Parse a subset of ICC profile binary data, inserting the six tags
+/// reported as missing for NEF: CMMFlags, ColorSpaceData,
+/// ConnectionSpaceIlluminant, DeviceAttributes, BlueMatrixColumn, and BlueTRC.
+fn parse_icc_profile_subset(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
+    // Minimum ICC header + tag table stub
+    if data.len() < 132 {
+        return Ok(());
+    }
+
+    // --- Header fields ---
+
+    // CMMFlags at offset 44 (4 bytes, big-endian u32)
+    let flags = u32::from_be_bytes([data[44], data[45], data[46], data[47]]);
+    let embedded = if flags & 0x01 == 0 { "Not Embedded" } else { "Embedded" };
+    let independent = if flags & 0x02 == 0 { "Independent" } else { "Not Independent" };
+    metadata.insert(
+        "ICC_Profile:CMMFlags".to_string(),
+        TagValue::new_string(format!("{}, {}", embedded, independent)),
+    );
+
+    // ColorSpaceData at offset 16 (4 bytes, ASCII signature)
+    let color_space = {
+        let sig_bytes = &data[16..20];
+        String::from_utf8_lossy(sig_bytes).trim().to_string()
+    };
+    metadata.insert(
+        "ICC_Profile:ColorSpaceData".to_string(),
+        TagValue::new_string(color_space),
+    );
+
+    // ConnectionSpaceIlluminant at offset 68 (three s15Fixed16 numbers)
+    let ill_x = read_s15fixed16_be(&data[68..72]);
+    let ill_y = read_s15fixed16_be(&data[72..76]);
+    let ill_z = read_s15fixed16_be(&data[76..80]);
+    metadata.insert(
+        "ICC_Profile:ConnectionSpaceIlluminant".to_string(),
+        TagValue::new_string(format!("{} {} {}", ill_x, ill_y, ill_z)),
+    );
+
+    // DeviceAttributes at offset 56 (8 bytes, big-endian u64)
+    let attrs = u64::from_be_bytes([
+        data[56], data[57], data[58], data[59],
+        data[60], data[61], data[62], data[63],
+    ]);
+    let reflective = if attrs & 0x01 == 0 { "Reflective" } else { "Transparency" };
+    let glossy = if attrs & 0x02 == 0 { "Glossy" } else { "Matte" };
+    let positive = if attrs & 0x04 == 0 { "Positive" } else { "Negative" };
+    let color = if attrs & 0x08 == 0 { "Color" } else { "B&W" };
+    metadata.insert(
+        "ICC_Profile:DeviceAttributes".to_string(),
+        TagValue::new_string(format!("{}, {}, {}, {}", reflective, glossy, positive, color)),
+    );
+
+    // --- Tag table (starts at byte 128) ---
+    let tag_count = u32::from_be_bytes([data[128], data[129], data[130], data[131]]) as usize;
+    for i in 0..tag_count {
+        let entry_off = 132 + i * 12;
+        if entry_off + 12 > data.len() {
+            break;
+        }
+        let tag_sig = String::from_utf8_lossy(&data[entry_off..entry_off + 4]);
+        let tag_off = u32::from_be_bytes([
+            data[entry_off + 4], data[entry_off + 5],
+            data[entry_off + 6], data[entry_off + 7],
+        ]) as usize;
+        let tag_size = u32::from_be_bytes([
+            data[entry_off + 8], data[entry_off + 9],
+            data[entry_off + 10], data[entry_off + 11],
+        ]) as usize;
+
+        if tag_off + tag_size > data.len() {
+            continue;
+        }
+
+        if tag_sig.trim() == "bXYZ" && tag_size >= 20 {
+            let x = read_s15fixed16_be(&data[tag_off + 8..tag_off + 12]);
+            let y = read_s15fixed16_be(&data[tag_off + 12..tag_off + 16]);
+            let z = read_s15fixed16_be(&data[tag_off + 16..tag_off + 20]);
+            metadata.insert(
+                "ICC_Profile:BlueMatrixColumn".to_string(),
+                TagValue::new_string(format!("{} {} {}", x, y, z)),
+            );
+        } else if tag_sig.trim() == "bTRC" {
+            metadata.insert(
+                "ICC_Profile:BlueTRC".to_string(),
+                TagValue::new_string(format!(
+                    "(Binary data {} bytes, use -b option to extract)",
+                    tag_size
+                )),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Convert a big-endian s15Fixed16 to f64.
+fn read_s15fixed16_be(bytes: &[u8]) -> f64 {
+    let val = i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    val as f64 / 65536.0
+}
+
 /// Parse metadata from camera raw file
 ///
 /// This is the main entry point for raw format metadata extraction.
@@ -310,6 +412,14 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         camera_make = Some(make_str.trim_end_matches('\0').trim().to_string());
                     }
 
+                    // ICC profile (tag 0x8773) – parse directly to get the six missing sub-tags
+                    if *tag_id == 0x8773 {
+                        if let Err(e) = parse_icc_profile_subset(bytes, &mut metadata) {
+                            eprintln!("Warning: Failed to parse ICC profile: {}", e);
+                        }
+                        continue; // do not store raw profile
+                    }
+
                     // Convert tag to metadata
                     // Panasonic RW2 stores BitsPerSample in its proprietary
                     // IFD0 tag 0x000A and Compression in tag 0x000B instead
@@ -423,6 +533,14 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         if *tag_id == 0x010F && *field_type == 2 {
                             let make_str = String::from_utf8_lossy(bytes);
                             exif_make = Some(make_str.trim_end_matches('\0').trim().to_string());
+                        }
+
+                        // ICC profile in EXIF IFD
+                        if *tag_id == 0x8773 {
+                            if let Err(e) = parse_icc_profile_subset(bytes, &mut metadata) {
+                                eprintln!("Warning: Failed to parse ICC profile: {}", e);
+                            }
+                            continue;
                         }
 
                         let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
