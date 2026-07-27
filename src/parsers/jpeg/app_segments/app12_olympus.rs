@@ -106,6 +106,12 @@ const KNOWN_TAGS: &[&str] = &[
     "IMgg",
     "IMrb",
     "IMrr",
+    "Protect",
+    "REV",
+    "S0",
+    "STB1",
+    "STB3",
+    "STB4",
 ];
 
 /// Parse Olympus Picture Info APP12 segment data.
@@ -657,6 +663,61 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:MTR1".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus Protect field in the APP12 group.
+            if key.eq_ignore_ascii_case("Protect") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:Protect".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus REV field (firmware revision
+            // string, such as "DCPT") in the APP12 group.
+            if key.eq_ignore_ascii_case("REV") {
+                metadata.insert("APP12:REV".to_string(), TagValue::String(value.clone()));
+            }
+
+            // ExifTool exposes the Olympus S0 diagnostic field in the APP12
+            // group as a comma-separated string of hex values.
+            if key.eq_ignore_ascii_case("S0") {
+                metadata.insert("APP12:S0".to_string(), TagValue::String(value.clone()));
+            }
+
+            // ExifTool exposes the Olympus STB1 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("STB1") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:STB1".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus STB3 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("STB3") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:STB3".to_string(), app12_value);
+            }
+
+            // ExifTool exposes the Olympus STB4 diagnostic field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("STB4") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+
+                metadata.insert("APP12:STB4".to_string(), app12_value);
             }
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
@@ -1729,5 +1790,213 @@ mod tests {
         assert!(is_olympus_picture_info("Type=camera\nID=test"));
         assert!(!is_olympus_picture_info("Canon Camera"));
         assert!(!is_olympus_picture_info("random data"));
+    }
+
+    // ------------------------------------------------------------------
+    // APP12 Protect / REV / S0 / STB1 / STB3 / STB4 regression tests
+    //
+    // These six keys were wired in commit bbbdd410, whose `Sample:` trailer
+    // named /tmp/oxidex-exiftool-cache/combined-samples/ExifTool.jpg. Measured
+    // 2026-07-26 with a release build of that commit, ExifTool.jpg produces
+    // ZERO tags containing the substring "APP12" -- its payload begins
+    // "Agfa Gevaert   \0", and process_app12_segments (src/core/jpeg_helpers.rs
+    // ~line 570) routes on case-sensitive byte compares against b"OLYM.." and
+    // b"AGFA", so the segment is dropped before this module is ever called.
+    // The cited sample therefore exercised none of the six keys, and the green
+    // "recheck-pass gaps=6->1" came entirely from OTHER files in the corpus.
+    //
+    // Ground truth below is `exiftool 13.55 -G0 -s -a` on the five Olympus
+    // D-series samples that actually reach this parser, run 2026-07-26. The
+    // fixture bytes are lifted verbatim from those files' APP12 payloads
+    // (dumped by walking the JPEG marker chain), and every expectation is a
+    // LITERAL from ExifTool's output rather than a reference back to the
+    // constant under test.
+    //
+    // ExifTool provenance for the names:
+    //   Protect -- explicit entry in %Image::ExifTool::APP12::PictureInfo,
+    //              APP12.pm line 74: `Protect     => { },`. A bare `{ }` means
+    //              no Name override AND no PrintConv, so the raw value is
+    //              printed verbatim.
+    //   REV / S0 / STB1 / STB3 / STB4 -- no table entry anywhere in the
+    //              ExifTool distribution (ripgrep for `REV\s*=>` and for
+    //              `STB[0-9]` over lib/Image/ExifTool/ both return no hits).
+    //              They are added at runtime by sub ProcessAPP12, APP12.pm
+    //              line 278: `$tagInfo = { Name => ucfirst $tag };`.
+    //              That is why lowercase on-disk `s0=` surfaces as `S0`.
+    // ------------------------------------------------------------------
+
+    /// APP12:Protect. Fixture is the head of OlympusD620L.jpg's APP12 payload.
+    /// exiftool 13.55 reports `[APP12] Protect : 0` on all five D-series
+    /// samples (D220, D320L, D340L, D500L, D620L).
+    #[test]
+    fn test_app12_protect_matches_exiftool_d620l() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\x001031\r\n\
+                     [picture info]\r\n\
+                     TimeDate=883639173\r\n\
+                     Resolution=3\r\n\
+                     Protect=0\r\n\
+                     ContTake=0\r\n\
+                     [end]\r\n\0";
+
+        let metadata = parse_app12_olympus(data).unwrap();
+
+        assert_eq!(metadata.get_integer("APP12:Protect"), Some(0));
+    }
+
+    /// APP12:Protect carries NO PrintConv in APP12.pm (`Protect => { }`), so a
+    /// non-zero value must pass through as the raw number. The whole corpus
+    /// only ever holds Protect=0, which makes every non-zero value a blind
+    /// spot the sample cannot cover -- exactly the hole that let the RAR
+    /// host-OS catch-all ("Unknown" replacing real data) through on 2026-07-26.
+    #[test]
+    fn test_app12_protect_has_no_printconv_so_nonzero_passes_through() {
+        for raw in [1_i64, 2, 255] {
+            let data = format!(
+                "OLYMPUS OPTICAL CO.,LTD.\0 697\r\n\
+                 [picture info]\r\n\
+                 Protect={}\r\n\
+                 [end]\r\n\0",
+                raw
+            );
+
+            let metadata = parse_app12_olympus(data.as_bytes()).unwrap();
+
+            assert_eq!(
+                metadata.get_integer("APP12:Protect"),
+                Some(raw),
+                "Protect={} must stay the raw number; APP12.pm defines no PrintConv for it",
+                raw
+            );
+            assert_eq!(
+                metadata.get_string("APP12:Protect"),
+                None,
+                "Protect={} must not be substituted with a stand-in label",
+                raw
+            );
+        }
+    }
+
+    /// APP12:REV. Fixture is the `[diag info]` head of OlympusD620L.jpg, the
+    /// only file in the corpus carrying a REV record. exiftool 13.55 reports
+    /// `[APP12] REV : DCPT`, and `-v3` prints `[adding APP12:REV]` because the
+    /// name comes from ProcessAPP12's `ucfirst $tag` fallback, not a table.
+    #[test]
+    fn test_app12_rev_matches_exiftool_d620l() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\x001031\r\n\
+                     [camera info]\r\n\
+                     Type=DCHT\r\n\
+                     Version=v01-02\r\n\
+                     [diag info]\r\n\
+                     REV=DCPT\r\n\
+                     IMgg=35931\r\n\
+                     [end]\r\n\0";
+
+        let metadata = parse_app12_olympus(data).unwrap();
+
+        assert_eq!(metadata.get_string("APP12:REV"), Some("DCPT"));
+    }
+
+    /// APP12:S0. Fixture is the `s0=` record from OlympusD220.jpg, verbatim.
+    /// Note the on-disk key is LOWERCASE; ExifTool's `ucfirst $tag` is what
+    /// turns it into the uppercase `S0` reported by `exiftool -G0 -s -a`.
+    /// The expected string is byte-for-byte ExifTool's output for that file.
+    #[test]
+    fn test_app12_s0_matches_exiftool_d220() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.   \x00 697\r\n\
+                     [diag info]\r\n\
+                     PicLen=87648\r\n\
+                     ThmLen=4016\r\n\
+                     s0=8259,0,14bfe,a184,11987,1e4f1,0,7c0000,40b60000,\
+                     56a05e6,616061a,5fb0581,b738,13c0038,d7\r\n\
+                     T0=3e2,0,0,16788,92,11e6b\r\n\
+                     [end]\r\n\0";
+
+        let metadata = parse_app12_olympus(data).unwrap();
+
+        assert_eq!(
+            metadata.get_string("APP12:S0"),
+            Some(
+                "8259,0,14bfe,a184,11987,1e4f1,0,7c0000,40b60000,\
+                 56a05e6,616061a,5fb0581,b738,13c0038,d7"
+            )
+        );
+    }
+
+    /// APP12:STB1 / STB3 / STB4. Fixture is the STB block from
+    /// OlympusD500L.jpg, verbatim. exiftool 13.55 reports STB1 : 139,
+    /// STB3 : 262, STB4 : 14 for that file -- three distinct literals, so a
+    /// swapped or fabricated mapping cannot pass by coincidence.
+    #[test]
+    fn test_app12_stb_values_match_exiftool_d500l() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\x00 991\r\n\
+                     [diag info]\r\n\
+                     EXP3=237\r\n\
+                     STB1=139\r\n\
+                     STB2=0\r\n\
+                     STB3=262\r\n\
+                     STB4=14\r\n\
+                     STB5=0\r\n\
+                     CAM1=33\r\n\
+                     [end]\r\n\0";
+
+        let metadata = parse_app12_olympus(data).unwrap();
+
+        assert_eq!(metadata.get_integer("APP12:STB1"), Some(139));
+        assert_eq!(metadata.get_integer("APP12:STB3"), Some(262));
+        assert_eq!(metadata.get_integer("APP12:STB4"), Some(14));
+    }
+
+    /// The STB keys have no ExifTool table entry at all, hence no PrintConv,
+    /// so every value must survive as the raw number. Both corpus files that
+    /// carry STB records hold only 0 and three small values (139/262/14), so
+    /// the sample can never demonstrate that a large or unusual value is not
+    /// remapped. Pin it here instead.
+    #[test]
+    fn test_app12_stb_has_no_printconv_so_arbitrary_values_pass_through() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\x00 991\r\n\
+                     [diag info]\r\n\
+                     STB1=65535\r\n\
+                     STB3=1\r\n\
+                     STB4=4294967295\r\n\
+                     [end]\r\n\0";
+
+        let metadata = parse_app12_olympus(data).unwrap();
+
+        assert_eq!(metadata.get_integer("APP12:STB1"), Some(65535));
+        assert_eq!(metadata.get_integer("APP12:STB3"), Some(1));
+        assert_eq!(metadata.get_integer("APP12:STB4"), Some(4_294_967_295));
+    }
+
+    /// The failure mode that motivated this whole review: a tag being invented
+    /// for input that does not contain it. None of the six keys may appear
+    /// when the payload has no such record. OlympusD500L.jpg, for instance,
+    /// carries STB records but no REV and no s0 -- and exiftool 13.55 emits
+    /// neither for that file.
+    #[test]
+    fn test_app12_wired_keys_are_not_invented_when_absent() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\x00 991\r\n\
+                     [picture info]\r\n\
+                     Resolution=2\r\n\
+                     ColorMode=1\r\n\
+                     [camera info]\r\n\
+                     Type=DCHC\r\n\
+                     [end]\r\n\0";
+
+        let metadata = parse_app12_olympus(data).unwrap();
+
+        for key in [
+            "APP12:Protect",
+            "APP12:REV",
+            "APP12:S0",
+            "APP12:STB1",
+            "APP12:STB3",
+            "APP12:STB4",
+        ] {
+            assert!(
+                !metadata.contains_key(key),
+                "{} was emitted for a payload that contains no such record",
+                key
+            );
+        }
     }
 }
