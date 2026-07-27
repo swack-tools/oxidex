@@ -703,6 +703,8 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
         return Ok(());
     };
 
+    let mut interop_ifd_offset: Option<u64> = None;
+
     for (tag_id, field_type, value_count, raw_bytes) in
         parse_ifd(&reader, exif_ifd_offset, byte_order)?
     {
@@ -727,6 +729,12 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA412 // HighISOMultiplierGreen
                 | 0xA413 // HighISOMultiplierBlue
         ) {
+            // Track Interoperability Sub-IFD pointer for subsequent parsing.
+            if tag_id == 0xA005 && field_type == 4 && value_count >= 1 && raw_bytes.len() >= 4 {
+                if let Some(off) = read_tiff_u32(raw_bytes.as_ref(), byte_order) {
+                    interop_ifd_offset = Some(u64::from(off));
+                }
+            }
             continue;
         }
 
@@ -743,6 +751,44 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
             raw_bytes_to_simple_tag_value(raw_bytes.as_ref(), field_type, value_count, byte_order)
         };
         metadata.insert(tag_name, tag_value);
+    }
+
+    // Parse Interoperability IFD if present — InteropIndex (0x0001) carries
+    // a PrintConv to the descriptive string ExifTool displays.
+    if let Some(offset) = interop_ifd_offset
+        && let Ok(interop_tags) = parse_ifd(&reader, offset, byte_order)
+    {
+        for (tag_id, field_type, value_count, raw_bytes) in &interop_tags {
+            let bytes = raw_bytes.as_ref();
+            match *tag_id {
+                // InteropIndex: short ASCII code -> "R98 - DCF basic file (sRGB)" etc.
+                0x0001 => {
+                    let raw = String::from_utf8_lossy(bytes)
+                        .trim_end_matches('\0')
+                        .to_string();
+                    let printed = match raw.as_str() {
+                        "R98" => "R98 - DCF basic file (sRGB)".to_string(),
+                        "R03" => "R03 - DCF option file (Adobe RGB)".to_string(),
+                        "THM" => "THM - DCF thumbnail file".to_string(),
+                        _ => raw,
+                    };
+                    metadata.insert(
+                        "InteropIFD:InteropIndex".to_string(),
+                        TagValue::new_string(printed),
+                    );
+                }
+                _ => {
+                    let tag_name = lookup_tag_name(*tag_id, "InteropIFD");
+                    let tag_value = raw_bytes_to_simple_tag_value(
+                        bytes,
+                        *field_type,
+                        *value_count,
+                        byte_order,
+                    );
+                    metadata.insert(tag_name, tag_value);
+                }
+            }
+        }
     }
 
     Ok(())
