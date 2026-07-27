@@ -64,8 +64,8 @@ impl RARParser {
 
         let header = reader.read(0, 8)?;
         if header.len() >= 7 && &header[0..4] == RAR_SIGNATURE {
-            // RAR5 has 0x01 at offset 7
-            if header.len() >= 8 && header[7] == RAR5_MARKER {
+            // RAR5 has 0x01 at offset 6 (seventh byte of the 8-byte signature)
+            if header.len() >= 7 && header[6] == RAR5_MARKER {
                 Ok("5.0")
             } else {
                 Ok("4.x")
@@ -666,7 +666,13 @@ fn rar5_first_file_entry(reader: &dyn FileReader) -> Result<Option<Rar5FileEntry
 
         let data_size = if header_flags & HEADER_FLAG_DATA_AREA != 0 {
             match RARParser::read_rar5_vint(block, field_offset) {
-                Ok((value, _)) => value,
+                Ok((value, next)) => {
+                    // The data-size vint is part of the generic header, not the
+                    // per-file record; advance field_offset so the
+                    // file_flags/unpacked size fields are read from the correct position.
+                    field_offset = next;
+                    value
+                }
                 Err(_) => break,
             }
         } else {
