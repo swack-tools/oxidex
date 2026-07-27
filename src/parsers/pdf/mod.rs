@@ -333,6 +333,10 @@ const TAG_COPYRIGHT: u16 = 0x8298;
 const TAG_CREATE_DATE: u16 = 0x9004;
 const TAG_DATE_TIME_ORIGINAL: u16 = 0x9003;
 const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
+const TAG_EXIF_IMAGE_WIDTH: u16 = 0xA002;
+const TAG_EXIF_VERSION: u16 = 0x9000;
+const TAG_EXPOSURE_BIAS_VALUE: u16 = 0x9204;
+const TAG_EXPOSURE_PROGRAM: u16 = 0x8822;
 
 /// Known compression values (IFD0 Compression tag)
 const COMPRESSION_LABELS: &[(u16, &str)] = &[
@@ -345,6 +349,19 @@ const COMPRESSION_LABELS: &[(u16, &str)] = &[
     (7, "JPEG"),
     (8, "Adobe Deflate"),
     (32773, "PackBits"),
+];
+
+/// ExposureProgram values (0x8822)
+const EXPOSURE_PROGRAM_LABELS: &[(u16, &str)] = &[
+    (0, "Not Defined"),
+    (1, "Manual"),
+    (2, "Program AE"),
+    (3, "Aperture-priority AE"),
+    (4, "Shutter speed priority AE"),
+    (5, "Creative (Slow speed)"),
+    (6, "Action (High speed)"),
+    (7, "Portrait"),
+    (8, "Landscape"),
 ];
 
 #[derive(Clone, Copy)]
@@ -594,6 +611,60 @@ fn parse_exif_ifd(
                         key,
                         crate::core::TagValue::new_string(components.join(", ")),
                     );
+                }
+            }
+            TAG_EXIF_IMAGE_WIDTH if field_type == 3 || field_type == 4 => {
+                let val_str = if field_type == 3 {
+                    if let Some(raw) = read_short_value(data, base, byte_order) {
+                        raw.to_string()
+                    } else {
+                        return None;
+                    }
+                } else {
+                    if let Some(raw) = read_long_value(data, base, byte_order) {
+                        raw.to_string()
+                    } else {
+                        return None;
+                    }
+                };
+                let key = crate::tag_db::lookup_tag_name(TAG_EXIF_IMAGE_WIDTH, "ExifIFD");
+                metadata.insert(key, crate::core::TagValue::new_string(val_str));
+            }
+            TAG_EXIF_VERSION if field_type == 7 => {
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
+                    let ver_str = String::from_utf8_lossy(&bytes)
+                        .trim_end_matches('\0')
+                        .to_string();
+                    if !ver_str.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_EXIF_VERSION, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(ver_str));
+                    }
+                }
+            }
+            TAG_EXPOSURE_BIAS_VALUE if field_type == 10 => {
+                if let Some((num, den)) = read_signed_rational_value(data, base, field_type, byte_order) {
+                    let val_str = if den == 0 {
+                        "0".to_string()
+                    } else if den == 1 {
+                        num.to_string()
+                    } else {
+                        let d = num as f64 / den as f64;
+                        format!("{}", d)
+                    };
+                    let key = crate::tag_db::lookup_tag_name(TAG_EXPOSURE_BIAS_VALUE, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(val_str));
+                }
+            }
+            TAG_EXPOSURE_PROGRAM if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    if let Some(label) = EXPOSURE_PROGRAM_LABELS
+                        .iter()
+                        .find(|&&(id, _)| id == raw)
+                        .map(|&(_, s)| s)
+                    {
+                        let key = crate::tag_db::lookup_tag_name(TAG_EXPOSURE_PROGRAM, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                    }
                 }
             }
             TAG_CREATE_DATE if field_type == 2 => {
