@@ -1112,7 +1112,8 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA402 // ExposureMode
                 | 0xA404 // DigitalZoomRatio
                 | 0xA408 // Contrast
-        ) {
+                | 0xA405 // FocalLengthIn35mmFormat
+            ) {
             continue;
         }
 
