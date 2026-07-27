@@ -45,6 +45,10 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
             0xC616 // CFAPlaneColor
                 | 0xC617 // CFALayout
                 | 0xC61F // DefaultCropOrigin
+                | 0xC61C // JpgFromRawStart
+                | 0xC61D // JpgFromRawLength
+                | 0xC61E // DefaultScale
+                | 0xC68E // MaskedAreas
                 | 0xC620 // DefaultCropSize
                 | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
@@ -236,6 +240,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     // CR2 IFD0 thumbnail byte count for PreviewImage/PreviewImageLength
     let mut cr2_thumbnail_length: Option<u32> = None;
 
+    // DNG IFD0 thumbnail byte count for PreviewImage/PreviewImageLength
+    let mut dng_thumbnail_length: Option<u32> = None;
+
     // Add format-specific tag to identify file type
     metadata.insert(
         "File:FileType".to_string(),
@@ -307,6 +314,18 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         && bytes.len() >= 4
                     {
                         cr2_thumbnail_length = Some(read_u32(bytes, byte_order));
+                    }
+
+                    // DNG IFD0: capture the StripByteCounts value for the
+                    // thumbnail JPEG preview (ExifTool EXIF:PreviewImage).
+                    if format == RawFormat::AdobeDNG
+                        && ifd_index == 0
+                        && *tag_id == 0x0117
+                        && bytes.len() >= 4
+                    {
+                        if dng_thumbnail_length.is_none() {
+                            dng_thumbnail_length = Some(read_u32(bytes, byte_order));
+                        }
                     }
 
                     // Check for SubIFD pointer (tag 0x014A) - common in RAW formats
@@ -463,6 +482,15 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                         byte_order,
                                     )
                                 }
+                            }
+                            0xC61E => {
+                                format_default_scale(bytes, byte_order)
+                                    .map(TagValue::new_string)
+                                    .unwrap_or_else(|| {
+                                        raw_bytes_to_simple_tag_value(
+                                            bytes, *field_type, *value_count, byte_order,
+                                        )
+                                    })
                             }
                             _ => format_dng_integer_array(
                                 *tag_id,
@@ -772,6 +800,29 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     match format {
         RawFormat::AdobeDNG => {
             extract_dng_tags(&mut metadata);
+            // DNG IFD0 thumbnail preview (ExifTool EXIF:PreviewImage).
+            if let Some(length) = dng_thumbnail_length {
+                if length > 0 {
+                    metadata.insert(
+                        "EXIF:PreviewImageLength".to_string(),
+                        TagValue::new_integer(length as i64),
+                    );
+                    metadata.insert(
+                        "EXIF:PreviewImage".to_string(),
+                        TagValue::new_string(format!(
+                            "(Binary data {} bytes, use -b option to extract)",
+                            length
+                        )),
+                    );
+                }
+            }
+            // DNG JpgFromRaw (uses JpgFromRawStart / JpgFromRawLength tags).
+            if let Some(start) = metadata.get("EXIF:JpgFromRawStart").and_then(|v| if let TagValue::Integer(i) = v { Some(*i as usize) } else { None })
+                && let Some(length) = metadata.get("EXIF:JpgFromRawLength").and_then(|v| if let TagValue::Integer(i) = v { Some(*i as usize) } else { None })
+                && length > 0 && start.saturating_add(length) <= data.len()
+            {
+                metadata.insert("EXIF:JpgFromRaw".to_string(), TagValue::new_string(format!("(Binary data {} bytes, use -b option to extract)", length)));
+            }
         }
         RawFormat::CanonCR2 => {
             // Emit EXIF:PreviewImage / PreviewImageLength from the IFD0
@@ -966,6 +1017,7 @@ fn format_dng_integer_array(
         match tag_id {
             0xC619 | 0x828D if size_from_type == 2 => 2,
             0xC68D if size_from_type == 4 => 4,
+            0xC68E if size_from_type == 4 => 4,
             0xC61F | 0xC620 => size_from_type, // accept SHORT or LONG
             _ => return None,
         }
@@ -1004,6 +1056,36 @@ fn format_dng_integer_array(
     };
 
     Some(formatted.join(" "))
+}
+
+/// Format DNG DefaultScale (tag 0xC61E) – a pair of SRATIONAL values.
+fn format_default_scale(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    if bytes.len() < 16 {
+        return None;
+    }
+    let read_srational = |offset: usize| -> Option<String> {
+        let num_bytes = bytes.get(offset..offset+4)?;
+        let den_bytes = bytes.get(offset+4..offset+8)?;
+        let numerator = match byte_order {
+            ByteOrder::LittleEndian => i32::from_le_bytes([num_bytes[0], num_bytes[1], num_bytes[2], num_bytes[3]]),
+            ByteOrder::BigEndian => i32::from_be_bytes([num_bytes[0], num_bytes[1], num_bytes[2], num_bytes[3]]),
+        };
+        let denominator = match byte_order {
+            ByteOrder::LittleEndian => i32::from_le_bytes([den_bytes[0], den_bytes[1], den_bytes[2], den_bytes[3]]),
+            ByteOrder::BigEndian => i32::from_be_bytes([den_bytes[0], den_bytes[1], den_bytes[2], den_bytes[3]]),
+        };
+        if denominator == 0 {
+            return None;
+        }
+        if denominator == 1 {
+            Some(numerator.to_string())
+        } else {
+            Some(format!("{}/{}", numerator, denominator))
+        }
+    };
+    let first = read_srational(0)?;
+    let second = read_srational(8)?;
+    Some(format!("{} {}", first, second))
 }
 
 fn read_tiff_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
