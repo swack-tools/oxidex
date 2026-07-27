@@ -112,7 +112,7 @@ jobs:
       - run: ls -lh target/${{ matrix.target }}/release/oxidex
 
   metrics:
-    name: Benchmarks & Coverage
+    name: Benchmarks
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -127,12 +127,3 @@ jobs:
           name: benchmark-results
           path: target/criterion/
           retention-days: 90
-      - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
-        with:
-          tool: cargo-tarpaulin
-      - name: Generate coverage
-        run: cargo tarpaulin --verbose --all-features --workspace --timeout 300 --out xml --output-dir ./coverage
-      - uses: codacy/codacy-coverage-reporter-action@89d6c85cfafaec52c72b6c5e8b2878d33104c699 # v1.3.0
-        with:
-          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          coverage-reports: coverage/cobertura.xml
