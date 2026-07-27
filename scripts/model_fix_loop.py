@@ -5200,6 +5200,41 @@ def new_oxidex_only_keys(pre_report, post_report):
     return sorted(keys(post_report) - keys(pre_report))
 
 
+def newly_duplicated_emissions(pre_report, post_report):
+    """Spec M3 sibling: duplicate_emissions present in post but NOT in pre.
+
+    The same pure set difference new_oxidex_only_keys performs, for the
+    other half of the same gate -- and the half that was missing it.
+
+    squad_merge_loop's post-merge check read `duplicate_emissions` straight
+    off the POST report while diffing `extra_in_oxidex` properly, in one
+    expression:
+
+        dup = (post or {}).get("duplicate_emissions") or []      # post only
+        introduced = new_oxidex_only_keys(pre, post)             # diffed
+        if dup or introduced: ...quarantine...
+
+    So any PRE-EXISTING duplicate quarantined every commit for that format,
+    permanently, whatever the commit did. Measured 2026-07-27: NEF carries
+    nine on clean main --
+
+        EXIF:BitsPerSample, EXIF:Compression, EXIF:ImageHeight,
+        EXIF:ImageWidth, EXIF:PhotometricInterpretation, EXIF:RowsPerStrip,
+        EXIF:SamplesPerPixel, EXIF:StripOffsets, EXIF:SubfileType
+
+    -- so NEF work could never be consumed, and the commit that tripped it
+    (d8168e7b) had introduced none of them. This surfaced only once #135
+    made duplicate detection work at all; before that the field was always
+    empty and the missing diff could not bite.
+
+    A commit is answerable for the duplicates it INTRODUCES, never for the
+    ones it inherits.
+    """
+    def keys(report):
+        return set((report or {}).get("duplicate_emissions") or [])
+    return sorted(keys(post_report) - keys(pre_report))
+
+
 DEFAULT_TABLE_PORT_THRESHOLD = 0.8
 
 

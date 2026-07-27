@@ -101,7 +101,7 @@ from parallel_model_fix_loop import branch_name as worker_branch_name
 from parallel_model_fix_loop import novel_commits
 from find_tag_gaps import DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS, DEFAULT_BUILD_SEMAPHORE_PATH
 from model_fix_loop import cargo_test_targeted as _real_cargo_test_targeted
-from model_fix_loop import new_oxidex_only_keys
+from model_fix_loop import new_oxidex_only_keys, newly_duplicated_emissions
 import validate_fix_commit
 from validate_fix_commit import validate_commit as _real_validate_commit
 from distill_lessons import (
@@ -780,7 +780,10 @@ def process_commit(*, repo_root, staging_path, squad, squad_branch, sha, fmt, is
         return quarantine(f"cargo test --lib {fmt.lower()} failed", ["targeted-test-failed"])
 
     post = comparison_fn(staging_path, cache_dir, fmt, "squad-staging")
-    dup = (post or {}).get("duplicate_emissions") or []
+    # Both halves of this gate are now diffed against PRE. Reading
+    # duplicate_emissions straight off POST held every format with a
+    # pre-existing duplicate hostage -- see newly_duplicated_emissions.
+    dup = newly_duplicated_emissions(pre, post) if pre is not None or post is not None else []
     introduced = new_oxidex_only_keys(pre, post) if pre is not None or post is not None else []
     if dup or introduced:
         checkout_branch(staging_path, squad_branch)
