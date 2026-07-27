@@ -53,24 +53,28 @@ pub fn extract_coff_metadata(header: &CoffHeader, metadata: &mut MetadataMap) {
         TagValue::Integer(header.number_of_sections as i64),
     );
 
-    // Timestamp (Unix epoch)
+    // Timestamp (converted to human-readable date with timezone, matching ExifTool)
     if header.time_date_stamp > 0 {
+        use chrono::{Local, TimeZone, Utc};
+        // Try local time first (matching ExifTool behavior), fall back to UTC
+        let timestamp_str = if let Some(dt) = Local
+            .timestamp_opt(header.time_date_stamp as i64, 0)
+            .single()
+        {
+            dt.format("%Y:%m:%d %H:%M:%S%:z").to_string()
+        } else if let Some(dt) = Utc.timestamp_opt(header.time_date_stamp as i64, 0).single() {
+            dt.format("%Y:%m:%d %H:%M:%S+00:00").to_string()
+        } else {
+            header.time_date_stamp.to_string()
+        };
         metadata.insert(
             "EXE:TimeStamp".to_string(),
-            TagValue::Integer(header.time_date_stamp as i64),
+            TagValue::String(timestamp_str.clone()),
         );
-
-        // Convert to human-readable date if possible
-        use chrono::{TimeZone, Utc};
-        if let Some(dt) = Utc.timestamp_opt(header.time_date_stamp as i64, 0).single() {
-            let timestamp_str = dt.format("%Y:%m:%d %H:%M:%S").to_string();
-            metadata.insert(
-                "EXE:CompileTime".to_string(),
-                TagValue::String(timestamp_str.clone()),
-            );
-            // Add PE:Timestamp as string for ExifTool compatibility
-            metadata.insert("EXE:Timestamp".to_string(), TagValue::String(timestamp_str));
-        }
+        metadata.insert(
+            "EXE:CompileTime".to_string(),
+            TagValue::String(timestamp_str),
+        );
     }
 
     // Characteristics
@@ -174,16 +178,10 @@ pub fn extract_optional_metadata(
         TagValue::Integer(std_header.size_of_uninitialized_data as i64),
     );
 
-    // Entry point
+    // Entry point (formatted as lowercase hex with zero-padding, matching ExifTool: sprintf("0x%.4x", $val))
     metadata.insert(
         "EXE:EntryPoint".to_string(),
-        TagValue::Integer(std_header.address_of_entry_point as i64),
-    );
-
-    // Add PE:EntryPoint as hexadecimal string for ExifTool compatibility
-    metadata.insert(
-        "EXE:EntryPointHex".to_string(),
-        TagValue::String(format!("0x{:X}", std_header.address_of_entry_point)),
+        TagValue::String(format!("0x{:04x}", std_header.address_of_entry_point)),
     );
 
     // Image base
@@ -227,7 +225,7 @@ pub fn extract_optional_metadata(
         subsystem_types::IMAGE_SUBSYSTEM_UNKNOWN => "Unknown",
         subsystem_types::IMAGE_SUBSYSTEM_NATIVE => "Native (Driver)",
         subsystem_types::IMAGE_SUBSYSTEM_WINDOWS_GUI => "Windows GUI",
-        subsystem_types::IMAGE_SUBSYSTEM_WINDOWS_CUI => "Windows Console",
+        subsystem_types::IMAGE_SUBSYSTEM_WINDOWS_CUI => "Windows command line",
         subsystem_types::IMAGE_SUBSYSTEM_OS2_CUI => "OS/2 Console",
         subsystem_types::IMAGE_SUBSYSTEM_POSIX_CUI => "POSIX Console",
         subsystem_types::IMAGE_SUBSYSTEM_EFI_APPLICATION => "EFI Application",
@@ -1211,7 +1209,7 @@ mod tests {
             (subsystem_types::IMAGE_SUBSYSTEM_WINDOWS_GUI, "Windows GUI"),
             (
                 subsystem_types::IMAGE_SUBSYSTEM_WINDOWS_CUI,
-                "Windows Console",
+                "Windows command line",
             ),
             (subsystem_types::IMAGE_SUBSYSTEM_OS2_CUI, "OS/2 Console"),
             (subsystem_types::IMAGE_SUBSYSTEM_POSIX_CUI, "POSIX Console"),

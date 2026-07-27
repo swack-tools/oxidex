@@ -322,6 +322,26 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 }
 
 const TIFF_ARTIST_TAG: u16 = 0x013b;
+const TAG_EXIF_IFD: u16 = 0x8769;
+const TAG_APERTURE_VALUE: u16 = 0x9202;
+const TAG_BRIGHTNESS_VALUE: u16 = 0x9203;
+const TAG_COLOR_SPACE: u16 = 0xA001;
+const TAG_COMPONENTS_CONFIGURATION: u16 = 0x9101;
+const TAG_COMPRESSED_BITS_PER_PIXEL: u16 = 0x9102;
+const TAG_COMPRESSION: u16 = 0x0103;
+
+/// Known compression values (IFD0 Compression tag)
+const COMPRESSION_LABELS: &[(u16, &str)] = &[
+    (1, "Uncompressed"),
+    (2, "CCITT 1D"),
+    (3, "T4/Group 3 Fax"),
+    (4, "T6/Group 4 Fax"),
+    (5, "LZW"),
+    (6, "JPEG (old-style)"),
+    (7, "JPEG"),
+    (8, "Adobe Deflate"),
+    (32773, "PackBits"),
+];
 
 #[derive(Clone, Copy)]
 enum EmbeddedTiffByteOrder {
@@ -329,8 +349,8 @@ enum EmbeddedTiffByteOrder {
     Big,
 }
 
-/// Extracts the standard IFD0 Artist tag from TIFF/EXIF payloads embedded in
-/// PDF image streams.
+/// Extracts standard EXIF tags from TIFF/EXIF payloads embedded in PDF image
+/// streams (IFD0 and ExifIFD).
 ///
 /// DCT-encoded PDF image streams retain their JPEG APP1 payload byte-for-byte,
 /// so the TIFF byte-order marker can be located without interpreting the PDF
@@ -338,7 +358,6 @@ enum EmbeddedTiffByteOrder {
 fn extract_embedded_exif_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> crate::error::Result<crate::core::MetadataMap> {
-    let mut metadata = crate::core::MetadataMap::with_capacity(1);
     let file_size = usize::try_from(reader.size()).map_err(|_| {
         crate::error::ExifToolError::parse_error(
             "PDF is too large to scan for embedded EXIF metadata",
@@ -346,117 +365,301 @@ fn extract_embedded_exif_metadata(
     })?;
     let data = reader.read(0, file_size)?;
 
-    let Some(artist) = find_embedded_exif_artist(data) else {
-        return Ok(metadata);
-    };
-
-    // Artist is tag 0x013b in IFD0. The tag database supplies the canonical
-    // group-qualified key for this directory instead of assigning a prefix
-    // based on the containing PDF.
-    let tag_key = crate::tag_db::lookup_tag_name(TIFF_ARTIST_TAG, "IFD0");
-    metadata.insert(tag_key, crate::core::TagValue::new_string(artist));
-
-    Ok(metadata)
+    Ok(find_embedded_exif_tags(data).unwrap_or_default())
 }
 
-/// Searches raw PDF bytes for embedded TIFF headers and returns the first
-/// valid IFD0 Artist value.
-fn find_embedded_exif_artist(data: &[u8]) -> Option<String> {
+/// Searches raw PDF bytes for embedded TIFF/EXIF headers and returns
+/// recognised EXIF tags from the first valid IFD0+ExifIFD chain.
+fn find_embedded_exif_tags(data: &[u8]) -> Option<MetadataMap> {
     let mut cursor = 0usize;
 
     while cursor < data.len() {
         let remaining = data.get(cursor..)?;
-        let Some(relative_offset) = remaining
+        let Some(rel_off) = remaining
             .windows(4)
-            .position(|window| window == b"II\x2a\x00" || window == b"MM\x00\x2a")
+            .position(|w| w == b"II\x2a\x00" || w == b"MM\x00\x2a")
         else {
             break;
         };
-
-        let tiff_offset = cursor.checked_add(relative_offset)?;
-        if let Some(artist) = parse_ifd0_ascii_tag(data.get(tiff_offset..)?, TIFF_ARTIST_TAG) {
-            return Some(artist);
+        let tiff_offset = cursor.checked_add(rel_off)?;
+        if let Some(tags) = parse_embedded_tiff_ifds(data.get(tiff_offset..)?) {
+            return Some(tags);
         }
-
-        // Advance one byte rather than trusting any offsets in a malformed
-        // candidate, allowing a later valid TIFF payload to be considered.
         cursor = tiff_offset.checked_add(1)?;
     }
 
     None
 }
 
-/// Parses one ASCII tag from the first TIFF IFD.
-fn parse_ifd0_ascii_tag(data: &[u8], wanted_tag: u16) -> Option<String> {
-    let byte_order = if data.get(0..2)? == b"II" {
+/// Parse IFD0 and optionally the ExifIFD sub-IFD, collecting recognised tags.
+fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
+    let byte_order = if data.get(..2)? == b"II" {
         EmbeddedTiffByteOrder::Little
-    } else if data.get(0..2)? == b"MM" {
+    } else if data.get(..2)? == b"MM" {
         EmbeddedTiffByteOrder::Big
     } else {
         return None;
     };
 
-    if read_embedded_tiff_u16(data, 2, byte_order)? != 42 {
+    if read_embedded_tiff_u16(data, 2, byte_order)? != 0x002A {
         return None;
     }
 
-    let ifd_offset = usize::try_from(read_embedded_tiff_u32(data, 4, byte_order)?).ok()?;
+    let ifd0_offset = usize::try_from(read_embedded_tiff_u32(data, 4, byte_order)?).ok()?;
+    let mut metadata = MetadataMap::with_capacity(8);
+    let mut exif_ifd_offset: Option<usize> = None;
+
+    // ---- IFD0 entries ------------------------------------------------------
+    let entry_count = usize::from(read_embedded_tiff_u16(data, ifd0_offset, byte_order)?);
+    let entries_offset = ifd0_offset.checked_add(2)?;
+    let entries_len = entry_count.checked_mul(12)?;
+    let entries_end = entries_offset.checked_add(entries_len)?;
+    data.get(entries_offset..entries_end)?;
+
+    for i in 0..entry_count {
+        let base = entries_offset.checked_add(i.checked_mul(12)?)?;
+        let tag = read_embedded_tiff_u16(data, base, byte_order)?;
+        let field_type = read_embedded_tiff_u16(data, base.checked_add(2)?, byte_order)?;
+        let count = read_embedded_tiff_u32(data, base.checked_add(4)?, byte_order)?;
+
+        match tag {
+            TIFF_ARTIST_TAG if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    if !v.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TIFF_ARTIST_TAG, "IFD0");
+                        metadata.insert(key, crate::core::TagValue::new_string(v));
+                    }
+                }
+            }
+            TAG_COMPRESSION if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    if let Some(label) = COMPRESSION_LABELS
+                        .iter()
+                        .find(|&&(id, _)| id == raw)
+                        .map(|&(_, s)| s)
+                    {
+                        let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "IFD0");
+                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                    }
+                }
+            }
+            TAG_EXIF_IFD if field_type == 4 || field_type == 13 => {
+                exif_ifd_offset = Some(
+                    usize::try_from(read_embedded_tiff_u32(
+                        data,
+                        base.checked_add(8)?,
+                        byte_order,
+                    )?)
+                    .ok()?,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    // ---- ExifIFD sub-IFD ----------------------------------------------------
+    if let Some(off) = exif_ifd_offset {
+        if let Some(sub_tags) = parse_exif_ifd(data, off, byte_order) {
+            for (k, v) in sub_tags.iter() {
+                metadata.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(metadata)
+    }
+}
+
+/// Parse a single ExifIFD (pointed to by the ExifIFD tag in IFD0) and return
+/// decoded EXIF tags.
+fn parse_exif_ifd(
+    data: &[u8],
+    ifd_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<MetadataMap> {
     let entry_count = usize::from(read_embedded_tiff_u16(data, ifd_offset, byte_order)?);
     let entries_offset = ifd_offset.checked_add(2)?;
     let entries_len = entry_count.checked_mul(12)?;
     let entries_end = entries_offset.checked_add(entries_len)?;
-
-    // Validate the complete entry array before iterating over file-controlled
-    // entry counts.
     data.get(entries_offset..entries_end)?;
 
-    for entry_index in 0..entry_count {
-        let entry_offset = entries_offset.checked_add(entry_index.checked_mul(12)?)?;
+    let mut metadata = MetadataMap::with_capacity(6);
 
-        if read_embedded_tiff_u16(data, entry_offset, byte_order)? != wanted_tag {
-            continue;
+    for i in 0..entry_count {
+        let base = entries_offset.checked_add(i.checked_mul(12)?)?;
+        let tag = read_embedded_tiff_u16(data, base, byte_order)?;
+        let field_type = read_embedded_tiff_u16(data, base.checked_add(2)?, byte_order)?;
+        let count = read_embedded_tiff_u32(data, base.checked_add(4)?, byte_order)?;
+
+        match tag {
+            TAG_APERTURE_VALUE if field_type == 5 => {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
+                    let apex = if den != 0 {
+                        f64::from(num) / f64::from(den)
+                    } else {
+                        0.0
+                    };
+                    let f_number = 2.0_f64.powf(apex / 2.0);
+                    let key = crate::tag_db::lookup_tag_name(TAG_APERTURE_VALUE, "ExifIFD");
+                    metadata.insert(
+                        key,
+                        crate::core::TagValue::new_string(format!("{}", f_number)),
+                    );
+                }
+            }
+            TAG_BRIGHTNESS_VALUE if field_type == 5 => {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
+                    let val_str = if den == 0 {
+                        "0".to_string()
+                    } else if den == 1 {
+                        num.to_string()
+                    } else {
+                        format!("{}", num as f64 / den as f64)
+                    };
+                    let key = crate::tag_db::lookup_tag_name(TAG_BRIGHTNESS_VALUE, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(val_str));
+                }
+            }
+            TAG_COMPRESSED_BITS_PER_PIXEL if field_type == 5 => {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
+                    let val_str = if den == 0 {
+                        "0".to_string()
+                    } else if den == 1 {
+                        num.to_string()
+                    } else {
+                        let d = num as f64 / den as f64;
+                        let s = format!("{:.9}", d);
+                        let trimmed = s.trim_end_matches('0').trim_end_matches('.');
+                        if trimmed.is_empty() {
+                            "0".to_string()
+                        } else {
+                            trimmed.to_string()
+                        }
+                    };
+                    let key =
+                        crate::tag_db::lookup_tag_name(TAG_COMPRESSED_BITS_PER_PIXEL, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(val_str));
+                }
+            }
+            TAG_COLOR_SPACE if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    let label = match raw {
+                        1 => "sRGB",
+                        0xFFFF => "Uncalibrated",
+                        _ => return None,
+                    };
+                    let key = crate::tag_db::lookup_tag_name(TAG_COLOR_SPACE, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                }
+            }
+            TAG_COMPONENTS_CONFIGURATION if field_type == 7 => {
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
+                    let components: Vec<String> = bytes
+                        .iter()
+                        .map(|&b| match b {
+                            0 => "-".to_string(),
+                            1 => "Y".to_string(),
+                            2 => "Cb".to_string(),
+                            3 => "Cr".to_string(),
+                            4 => "R".to_string(),
+                            5 => "G".to_string(),
+                            6 => "B".to_string(),
+                            _ => "?".to_string(),
+                        })
+                        .collect();
+                    let key =
+                        crate::tag_db::lookup_tag_name(TAG_COMPONENTS_CONFIGURATION, "ExifIFD");
+                    metadata.insert(
+                        key,
+                        crate::core::TagValue::new_string(components.join(", ")),
+                    );
+                }
+            }
+            _ => {}
         }
-
-        let field_type = read_embedded_tiff_u16(data, entry_offset.checked_add(2)?, byte_order)?;
-        if field_type != 2 {
-            return None;
-        }
-
-        let value_len = usize::try_from(read_embedded_tiff_u32(
-            data,
-            entry_offset.checked_add(4)?,
-            byte_order,
-        )?)
-        .ok()?;
-        if value_len == 0 {
-            return None;
-        }
-
-        let value_offset = if value_len <= 4 {
-            entry_offset.checked_add(8)?
-        } else {
-            usize::try_from(read_embedded_tiff_u32(
-                data,
-                entry_offset.checked_add(8)?,
-                byte_order,
-            )?)
-            .ok()?
-        };
-        let value_end = value_offset.checked_add(value_len)?;
-        let raw_value = data.get(value_offset..value_end)?;
-        let text_len = raw_value
-            .iter()
-            .position(|byte| *byte == 0)
-            .unwrap_or(raw_value.len());
-        let value = String::from_utf8_lossy(raw_value.get(..text_len)?).into_owned();
-
-        if !value.is_empty() {
-            return Some(value);
-        }
-        return None;
     }
 
-    None
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(metadata)
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  TIFF entry value helpers
+// ---------------------------------------------------------------------------
+
+fn get_entry_value_offset(
+    data: &[u8],
+    entry_offset: usize,
+    type_size: usize,
+    count: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<usize> {
+    let total = count.checked_mul(type_size)?;
+    if total <= 4 {
+        entry_offset.checked_add(8)
+    } else {
+        let value_off = read_embedded_tiff_u32(data, entry_offset.checked_add(8)?, byte_order)?;
+        Some(usize::try_from(value_off).ok()?)
+    }
+}
+
+fn read_ascii_value(
+    data: &[u8],
+    entry_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+    count: u32,
+) -> Option<String> {
+    let len = usize::try_from(count).ok()?;
+    if len == 0 {
+        return None;
+    }
+    let val_off = get_entry_value_offset(data, entry_offset, 1, len, byte_order)?;
+    let end = val_off.checked_add(len)?;
+    let raw = data.get(val_off..end)?;
+    let text_end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+    let s = String::from_utf8_lossy(&raw[..text_end]).into_owned();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+fn read_short_value(
+    data: &[u8],
+    entry_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<u16> {
+    let val_off = get_entry_value_offset(data, entry_offset, 2, 1, byte_order)?;
+    read_embedded_tiff_u16(data, val_off, byte_order)
+}
+
+fn read_unsigned_rational_value(
+    data: &[u8],
+    entry_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<(u32, u32)> {
+    let val_off = get_entry_value_offset(data, entry_offset, 8, 1, byte_order)?;
+    let num = read_embedded_tiff_u32(data, val_off, byte_order)?;
+    let den = read_embedded_tiff_u32(data, val_off.checked_add(4)?, byte_order)?;
+    Some((num, den))
+}
+
+fn read_undefined_value(
+    data: &[u8],
+    entry_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+    count: u32,
+) -> Option<Vec<u8>> {
+    let cnt = usize::try_from(count).ok()?;
+    if cnt == 0 {
+        return Some(Vec::new());
+    }
+    let val_off = get_entry_value_offset(data, entry_offset, 1, cnt, byte_order)?;
+    let end = val_off.checked_add(cnt)?;
+    Some(data.get(val_off..end)?.to_vec())
 }
 
 fn read_embedded_tiff_u16(
@@ -489,26 +692,27 @@ fn read_embedded_tiff_u32(
 
 #[cfg(test)]
 mod embedded_exif_tests {
-    use super::find_embedded_exif_artist;
+    use super::find_embedded_exif_tags;
+    use crate::core::MetadataMap;
 
     #[test]
     fn extracts_artist_from_embedded_little_endian_tiff() {
         let mut pdf = b"%PDF-1.4\nstream\nExif\0\0".to_vec();
-
         // TIFF header with IFD0 at offset 8.
         pdf.extend_from_slice(b"II\x2a\x00\x08\x00\x00\x00");
         // One IFD entry.
         pdf.extend_from_slice(b"\x01\x00");
         // Artist (0x013b), ASCII, 12 bytes, value at TIFF offset 26.
         pdf.extend_from_slice(b"\x3b\x01\x02\x00\x0c\x00\x00\x00\x1a\x00\x00\x00");
-        // No next IFD, followed by the Artist string.
+        // Next IFD pointer = 0, then Artist string.
         pdf.extend_from_slice(b"\x00\x00\x00\x00Phil Harvey\0");
         pdf.extend_from_slice(b"\nendstream\n%%EOF");
 
-        assert_eq!(
-            find_embedded_exif_artist(&pdf).as_deref(),
-            Some("Phil Harvey")
-        );
+        let map = find_embedded_exif_tags(&pdf).expect("should find embedded EXIF tags");
+        let artist = map
+            .get_string("IFD0:Artist")
+            .expect("must contain Artist tag");
+        assert_eq!(artist, "Phil Harvey");
     }
 }
 
