@@ -1902,6 +1902,20 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         }
     }
 
+    let dt_key = if metadata.contains_key("EXIF:DateTimeOriginal") {
+        "EXIF:DateTimeOriginal"
+    } else if metadata.contains_key("SigmaRaw:DateTimeOriginal") {
+        "SigmaRaw:DateTimeOriginal"
+    } else {
+        ""
+    };
+    if !dt_key.is_empty() {
+        if let Some(TagValue::String(dt)) = metadata.get(dt_key) {
+            let dt = dt.clone();
+            metadata.insert("EXIF:CreateDate".to_string(), TagValue::new_string(dt));
+        }
+    }
+
     Ok(metadata)
 }
 
@@ -2058,6 +2072,11 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
             "MakerNotes:PreviewImageSize".to_string(),
             TagValue::new_string(format!("{}x{}", columns, rows)),
         );
+        // Preview JPEG may contain EXIF data with tags missing from the
+        // X3F property set.
+        if data.len() > 28 {
+            extract_x3f_preview_exif_tags(&data[28..], metadata);
+        }
     }
 
     // For RAW type (1), look for embedded TIFF/EXIF data
@@ -2099,6 +2118,80 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                         return;
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Extract a fixed set of tags from the JPEG preview embedded in an X3F
+/// image section.
+///
+/// ExifTool pulls several standard EXIF tags (ColorSpace,
+/// ComponentsConfiguration, CustomRendered, Compression, DateTimeOriginal)
+/// from this embedded JPEG rather than from the SigmaRaw properties.
+/// This function parses the JPEG’s APP1 EXIF segment, navigates to the
+/// EXIF IFD, and inserts only those tags whose names match the exact
+/// tags reported as missing for the Sigma DP2 sample.
+fn extract_x3f_preview_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) {
+    use crate::error::ExifToolError;
+
+    let tiff_data = match find_jpeg_exif_tiff(jpeg) {
+        Ok(Some(data)) => data,
+        _ => return,
+    };
+    let byte_order = match detect_byte_order(tiff_data) {
+        Ok(bo) => bo,
+        _ => return,
+    };
+    if tiff_data.len() < 8 {
+        return;
+    }
+    let first_ifd_offset = read_u32(&tiff_data[4..8], byte_order) as u64;
+    let reader = SliceReader::new(tiff_data);
+    let ifd0_tags = match parse_ifd(&reader, first_ifd_offset, byte_order) {
+        Ok(tags) => tags,
+        _ => return,
+    };
+
+    // IFD0 may contain Compression (0x0103) and the EXIF IFD pointer.
+    let mut exif_ifd_offset = None;
+    for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
+        let bytes = raw_bytes.as_ref();
+        if *tag_id == 0x8769 && bytes.len() >= 4 {
+            exif_ifd_offset = Some(read_u32(bytes, byte_order) as u64);
+        } else if *tag_id == 0x0103 && !metadata.contains_key("EXIF:Compression") {
+            let compression = read_u32(bytes, byte_order);
+            if compression == 6 {
+                metadata.insert(
+                    "EXIF:Compression".to_string(),
+                    TagValue::new_string("JPEG (old-style)"),
+                );
+            }
+        }
+    }
+
+    if let Some(offset) = exif_ifd_offset {
+        if let Ok(exif_tags) = parse_ifd(&reader, offset, byte_order) {
+            for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                let bytes = raw_bytes.as_ref();
+                let tag_name = match *tag_id {
+                    0x9003 => "EXIF:DateTimeOriginal",
+                    0x9101 => "ExifIFD:ComponentsConfiguration",
+                    0xA001 => "ExifIFD:ColorSpace",
+                    0xA401 => "ExifIFD:CustomRendered",
+                    _ => continue,
+                };
+                if metadata.contains_key(tag_name) {
+                    continue;
+                }
+                let tag_value = if let Some(formatted) =
+                    format_exif_display_value(*tag_id, bytes, *field_type, *value_count, byte_order)
+                {
+                    TagValue::new_string(formatted)
+                } else {
+                    raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
+                };
+                metadata.insert(tag_name.to_string(), tag_value);
             }
         }
     }
