@@ -284,6 +284,23 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
         }
     }
 
+    // BareStruct (test:BareStruct with parseType="Resource") is flattened
+    let bare_struct_tags = extract_bare_struct_tags(xml_bytes)?;
+    for (tag, value) in &bare_struct_tags {
+        if !results.iter().any(|(t, _)| t == tag) {
+            results.push((tag.clone(), value.clone()));
+        }
+    }
+
+    // CopyrightOwner is a PLUS structured Seq; ExifTool flattens
+    // plus:CopyrightOwnerName to XMP:CopyrightOwnerName.
+    let copyright_owner_names = extract_copyright_owner_name_values(xml_bytes)?;
+    for (tag, value) in &copyright_owner_names {
+        if !results.iter().any(|(t, _)| t == tag) {
+            results.push((tag.clone(), value.clone()));
+        }
+    }
+
     // Post-process results to apply formatting for specific tags
     let results = results
         .into_iter()
@@ -644,12 +661,11 @@ fn extract_b_test_tag_field1_values(xml_bytes: &[u8]) -> Result<Vec<(String, Str
     let mut depth = 0usize;
 
     let mut mwg_rs_depth: Option<usize> = None;
-    let mut field1_depth: Option<usize> = None;
-    let mut alt_depth: Option<usize> = None;
+    let mut bt_depth: Option<usize> = None;
+    let mut alt_stack: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
     let mut li_depth: Option<usize> = None;
-    let mut current_lang: Option<String> = None;
-    let mut current_value = String::new();
-    let mut lang_values: Vec<(String, String)> = Vec::new();
+    let mut li_lang: Option<String> = None;
+    let mut li_value: String = String::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -662,35 +678,42 @@ fn extract_b_test_tag_field1_values(xml_bytes: &[u8]) -> Result<Vec<(String, Str
                     && is_property_in_namespace(&tag_name, "Regions", MWG_RS_NS, &resolver)
                 {
                     mwg_rs_depth = Some(depth);
+                    continue;
                 }
 
-                if field1_depth.is_none()
+                if bt_depth.is_none()
                     && mwg_rs_depth.is_none()
                     && NamespaceResolver::extract_local_name(&tag_name) == "BTestTagField1"
                 {
-                    field1_depth = Some(depth);
-                    lang_values.clear();
+                    bt_depth = Some(depth);
+                    continue;
                 }
 
-                if field1_depth.is_some()
-                    && alt_depth.is_none()
+                if bt_depth.is_some()
+                    && depth == bt_depth.unwrap() + 1
                     && is_collection_container(&tag_name, &resolver)
                 {
-                    alt_depth = Some(depth);
+                    alt_stack.push_back(depth);
+                    continue;
                 }
 
-                if alt_depth.is_some() && li_depth.is_none() && is_rdf_li(&tag_name, &resolver) {
+                if !alt_stack.is_empty()
+                    && li_depth.is_none()
+                    && depth == alt_stack.back().copied().unwrap() + 1
+                    && is_rdf_li(&tag_name, &resolver)
+                {
                     li_depth = Some(depth);
-                    current_lang = None;
-                    current_value.clear();
+                    li_lang = None;
+                    li_value.clear();
                     for attr in e.attributes().flatten() {
                         let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                         if key == "xml:lang" {
                             if let Ok(val) = std::str::from_utf8(&attr.value) {
-                                current_lang = Some(val.to_string());
+                                li_lang = Some(val.to_string());
                             }
                         }
                     }
+                    continue;
                 }
             }
 
@@ -698,30 +721,24 @@ fn extract_b_test_tag_field1_values(xml_bytes: &[u8]) -> Result<Vec<(String, Str
                 let tag_name = extract_tag_name_from_bytes(e.name().as_ref())?;
 
                 if li_depth == Some(depth) && is_rdf_li(&tag_name, &resolver) {
-                    let value = current_value.trim().to_string();
+                    let value = li_value.trim().to_string();
                     if !value.is_empty() {
-                        if let Some(ref lang) = current_lang {
-                            lang_values.push((lang.clone(), value));
+                        if let Some(lang) = li_lang.take() {
+                            results.push((format!("XMP:BTestTagField1-{}", lang), value));
                         }
                     }
-                    current_value.clear();
                     li_depth = None;
-                    current_lang = None;
+                    li_value.clear();
                 }
 
-                if alt_depth == Some(depth) && is_collection_container(&tag_name, &resolver) {
-                    alt_depth = None;
+                if !alt_stack.is_empty() && alt_stack.back() == Some(&depth) {
+                    alt_stack.pop_back();
                 }
 
-                if field1_depth == Some(depth)
+                if bt_depth == Some(depth)
                     && NamespaceResolver::extract_local_name(&tag_name) == "BTestTagField1"
                 {
-                    // BTestTagField1: only emit language-qualified tags, no base
-                    for (lang, val) in &lang_values {
-                        results.push((format!("XMP:BTestTagField1-{}", lang), val.clone()));
-                    }
-                    field1_depth = None;
-                    lang_values.clear();
+                    bt_depth = None;
                 }
 
                 if mwg_rs_depth == Some(depth)
@@ -739,7 +756,22 @@ fn extract_b_test_tag_field1_values(xml_bytes: &[u8]) -> Result<Vec<(String, Str
                 {
                     let unescaped =
                         quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
-                    current_value.push_str(&unescaped);
+                    li_value.push_str(&unescaped);
+                }
+            }
+
+            Ok(Event::GeneralRef(e)) => {
+                if li_depth.is_some()
+                    && let Ok(entity_name) = e.xml10_content()
+                {
+                    if let Ok(Some(ch)) = e.resolve_char_ref() {
+                        li_value.push(ch);
+                    } else if let Some(resolved) = resolve_predefined_entity(&entity_name) {
+                        li_value.push_str(resolved);
+                    } else {
+                        let unresolved = format!("&{};", entity_name);
+                        li_value.push_str(&unresolved);
+                    }
                 }
             }
 
@@ -755,6 +787,225 @@ fn extract_b_test_tag_field1_values(xml_bytes: &[u8]) -> Result<Vec<(String, Str
     }
 
     Ok(results)
+}
+
+/// Extracts fields from a BareStruct property with rdf:parseType="Resource".
+fn extract_bare_struct_tags(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    let mut reader = Reader::from_reader(xml_bytes);
+    reader.config_mut().trim_text(true);
+
+    let mut resolver = NamespaceResolver::new();
+    let mut results = Vec::new();
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+    let mut struct_depth: Option<usize> = None;
+    let mut field_depth: Option<usize> = None;
+    let mut field_local: Option<String> = None;
+    let mut current_value = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+                let local = NamespaceResolver::extract_local_name(&tag_name);
+
+                if struct_depth.is_none() && local == "BareStruct" {
+                    let mut has_parse_type_resource = false;
+                    for attr in e.attributes().flatten() {
+                        let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                        let val = std::str::from_utf8(&attr.value).unwrap_or("");
+                        if key == "rdf:parseType" && val == "Resource" {
+                            has_parse_type_resource = true;
+                            break;
+                        }
+                    }
+                    if has_parse_type_resource {
+                        struct_depth = Some(depth);
+                    }
+                } else if struct_depth.is_some()
+                    && field_depth.is_none()
+                    && struct_depth == Some(depth - 1)
+                    && !is_rdf_li(&tag_name, &resolver)
+                    && !is_collection_container(&tag_name, &resolver)
+                    && !is_rdf_description(&tag_name, &resolver)
+                {
+                    field_depth = Some(depth);
+                    field_local = Some(capitalize_first_letter(local));
+                    current_value.clear();
+                }
+            }
+
+            Ok(Event::End(e)) => {
+                let _tag_name = extract_tag_name_from_bytes(e.name().as_ref())?;
+
+                if field_depth == Some(depth) {
+                    let value = current_value.trim().to_string();
+                    if !value.is_empty() {
+                        if let Some(ref fname) = field_local {
+                            results.push((format!("XMP:BareStruct{}", fname), value));
+                        }
+                    }
+                    current_value.clear();
+                    field_depth = None;
+                    field_local = None;
+                }
+
+                if struct_depth == Some(depth) {
+                    struct_depth = None;
+                }
+
+                depth = depth.saturating_sub(1);
+            }
+
+            Ok(Event::Text(e)) => {
+                if field_depth.is_some()
+                    && let Ok(decoded) = e.xml10_content()
+                {
+                    let unescaped =
+                        quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
+                    current_value.push_str(&unescaped);
+                }
+            }
+
+            Ok(Event::GeneralRef(e)) => {
+                if field_depth.is_some()
+                    && let Ok(entity_name) = e.xml10_content()
+                {
+                    if let Ok(Some(ch)) = e.resolve_char_ref() {
+                        current_value.push(ch);
+                    } else if let Some(resolved) = resolve_predefined_entity(&entity_name) {
+                        current_value.push_str(resolved);
+                    } else {
+                        let unresolved = format!("&{};", entity_name);
+                        current_value.push_str(&unresolved);
+                    }
+                }
+            }
+
+            Ok(Event::Empty(e)) => {
+                register_namespaces_from_element(&e, &mut resolver)?;
+            }
+
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(_e) => break,
+        }
+        buf.clear();
+    }
+
+    Ok(results)
+}
+
+/// Extracts CopyrightOwnerName from PLUS CopyrightOwner structured Seq.
+fn extract_copyright_owner_name_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    const PLUS_NAMESPACE: &str = "http://ns.useplus.org/ldf/xmp/1.0/";
+
+    let mut reader = Reader::from_reader(xml_bytes);
+    reader.config_mut().trim_text(true);
+
+    let mut resolver = NamespaceResolver::new();
+    let mut names = Vec::new();
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+    let mut copyright_owner_depth: Option<usize> = None;
+    let mut name_depth: Option<usize> = None;
+    let mut current_name = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+
+                if copyright_owner_depth.is_none()
+                    && is_property_in_namespace(
+                        &tag_name, "CopyrightOwner", PLUS_NAMESPACE, &resolver,
+                    )
+                {
+                    copyright_owner_depth = Some(depth);
+                } else if copyright_owner_depth.is_some()
+                    && name_depth.is_none()
+                    && is_property_in_namespace(
+                        &tag_name, "CopyrightOwnerName", PLUS_NAMESPACE, &resolver,
+                    )
+                {
+                    name_depth = Some(depth);
+                    current_name.clear();
+                }
+            }
+
+            Ok(Event::End(e)) => {
+                let tag_name = extract_tag_name_from_bytes(e.name().as_ref())?;
+
+                if name_depth == Some(depth)
+                    && is_property_in_namespace(
+                        &tag_name, "CopyrightOwnerName", PLUS_NAMESPACE, &resolver,
+                    )
+                {
+                    let value = current_name.trim();
+                    if !value.is_empty() {
+                        names.push(value.to_string());
+                    }
+                    current_name.clear();
+                    name_depth = None;
+                }
+
+                if copyright_owner_depth == Some(depth)
+                    && is_property_in_namespace(
+                        &tag_name, "CopyrightOwner", PLUS_NAMESPACE, &resolver,
+                    )
+                {
+                    copyright_owner_depth = None;
+                }
+
+                depth = depth.saturating_sub(1);
+            }
+
+            Ok(Event::Text(e)) => {
+                if name_depth.is_some()
+                    && let Ok(decoded) = e.xml10_content()
+                {
+                    let unescaped =
+                        quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
+                    current_name.push_str(&unescaped);
+                }
+            }
+
+            Ok(Event::GeneralRef(e)) => {
+                if name_depth.is_some()
+                    && let Ok(entity_name) = e.xml10_content()
+                {
+                    if let Ok(Some(ch)) = e.resolve_char_ref() {
+                        current_name.push(ch);
+                    } else if let Some(resolved) = resolve_predefined_entity(&entity_name) {
+                        current_name.push_str(resolved);
+                    } else {
+                        let unresolved = format!("&{};", entity_name);
+                        current_name.push_str(&unresolved);
+                    }
+                }
+            }
+
+            Ok(Event::Empty(e)) => {
+                register_namespaces_from_element(&e, &mut resolver)?;
+            }
+
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(_e) => break,
+        }
+        buf.clear();
+    }
+
+    let tags: Vec<(String, String)> = names
+        .into_iter()
+        .map(|name| ("XMP:CopyrightOwnerName".to_string(), name))
+        .collect();
+
+    Ok(tags)
 }
 
 /// Checks a property's local name and resolved namespace URI.
