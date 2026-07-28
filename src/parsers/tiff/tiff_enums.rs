@@ -252,9 +252,13 @@ pub fn tiff_enum_to_string(tag_id: u16, value: i64) -> Option<String> {
             _ => None,
         },
 
-        // LightSource (EXIF tag 0x9208)
-        // The kind of light source
-        0x9208 => match value {
+        // LightSource (0x9208) and the DNG calibration illuminants
+        // (0xC65A/0xC65B) share one table in ExifTool: Exif.pm:3639 declares
+        // `PrintConv => \%lightSource` for CalibrationIlluminant1, the same
+        // hash 0x9208 uses. Only 0x9208 was routed here, so the DNG pair
+        // reported raw `17` and `21` where ExifTool prints `Standard Light A`
+        // and `D65`.
+        0x9208 | 0xC65A | 0xC65B => match value {
             0 => Some("Unknown".to_string()),
             1 => Some("Daylight".to_string()),
             2 => Some("Fluorescent".to_string()),

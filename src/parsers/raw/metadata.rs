@@ -1667,6 +1667,18 @@ fn format_exif_display_value(
             }
         }
         // ColorSpace: SHORT[1].
+        // CalibrationIlluminant1/2: int16u, and ExifTool prints them through
+        // the SAME %lightSource hash that LightSource (0x9208) uses --
+        // Exif.pm:3639 is `PrintConv => \%lightSource`. Delegating keeps one
+        // table instead of a third copy of it; without this the DNG pair
+        // reported raw `17` and `21` where ExifTool prints `Standard Light A`
+        // and `D65`.
+        0xC65A | 0xC65B if field_type == 3 && value_count >= 1 => {
+            crate::parsers::tiff::tiff_enums::tiff_enum_to_string(
+                tag_id,
+                i64::from(read_tiff_u16(bytes, byte_order)?),
+            )
+        }
         0xA001 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
             1 => Some("sRGB".to_string()),
             0xffff => Some("Uncalibrated".to_string()),
@@ -4424,10 +4436,96 @@ fn read_u32(bytes: &[u8], byte_order: ByteOrder) -> u32 {
 /// # Returns
 ///
 /// TagValue representing the data
+/// Renders a multi-component RATIONAL/SRATIONAL run the way ExifTool prints it.
+///
+/// Returns `None` for a single component, leaving the caller's existing
+/// scalar handling untouched.
+///
+/// This converter took `_value_count` and threw it away, so every array-valued
+/// rational in a RAW IFD collapsed to its first component: `AsShotNeutral`
+/// reported `0.592408` where ExifTool reports `0.592408 1 0.501692`, and the
+/// 9-element `ColorMatrix1`/`ColorMatrix2` and `CameraCalibration1`/`2` each
+/// reported one number out of nine. Six DNG tags, one cause.
+///
+/// ExifTool prints these as space-separated shortest-form decimals, which is
+/// what `{}` on an f64 gives: 592408/1000000 -> `0.592408`, 1/1 -> `1`,
+/// -945/10000 -> `-0.0945`. A zero denominator degrades to the bare numerator
+/// rather than emitting `inf`.
+/// The SHORT/LONG counterpart of [`join_rational_array`].
+///
+/// These two branches dropped `value_count` the same way the rational ones
+/// did, so `BitsPerSample` (SHORT[3]) reported `8` where ExifTool reports
+/// `8 8 8`. Returns `None` for a single component so scalar values keep their
+/// integer representation untouched.
+fn join_integer_array(
+    bytes: &[u8],
+    value_count: u32,
+    byte_order: ByteOrder,
+    width: usize,
+) -> Option<String> {
+    let count = usize::try_from(value_count).ok()?;
+    if count < 2 || bytes.len() < count * width {
+        return None;
+    }
+    let mut parts = Vec::with_capacity(count);
+    for i in 0..count {
+        let at = i * width;
+        let value = match width {
+            2 => {
+                let chunk = bytes.get(at..at + 2)?;
+                match byte_order {
+                    ByteOrder::LittleEndian => u16::from_le_bytes([chunk[0], chunk[1]]) as u32,
+                    ByteOrder::BigEndian => u16::from_be_bytes([chunk[0], chunk[1]]) as u32,
+                }
+            }
+            _ => read_u32(bytes.get(at..at + 4)?, byte_order),
+        };
+        parts.push(value.to_string());
+    }
+    Some(parts.join(" "))
+}
+
+fn join_rational_array(
+    bytes: &[u8],
+    value_count: u32,
+    byte_order: ByteOrder,
+    signed: bool,
+) -> Option<String> {
+    let count = usize::try_from(value_count).ok()?;
+    if count < 2 || bytes.len() < count * 8 {
+        return None;
+    }
+
+    let reader = match byte_order {
+        ByteOrder::LittleEndian => EndianReader::little_endian(bytes),
+        ByteOrder::BigEndian => EndianReader::big_endian(bytes),
+    };
+
+    let mut parts = Vec::with_capacity(count);
+    for i in 0..count {
+        let at = i * 8;
+        let (numerator, denominator) = if signed {
+            (reader.i32_at(at)? as f64, reader.i32_at(at + 4)? as f64)
+        } else {
+            (
+                read_u32(bytes.get(at..at + 4)?, byte_order) as f64,
+                read_u32(bytes.get(at + 4..at + 8)?, byte_order) as f64,
+            )
+        };
+        let value = if denominator == 0.0 {
+            numerator
+        } else {
+            numerator / denominator
+        };
+        parts.push(format!("{value}"));
+    }
+    Some(parts.join(" "))
+}
+
 fn raw_bytes_to_simple_tag_value(
     bytes: &[u8],
     field_type: u16,
-    _value_count: u32,
+    value_count: u32,
     byte_order: ByteOrder,
 ) -> TagValue {
     use crate::parsers::common::exif_types::ExifType;
@@ -4444,6 +4542,9 @@ fn raw_bytes_to_simple_tag_value(
 
             // SHORT (16-bit unsigned)
             ExifType::Short if bytes.len() >= 2 => {
+                if let Some(joined) = join_integer_array(bytes, value_count, byte_order, 2) {
+                    return TagValue::new_string(joined);
+                }
                 let reader = match byte_order {
                     ByteOrder::LittleEndian => EndianReader::little_endian(bytes),
                     ByteOrder::BigEndian => EndianReader::big_endian(bytes),
@@ -4454,12 +4555,18 @@ fn raw_bytes_to_simple_tag_value(
 
             // LONG (32-bit unsigned)
             ExifType::Long if bytes.len() >= 4 => {
+                if let Some(joined) = join_integer_array(bytes, value_count, byte_order, 4) {
+                    return TagValue::new_string(joined);
+                }
                 let value = read_u32(bytes, byte_order) as i64;
                 return TagValue::new_integer(value);
             }
 
             // RATIONAL (two 32-bit unsigned)
             ExifType::Rational if bytes.len() >= 8 => {
+                if let Some(joined) = join_rational_array(bytes, value_count, byte_order, false) {
+                    return TagValue::new_string(joined);
+                }
                 let numerator = read_u32(&bytes[0..4], byte_order);
                 let denominator = read_u32(&bytes[4..8], byte_order);
                 return TagValue::new_rational(numerator as i32, denominator as i32);
@@ -4467,6 +4574,9 @@ fn raw_bytes_to_simple_tag_value(
 
             // SRATIONAL (two 32-bit signed)
             ExifType::SRational if bytes.len() >= 8 => {
+                if let Some(joined) = join_rational_array(bytes, value_count, byte_order, true) {
+                    return TagValue::new_string(joined);
+                }
                 let reader = match byte_order {
                     ByteOrder::LittleEndian => EndianReader::little_endian(bytes),
                     ByteOrder::BigEndian => EndianReader::big_endian(bytes),
@@ -5583,5 +5693,137 @@ mod backlog_group_1_printconv_tests {
             Some(&TagValue::new_integer(12))
         );
         assert!(metadata.get("EXIF:JpgFromRaw").is_none());
+    }
+}
+
+#[cfg(test)]
+mod rational_array_tests {
+    use super::*;
+
+    fn le_rationals(pairs: &[(u32, u32)]) -> Vec<u8> {
+        pairs
+            .iter()
+            .flat_map(|(n, d)| {
+                let mut v = n.to_le_bytes().to_vec();
+                v.extend_from_slice(&d.to_le_bytes());
+                v
+            })
+            .collect()
+    }
+
+    /// `raw_bytes_to_simple_tag_value` took `_value_count` and discarded it, so
+    /// every array-valued rational in a RAW IFD collapsed to its first
+    /// component. Values are ExifTool's own output for
+    /// tests/../combined-samples/DNG.dng.
+    #[test]
+    fn dng_rational_arrays_keep_every_component() {
+        // 0xC628 AsShotNeutral, RATIONAL[3] -> "0.592408 1 0.501692"
+        let as_shot = le_rationals(&[(592408, 1000000), (1, 1), (501692, 1000000)]);
+        assert_eq!(
+            raw_bytes_to_simple_tag_value(&as_shot, 5, 3, ByteOrder::LittleEndian).as_string(),
+            Some("0.592408 1 0.501692")
+        );
+
+        // 0xC627 AnalogBalance, RATIONAL[3] -> "1 1 1", not "1/1"
+        let analog = le_rationals(&[(1, 1), (1, 1), (1, 1)]);
+        assert_eq!(
+            raw_bytes_to_simple_tag_value(&analog, 5, 3, ByteOrder::LittleEndian).as_string(),
+            Some("1 1 1")
+        );
+    }
+
+    /// ColorMatrix1/2 are SRATIONAL[9] and carry negatives, which is why the
+    /// signed path needs the same treatment as the unsigned one.
+    #[test]
+    fn signed_rational_arrays_keep_sign_and_every_component() {
+        let pairs: [(i32, i32); 9] = [
+            (6159, 10000),
+            (-945, 10000),
+            (-745, 10000),
+            (-6846, 10000),
+            (13563, 10000),
+            (3684, 10000),
+            (-802, 10000),
+            (1086, 10000),
+            (7555, 10000),
+        ];
+        let bytes: Vec<u8> = pairs
+            .iter()
+            .flat_map(|(n, d)| {
+                let mut v = n.to_le_bytes().to_vec();
+                v.extend_from_slice(&d.to_le_bytes());
+                v
+            })
+            .collect();
+        assert_eq!(
+            raw_bytes_to_simple_tag_value(&bytes, 10, 9, ByteOrder::LittleEndian).as_string(),
+            Some("0.6159 -0.0945 -0.0745 -0.6846 1.3563 0.3684 -0.0802 0.1086 0.7555")
+        );
+    }
+
+    /// A single rational must keep its existing representation -- the fix is
+    /// additive, and nothing that reads scalar rationals should shift.
+    #[test]
+    fn single_rationals_are_untouched() {
+        let one = le_rationals(&[(592408, 1000000)]);
+        let value = raw_bytes_to_simple_tag_value(&one, 5, 1, ByteOrder::LittleEndian);
+        assert!(value.is_rational(), "single rational must stay a Rational");
+    }
+
+    /// ExifTool prints CalibrationIlluminant1/2 through the same %lightSource
+    /// hash LightSource (0x9208) uses -- Exif.pm:3639. Only 0x9208 was routed
+    /// to that table, so the DNG pair reported raw 17 and 21.
+    #[test]
+    fn dng_calibration_illuminants_print_through_the_light_source_table() {
+        for (tag, raw, expected) in [
+            (0xC65Au16, 17u16, "Standard Light A"),
+            (0xC65B, 21, "D65"),
+            (0xC65A, 23, "D50"),
+            (0xC65B, 255, "Other"),
+        ] {
+            assert_eq!(
+                format_exif_display_value(tag, &raw.to_le_bytes(), 3, 1, ByteOrder::LittleEndian),
+                Some(expected.to_string()),
+                "tag {tag:#06X} value {raw}"
+            );
+        }
+    }
+
+    /// SHORT and LONG dropped `value_count` exactly as the rational branches
+    /// did. BitsPerSample is SHORT[3]: ExifTool prints "8 8 8", oxidex printed
+    /// "8". This reaches past DNG -- it also closed CR2:BitsPerSample,
+    /// CR2:RawImageSegmentation and MRW:SubjectArea.
+    #[test]
+    fn short_and_long_arrays_keep_every_component() {
+        let three_shorts: Vec<u8> = [8u16, 8, 8].iter().flat_map(|v| v.to_le_bytes()).collect();
+        assert_eq!(
+            raw_bytes_to_simple_tag_value(&three_shorts, 3, 3, ByteOrder::LittleEndian).as_string(),
+            Some("8 8 8")
+        );
+
+        let two_longs: Vec<u8> = [3040u32, 2014]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        assert_eq!(
+            raw_bytes_to_simple_tag_value(&two_longs, 4, 2, ByteOrder::LittleEndian).as_string(),
+            Some("3040 2014")
+        );
+
+        // Big-endian must agree -- TIFF is either order.
+        let be_shorts: Vec<u8> = [1u16, 2, 3].iter().flat_map(|v| v.to_be_bytes()).collect();
+        assert_eq!(
+            raw_bytes_to_simple_tag_value(&be_shorts, 3, 3, ByteOrder::BigEndian).as_string(),
+            Some("1 2 3")
+        );
+
+        // A single SHORT stays an integer, not a one-element string.
+        let one = 8u16.to_le_bytes();
+        assert!(
+            raw_bytes_to_simple_tag_value(&one, 3, 1, ByteOrder::LittleEndian)
+                .as_string()
+                .is_none(),
+            "scalar SHORT must keep its integer representation"
+        );
     }
 }
