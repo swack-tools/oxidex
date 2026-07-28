@@ -246,7 +246,7 @@ def save_sweep_state(path, data):
     write_json_atomic(path, data)
 
 
-def collect_green_stamps(home, squads, cursor):
+def collect_green_stamps(home, squads, cursor, repo_root=None, run_git=None, log_fn=print):
     """spec M4 step 2: for every squad, the newest squad-status head
     entry (status="consumed", work_done, carrying a squad_sha) whose ts
     is newer than that squad's cursor entry. Reuses
@@ -310,8 +310,36 @@ def collect_green_stamps(home, squads, cursor):
         consumed.sort(key=squad_merge_loop.stamp_order_key)
         _newest_sha, newest_entry = consumed[-1]
         formats = sorted({entry.get("format") for _sha, entry in consumed if entry.get("format")})
+        squad_sha = newest_entry["squad_sha"]
+        # A stamp records the squad tip AT STAMP TIME. Nothing kept that sha
+        # reachable afterwards, and squad branches get recut routinely --
+        # should_recut does it whenever a branch drifts
+        # DEFAULT_RECUT_BEHIND_COMMITS behind origin/main. Every stamp taken
+        # before a recut then points at a commit built on the OLD base, which
+        # merges into the fresh sweep branch as a guaranteed conflict.
+        # Measured 2026-07-28: the sweep logged "cross-squad conflict merging
+        # squad/exif-core @ a2290721f7d1" round after round while
+        # squad/exif-core had long since been recut to 4a9db27b. Skip a stamp
+        # whose sha is no longer contained in its own branch; the merger will
+        # re-stamp the work against the current tip.
+        if repo_root is not None and run_git is not None:
+            rc, _out, _err = run_git(
+                ["merge-base", "--is-ancestor", squad_sha, f"squad/{squad}"], repo_root)
+            if rc != 0:
+                log_fn(
+                    f"skipping stale stamp for squad/{squad} @ {squad_sha[:12]}: no longer "
+                    f"contained in squad/{squad} (recut since it was stamped)"
+                )
+                # The cursor still advances below, so the dead stamp does not
+                # resurface as news on every subsequent poll.
+                new_cursor["squads"][squad] = {
+                    "last_ts": newest_entry.get("ts"), "last_squad_sha": squad_sha,
+                    **({"last_ts_epoch": float(newest_entry["ts_epoch"])}
+                       if newest_entry.get("ts_epoch") is not None else {}),
+                }
+                continue
         stamps[squad] = {
-            "squad_sha": newest_entry["squad_sha"], "ts": newest_entry.get("ts"), "formats": formats,
+            "squad_sha": squad_sha, "ts": newest_entry.get("ts"), "formats": formats,
         }
         cursor_entry = {
             "last_ts": newest_entry.get("ts"), "last_squad_sha": newest_entry["squad_sha"],
@@ -1189,7 +1217,8 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
         log_fn(f"preflight: stale lock(s) {health['stale']} -- informational, not a hard stop")
 
     cursor = load_sweep_state(sweep_state_path)
-    stamps, new_cursor = collect_green_stamps(home, squads, cursor)
+    stamps, new_cursor = collect_green_stamps(
+        home, squads, cursor, repo_root=repo_root, run_git=run_git, log_fn=log_fn)
     if not stamps:
         log_fn("no news since last sweep -- nothing to do")
         return {"status": "no_news", "preflight": health}

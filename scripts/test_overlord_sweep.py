@@ -1967,3 +1967,64 @@ class LintFailureMustNotStallForeverTests(unittest.TestCase):
         self.assertFalse(result["lint_passed"])
         self.assertEqual(result["offenders"], [])
         self.assertEqual(sorted(result["surviving_squads"]), ["canon", "xmp"])
+
+
+class StaleStampsMustNotBeMergedTests(unittest.TestCase):
+    """A green stamp records the squad tip AT STAMP TIME, and nothing keeps
+    that sha reachable afterwards.
+
+    Squad branches are recut routinely -- should_recut fires whenever one
+    drifts DEFAULT_RECUT_BEHIND_COMMITS behind origin/main -- so every stamp
+    taken before a recut points at a commit built on the OLD base. Merging it
+    into a freshly cut sweep branch is a guaranteed conflict. Measured
+    2026-07-28: the sweep logged "cross-squad conflict merging
+    squad/exif-core @ a2290721f7d1" round after round while squad/exif-core
+    had long since been recut.
+    """
+
+    def _home_with_stamp(self, tmp, squad, squad_sha):
+        import overlord_sweep, squad_merge_loop
+        home = Path(tmp)
+        path = squad_merge_loop.squad_status_file(home, squad)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"heads": {"h1": {
+            "status": "consumed", "work_done": True, "squad_sha": squad_sha,
+            "ts": "2026-07-28T00:00:00", "ts_epoch": 1785000000.0, "format": "CR2",
+        }}}))
+        return home
+
+    def test_a_stamp_whose_sha_left_the_branch_is_skipped(self):
+        import overlord_sweep
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home_with_stamp(tmp, "exif-core", "a2290721f7d1")
+            logged = []
+            # is-ancestor fails: the sha is no longer contained in the branch.
+            stamps, cursor = overlord_sweep.collect_green_stamps(
+                home, ["exif-core"], {}, repo_root=Path("/fake"),
+                run_git=lambda argv, repo: (1, "", "not an ancestor"),
+                log_fn=logged.append,
+            )
+            self.assertEqual(stamps, {}, "a stale stamp must not be handed to the merger")
+            self.assertIn("skipping stale stamp", " ".join(logged))
+            # The cursor must still advance, or the dead stamp is re-read every poll.
+            self.assertEqual(
+                cursor["squads"]["exif-core"]["last_squad_sha"], "a2290721f7d1")
+
+    def test_a_stamp_still_on_the_branch_is_kept(self):
+        import overlord_sweep
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home_with_stamp(tmp, "canon", "4a9db27bcafe")
+            stamps, _cursor = overlord_sweep.collect_green_stamps(
+                home, ["canon"], {}, repo_root=Path("/fake"),
+                run_git=lambda argv, repo: (0, "", ""), log_fn=lambda *a: None,
+            )
+            self.assertEqual(stamps["canon"]["squad_sha"], "4a9db27bcafe")
+
+    def test_without_a_run_git_the_check_is_skipped_not_guessed(self):
+        # Conservative in the same direction as the rest of the module: no
+        # git access means no evidence, so nothing is accused of staleness.
+        import overlord_sweep
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home_with_stamp(tmp, "xmp", "deadbeef1234")
+            stamps, _cursor = overlord_sweep.collect_green_stamps(home, ["xmp"], {})
+            self.assertEqual(stamps["xmp"]["squad_sha"], "deadbeef1234")
