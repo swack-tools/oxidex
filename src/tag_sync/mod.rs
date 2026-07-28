@@ -670,13 +670,20 @@ mod tests {
     fn parse_domain_yaml_recovers_subdirectory_tags_listx_omits() {
         let yaml = include_str!("../../oxidex-tags-core/src/core_tags.yaml");
         let records = parse_domain_yaml(yaml);
-        assert!(records.len() > 1000, "parsed only {} records", records.len());
+        assert!(
+            records.len() > 1000,
+            "parsed only {} records",
+            records.len()
+        );
 
         for needed in ["ExifOffset", "GPSInfo", "InteropOffset"] {
             let found = records
                 .iter()
                 .find(|r| r.name == needed && r.table == "Exif::Main");
-            assert!(found.is_some(), "{needed} was not recovered from the registry");
+            assert!(
+                found.is_some(),
+                "{needed} was not recovered from the registry"
+            );
         }
     }
 
@@ -710,6 +717,9 @@ mod tests {
         assert_eq!(exif.type_name.as_deref(), Some("int32u"));
         let desc = back.iter().find(|r| r.name == "ImageDescription").unwrap();
         assert!(desc.writable);
-        assert_eq!(desc.description.as_deref(), Some(r#"a "quoted" description"#));
+        assert_eq!(
+            desc.description.as_deref(),
+            Some(r#"a "quoted" description"#)
+        );
     }
 }
