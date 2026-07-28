@@ -48,6 +48,11 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
                 | 0xC62D // BayerGreenSplit
                 | 0xC632 // AntiAliasStrength
                 | 0xC65C // BestQualityScale
+                | 0xC616 // CFAPlaneColor
+                | 0xC617 // CFALayout
+                | 0xC61E // DefaultScale
+                | 0xC61F // DefaultCropOrigin
+                | 0xC620 // DefaultCropSize
                 | 0xC68D // ActiveArea
         )
     {
@@ -747,8 +752,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             // CFAPattern2 stays under its physical SubIFD
                             // group for all formats, including NEF.
                             if tag_id == 0x828E {
+                                let group = if format == RawFormat::AdobeDNG { "EXIF" } else { sub_ifd_name };
                                 metadata.insert(
-                                    lookup_tag_name(tag_id, sub_ifd_name),
+                                    lookup_tag_name(tag_id, group),
                                     TagValue::new_string(format_cfa_pattern2(
                                         raw_bytes.as_ref(),
                                         value_count,
@@ -1078,6 +1084,65 @@ fn format_dng_integer_array(
     value_count: u32,
     byte_order: ByteOrder,
 ) -> Option<String> {
+    // CFAPlaneColor (0xC616): BYTE array, each byte maps to a color name.
+    if tag_id == 0xC616 && field_type == 1 {
+        let count = usize::try_from(value_count).ok()?;
+        let values = bytes.get(..count)?;
+        let colors: Option<Vec<&str>> = values.iter().map(|&b| match b {
+            0 => Some("Red"),
+            1 => Some("Green"),
+            2 => Some("Blue"),
+            3 => Some("Cyan"),
+            4 => Some("Magenta"),
+            5 => Some("Yellow"),
+            6 => Some("White"),
+            _ => None,
+        }).collect();
+        return Some(colors?.join(","));
+    }
+    // CFALayout (0xC617): SHORT with PrintConv table.
+    if tag_id == 0xC617 && field_type == 3 && value_count >= 1 {
+        let value = read_tiff_u16(bytes, byte_order)?;
+        let layout = match value {
+            1 => "Rectangular",
+            2 => "Even columns offset down 1/2 row",
+            3 => "Even columns offset up 1/2 row",
+            4 => "Even rows offset right 1/2 column",
+            5 => "Even rows offset left 1/2 column",
+            6 => "Even rows offset up by 1/2 row, even columns offset left by 1/2 column",
+            7 => "Even rows offset up by 1/2 row, even columns offset right by 1/2 column",
+            8 => "Even rows offset down by 1/2 row, even columns offset left by 1/2 column",
+            9 => "Even rows offset down by 1/2 row, even columns offset right by 1/2 column",
+            _ => return None,
+        };
+        return Some(layout.to_string());
+    }
+    // DefaultScale (0xC61E): two RATIONALs.
+    if tag_id == 0xC61E && field_type == 5 && value_count >= 2 {
+        let num1 = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+        let den1 = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+        let num2 = read_tiff_u32(bytes.get(8..12)?, byte_order)?;
+        let den2 = read_tiff_u32(bytes.get(12..16)?, byte_order)?;
+        if den1 == 0 || den2 == 0 {
+            return None;
+        }
+        let val1 = if num1 % den1 == 0 { (num1 / den1).to_string() } else { format!("{}", num1 as f64 / den1 as f64) };
+        let val2 = if num2 % den2 == 0 { (num2 / den2).to_string() } else { format!("{}", num2 as f64 / den2 as f64) };
+        return Some(format!("{} {}", val1, val2));
+    }
+    // DefaultCropOrigin (0xC61F): two LONGs.
+    if tag_id == 0xC61F && field_type == 4 && value_count >= 2 {
+        let val1 = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+        let val2 = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+        return Some(format!("{} {}", val1, val2));
+    }
+    // DefaultCropSize (0xC620): two LONGs.
+    if tag_id == 0xC620 && field_type == 4 && value_count >= 2 {
+        let val1 = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+        let val2 = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+        return Some(format!("{} {}", val1, val2));
+    }
+
     let component_size = match tag_id {
         0xC619 if field_type == 3 => 2, // BlackLevelRepeatDim: SHORT[2]
         0xC68D if field_type == 4 => 4, // ActiveArea: LONG[4]
