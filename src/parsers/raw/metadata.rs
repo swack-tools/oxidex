@@ -408,7 +408,8 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut ifd_offset = first_ifd_offset;
     let mut ifd_index = 0;
 
-    // CR2 IFD0 thumbnail byte count for PreviewImage/PreviewImageLength
+    // CR2 IFD0 thumbnail offset and byte count
+    let mut cr2_thumbnail_offset: Option<u32> = None;
     let mut cr2_thumbnail_length: Option<u32> = None;
 
     // Add format-specific tag to identify file type
@@ -474,8 +475,17 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         continue; // Don't add pointer tag to metadata
                     }
 
+                    // CR2 IFD0: capture StripOffsets for the embedded thumbnail
+                    if format == RawFormat::CanonCR2
+                        && ifd_index == 0
+                        && *tag_id == 0x0111
+                        && bytes.len() >= 4
+                    {
+                        cr2_thumbnail_offset = Some(read_u32(bytes, byte_order));
+                    }
+
                     // CR2 IFD0: capture the StripByteCounts value for the
-                    // thumbnail JPEG preview (ExifTool EXIF:PreviewImage).
+                    // thumbnail JPEG preview (ExifTool EXIF:ThumbnailImage).
                     if format == RawFormat::CanonCR2
                         && ifd_index == 0
                         && *tag_id == 0x0117
@@ -952,6 +962,35 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 continue;
                             }
 
+                            // CR2: CFAPattern (0xA302) should be decoded and
+                            // named CR2CFAPattern under the EXIF group.
+                            if format == RawFormat::CanonCR2 && tag_id == 0xA302 {
+                                if let Some(decoded) =
+                                    decode_exif_cfa_pattern(raw_bytes.as_ref(), byte_order)
+                                {
+                                    metadata.insert(
+                                        "EXIF:CR2CFAPattern".to_string(),
+                                        TagValue::new_string(decoded),
+                                    );
+                                }
+                                continue;
+                            }
+
+                            // CR2: RawImageSegmentation (0xC640) prints all
+                            // components space-separated (exiftool: "1 1758 1758").
+                            if format == RawFormat::CanonCR2 && tag_id == 0xC640 {
+                                let formatted = format_multi_short(
+                                    raw_bytes.as_ref(),
+                                    value_count,
+                                    byte_order,
+                                );
+                                metadata.insert(
+                                    "EXIF:RawImageSegmentation".to_string(),
+                                    TagValue::new_string(formatted),
+                                );
+                                continue;
+                            }
+
                             let tag_name = if is_nef {
                                 lookup_tag_name(tag_id, "EXIF")
                             } else {
@@ -1020,16 +1059,22 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
             extract_dng_tags(&mut metadata);
         }
         RawFormat::CanonCR2 => {
-            // Emit EXIF:PreviewImage / PreviewImageLength from the IFD0
-            // thumbnail JPEG byte count (StripByteCounts, 0x0117).
+            // Emit EXIF:PreviewImageStart, ThumbnailLength, ThumbnailImage
+            // from the IFD0 thumbnail (StripOffsets/StripByteCounts).
+            if let Some(offset) = cr2_thumbnail_offset {
+                metadata.insert(
+                    "EXIF:PreviewImageStart".to_string(),
+                    TagValue::new_integer(offset as i64),
+                );
+            }
             if let Some(length) = cr2_thumbnail_length {
                 if length > 0 {
                     metadata.insert(
-                        "EXIF:PreviewImageLength".to_string(),
+                        "EXIF:ThumbnailLength".to_string(),
                         TagValue::new_integer(length as i64),
                     );
                     metadata.insert(
-                        "EXIF:PreviewImage".to_string(),
+                        "EXIF:ThumbnailImage".to_string(),
                         TagValue::new_string(format!(
                             "(Binary data {} bytes, use -b option to extract)",
                             length
@@ -2850,6 +2895,33 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         byte_order,
                     ) {
                         TagValue::new_string(value)
+                    } else if *tag_id == 0x0102 && *value_count > 1 {
+                        // BitsPerSample with multiple components: format all
+                        let count = usize::try_from(*value_count).unwrap_or(1);
+                        let component_size = if *field_type == 3 {
+                            2
+                        } else if *field_type == 4 {
+                            4
+                        } else {
+                            0
+                        };
+                        if component_size > 0 && bytes.len() >= count * component_size {
+                            let values: String = (0..count)
+                                .filter_map(|i| {
+                                    let start = i * component_size;
+                                    let chunk = bytes.get(start..start + component_size)?;
+                                    if component_size == 2 {
+                                        read_tiff_u16(chunk, byte_order).map(|v| v.to_string())
+                                    } else {
+                                        Some(read_u32(chunk, byte_order).to_string())
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            TagValue::new_string(values)
+                        } else {
+                            tag_value
+                        }
                     } else {
                         tag_value
                     };
@@ -4338,6 +4410,20 @@ fn format_cfa_repeat_pattern_dim(bytes: &[u8], byte_order: ByteOrder) -> Option<
     let rows = read_tiff_u16(bytes, byte_order)?;
     let cols = read_tiff_u16(bytes.get(2..)?, byte_order)?;
     Some(format!("{} {}", rows, cols))
+}
+
+/// Format multiple SHORT values as space-separated string.
+fn format_multi_short(bytes: &[u8], value_count: u32, byte_order: ByteOrder) -> String {
+    let count = usize::try_from(value_count).unwrap_or(0);
+    (0..count)
+        .filter_map(|i| {
+            let start = i * 2;
+            bytes.get(start..start + 2)
+                .and_then(|chunk| read_tiff_u16(chunk, byte_order))
+        })
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Emit the renamed embedded-image tags from one DNG SubIFD.
