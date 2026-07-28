@@ -3333,8 +3333,8 @@ fn map_x3f_property_name(name: &str) -> String {
         "EXPTIME" => "SigmaRaw:IntegrationTime".to_string(),
         "SHUTTER" => "SigmaRaw:ExposureTime".to_string(),
         "APERTURE" => "SigmaRaw:FNumber".to_string(),
-        "FLENGTH" => "EXIF:FocalLength".to_string(),
-        "FLEQ35MM" => "EXIF:FocalLengthIn35mmFormat".to_string(),
+        "FLENGTH" => "SigmaRaw:FocalLength".to_string(),
+        "FLEQ35MM" => "SigmaRaw:FocalLengthIn35mmFormat".to_string(),
         "ISO" => "SigmaRaw:ISO".to_string(),
         "WB" | "WBAL" => "SigmaRaw:WhiteBalance".to_string(),
         "EXPCOMP" => "SigmaRaw:ExposureCompensation".to_string(),
@@ -3452,7 +3452,7 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                             continue;
                                         }
                                         let bytes = raw_bytes.as_ref();
-                                        let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
+                                        let tag_name = lookup_tag_name(*tag_id, "EXIF");
                                         let tag_value = if let Some(value) =
                                             format_exif_display_value(
                                                 *tag_id,
