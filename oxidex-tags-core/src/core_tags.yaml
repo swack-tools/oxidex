@@ -379,6 +379,10 @@ tables:
         description: "Make tag"
   - name: Exif::Main
     tags:
+      - id: "0x0001"
+        name: "InteropIndex"
+        writable: false
+        description: "InteropIndex tag"
       - id: "0x0002"
         name: "InteropVersion"
         writable: false
