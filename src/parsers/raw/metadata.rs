@@ -425,8 +425,24 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         (RawFormat::PanasonicRW2, 0, 0x001A) => {
                             format!("{}:HighISOMultiplierBlue", ifd_name)
                         }
+                    // PanasonicRaw.pm IFD0 sensor border / dimension tags.
+                    // ExifTool reports these under the EXIF group.
+                    //   0x0004 => SensorTopBorder
+                    //   0x0005 => SensorLeftBorder
+                    //   0x0006 => SensorHeight
+                    //   0x0007 => SensorWidth
+                    //   0x0008 => SensorBottomBorder
                     (RawFormat::PanasonicRW2, 0, 0x0001) => {
                         "EXIF:PanasonicRawVersion".to_string()
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x0005) => {
+                        "EXIF:SensorLeftBorder".to_string()
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x0006) => {
+                        "EXIF:SensorHeight".to_string()
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x0008) => {
+                        "EXIF:SensorBottomBorder".to_string()
                     }
                     (RawFormat::PanasonicRW2, 0, 0x0002) => {
                         "EXIF:RawDataOffset".to_string()
@@ -445,6 +461,15 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // ResolutionUnit needs PrintConv; name set here,
                         // value formatting in tag_value chain below.
                         "EXIF:ResolutionUnit".to_string()
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x0115) => {
+                        "EXIF:SamplesPerPixel".to_string()
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x9217) => {
+                        "EXIF:SensingMethod".to_string()
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x9293) => {
+                        "EXIF:Saturation".to_string()
                     }
                         // TIFF/EP tag 0x9216 (TIFF-EPStandardID) lives in NEF
                         // IFD0. lookup_tag_name has no entry for it under the
