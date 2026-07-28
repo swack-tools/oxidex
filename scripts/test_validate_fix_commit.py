@@ -249,6 +249,39 @@ class TrailerTruthTests(unittest.TestCase):
                 ["tag-name-is-a-printconv-value:EXIF:Higher_resolution_image_exists"],
             )
 
+    def test_a_binary_data_shorthand_tag_is_not_mistaken_for_a_value(self):
+        # The false-positive class this rule must never have. ExifTool's
+        # binary-data tables name a tag as the VALUE of a numeric key --
+        # Canon.pm:7429 is `10 => 'BlackMaskTopBorder'` -- which is
+        # character-for-character a PrintConv row. Perl source alone cannot
+        # tell them apart; -listx can, because ExifTool already decided.
+        # Skipped rather than asserted when exiftool is absent, since the
+        # rule deliberately makes no accusation without it.
+        if not validate_fix_commit._exiftool_tag_names():
+            self.skipTest("exiftool not on PATH")
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = self._lib(
+                tmp,
+                Canon=(
+                    "%Image::ExifTool::Canon::SensorInfo = (\n"
+                    "    10 => 'BlackMaskTopBorder',\n"
+                    ");\n"
+                ),
+            )
+            for real in (
+                "Canon:BlackMaskTopBorder",
+                "Canon:BlackMaskRightBorder",
+                "Font:FontSubfamilyID",
+                "Font:NameTableVersion",
+            ):
+                self.assertEqual(
+                    check_trailer_truth(
+                        {"Tag": [real], "Perl-Ref": ["Canon.pm"]}, perl_lib=lib
+                    ),
+                    [],
+                    f"{real} is a real ExifTool tag and must not be flagged",
+                )
+
     def test_a_runtime_named_tag_is_still_accepted(self):
         # The class the corpus check deliberately protects, and which this
         # rule must not disturb. ExifTool's ProcessAPP12 names unknown fields

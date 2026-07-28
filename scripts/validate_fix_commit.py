@@ -102,6 +102,7 @@ import fnmatch
 import functools
 import json
 import re
+import xml.etree.ElementTree as ET  # nosec B405 -- parses only local exiftool output
 import shlex
 import subprocess
 import sys
@@ -827,13 +828,24 @@ def check_trailer_truth(trailers, perl_lib=None, samples_cache=None):
     # protects: REV/S0/STB1 appear in no table AND as no display value, so
     # they still draw no flag. Only names ExifTool prints as values, and
     # never defines as tags, are reported.
-    if perl_lib is not None:
+    #
+    # Perl source ALONE cannot decide this, and assuming it can produces false
+    # convictions. ExifTool's binary-data tables use a shorthand where the tag
+    # name is the VALUE of a numeric key -- Canon.pm:7429 is
+    # `10 => 'BlackMaskTopBorder'` -- which is character-for-character the
+    # shape of a PrintConv row like `1 => 'Uncompressed'`. Reading the corpus
+    # would flag BlackMaskTopBorder, FontSubfamilyID and NameTableVersion,
+    # all real tags. `-listx` resolves the ambiguity because ExifTool has
+    # already decided: real tags come out as <tag name=...>, display strings
+    # as <key><val>. Without it there is no evidence, so there is no flag.
+    listx_names = _exiftool_tag_names()
+    if perl_lib is not None and listx_names:
         corpus = _perl_lib_corpus(Path(perl_lib))
         if isinstance(corpus, bytes):
             corpus = corpus.decode("utf-8", errors="replace")
         for tag in tags:
             local = _tag_local_name(tag)
-            if _defines_tag(corpus, local):
+            if local in listx_names or _defines_tag(corpus, local):
                 continue
             if _is_print_conv_display_value(corpus, local):
                 flags.append(f"tag-name-is-a-printconv-value:{_flag_token(tag)}")
@@ -866,6 +878,33 @@ def _defines_tag(perl_text, name):
     key_form = rf"(?m)^\s*{re.escape(name)}\s*=>"
     name_form = rf"(?m)^\s*Name\s*=>\s*'{re.escape(name)}'"
     return bool(re.search(key_form, perl_text) or re.search(name_form, perl_text))
+
+
+_LISTX_TAG_NAMES = None
+
+
+def _exiftool_tag_names():
+    """Every tag name `exiftool -f -listx` reports, or None when unavailable.
+
+    Cached for the process: the dump is ~18 MB and the merger calls this per
+    commit. `None` (no exiftool, or a parse failure) means the caller must not
+    accuse -- same conservative direction as the rest of this module.
+    """
+    global _LISTX_TAG_NAMES
+    if _LISTX_TAG_NAMES is None:
+        names = set()
+        try:
+            blob = subprocess.run(  # nosec B603,B607
+                ["exiftool", "-f", "-listx"], capture_output=True, check=True
+            ).stdout
+            root = ET.fromstring(blob)  # nosec B314 -- local trusted binary
+            for table in root.iter("table"):
+                for tag in table.findall("tag"):
+                    names.add(tag.get("name", ""))
+        except (OSError, subprocess.SubprocessError, ET.ParseError):
+            names = set()
+        _LISTX_TAG_NAMES = names
+    return _LISTX_TAG_NAMES or None
 
 
 def _is_print_conv_display_value(perl_text, name):
