@@ -43,11 +43,16 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0x0143 // TileLength
+            0x0142 // TileWidth
+                | 0x0143 // TileLength
                 | 0x0144 // TileOffsets
                 | 0x0145 // TileByteCounts
                 | 0x014C // ThumbnailTIFF
                 | 0x0214 // ReferenceBlackWhite
+                | 0x0211 // YCbCrCoefficients
+                | 0x0212 // YCbCrSubSampling
+                | 0x0213 // YCbCrPositioning
+                | 0xC61D // WhiteLevel
                 | 0xC68E // MaskedAreas
                 | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
@@ -1103,6 +1108,12 @@ fn format_dng_integer_array(
             .collect();
         return Some(formatted?.join(" "));
     }
+    // YCbCrCoefficients (0x0211): RATIONAL[3] -> space-separated
+    if tag_id == 0x0211 && field_type == 5 && value_count >= 3 {
+        let values = bytes.get(..3 * 8)?;
+        let formatted = format_rational_array(values, 3, byte_order)?;
+        return Some(formatted);
+    }
     // ReferenceBlackWhite (0x0214): RATIONAL[6] -> space-separated
     if tag_id == 0x0214 && field_type == 5 && value_count >= 6 {
         let count = usize::try_from(value_count).ok()?;
@@ -1242,6 +1253,18 @@ fn format_dng_integer_array(
     };
 
     Some(formatted.join(" "))
+}
+
+/// Format a fixed-size RATIONAL array as space-separated decimal strings.
+fn format_rational_array(bytes: &[u8], count: usize, byte_order: ByteOrder) -> Option<String> {
+    let values = bytes.get(..count * 8)?;
+    let formatted: Option<Vec<String>> = values.chunks_exact(8).map(|chunk| {
+        let num = read_tiff_u32(chunk.get(..4)?, byte_order)?;
+        let den = read_tiff_u32(chunk.get(4..8)?, byte_order)?;
+        if den == 0 { return None; }
+        Some(format!("{}", num as f64 / den as f64))
+    }).collect();
+    Some(formatted?.join(" "))
 }
 
 fn read_tiff_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
@@ -1599,6 +1622,42 @@ fn format_exif_display_value(
             format_rational_as_string(bytes, byte_order)
         }
         // Contrast: SHORT[1].
+        // YCbCrPositioning: SHORT[1]. Exif.pm 0x0213 PrintConv, verbatim:
+        // 1 => 'Centered', 2 => 'Co-sited'
+        0x0213 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("Centered".to_string()),
+            2 => Some("Co-sited".to_string()),
+            _ => None,
+        },
+        // YCbCrSubSampling: SHORT[2]. Exif.pm PrintConv wraps components as
+        // "YCbCr4:2:0 (2 2)" etc.
+        0x0212 if field_type == 3 && value_count >= 2 && bytes.len() >= 4 => {
+            let h = read_tiff_u16(&bytes[0..2], byte_order)?;
+            let v = read_tiff_u16(&bytes[2..4], byte_order)?;
+            let pattern = match (h, v) {
+                (1, 1) => "YCbCr4:4:4 (1 1)",
+                (2, 1) => "YCbCr4:2:2 (2 1)",
+                (2, 2) => "YCbCr4:2:0 (2 2)",
+                (4, 1) => "YCbCr4:2:2 (4 1)",
+                (4, 2) => "YCbCr4:2:0 (4 2)",
+                _ => return None,
+            };
+            Some(pattern.to_string())
+        }
+        // YCbCrCoefficients: RATIONAL[3]. Exif.pm 0x0211 prints as space-separated
+        // numbers with no special PrintConv.
+        0x0211 if field_type == 5 && value_count >= 3 => {
+            let values = bytes.get(..3 * 8)?;
+            let formatted = format_rational_array(values, 3, byte_order)?;
+            Some(formatted)
+        }
+        // WhiteLevel (0xC61D) and TileWidth (0x0142) have no special
+        // PrintConv – they are plain integers.  The generic tag value path
+        // emits them correctly once the tag name is mapped to EXIF: via
+        // lookup_raw_tag_name.  No extra case needed here.
+        // YCbCrCoefficients (0x0211) is also handled by format_dng_integer_array
+        // for the SubIFD path.
+
         0xA408 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
             0 => Some("Normal".to_string()),
             1 => Some("Soft".to_string()),
