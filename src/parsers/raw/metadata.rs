@@ -3210,6 +3210,7 @@ fn parse_x3f_properties(data: &[u8], metadata: &mut MetadataMap) {
         if !name.is_empty() && !value.is_empty() {
             // Map property names to ExifTool-compatible tag names
             let tag_name = map_x3f_property_name(&name);
+            let value = convert_x3f_property_value(&name, &value).unwrap_or(value);
             metadata.insert(tag_name, TagValue::new_string(value));
         }
     }
@@ -3236,6 +3237,59 @@ fn read_utf16le_string(data: &[u8], offset: usize) -> String {
     String::from_utf16_lossy(&chars)
 }
 
+/// Applies the ValueConv/PrintConv ExifTool declares for X3F properties.
+///
+/// `map_x3f_property_name` only renamed properties; the values went in raw, so
+/// `FNumber` read `8.35419` where ExifTool prints `8.4` and `DateTimeOriginal`
+/// read `978309395` where ExifTool prints `2001:01:01 00:36:35`.
+///
+/// Returns `None` to leave a value untouched.
+fn convert_x3f_property_value(property: &str, value: &str) -> Option<String> {
+    match property {
+        // SigmaRaw.pm:154  PrintConv => 'sprintf("%.1f",$val)'
+        "APERTURE" => Some(format!("{:.1}", value.parse::<f64>().ok()?)),
+
+        // SigmaRaw.pm:263  ValueConv => 'ConvertUnixTime($val)'
+        "TIME" => format_unix_time_exiftool(value.parse::<i64>().ok()?),
+
+        // SigmaRaw.pm:190  ValueConv => '$val * 1e-6' (usec), then
+        // SigmaRaw.pm:191  PrintConv => PrintExposureTime
+        "EXPTIME" => Some(print_exposure_time(value.parse::<f64>().ok()? * 1e-6)),
+
+        // SigmaRaw.pm:257  PrintConv => PrintExposureTime (already seconds)
+        "SHUTTER" => Some(print_exposure_time(value.parse::<f64>().ok()?)),
+
+        _ => None,
+    }
+}
+
+/// ExifTool's `ConvertUnixTime`: seconds since the epoch, UTC, as
+/// `YYYY:MM:DD HH:MM:SS`.
+fn format_unix_time_exiftool(epoch_seconds: i64) -> Option<String> {
+    let days = epoch_seconds.div_euclid(86_400);
+    let secs = epoch_seconds.rem_euclid(86_400);
+    // Civil-from-days (Howard Hinnant's algorithm), shifted to a March-based year.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    Some(format!(
+        "{:04}:{:02}:{:02} {:02}:{:02}:{:02}",
+        y,
+        m,
+        d,
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    ))
+}
+
 /// Map X3F property names to ExifTool-compatible tag names
 fn map_x3f_property_name(name: &str) -> String {
     match name {
@@ -3243,7 +3297,12 @@ fn map_x3f_property_name(name: &str) -> String {
         "CAMMODEL" => "EXIF:Model".to_string(),
         "CAMSERIAL" => "MakerNotes:SerialNumber".to_string(),
         "FIRMWARE" => "MakerNotes:Firmware".to_string(),
-        "EXPTIME" => "SigmaRaw:ExposureTime".to_string(),
+        // SigmaRaw.pm:187 -- EXPTIME is IntegrationTime, NOT ExposureTime.
+        // That is SHUTTER (SigmaRaw.pm:254). Mapping EXPTIME to ExposureTime
+        // reported IntegrationTime's raw microseconds (24140) as the shutter
+        // speed, where ExifTool prints 1/108.
+        "EXPTIME" => "SigmaRaw:IntegrationTime".to_string(),
+        "SHUTTER" => "SigmaRaw:ExposureTime".to_string(),
         "APERTURE" => "SigmaRaw:FNumber".to_string(),
         "FLENGTH" => "SigmaRaw:FocalLength".to_string(),
         "FLEQ35MM" => "SigmaRaw:FocalLengthIn35mmFormat".to_string(),
@@ -5825,5 +5884,43 @@ mod rational_array_tests {
                 .is_none(),
             "scalar SHORT must keep its integer representation"
         );
+    }
+
+    /// X3F properties went in raw: `map_x3f_property_name` renamed them and
+    /// nothing applied ExifTool's ValueConv/PrintConv. Values are ExifTool's
+    /// own output for combined-samples/Sigma.x3f.
+    #[test]
+    fn x3f_properties_get_their_exiftool_conversions() {
+        // SigmaRaw.pm:154  sprintf("%.1f",$val)
+        assert_eq!(
+            convert_x3f_property_value("APERTURE", "8.35419").as_deref(),
+            Some("8.4")
+        );
+        // SigmaRaw.pm:263  ConvertUnixTime($val)
+        assert_eq!(
+            convert_x3f_property_value("TIME", "978309395").as_deref(),
+            Some("2001:01:01 00:36:35")
+        );
+        // SigmaRaw.pm:190-191  $val * 1e-6 then PrintExposureTime
+        assert_eq!(
+            convert_x3f_property_value("EXPTIME", "24140").as_deref(),
+            Some("1/41")
+        );
+        // SigmaRaw.pm:257  PrintExposureTime, already seconds
+        assert_eq!(
+            convert_x3f_property_value("SHUTTER", "0.00929").as_deref(),
+            Some("1/108")
+        );
+        // Anything without a declared conversion is left alone.
+        assert_eq!(convert_x3f_property_value("CAMMODEL", "SD9"), None);
+    }
+
+    /// EXPTIME is IntegrationTime (SigmaRaw.pm:187); ExposureTime is SHUTTER
+    /// (SigmaRaw.pm:254). Mapping EXPTIME to ExposureTime reported
+    /// IntegrationTime's raw microseconds as the shutter speed.
+    #[test]
+    fn x3f_exptime_is_integration_time_not_exposure_time() {
+        assert_eq!(map_x3f_property_name("EXPTIME"), "SigmaRaw:IntegrationTime");
+        assert_eq!(map_x3f_property_name("SHUTTER"), "SigmaRaw:ExposureTime");
     }
 }
