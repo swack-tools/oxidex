@@ -74,6 +74,9 @@ const KNOWN_TAGS: &[&str] = &[
     "Manufacturer",
     "Model",
     "Software",
+    "TagQ",
+    "TagR",
+    "ThmLen",
     "CAM1",
     "COLOR2",
     "COLOR3",
@@ -271,9 +274,13 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             // Agfa SR84 data), so the canonical tag must be emitted here
             // rather than only by the AGFA-identified parser.
             if tag_name == "CameraType" {
+                let camera_type = match value.as_str() {
+                    "DCHT" => "SR84".to_string(),
+                    _ => value.clone(),
+                };
                 metadata.insert(
                     "APP12:CameraType".to_string(),
-                    TagValue::String(value.clone()),
+                    TagValue::String(camera_type),
                 );
             }
 
@@ -748,6 +755,43 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             // as a string in the APP12 group (values like "v").
             if key.eq_ignore_ascii_case("TagS") {
                 metadata.insert("APP12:TagS".to_string(), TagValue::String(value.clone()));
+            }
+
+            // ExifTool exposes ThmLen (thumbnail length in bytes) in the APP12 group.
+            if key.eq_ignore_ascii_case("ThmLen") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:ThmLen".to_string(), app12_value);
+            }
+
+            // ExifTool exposes TagQ as APP12:TagQ (an integer diagnostic field).
+            if key.eq_ignore_ascii_case("TagQ") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:TagQ".to_string(), app12_value);
+            }
+
+            // ExifTool exposes TagR as APP12:TagR (an integer diagnostic field).
+            if key.eq_ignore_ascii_case("TagR") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:TagR".to_string(), app12_value);
+            }
+
+            // ExifTool exposes Zoom as APP12:Zoom (a rational/float value).
+            // Olympus:Zoom is still emitted via the generic fallback below.
+            if key.eq_ignore_ascii_case("Zoom") {
+                let app12_value = value
+                    .parse::<f64>()
+                    .map(TagValue::Float)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:Zoom".to_string(), app12_value);
             }
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
