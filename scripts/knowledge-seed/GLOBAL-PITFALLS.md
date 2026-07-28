@@ -35,3 +35,7 @@ is the checked-in seed (`scripts/knowledge-seed/`). Cap: 3000 chars / 12 bullets
 - [seed] Scope structured-document scans (XML/XMP) to the exact position ExifTool
   reads. Do not join values from sibling structures nested elsewhere (e.g.
   mwg-rs:Regions copies of ArtworkOrObject). (XMP ArtworkTitle)
+- [seed] Cite every numeric constant you add, and check each against the ExifTool table
+  it comes from (language/encoding/enum IDs especially). Passing the recheck does NOT
+  validate them: a TTF fix shipped Mac Spanish=12 (Arabic) and Italian=4 (Dutch) beside
+  two correct IDs, and the sample only exercised the correct pair.

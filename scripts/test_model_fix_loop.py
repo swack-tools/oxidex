@@ -1,6 +1,13 @@
+import datetime
+import difflib
+import email.utils
+import io
 import json
 import multiprocessing
 import os
+import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -9,6 +16,7 @@ import urllib.error
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
+import model_fix_loop
 from model_fix_loop import (
     ARCHITECTURE_PRIMER,
     KNOWN_PITFALLS,
@@ -18,8 +26,11 @@ from model_fix_loop import (
     TABLE_JOB_CLAIM_PREFIX,
     _dedupe_machine_entries,
     _entry_is_human,
+    _extract_test_failure_context,
     _is_rejection_entry,
     _normalize_model_config,
+    _quota_exhausted_message,
+    _retry_after_seconds,
     _select_tier,
     _state_locked,
     _table_port_pseudo_gap,
@@ -36,6 +47,10 @@ from model_fix_loop import (
     foundation_job_claim_key,
     gather_live_claims,
     load_foundation_jobs,
+    DEFAULT_DEADLINE_SECONDS,
+    INFRA_FAILURE_PREFIX,
+    ModelCallDeadlineExceeded,
+    ModelQuotaExhausted,
     load_tag_state,
     mark_held_by_foundation,
     normalize_table_job_config,
@@ -65,7 +80,15 @@ from model_fix_loop import (
     extract_cache_usage,
     cluster_key,
     compact_messages,
+    compose_learning_block,
+    count_diff_format_failures,
+    build_diff_format_remediation,
     DEFAULT_GOVERNOR_BURST,
+    DEFAULT_LEARNING_BUDGET_TOKENS,
+    DEFAULT_QUARANTINE_MAX_ENTRIES,
+    LEARNING_SECTION_ORDER,
+    QUARANTINE_FLAGS_DISPLAY_CHARS,
+    QUARANTINE_REASON_DISPLAY_CHARS,
     detect_duplicate_tag_insertion,
     estimate_tokens,
     expand_gaps_to_tags,
@@ -76,13 +99,24 @@ from model_fix_loop import (
     file_content_at_head,
     find_implemented_sibling,
     fix_gap,
+    format_lessons_tail,
+    format_own_quarantine,
     format_previous_attempts,
     load_global_pitfalls,
     load_module_playbook,
     format_sweep_review_history,
+    read_lessons_tail_events,
+    read_own_quarantine,
+    select_module_lessons,
+    squad_from_worker,
+    describe_missing_path,
+    FORCED_DIFF_DEMAND,
     git_apply,
+    git_apply_with_rung,
+    GIT_APPLY_LADDER,
     git_checkout_clean,
     git_commit,
+    render_request_budget_footer,
     governor_acquire,
     governor_report,
     load_landed_tags,
@@ -92,6 +126,7 @@ from model_fix_loop import (
     make_single_tag_gap,
     models_for_phase,
     new_oxidex_only_keys,
+    newly_duplicated_emissions,
     parse_request_range,
     refresh_worktree,
     resolve_request,
@@ -336,6 +371,43 @@ class ExtractDiffTests(unittest.TestCase):
         self.assertTrue(diff.startswith("--- a/foo.rs"))
 
 
+class ExtractTestFailureContextTests(unittest.TestCase):
+    def test_surfaces_panic_pushed_past_tail_window_by_later_binaries(self):
+        panic_block = (
+            "running 3 tests\n"
+            "test jpeg::app12_stb2 ... FAILED\n\n"
+            "failures:\n\n"
+            "---- jpeg::app12_stb2 stdout ----\n"
+            "thread 'jpeg::app12_stb2' panicked at src/parsers/jpeg/app12.rs:88:9:\n"
+            "assertion `left == right` failed\n"
+            "  left: 3\n"
+            " right: 2\n\n"
+            "failures:\n"
+            "    jpeg::app12_stb2\n\n"
+            "test result: FAILED. 2 passed; 1 failed; 0 ignored\n\n"
+        )
+        # Simulate many unrelated, PASSING test binaries printing after the
+        # real failure -- this is what pushed the panic out of any blind
+        # tail-keep in the observed live regressions (nikon-1, canon-3, etc).
+        noise = "".join(f"running 50 tests\ntest mod{i}::case ... ok\n" * 1 for i in range(2000))
+        output = panic_block + noise
+        self.assertGreater(len(output), 20000)
+
+        extracted = _extract_test_failure_context(output, max_chars=8000)
+
+        self.assertIn("panicked at src/parsers/jpeg/app12.rs:88:9", extracted)
+        self.assertIn("assertion `left == right` failed", extracted)
+        self.assertLessEqual(len(extracted), 8000 + 20)
+
+    def test_falls_back_to_blind_tail_when_no_markers_found(self):
+        output = "line\n" * 5000
+        extracted = _extract_test_failure_context(output, max_chars=100)
+        self.assertEqual(extracted, output[-100:])
+
+    def test_empty_output_returns_empty(self):
+        self.assertEqual(_extract_test_failure_context("", max_chars=100), "")
+
+
 class EstimateTokensTests(unittest.TestCase):
     def test_roughly_four_chars_per_token(self):
         self.assertEqual(estimate_tokens("a" * 400), 100)
@@ -419,6 +491,24 @@ class AssemblePromptSectionsTests(unittest.TestCase):
         sections = [("protected", "p" * 100_000), ("elastic", "e" * 100_000)]
         result = assemble_prompt_sections(sections, {"elastic": 0}, max_tokens=10)
         self.assertIn("p" * 100_000, result)  # untouched even though huge
+
+    def test_shrink_order_comes_from_budgets_not_from_render_order(self):
+        """Render order and shrink priority are independent axes, and this
+        pins that they stay independent: since 2026-07-26 build_prompt
+        renders most-cacheable-first (PROMPT_SECTION_ORDER) while still
+        shedding least-essential-first (PROMPT_SHRINK_PRIORITY). Deriving
+        one from the other -- which the single `sections` list used to
+        invite -- would silently start truncating parser source before
+        attempt history."""
+        from model_fix_loop import assemble_prompt_sections
+        sections = [("rendered_first", "a" * 4000), ("rendered_second", "b" * 4000)]
+        # budgets deliberately lists them in the OPPOSITE order.
+        result = assemble_prompt_sections(
+            sections, {"rendered_second": 0, "rendered_first": 0}, max_tokens=1200,
+        )
+        self.assertIn("a" * 4000, result)          # rendered first, shrunk last
+        self.assertLess(result.count("b"), 4000)   # rendered last, shrunk first
+        self.assertLess(result.index("a"), result.index("b"))  # order preserved
 
 
 class CompactMessagesTests(unittest.TestCase):
@@ -863,6 +953,380 @@ class CallModelRetryTests(unittest.TestCase):
         self.assertLess(state["tokens"], DEFAULT_GOVERNOR_BURST)  # slots were spent
 
 
+class CallModelDeadlineTests(unittest.TestCase):
+    """A slow-drip stream must be killed and replayed.
+
+    urlopen's `timeout` only bounds a single read, and every arriving SSE
+    chunk resets it -- so a provider trickling content satisfies it
+    indefinitely. Measured on theclawbay.com: one call ran 2118s against a
+    configured timeout=1200. deadline_seconds is the wall-clock bound that
+    actually cuts that off.
+    """
+
+    def _sse(self, *texts):
+        return [
+            ('data: ' + json.dumps({"choices": [{"delta": {"content": t}}]}) + '\n').encode()
+            for t in texts
+        ] + [b'data: [DONE]\n']
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_slow_stream_is_abandoned_and_replayed(self, mock_urlopen):
+        # A stream that never stalls on any single read (so `timeout` can
+        # never fire) but takes 10s of wall clock per chunk.
+        slow_cm = MagicMock()
+        slow_cm.__iter__.return_value = iter(self._sse("a", "b", "c", "d"))
+        slow_ctx = MagicMock()
+        slow_ctx.__enter__.return_value = slow_cm
+
+        ok_cm = MagicMock()
+        ok_cm.__iter__.return_value = iter(self._sse("recovered"))
+        ok_ctx = MagicMock()
+        ok_ctx.__enter__.return_value = ok_cm
+
+        mock_urlopen.side_effect = [slow_ctx, ok_ctx]
+        # Attempt 1 starts at t=0 and is cut off at t=30 (past the 25s
+        # deadline) partway through the stream; the replay starts at t=40
+        # and streams briskly, so it finishes well inside its own window.
+        clock = iter([0, 0, 10, 20, 30] + [40, 40, 41, 42, 43] + [44] * 20)
+        with patch("model_fix_loop.time.monotonic", lambda: next(clock)):
+            reply = call_model(
+                [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "low",
+                stream=True, timeout=1200, deadline_seconds=25,
+                sleep_fn=lambda s: None,
+            )
+        # First attempt was cut off mid-stream; the replay's reply is returned.
+        self.assertEqual(reply, "recovered")
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_deadline_is_reported_to_governor_as_not_rate_limited(self, mock_urlopen):
+        # A slow provider is not a rate limit. Reporting it as one would
+        # put the whole fleet into a global cooldown over one sluggish
+        # call, which is the opposite of what should happen.
+        slow_cm = MagicMock()
+        slow_cm.__iter__.return_value = iter(self._sse("a", "b", "c"))
+        slow_ctx = MagicMock()
+        slow_ctx.__enter__.return_value = slow_cm
+        ok_cm = MagicMock()
+        ok_cm.__iter__.return_value = iter(self._sse("ok"))
+        ok_ctx = MagicMock()
+        ok_ctx.__enter__.return_value = ok_cm
+        mock_urlopen.side_effect = [slow_ctx, ok_ctx]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gov = Path(tmpdir) / "gov.json"
+            # Attempt 1 blows the 15s deadline at t=20; the replay starts
+            # at t=30 and completes promptly.
+            clock = iter([0, 0, 10, 20] + [30, 30, 31, 32, 33] + [34] * 20)
+            with patch("model_fix_loop.time.monotonic", lambda: next(clock)):
+                call_model(
+                    [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "low",
+                    stream=True, deadline_seconds=15, sleep_fn=lambda s: None,
+                    governor_path=gov,
+                )
+            state = json.loads(gov.read_text())
+        self.assertEqual(state["consecutive_limited"], 0)
+        self.assertEqual(state["cooldown_until"], 0.0)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_gives_up_after_max_retries_on_persistent_slowness(self, mock_urlopen):
+        def always_slow(*_a, **_kw):
+            cm = MagicMock()
+            cm.__iter__.return_value = iter(self._sse("a", "b", "c"))
+            ctx = MagicMock()
+            ctx.__enter__.return_value = cm
+            return ctx
+
+        mock_urlopen.side_effect = always_slow
+        clock = iter(range(0, 100000, 10))
+        with patch("model_fix_loop.time.monotonic", lambda: next(clock)):
+            with self.assertRaises(ModelCallDeadlineExceeded):
+                call_model(
+                    [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "low",
+                    stream=True, deadline_seconds=5, max_retries=2,
+                    sleep_fn=lambda s: None,
+                )
+        # 1 initial attempt + 2 retries: persistent slowness eventually
+        # gives up rather than replaying forever.
+        self.assertEqual(mock_urlopen.call_count, 3)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_fast_stream_under_deadline_is_untouched(self, mock_urlopen):
+        cm = MagicMock()
+        cm.__iter__.return_value = iter(self._sse("hello ", "world"))
+        ctx = MagicMock()
+        ctx.__enter__.return_value = cm
+        mock_urlopen.side_effect = [ctx]
+        clock = iter([0, 0, 1, 2, 3, 4, 5, 6])
+        with patch("model_fix_loop.time.monotonic", lambda: next(clock)):
+            reply = call_model(
+                [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "low",
+                stream=True, deadline_seconds=120, sleep_fn=lambda s: None,
+            )
+        self.assertEqual(reply, "hello world")
+        self.assertEqual(mock_urlopen.call_count, 1)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_socket_timeout_is_clamped_to_remaining_deadline(self, mock_urlopen):
+        # Otherwise a connection that stalls just before the deadline
+        # still blocks for the full (much larger) `timeout` first.
+        cm = MagicMock()
+        cm.read.return_value = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
+        ctx = MagicMock()
+        ctx.__enter__.return_value = cm
+        mock_urlopen.side_effect = [ctx]
+        clock = iter([0, 0, 0, 0, 0])
+        with patch("model_fix_loop.time.monotonic", lambda: next(clock)):
+            call_model(
+                [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "low",
+                stream=False, timeout=1200, deadline_seconds=120,
+                sleep_fn=lambda s: None,
+            )
+        self.assertEqual(mock_urlopen.call_args.kwargs["timeout"], 120)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_deadline_none_restores_unbounded_behavior(self, mock_urlopen):
+        cm = MagicMock()
+        cm.__iter__.return_value = iter(self._sse("a", "b"))
+        ctx = MagicMock()
+        ctx.__enter__.return_value = cm
+        mock_urlopen.side_effect = [ctx]
+        with patch("model_fix_loop.time.monotonic", lambda: 10**9):
+            reply = call_model(
+                [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "low",
+                stream=True, deadline_seconds=None, sleep_fn=lambda s: None,
+            )
+        self.assertEqual(reply, "ab")
+        self.assertEqual(mock_urlopen.call_args.kwargs["timeout"], 120)
+
+    def test_config_default_is_120_seconds(self):
+        config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
+        self.assertEqual(config["deadline_seconds"], DEFAULT_DEADLINE_SECONDS)
+        self.assertEqual(config["deadline_seconds"], 120)
+
+    def test_config_deadline_is_overridable(self):
+        config = _normalize_model_config({
+            "base_url": "u", "api_key": "k", "models": ["m"], "deadline_seconds": 45,
+        })
+        self.assertEqual(config["deadline_seconds"], 45)
+
+
+class RetryAfterTests(unittest.TestCase):
+    """A 429's Retry-After is the server stating its own wait window --
+    strictly better information than any backoff curve we can guess."""
+
+    def test_parses_delta_seconds(self):
+        self.assertEqual(_retry_after_seconds({"Retry-After": "30"}), 30.0)
+
+    def test_parses_http_date(self):
+        # 60s in the future relative to the injected clock.
+        when = datetime.datetime(2026, 7, 25, 12, 1, 0, tzinfo=datetime.timezone.utc)
+        header = email.utils.format_datetime(when)
+        now = datetime.datetime(2026, 7, 25, 12, 0, 0, tzinfo=datetime.timezone.utc).timestamp()
+        self.assertAlmostEqual(
+            _retry_after_seconds({"Retry-After": header}, now_fn=lambda: now), 60.0, places=0
+        )
+
+    def test_absent_or_malformed_returns_none(self):
+        self.assertIsNone(_retry_after_seconds(None))
+        self.assertIsNone(_retry_after_seconds({}))
+        self.assertIsNone(_retry_after_seconds({"Retry-After": ""}))
+        self.assertIsNone(_retry_after_seconds({"Retry-After": "soon-ish"}))
+
+    def test_past_http_date_clamps_to_zero_not_negative(self):
+        past = email.utils.format_datetime(
+            datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+        )
+        self.assertEqual(_retry_after_seconds({"Retry-After": past}), 0.0)
+
+    def test_retry_after_raises_the_cooldown_floor(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gov = Path(tmpdir) / "gov.json"
+            # Exponential backoff would be 5s and the cap 10s; the server
+            # asked for 300s, which must win -- capping our own guessing
+            # is not a reason to ignore an explicit instruction.
+            governor_report(gov, limited=True, cooldown_seconds=5,
+                            max_cooldown_seconds=10, now_fn=lambda: 1000.0,
+                            retry_after_seconds=300)
+            state = json.loads(gov.read_text())
+        self.assertEqual(state["cooldown_until"], 1300.0)
+
+    def test_smaller_retry_after_does_not_lower_the_cooldown(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gov = Path(tmpdir) / "gov.json"
+            governor_report(gov, limited=True, cooldown_seconds=60,
+                            max_cooldown_seconds=300, now_fn=lambda: 1000.0,
+                            retry_after_seconds=5)
+            state = json.loads(gov.read_text())
+        self.assertEqual(state["cooldown_until"], 1060.0)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_429_retry_after_reaches_the_governor(self, mock_urlopen):
+        err = urllib.error.HTTPError(
+            url="https://api.example/v1/chat/completions", code=429,
+            msg="Too Many Requests", hdrs={"Retry-After": "240"}, fp=None,
+        )
+        ok_cm = MagicMock()
+        ok_cm.read.return_value = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
+        ok_ctx = MagicMock()
+        ok_ctx.__enter__.return_value = ok_cm
+        mock_urlopen.side_effect = [err, ok_ctx]
+
+        seen = {}
+
+        def fake_report(path, limited, cooldown_seconds=None, max_cooldown_seconds=None,
+                        now_fn=None, retry_after_seconds=None):
+            if limited:
+                seen["retry_after"] = retry_after_seconds
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gov = Path(tmpdir) / "gov.json"
+            with patch("model_fix_loop.governor_report", fake_report):
+                call_model(
+                    [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "low",
+                    sleep_fn=lambda s: None, governor_path=gov,
+                )
+        self.assertEqual(seen["retry_after"], 240.0)
+
+
+class QuotaExhaustedTests(unittest.TestCase):
+    """A 429 meaning "account out of budget" must fail fast, not ride the
+    retry ladder. Providers overload 429 for both throttling and billing;
+    only the first is worth waiting out."""
+
+    # Trimmed from a real theclawbay.com 429 captured 2026-07-25.
+    REAL_BODY = {
+        "error": "weekly cost limit reached for this account",
+        "code": "weekly_cost_limit_reached",
+        "theclawbayError": {
+            "requestId": "acea5cad-24c2-4485-94b3-5f52ca69dc96",
+            "category": "quota",
+            "code": "weekly_cost_limit_reached",
+            "userMessage": "Your weekly The Claw Bay usage limit has been reached.",
+            "retryable": False,
+        },
+    }
+
+    def _http_error(self, code, body):
+        return urllib.error.HTTPError(
+            url="https://api.example/v1/chat/completions", code=code,
+            msg="Too Many Requests", hdrs=None,
+            fp=io.BytesIO(json.dumps(body).encode()),
+        )
+
+    def test_recognizes_real_clawbay_weekly_limit_body(self):
+        msg = _quota_exhausted_message(self._http_error(429, self.REAL_BODY))
+        self.assertIsNotNone(msg)
+        self.assertIn("weekly", msg.lower())
+        self.assertIn("weekly_cost_limit_reached", msg)
+
+    def test_plain_rate_limit_429_is_still_retryable(self):
+        body = {"error": {"message": "Rate limit reached for gpt-5.5", "type": "rate_limit_error"}}
+        self.assertIsNone(_quota_exhausted_message(self._http_error(429, body)))
+
+    def test_unparseable_body_falls_through_to_retry(self):
+        # Wrongly giving up on a transient 429 is worse than wrongly
+        # retrying a permanent one, so anything ambiguous stays retryable.
+        err = urllib.error.HTTPError(
+            url="https://u", code=429, msg="x", hdrs=None, fp=io.BytesIO(b"<html>nope</html>"),
+        )
+        self.assertIsNone(_quota_exhausted_message(err))
+
+    def test_non_429_is_never_classified_as_quota(self):
+        self.assertIsNone(_quota_exhausted_message(self._http_error(500, self.REAL_BODY)))
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_quota_429_is_retried_like_any_other_429(self, mock_urlopen):
+        # Policy: ALL 429s retry, quota included. The token bucket's global
+        # cooldown is what paces the wait, so the fleet resumes by itself
+        # once the billing window rolls over.
+        ok_cm = MagicMock()
+        ok_cm.read.return_value = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
+        ok_ctx = MagicMock()
+        ok_ctx.__enter__.return_value = ok_cm
+        mock_urlopen.side_effect = [
+            self._http_error(429, self.REAL_BODY),
+            self._http_error(429, self.REAL_BODY),
+            ok_ctx,
+        ]
+        reply = call_model(
+            [{"role": "user", "content": "x"}], "https://u", "k", "gpt-5.5", 4096, "medium",
+            max_retries=10, sleep_fn=lambda s: None,
+        )
+        self.assertEqual(reply, "hi")
+        self.assertEqual(mock_urlopen.call_count, 3)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_quota_429_does_pace_the_fleet_via_the_token_bucket(self, mock_urlopen):
+        # Since we now wait rather than bail, the global cooldown must be
+        # set -- that is the whole mechanism keeping a quota-blocked fleet
+        # from hot-looping against the provider.
+        mock_urlopen.side_effect = self._http_error(429, self.REAL_BODY)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gov = Path(tmpdir) / "gov.json"
+            # cooldown_seconds=0: the quota 429 must still be REPORTED as
+            # limited without this test sitting out a real cooldown --
+            # governor_acquire busy-waits against the wall clock when
+            # sleep_fn is a no-op. The cooldown arithmetic itself is
+            # covered directly in RetryAfterTests.
+            with self.assertRaises(ModelQuotaExhausted):
+                call_model(
+                    [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "medium",
+                    max_retries=2, sleep_fn=lambda s: None, governor_path=gov,
+                    governor_cooldown_seconds=0, governor_max_cooldown_seconds=0,
+                )
+            state = json.loads(gov.read_text())
+        # limited on every attempt -- this streak is what drives the
+        # exponential global cooldown in a real run.
+        self.assertEqual(state["consecutive_limited"], 3)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_names_billing_as_the_cause_once_retries_are_spent(self, mock_urlopen):
+        # A bare "HTTP Error 429" after a long ride-out sends an operator
+        # looking at rate limits when the answer is billing.
+        mock_urlopen.side_effect = self._http_error(429, self.REAL_BODY)
+        with self.assertRaises(ModelQuotaExhausted) as ctx:
+            call_model(
+                [{"role": "user", "content": "x"}], "https://u", "k", "gpt-5.5", 4096, "medium",
+                max_retries=3, sleep_fn=lambda s: None,
+            )
+        # Every retry was still made -- naming the cause is not a shortcut.
+        self.assertEqual(mock_urlopen.call_count, 4)
+        self.assertIn("gpt-5.5", str(ctx.exception))
+        self.assertIn("weekly", str(ctx.exception).lower())
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_quota_retry_is_logged_distinctly_from_throttling(self, mock_urlopen):
+        ok_cm = MagicMock()
+        ok_cm.read.return_value = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
+        ok_ctx = MagicMock()
+        ok_ctx.__enter__.return_value = ok_cm
+        mock_urlopen.side_effect = [self._http_error(429, self.REAL_BODY), ok_ctx]
+        logged = []
+        call_model(
+            [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "medium",
+            sleep_fn=lambda s: None, log_fn=logged.append,
+        )
+        self.assertTrue(any("quota exhausted" in m for m in logged), logged)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_plain_rate_limit_429_is_not_labelled_as_quota(self, mock_urlopen):
+        ok_cm = MagicMock()
+        ok_cm.read.return_value = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
+        ok_ctx = MagicMock()
+        ok_ctx.__enter__.return_value = ok_cm
+        mock_urlopen.side_effect = [
+            self._http_error(429, {"error": {"message": "Rate limit reached"}}),
+            ok_ctx,
+        ]
+        logged = []
+        call_model(
+            [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "medium",
+            sleep_fn=lambda s: None, log_fn=logged.append,
+        )
+        self.assertFalse(any("quota exhausted" in m for m in logged), logged)
+
+
 class CallModelStreamingTests(unittest.TestCase):
     @patch("model_fix_loop.urllib.request.urlopen")
     def test_stream_true_sets_stream_field_in_request_body(self, mock_urlopen):
@@ -1043,21 +1507,235 @@ class CallModelTemperatureTests(unittest.TestCase):
 
 class GitApplyTests(unittest.TestCase):
     @patch("model_fix_loop.subprocess.run")
-    def test_success_returns_true(self, mock_run):
+    def test_first_rung_is_exact_and_nothing_looser_runs_when_it_applies(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stderr="")
         ok, msg = git_apply("diff text", Path("/fake/repo"))
         self.assertTrue(ok)
+        self.assertEqual(msg, "applied")
+        # Exactly one exec: the ladder must stop at the rung that worked.
+        self.assertEqual(mock_run.call_count, 1)
         args, kwargs = mock_run.call_args
-        self.assertEqual(args[0], ["git", "apply", "--reject", "--recount", "-"])
+        # No --reject: it makes git apply non-atomic, which would leave the
+        # next rung matching against a half-patched tree.
+        self.assertEqual(args[0], ["git", "apply", "--recount", "-"])
+        self.assertNotIn("--reject", args[0])
         self.assertEqual(kwargs["input"], "diff text")
         self.assertEqual(kwargs["cwd"], Path("/fake/repo"))
 
     @patch("model_fix_loop.subprocess.run")
-    def test_failure_returns_stderr(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=1, stderr="patch does not apply")
-        ok, msg = git_apply("bad diff", Path("/fake/repo"))
+    def test_every_rung_is_tried_before_failing(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stderr="patch does not apply\n", stdout="")
+        ok, msg, rung = git_apply_with_rung("bad diff", Path("/fake/repo"))
         self.assertFalse(ok)
-        self.assertEqual(msg, "patch does not apply")
+        self.assertIsNone(rung)
+        applies = [c.args[0] for c in mock_run.call_args_list if c.args[0][:2] == ["git", "apply"]]
+        self.assertEqual(applies, [argv for _, argv in GIT_APPLY_LADDER])
+        # The STRICT rung's stderr is what comes back (it names the context
+        # git searched for), plus a note that looser rungs were already tried
+        # so the model doesn't waste its retry on a whitespace tweak.
+        self.assertTrue(msg.startswith("patch does not apply"))
+        self.assertIn("ignore-whitespace", msg)
+        self.assertIn("3way", msg)
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_reports_which_rung_applied(self, mock_run):
+        results = [
+            MagicMock(returncode=1, stderr="nope\n", stdout=""),   # exact
+            MagicMock(returncode=1, stderr="nope\n", stdout=""),   # ignore-whitespace
+            MagicMock(returncode=0, stderr="", stdout=""),         # context1
+        ]
+        mock_run.side_effect = results
+        ok, msg, rung = git_apply_with_rung("drifted diff", Path("/fake/repo"))
+        self.assertTrue(ok)
+        self.assertEqual(rung, "context1")
+        self.assertIn("context1", msg)
+        self.assertEqual(mock_run.call_count, 3)
+
+
+class GitApplyLadderIntegrationTests(unittest.TestCase):
+    """The ladder against a real git binary in a tempdir repo -- mocks can't
+    tell us whether -C1 actually rescues a drifted hunk, nor whether a failed
+    rung leaves the tree clean for the next one (the property the whole
+    ladder rests on)."""
+
+    def _make_repo(self, tmpdir, content):
+        import subprocess as sp
+        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+        repo = Path(tmpdir) / "repo"
+        repo.mkdir()
+
+        def git(*args, input_text=None, check=True):
+            return sp.run(
+                ["git", *args], cwd=repo, input=input_text, capture_output=True,
+                text=True, check=check, env=env,
+            )
+
+        git("init", "-q")
+        git("config", "user.email", "fleet@example.com")
+        git("config", "user.name", "Fleet Test")
+        git("config", "commit.gpgsign", "false")
+        (repo / "f.rs").write_text(content)
+        git("add", "-A")
+        git("commit", "-q", "-m", "base")
+        return repo, git
+
+    BASE = "".join(f"line{i}\n" for i in range(1, 21))
+
+    def _model_diff(self, before, after, path="f.rs"):
+        """A unified diff of `before` -> `after` in the shape a MODEL emits:
+        correct hunk headers, 3 lines of context, and no `index <blob>..`
+        line (models never have blob hashes -- which is also why the 3way
+        rung can't help them; the tests that need it build their diff with
+        `git diff` instead)."""
+        return "".join(difflib.unified_diff(
+            before.splitlines(keepends=True), after.splitlines(keepends=True),
+            fromfile=f"a/{path}", tofile=f"b/{path}",
+        ))
+
+    def test_exact_rung_applies_a_clean_diff(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _ = self._make_repo(tmpdir, self.BASE)
+            diff = self._model_diff(self.BASE, self.BASE.replace("line10\n", "PATCHED\n"))
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            content = (repo / "f.rs").read_text()
+        self.assertTrue(ok, msg)
+        self.assertEqual(rung, "exact")
+        self.assertEqual(content.splitlines()[9], "PATCHED")
+
+    def test_indentation_slip_is_rescued_by_ignore_whitespace(self):
+        # The classic model slip, measured 2026-07-26: it re-typed the block
+        # with tabs where the file uses spaces (2-space-vs-4-space behaves
+        # identically). Note the limit of this rung -- a model that drops the
+        # indentation ENTIRELY is not rescued here, because that's a
+        # whitespace-vs-nothing difference, not a whitespace-amount one.
+        on_disk = "".join(f"    line{i}\n" for i in range(1, 21))
+        tabbed = "".join(f"\tline{i}\n" for i in range(1, 21))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _ = self._make_repo(tmpdir, on_disk)
+            diff = self._model_diff(tabbed, tabbed.replace("\tline10\n", "\tPATCHED\n"))
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            content = (repo / "f.rs").read_text()
+        self.assertTrue(ok, msg)
+        self.assertEqual(rung, "ignore-whitespace")
+        self.assertIn("PATCHED", content.splitlines()[9])
+
+    def test_context_drift_is_rescued_by_c1(self):
+        # The outer context lines moved on (another worker's fix landed
+        # there, or the model only ever saw an excerpt); the -/+ lines and
+        # the immediate neighbours still match.
+        drifted = self.BASE.replace("line8\n", "MOVED_ON_8\n").replace("line12\n", "MOVED_ON_12\n")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _ = self._make_repo(tmpdir, drifted)
+            diff = self._model_diff(self.BASE, self.BASE.replace("line10\n", "PATCHED\n"))
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            content = (repo / "f.rs").read_text()
+        self.assertTrue(ok, msg)
+        self.assertEqual(rung, "context1")
+        # Rescued, not mangled: the change landed exactly where line10 was,
+        # and the drifted neighbours are untouched.
+        self.assertEqual(content.splitlines()[9], "PATCHED")
+        self.assertEqual(content.splitlines()[7], "MOVED_ON_8")
+        self.assertEqual(content.splitlines()[11], "MOVED_ON_12")
+
+    def test_unlocatable_change_still_fails_at_every_rung(self):
+        # No fuzz anywhere in the ladder: a hunk whose removed line does not
+        # exist must NOT be applied somewhere plausible-looking.
+        imaginary = "".join(f"imaginary{i}\n" for i in range(1, 21))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _ = self._make_repo(tmpdir, self.BASE)
+            diff = self._model_diff(imaginary, imaginary.replace("imaginary10\n", "PATCHED\n"))
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            content = (repo / "f.rs").read_text()
+        self.assertFalse(ok)
+        self.assertIsNone(rung)
+        self.assertEqual(content, self.BASE)
+
+    def test_failed_rung_leaves_the_tree_byte_identical_for_the_next_one(self):
+        # The ladder's core invariant. A 2-file patch that fails on one file
+        # must not leave the OTHER file modified -- that was exactly what
+        # --reject used to do, and it would make a later rung's "success"
+        # mean a doubly-applied edit.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, git = self._make_repo(tmpdir, self.BASE)
+            (repo / "g.rs").write_text(self.BASE)
+            git("add", "-A")
+            git("commit", "-q", "-m", "add g")
+            imaginary = "".join(f"imaginary{i}\n" for i in range(1, 21))
+            diff = (
+                # g.rs: applies cleanly on its own.
+                self._model_diff(self.BASE, self.BASE.replace("line10\n", "PATCHED_G\n"), "g.rs")
+                # f.rs: unlocatable, so the patch as a whole must fail.
+                + self._model_diff(imaginary, imaginary.replace("imaginary10\n", "PATCHED_F\n"))
+            )
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            status = git("status", "--porcelain").stdout
+            g_content = (repo / "g.rs").read_text()
+        self.assertFalse(ok)
+        self.assertEqual(status, "", f"tree left dirty by a failed apply: {status!r}")
+        self.assertNotIn("PATCHED_G", g_content)
+
+    def test_three_way_finishes_a_half_landed_patch_and_leaves_it_unstaged(self):
+        # The one shape measured (2026-07-26) where rungs 1-4 all fail and
+        # --3way genuinely rescues: a two-change patch where one change has
+        # ALREADY landed. Rungs 1-4 fail as a unit ("patch does not apply")
+        # because the second hunk's preimage is gone; the 3-way merge sees
+        # ours-already-has-B and applies only A.
+        #
+        # It must come back UNSTAGED. --3way implies --index, so without
+        # _restore_after_three_way the change is staged, and
+        # git_checkout_clean's `git checkout -- .` restores the worktree FROM
+        # the index -- i.e. a 3way-applied change would survive the revert
+        # after a failed build and leak into the next round.
+        both = self.BASE.replace("line10\n", "PATCHED_A\n").replace("line18\n", "PATCHED_B\n")
+        half = self.BASE.replace("line18\n", "PATCHED_B\n")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, git = self._make_repo(tmpdir, self.BASE)
+            (repo / "f.rs").write_text(both)
+            git("add", "-A")
+            diff = git("diff", "--cached").stdout   # carries index/blob lines
+            git("reset", "-q", "--hard")
+            (repo / "f.rs").write_text(half)
+            git("add", "-A")
+            git("commit", "-q", "-m", "half of it already landed")
+
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            status = git("status", "--porcelain").stdout
+            content = (repo / "f.rs").read_text()
+            self.assertTrue(ok, msg)
+            self.assertEqual(rung, "3way")
+            self.assertIn("PATCHED_A", content)
+            self.assertIn("PATCHED_B", content)
+            # " M" = unstaged modification; "M " (staged) is the bug this pins.
+            self.assertTrue(status.startswith(" M"), f"3way left the change staged: {status!r}")
+            # And the revert the loop actually performs must undo it.
+            git_checkout_clean(repo)
+            self.assertEqual(git("status", "--porcelain").stdout, "")
+            self.assertNotIn("PATCHED_A", (repo / "f.rs").read_text())
+
+    def test_three_way_conflict_leaves_no_unmerged_entries_behind(self):
+        # A conflicting --3way exits 1 having written conflict markers AND an
+        # unmerged index entry. git_checkout_clean runs `git checkout -- .`
+        # with check=True, which ERRORS on an unmerged path -- i.e. this
+        # state used to be able to kill the worker outright.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, git = self._make_repo(tmpdir, self.BASE)
+            (repo / "f.rs").write_text(self.BASE.replace("line10\n", "OURS\n"))
+            git("add", "-A")
+            diff = git("diff", "--cached").stdout
+            git("reset", "-q", "--hard")
+            (repo / "f.rs").write_text(self.BASE.replace("line10\n", "THEIRS\n"))
+            git("add", "-A")
+            git("commit", "-q", "-m", "conflicting change")
+
+            ok, msg, rung = git_apply_with_rung(diff, repo)
+            status = git("status", "--porcelain").stdout
+            content = (repo / "f.rs").read_text()
+            self.assertFalse(ok)
+            self.assertNotIn("U", status)
+            self.assertNotIn("<<<<<<<", content)
+            self.assertEqual(status, "", f"3way conflict left the tree dirty: {status!r}")
+            # And the real cleanup path (check=True) must not blow up on it.
+            git_checkout_clean(repo)
 
 
 class GitCheckoutCleanTests(unittest.TestCase):
@@ -1712,8 +2390,242 @@ class BuildPromptOrderingTests(unittest.TestCase):
     def test_manifest_lists_all_four_shapes_and_range_syntax(self):
         manifest = build_reply_shape_manifest(4096)
         for needle in ("REQUEST:", "VERIFY", "PATCH 1/N", "Plan + diff",
-                       ":<start>-<end>", "roughly 4096 tokens", "ephemeral"):
+                       ":40-120", ":400-", ":-120", ":400",
+                       "roughly 4096 tokens", "ephemeral"):
             self.assertIn(needle, manifest)
+
+
+# --- prompt-cache prefix ordering ------------------------------------------
+#
+# The fleet's worker pool leads with deepseek/deepseek-v4-pro, whose cache
+# READ price is $0.0036/M against $0.435/M for fresh input -- 120x. It is an
+# AUTOMATIC PREFIX cache: only a byte-identical LEADING run of a previous
+# request is discounted, so section render order is the entire lever (see
+# model_fix_loop.PROMPT_SECTION_ORDER for the measurements behind the order
+# these tests pin). Measured offline over 108 prompts rebuilt from real
+# saved fixer requests across 22 formats: the pre-2026-07-26 order left
+# 40.1% of a prompt cacheable against a sibling prompt for the same format
+# (17.0% at max_prompt_tokens=32768), the pinned order leaves 89.5% (85.1%).
+# Every test below fails on the old order.
+
+def _cache_order_gap(fmt, tag_name, parser_file):
+    return {
+        "format": fmt,
+        "missing_tags": [{"family": "EXIF", "name": tag_name, "value": "v",
+                          "tag_id": None, "source_file": None}],
+        "value_differences": [],
+        "gap_count": 1,
+        "parser_files": [parser_file],
+    }
+
+
+class PromptCachePrefixOrderTests(unittest.TestCase):
+    """Pins the render order build_prompt uses for provider prefix caching,
+    and the invariants that make it pay off. Hermetic: every optional
+    section is fed from a tempdir, nothing reads the real OXIDEX_HOME."""
+
+    #: The order as measured-and-shipped on 2026-07-26. A change here is a
+    #: change to the fleet's cache-hit rate and its bill; re-run the offline
+    #: prefix harness before editing it.
+    EXPECTED_ORDER = (
+        "invariants", "format_intro", "samples", "parser_files", "overview",
+        "learning", "exact_sample", "gaps", "perl_block", "neighbor",
+        "attempts", "tail",
+    )
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        (self.tmp / "src").mkdir()
+        (self.tmp / "src" / "nef.rs").write_text("// PARSER-SOURCE-MARKER\n" + "x" * 500)
+        (self.tmp / "src" / "cr2.rs").write_text("// OTHER-PARSER-MARKER\n" + "y" * 500)
+        self.samples = self.tmp / "samples"
+        self.samples.mkdir()
+        (self.samples / "a.nef").write_bytes(b"\x01\x02\x03NEFSAMPLE")
+        (self.samples / "a.cr2").write_bytes(b"\x04\x05\x06CR2SAMPLE")
+        # knowledge_home: only the module playbook, so the learning block
+        # is non-empty and deterministic (no lessons/quarantine ledgers).
+        modules = self.tmp / "home" / "logs" / "knowledge" / "modules"
+        modules.mkdir(parents=True)
+        (modules / "NEF.md").write_text("PLAYBOOK-MARKER for NEF")
+        (modules / "CR2.md").write_text("PLAYBOOK-MARKER for CR2")
+
+    def _prompt(self, fmt="NEF", tag_name="LensModel", parser="src/nef.rs",
+                sample="a.nef", **kw):
+        gap = _cache_order_gap(fmt, tag_name, parser)
+        gap["missing_tags"][0]["source_file"] = str(self.samples / sample)
+        kw.setdefault("neighbor_precedent_block", "\n\nNEIGHBOR-MARKER precedent")
+        return build_prompt(
+            gap, repo_root=self.tmp, max_tags=1, samples_dir=self.samples,
+            knowledge_home=self.tmp / "home", module_name=fmt,
+            max_prompt_tokens=100_000, **kw,
+        )
+
+    def test_render_order_constant_is_the_measured_stability_ranking(self):
+        self.assertEqual(model_fix_loop.PROMPT_SECTION_ORDER, self.EXPECTED_ORDER)
+
+    def test_rendered_prompt_follows_the_pinned_section_order(self):
+        prompt = self._prompt(previous_attempts=[
+            {"diff": "--- a/x\n", "status": "failed", "reason": "ATTEMPT-MARKER"},
+        ])
+        markers = [
+            ("invariants", "CRITICAL RUST ARCHITECTURE CONSTRAINTS"),
+            ("invariants/pitfalls", "Lessons from mistakes"),
+            ("invariants/manifest", "exactly one of these four shapes"),
+            ("invariants/primer", "How oxidex is structured, for orientation"),
+            ("format_intro", 'format "NEF"'),
+            ("samples", "Real sample files available for this format"),
+            ("parser_files", "PARSER-SOURCE-MARKER"),
+            ("learning", "PLAYBOOK-MARKER"),
+            ("exact_sample", "Real sample file containing the tag targeted below"),
+            ("gaps", "Missing entirely"),
+            ("gaps/diffs", "Value differences"),
+            ("neighbor", "NEIGHBOR-MARKER"),
+            ("attempts", "ATTEMPT-MARKER"),
+            ("tail", TERMINAL_REMINDER),
+        ]
+        positions = []
+        for name, needle in markers:
+            self.assertIn(needle, prompt, f"{name} section missing from prompt")
+            positions.append((name, prompt.index(needle)))
+        self.assertEqual(
+            positions, sorted(positions, key=lambda p: p[1]),
+            f"sections rendered out of order: {positions}",
+        )
+
+    def test_every_static_section_precedes_the_gap_list(self):
+        """The whole point of the reorder: the most volatile string in the
+        prompt used to sit at byte ~1871, in front of every large static
+        block, so all of them were re-billed at full price every call."""
+        prompt = self._prompt()
+        gap_pos = prompt.index("Missing entirely")
+        for needle in ("How oxidex is structured, for orientation",
+                       "Real sample files available for this format",
+                       "Likely relevant source files",
+                       "PARSER-SOURCE-MARKER",
+                       "PLAYBOOK-MARKER"):
+            self.assertLess(prompt.index(needle), gap_pos, needle)
+
+    def test_different_formats_still_share_the_whole_invariant_block(self):
+        """Tier 0 is shared fleet-wide, not just within one worker: a NEF
+        worker's prompt and a CR2 worker's prompt agree byte-for-byte
+        through the constraints, pitfalls, manifest and primer, and diverge
+        only at the format line."""
+        a = self._prompt(fmt="NEF", parser="src/nef.rs", sample="a.nef")
+        b = self._prompt(fmt="CR2", tag_name="Aperture", parser="src/cr2.rs",
+                         sample="a.cr2")
+        shared = os.path.commonprefix([a, b])
+        for needle in ("CRITICAL RUST ARCHITECTURE CONSTRAINTS",
+                       "Lessons from mistakes",
+                       "exactly one of these four shapes",
+                       "How oxidex is structured, for orientation"):
+            self.assertIn(needle, shared, needle)
+        # ...and nothing format-specific sneaked in ahead of the split.
+        self.assertNotIn("NEF", shared)
+        self.assertLess(len(shared) - len(shared.rstrip()), 5)
+
+    def test_same_format_different_tag_shares_the_parser_source(self):
+        """The 28 KB of parser source is the single biggest block in the
+        prompt; two different tags of one format must still share it."""
+        a = self._prompt(tag_name="LensModel")
+        b = self._prompt(tag_name="FocalLength")
+        shared = os.path.commonprefix([a, b])
+        self.assertIn("PARSER-SOURCE-MARKER", shared)
+        self.assertIn("PLAYBOOK-MARKER", shared)
+        self.assertGreater(len(shared) / len(a), 0.8)
+
+    def test_exact_sample_block_points_forward_at_the_gap_list(self):
+        """It renders ABOVE the gap list now (sibling tags share a sample
+        file, so it is the more stable of the two), which only reads
+        correctly because the lead-in no longer says "this exact tag"."""
+        prompt = self._prompt()
+        self.assertIn("Real sample file containing the tag targeted below", prompt)
+        self.assertNotIn("Real sample file containing this exact tag", prompt)
+        self.assertLess(
+            prompt.index("Real sample file containing the tag targeted below"),
+            prompt.index("Missing entirely"),
+        )
+
+    def test_per_tag_reference_blocks_stay_below_the_gap_list(self):
+        """perl_block and neighbor keep pointing BACK at the gap list, so
+        they must not be hoisted into an earlier tier."""
+        prompt = self._prompt()
+        self.assertGreater(prompt.index("NEIGHBOR-MARKER"),
+                           prompt.index("Missing entirely"))
+
+    def test_shrink_priority_is_not_the_render_order(self):
+        """PROMPT_SHRINK_PRIORITY ranks what a fixer can afford to LOSE;
+        PROMPT_SECTION_ORDER ranks what caches best. Conflating them would
+        start shedding parser source before attempt history."""
+        self.assertEqual(
+            model_fix_loop.PROMPT_SHRINK_PRIORITY,
+            ("attempts", "samples", "neighbor", "perl_block", "parser_files"),
+        )
+        rendered = [n for n in model_fix_loop.PROMPT_SECTION_ORDER
+                    if n in model_fix_loop.PROMPT_SHRINK_PRIORITY]
+        self.assertNotEqual(tuple(rendered), model_fix_loop.PROMPT_SHRINK_PRIORITY)
+
+    def test_build_prompt_passes_budgets_in_shrink_priority_order(self):
+        captured = {}
+        real = model_fix_loop.assemble_prompt_sections
+
+        def spy(sections, budgets, max_tokens):
+            captured["sections"] = [n for n, _ in sections]
+            captured["budgets"] = list(budgets)
+            return real(sections, budgets, max_tokens)
+
+        with patch.object(model_fix_loop, "assemble_prompt_sections", spy):
+            self._prompt()
+        self.assertEqual(tuple(captured["sections"]), self.EXPECTED_ORDER)
+        self.assertEqual(tuple(captured["budgets"]),
+                         model_fix_loop.PROMPT_SHRINK_PRIORITY)
+
+    def test_attempts_are_still_shed_before_parser_source(self):
+        """Behaviour under budget pressure is unchanged by the reorder."""
+        gap = _cache_order_gap("NEF", "LensModel", "src/nef.rs")
+        (self.tmp / "src" / "nef.rs").write_text("// PARSER-SOURCE-MARKER\n" + "x" * 40_000)
+        prompt = build_prompt(
+            gap, repo_root=self.tmp, max_tags=1, max_file_bytes=200_000,
+            max_prompt_tokens=3000, parser_floor_tokens=2000,
+            previous_attempts=[{"diff": "--- a/x\n", "status": "failed",
+                                "reason": "ATTEMPT-MARKER"}],
+        )
+        self.assertNotIn("ATTEMPT-MARKER", prompt)   # shed first
+        self.assertIn("PARSER-SOURCE-MARKER", prompt)  # floored, never emptied
+
+    def test_prompt_bytes_do_not_depend_on_hash_seed(self):
+        """Any set iteration, dict ordering, timestamp or random id anywhere
+        in the prefix destroys caching for every request behind it. Two
+        interpreters with different PYTHONHASHSEED must produce the same
+        bytes."""
+        script = self.tmp / "render.py"
+        script.write_text(
+            "import hashlib, sys\n"
+            f"sys.path.insert(0, {str(Path(model_fix_loop.__file__).parent)!r})\n"
+            "from pathlib import Path\n"
+            "import model_fix_loop as m\n"
+            f"tmp = Path({str(self.tmp)!r})\n"
+            "gap = {'format': 'NEF', 'gap_count': 1, 'parser_files': ['src/nef.rs'],\n"
+            "       'value_differences': [],\n"
+            "       'missing_tags': [{'family': 'EXIF', 'name': 'LensModel', 'value': 'v',\n"
+            "                         'tag_id': None,\n"
+            "                         'source_file': str(tmp / 'samples' / 'a.nef')}]}\n"
+            "p = m.build_prompt(gap, repo_root=tmp, max_tags=1,\n"
+            "                   samples_dir=tmp / 'samples',\n"
+            "                   knowledge_home=tmp / 'home', module_name='NEF',\n"
+            "                   worker_label='w-1', max_prompt_tokens=100000)\n"
+            "sys.stdout.write(hashlib.sha256(p.encode()).hexdigest())\n"
+        )
+        digests = set()
+        for seed in ("0", "1", "12345"):
+            env = dict(os.environ, PYTHONHASHSEED=seed)
+            out = subprocess.run(  # nosec B603 -- fixed argv, tempdir script
+                [sys.executable, str(script)], capture_output=True, text=True,
+                env=env, timeout=120, check=True,
+            )
+            digests.add(out.stdout.strip())
+        self.assertEqual(len(digests), 1, f"non-deterministic prompt: {digests}")
+        self.assertRegex(digests.pop(), r"^[0-9a-f]{64}$")  # a prompt was really built
 
 
 class RustArchitectureConstraintsTests(unittest.TestCase):
@@ -1823,6 +2735,38 @@ class ParseRequestRangeTests(unittest.TestCase):
     def test_non_numeric_suffix_is_just_part_of_the_path(self):
         self.assertEqual(parse_request_range("src/x.rs:a-b"), ("src/x.rs:a-b", None, None))
 
+    # --- open-ended and bare-line forms ------------------------------------
+    #
+    # The RW2 transcript (deepseek-v4-pro, 2026-07-26T21:23) opened with
+    # "REQUEST: src/parsers/xmp/rdf_parser.rs:400-" and got a
+    # could-not-resolve rejection, because the START-END-only regex left
+    # ":400-" glued to the filename.
+
+    def test_open_ended_range_means_to_end_of_file(self):
+        self.assertEqual(parse_request_range("src/x.rs:400-"), ("src/x.rs", 400, None))
+
+    def test_open_start_range_means_from_line_one(self):
+        self.assertEqual(parse_request_range("src/x.rs:-120"), ("src/x.rs", 1, 120))
+
+    def test_bare_line_number_becomes_a_window_around_it(self):
+        path, start, end = parse_request_range("src/x.rs:400")
+        self.assertEqual(path, "src/x.rs")
+        self.assertEqual(start, 400 - model_fix_loop.REQUEST_SINGLE_LINE_CONTEXT_BEFORE)
+        self.assertEqual(end, 400 + model_fix_loop.REQUEST_SINGLE_LINE_CONTEXT_AFTER)
+
+    def test_bare_line_number_window_is_clamped_at_the_top_of_the_file(self):
+        self.assertEqual(parse_request_range("src/x.rs:3")[1], 1)
+
+    def test_zero_forms_strip_the_suffix_and_fall_back_to_whole_file(self):
+        # Same forgiving degrade-to-whole-file rule the START-END form has
+        # had: a typo'd range must not fail the whole request.
+        for typo in ("src/x.rs:0-", "src/x.rs:-0", "src/x.rs:0"):
+            self.assertEqual(parse_request_range(typo), ("src/x.rs", None, None), typo)
+
+    def test_non_numeric_open_forms_stay_part_of_the_path(self):
+        for shape in ("src/x.rs:abc-", "src/x.rs:-abc", "src/x.rs:abc"):
+            self.assertEqual(parse_request_range(shape), (shape, None, None), shape)
+
 
 class ResolveRequestRangeTests(unittest.TestCase):
     def _make_repo(self, tmpdir):
@@ -1859,6 +2803,123 @@ class ResolveRequestRangeTests(unittest.TestCase):
             (samples / "EXE.dylib").write_bytes(b"\xfe\xed\xfa\xcf1234")
             answer = resolve_request("EXE.dylib:1-2", Path("/nonexistent"), samples)
         self.assertIn("Hex dump of EXE.dylib", answer)
+
+    def test_open_ended_range_serves_through_end_of_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:97-", repo, None)
+        self.assertIn("Lines 97-100 of src/big.rs", answer)
+        self.assertIn("97: line97", answer)
+        self.assertIn("100: line100", answer)
+        self.assertNotIn("96: line96", answer)
+
+    def test_open_ended_range_past_eof_says_so_with_readable_bounds(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:500-", repo, None)
+        self.assertIn("only 100 lines", answer)
+        self.assertIn("500-EOF", answer)   # not "500-None"
+
+    def test_open_start_range_serves_from_line_one(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:-3", repo, None)
+        self.assertIn("Lines 1-3 of src/big.rs", answer)
+        self.assertIn("1: line1", answer)
+        self.assertNotIn("4: line4", answer)
+
+    def test_bare_line_number_serves_a_window_around_it(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/big.rs:50", repo, None)
+        self.assertIn("30: line30", answer)   # 50 - CONTEXT_BEFORE
+        self.assertIn("50: line50", answer)
+        self.assertIn("100: line100", answer)  # window clamped to EOF
+        self.assertNotIn("29: line29", answer)
+
+
+class ResolveRequestRejectionTests(unittest.TestCase):
+    """A could-not-resolve rejection has to be self-correcting.
+
+    In the RW2 transcript (2026-07-26T21:23) the model asked for
+    src/parsers/xmp/artwork_parser.rs -- a plausible name that does not
+    exist -- and the rejection told it to "try a path from the list shown"
+    while showing it nothing; the prompt's file list was thousands of tokens
+    back in a ~17K-token conversation. It then guessed again."""
+
+    def _make_repo(self, tmpdir):
+        repo = Path(tmpdir)
+        xmp = repo / "src" / "parsers" / "xmp"
+        xmp.mkdir(parents=True)
+        for name in ("history_parser.rs", "mod.rs", "namespace_mapping.rs",
+                     "namespace_resolver.rs", "rdf_parser.rs"):
+            (xmp / name).write_text("// stub\n")
+        (xmp / "namespaces").mkdir()
+        return repo
+
+    def test_lists_the_real_siblings_when_the_parent_exists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/parsers/xmp/artwork_parser.rs", repo, None)
+        self.assertIn("Could not resolve", answer)
+        self.assertIn("src/parsers/xmp/ actually contains", answer)
+        for name in ("history_parser.rs", "mod.rs", "namespace_mapping.rs",
+                     "namespace_resolver.rs", "rdf_parser.rs"):
+            self.assertIn(name, answer)
+        self.assertIn("namespaces/", answer)   # directories marked as such
+
+    def test_offers_a_did_you_mean_for_a_near_miss(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/parsers/xmp/rdf_parsr.rs", repo, None)
+        self.assertIn("Did you mean", answer)
+        self.assertIn("src/parsers/xmp/rdf_parser.rs", answer)
+
+    def test_walks_up_to_the_nearest_existing_ancestor(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/parsers/nosuchdir/deeper/x.rs", repo, None)
+        self.assertIn("src/parsers/ actually contains", answer)
+        self.assertIn("xmp/", answer)
+
+    def test_listing_is_bounded_and_reports_the_overflow(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            for i in range(60):
+                (repo / "src" / f"p{i:02d}.rs").write_text("// stub\n")
+            answer = resolve_request("src/missing.rs", repo, None)
+        self.assertIn("(+20 more)", answer)
+        self.assertIn("p00.rs", answer)
+        self.assertNotIn("p59.rs", answer)
+
+    def test_a_range_suffix_does_not_leak_into_the_rejection(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("src/parsers/xmp/artwork_parser.rs:400-", repo, None)
+        self.assertIn("'src/parsers/xmp/artwork_parser.rs'", answer)
+        self.assertNotIn(":400-", answer)
+
+    def test_traversal_out_of_the_roots_lists_nothing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._make_repo(tmpdir)
+            answer = resolve_request("../../../etc/passwd", repo, None)
+        self.assertIn("Could not resolve", answer)
+        self.assertNotIn("actually contains", answer)
+
+    def test_samples_dir_entries_are_listed_too(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            samples = Path(tmpdir) / "samples"
+            samples.mkdir()
+            (samples / "XMP5.xmp").write_bytes(b"<x/>")
+            answer = resolve_request("XMP9.xmp", Path(tmpdir) / "nonexistent-repo", samples)
+        self.assertIn("XMP5.xmp", answer)
+
+    def test_empty_listing_falls_back_to_the_bare_rejection(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir) / "does-not-exist"
+            answer = describe_missing_path("src/x.rs", repo, None)
+        self.assertEqual(answer, "")
 
 
 class LoadRecentSweepReviewsTests(unittest.TestCase):
@@ -2553,6 +3614,695 @@ class BuildPromptKnowledgeLayerTests(unittest.TestCase):
         self.assertIn("fallback-key playbook", prompt)
 
 
+def _seed_lessons(home, rows):
+    """Write K1 rows to <home>/logs/lessons.jsonl, ledger order."""
+    path = Path(home) / "logs" / "lessons.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+    return path
+
+
+def _lesson_row(event="build_failed", reason="r", worker="canon-1",
+                module="Canon.pm", fmt="NEF", tag_key="", ts="2026-07-25T10:00:00"):
+    return {"ts": ts, "worker": worker, "format": fmt, "module": module,
+            "table": "", "tag_key": tag_key, "event": event, "reason": reason,
+            "evidence": "", "checklist_id": ""}
+
+
+def _seed_quarantine(home, rows):
+    """Write squad_merge_loop-shaped entries to <home>/logs/quarantine.jsonl."""
+    path = Path(home) / "logs" / "quarantine.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+    return path
+
+
+def _quarantine_entry(squad="canon", fmt="NEF", flags=("printconv-unverifiable",),
+                      reason="validate_fix_commit flags: printconv-unverifiable",
+                      ts="2026-07-25T18:46:30"):
+    return {"ts": ts, "patch_id": "p" + str(abs(hash((squad, fmt, reason))) % 10**8),
+            "sha": "deadbeef", "format": fmt, "squad": squad, "reason": reason,
+            "flags": list(flags), "attempt": 1, "backoff_seconds": 60}
+
+
+class SquadFromWorkerTests(unittest.TestCase):
+    """parallel_model_fix_loop mints worker ids as f"{squad}-{n}"; the
+    quarantine ledger records only the squad. This is the link back --
+    and it is validate_fix_commit's helper, reused rather than
+    re-derived, because the two must agree on what "owns" means or the
+    validator and the prompt disagree about whose commit was rejected."""
+
+    def test_trailing_index_is_stripped(self):
+        self.assertEqual(squad_from_worker("canon-3"), "canon")
+        self.assertEqual(squad_from_worker("sony-minolta-2"), "sony-minolta")
+        self.assertEqual(squad_from_worker("pentax-samsung-11"), "pentax-samsung")
+
+    def test_a_label_with_no_index_suffix_is_its_own_squad(self):
+        # run_worker's bare format name and main()'s default "1" never
+        # encoded a squad. They must resolve to a squad name that matches
+        # NOTHING in the ledger rather than to a wildcard -- see
+        # OwnQuarantineTests.test_a_format_labelled_worker_is_never_shown
+        # _another_squads_rejections for why that distinction is the
+        # whole ballgame on the legacy (per-format) path.
+        for label in ("JPEG", "1", "canon-"):
+            self.assertEqual(squad_from_worker(label), label)
+
+
+class OwnQuarantineTests(unittest.TestCase):
+    """A worker never learned its own commit had been rejected, so it
+    kept stacking new commits on the rejected code -- the root cause of
+    an entire quarantine class (7 heads hitting cherry-pick conflicts
+    purely because their own earlier commit had been dropped)."""
+
+    def test_own_squad_and_format_entries_are_returned_newest_first(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = _seed_quarantine(home, [
+                _quarantine_entry(reason="older rejection", ts="2026-07-25T01:00:00"),
+                _quarantine_entry(reason="newer rejection", ts="2026-07-25T02:00:00"),
+            ])
+            entries = read_own_quarantine(path, "canon-3", "NEF")
+        self.assertEqual([e["reason"] for e in entries],
+                         ["newer rejection", "older rejection"])
+
+    def test_other_squads_and_other_formats_are_excluded(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = _seed_quarantine(home, [
+                _quarantine_entry(squad="canon", fmt="NEF", reason="mine"),
+                _quarantine_entry(squad="nikon", fmt="NEF", reason="other squad"),
+                _quarantine_entry(squad="canon", fmt="CR2", reason="other format"),
+            ])
+            entries = read_own_quarantine(path, "canon-3", "NEF")
+        self.assertEqual([e["reason"] for e in entries], ["mine"])
+
+    def test_squad_wide_bisection_verdict_has_no_format_and_still_matches(self):
+        # overlord_sweep.bisect_sweep_failure quarantines a whole squad
+        # with format_name=None: it rolled back the branch every member
+        # shares, so every member needs to see it.
+        with tempfile.TemporaryDirectory() as home:
+            path = _seed_quarantine(home, [
+                _quarantine_entry(squad="canon", fmt=None, flags=("sweep-bisection",),
+                                  reason="overlord sweep bisection: isolated as the offending squad"),
+            ])
+            entries = read_own_quarantine(path, "canon-3", "NEF")
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["flags"], ["sweep-bisection"])
+
+    def test_a_format_labelled_worker_is_never_shown_another_squads_rejections(self):
+        """The legacy per-format path -- parallel_model_fix_loop.run_round,
+        which is the DEFAULT (run_squad_round needs --squad-mode) -- labels
+        its workers with the bare format name (run_worker: worker_label =
+        fmt) and model_fix_loop's own CLI defaults the label to "1".
+
+        Neither encodes a squad, so an ownership test that degraded to
+        "same format" for them made the (squad, format) pair collapse to
+        FORMAT ALONE. Measured against the live ledger 2026-07-25 that is
+        not an edge case, it is 100% wrong output: label "JPEG" returned
+        four entries owned by ps-docs/sony-minolta/thermal, label "CR2"
+        returned exif-core/canon, and the bare CLI label "1" returned
+        ps-docs/sony-minolta/thermal -- every one of them rendered under
+        "YOUR OWN commits that were REJECTED ... Fix the defect named by
+        the flags below". A legacy worker has no quarantine entries of its
+        own at all (the ledger records squads, and it is not in one), so
+        the only correct answer for it is nothing.
+        """
+        with tempfile.TemporaryDirectory() as home:
+            path = _seed_quarantine(home, [
+                _quarantine_entry(squad="ps-docs", fmt="JPEG", reason="ps-docs rejection"),
+                _quarantine_entry(squad="thermal", fmt="JPEG", reason="thermal rejection"),
+                _quarantine_entry(squad="canon", fmt=None, flags=("sweep-bisection",),
+                                  reason="squad-wide rollback of canon"),
+            ])
+            self.assertEqual(read_own_quarantine(path, "JPEG", "JPEG"), [])
+            self.assertEqual(read_own_quarantine(path, "1", "JPEG"), [])
+            self.assertEqual(read_own_quarantine(path, "CR2", "CR2"), [])
+
+    def test_a_missing_format_trailer_verdict_is_squad_wide_not_invisible(self):
+        """squad_merge_loop records the literal string "UNKNOWN" when a
+        commit has no Format: trailer (squad_merge_loop.py:1111). "UNKNOWN"
+        is truthy, so a plain `entry_format != format_name` test hid it
+        from every worker: 28 of 77 live rows (36%, exactly 2 per squad
+        across all 14 squads, 2026-07-25) were permanently unreachable --
+        and ALL 28 carry `missing-trailer:Format` as their first flag.
+
+        That is the one rejection class this whole feature exists to
+        close, and it was the one class it could never report, so the
+        worker kept omitting the trailer forever. A verdict with no usable
+        format is squad-wide, exactly like overlord_sweep's formatless
+        bisection entry.
+        """
+        with tempfile.TemporaryDirectory() as home:
+            path = _seed_quarantine(home, [
+                _quarantine_entry(squad="canon", fmt="UNKNOWN",
+                                  flags=("missing-trailer:Format",),
+                                  reason="validate_fix_commit flags: missing-trailer:Format"),
+            ])
+            entries = read_own_quarantine(path, "canon-3", "NEF")
+        self.assertEqual([e["flags"] for e in entries], [["missing-trailer:Format"]])
+
+    def test_bounded_by_max_entries_and_tolerant_of_garbage(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = _seed_quarantine(home, [
+                _quarantine_entry(reason=f"rejection {c}") for c in "abcdefghij"
+            ])
+            with path.open("a") as f:
+                f.write("not json at all\n[1,2,3]\n")
+            entries = read_own_quarantine(path, "canon-3", "NEF")
+        self.assertEqual(len(entries), DEFAULT_QUARANTINE_MAX_ENTRIES)
+        self.assertEqual(entries[0]["reason"], "rejection j")
+
+    def test_a_malformed_flags_field_never_kills_the_worker(self):
+        """`flags` is written by another process (squad_merge_loop) and is
+        the one field in the read path that was consumed without coercion:
+        `", ".join(str(f) for f in entry["flags"])` on a non-iterable
+        raised TypeError straight out of build_prompt, through fix_gap,
+        killing the worker process. Advisory context is never allowed to
+        be a hard dependency (read_own_quarantine's own contract)."""
+        for junk in (5, {"a": 1}, True, 3.5):
+            entry = _quarantine_entry()
+            entry["flags"] = junk
+            rendered = format_own_quarantine([entry])
+            self.assertIn("REJECTED", rendered)
+        entry = _quarantine_entry()
+        entry["flags"] = "printconv-mismatch:Auto"  # a bare string, not a list
+        self.assertIn("printconv-mismatch:Auto", format_own_quarantine([entry]))
+
+    def test_missing_ledger_is_not_an_error(self):
+        with tempfile.TemporaryDirectory() as home:
+            self.assertEqual(
+                read_own_quarantine(Path(home) / "logs" / "quarantine.jsonl", "canon-3", "NEF"),
+                [],
+            )
+
+    def test_rendered_section_leads_with_flags_and_clamps_the_reason(self):
+        long_conflict = "cherry-pick failed: " + "CONFLICT line\n" * 200
+        rendered = format_own_quarantine([
+            _quarantine_entry(flags=("printconv-mismatch:Auto (bracketed)",),
+                              reason=long_conflict),
+        ])
+        self.assertIn("printconv-mismatch:Auto (bracketed)", rendered)
+        self.assertIn("REJECTED", rendered)
+        # One bullet, one line: the multi-line git transcript is flattened
+        # and clamped, never allowed to become 200 unindented lines.
+        self.assertEqual(len(rendered.strip().splitlines()[-1:]), 1)
+        self.assertLess(len(rendered.strip().splitlines()[-1]),
+                        QUARANTINE_REASON_DISPLAY_CHARS + 120)
+
+    def test_the_hidden_count_covers_flags_dropped_by_the_CHAR_cap_too(self):
+        # Deriving `hidden` from the flag-COUNT cap alone made the suffix
+        # lie: three 100-char flags against a 200-char budget rendered
+        # 200 chars + "..." with hidden == 0, so the third flag vanished
+        # silently. Both caps must feed the same count.
+        text = model_fix_loop._clamp_quarantine_flags(["A" * 100, "B" * 100, "C" * 100])
+        self.assertIn("(+2 more)", text)
+        self.assertNotIn("C" * 100, text)
+
+    def test_a_single_flag_longer_than_the_whole_budget_still_renders(self):
+        text = model_fix_loop._clamp_quarantine_flags(["Z" * 500])
+        self.assertTrue(text.startswith("Z"))
+        self.assertTrue(text.endswith("..."))
+        self.assertNotIn("more)", text, "nothing is hidden when there is one flag")
+
+    def test_the_flags_list_is_capped_so_one_entry_cannot_eat_the_block(self):
+        """validate_fix_commit appends one `printconv-mismatch:<48-char
+        excerpt>` flag per unverifiable map value, uncapped -- the live
+        worst case is already 11 flags / 512 chars (2026-07-25), and a
+        commit adding a ~30-entry PrintConv lookup produces 30 flags in
+        one entry. format_own_quarantine joined them with no cap while its
+        docstring promised "Deterministic, bounded output"."""
+        entries = [
+            _quarantine_entry(
+                reason=f"validate_fix_commit flags: printconv-mismatch ({n})",
+                flags=tuple(f"printconv-mismatch:Auto (bracketed, +{i} EV) sample {n}"
+                            for i in range(30)),
+            )
+            for n in range(DEFAULT_QUARANTINE_MAX_ENTRIES)
+        ]
+        rendered = format_own_quarantine(entries)
+        # The docstring's promise, made testable: header + at most
+        # DEFAULT_QUARANTINE_MAX_ENTRIES lines, each bounded by the flags
+        # cap plus the reason cap plus rendering punctuation.
+        for line in rendered.strip().splitlines()[1:]:
+            self.assertLessEqual(
+                len(line),
+                QUARANTINE_FLAGS_DISPLAY_CHARS + QUARANTINE_REASON_DISPLAY_CHARS + 80,
+                line,
+            )
+        self.assertIn("printconv-mismatch:", rendered)
+
+    def test_a_flag_heavy_entry_cannot_starve_the_rest_of_the_learning_block(self):
+        """LEARNING_SECTION_ORDER ranks the quarantine section SECOND, so
+        anything it fails to bound is taken straight out of K4 sweep
+        reviews, the K3 module playbook and the lessons tail. Reproduced
+        before the cap: four 30-flag entries rendered a 5858-char block
+        against a 4800-char budget, and compose_learning_block admitted
+        the quarantine block ALONE -- the K3 knowledge spine went dark for
+        that worker for as long as the entry stayed in the 64KB window,
+        which today is the whole 48KB ledger, i.e. indefinitely."""
+        gap = make_gap(gap_count=1)
+        with tempfile.TemporaryDirectory() as home:
+            _seed_quarantine(home, [
+                _quarantine_entry(
+                    squad="canon", fmt="NEF",
+                    reason=f"validate_fix_commit flags: printconv-mismatch ({n})",
+                    flags=tuple(f"printconv-mismatch:Auto (bracketed, +{i} EV) s{n}"
+                                for i in range(30)),
+                )
+                for n in range(DEFAULT_QUARANTINE_MAX_ENTRIES)
+            ])
+            _seed_lessons(home, [
+                _lesson_row(event="wrong_value", reason="THE RECURRING MISTAKE")
+            ] * 4)
+            modules_dir = Path(home) / "logs" / "knowledge" / "modules"
+            modules_dir.mkdir(parents=True)
+            (modules_dir / "Canon.pm.md").write_text("- THE MODULE PLAYBOOK BULLET\n")
+            prompt = build_prompt(gap, knowledge_home=Path(home),
+                                  module_name="Canon.pm", worker_label="canon-3")
+        self.assertIn("REJECTED", prompt)
+        self.assertIn("THE MODULE PLAYBOOK BULLET", prompt)
+        self.assertIn("THE RECURRING MISTAKE", prompt)
+
+
+class BuildPromptOwnQuarantineTests(unittest.TestCase):
+    def test_a_workers_own_rejection_flags_reach_its_prompt(self):
+        with tempfile.TemporaryDirectory() as home:
+            _seed_quarantine(home, [
+                _quarantine_entry(squad="canon", fmt="NEF",
+                                  flags=("printconv-mismatch:Auto (bracketed)",),
+                                  reason="validate_fix_commit flags: printconv-mismatch"),
+            ])
+            prompt = build_prompt(make_gap(gap_count=1), knowledge_home=Path(home),
+                                  worker_label="canon-3")
+        self.assertIn("printconv-mismatch:Auto (bracketed)", prompt)
+        self.assertIn("REJECTED", prompt)
+
+    def test_another_workers_rejection_does_not(self):
+        with tempfile.TemporaryDirectory() as home:
+            _seed_quarantine(home, [
+                _quarantine_entry(squad="nikon", fmt="NEF",
+                                  flags=("targeted-test-failed",),
+                                  reason="cargo test --lib nef failed"),
+            ])
+            prompt = build_prompt(make_gap(gap_count=1), knowledge_home=Path(home),
+                                  worker_label="canon-3")
+        self.assertNotIn("targeted-test-failed", prompt)
+        self.assertNotIn("REJECTED", prompt)
+
+    def test_omitted_entirely_without_a_worker_label(self):
+        # Hermetic-by-default: every pre-existing caller passes no
+        # worker_label and must keep its byte-identical prompt.
+        with tempfile.TemporaryDirectory() as home:
+            _seed_quarantine(home, [_quarantine_entry(squad="canon", fmt="NEF")])
+            with_label = build_prompt(make_gap(gap_count=1), knowledge_home=Path(home),
+                                      worker_label="canon-3")
+            without = build_prompt(make_gap(gap_count=1), knowledge_home=Path(home))
+        self.assertIn("printconv-unverifiable", with_label)
+        self.assertNotIn("printconv-unverifiable", without)
+
+
+class InfraNoiseNeverReachesAPromptTests(unittest.TestCase):
+    """226 urlopen errors and 54 HTTP 429s are provider outages, not
+    knowledge. They must not reach a prompt and must not consume a byte
+    of the learning budget -- including the 231 live rows that labelled
+    an outage as build_failed/review_rejected/structural."""
+
+    INFRA_ROWS = (
+        ("infra", "model call failed: HTTP Error 429: Too Many Requests"),
+        ("build_failed", "model call failed: <urlopen error [Errno 8] nodename "
+                         "nor servname provided, or not known>"),
+        ("review_rejected", "review call failed: [Errno 54] Connection reset by peer"),
+        ("structural", "FAILED NEF:EXIF:CFAPattern2: model call failed: "
+                       "[Errno 54] Connection reset by peer"),
+    )
+
+    def test_tail_reader_drops_them_however_they_were_labelled(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = _seed_lessons(home, [
+                _lesson_row(event=event, reason=reason)
+                for event, reason in self.INFRA_ROWS
+            ] + [_lesson_row(event="wrong_value", reason="a genuine lesson")])
+            events = read_lessons_tail_events(path)
+        self.assertEqual([e["reason"] for e in events], ["a genuine lesson"])
+
+    def test_none_of_it_reaches_the_prompt(self):
+        with tempfile.TemporaryDirectory() as home:
+            _seed_lessons(home, [
+                _lesson_row(event=event, reason=reason)
+                for event, reason in self.INFRA_ROWS
+            ])
+            prompt = build_prompt(make_gap(gap_count=1), knowledge_home=Path(home),
+                                  module_name="Canon.pm", worker_label="canon-1")
+        for token in ("urlopen", "429", "Connection reset", "model call failed",
+                      "Recent lessons ledger entries"):
+            self.assertNotIn(token, prompt)
+
+    def test_it_consumes_no_learning_budget(self):
+        """Hundreds of outage rows must produce a byte-identical prompt
+        to zero of them. The block admits max_entries DISTINCT lessons;
+        if an outage counted as one, a single provider incident would
+        evict every real lesson from the block for hours."""
+        gap = make_gap(gap_count=1)
+        # Outages first, real lessons last: if the outages consumed any
+        # ranking slot or any byte of budget, the real lessons appended
+        # after them would be the ones pushed out.
+        outage = [_lesson_row(event=event, reason=reason)
+                  for event, reason in self.INFRA_ROWS] * 50
+        real = [_lesson_row(event="wrong_value", reason=f"real lesson {c}")
+                for c in "abcdefgh"]
+        with tempfile.TemporaryDirectory() as quiet:
+            _seed_lessons(quiet, real)
+            quiet_prompt = build_prompt(gap, knowledge_home=Path(quiet),
+                                        module_name="Canon.pm", worker_label="canon-1")
+        with tempfile.TemporaryDirectory() as noisy:
+            _seed_lessons(noisy, outage + real)
+            noisy_prompt = build_prompt(gap, knowledge_home=Path(noisy),
+                                        module_name="Canon.pm", worker_label="canon-1")
+        self.assertIn("real lesson a", quiet_prompt)
+        self.assertEqual(noisy_prompt, quiet_prompt)
+
+
+class AdaptiveDiffFormatGuidanceTests(unittest.TestCase):
+    """"no diff in model response" is 1489 of 4922 live lesson rows
+    (~40% of all failures) and is a RESPONSE-FORMAT failure, not a
+    domain-knowledge one. The corrective text goes only to the workers
+    actually failing that way."""
+
+    NO_DIFF_SPELLINGS = (
+        "no diff in model response",
+        "no diff in model response (exhausted request budget)",
+        "no diff in model response (exhausted verify budget)",
+        "no diff in model response (patch chunking exceeded safety limit)",
+    )
+
+    def test_counts_only_this_workers_rows(self):
+        events = [
+            _lesson_row(worker="canon-1", reason=self.NO_DIFF_SPELLINGS[0]),
+            _lesson_row(worker="canon-1", reason=self.NO_DIFF_SPELLINGS[2]),
+            _lesson_row(worker="nikon-1", reason=self.NO_DIFF_SPELLINGS[0]),
+            _lesson_row(worker="canon-1", reason="gap count did not decrease"),
+        ]
+        self.assertEqual(count_diff_format_failures(events, "canon-1"), 2)
+        self.assertEqual(count_diff_format_failures(events, "nikon-1"), 1)
+        self.assertEqual(count_diff_format_failures(events, "olympus-1"), 0)
+        self.assertEqual(count_diff_format_failures(events, None), 0)
+
+    def test_every_attempt_build_spelling_is_recognized(self):
+        for reason in self.NO_DIFF_SPELLINGS:
+            self.assertEqual(
+                count_diff_format_failures([_lesson_row(reason=reason)], "canon-1"), 1,
+                reason,
+            )
+
+    def test_guidance_states_the_envelope_with_a_working_example(self):
+        text = build_diff_format_remediation(3)
+        self.assertIn("```diff", text)
+        self.assertIn("--- a/", text)   # a bare @@ hunk does not apply
+        self.assertIn("+++ b/", text)
+        self.assertIn("EXACTLY ONE", text)
+        self.assertIn("3 recent", text)
+        self.assertEqual(build_diff_format_remediation(0), "")
+
+    def test_it_never_spends_a_slot_in_the_domain_lessons_ranking(self):
+        """Each failure class is routed to the one section that can fix
+        it. Without this, ranking by recurrence is self-defeating: over
+        the live tail 2026-07-25 this reason is 40 of 235 rows and ranks
+        FIRST for essentially every module, evicting the wrong_value and
+        structural lessons that carry the actual ExifTool knowledge."""
+        # fix_gap writes TWO rows per failed round, not one: the specific
+        # event, and then critique_and_continue's lesson("critique",
+        # critique). The critique row carries the CRITIC'S PARAPHRASE, so
+        # it never contains the literal "no diff in model response" and a
+        # literal-match filter sails straight past it. The old fixture
+        # wrote only the first row, which is the only reason this test
+        # ever passed. Measured on the live tail 2026-07-25: 14 of 43
+        # ranked slots across the 6 live formats were spent on that
+        # paraphrase (MRW 5 of 6, NEF 4 of 6).
+        events = []
+        for i in range(40):
+            events.append(_lesson_row(reason=self.NO_DIFF_SPELLINGS[i % 4]))
+            events.append(_lesson_row(
+                event="critique",
+                reason=(f"The fixer likely emitted no diff because it assumed "
+                        f"tag {i} was already handled, and provided a prose "
+                        f"description instead of an actual unified diff."),
+            ))
+        events += [_lesson_row(event="wrong_value", reason="PrintConv byte match")] * 2
+        ranked = select_module_lessons(events, "Canon.pm", "NEF")
+        self.assertEqual([(e["reason"], n) for e, n in ranked],
+                         [("PrintConv byte match", 2)])
+
+    def test_failing_worker_gets_it_and_a_clean_worker_does_not(self):
+        gap = make_gap(gap_count=1)
+        with tempfile.TemporaryDirectory() as home:
+            _seed_lessons(home, [
+                _lesson_row(worker="canon-1", reason=self.NO_DIFF_SPELLINGS[0]),
+            ])
+            failing = build_prompt(gap, knowledge_home=Path(home),
+                                   module_name="Canon.pm", worker_label="canon-1")
+            clean = build_prompt(gap, knowledge_home=Path(home),
+                                 module_name="Canon.pm", worker_label="canon-2")
+        self.assertIn("FORMAT ALERT", failing)
+        self.assertNotIn("FORMAT ALERT", clean)
+
+    def test_the_alert_does_not_contradict_the_reply_shape_manifest(self):
+        """The alert and build_reply_shape_manifest ship in the SAME
+        prompt, and the alert used to overrule it: it said the reply "is
+        parsed by looking for a ```diff fenced block, and nothing else
+        counts" and "Prose describing the change ... discarded unread",
+        while the manifest defines four legal shapes of which shape 1
+        (REQUEST) is a bare prose line with NO diff at all and shape 4
+        REQUIRES 2-3 sentences of prose before the fence -- and the
+        STRATEGY paragraph tells the worker to probe with VERIFY.
+
+        A worker that believes the alert stops issuing REQUEST/VERIFY,
+        which is the opposite of what the alert is for.
+        """
+        text = build_diff_format_remediation(3)
+        manifest = build_reply_shape_manifest(4096)
+        for shape in ("REQUEST", "VERIFY", "PATCH"):
+            self.assertIn(shape, manifest)
+            self.assertIn(shape, text, f"the alert must not erase shape {shape}")
+        self.assertNotIn("nothing else counts", text)
+        self.assertNotIn("Nothing may follow the closing fence", text)
+
+    def test_the_alert_makes_no_claim_extract_diff_contradicts(self):
+        """Two of the alert's assertions were false in the STRICT
+        direction, which is the direction that costs rounds: extract_diff
+        also accepts an unfenced reply that starts with "diff --git"/
+        "--- ", and DIFF_BLOCK_RE is a NON-GREEDY search, so trailing text
+        after the closing fence is simply ignored. Pin both to
+        extract_diff's actual behaviour so the text and the parser can
+        never drift apart again."""
+        body = ("--- a/src/parsers/jpeg/foo.rs\n"
+                "+++ b/src/parsers/jpeg/foo.rs\n"
+                "@@ -1,2 +1,3 @@\n a\n+b\n c\n")
+        # First half: what the parser really accepts.
+        self.assertIsNotNone(extract_diff(body))                       # unfenced
+        self.assertIsNotNone(extract_diff(f"```diff\n{body}```\nthanks!"))  # trailing prose
+        self.assertIsNotNone(extract_diff(f"Here is the fix.\n\n```diff\n{body}```"))
+
+        # Second half, and WITHOUT IT THIS TEST GUARDS NOTHING: assert the
+        # alert text makes no claim the three cases above contradict.
+        # Reverting DIFF_FORMAT_REMEDIATION wholesale to its old
+        # self-contradicting wording left this test green, because every
+        # assertion was on extract_diff -- a function the change never
+        # touched. The docstring's promise ("so the text and the parser can
+        # never drift apart again") requires binding BOTH sides.
+        alert = model_fix_loop.DIFF_FORMAT_REMEDIATION
+        for false_in_the_strict_direction in (
+            "nothing else counts",
+            "Nothing may follow the closing fence",
+        ):
+            self.assertNotIn(false_in_the_strict_direction, alert)
+        # And it must not discourage the evidence-gathering protocol the
+        # loop documents as its own fastest path to convergence.
+        for shape in ("REQUEST", "VERIFY"):
+            self.assertIn(shape, alert)
+
+
+class RecurrenceRankingOnProseRowsTests(unittest.TestCase):
+    """rank_by_recurrence clusters on fingerprint_scoped, whose reason
+    component is NORMALIZED FREE TEXT. That works for the machine-written
+    reasons (cargo output, tag-key mismatches) and not at all for the
+    critic's multi-hundred-word prose.
+
+    Measured over the live 256KB tail 2026-07-25 (235 rows), per event:
+    critique 112 rows -> 107 clusters, 106 of them singletons (95%);
+    build_failed 78 rows -> 2 clusters, 0 singletons; gap_not_closed 11
+    -> 1 cluster; review_rejected 10 -> 2 clusters. The degeneration is
+    entirely and exclusively the critique event, and a ranking in which
+    every row is a singleton is not a recurrence ranking -- ties fall
+    through to recency, i.e. exactly the newest-first tail this feature
+    was introduced to replace, for 43% of the ledger.
+    """
+
+    #: Verbatim shapes from the live ledger (worker ids and module names
+    #: elided). Note they vary LEXICALLY, not numerically -- norm_reason
+    #: folds digit runs to "#", so a fixture that varied only by an index
+    #: would cluster and prove nothing.
+    LIVE_CRITIQUE_SHAPES = (
+        "The model most likely assumed the missing tag belonged in the top-level "
+        "container parser rather than in the specific submodule that actually "
+        "hosts that tag table, causing it to return an empty result.",
+        "The fixer most likely failed because it searched for a tag definition "
+        "table and found none, incorrectly concluding no diff was needed.",
+        "You likely either explained the fix in prose or assumed that ISO tag "
+        "coverage is already handled elsewhere, so you emitted no code patch.",
+        "You likely assumed CR2 has a dedicated module or top-level tag table, "
+        "causing the model to target a non-existent file.",
+        "The attempt probably reused a PrintConv string remembered from another "
+        "camera family instead of reading the one in the maker-note table.",
+    )
+
+    def test_prose_critiques_do_not_displace_genuinely_recurring_lessons(self):
+        events = [_lesson_row(event="wrong_value", reason="THE RECURRING MISTAKE")] * 3
+        events += [
+            _lesson_row(event="critique", reason=shape)
+            for _ in range(8) for shape in self.LIVE_CRITIQUE_SHAPES
+        ]
+        ranked = select_module_lessons(events, "Canon.pm", "NEF")
+        self.assertEqual([(e["reason"], n) for e, n in ranked],
+                         [("THE RECURRING MISTAKE", 3)])
+
+    def test_machine_written_reasons_still_cluster_and_still_rank(self):
+        # The fix must not throw out the ranking itself: reasons that DO
+        # carry a repeatable identity keep clustering exactly as before.
+        events = [_lesson_row(event="build_failed", reason="error[E0308]: mismatched types")] * 5
+        events += [_lesson_row(event="wrong_value", reason="PrintConv byte match")] * 2
+        events += [_lesson_row(event="structural", reason="double emission of Make")]
+        ranked = select_module_lessons(events, "Canon.pm", "NEF")
+        self.assertEqual([(e["reason"], n) for e, n in ranked],
+                         [("error[E0308]: mismatched types", 5),
+                          ("PrintConv byte match", 2),
+                          ("double emission of Make", 1)])
+
+
+class DeadCompatibilityShimTests(unittest.TestCase):
+    def test_read_lessons_tail_is_gone(self):
+        """It was kept as a compatibility shim for callers that do not
+        exist: zero callers and zero tests in the tree, while its return
+        type silently changed from [event, ...] to [(event, count), ...]
+        when recurrence ranking landed. A shim nothing calls, nothing
+        tests, and whose contract changed under it is not compatibility,
+        it is a trap for the next caller."""
+        self.assertFalse(hasattr(model_fix_loop, "read_lessons_tail"))
+
+
+class LessonRecurrenceRankingTests(unittest.TestCase):
+    """Section 6: the block leads with the mistake this module keeps
+    repeating, not with whatever happened last."""
+
+    def test_repeated_fingerprint_outranks_a_more_recent_one_off(self):
+        events = [_lesson_row(event="wrong_value", reason="PrintConv must match Perl")] * 3
+        events.append(_lesson_row(event="build_failed", reason="a one-off compile error"))
+        ranked = select_module_lessons(events, "Canon.pm", "NEF")
+        self.assertEqual([(e["reason"], n) for e, n in ranked], [
+            ("PrintConv must match Perl", 3),
+            ("a one-off compile error", 1),
+        ])
+
+    def test_module_scoping_beats_format_scoping_when_a_module_is_given(self):
+        events = [
+            _lesson_row(module="Canon.pm", fmt="NEF", reason="canon lesson"),
+            _lesson_row(module="Nikon.pm", fmt="NEF", reason="nikon lesson"),
+        ]
+        self.assertEqual([e["reason"] for e, _ in select_module_lessons(events, "Canon.pm", "NEF")],
+                         ["canon lesson"])
+        # No module key -> format scoping, which here admits both rows.
+        self.assertEqual(len(select_module_lessons(events, None, "NEF")), 2)
+
+    def test_rendered_block_shows_the_recurrence_count_only_when_repeated(self):
+        events = [_lesson_row(event="wrong_value", reason="recurring")] * 4
+        events.append(_lesson_row(event="build_failed", reason="one-off"))
+        rendered = format_lessons_tail(select_module_lessons(events, "Canon.pm", "NEF"))
+        self.assertIn("- wrong_value x4: recurring", rendered)
+        self.assertIn("- build_failed: one-off", rendered)
+        self.assertLess(rendered.index("x4"), rendered.index("one-off"))
+
+    def test_recurring_mistake_leads_the_prompt_block(self):
+        with tempfile.TemporaryDirectory() as home:
+            rows = [_lesson_row(event="wrong_value", reason="THE RECURRING MISTAKE")] * 5
+            rows += [_lesson_row(event="build_failed", reason=f"a fresh one-off {c}")
+                     for c in "abcdefgh"]
+            _seed_lessons(home, rows)
+            prompt = build_prompt(make_gap(gap_count=1), knowledge_home=Path(home),
+                                  module_name="Canon.pm")
+        self.assertIn("wrong_value x5: THE RECURRING MISTAKE", prompt)
+        self.assertLess(prompt.index("THE RECURRING MISTAKE"), prompt.index("a fresh one-off"))
+
+
+class LearningBlockBudgetTests(unittest.TestCase):
+    """The budget must stay honest no matter how large the ledgers grow,
+    and the squeeze must fall on the least valuable sections."""
+
+    def test_composition_is_bounded_by_the_budget(self):
+        parts = {name: "x" * 10_000 for name in LEARNING_SECTION_ORDER}
+        self.assertEqual(len(compose_learning_block(parts, 100)), 400)
+        self.assertEqual(compose_learning_block(parts, 0), "")
+
+    def test_overflow_is_shed_from_the_tail_of_the_priority_order(self):
+        parts = {"diff_format": "F" * 40, "quarantine": "Q" * 40,
+                 "sweep_reviews": "S" * 40, "module_playbook": "M" * 40,
+                 "lessons_tail": "L" * 40}
+        text = compose_learning_block(parts, 25)  # 100 chars
+        self.assertEqual(text, "F" * 40 + "Q" * 40 + "S" * 20)
+        self.assertNotIn("M", text)
+        self.assertNotIn("L", text)
+
+    def test_unranked_keys_are_ignored(self):
+        self.assertEqual(compose_learning_block({"mystery": "Z" * 50}, 100), "")
+
+    def test_pre_existing_three_section_order_is_unchanged(self):
+        # With neither new section present the block must be exactly what
+        # the old `sweep + module + tail` concatenation produced, so a
+        # worker with no quarantine record and no format problem keeps a
+        # byte-identical (cacheable) prompt.
+        parts = {"sweep_reviews": "S", "module_playbook": "M", "lessons_tail": "L"}
+        self.assertEqual(compose_learning_block(parts, 1000), "SML")
+
+    def test_large_synthetic_ledger_stays_within_the_configured_budget(self):
+        gap = make_gap(gap_count=1)
+        budget = DEFAULT_LEARNING_BUDGET_TOKENS  # 1200 tokens -> 4800 chars
+        with tempfile.TemporaryDirectory() as home:
+            # ~3000 lesson rows, 400 quarantine entries and a full-size
+            # playbook: every section of the block over-full at once.
+            rows = []
+            for i in range(1000):
+                rows.append(_lesson_row(event="wrong_value",
+                                        reason=f"recurring mistake {chr(97 + i % 26)}" * 8))
+                rows.append(_lesson_row(event="build_failed", reason="x" * 400))
+                rows.append(_lesson_row(worker="canon-1",
+                                        reason="no diff in model response"))
+            _seed_lessons(home, rows)
+            _seed_quarantine(home, [
+                _quarantine_entry(flags=("printconv-mismatch:Auto (bracketed)",),
+                                  reason="y" * 900)
+                for _ in range(400)
+            ])
+            modules_dir = Path(home) / "logs" / "knowledge" / "modules"
+            modules_dir.mkdir(parents=True)
+            (modules_dir / "Canon.pm.md").write_text("- playbook bullet\n" * 300)
+
+            # learning_budget_tokens=0 empties the block entirely, so the
+            # difference between the two prompts IS the block, exactly --
+            # no estimating around the rest of the prompt.
+            without_block = build_prompt(gap, knowledge_home=Path(home),
+                                         module_name="Canon.pm", worker_label="canon-1",
+                                         learning_budget_tokens=0)
+            loaded = build_prompt(gap, knowledge_home=Path(home),
+                                  module_name="Canon.pm", worker_label="canon-1",
+                                  learning_budget_tokens=budget)
+        self.assertLessEqual(len(loaded) - len(without_block), budget * 4)
+        # The highest-priority sections are the ones that survived...
+        self.assertIn("FORMAT ALERT", loaded)
+        self.assertIn("printconv-mismatch:Auto (bracketed)", loaded)
+        # ...and the lowest-priority one was shed entirely.
+        self.assertNotIn("Recent lessons ledger entries", loaded)
+
+
 class FormatPreviousAttemptsTests(unittest.TestCase):
     def test_empty_returns_empty_string(self):
         self.assertEqual(format_previous_attempts([]), "")
@@ -2645,6 +4395,25 @@ class ReviewVerdictTests(unittest.TestCase):
         self.assertFalse(approved)
         self.assertIn("review call failed", reason)
 
+    def test_unreachable_reviewer_does_not_kill_the_worker(self):
+        # Continue-on policy: an unreachable reviewer is "not approved
+        # this round", not a crash. The tag comes back around and gets
+        # reviewed again once the provider answers.
+        gap = make_gap()
+
+        def raising(messages, *a):
+            raise ModelQuotaExhausted("weekly cost limit reached")
+
+        approved, reason = review_verdict(
+            gap, "--- a/x\n+++ b/x\n",
+            {"base_url": "u", "api_key": "k",
+             "models": [{"name": "gpt-5.6-terra", "base_url": "u", "api_key": "k"}],
+             "max_tokens": 4096, "reasoning_effort": "low"},
+            call_model_fn=raising,
+        )
+        self.assertFalse(approved)
+        self.assertIn("review call failed", reason)
+
     def test_picks_a_model_from_the_pool_via_pick_model_fn(self):
         gap = make_gap()
         models_seen = []
@@ -2710,6 +4479,57 @@ class ExtractReviewVerdictFullTests(unittest.TestCase):
     def test_unparseable_defaults_to_reject(self):
         from model_fix_loop import extract_review_verdict_full
         verdict, reason = extract_review_verdict_full("uh, maybe?")
+        self.assertEqual(verdict, "reject")
+        self.assertIn("unparseable review verdict", reason)
+
+    def test_trailing_approve_after_checklist_is_honored(self):
+        # The review prompt says "answer each checklist item briefly, THEN
+        # give your verdict" -- a model that OBEYS puts APPROVE last. The
+        # first-line-only match scored these unparseable -> REJECT,
+        # measured at 7/209 real reviews and destroying already-built,
+        # already-gap-verified fixes.
+        from model_fix_loop import extract_review_verdict_full
+        reply = (
+            "C1: exact tag ID match confirmed (0x0112).\n"
+            "C2: PrintConv strings are byte-identical to Exif.pm.\n"
+            "C3: single reachable emitter.\n"
+            "C4: test asserts against a real sample.\n"
+            "C5: no hardcoded values.\n"
+            "\n"
+            "APPROVE"
+        )
+        self.assertEqual(extract_review_verdict_full(reply), ("approve", ""))
+
+    def test_trailing_verdict_label_and_markdown_emphasis_are_tolerated(self):
+        from model_fix_loop import extract_review_verdict_full
+        self.assertEqual(
+            extract_review_verdict_full("C1: fine.\n\n**Final Verdict:** APPROVE"),
+            ("approve", ""),
+        )
+        verdict, reason = extract_review_verdict_full(
+            "C2: paraphrased.\n\nVerdict: REJECT: C2 paraphrased PrintConv")
+        self.assertEqual(verdict, "reject")
+        self.assertEqual(reason, "C2 paraphrased PrintConv")
+
+    def test_last_verdict_line_wins_over_criteria_discussion(self):
+        # Checklist bodies routinely mention the words approve/reject while
+        # discussing criteria; the model's real conclusion is the LAST one,
+        # which is why the rescan runs bottom-up rather than top-down.
+        from model_fix_loop import extract_review_verdict_full
+        reply = (
+            "I would normally approve a change like this, but:\n"
+            "C2: the PrintConv string was paraphrased.\n"
+            "\n"
+            "REJECT: C2 paraphrased PrintConv"
+        )
+        verdict, reason = extract_review_verdict_full(reply)
+        self.assertEqual(verdict, "reject")
+        self.assertEqual(reason, "C2 paraphrased PrintConv")
+
+    def test_no_verdict_anywhere_still_fails_safe_to_reject(self):
+        from model_fix_loop import extract_review_verdict_full
+        verdict, reason = extract_review_verdict_full(
+            "C1: looks plausible.\nC2: I am not sure about the table.\nHmm.")
         self.assertEqual(verdict, "reject")
         self.assertIn("unparseable review verdict", reason)
 
@@ -2986,6 +4806,47 @@ class AttemptBuildTests(unittest.TestCase):
         self.assertIn("model call failed", reason)
         self.assertIn("timed out", reason)
 
+    def test_exhausted_quota_is_an_infra_failure_the_worker_continues_past(self):
+        # Operator policy: empty 200s, 429s and everything in that class
+        # are continued past, never fatal. The reason must carry
+        # INFRA_FAILURE_PREFIX so run_tag_loop's infra_only branch charges
+        # nothing -- no fail increment, no blacklist. Propagating instead
+        # would kill the worker, which is the opposite of continuing on.
+        def raising_call_model(messages, *a):
+            raise ModelQuotaExhausted("weekly cost limit reached")
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=raising_call_model,
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertTrue(reason.startswith(INFRA_FAILURE_PREFIX), reason)
+        self.assertIn("weekly cost limit", reason)
+
+    def test_empty_reply_exhaustion_is_also_an_infra_failure(self):
+        # The dominant real-world failure: HTTP 200 with an empty body
+        # (29.1% of gpt-5.5 calls, 5.9% of gpt-5.6-terra). Must land in
+        # the same continue-on bucket as a 429.
+        def raising_call_model(messages, *a):
+            raise RuntimeError("model returned an empty reply")
+
+        built, reason, _diff, _msgs = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=raising_call_model,
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertTrue(reason.startswith(INFRA_FAILURE_PREFIX), reason)
+
     def test_nudges_model_to_submit_a_diff_once_request_budget_is_exhausted(self):
         # Previously: once request_turns_used hit MAX_REQUEST_TURNS, the
         # next REQUEST-shaped reply fell straight through to extract_diff
@@ -3002,8 +4863,8 @@ class AttemptBuildTests(unittest.TestCase):
                 # that's what must trigger the nudge instead of an
                 # immediate silent failure.
                 return "REQUEST: src/parsers/jpeg/mod.rs"
-            # 6th call: this is the post-nudge turn -- submit a real diff.
-            self.assertIn("No more file requests", messages[-1]["content"])
+            # 6th call: this is the forced-diff turn -- submit a real diff.
+            self.assertIn("reply with a diff and nothing else", messages[-1]["content"])
             return "```diff\n--- a/x\n+++ b/x\n```\n"
 
         built, reason, diff, messages = attempt_build(
@@ -3017,6 +4878,135 @@ class AttemptBuildTests(unittest.TestCase):
         )
         self.assertTrue(built)
         self.assertEqual(len(calls), 6)
+
+    # --- investigation-budget visibility (defect 3) -------------------------
+    #
+    # RW2 transcript, 2026-07-26T21:23: the model spent turn 24 on yet another
+    # REQUEST because nothing in the conversation ever told it how many
+    # investigation turns it had or how many were left, and the one
+    # "stop investigating" message only arrived AFTER the budget was gone.
+
+    def test_every_request_answer_ends_with_the_remaining_budget(self):
+        seen = []
+
+        def fake_call_model(messages, *a):
+            if messages[-1]["role"] == "user" and len(seen) < 3:
+                seen.append(messages[-1]["content"])
+            if len(seen) < 3:
+                return "REQUEST: src/x.rs"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("fn a() {}\n")
+            attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=5),
+                repo_root=repo,
+            )
+        # seen[0] is the original prompt; seen[1..] are REQUEST answers.
+        self.assertIn("(investigation turn 1 of 5 -- 4 left)", seen[1])
+        self.assertIn("(investigation turn 2 of 5 -- 3 left)", seen[2])
+        # ...and the counter must be the LAST thing in the message: it changes
+        # every turn, so anywhere but the tail it would break the provider's
+        # cached prefix for every later call in the attempt.
+        self.assertTrue(seen[1].rstrip().endswith("4 left)"), seen[1])
+        self.assertIn("fn a() {}", seen[1])   # the answer itself still comes first
+
+    def test_final_investigation_turn_is_told_so_before_it_is_spent(self):
+        answers = []
+
+        def fake_call_model(messages, *a):
+            if len(answers) < 2:
+                answers.append(messages[-1]["content"])
+                return "REQUEST: src/x.rs"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("fn a() {}\n")
+            attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=1),
+                repo_root=repo,
+            )
+        final = answers[1]   # the answer to the one and only allowed REQUEST
+        self.assertIn("this was your LAST", final)
+        self.assertIn("another REQUEST will be discarded", final)
+        self.assertIn("best-effort diff", final)
+
+    def test_budget_footer_wording(self):
+        self.assertEqual(render_request_budget_footer(3, 5),
+                         "(investigation turn 3 of 5 -- 2 left)")
+        last = render_request_budget_footer(5, 5)
+        self.assertIn("this was your LAST", last)
+        self.assertNotIn("2 left", last)
+
+    def test_dead_end_pivot_message_also_carries_the_budget(self):
+        # The max_request_repeats dead-end branch is still a consumed
+        # investigation turn, so it must show the same counter.
+        seen = []
+
+        def fake_call_model(messages, *a):
+            seen.append(messages[-1]["content"])
+            if len(seen) <= 4:
+                return "REQUEST: src/x.rs"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("fn a() {}\n")
+            attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=8, max_request_repeats=3),
+                repo_root=repo,
+            )
+        pivot = [m for m in seen if "requested 'src/x.rs' 3 times" in m]
+        self.assertEqual(len(pivot), 1)
+        self.assertIn("(investigation turn 3 of 8 -- 5 left)", pivot[0])
+
+    def test_request_with_no_turns_left_forces_exactly_one_diff_only_retry(self):
+        calls = []
+
+        def fake_call_model(messages, *a):
+            calls.append(messages[-1]["content"])
+            return "REQUEST: src/parsers/jpeg/mod.rs"   # never gives up
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=dict(CONFIG, max_request_turns=2),
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertEqual(reason, "no diff in model response (exhausted request budget)")
+        # 2 budgeted REQUEST turns + the one that overran + exactly ONE forced
+        # retry = 4 calls. A 5th would mean the forced retry can loop.
+        self.assertEqual(len(calls), 4)
+        forced = [c for c in calls if c == FORCED_DIFF_DEMAND]
+        self.assertEqual(len(forced), 1)
+        # It must demand a diff and NOTHING else -- no "or a REQUEST if you
+        # must" escape hatch, which is how the transcript kept investigating.
+        self.assertIn("DISCARDED", FORCED_DIFF_DEMAND)
+        self.assertIn("reply with a diff and nothing else", FORCED_DIFF_DEMAND)
 
     def test_fails_with_specific_reason_if_model_keeps_requesting_after_the_nudge(self):
         built, reason, diff, messages = attempt_build(
@@ -4280,8 +6270,13 @@ class FixGapK1LessonTests(HermeticFixGapTestCase):
                 knowledge_home=tmpdir, worker_label="w1",
             )
             events = [e["event"] for e in _read_lessons(tmpdir)]
-        self.assertIn("build_failed", events)
-        self.assertIn("infra", events)
+        # Exactly ONE row, and it is infra. fix_gap used to ALSO write a
+        # build_failed row carrying the same outage reason (from inside
+        # `if not built:`, where a DNS error and a type error look
+        # identical) -- 218 such duplicate rows on the live ledger
+        # 2026-07-25, every one of them a knowledge-file bullet and a
+        # line of some worker's prompt budget spent on a 429.
+        self.assertEqual(events, ["infra"])
         self.assertNotIn("critique", events)
 
     def test_test_regression_writes_test_regressed_event(self):
@@ -4932,6 +6927,42 @@ class TagStillOpenTests(unittest.TestCase):
         match = {"missing_tags": [], "value_differences": [],
                  "duplicate_emissions": ["EXIF:SomeOtherTag"]}
         self.assertIsNone(tag_still_open(match, self.MISSING_GAP))
+
+
+class NewlyDuplicatedEmissionsTests(unittest.TestCase):
+    """The other half of the same gate, which was reading POST directly.
+
+    Measured 2026-07-27: NEF carries NINE duplicate_emissions on clean main
+    (EXIF:BitsPerSample, Compression, ImageHeight, ImageWidth,
+    PhotometricInterpretation, RowsPerStrip, SamplesPerPixel, StripOffsets,
+    SubfileType), so every NEF commit was quarantined for inheriting them --
+    including d8168e7b, which introduced none. A commit is answerable for
+    the duplicates it INTRODUCES, never for the ones it inherits.
+    """
+
+    def test_pre_existing_duplicates_are_NOT_blamed_on_the_commit(self):
+        nine = ["EXIF:BitsPerSample", "EXIF:Compression", "EXIF:ImageHeight"]
+        pre = {"duplicate_emissions": nine}
+        post = {"duplicate_emissions": nine}
+        self.assertEqual(newly_duplicated_emissions(pre, post), [])
+
+    def test_an_introduced_duplicate_is_reported(self):
+        pre = {"duplicate_emissions": ["EXIF:Compression"]}
+        post = {"duplicate_emissions": ["EXIF:Compression", "GIF:BackgroundColor"]}
+        self.assertEqual(newly_duplicated_emissions(pre, post), ["GIF:BackgroundColor"])
+
+    def test_multiple_introduced_are_sorted(self):
+        pre = {"duplicate_emissions": []}
+        post = {"duplicate_emissions": ["MakerNotes:Z", "EXIF:A"]}
+        self.assertEqual(newly_duplicated_emissions(pre, post), ["EXIF:A", "MakerNotes:Z"])
+
+    def test_a_duplicate_the_commit_REMOVED_is_not_reported(self):
+        pre = {"duplicate_emissions": ["EXIF:A"]}
+        post = {"duplicate_emissions": []}
+        self.assertEqual(newly_duplicated_emissions(pre, post), [])
+
+    def test_missing_reports_are_treated_as_empty(self):
+        self.assertEqual(newly_duplicated_emissions(None, None), [])
 
 
 class NewOxidexOnlyKeysTests(unittest.TestCase):

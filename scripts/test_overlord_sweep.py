@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -252,6 +253,93 @@ class CollectGreenStampsTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# DST fall-back: the stamp ordering key must be an INSTANT, not a naive
+# local-time string
+# ---------------------------------------------------------------------------
+
+class DstFallBackStampOrderingTests(unittest.TestCase):
+    """record_head stamps `ts` with offset-free LOCAL time and
+    collect_green_stamps both filtered and sorted that string
+    lexicographically. Inside the DST fall-back's repeated hour a LATER
+    instant therefore sorts EARLIER, so the newest consumed head is
+    passed over and the round reports the older squad_sha (or, on the
+    next round, no news at all).
+
+    Measured with TZ=America/Los_Angeles (both epochs verified against
+    time.localtime):
+      1793521800 -> 2026-11-01T01:30:00 PDT-0700   (earlier instant)
+      1793524500 -> 2026-11-01T01:15:00 PST-0800   (2700s LATER instant)
+    "01:15:00" < "01:30:00" as a string, so the later head loses.
+    """
+
+    EARLIER_PDT = 1793521800.0
+    LATER_PST = 1793524500.0
+
+    def setUp(self):
+        patcher = patch.dict(os.environ, {"TZ": "America/Los_Angeles"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        time.tzset()
+        # tzset() reads the RESTORED environment, so re-running it during
+        # cleanup is what actually puts this process's clock back.
+        self.addCleanup(time.tzset)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.home = Path(self._tmp.name)
+
+    def _record(self, sha, squad_sha, epoch):
+        squad_merge_loop.record_head(
+            squad_merge_loop.squad_status_file(self.home, "canon"), sha, status="consumed",
+            patch_id=f"p-{sha}", format_name="JPEG", squad_sha=squad_sha, now_fn=lambda: epoch,
+        )
+
+    def test_the_later_instant_in_the_repeated_hour_wins(self):
+        self._record("headA", "aaaa", self.EARLIER_PDT)
+        self._record("headB", "bbbb", self.LATER_PST)
+        stamps, new_cursor = overlord_sweep.collect_green_stamps(self.home, ["canon"], {"squads": {}})
+        self.assertEqual(stamps["canon"]["squad_sha"], "bbbb")
+        self.assertEqual(new_cursor["squads"]["canon"]["last_squad_sha"], "bbbb")
+
+    def test_a_stamp_recorded_after_the_cursor_is_still_news(self):
+        # The consequence that actually stalls a squad: round 1 consumes
+        # the 01:30 PDT stamp and writes it as the cursor; round 2's 01:15
+        # PST stamp is a LATER instant but a smaller string, so the
+        # string filter reports "no news" and the round does nothing.
+        self._record("headA", "aaaa", self.EARLIER_PDT)
+        _stamps, cursor = overlord_sweep.collect_green_stamps(self.home, ["canon"], {"squads": {}})
+        self._record("headB", "bbbb", self.LATER_PST)
+        stamps, _new_cursor = overlord_sweep.collect_green_stamps(self.home, ["canon"], cursor)
+        self.assertEqual(stamps.get("canon", {}).get("squad_sha"), "bbbb")
+
+    def test_a_legacy_cursor_with_no_epoch_still_sees_new_epoch_stamps(self):
+        """The migration case a naive UTC switch breaks. On-disk cursors
+        written before this fix hold a naive LOCAL string; a stamp
+        written after it must still register as news against that
+        cursor, or every squad stalls for the length of the UTC offset.
+        """
+        self._record("headA", "aaaa", self.EARLIER_PDT)
+        legacy_cursor = {"squads": {"canon": {"last_ts": "2026-11-01T00:00:00",
+                                              "last_squad_sha": "older"}}}
+        stamps, _new_cursor = overlord_sweep.collect_green_stamps(
+            self.home, ["canon"], legacy_cursor,
+        )
+        self.assertEqual(stamps["canon"]["squad_sha"], "aaaa")
+
+    def test_a_legacy_stamp_with_no_epoch_is_still_collected(self):
+        # The other half of the migration: squad-status files already on
+        # disk carry no ts_epoch at all, and must keep working.
+        path = squad_merge_loop.squad_status_file(self.home, "canon")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"heads": {"legacyhead": {
+            "status": "consumed", "patch_id": "p", "format": "JPEG", "work_done": True,
+            "ts": "2026-11-01T01:30:00", "squad_sha": "legacysha",
+        }}}))
+        stamps, new_cursor = overlord_sweep.collect_green_stamps(self.home, ["canon"], {"squads": {}})
+        self.assertEqual(stamps["canon"]["squad_sha"], "legacysha")
+        self.assertEqual(new_cursor["squads"]["canon"]["last_ts"], "2026-11-01T01:30:00")
+
+
+# ---------------------------------------------------------------------------
 # Fresh sweep branch naming
 # ---------------------------------------------------------------------------
 
@@ -454,6 +542,46 @@ class VerifiedDeltaTests(GitRepoTestCase):
         total = overlord_sweep.sum_verified_deltas(repo, [sha1, sha2], overlord_sweep.default_run_git)
         self.assertEqual(total, 4)
 
+    def test_the_SAME_patch_twice_is_counted_ONCE(self):
+        """This total is the right-hand side of `measured_delta >=
+        verified_delta_sum`, and the left-hand side is a MEASUREMENT -- a gap
+        closed twice still measures as one gap closed. Counting a claim once
+        per commit compares a deduplicated quantity against a duplicated one.
+
+        Measured 2026-07-27 on the live fleet: measured delta 40 against
+        sum(Verified)=101 over 41 commits that were only 9 distinct patches
+        (distinct sum: 27). The sweep closed 40 gaps against 27 claimed --
+        over-delivery, which this gate calls "bonus yield, never a failure" --
+        and was rejected for under-delivering. That aborted every sweep.
+        """
+        repo = self.make_repo()
+        sha1 = self.commit_file(repo, "a.txt", "1", "fix a",
+                                trailers=[("Verified", "recheck-pass gaps=3->1")])
+        # The identical change reaching the sweep by a second route --
+        # cherry-picked onto another squad branch, so a DIFFERENT sha with the
+        # SAME patch-id, which is how it actually happens.
+        git(repo, "checkout", "-q", "-b", "other", "HEAD~1")
+        # Same parent and same content, so the same DIFF and the same
+        # patch-id; a different subject so it is a different COMMIT. That is
+        # exactly the shape a cherry-pick onto a second squad branch produces.
+        sha2 = self.commit_file(repo, "a.txt", "1", "fix a (via another squad)",
+                                trailers=[("Verified", "recheck-pass gaps=3->1")])
+        self.assertNotEqual(sha1, sha2, "must be two distinct commits")
+        total = overlord_sweep.sum_verified_deltas(
+            repo, [sha1, sha2], overlord_sweep.default_run_git)
+        self.assertEqual(total, 2, "one patch, one claim -- not 4")
+
+    def test_two_DIFFERENT_patches_both_count(self):
+        """Dedup must not swallow genuinely separate work."""
+        repo = self.make_repo()
+        sha1 = self.commit_file(repo, "a.txt", "1", "fix a",
+                                trailers=[("Verified", "recheck-pass gaps=3->1")])
+        sha2 = self.commit_file(repo, "b.txt", "1", "fix b",
+                                trailers=[("Verified", "recheck-pass gaps=2->0")])
+        total = overlord_sweep.sum_verified_deltas(
+            repo, [sha1, sha2], overlord_sweep.default_run_git)
+        self.assertEqual(total, 4)
+
     def test_missing_verified_trailer_contributes_zero(self):
         repo = self.make_repo()
         sha = self.commit_file(repo, "a.txt", "1", "fix a, no trailer")
@@ -481,13 +609,41 @@ class EvaluatePostMergeTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(delta, 5)
 
-    def test_negative_component_fails(self):
+    def test_a_delta_shortfall_is_RECORDED_but_no_longer_blocks(self):
+        """The shortfall stays visible; it just stops gating the push.
+
+        measured is a MEASUREMENT of the merged whole, sum(Verified) is a SUM
+        of per-commit claims, and that comparison only holds when the claims
+        are disjoint. Across a sweep they routinely are not: two commits
+        fixing overlapping gaps in one format each honestly claim what they
+        closed, while the measurement counts each closed gap once.
+
+        Measured 2026-07-27 on three consecutive sweeps -- 40 < 101 and
+        35 < 65 -- each aborting the sweep and then sending bisection after an
+        offender that did not exist. In the last one that hunt MASKED a real
+        CR2 defect (a tag named 'EXIF:Higher resolution image exists', the
+        PrintConv value of OPIProxy used as a tag name), because no squad's
+        removal could clear a shortfall that was arithmetic, not causal.
+
+        Every claim is still verified per-commit twice over -- the worker's
+        recheck and the merger's targeted test plus comparison -- so nothing
+        is unguarded by demoting the sweep-level re-sum.
+        """
         pre = {"JPEG": {"gap_count": 10}}
         post = {"JPEG": {"gap_count": 10}}
         ok, delta, problems = overlord_sweep.evaluate_post_merge(pre, post, 2)
-        self.assertFalse(ok)
+        self.assertTrue(ok, "a delta shortfall alone must not block the sweep")
         self.assertEqual(delta, 0)
-        self.assertTrue(any("sum(Verified)" in p for p in problems))
+        self.assertTrue(any("sum(Verified)" in p for p in problems),
+                        "but it must still be RECORDED in the sweep problems")
+
+    def test_a_structural_problem_still_blocks_even_with_a_fine_delta(self):
+        """The clauses that say what the RESULT IS stay blocking."""
+        pre = {"JPEG": {"gap_count": 10, "extra_in_oxidex": []}}
+        post = {"JPEG": {"gap_count": 2, "extra_in_oxidex": [{"family": "EXIF", "name": "Bogus"}]}}
+        ok, _delta, problems = overlord_sweep.evaluate_post_merge(pre, post, 2)
+        self.assertFalse(ok)
+        self.assertTrue(any("new_oxidex_only" in p for p in problems))
 
     def test_duplicate_emission_fails_even_with_a_good_delta(self):
         pre = {"JPEG": {"gap_count": 10, "extra_in_oxidex": []}}
@@ -691,6 +847,181 @@ class BuildEvidenceRowsTests(GitRepoTestCase):
         self.assertIn("abc123def456"[:12], text)
         self.assertIn("touches a commons file", text)
 
+    def test_the_section_does_not_claim_a_review_gate_that_does_not_exist(self):
+        """It said "flagged for human judgment-queue review before
+        merge". Nothing enforces that: judgment_entries is interpolated
+        into this prose and echoed in run_sweep's return dict, and the
+        string "judgment" does not appear anywhere in
+        parallel_model_fix_loop -- auto_publish_round branches only on
+        run_sweep's status and on pr_checks_state, so a flagged commit
+        squash-merges on green like any other. Measured 2026-07-26: BOTH
+        sweep PRs that have ever landed (#124 -> 4f3eb99 and #130 ->
+        a2aa0df) carry "touches a value-map/PrintConv-like table", i.e.
+        turning this into a hard merge gate today would have published
+        NOTHING. Until the classifier's precision is fixed, the prose has
+        to describe what actually happens.
+        """
+        text = overlord_sweep.render_judgment_queue_section(
+            [("abc123def456", ["touches a value-map/PrintConv-like table"])],
+        )
+        self.assertNotIn("before merge", text)
+        self.assertIn("advisory", text.lower())
+
+
+# ---------------------------------------------------------------------------
+# Step 7b: cargo fmt before push (the measured PR #124 CI failure)
+# ---------------------------------------------------------------------------
+
+class ReattachSweepBranchTests(GitRepoTestCase):
+    """The re-attach is what makes every commit after step 5 land on the
+    branch instead of on an orphaned detached HEAD. Its FAILURE path had
+    no coverage at all, so "a terminal reattach_failed status that
+    refuses to push" rested on assertion; these pin it, including the
+    no-discard invariant that matters most -- it must refuse rather than
+    force-move a ref."""
+
+    def test_happy_path_attaches_head_to_the_branch(self):
+        repo = self.make_repo()
+        git(repo, "checkout", "-q", "-b", "sweep/tags-2026-07-26-1")
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "fix")
+        tip = git_out(repo, "rev-parse", "HEAD").strip()
+        git(repo, "checkout", "-q", "--detach", tip)
+
+        ok, message = overlord_sweep.reattach_sweep_branch(
+            repo, "sweep/tags-2026-07-26-1", overlord_sweep.default_run_git,
+        )
+        self.assertTrue(ok, message)
+        # Symbolically attached, not merely pointing at the same sha.
+        self.assertEqual(
+            git_out(repo, "rev-parse", "--abbrev-ref", "HEAD").strip(),
+            "sweep/tags-2026-07-26-1",
+        )
+
+    def test_a_commit_made_while_detached_is_carried_onto_the_branch(self):
+        repo = self.make_repo()
+        git(repo, "checkout", "-q", "-b", "sweep/tags-2026-07-26-1")
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "fix")
+        branch_before = git_out(repo, "rev-parse", "sweep/tags-2026-07-26-1").strip()
+        git(repo, "checkout", "-q", "--detach", branch_before)
+        # This is the orphan the real bug produced: bisection's revert, or
+        # step 7b's cargo-fmt commit.
+        self.commit_file(repo, "src/a.rs", "fn a() { }\n", "style: cargo fmt")
+        orphan = git_out(repo, "rev-parse", "HEAD").strip()
+        self.assertNotEqual(branch_before, orphan)
+
+        ok, _message = overlord_sweep.reattach_sweep_branch(
+            repo, "sweep/tags-2026-07-26-1", overlord_sweep.default_run_git,
+        )
+        self.assertTrue(ok)
+        self.assertEqual(
+            git_out(repo, "rev-parse", "sweep/tags-2026-07-26-1").strip(), orphan
+        )
+
+    def test_a_missing_branch_ref_fails_instead_of_creating_one(self):
+        repo = self.make_repo()
+        ok, message = overlord_sweep.reattach_sweep_branch(
+            repo, "sweep/tags-2026-07-26-9", overlord_sweep.default_run_git,
+        )
+        self.assertFalse(ok)
+        self.assertIn("no longer exists", message)
+        rc, _out, _err = overlord_sweep.default_run_git(
+            ["rev-parse", "--verify", "--quiet", "refs/heads/sweep/tags-2026-07-26-9"], repo,
+        )
+        self.assertNotEqual(rc, 0, "must not have created the branch it could not find")
+
+    def test_a_branch_that_is_not_an_ancestor_is_refused_not_force_moved(self):
+        # The no-discard invariant. If HEAD somehow diverged, moving the
+        # ref would silently drop whatever the branch carried.
+        repo = self.make_repo()
+        git(repo, "checkout", "-q", "-b", "sweep/tags-2026-07-26-1")
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "branch-only work")
+        branch_tip = git_out(repo, "rev-parse", "sweep/tags-2026-07-26-1").strip()
+        git(repo, "checkout", "-q", "--detach", "main")
+        self.commit_file(repo, "src/b.rs", "fn b() {}\n", "divergent work")
+
+        ok, message = overlord_sweep.reattach_sweep_branch(
+            repo, "sweep/tags-2026-07-26-1", overlord_sweep.default_run_git,
+        )
+        self.assertFalse(ok)
+        self.assertIn("not an ancestor", message)
+        self.assertEqual(
+            git_out(repo, "rev-parse", "sweep/tags-2026-07-26-1").strip(),
+            branch_tip,
+            "the branch ref must be exactly where it was",
+        )
+
+
+class FormatSweepBranchTests(GitRepoTestCase):
+    """cargo fmt itself is injected (a tempdir repo has no Cargo.toml and
+    hermetic tests never shell out to a real cargo); what is exercised
+    for real is the git half -- what gets staged, whether a commit is
+    created at all, and that the commit is a separate, labelled one."""
+
+    def test_commits_when_fmt_changed_a_rust_file(self):
+        repo = self.make_repo()
+        self.commit_file(repo, "src/a.rs", "fn a( ) {}\n", "add a.rs")
+        before = git_out(repo, "rev-parse", "HEAD").strip()
+
+        def fake_fmt(repo_root):
+            (Path(repo_root) / "src" / "a.rs").write_text("fn a() {}\n")
+            return True, ""
+
+        result = overlord_sweep.format_sweep_branch(
+            repo, overlord_sweep.default_run_git, fmt_fn=fake_fmt, log_fn=lambda *a: None,
+        )
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["committed"])
+        head = git_out(repo, "rev-parse", "HEAD").strip()
+        self.assertNotEqual(head, before)
+        self.assertIn("style: cargo fmt --all", git_out(repo, "log", "-1", "--format=%s"))
+        # Exactly one new commit, and it carries only the reformatted file.
+        self.assertEqual(git_out(repo, "log", f"{before}..HEAD", "--format=%H").split(), [head])
+        self.assertEqual(git_out(repo, "show", "--name-only", "--format=", "HEAD").split(), ["src/a.rs"])
+
+    def test_no_commit_when_the_branch_is_already_fmt_clean(self):
+        repo = self.make_repo()
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "add a.rs")
+        before = git_out(repo, "rev-parse", "HEAD").strip()
+
+        result = overlord_sweep.format_sweep_branch(
+            repo, overlord_sweep.default_run_git, fmt_fn=lambda repo_root: (True, ""),
+            log_fn=lambda *a: None,
+        )
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["committed"])
+        self.assertEqual(git_out(repo, "rev-parse", "HEAD").strip(), before)
+
+    def test_untracked_junk_in_the_worktree_never_rides_along(self):
+        # `git add -u -- '*.rs'`: a comparison report or editor dropping
+        # sitting in the sweep worktree must never end up inside a commit
+        # labelled "cargo fmt".
+        repo = self.make_repo()
+        self.commit_file(repo, "src/a.rs", "fn a( ) {}\n", "add a.rs")
+
+        def fake_fmt(repo_root):
+            (Path(repo_root) / "src" / "a.rs").write_text("fn a() {}\n")
+            (Path(repo_root) / "tagcmp-JPEG-sweep-post.json").write_text("{}")
+            return True, ""
+
+        overlord_sweep.format_sweep_branch(
+            repo, overlord_sweep.default_run_git, fmt_fn=fake_fmt, log_fn=lambda *a: None,
+        )
+        self.assertEqual(git_out(repo, "show", "--name-only", "--format=", "HEAD").split(), ["src/a.rs"])
+        self.assertIn("tagcmp-JPEG-sweep-post.json", git_out(repo, "status", "--porcelain"))
+
+    def test_a_failing_cargo_fmt_is_reported_but_commits_nothing(self):
+        repo = self.make_repo()
+        before = git_out(repo, "rev-parse", "HEAD").strip()
+        logged = []
+        result = overlord_sweep.format_sweep_branch(
+            repo, overlord_sweep.default_run_git,
+            fmt_fn=lambda repo_root: (False, "error: no rustfmt component"), log_fn=logged.append,
+        )
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["committed"])
+        self.assertEqual(git_out(repo, "rev-parse", "HEAD").strip(), before)
+        self.assertTrue(any("cargo fmt --all FAILED" in line for line in logged))
+
 
 # ---------------------------------------------------------------------------
 # run_sweep -- end to end with everything side-effectful injected
@@ -718,6 +1049,24 @@ class RunSweepIntegrationTests(GitRepoTestCase):
     def _checkout_fn(repo_root, ref):
         git(repo_root, "checkout", "--detach", ref)
 
+    @staticmethod
+    def _reformatting_fmt_fn(repo_root):
+        """An fmt_fn that behaves like the real `cargo fmt --all`: it
+        REWRITES a tracked .rs file.
+
+        `lambda repo_root: (True, "")` -- what these integration tests
+        injected until 2026-07-26 -- changes no file, so
+        format_sweep_branch short-circuits at "already cargo-fmt clean"
+        and never reaches its `git commit`. That made the orphaned-fmt-
+        commit defect (the fmt commit landing on the recheck's DETACHED
+        HEAD instead of on the sweep branch) completely invisible here.
+        """
+        for path in sorted(Path(repo_root).rglob("*.rs")):
+            text = path.read_text()
+            if "( )" in text:
+                path.write_text(text.replace("( )", "()"))
+        return True, ""
+
     def test_no_news_short_circuits_before_cutting_a_branch(self):
         repo = self.make_repo()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -736,7 +1085,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         git(repo, "branch", "squad/canon", "main")
         git(repo, "checkout", "-q", "squad/canon")
         canon_sha = self.commit_file(
-            repo, "src/parsers/jpeg/x.rs", "// fixed\n", "fix JPEG:Foo",
+            repo, "src/parsers/jpeg/x.rs", "fn fixed( ) {}\n", "fix JPEG:Foo",
             trailers=[
                 ("Format", "JPEG"), ("Tag", "MakerNotes:Foo"), ("Sample", "s1.jpg"),
                 ("Exiftool-Value", "5"), ("Oxidex-Value", "5"), ("Verified", "recheck-pass gaps=3->2"),
@@ -755,10 +1104,19 @@ class RunSweepIntegrationTests(GitRepoTestCase):
             )
 
             pr_calls = []
+            pushed = []
 
             def fake_create_pr(title, body, branch, base):
                 pr_calls.append({"title": title, "body": body, "branch": branch, "base": base})
                 return {"ok": True, "url": "https://example/pr/1"}
+
+            def fake_push(repo_root, branch):
+                # What origin would actually receive: the BRANCH ref, not
+                # whatever local HEAD happens to be. Recorded at push time
+                # so the assertions below can compare against the exact
+                # commit `gh pr create --head <branch>` would open a PR on.
+                pushed.append(git_out(repo_root, "rev-parse", branch).strip())
+                return True, "pushed"
 
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused", comparison_fn=self._passing_comparison_fn,
@@ -766,7 +1124,14 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 sweep_state_path=home / "sweep-state.json", origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
-                create_pr_fn=fake_create_pr, push_branch_fn=lambda repo_root, branch: (True, "pushed"),
+                create_pr_fn=fake_create_pr, push_branch_fn=fake_push,
+                # A tempdir repo has no Cargo.toml -- inject the fmt step
+                # (step 7b, which sits between the workspace test and the
+                # push) so this stays hermetic instead of shelling out to
+                # a real cargo. It must REWRITE a tracked .rs file, exactly
+                # as rustfmt does: a no-op hook produces no commit and so
+                # cannot show whether that commit lands on the branch.
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""),
                 now_fn=lambda: 12345,
             )
 
@@ -783,6 +1148,91 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         self.assertIn("Judgment queue", body)
         self.assertEqual(pr_calls[0]["branch"], result["branch"])
         self.assertIn("canon", cursor["squads"])
+
+        # The fmt commit must be ON THE BRANCH at push time. The pre/post
+        # recheck ends by checking out sweep_tip DETACHED, so without an
+        # explicit re-attach every commit made after it (the fmt commit,
+        # and any bisection revert) lands on a detached HEAD and the
+        # branch ref -- the only thing `git push origin <branch>` and
+        # `gh pr create --head <branch>` ever see -- stays behind.
+        branch = result["branch"]
+        self.assertTrue(result["fmt"]["committed"])
+        self.assertEqual(git_out(repo, "rev-parse", "HEAD").strip(),
+                         git_out(repo, "rev-parse", branch).strip())
+        self.assertIn("style: cargo fmt --all (sweep publish)",
+                      git_out(repo, "log", branch, "--format=%s").splitlines())
+        self.assertEqual(git_out(repo, "show", f"{branch}:src/parsers/jpeg/x.rs"), "fn fixed() {}\n")
+        self.assertEqual(pushed, [git_out(repo, "rev-parse", branch).strip()])
+
+    def test_a_bisected_sweep_pushes_the_branch_with_the_offender_actually_reverted(self):
+        """The same detached-HEAD defect as the fmt commit, one step
+        earlier: bisect_sweep_failure's `git revert` commits also run
+        AFTER the pre/post recheck has detached HEAD. Without a re-attach
+        the branch ref still points at the pre-bisection merge tip, so
+        the PR ships the quarantined squad's regression -- the exact
+        thing bisection exists to keep out."""
+        repo = self.make_repo()
+
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "canon_fixed.marker", "1", "canon fix",
+            trailers=[("Format", "JPEG"), ("Tag", "JPEG:Good"), ("Verified", "recheck-pass gaps=13->10")],
+        )
+        git(repo, "checkout", "-q", "main")
+
+        git(repo, "branch", "squad/nikon", "main")
+        git(repo, "checkout", "-q", "squad/nikon")
+        self.commit_file(
+            repo, "nikon_fixed.marker", "1", "nikon fix (looks fine)",
+            trailers=[("Format", "JPEG"), ("Tag", "JPEG:Bad"), ("Verified", "recheck-pass gaps=10->8")],
+        )
+        nikon_sha = self.commit_file(repo, "duplicate.marker", "1", "nikon dup side effect")
+        git(repo, "checkout", "-q", "main")
+
+        def comparison_fn(repo_root, cache_dir, fmt, suffix):
+            repo_root = Path(repo_root)
+            gap_count = 10 - 3 * (repo_root / "canon_fixed.marker").exists() \
+                - 2 * (repo_root / "nikon_fixed.marker").exists()
+            return {
+                "gap_count": gap_count,
+                "duplicate_emissions": ["JPEG:Dup"] if (repo_root / "duplicate.marker").exists() else [],
+                "extra_in_oxidex": [],
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            squads_toml = self._squads_toml(Path(tmpdir), ["canon", "nikon"])
+            for squad, sha in (("canon", canon_sha), ("nikon", nikon_sha)):
+                squad_merge_loop.record_head(
+                    squad_merge_loop.squad_status_file(home, squad), f"{squad}head", status="consumed",
+                    patch_id=f"p-{squad}", format_name="JPEG", squad_sha=sha, now_fn=lambda: 100,
+                )
+            pushed = []
+
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused", comparison_fn=comparison_fn,
+                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                sweep_state_path=home / "sweep-state.json", origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                quarantine_path=home / "quarantine.jsonl",
+                cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
+                create_pr_fn=lambda *a, **kw: {"ok": True, "url": "https://example/pr/2"},
+                push_branch_fn=lambda repo_root, branch: (
+                    pushed.append(git_out(repo_root, "rev-parse", branch).strip()) or (True, "pushed")
+                ),
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["bisection"]["offenders"], ["nikon"])
+        branch = result["branch"]
+        # What origin receives must be the post-bisection tree.
+        listing = git_out(repo, "ls-tree", "-r", "--name-only", branch).split()
+        self.assertIn("canon_fixed.marker", listing)
+        self.assertNotIn("nikon_fixed.marker", listing)
+        self.assertNotIn("duplicate.marker", listing)
+        self.assertEqual(pushed, [git_out(repo, "rev-parse", branch).strip()])
 
     def test_workspace_test_failure_blocks_pr_creation(self):
         repo = self.make_repo()
@@ -907,12 +1357,78 @@ class RunSweepIntegrationTests(GitRepoTestCase):
             stamps, _new_cursor = overlord_sweep.collect_green_stamps(home, squads, cursor)
             self.assertIn("canon", stamps)
 
-    def test_push_failure_blocks_pr_creation_but_cursor_still_advances(self):
-        # Once cargo test --workspace passes, every surviving squad's
-        # contribution is durably on a cut, tested sweep branch --
-        # durable regardless of whether the push/PR-creation calls
-        # themselves succeed, so the cursor SHOULD advance here (unlike
-        # the workspace_tests_failed case above).
+    def _one_squad_fixture(self, repo, tmpdir):
+        """One green-stamped squad on `repo`, its home under `tmpdir`.
+        Returns (home, squads_toml, sweep_state_path)."""
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "src/a.rs", "fn a( ) {}\n", "fix JPEG:Foo",
+            trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:Foo"), ("Verified", "recheck-pass gaps=3->2")],
+        )
+        git(repo, "checkout", "-q", "main")
+        home = Path(tmpdir) / "home"
+        squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+        squad_merge_loop.record_head(
+            squad_merge_loop.squad_status_file(home, "canon"), "workerheadsha", status="consumed",
+            patch_id="p1", format_name="JPEG", squad_sha=canon_sha, now_fn=lambda: 100,
+        )
+        return home, squads_toml, home / "sweep-state.json"
+
+    def test_a_failed_gh_pr_create_is_its_own_status_not_ok(self):
+        """`gh pr create` fails for entirely routine reasons -- expired
+        auth, a secondary rate limit, an org rule that forbids the PR,
+        no network. Reporting that round as "ok" made the caller poll
+        `gh pr checks <branch>` against a branch with no PR (three
+        "unknown" answers, two 30s sleeps) and left an orphan branch on
+        origin with the sweep cursor already advanced past it."""
+        repo = self.make_repo()
+        logged = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home, squads_toml, sweep_state_path = self._one_squad_fixture(repo, tmpdir)
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused", comparison_fn=self._passing_comparison_fn,
+                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                sweep_state_path=sweep_state_path, origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: (True, "pushed"),
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=logged.append,
+                create_pr_fn=lambda *a, **kw: {
+                    "ok": False, "stdout": "",
+                    "stderr": "gh: To get started with GitHub CLI, please run: gh auth login",
+                },
+            )
+        self.assertEqual(result["status"], "pr_create_failed")
+        self.assertIn("pr", result)
+        self.assertTrue(any("gh pr create FAILED" in line for line in logged))
+
+    def test_main_exits_non_zero_when_pr_creation_fails(self):
+        # The CLI must surface it too: `uv run overlord_sweep.py` exiting
+        # 0 on a round that opened no PR is indistinguishable from a
+        # healthy one in any wrapper script or cron log.
+        printed = []
+        with patch.object(overlord_sweep, "run_sweep",
+                          return_value={"status": "pr_create_failed", "branch": "sweep/x",
+                                        "pr": {"ok": False, "stderr": "gh auth login"}}):
+            with patch("builtins.print", side_effect=lambda *a, **kw: printed.append(" ".join(map(str, a)))):
+                rc = overlord_sweep.main(["--repo", str(self.tmp), "--home", str(self.tmp / "home")])
+        self.assertEqual(rc, 1)
+        # Loud, not a dict buried in the JSON blob: an operator scanning
+        # a cron log has to be able to see that no PR exists.
+        self.assertTrue(any("PR CREATION FAILED" in line for line in printed), printed)
+
+    def test_push_failure_leaves_the_cursor_untouched_for_retry(self):
+        # Until 2026-07-26 the cursor advanced here (this test was named
+        # ..._but_cursor_still_advances and asserted the opposite). The
+        # rationale for the eager advance -- "re-sweeping already-pushed
+        # content would open a SECOND PR racing the first" -- does not
+        # apply to a FAILED push: origin has nothing, so a retry cannot
+        # duplicate anything, and advancing is pure downside. Measured
+        # consequence of the old behaviour: round 1 push_failed consumed
+        # the stamp, round 2 with a healthy push reported 'no_news' and
+        # the validated fix shipped only if that squad happened to stamp
+        # again.
         repo = self.make_repo()
         git(repo, "branch", "squad/canon", "main")
         git(repo, "checkout", "-q", "squad/canon")
@@ -941,12 +1457,434 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
                 create_pr_fn=lambda *a, **kw: pr_calls.append(1),
                 push_branch_fn=lambda repo_root, branch: (False, "no configured push destination"),
+                fmt_fn=lambda repo_root: (True, ""), lint_fn=lambda repo_root: (True, ""),
             )
 
             self.assertEqual(result["status"], "push_failed")
             self.assertEqual(pr_calls, [])
             cursor = overlord_sweep.load_sweep_state(sweep_state_path)
-            self.assertIn("canon", cursor["squads"])
+            self.assertEqual(cursor, {"squads": {}})
+            squads = overlord_sweep.squads_from_toml(squads_toml)
+            stamps, _new_cursor = overlord_sweep.collect_green_stamps(home, squads, cursor)
+            self.assertIn("canon", stamps)
+
+    def test_a_LINT_failure_refuses_to_push_and_keeps_the_stamps(self):
+        """A sweep PR that cannot merge is worse than no sweep PR.
+
+        The sweep already ran cargo fmt and committed the result, so style was
+        covered -- but nothing ran the gate CI actually applies,
+        `cargo clippy --all-features -- -D warnings`.
+
+        Measured 2026-07-27 on sweep/tags-2026-07-27-8 (PR #154), the first PR
+        this pipeline opened autonomously: fmt clean, 70 tag trailers, and SIX
+        clippy errors -- one dead assignment and five `unreachable pattern`s,
+        because two squads had independently fixed the same X3F/RW2 tags with
+        DIFFERENT code. Different code means different patch-ids, so the
+        cross-squad dedup correctly let both through; they collided only once
+        merged.
+
+        Cursor semantics match the push_failed path: origin has nothing, so a
+        retry cannot duplicate a PR or a branch, and the stamps must NOT be
+        consumed.
+        """
+        repo = self.make_repo()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home, squads_toml, sweep_state_path = self._one_squad_fixture(repo, tmpdir)
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                squads_toml_path=squads_toml, sweep_state_path=sweep_state_path,
+                origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
+                fmt_fn=self._reformatting_fmt_fn,
+                lint_fn=lambda repo_root: (False, "error: unreachable pattern\nerror: could not compile"),
+                push_branch_fn=lambda r, b: self.fail("must NOT push a branch that fails the lint gate"),
+                create_pr_fn=lambda *a, **kw: self.fail("must NOT open a PR for it"),
+                log_fn=lambda *a: None,
+            )
+            self.assertEqual(result["status"], "lint_failed")
+            self.assertIn("unreachable pattern", result["message"])
+            cursor = overlord_sweep.load_sweep_state(sweep_state_path)
+            self.assertNotIn("canon", cursor.get("squads", {}),
+                             "stamps must survive for the next round")
+
+    def test_a_push_failure_is_retried_whole_by_the_next_round(self):
+        """The end-to-end consequence, driven twice against one repo: a
+        round whose push fails must leave the next round able to sweep
+        the identical stamp and actually land it."""
+        repo = self.make_repo()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home, squads_toml, sweep_state_path = self._one_squad_fixture(repo, tmpdir)
+            common = dict(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                squads_toml_path=squads_toml, sweep_state_path=sweep_state_path, origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
+            )
+            first = overlord_sweep.run_sweep(
+                push_branch_fn=lambda repo_root, branch: (False, "fatal: could not read from remote"),
+                create_pr_fn=lambda *a, **kw: self.fail("no PR may be created after a failed push"),
+                **common,
+            )
+            pushed = []
+            second = overlord_sweep.run_sweep(
+                push_branch_fn=lambda repo_root, branch: (
+                    pushed.append(git_out(repo_root, "ls-tree", "-r", "--name-only", branch).split())
+                    or (True, "pushed")
+                ),
+                create_pr_fn=lambda *a, **kw: {"ok": True, "url": "https://example/pr/3"},
+                **common,
+            )
+        self.assertEqual(first["status"], "push_failed")
+        self.assertEqual(second["status"], "ok")
+        # The retry really carries the fix, not just a fresh empty branch.
+        self.assertEqual(len(pushed), 1)
+        self.assertIn("src/a.rs", pushed[0])
+
+    def test_a_zero_delta_sweep_never_runs_the_workspace_suite_pushes_or_opens_a_pr(self):
+        """DURABLE repo rule: compare the TREE, not the SHA. A
+        cherry-pick/squash gives identical content a fresh sha, so a
+        stamp whose whole contribution is already on origin/main still
+        produces a branch that is N commits "ahead" while being
+        tree-identical. Until 2026-07-26 that branch paid a full
+        `cargo test --workspace`, was pushed, and had a PR opened on it
+        (which auto_publish_round then squash-merged on green) -- a
+        no-op commit on main plus a wasted CI cycle every time.
+        """
+        repo = self.make_repo()
+        # origin/main already carries the fix's CONTENT under its own sha
+        # (what a squash-merge leaves behind).
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "sweep: the same fix, squashed onto main")
+        git(repo, "branch", "squad/canon", "main~1")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "src/a.rs", "fn a() {}\n", "fix JPEG:Foo",
+            trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:Foo")],
+        )
+        git(repo, "checkout", "-q", "main")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            squad_merge_loop.record_head(
+                squad_merge_loop.squad_status_file(home, "canon"), "workerhead", status="consumed",
+                patch_id="p1", format_name="JPEG", squad_sha=canon_sha, now_fn=lambda: 100,
+            )
+            sweep_state_path = home / "sweep-state.json"
+            tested, pushed, prs = [], [], []
+
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                squads_toml_path=squads_toml, sweep_state_path=sweep_state_path, origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
+                create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
+            )
+            cursor = overlord_sweep.load_sweep_state(sweep_state_path)
+
+        self.assertEqual(result["status"], "zero_delta")
+        self.assertEqual(tested, [])
+        self.assertEqual(pushed, [])
+        self.assertEqual(prs, [])
+        # The tree really was identical -- the branch was "ahead" by a
+        # commit, which is exactly why a sha comparison cannot catch it.
+        branch = result["branch"]
+        self.assertEqual(git_out(repo, "rev-parse", f"{branch}^{{tree}}").strip(),
+                         git_out(repo, "rev-parse", "main^{tree}").strip())
+        self.assertNotEqual(git_out(repo, "rev-parse", branch).strip(),
+                            git_out(repo, "rev-parse", "main").strip())
+        # Advancing here is correct and required: the content IS on main,
+        # so re-collecting the stamp forever would spin every round.
+        self.assertIn("canon", cursor["squads"])
+
+    def test_a_stamp_already_an_ancestor_of_origin_main_is_zero_delta_too(self):
+        # The variant real `gh pr create` rejects outright ("No commits
+        # between main and ..."), after the round has already burned a
+        # full workspace suite and two comparison runs.
+        repo = self.make_repo()
+        landed = self.commit_file(repo, "src/a.rs", "fn a() {}\n", "fix already on main")
+        git(repo, "branch", "squad/canon", landed)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            squad_merge_loop.record_head(
+                squad_merge_loop.squad_status_file(home, "canon"), "workerhead", status="consumed",
+                patch_id="p1", format_name="JPEG", squad_sha=landed, now_fn=lambda: 100,
+            )
+            tested, pushed = [], []
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                squads_toml_path=squads_toml, sweep_state_path=home / "sweep-state.json",
+                origin_ref="main", dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
+                create_pr_fn=lambda *a, **kw: self.fail("no PR for a zero-delta sweep"),
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
+            )
+        self.assertEqual(result["status"], "zero_delta")
+        self.assertEqual(tested, [])
+        self.assertEqual(pushed, [])
+
+
+class EmptyRevertIsNotAFailureTests(unittest.TestCase):
+    """"Nothing to revert" and "cannot revert" are opposites.
+
+    git revert exits NON-ZERO with "nothing to commit, working tree clean"
+    when the revert would change nothing -- the contribution is already
+    absent. The handler read stderr, which git leaves EMPTY for this case
+    (the message goes to stdout), and reported failure.
+
+    Measured 2026-07-27 on the real sweep/tags-2026-07-27-5: squads
+    exif-core and panasonic-leica both contributed the SAME fix (identical
+    patch-id e906c487dec2709f5203d30d5d7ddf6a3b65de20), so the second merge
+    added nothing and reverting it was a no-op. That aborted the entire
+    sweep and blocked every other squad's verified work from publishing.
+    Against the real merge commit: current code returned (False, ''), the
+    fix returns (True, 'nothing to revert (contribution already absent)').
+    """
+
+    def test_empty_merge_revert_counts_as_reverted(self):
+        def run_git(args, repo_root, input_text=None):
+            if args[:1] == ["revert"] and "--abort" not in args:
+                # Exactly what git emits: rc 1, message on STDOUT, stderr empty.
+                return 1, "nothing to commit, working tree clean\n", ""
+            return 0, "", ""
+        ok, msg = overlord_sweep.revert_squad_contribution(
+            "/unused", {"mode": "merge", "merge_sha": "deadbeef", "squad": "x"}, run_git)
+        self.assertTrue(ok, "an already-absent contribution must count as reverted")
+        self.assertIn("nothing to revert", msg)
+
+    def test_a_GENUINE_revert_failure_is_still_a_failure(self):
+        """The distinction that matters: a conflict is not an empty diff."""
+        def run_git(args, repo_root, input_text=None):
+            if args[:1] == ["revert"] and "--abort" not in args:
+                return 1, "", "error: could not revert deadbeef... CONFLICT (content)\n"
+            return 0, "", ""
+        ok, msg = overlord_sweep.revert_squad_contribution(
+            "/unused", {"mode": "merge", "merge_sha": "deadbeef", "squad": "x"}, run_git)
+        self.assertFalse(ok, "a real conflict must still block the push")
+        self.assertIn("CONFLICT", msg)
+
+
+class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
+    """DEFECT 1: bisect_sweep_failure INFERRED "the offender is no longer
+    on the branch" from `offenders`/`surviving_squads` instead of
+    establishing it mechanically. Both of its loops treat a FAILED
+    `git revert` as "carry on" -- the isolation loop `continue`s and the
+    full-abort loop just logs -- so the squad stays in `surviving`,
+    run_sweep's `if not merge_infos:` abort gate never fires, and the
+    round returns status 'ok' with the rejected content still on the
+    branch it pushes. auto_publish_round then squash-merges it on green.
+
+    Both revert-failure triggers were verified as raw git behaviour by
+    the refuter: an empty-diff revert (`git revert --no-edit -m 1 <merge>`
+    exits 1 with EMPTY stderr when the squad's content is already on
+    origin/main under another sha) and a genuine revert CONFLICT (two
+    squads touching overlapping regions of a shared emitter file merge
+    cleanly but do not revert cleanly -- the likelier trigger, since the
+    full-abort loop is only reached on a real multi-squad interaction).
+    Both are stood in for here by failing exactly the `revert` calls and
+    leaving every other git operation real.
+    """
+
+    @staticmethod
+    def _checkout_fn(repo_root, ref):
+        git(repo_root, "checkout", "--detach", ref)
+
+    def _squads_toml(self, tmp, squads):
+        path = tmp / "squads.toml"
+        path.write_text("\n".join(
+            f'[squads.{s}]\nmodules = []\nformats = ["JPEG"]\nownership_globs = []\n' for s in squads
+        ))
+        return path
+
+    def _failing_comparison_fn(self, repo_root, cache_dir, fmt, suffix):
+        """A duplicate emission the sweep INTRODUCES and can never clear,
+        because the only way to clear it is to revert -- and reverting fails.
+
+        It must be absent from the PRE report. The gate diffs pre against
+        post (a sweep is answerable for what it introduces, not for what
+        origin/main already carries), so a duplicate present on BOTH sides is
+        inherited and correctly does not block. This fixture used to return
+        ["JPEG:Dup"] for both, which described a pre-existing duplicate while
+        the docstring claimed an introduced one -- the test passed only
+        because the gate read POST alone."""
+        pre = suffix == "sweep-pre"
+        return {"gap_count": 5 if pre else 4,
+                "duplicate_emissions": [] if pre else ["JPEG:Dup"],
+                "extra_in_oxidex": []}
+
+    def _inherited_dup_comparison_fn(self, repo_root, cache_dir, fmt, suffix):
+        """The SAME duplicate on both sides: origin/main already had it."""
+        return {"gap_count": 5 if suffix == "sweep-pre" else 4,
+                "duplicate_emissions": ["JPEG:Inherited"], "extra_in_oxidex": []}
+
+    def test_a_PRE_EXISTING_duplicate_does_not_veto_the_sweep(self):
+        """This is the LAST gate before a sweep PR is opened.
+
+        Reading duplicate_emissions off POST alone let any duplicate already
+        on origin/main veto publication outright -- NEF carries nine. That is
+        one reason no sweep PR had ever opened. A sweep is answerable for the
+        duplicates it INTRODUCES.
+        """
+        repo = self.make_repo()
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "src/a.rs", "fn a() {}\n", "fix JPEG:Foo",
+            trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:Foo"),
+                      ("Verified", "recheck-pass gaps=3->2")],
+        )
+        git(repo, "checkout", "-q", "main")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            squad_merge_loop.record_head(
+                squad_merge_loop.squad_status_file(home, "canon"), "workerhead",
+                status="consumed", patch_id="p1", format_name="JPEG",
+                squad_sha=canon_sha, now_fn=lambda: 100,
+            )
+            pushed, prs = [], []
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._inherited_dup_comparison_fn,
+                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                sweep_state_path=home / "sweep-state.json", origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                quarantine_path=home / "quarantine.jsonl",
+                cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
+                create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
+                fmt_fn=lambda repo_root: (True, ""), lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
+            )
+        # It must NOT abort on a duplicate it inherited.
+        self.assertNotEqual(result["status"], "sweep_aborted")
+        self.assertEqual(pushed, ["sweep/tags-2026-07-27-1"][:len(pushed)] or [])
+        self.assertTrue(pushed, "an inherited duplicate must not stop the sweep from pushing")
+
+    def test_an_unrevertable_offender_refuses_to_push_instead_of_shipping(self):
+        repo = self.make_repo()
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "src/a.rs", "fn a() {}\n", "fix JPEG:Foo",
+            trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:Foo"),
+                      ("Verified", "recheck-pass gaps=3->2")],
+        )
+        git(repo, "checkout", "-q", "main")
+
+        def revert_hostile_run_git(args, repo_root, input_text=None):
+            if args[:1] == ["revert"]:
+                # Exactly what the measured empty-diff revert does: rc 1,
+                # nothing on stderr (the message goes to stdout).
+                return 1, "nothing to commit, working tree clean\n", ""
+            return overlord_sweep.default_run_git(args, repo_root, input_text)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            squad_merge_loop.record_head(
+                squad_merge_loop.squad_status_file(home, "canon"), "workerhead", status="consumed",
+                patch_id="p1", format_name="JPEG", squad_sha=canon_sha, now_fn=lambda: 100,
+            )
+            sweep_state_path = home / "sweep-state.json"
+            pushed, prs, tested = [], [], []
+
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._failing_comparison_fn, checkout_fn=self._checkout_fn,
+                squads_toml_path=squads_toml, sweep_state_path=sweep_state_path, origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                quarantine_path=home / "quarantine.jsonl",
+                cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
+                create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
+                fmt_fn=lambda repo_root: (True, ""), lint_fn=lambda repo_root: (True, ""), run_git=revert_hostile_run_git,
+                log_fn=lambda *a: None,
+            )
+            cursor = overlord_sweep.load_sweep_state(sweep_state_path)
+
+        self.assertNotEqual(result["status"], "ok")
+        self.assertEqual(result["status"], "sweep_aborted")
+        self.assertEqual(result["bisection"]["unrevertable"], ["canon"])
+        # Nothing that bisection could not remove may reach origin.
+        self.assertEqual(pushed, [])
+        self.assertEqual(prs, [])
+        self.assertEqual(tested, [])
+        # And the squad is neither quarantined nor consumed -- a later
+        # sweep must retry it once the revert can succeed.
+        self.assertEqual(cursor, {"squads": {}})
+
+    def test_a_bisection_that_left_the_recheck_failing_refuses_to_push(self):
+        """The other half of the same inference: the isolation loop can
+        reach `found = True` on a path where the LAST recheck it ran
+        FAILED -- squad A's revert succeeds, the recheck still fails
+        (A was innocent), and then `undo_last_revert` fails, so A is
+        quarantined as "the offender" while the real offender B stays on
+        the branch. `offenders`/`surviving` look tidy; the branch is
+        known-bad. It must not be pushed."""
+        repo = self.make_repo()
+        for squad, path, content in (("canon", "src/a.rs", "fn a() {}\n"),
+                                     ("nikon", "src/b.rs", "fn b() {}\n")):
+            git(repo, "branch", f"squad/{squad}", "main")
+            git(repo, "checkout", "-q", f"squad/{squad}")
+            sha = self.commit_file(
+                repo, path, content, f"{squad} fix",
+                trailers=[("Format", "JPEG"), ("Tag", f"JPEG:{squad}"),
+                          ("Verified", "recheck-pass gaps=3->2")],
+            )
+            git(repo, "checkout", "-q", "main")
+            setattr(self, f"{squad}_sha", sha)
+
+        def comparison_fn(repo_root, cache_dir, fmt, suffix):
+            # nikon's file is the regression, and it is never reverted
+            # (the only revert that happens is canon's).
+            bad = (Path(repo_root) / "src" / "b.rs").exists()
+            return {"gap_count": 5 if suffix == "sweep-pre" else 4,
+                    "duplicate_emissions": ["JPEG:Dup"] if bad else [], "extra_in_oxidex": []}
+
+        def restore_hostile_run_git(args, repo_root, input_text=None):
+            # `undo_last_revert`'s exact argv -- `revert --no-edit <sha>`
+            # with no -m -- and nothing else.
+            if args[:2] == ["revert", "--no-edit"] and "-m" not in args:
+                return 1, "", "error: could not revert the revert"
+            return overlord_sweep.default_run_git(args, repo_root, input_text)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            squads_toml = self._squads_toml(Path(tmpdir), ["canon", "nikon"])
+            for squad in ("canon", "nikon"):
+                squad_merge_loop.record_head(
+                    squad_merge_loop.squad_status_file(home, squad), f"{squad}head",
+                    status="consumed", patch_id=f"p-{squad}", format_name="JPEG",
+                    squad_sha=getattr(self, f"{squad}_sha"), now_fn=lambda: 100,
+                )
+            pushed, prs = [], []
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused", comparison_fn=comparison_fn,
+                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                sweep_state_path=home / "sweep-state.json", origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                quarantine_path=home / "quarantine.jsonl",
+                cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
+                create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
+                fmt_fn=lambda repo_root: (True, ""), lint_fn=lambda repo_root: (True, ""), run_git=restore_hostile_run_git,
+                log_fn=lambda *a: None,
+            )
+
+        self.assertNotEqual(result["status"], "ok")
+        self.assertFalse(result["bisection"]["recheck_passed"])
+        self.assertEqual(pushed, [])
+        self.assertEqual(prs, [])
 
 
 if __name__ == "__main__":

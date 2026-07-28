@@ -37,17 +37,29 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           evidence, and a scoped emission scan alongside
                           the C1-C5 checklist -- see review_verdict)
     learning_budget_tokens default 1200 (worker only; flat, reserved token
-                          budget for the learning block -- GLOBAL-PITFALLS.md
-                          excerpt + module playbook + sweep reviews +
-                          lessons tail -- never squeezed further and never
-                          dropped entirely, see build_prompt)
+                          budget for the learning block -- adaptive
+                          diff-format remediation + this worker's own
+                          quarantine verdicts + sweep reviews + module
+                          playbook + lessons tail -- never squeezed further
+                          and never dropped entirely. Overflow inside the
+                          block is shed from the tail of
+                          LEARNING_SECTION_ORDER, so a growing ledger costs
+                          the low-value sections first, never the
+                          high-value ones. See build_prompt /
+                          compose_learning_block. The GLOBAL-PITFALLS.md
+                          excerpt is outside this budget -- it sits in the
+                          static cacheable prefix.)
     parser_floor_tokens    default 2000 (worker only; the parser-files
                           section never shrinks below this even under the
                           worst prompt overflow -- "elastic with a floor")
     lessons_tail_kb        default 256 (worker only; how far back
                           build_prompt seeks into the tail of
                           logs/lessons.jsonl -- bounded, no full scan of a
-                          ledger that only grows -- see read_lessons_tail)
+                          ledger that only grows -- see
+                          read_lessons_tail_events. Those bytes are read
+                          ONCE and feed both the recurrence-ranked
+                          module/format lessons and the per-worker
+                          "no diff in model response" detector.)
     max_request_repeats    default 3 (worker only; identical REQUESTs before
                           a pivot nudge replaces the served content)
     max_verify_turns       default 10 (worker only; VERIFY trial-compile
@@ -91,6 +103,14 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           with keepalives well past this before ever
                           sending real content, so raise it if a provider
                           is otherwise reliable but just slow)
+    deadline_seconds       default 120 (wall-clock ceiling on ONE model
+                          call, checked as stream chunks arrive). Unlike
+                          timeout, arriving data does NOT reset it, so
+                          this is what actually bounds a call: a provider
+                          trickling SSE chunks satisfies timeout forever
+                          (measured 2118s against timeout=1200). On expiry
+                          the connection is closed and the request is
+                          replayed, counting against max_retries.
     max_request_turns      default 20 (worker only; how many REQUEST:
                           <path> investigation turns -- see
                           attempt_build/resolve_request -- the fixer gets
@@ -167,6 +187,9 @@ Usage:
     uv run scripts/model_fix_loop.py --config /path/to/config.toml
 """
 import argparse
+import datetime
+import difflib
+import email.utils
 import fcntl
 import functools
 import json
@@ -203,8 +226,19 @@ from find_tag_gaps import (
 # rather than keeping its own copy, exactly like log_sweep_review.py does.
 from distill_lessons import (
     append_lesson as _dl_append_lesson,
+    is_infra_reason,
     make_lesson as make_lesson_event,
+    rank_by_recurrence,
 )
+
+# validate_fix_commit.py is the canonical owner of "which squad does this
+# worker id belong to" -- it is the helper the merger itself uses when it
+# decides ownership of a candidate commit (see check_ownership). Reusing
+# it, rather than keeping a second regex here, is what guarantees the
+# prompt and the validator can never disagree about whose commit was
+# rejected. Same sibling-import shape as find_tag_gaps/distill_lessons
+# above; validate_fix_commit is stdlib-only and imports nothing from here.
+from validate_fix_commit import squad_from_worker
 
 # --- K1 lessons ledger (writer side; see distill_lessons.py for the ---------
 # --- canonical schema/fingerprint/append contract) --------------------------
@@ -348,6 +382,15 @@ def assemble_prompt_sections(sections, budgets, max_tokens):
     parser_files, with parser_files's floor set to parser_floor_tokens
     (never squeezed below that no matter how much overflow remains).
 
+    The two arguments are INDEPENDENT axes and this function keeps them
+    that way: render order comes only from `sections`, shrink order only
+    from `budgets`. build_prompt relies on that -- since 2026-07-26 its
+    render order is chosen to maximise the byte-identical prefix a
+    provider's prompt cache can reuse (PROMPT_SECTION_ORDER), which is a
+    completely different ranking from what a fixer can afford to lose
+    under budget pressure (PROMPT_SHRINK_PRIORITY). Do not "simplify"
+    this back into deriving one from the other.
+
     Algorithm: if the assembled total already fits max_tokens, return it
     unchanged (no section is ever shrunk when there's no pressure to).
     Otherwise walk `budgets` in order; each section not yet at its own
@@ -438,6 +481,150 @@ DEFAULT_MAX_RETRIES = 1000
 DEFAULT_RETRY_BACKOFF_SECONDS = 2
 DEFAULT_MAX_RETRY_BACKOFF_SECONDS = 120  # cap growth -- 2**1000 would otherwise be absurd
 
+# Hard wall-clock ceiling on ONE model call, distinct from `timeout`.
+#
+# `timeout` is urlopen's socket timeout: it bounds how long a single read
+# may block, and every byte that arrives resets it. Under stream=True that
+# makes it nearly unbounded in practice -- a provider trickling one SSE
+# chunk every few seconds keeps resetting the clock forever. Measured on
+# theclawbay.com: a single call ran 2118s against a configured
+# timeout=1200, because no individual read ever stalled that long.
+#
+# deadline_seconds is measured once from the start of the request and
+# checked as chunks arrive, so a slow-drip response is abandoned and
+# replayed instead of hanging a worker. Kept as a separate knob because
+# raising `timeout` is still legitimate for providers that hold a
+# connection open before their first token.
+DEFAULT_DEADLINE_SECONDS = 120
+
+
+class ModelCallDeadlineExceeded(Exception):
+    """One model call outlived deadline_seconds of wall clock.
+
+    Retryable by design: raising it from inside the `with urlopen(...)`
+    block closes the connection (killing the in-flight response), and
+    call_model's retry loop then replays the same request. Deliberately
+    NOT an HTTPError/URLError subclass -- a slow provider is neither a
+    rate limit nor an unreachable host, and conflating it with either
+    would report the wrong thing to the rate governor.
+    """
+
+
+class ModelQuotaExhausted(Exception):
+    """Raised after the retry ladder is spent and every attempt came back
+    as an account/billing-quota 429.
+
+    NOT fatal to a worker. attempt_build/review_verdict catch it with the
+    rest of the continue-on class (empty 200s, 429s, connection errors);
+    it becomes an INFRA_FAILURE_PREFIX reason, which run_tag_loop charges
+    nothing for -- no fail increment, no attempt history, no blacklist.
+    It exists so the reason string names billing rather than showing an
+    opaque 429.
+
+    Policy: all 429s are retried, quota ones included -- the shared token
+    bucket's global cooldown paces them, so a fleet waiting out even a
+    multi-day billing window settles into one poll per cooldown cap and
+    resumes on its own the moment the window rolls over. Nothing here
+    shortcuts a retry.
+
+    This exists purely so the final error names the real cause. Providers
+    overload 429 for "you are going too fast" and "your account is out of
+    budget", and those demand completely different responses from a human;
+    a bare "HTTP Error 429" after a long ride-out points at rate limits
+    when the answer is billing.
+
+    Observed on theclawbay.com, which is explicit about the difference:
+        {"error": "weekly cost limit reached for this account",
+         "code": "weekly_cost_limit_reached",
+         "theclawbayError": {"category": "quota", "retryable": false}}
+    """
+
+
+def _quota_exhausted_message(err):
+    """If an HTTPError is a non-retryable quota/billing 429, return a short
+    human message; otherwise None (meaning: treat as an ordinary retryable
+    rate limit).
+
+    Conservative by construction -- it only opts OUT of retrying when the
+    provider explicitly says the condition is not retryable, or names a
+    quota/limit-reached code. Anything unparseable is simply not labelled.
+
+    This is a LABEL, not a control-flow decision -- every 429 is retried
+    either way (see call_model). It only determines whether the log says
+    "waiting on a spent budget" or "being throttled", and which cause the
+    final exception names once the retry ladder is fully spent.
+    """
+    if getattr(err, "code", None) != 429:
+        return None
+    try:
+        # HTTPError's fp is single-read; this is the only consumer, and the
+        # body is only needed for classification. Capped so a misbehaving
+        # provider can't stream an unbounded "error" at us.
+        body = json.loads(err.read(65536))
+    except Exception:  # nosec B110 -- unparseable body => treat as retryable
+        return None
+    if not isinstance(body, dict):
+        return None
+    vendor = body.get("theclawbayError")
+    vendor = vendor if isinstance(vendor, dict) else {}
+    retryable = vendor.get("retryable", body.get("retryable"))
+    code = str(vendor.get("code") or body.get("code") or "")
+    category = str(vendor.get("category") or "")
+    looks_like_quota = (
+        category == "quota"
+        or code.endswith("_limit_reached")
+        or "cost_limit" in code
+        or "quota" in code
+    )
+    if retryable is False or looks_like_quota:
+        detail = (
+            vendor.get("userMessage")
+            or body.get("error")
+            or code
+            or "provider reported a non-retryable 429"
+        )
+        return f"{detail} (code={code or 'unknown'})"
+    return None
+
+
+def _retry_after_seconds(headers, now_fn=time.time):
+    """Parse a Retry-After header into seconds, or None if absent/unusable.
+
+    RFC 9110 allows either delta-seconds ("30") or an HTTP-date
+    ("Wed, 21 Oct 2026 07:28:00 GMT"); providers send both. A server
+    telling us exactly how long to wait beats any backoff curve we could
+    guess, so this is preferred over the exponential cooldown whenever
+    it is larger. Malformed values return None rather than raising --
+    a broken header must never take down the loop.
+    """
+    if not headers:
+        return None
+    raw = None
+    # email.message.Message (urllib's header type) is case-insensitive via
+    # .get; a plain dict from a test/mock may not be.
+    try:
+        raw = headers.get("Retry-After")
+    except AttributeError:
+        return None
+    if raw is None:
+        return None
+    raw = str(raw).strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(int(raw)))
+    except ValueError:
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    return max(0.0, when.timestamp() - now_fn())
+
 
 def extract_cache_usage(usage):
     """Pull (cached_input_tokens, total_input_tokens) out of a response's
@@ -500,7 +687,8 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
                 max_retry_backoff_seconds=DEFAULT_MAX_RETRY_BACKOFF_SECONDS, sleep_fn=time.sleep,
                 log_fn=None, usage_fn=None, prompt_cache="auto",
                 governor_path=None, governor_calls_per_minute=None, governor_burst=None,
-                governor_cooldown_seconds=None, governor_max_cooldown_seconds=None):
+                governor_cooldown_seconds=None, governor_max_cooldown_seconds=None,
+                deadline_seconds=DEFAULT_DEADLINE_SECONDS):
     """POST a chat-completions request, retrying on transient upstream
     failures, and return the assistant's reply text.
 
@@ -556,6 +744,15 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
     keepalives well past 120s before ever sending real content, so this is
     configurable per [worker]/[reviewer] rather than a fixed value.
 
+    deadline_seconds (default DEFAULT_DEADLINE_SECONDS) is the wall-clock
+    ceiling on ONE attempt, and is the knob that actually bounds a call.
+    timeout alone does not: it limits a single read, and every arriving
+    SSE chunk resets it, so a slow-drip stream can run for hours without
+    ever tripping it (measured: 2118s against timeout=1200). When the
+    deadline is hit the connection is closed and the request is REPLAYED
+    like any other transient failure, counting against max_retries. Pass
+    None to disable and restore the old unbounded behavior.
+
     log_fn(str), if given, is called once per retry -- otherwise a worker
     riding out a long stretch of transient failures (a real, intended
     outcome of max_retries being high) produces zero log output for
@@ -579,6 +776,7 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
         else governor_max_cooldown_seconds
     )
     last_error = None
+    last_quota_message = None
     for attempt in range(max_retries + 1):
         if attempt > 0:
             delay = min(retry_backoff_seconds * (2 ** (attempt - 1)), max_retry_backoff_seconds)
@@ -594,12 +792,55 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
             reply, usage = _call_model_once(
                 messages, base_url, api_key, model, max_tokens, reasoning_effort,
                 stream, thinking, temperature, timeout, prompt_cache,
+                deadline_seconds=deadline_seconds,
             )
-        except urllib.error.HTTPError as e:
-            governor_report(governor_path, limited=(e.code in DEFAULT_RETRYABLE_HTTP_STATUSES),
+        except ModelCallDeadlineExceeded as e:
+            # The provider was reachable and answering, just far too slowly
+            # to be worth waiting on -- the connection has already been
+            # closed by leaving _call_model_once's `with` block. Replay it.
+            # limited=False on purpose: a slow response is not a rate
+            # limit, and reporting it as one would put the entire fleet
+            # into cooldown over one sluggish call.
+            governor_report(governor_path, limited=False,
                             cooldown_seconds=governor_cooldown_seconds,
                             max_cooldown_seconds=governor_max_cooldown_seconds)
-            if e.code not in DEFAULT_RETRYABLE_HTTP_STATUSES:
+            last_error = e
+            continue
+        except urllib.error.HTTPError as e:
+            limited = e.code in DEFAULT_RETRYABLE_HTTP_STATUSES
+            # EVERY 429 is retried, including an account/billing quota
+            # ("weekly cost limit reached"), and the shared token bucket's
+            # global cooldown is what paces it. That cooldown grows
+            # exponentially per consecutive limited outcome and caps at
+            # governor_max_cooldown_seconds, so waiting out a multi-day
+            # quota window settles into one poll per cap interval per
+            # fleet rather than a hot retry loop -- cheap enough to simply
+            # sit there until the window rolls over, with no operator
+            # action needed to resume.
+            #
+            # The quota case is still CLASSIFIED, purely so the log says
+            # "waiting on a spent budget" instead of "being throttled":
+            # those need very different responses from a human, and the
+            # raw 429 alone cannot tell them apart.
+            quota_message = _quota_exhausted_message(e) if limited else None
+            if quota_message is not None:
+                last_quota_message = quota_message
+                if log_fn:
+                    log_fn(
+                        f"429 quota exhausted ({quota_message}) -- retrying; "
+                        f"the governor cooldown paces this until the window resets"
+                    )
+            # A 429 usually carries Retry-After; honoring it beats guessing
+            # with an exponential curve, and it feeds the GLOBAL cooldown
+            # so the whole fleet waits out the window the server named.
+            governor_report(governor_path, limited=limited,
+                            cooldown_seconds=governor_cooldown_seconds,
+                            max_cooldown_seconds=governor_max_cooldown_seconds,
+                            retry_after_seconds=(
+                                _retry_after_seconds(getattr(e, "headers", None))
+                                if limited else None
+                            ))
+            if not limited:
                 raise
             last_error = e
             continue
@@ -630,6 +871,16 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
                         cooldown_seconds=governor_cooldown_seconds,
                         max_cooldown_seconds=governor_max_cooldown_seconds)
         return reply
+    # Only reached once the ENTIRE retry ladder is spent. If the thing we
+    # kept retrying was a spent budget, say so: a bare "HTTP Error 429" at
+    # this point reads as throttling and sends an operator looking at rate
+    # limits instead of at billing. This does not shortcut any retry --
+    # every attempt was still made.
+    if last_quota_message is not None:
+        raise ModelQuotaExhausted(
+            f"{model} via {base_url}: {last_quota_message} "
+            f"(still 429ing after {max_retries} retries)"
+        ) from last_error
     # last_error is only None if max_retries < 0 (range(max_retries + 1) never
     # iterates) -- guard against `raise None`, which would raise a confusing
     # TypeError instead of surfacing the actual misconfiguration.
@@ -637,7 +888,36 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
 
 
 def _call_model_once(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream, thinking,
-                      temperature, timeout, prompt_cache="auto"):
+                      temperature, timeout, prompt_cache="auto",
+                      deadline_seconds=None, now_fn=None):
+    """One HTTP attempt. Raises ModelCallDeadlineExceeded if the call
+    outlives deadline_seconds of wall clock (None disables the deadline,
+    preserving the old unbounded behavior for callers that want it).
+
+    The socket timeout bounds a single stalled read; the deadline bounds
+    the whole call. Both are needed: a provider can satisfy the former
+    indefinitely by trickling SSE chunks, which is precisely the failure
+    this deadline exists to cut off.
+    """
+    # Resolved here, not as a def-time default: binding time.monotonic at
+    # import makes the clock unpatchable, which silently disables every
+    # test that injects one -- caught only because a deadline test kept
+    # returning the full slow reply instead of raising.
+    now_fn = time.monotonic if now_fn is None else now_fn
+    started = now_fn()
+
+    def remaining():
+        if deadline_seconds is None:
+            return None
+        return deadline_seconds - (now_fn() - started)
+
+    def check_deadline(where):
+        left = remaining()
+        if left is not None and left <= 0:
+            raise ModelCallDeadlineExceeded(
+                f"model call exceeded deadline_seconds={deadline_seconds} while {where}"
+            )
+
     url = base_url.rstrip("/") + "/chat/completions"
     payload = {
         "model": model,
@@ -670,16 +950,30 @@ def _call_model_once(messages, base_url, api_key, model, max_tokens, reasoning_e
             ),
         },
     )
+    # Never let one socket read outlast the whole call's deadline: without
+    # this, a connection that stalls right before the deadline still blocks
+    # for the full (much larger) `timeout` before anything notices.
+    effective_timeout = timeout
+    left = remaining()
+    if left is not None:
+        effective_timeout = max(1.0, min(timeout, left))
     # base_url is developer-supplied local config (MODEL_FIX_BASE_URL /
     # REVIEW_BASE_URL), never network- or attacker-controlled input.
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
+    with urllib.request.urlopen(req, timeout=effective_timeout) as resp:  # nosec B310
         if not stream:
             response = json.loads(resp.read())
+            check_deadline("reading a non-streamed response")
             return response["choices"][0]["message"]["content"], response.get("usage")
 
         chunks = []
         usage = None
         for raw_line in resp:
+            # Checked per chunk, not per read: this is the only place that
+            # can catch a response which is technically still alive but is
+            # never going to finish in a useful amount of time. Leaving the
+            # `with` block by raising closes the connection, which is what
+            # actually kills the in-flight request.
+            check_deadline("streaming the response")
             line = raw_line.decode("utf-8").strip()
             if not line.startswith("data:"):
                 continue
@@ -701,27 +995,157 @@ def _call_model_once(messages, base_url, api_key, model, max_tokens, reasoning_e
         return "".join(chunks), usage
 
 
-def git_apply(diff_text, repo_root):
-    """Apply a unified diff to the working tree. Returns (success, message).
+#: The git-apply tolerance ladder, tried strictly least-tolerant first; the
+#: FIRST rung that applies wins and the rest are never run.
+#:
+#: Why a ladder at all: a real RW2 worker transcript (deepseek-v4-pro,
+#: 2026-07-26T21:23) burned an entire attempt on two consecutive
+#: "did not apply" rejections -- a plan+diff at turn 21 and a VERIFY diff at
+#: turn 23 -- for a model diff whose content was right but whose context had
+#: drifted. There was no second chance: `git apply --recount` either matches
+#: 3 lines of context verbatim or fails, and a model that has only seen an
+#: excerpt of a file cannot reliably reproduce the surrounding whitespace.
+#: Every rung below still requires the change to be LOCATABLE -- there is
+#: deliberately no `patch --fuzz` fallback, which can silently apply a hunk
+#: in the wrong place and produce a plausible-looking but wrong edit.
+#:
+#: --recount (every rung) tells git to ignore each hunk's stated
+#: @@ -a,b +c,d @@ line counts and recompute them from the actual +/-/context
+#: lines instead -- models routinely emit diffs with an off-by-one in that
+#: header despite otherwise-correct content, which git rejects outright as
+#: "corrupt patch" without this flag. Harmless for a diff whose counts were
+#: already right.
+#:
+#: NOTE the deliberate absence of --reject, which every rung before this
+#: ladder used to pass. --reject makes `git apply` NON-ATOMIC: it applies
+#: whatever hunks it can, writes the rest to .rej files, and still exits 1.
+#: Measured directly (scratch repo, 2026-07-26): a 2-file patch failing on
+#: file A left file B fully modified plus an A.rej on disk. That is fatal for
+#: a ladder -- rung N+1 would then be matching its context against a tree
+#: rung N already half-patched, so a "success" at a looser rung could mean a
+#: doubly-applied or interleaved edit. Without --reject, `git apply` checks
+#: every hunk before writing anything and leaves the tree byte-identical on
+#: failure (also measured), which is exactly the precondition each next rung
+#: needs. Nothing in the fleet ever consumed a .rej file: attempt_build calls
+#: git_checkout_clean immediately after a failed apply, whose `git clean -fd`
+#: both deleted the partially-applied state and printed the "Removing
+#: <file>.rej" lines seen in worker logs. That clean still runs and still
+#: sweeps .rej files left behind by anything else; this ladder simply stops
+#: creating them.
+GIT_APPLY_LADDER = (
+    # 1. Exact: the pre-ladder behavior (minus --reject), and still the rung
+    #    the overwhelming majority of diffs land on.
+    ("exact", ["git", "apply", "--recount", "-"]),
+    # 2. Indentation slips -- a model re-typing a Rust block from memory gets
+    #    the code right and the leading spaces/tabs wrong.
+    ("ignore-whitespace", ["git", "apply", "--recount", "--ignore-whitespace", "-"]),
+    # 3. Context drift -- the file moved on (another worker's landed fix, or
+    #    the model only ever saw an excerpt). -C1 requires 1 line of context
+    #    instead of 3; the -/+ lines themselves must still match exactly.
+    ("context1", ["git", "apply", "--recount", "-C1", "-"]),
+    # 4. Both at once.
+    ("context1-ignore-whitespace",
+     ["git", "apply", "--recount", "-C1", "--ignore-whitespace", "-"]),
+    # 5. Real 3-way merge. Only possible when the diff carries `index
+    #    <old>..<new>` blob lines AND that old blob is in this repo's object
+    #    store -- most model-authored diffs have neither, so this rung usually
+    #    fails instantly with "does not have a valid blob information". Try it
+    #    anyway (it costs one exec) but do not rely on it. See
+    #    _restore_after_three_way below for the state it can leave behind.
+    ("3way", ["git", "apply", "--3way", "--recount", "-"]),
+)
+
+#: Rung 5's name, referenced in both the success and failure paths below.
+_THREE_WAY_RUNG = "3way"
+
+
+def _restore_after_three_way(repo_root, applied):
+    """Undo the index side-effects `git apply --3way` has and the other
+    rungs don't. Measured in a scratch repo, 2026-07-26:
+
+      - On SUCCESS --3way implies --index, so the change comes back STAGED
+        ("M  f.txt"). That silently breaks git_checkout_clean: its
+        `git checkout -- .` restores the worktree FROM THE INDEX, so a
+        3way-applied change would survive the revert that follows a failed
+        build and leak into the next round's diff (and into `git add -A`).
+      - On FAILURE with a real conflict it exits 1 having written conflict
+        markers into the file and left an UNMERGED index entry ("UU f.txt").
+        `git checkout -- .` on an unmerged path is an error, and
+        git_checkout_clean runs it with check=True -- i.e. that would have
+        raised CalledProcessError and killed the worker outright.
+
+    `git reset -q -- <paths>` puts those index entries back to HEAD; on the
+    failure path a following `git checkout -- <paths>` then throws away the
+    conflict-markered worktree content. Scoped to the paths the 3way itself
+    touched (staged or unmerged -- rungs 1-4 stage nothing, so anything
+    staged here is ours) rather than the whole tree, so this can never
+    discard unrelated work.
+    """
+    paths = set()
+    for argv in (
+        ["git", "diff", "--cached", "--name-only"],
+        ["git", "diff", "--name-only", "--diff-filter=U"],
+    ):
+        probe = subprocess.run(argv, capture_output=True, text=True, cwd=repo_root)  # nosec B603
+        paths.update(line for line in probe.stdout.splitlines() if line.strip())
+    if not paths:
+        return
+    ordered = sorted(paths)
+    subprocess.run(  # nosec B603
+        ["git", "reset", "-q", "--"] + ordered, capture_output=True, text=True, cwd=repo_root,
+    )
+    if not applied:
+        subprocess.run(  # nosec B603
+            ["git", "checkout", "--"] + ordered, capture_output=True, text=True, cwd=repo_root,
+        )
+
+
+def git_apply_with_rung(diff_text, repo_root):
+    """Apply a unified diff to the working tree, walking GIT_APPLY_LADDER
+    until one rung succeeds. Returns (success, message, rung_used) --
+    rung_used is the GIT_APPLY_LADDER name that applied, or None on total
+    failure. git_apply() below is the 2-tuple wrapper every existing caller
+    keeps using; only the callers that want to LOG which rung was needed
+    (see logging_git_apply) call this one.
 
     List-argv only, no shell=True anywhere in this file -- repo_root is a
     local path this process already trusts (the repo it's running in), and
     diff_text is passed via stdin, never interpolated into the argv list.
-
-    --recount tells git to ignore each hunk's stated @@ -a,b +c,d @@ line
-    counts and recompute them from the actual +/-/context lines instead --
-    models routinely emit diffs with an off-by-one in that header despite
-    otherwise-correct content, which git rejects outright as "corrupt
-    patch" without this flag. Harmless for a diff whose counts were
-    already right.
     """
-    result = subprocess.run(  # nosec B603
-        ["git", "apply", "--reject", "--recount", "-"],
-        input=diff_text, capture_output=True, text=True, cwd=repo_root,
-    )
-    if result.returncode == 0:
-        return True, "applied"
-    return False, result.stderr
+    first_error = None
+    for rung, argv in GIT_APPLY_LADDER:
+        result = subprocess.run(  # nosec B603
+            argv, input=diff_text, capture_output=True, text=True, cwd=repo_root,
+        )
+        applied = result.returncode == 0
+        if rung == _THREE_WAY_RUNG:
+            _restore_after_three_way(repo_root, applied)
+        if applied:
+            # "applied" verbatim for the exact rung: that exact string is
+            # what the manifest and every existing test have recorded since
+            # this function existed, and a looser rung is the only
+            # interesting case to call out.
+            message = "applied" if rung == GIT_APPLY_LADDER[0][0] else f"applied at rung {rung!r}"
+            return True, message, rung
+        if first_error is None:
+            first_error = result.stderr
+    # Report the STRICT rung's stderr, not the last one's: it's the message
+    # that names the context git searched for, which is what a model needs to
+    # correct its diff. The suffix tells it not to waste its retry on a
+    # whitespace/indentation tweak -- that was already tried for it.
+    looser = ", ".join(rung for rung, _ in GIT_APPLY_LADDER[1:])
+    return False, f"{first_error}(also retried at looser rungs: {looser} -- none applied)", None
+
+
+def git_apply(diff_text, repo_root):
+    """Apply a unified diff to the working tree. Returns (success, message).
+
+    Thin 2-tuple wrapper over git_apply_with_rung so every existing caller
+    (attempt_build's git_apply_fn contract, and the test fakes injected for
+    it) is unaffected by the ladder's extra return value.
+    """
+    success, message, _rung = git_apply_with_rung(diff_text, repo_root)
+    return success, message
 
 
 def git_checkout_clean(repo_root):
@@ -960,11 +1384,19 @@ def governor_acquire(path, calls_per_minute=DEFAULT_GOVERNOR_CALLS_PER_MINUTE,
 
 def governor_report(path, limited, cooldown_seconds=DEFAULT_GOVERNOR_COOLDOWN_SECONDS,
                     max_cooldown_seconds=DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS,
-                    now_fn=time.time):
+                    now_fn=time.time, retry_after_seconds=None):
     """Record one call outcome. limited=True (429 or 5xx) sets/extends
     the GLOBAL cooldown with exponential growth per consecutive limited
     outcome, capped; limited=False resets the streak (the next limited
-    outcome starts from the base cooldown again). path=None disables."""
+    outcome starts from the base cooldown again). path=None disables.
+
+    retry_after_seconds, when the response carried a Retry-After header,
+    is the server's own statement of how long to wait. It raises the
+    cooldown floor: the effective wait becomes max(exponential backoff,
+    Retry-After). It deliberately bypasses max_cooldown_seconds, which
+    exists to cap our *guessing* -- ignoring an explicit instruction to
+    wait longer just earns another 429 the moment the cap expires.
+    """
     if path is None:
         return
     def mutate(state):
@@ -974,6 +1406,8 @@ def governor_report(path, limited, cooldown_seconds=DEFAULT_GOVERNOR_COOLDOWN_SE
                 cooldown_seconds * (2 ** (state["consecutive_limited"] - 1)),
                 max_cooldown_seconds,
             )
+            if retry_after_seconds is not None:
+                backoff = max(backoff, retry_after_seconds)
             state["cooldown_until"] = max(state["cooldown_until"], now_fn() + backoff)
         else:
             state["consecutive_limited"] = 0
@@ -1698,14 +2132,23 @@ How oxidex is structured, for orientation (see the actual parser file(s) below f
 """.strip()
 
 
-def build_format_overview_block(lib_dir, perl_reference_block):
-    """Combine ExifTool's own NOTES documentation for this gap's relevant
-    Perl module(s) -- extracted from whichever files build_perl_reference_block
-    already found tags in, so no redundant module discovery -- with a
-    short, always-included primer on how oxidex's own parsers are
-    organized. The per-tag Perl snippets and the full parser file
-    contents (see build_prompt's other sections) already show the
-    specifics; this section is deliberately just orientation."""
+def build_perl_notes_block(lib_dir, perl_reference_block):
+    """ExifTool's own NOTES documentation for this gap's relevant Perl
+    module(s) -- extracted from whichever files build_perl_reference_block
+    already found tags in, so no redundant module discovery. "" when
+    nothing is found.
+
+    Split out of build_format_overview_block (2026-07-26) purely for
+    prompt-cache reasons: the primer half of that block is byte-identical
+    for every worker/format/tag forever, while this half tracks whichever
+    Perl module the CURRENT tag lives in and so varies within a format.
+    Measured over 216 renders of real gaps across 22 formats: the primer
+    had 1 distinct value across all of them, these NOTES had 19 (and
+    varied tag-to-tag within 6 of the 22 formats). Keeping them in one
+    section forced the invariant primer to sit behind a per-tag string,
+    which ends the cacheable prefix early -- build_prompt now emits them
+    in different stability tiers. build_format_overview_block below keeps
+    its original combined contract for every other caller."""
     notes_blocks = []
     if lib_dir is not None:
         module_table_pairs = sorted(set(PERL_MODULE_HEADER_RE.findall(perl_reference_block)))
@@ -1715,14 +2158,22 @@ def build_format_overview_block(lib_dir, perl_reference_block):
                 label = f"{name}, table {table_name}" if table_name else name
                 notes_blocks.append(f"--- {label} ---\n{notes}")
 
-    notes_section = ""
-    if notes_blocks:
-        notes_section = (
-            "\n\nExifTool's own documentation for this format (from the Perl source's NOTES):\n\n"
-            + "\n\n".join(notes_blocks)
-        )
+    if not notes_blocks:
+        return ""
+    return (
+        "\n\nExifTool's own documentation for this format (from the Perl source's NOTES):\n\n"
+        + "\n\n".join(notes_blocks)
+    )
 
-    return f"\n\n{ARCHITECTURE_PRIMER}{notes_section}"
+
+def build_format_overview_block(lib_dir, perl_reference_block):
+    """Combine ExifTool's own NOTES documentation for this gap's relevant
+    Perl module(s) (see build_perl_notes_block) with a short,
+    always-included primer on how oxidex's own parsers are organized. The
+    per-tag Perl snippets and the full parser file contents (see
+    build_prompt's other sections) already show the specifics; this
+    section is deliberately just orientation."""
+    return f"\n\n{ARCHITECTURE_PRIMER}{build_perl_notes_block(lib_dir, perl_reference_block)}"
 
 
 RUST_ARCHITECTURE_CONSTRAINTS = """
@@ -1756,7 +2207,7 @@ STRATEGY: bias toward attempting a real patch early rather than open-ended explo
 
 Every reply must be exactly one of these four shapes:
 
-1. REQUEST: <path> -- see a source file or a sample file (a bare line, nothing else in the reply). Add :<start>-<end> after a source path (e.g. REQUEST: src/parsers/x.rs:40-120) to get just that 1-indexed line range -- prefer a range for anything large.
+1. REQUEST: <path> -- see a source file or a sample file (a bare line, nothing else in the reply). Add a 1-indexed line range after a source path -- prefer one for anything large. All four shapes work: `:40-120` (that range), `:400-` (line 400 to end of file), `:-120` (start through line 120), `:400` (a window around line 400). You have a limited number of REQUEST turns per attempt and each answer tells you how many are left; when none are left you MUST reply with a diff.
 2. VERIFY -- trial-compile a candidate change without committing to it: the line "VERIFY" followed by exactly ONE ```diff fenced block. The diff is applied, `cargo check` runs, the tail of its output comes back, and the change is REVERTED -- your final diff must still contain the complete change.
 3. PATCH 1/N -- if your finished diff would exceed roughly {max_prompt_tokens} tokens (~{max_prompt_tokens * 4} characters) in one reply, split it into N consecutive chunks and send the first as the line "PATCH 1/N" followed by ONE ```diff fenced chunk; you'll be prompted for each next chunk. Chunks are concatenated in order before applying, so split anywhere (mid-hunk is fine) -- never repeat or skip lines across a boundary.
 4. Plan + diff -- first, 2-3 sentences: which tag(s) you're fixing, where in the code, what you learned from the previous turn's output, and (on a retry) what you're doing differently from the failed attempt(s) above and why. Then exactly ONE ```diff fenced block containing the complete unified diff.
@@ -1984,6 +2435,16 @@ def build_exact_sample_block(gap, samples_dir):
     exact file and its size and point at the REQUEST: protocol, rather
     than leaving it to be found (or missed) among samples_block's
     generic per-format list.
+
+    The lead-in says "the tag targeted below", not "this exact tag":
+    build_prompt renders this section ABOVE the gap list (2026-07-26),
+    because different tags of one format very often come from the SAME
+    sample file -- measured over 216 renders of real gaps, this block had
+    only 1.86 distinct values per format against the gap list's 4.73, so
+    putting the hex dump in front of the gap list keeps a mean 1.2 KB of
+    prefix cacheable that the old order re-billed every call (81.6% ->
+    87.6% of the prompt cacheable in the offline harness). The wording
+    has to point forwards for that to read correctly.
     """
     all_entries = gap["missing_tags"] + gap["value_differences"]
     if len(all_entries) != 1:
@@ -2005,14 +2466,46 @@ def build_exact_sample_block(gap, samples_dir):
     if size <= DEFAULT_INLINE_SAMPLE_MAX_BYTES:
         data = path.read_bytes()
         return (
-            f"\n\nReal sample file containing this exact tag ({shown_path}, {size} bytes) "
+            f"\n\nReal sample file containing the tag targeted below ({shown_path}, {size} bytes) "
             f"-- full hex dump:\n{hex_dump(data, max_bytes=DEFAULT_INLINE_SAMPLE_MAX_BYTES)}"
         )
     return (
-        f"\n\nReal sample file containing this exact tag: {shown_path} ({size} bytes, too "
+        f"\n\nReal sample file containing the tag targeted below: {shown_path} ({size} bytes, too "
         f"large to inline here). Respond with \"REQUEST: {shown_path}\" instead of a diff if "
         "you need to see its raw bytes."
     )
+
+
+# --- Section 6: adaptive response-format guidance --------------------------
+#
+# "no diff in model response" is attempt_build's verdict when
+# extract_diff() finds neither a ```diff fenced block nor a reply that
+# starts like a raw unified diff. It accounts for 1489 of 4922 live
+# lesson rows (2026-07-25) -- ~40% of every failure the fleet records,
+# nearly 4x the next reason -- and it is a RESPONSE-FORMAT failure, not a
+# domain-knowledge one: the model usually did the work and then wrapped
+# it in ```rust, or narrated the patch in prose, or emitted a bare
+# @@ hunk. No amount of ExifTool lore in the prompt fixes that; a
+# corrective statement of the expected envelope does.
+#
+# It is injected adaptively -- only for the workers actually failing this
+# way -- because the fix is worth ~120 tokens and the learning budget is
+# 1200: charging every prompt for it permanently would cost 10% of the
+# block to teach the ~60% of workers who already get the format right
+# something they already know.
+#
+# Declared here, ahead of the lessons tail, because the tail DEFERS to
+# it: select_module_lessons drops these rows from the domain-lessons
+# ranking entirely (see there), so each failure class is routed to the
+# one section that can actually fix it.
+
+DIFF_FORMAT_FAILURE_RE = re.compile(r"(?i)no diff in model response")
+
+#: One occurrence in the tail window is enough to escalate. This failure
+#: mode is self-reinforcing (the model that answers in prose once answers
+#: in prose again on the retry) and the corrective text is cheap, so
+#: waiting for a second sample buys nothing but another wasted round.
+DEFAULT_DIFF_FORMAT_ESCALATION_THRESHOLD = 1
 
 
 # --- Section 6: lessons tail (part of the learning block) ------------------
@@ -2020,21 +2513,42 @@ def build_exact_sample_block(gap, samples_dir):
 DEFAULT_LESSONS_TAIL_KB = 256
 DEFAULT_LESSONS_TAIL_MAX_ENTRIES = 8
 
+#: One rendered lessons/quarantine line is clamped to this many chars.
+#: Reasons carry whole cherry-pick transcripts and cargo output; a single
+#: un-clamped one can be 2000 bytes (the K1 line cap) and eat the entire
+#: learning budget by itself.
+LESSON_REASON_DISPLAY_CHARS = 240
 
-def read_lessons_tail(lessons_path, module_key, format_name,
-                       tail_kb=DEFAULT_LESSONS_TAIL_KB,
-                       max_entries=DEFAULT_LESSONS_TAIL_MAX_ENTRIES):
-    """Section 6: the last `tail_kb` KB of <home>/logs/lessons.jsonl via
-    seek (bounded, no full scan of a ledger that only ever grows), non-
-    infra events filtered to the same module (when module_key is given)
-    else the same format, newest `max_entries` kept.
+
+def _clamp_reason(reason, limit=LESSON_REASON_DISPLAY_CHARS):
+    """Whitespace-flatten and clamp one ledger reason to a single prompt
+    line. Flattening matters as much as clamping: a cherry-pick or cargo
+    reason is multi-line, and an embedded newline would silently split one
+    "  - " bullet into several unindented lines mid-block."""
+    text = " ".join(str(reason or "").split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def read_lessons_tail_events(lessons_path, tail_kb=DEFAULT_LESSONS_TAIL_KB):
+    """Section 6: every parseable, non-infra K1 row in the last `tail_kb`
+    KB of <home>/logs/lessons.jsonl, in ledger order (oldest first), via
+    seek -- bounded, no full scan of a ledger that only ever grows.
 
     A byte offset can land mid-line (either the seek itself, or a writer
     mid-append at the moment of the read) -- the first split chunk after
     a nonzero offset is dropped rather than risking a truncated JSON
     object; every other malformed line is skipped the same way every
     other K1 reader skips one (never degrades to {}). Missing file (not
-    yet created, or no lessons_path given): []."""
+    yet created, or no lessons_path given): [].
+
+    This is the SINGLE choke point where infra noise leaves the worker's
+    view: a row is dropped when its event is "infra" OR when its reason
+    reads as a provider outage however it was labelled (see
+    distill_lessons.is_infra_reason -- 231 live rows label an outage as
+    build_failed/review_rejected/structural). Everything downstream --
+    the module/format ranking, the per-worker diff-format detector -- is
+    built on this list, so none of them can leak one.
+    """
     if not lessons_path:
         return []
     path = Path(lessons_path)
@@ -2064,34 +2578,619 @@ def read_lessons_tail(lessons_path, module_key, format_name,
         if not isinstance(ev, dict):
             continue
         event = ev.get("event")
-        if not event or event == "infra":
-            continue
-        if module_key:
-            if ev.get("module") != module_key:
-                continue
-        elif ev.get("format") != format_name:
+        if not event or event == "infra" or is_infra_reason(ev.get("reason")):
             continue
         events.append(ev)
-    events.reverse()  # ledger is append-order (oldest first); newest first
-    return events[:max_entries]
+    return events
 
 
-def format_lessons_tail(events):
-    """Render read_lessons_tail's output into a learning-block section."""
-    if not events:
+def select_module_lessons(events, module_key, format_name,
+                          max_entries=DEFAULT_LESSONS_TAIL_MAX_ENTRIES):
+    """Scope read_lessons_tail_events' rows to this module (when
+    module_key is given) else this format, then rank them by RECURRENCE
+    -- see distill_lessons.rank_by_recurrence. Returns
+    [(representative_row, occurrence_count), ...], most-repeated first.
+
+    Ranking replaced a plain newest-first tail: the tail spent its whole
+    budget on whatever the last hour happened to emit, which on a fleet
+    where one failure mode accounts for ~40% of all rows means N nearly
+    identical lines and no room for the mistake this module actually
+    keeps repeating. Collapsing by fingerprint costs one line per
+    distinct mistake instead of one per occurrence, so the same budget
+    now buys `max_entries` DISTINCT lessons rather than `max_entries`
+    samples.
+
+    Two row classes are excluded outright before ranking.
+
+    (1) "no diff in model response" rows. Ranking by recurrence without
+    this would be self-defeating: measured over the live tail 2026-07-25
+    that one reason is 40 of 235 rows and duly ranks FIRST for
+    essentially every module, evicting the wrong_value and structural
+    lessons that are the only ones carrying ExifTool knowledge. It is a
+    response-format defect, it teaches a worker nothing about the module,
+    and it is already routed to the section that can actually fix it
+    (build_diff_format_remediation) -- so it does not also get to spend a
+    slot here.
+
+    (2) `critique` rows, for two independent reasons that happen to have
+    the same fix.
+
+    First, they are DUPLICATES BY CONSTRUCTION. fix_gap writes two rows
+    per failed round, not one: the specific event (build_failed /
+    wrong_value / gap_not_closed / structural / test_regressed) and then
+    critique_and_continue's lesson("critique", critique). The critique row
+    is the critic's PARAPHRASE of the very failure the row beside it
+    already states, so ranking both double-counts one event. This is the
+    same duplicate-row shape already fixed for infra rows in fix_gap
+    (which stopped writing a build_failed row beside every `infra` row).
+    Excluding (1) by literal reason match could never catch the paraphrase
+    -- "The fixer likely emitted no diff because...", "provided a prose
+    description instead of an actual unified diff" contain no literal
+    "no diff in model response" -- so the diff-format failure went on
+    taking slots through its critique twin: 14 of 43 ranked slots across
+    the 6 live formats, 2026-07-25 (MRW 5 of 6, NEF 4 of 6).
+
+    Second, a critique reason is unbounded LLM prose, and recurrence
+    ranking cannot cluster prose. fingerprint_scoped's reason component is
+    normalized free text, so two critiques of the same mistake share no
+    key. Measured per event over the same 235-row tail: critique 112 rows
+    -> 107 clusters, 106 of them singletons (95%); build_failed 78 rows ->
+    2 clusters, 0 singletons; gap_not_closed 11 -> 1; review_rejected 10
+    -> 2. Every other event clusters; the critique event alone does not,
+    and a ranking whose entries are all singletons is just newest-first
+    with extra steps -- precisely the ranking this function replaced.
+
+    Nothing is lost by dropping them: the critique is fed back IN FULL and
+    unclamped to the worker that earned it, in the same conversation
+    (critique_and_continue appends it to `messages`). What was being
+    ranked here was a 240-char truncation of someone else's critique of
+    someone else's round.
+    """
+    if module_key:
+        scoped = [ev for ev in events if ev.get("module") == module_key]
+    else:
+        scoped = [ev for ev in events if ev.get("format") == format_name]
+    scoped = [ev for ev in scoped
+              if ev.get("event") != "critique"
+              and not DIFF_FORMAT_FAILURE_RE.search(str(ev.get("reason") or ""))]
+    return rank_by_recurrence(scoped, max_entries=max_entries)
+
+
+def format_lessons_tail(ranked):
+    """Render select_module_lessons' [(row, count), ...] into a
+    learning-block section. The "xN" recurrence count is shown only when
+    N > 1: on a one-off it is noise, and on a repeat it is the whole
+    point -- it tells the model this is a rake the fleet keeps stepping
+    on, not one worker's bad afternoon."""
+    if not ranked:
         return ""
     lines = []
-    for ev in events:
+    for ev, count in ranked:
         event = ev.get("event", "?")
-        reason = str(ev.get("reason") or "").strip()
+        reason = _clamp_reason(ev.get("reason"))
         tag_key = ev.get("tag_key") or ""
         suffix = f" ({tag_key})" if tag_key else ""
-        lines.append(f"  - {event}: {reason}{suffix}")
+        recurrence = f" x{count}" if count > 1 else ""
+        lines.append(f"  - {event}{recurrence}: {reason}{suffix}")
     return (
         "\n\nRecent lessons ledger entries (fleet-wide, spec K1 -- other "
-        "workers' recent outcomes on this module/format):\n"
+        "workers' outcomes on this module/format, ranked by how often each "
+        "distinct mistake RECURS, most-repeated first; \"xN\" is the "
+        "recurrence count):\n"
         + "\n".join(lines)
     )
+
+
+# --- Section 6: the worker's own quarantine verdicts -----------------------
+#
+# scripts/squad_merge_loop.py's mergers validate every worker commit and
+# cherry-pick it onto squad/<name>; a rejected commit is appended to
+# <home>/logs/quarantine.jsonl (see squad_merge_loop.append_quarantine for
+# the entry shape) and NEVER retried. Until now nothing told the worker:
+# model_fix_loop.py contained zero references to that ledger, so a worker
+# whose commit was rejected went on stacking new commits on top of the
+# rejected code -- which is how 7 heads came to hit cherry-pick conflicts
+# for no reason other than their OWN earlier commit having been silently
+# dropped from the squad branch. Surfacing the verdict is the whole fix:
+# the flags name the defect ("printconv-mismatch:<value>",
+# "cherry-pick-conflict", "targeted-test-failed"), so a worker that sees
+# them can stop reproducing it.
+
+#: The quarantine ledger is tiny next to lessons.jsonl (77 lines vs 4922
+#: live, 2026-07-25) but it is append-only and grows, so it gets the same
+#: bounded-seek treatment rather than a full read.
+DEFAULT_QUARANTINE_TAIL_KB = 64
+
+#: At most this many of the worker's own rejections reach the prompt.
+#: Four is the same window K4 gives sweep reviews: enough to show a
+#: pattern, small enough that a bad afternoon cannot crowd out the
+#: module playbook.
+DEFAULT_QUARANTINE_MAX_ENTRIES = 4
+
+#: A cherry-pick reason embeds git's entire conflict transcript (~700
+#: chars live). The flags carry the actual verdict, so the reason is
+#: clamped harder than a lesson's.
+QUARANTINE_REASON_DISPLAY_CHARS = 180
+
+#: The rendered flags list of ONE entry is capped at this many flags and
+#: this many chars.
+QUARANTINE_MAX_FLAGS = 4
+QUARANTINE_FLAGS_DISPLAY_CHARS = 200
+
+#: squad_merge_loop writes this literal when a candidate commit has no
+#: `Format:` trailer to read (squad_merge_loop.py:1111,
+#: `commit_format_trailer(...) or "UNKNOWN"`). It is a placeholder for a
+#: MISSING format, not a format, and must be read back as one -- see
+#: _quarantine_entry_format.
+QUARANTINE_UNKNOWN_FORMAT = "UNKNOWN"
+
+
+def _quarantine_entry_format(entry):
+    """The format a quarantine entry actually pins itself to, or None for
+    a squad-wide verdict that pins itself to no format at all.
+
+    Two shapes mean "no format": JSON null (overlord_sweep's bisection
+    quarantines a whole squad with format_name=None) and the literal
+    "UNKNOWN" that squad_merge_loop substitutes when the commit carries no
+    Format: trailer. Only the first was recognised, and since "UNKNOWN" is
+    truthy the second was silently pinned to a format no worker ever has:
+    28 of 77 live rows (36%, exactly 2 per squad across all 14 squads,
+    2026-07-25) were invisible to every worker -- and ALL 28 carry
+    `missing-trailer:Format` as their first flag, so the single rejection
+    class whose defect IS the absent trailer was the one class this
+    feature could never report back. The worker therefore kept omitting
+    the trailer, and the ledger kept growing two more rows per squad.
+    """
+    fmt = str(entry.get("format") or "").strip()
+    if not fmt or fmt == QUARANTINE_UNKNOWN_FORMAT:
+        return None
+    return fmt
+
+
+def read_own_quarantine(quarantine_path, worker_label, format_name,
+                        tail_kb=DEFAULT_QUARANTINE_TAIL_KB,
+                        max_entries=DEFAULT_QUARANTINE_MAX_ENTRIES):
+    """This worker's OWN recent quarantine verdicts, newest first.
+
+    "Own" is (squad, format): the pair is what identifies a worker in the
+    ledger, since squad_merge_loop records the squad and the commit's
+    Format trailer but not the worker id. A verdict that pins itself to no
+    format (see _quarantine_entry_format: JSON null from overlord_sweep's
+    squad bisection, or the "UNKNOWN" placeholder for a commit with no
+    Format: trailer) matches every member of its squad -- it rolled back
+    or rejected work on the branch they all share, so they all need it.
+
+    Another squad's rejections are deliberately NOT shown, and neither
+    are the same squad's rejections on a different format: they name
+    parser files this worker never touches, and the budget they would
+    spend is better spent on the module playbook.
+
+    Ownership is decided by validate_fix_commit.squad_from_worker -- the
+    SAME helper the merger uses to decide which squad a candidate commit
+    belongs to -- so a label with no "-<n>" suffix is its own squad name
+    and matches nothing in a ledger whose squads are real squad names.
+    That is a deliberate fail-closed default, and it is the only safe one:
+    the previous helper here returned None for such a label and the match
+    degraded to FORMAT ALONE, which is not an edge case but the DEFAULT
+    path -- parallel_model_fix_loop picks run_round unless --squad-mode,
+    run_worker labels those workers with the bare format name ("JPEG",
+    "CR2") and model_fix_loop's own CLI defaults the label to "1".
+    Measured against the live ledger 2026-07-25, the degrade returned
+    ps-docs/sony-minolta/thermal rejections for label "JPEG",
+    exif-core/canon for "CR2", and ps-docs/sony-minolta/thermal for the
+    bare "1" -- all rendered by format_own_quarantine under "YOUR OWN
+    commits that were REJECTED ... Fix the defect named by the flags
+    below". Showing nothing is strictly better than showing a lie.
+
+    KNOWN GAP, stated plainly because the earlier version of this comment
+    got it wrong. It is NOT true that a legacy worker owns no ledger
+    entries: squad_merge_loop.candidate_worker_branches returns the legacy
+    per-format branch model-fix-parallel-<fmt> for every format
+    squads.toml lists under a squad, and poll_once feeds those to
+    process_commit(squad=<squad>, fmt=<fmt>), whose quarantine() records
+    squad=<the CONSUMING squad>. So a legacy worker's commits do become
+    entries -- filed under whichever squad consumed them, and since
+    squads.toml lists JPEG under 12 of 14 squads, potentially under many
+    squad names at once. Nothing in the ledger ties them back to the
+    legacy label the worker was given, so this function cannot claim them
+    and returns [] on that path: the quarantine section is inert for
+    legacy per-format workers, including the missing-trailer:Format class
+    it would otherwise surface. The ledger does record `sha`, so ownership
+    is recoverable in principle by walking the worker branch -- nothing
+    does that today. Fail-closed is still the right default here; a wrong
+    owner teaches a worker to fix someone else's defect.
+
+    No worker_label at all returns [] before any of that: an absent label
+    means there is no worker to be the owner of anything. That is what
+    keeps build_prompt hermetic by default -- a caller that never opted
+    in must not be shown some arbitrary worker's rejections.
+
+    Missing/unreadable ledger, or no path: [] -- advisory context, never
+    a hard dependency, same contract as every other build_prompt source.
+    """
+    if not quarantine_path or not worker_label:
+        return []
+    path = Path(quarantine_path)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return []
+    offset = max(0, size - tail_kb * 1024)
+    try:
+        with path.open("rb") as f:
+            f.seek(offset)
+            data = f.read()
+    except OSError:
+        return []
+    lines = data.split(b"\n")
+    if offset > 0:
+        lines = lines[1:]  # drop a possibly-partial leading fragment
+    squad = squad_from_worker(str(worker_label).strip())
+    entries = []
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            entry = json.loads(raw)
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("squad") != squad:
+            continue
+        entry_format = _quarantine_entry_format(entry)
+        # A formatless verdict applies to every member of the squad.
+        if entry_format and entry_format != format_name:
+            continue
+        entries.append(entry)
+    entries.reverse()  # ledger is append-order (oldest first); newest first
+    return entries[:max_entries]
+
+
+def _clamp_quarantine_flags(raw_flags,
+                            max_flags=QUARANTINE_MAX_FLAGS,
+                            max_chars=QUARANTINE_FLAGS_DISPLAY_CHARS):
+    """Render one entry's `flags` as a bounded, deterministic string.
+
+    BOUNDED because the writer is unbounded: validate_fix_commit appends
+    one `printconv-mismatch:<48-char excerpt>` flag per unverifiable map
+    value with no cap of its own, so a commit adding a ~30-entry PrintConv
+    lookup emits 30 flags in a single entry (the live worst case is
+    already 11 flags / 512 chars, 2026-07-25). Four such entries rendered
+    a 5858-char section against a 4800-char learning budget, and since
+    LEARNING_SECTION_ORDER ranks this section SECOND, compose_learning_
+    block then admitted the quarantine block ALONE and dropped the K4
+    sweep reviews, the K3 module playbook and the lessons tail outright --
+    the knowledge spine went dark for that worker for as long as the entry
+    stayed in the 64KB window, which today is the whole ledger. The first
+    few flags already name the defect class; flags 5..30 are the same
+    class with different excerpts, so the tail costs budget and teaches
+    nothing. The "(+N more)" suffix keeps the true count visible, and it
+    counts flags dropped by EITHER cap -- the char budget decides how many
+    flags fit, then the remainder is reported.
+
+    DEFENSIVE because `flags` is written by another process. Every other
+    field in this read path is coerced; this one was consumed as
+    `", ".join(str(f) for f in entry["flags"])`, so a row whose flags is
+    a bare int raised TypeError straight out of build_prompt, through
+    fix_gap, and killed the worker -- from a section whose whole contract
+    (read_own_quarantine's docstring) is "advisory context, never a hard
+    dependency". A string is treated as ONE flag rather than as an
+    iterable of characters, which is the only reading a writer could have
+    meant; anything else non-list is reported as one opaque value.
+    """
+    if isinstance(raw_flags, str):
+        flags = [raw_flags]
+    elif isinstance(raw_flags, (list, tuple)):
+        flags = [str(f) for f in raw_flags]
+    elif not raw_flags:
+        flags = []
+    else:
+        flags = [str(raw_flags)]
+    flags = [f for f in flags if f]
+    if not flags:
+        return "(no flags)"
+    # Both caps have to feed the SAME count, or "(+N more)" lies. Deriving
+    # `hidden` from the flag-count cap alone meant
+    # (['A'*100, 'B'*100, 'C'*100]) rendered 200 chars + "..." with
+    # hidden == 0 -- the third flag vanished with nothing to say so. Decide
+    # how many flags actually fit, then report the rest.
+    shown = []
+    used = 0
+    for flag in flags[:max_flags]:
+        cost = len(flag) + (2 if shown else 0)  # ", " between flags
+        if shown and used + cost > max_chars:
+            break
+        shown.append(flag)
+        used += cost
+    if not shown:
+        shown = [flags[0]]
+    hidden = len(flags) - len(shown)
+    text = ", ".join(shown)
+    if len(text) > max_chars:
+        # Only reachable when the FIRST flag alone exceeds the budget: it
+        # is force-included above so the line is never empty, but the
+        # bound this function exists to enforce still has to hold.
+        text = text[:max_chars].rstrip() + "..."
+    if hidden > 0:
+        text += f" (+{hidden} more)"
+    return text
+
+
+def format_own_quarantine(entries):
+    """Render read_own_quarantine's entries into a learning-block section.
+
+    The flags lead each line because they ARE the verdict and they carry
+    the offending value inline (validate_fix_commit emits
+    "printconv-mismatch:<the wrong string>", "multi-sample-fail:<tag>",
+    "missing-trailer:<key>"); the reason is the human-readable tail and
+    is clamped hard. Deterministic, bounded output -- and now actually
+    bounded, see _clamp_quarantine_flags: at most
+    DEFAULT_QUARANTINE_MAX_ENTRIES lines, each at most
+    QUARANTINE_FLAGS_DISPLAY_CHARS + QUARANTINE_REASON_DISPLAY_CHARS
+    chars plus a fixed rendering overhead.
+    """
+    if not entries:
+        return ""
+    lines = []
+    for entry in entries:
+        flags = _clamp_quarantine_flags(entry.get("flags"))
+        reason = _clamp_reason(entry.get("reason"), QUARANTINE_REASON_DISPLAY_CHARS)
+        date = str(entry.get("ts") or "")[:10]
+        stamp = f" [{date}]" if date else ""
+        lines.append(f"  - {flags}{stamp}: {reason}")
+    return (
+        "\n\nYOUR OWN commits that were REJECTED at merge time (spec M2 "
+        "quarantine ledger, newest first). These never reached the squad "
+        "branch and were never retried -- anything you build on top of them "
+        "will conflict or be rejected the same way. Fix the defect named by "
+        "the flags below before repeating that approach:\n"
+        + "\n".join(lines)
+    )
+
+
+# --- Section 6: adaptive response-format guidance, continued --------------
+# (DIFF_FORMAT_FAILURE_RE and the escalation threshold are declared at the
+# top of section 6 because select_module_lessons above depends on them.)
+
+def count_diff_format_failures(events, worker_label):
+    """How many of THIS worker's rows in the tail window failed with "no
+    diff in model response". Scoped to the worker, not the module: the
+    defect belongs to whichever model this worker is rotating through,
+    and a sibling worker on the same module that formats its replies
+    correctly must not be taxed for it. No worker_label (the hermetic
+    default) means no escalation -- 0."""
+    if not worker_label:
+        return 0
+    return sum(
+        1 for ev in events
+        if ev.get("worker") == worker_label
+        and DIFF_FORMAT_FAILURE_RE.search(str(ev.get("reason") or ""))
+    )
+
+
+#: The corrective envelope statement. Deliberately concrete: the exact
+#: fence, the exact minimum a unified diff needs to apply (git apply
+#: rejects a bare @@ hunk with no ---/+++ headers), and one minimal
+#: example that would actually apply -- a rule the model can pattern-match
+#: against, not a rule it has to interpret.
+#:
+#: It must also be TRUE and must not contradict build_reply_shape_manifest,
+#: which ships in the same prompt. The first version did both wrong: it
+#: said the reply "is parsed by looking for a ```diff fenced block, and
+#: nothing else counts" and that prose is "discarded unread", while the
+#: manifest defines four legal shapes of which shape 1 (REQUEST) is a bare
+#: prose line with no diff and shape 4 REQUIRES 2-3 sentences of prose
+#: before the fence -- and the STRATEGY paragraph tells the worker to probe
+#: with VERIFY. A worker that believed the alert would stop issuing
+#: REQUEST/VERIFY, i.e. the alert would cost rounds instead of saving them.
+#: Two of its claims were also simply false, both in the strict direction:
+#: extract_diff ALSO accepts an unfenced reply starting with "diff --git"/
+#: "--- ", and DIFF_BLOCK_RE is a non-greedy search, so text after the
+#: closing fence is ignored rather than fatal. Every claim below is pinned
+#: to extract_diff's real behaviour by
+#: AdaptiveDiffFormatGuidanceTests.test_the_alert_makes_no_claim_
+#: extract_diff_contradicts.
+DIFF_FORMAT_REMEDIATION = """\
+FORMAT ALERT -- one or more of your recent rounds ended with no diff \
+extracted from your reply, so the round was wasted. This was NOT a code \
+problem, it is how the reply was packaged.
+
+The four reply shapes at the top of this prompt all still apply, and this \
+alert does not narrow them: REQUEST and VERIFY remain the right moves when \
+you are still investigating, and a Plan + diff reply is SUPPOSED to open \
+with 2-3 sentences of prose before the fence. What does not work is ending \
+a round with prose ALONE when you meant to deliver a change.
+
+Whenever your reply is meant to carry a change, it must contain the change \
+as a unified diff in EXACTLY ONE ```diff fenced block, complete, with \
+per-file ---/+++ headers -- a bare @@ hunk has nothing to apply against and \
+is rejected. A ```rust or ```patch fence is not read as a diff, and a diff \
+split across two fences loses everything after the first fence closes. \
+Minimal correct example:
+
+```diff
+--- a/src/parsers/jpeg/foo.rs
++++ b/src/parsers/jpeg/foo.rs
+@@ -10,6 +10,7 @@ fn parse(&self) {
+     let a = 1;
++    let b = 2;
+     let c = 3;
+```
+
+Text after the closing fence is ignored, so a closing sentence is harmless; \
+a SECOND ```diff block is not, because only the first is read. If the diff \
+is too large for one reply, use the "PATCH i/N" shape from the manifest \
+above -- each chunk is still ONE ```diff fenced block."""
+
+
+def build_diff_format_remediation(failure_count,
+                                  threshold=DEFAULT_DIFF_FORMAT_ESCALATION_THRESHOLD):
+    """The corrective envelope block for a worker that has recently hit
+    "no diff in model response", "" for one that hasn't (see
+    count_diff_format_failures for why this is per-worker)."""
+    if failure_count < threshold:
+        return ""
+    return (
+        f"\n\n{DIFF_FORMAT_REMEDIATION}\n(Triggered by {failure_count} recent "
+        "reply/replies of yours from which no diff could be extracted.)"
+    )
+
+
+# --- Section 6: learning-block composition ---------------------------------
+
+#: The learning block's fixed priority order, highest first. Whatever
+#: overflows learning_budget_tokens is shed from the TAIL of this list:
+#:
+#:   1. diff-format remediation -- tiny, adaptive (only present for a
+#:      worker that needs it), and targets ~40% of all recorded failures.
+#:      Useless if truncated, so it goes first.
+#:   2. the worker's own quarantine verdicts -- the only section that is
+#:      about THIS worker's own rejected code; without it the worker
+#:      rebuilds on top of it.
+#:   3. sweep reviews (K4) -- human verdicts, the scarcest signal there is.
+#:   4. module playbook (K3) -- the distiller's recurrence-ranked digest.
+#:   5. lessons tail (K1) -- raw rows, the most redundant with 4.
+#:
+#: 3/4/5 keep the order they had before 1/2 existed, so a worker with
+#: neither a quarantine record nor a format problem gets a byte-identical
+#: learning block to the one it got before (prompt-cache friendly, and
+#: the reason every pre-existing build_prompt test still passes unchanged).
+LEARNING_SECTION_ORDER = (
+    "diff_format", "quarantine", "sweep_reviews", "module_playbook", "lessons_tail",
+)
+
+
+def compose_learning_block(parts, budget_tokens):
+    """Assemble the learning block from `parts` ({name: text}) in
+    LEARNING_SECTION_ORDER and clamp the result to budget_tokens.
+
+    Each section is admitted whole while the budget allows; the first one
+    that doesn't fit is clamped to exactly what remains and every later
+    section is dropped. That makes the budget a hard bound no matter how
+    large the ledgers grow -- a 100k-row lessons.jsonl produces the same
+    number of prompt bytes as a 100-row one -- while guaranteeing that
+    the sections most likely to change a worker's behaviour are the ones
+    that survive the squeeze.
+
+    Unknown keys in `parts` are ignored rather than appended in dict
+    order: a section that isn't ranked has no defined position under
+    pressure, and silently giving it one is how an unranked section ends
+    up starving a ranked one.
+    """
+    budget_chars = max(0, budget_tokens) * 4
+    out = []
+    used = 0
+    for name in LEARNING_SECTION_ORDER:
+        text = parts.get(name) or ""
+        if not text:
+            continue
+        remaining = budget_chars - used
+        if remaining <= 0:
+            break
+        out.append(text[:remaining])
+        used += min(len(text), remaining)
+    return "".join(out)
+
+
+# --- prompt-cache section ordering (2026-07-26) -----------------------------
+#
+# The fleet's worker pool now leads with deepseek/deepseek-v4-pro on
+# OpenRouter: input $0.435/M, output $0.87/M, CACHE READ $0.0036/M -- a
+# 120x discount on any leading run of tokens that is byte-identical to a
+# recent request. DeepSeek's cache is AUTOMATIC PREFIX caching: there is
+# no cache_control to place (apply_prompt_cache_markers' Anthropic-style
+# breakpoints are a no-op here, which is why config ships
+# prompt_cache = "auto"), so the ONLY lever is the order the sections are
+# rendered in. One varying byte ends the prefix and everything after it is
+# re-billed at 120x.
+#
+# The order below is derived from measurement, not intuition: 216 renders
+# of real gap dicts reconstructed from the fleet's own saved fixer
+# requests (~/.oxidex/logs/model-fix-requests), covering 22 formats x 6
+# gaps x 2 worker ids, with the live samples dir / ExifTool Perl lib /
+# knowledge home wired in. Per section: distinct rendered values across
+# ALL renders, mean distinct values WITHIN one format, and whether it
+# changes when only the worker id changes:
+#
+#   section        mean chars   distinct/all   distinct/format   per-worker
+#   constraints          1785              1              1.00          no
+#   pitfalls             5103              1              1.00          no
+#   manifest             1917              1              1.00          no
+#   primer               1363              1              1.00          no
+#   format line            86             22              1.00          no
+#   samples               174             20              1.00          no
+#   parser_files        28707             24              1.64          no
+#   perl NOTES           1363             19              1.64          no
+#   learning             3223             40              2.00         YES
+#   missing+diffs         ~90            104              4.73          no
+#   exact_sample         2337             25              1.86          no
+#   perl_block            791             83              4.27          no
+#   tail                  331              1              1.00          no
+#
+# The first four rows were one section ("intro") together with the format
+# line and the missing-tag list, which is why the old order lost the
+# prefix at ~1.8 KB (cross-format) / ~7 KB (same format) out of a ~17.5 KB
+# prompt: the single most volatile string in the whole prompt sat at byte
+# 1871, in front of the 28 KB of parser source. Splitting it is the
+# single highest-value change here.
+#
+# Two placements are deliberate and worth not "fixing" later:
+#   * learning ABOVE the gap list. It reads as per-worker orientation, and
+#     the measurement says it is genuinely more stable than the gap list:
+#     for a fixed worker it was identical across all 6 tags of a format
+#     (2.00 distinct/format == exactly the 2 worker ids probed), while the
+#     gap list changed on every tag (4.73 distinct/format). Workers
+#     process tags back to back, so this is the common case.
+#   * exact_sample ABOVE the gap list, which is where it did NOT used to
+#     be. Different tags of one format usually come from the same sample
+#     file (1.86 distinct values per format, against the gap list's 4.73),
+#     so it belongs in the more stable tier -- worth 81.6% -> 87.6% in the
+#     offline harness. Its lead-in was reworded from "this exact tag" to
+#     "the tag targeted below" so the reference still resolves.
+#   * perl_block / neighbor BELOW the gap list, where they already were.
+#     Same argument would move perl_block up, but it is worth only ~0.2
+#     points (791 mean chars, 4.27 distinct/format -- it tracks the tag
+#     almost exactly) and its lead-in text is shared with the critique and
+#     foundation-job prompts, where the tags ARE listed above it. Not
+#     worth rewording a string three prompts depend on.
+#
+# Measured end to end over the same 22-format corpus with max_prompt_
+# tokens=4096: 40.1% -> 87.6% of a prompt cacheable against another prompt
+# for the same format, and 1864 -> 8133 bytes cacheable against a prompt
+# for a DIFFERENT format (i.e. across the whole fleet, not just one
+# worker) -- see the ordering-variant sweep recorded in the commit body.
+PROMPT_SECTION_ORDER = (
+    "invariants",     # tier 0: identical for every worker/format/tag
+    "format_intro",   # tier 1: per format
+    "samples",        # tier 1: per format
+    "parser_files",   # tier 2: per format, occasionally per tag
+    "overview",       # tier 2: per format, occasionally per tag
+    "learning",       # tier 3: per worker
+    "exact_sample",   # tier 3: per sample file, shared across sibling tags
+    "gaps",           # tier 4: per tag -- the volatile payload
+    "perl_block",     # tier 5: per tag, must follow the gap list
+    "neighbor",       # tier 5: per tag, must follow the gap list
+    "attempts",       # tier 6: append-only, grows every failed round
+    "tail",           # invariant, but its whole job is to be last
+)
+
+#: Which sections assemble_prompt_sections may shrink when a prompt
+#: overflows max_prompt_tokens, in the order it sheds them: least
+#: essential first. This is a SEPARATE axis from PROMPT_SECTION_ORDER
+#: above and must stay that way -- render order is chosen for cache
+#: prefix length, shrink order for what the fixer can most afford to
+#: lose. They used to be the same tuple by accident (one `sections` list
+#: whose order fed both), so reordering for cache would silently have
+#: started shedding parser source before attempt history.
+#: assemble_prompt_sections reads render order from its `sections`
+#: argument and shrink order from its `budgets` argument, and never
+#: conflates them; test_shrink_priority_is_independent_of_render_order
+#: pins that.
+PROMPT_SHRINK_PRIORITY = (
+    "attempts", "samples", "neighbor", "perl_block", "parser_files",
+)
 
 
 def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
@@ -2103,7 +3202,8 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                   knowledge_home=None, module_name=None,
                   learning_budget_tokens=DEFAULT_LEARNING_BUDGET_TOKENS,
                   parser_floor_tokens=DEFAULT_PARSER_FLOOR_TOKENS,
-                  lessons_tail_kb=DEFAULT_LESSONS_TAIL_KB):
+                  lessons_tail_kb=DEFAULT_LESSONS_TAIL_KB,
+                  worker_label=None):
     """Format one gap into a model prompt, capped so a huge format (e.g.
     JPEG with thousands of gaps and dozens of parser files) becomes an
     iterative, tractable request instead of one impossibly large prompt.
@@ -2146,33 +3246,55 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     <knowledge_home>/logs/knowledge/modules/<module_name>.md playbook to
     show (spec K3); None falls back to gap["format"] as the key. Also
     scopes the lessons-tail selection (module match takes priority over
-    format match -- see read_lessons_tail). Has no effect when
+    format match -- see select_module_lessons). Has no effect when
     knowledge_home is None.
 
     learning_budget_tokens/parser_floor_tokens/lessons_tail_kb are the
-    section-6 knobs: the learning block (pitfalls excerpt + module
-    playbook + sweep reviews + lessons tail -- everything knowledge_home
-    gates, plus sweep_review_log_path's section) is capped at
-    learning_budget_tokens and never dropped entirely; the parser-files
-    section never shrinks below parser_floor_tokens even under the worst
-    overflow; lessons_tail_kb bounds how much of the tail of
-    logs/lessons.jsonl read_lessons_tail seeks into.
+    section-6 knobs: the learning block (diff-format remediation + this
+    worker's own quarantine verdicts + sweep reviews + module playbook +
+    lessons tail -- everything knowledge_home gates, plus
+    sweep_review_log_path's section) is capped at learning_budget_tokens
+    and never dropped entirely; the parser-files section never shrinks
+    below parser_floor_tokens even under the worst overflow;
+    lessons_tail_kb bounds how much of the tail of logs/lessons.jsonl
+    read_lessons_tail_events seeks into. Within the learning block,
+    overflow is shed from the tail of LEARNING_SECTION_ORDER (see
+    compose_learning_block), so the budget bounds a growing ledger
+    without letting the low-value sections squeeze out the high-value
+    ones.
+
+    worker_label, if given, is this worker's fleet id (e.g. "canon-3" --
+    parallel_model_fix_loop's f"{squad}-{n}"). It gates the two
+    per-worker learning sections, both of which need to know WHOSE
+    history is being read: the quarantine verdicts for this worker's own
+    (squad, format) -- see read_own_quarantine -- and the adaptive
+    response-format remediation for a worker that has recently been
+    losing rounds to "no diff in model response" (see
+    count_diff_format_failures). None (the default) omits both, so every
+    existing caller's prompt is byte-identical. Like the rest of the
+    learning block it does nothing unless knowledge_home is also given
+    -- there is no ledger to read otherwise.
 
     neighbor_precedent_block is a pre-rendered string (see
     build_neighbor_precedent_block, built by the caller so build_prompt
     itself stays free of subprocess calls) inserted after the Perl
     reference in the stable per-tag section; "" (the default) omits it.
 
-    Sections are ordered static-first (constraints/pitfalls/manifest),
-    then per-tag content, then volatile history, so the byte-stable
-    prefix is maximal for provider prompt caching. Section 6: overflow
-    beyond max_prompt_tokens is shed via graduated per-section truncation
-    (see assemble_prompt_sections) rather than plain head-keeping --
-    attempts, then samples, then neighbor precedent, then perl_block,
-    then the parser-files section down to (never below)
-    parser_floor_tokens, in that priority order; the learning block is
-    never part of that squeeze (it gets its own flat, never-emptied
-    budget instead).
+    Sections render in PROMPT_SECTION_ORDER: most-stable-first, so the
+    byte-identical leading run a provider's automatic prefix cache can
+    reuse is as long as possible (see that constant for the measured
+    per-section stability the order is derived from, and for why
+    `learning` sits above the gap list while the per-tag reference
+    blocks sit below it).
+
+    Section 6: overflow beyond max_prompt_tokens is shed via graduated
+    per-section truncation (see assemble_prompt_sections) rather than
+    plain head-keeping -- attempts, then samples, then neighbor
+    precedent, then perl_block, then the parser-files section down to
+    (never below) parser_floor_tokens, in that priority order
+    (PROMPT_SHRINK_PRIORITY, which is deliberately independent of the
+    render order); the learning block is never part of that squeeze (it
+    gets its own flat, never-emptied budget instead).
     """
     missing_shown = gap["missing_tags"][:max_tags]
     missing_omitted = len(gap["missing_tags"]) - len(missing_shown)
@@ -2226,7 +3348,10 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
 
     perl_block = build_perl_reference_block(gap, perl_lib_dir)
 
-    overview_block = build_format_overview_block(perl_lib_dir, perl_block)
+    # Split, not build_format_overview_block: the invariant primer half
+    # goes in the tier-0 section and only these per-tag NOTES stay down
+    # here. See build_perl_notes_block and PROMPT_SECTION_ORDER.
+    perl_notes_block = build_perl_notes_block(perl_lib_dir, perl_block)
 
     # Spec K2: fresh read every call, falls back to the KNOWN_PITFALLS
     # constant when knowledge_home is omitted (hermetic by default -- see
@@ -2252,62 +3377,117 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                 + playbook_text
             )
 
-    # Section 6: lessons tail, also part of the learning block.
+    # Section 6: the three ledger-fed sections. All read the SAME bounded
+    # tail bytes once (read_lessons_tail_events), then scope them
+    # differently -- by module/format for the ranked lessons, by worker
+    # for the diff-format detector -- rather than seeking into a
+    # multi-megabyte ledger twice per prompt.
     lessons_tail_block = ""
+    diff_format_block = ""
+    quarantine_block = ""
     if knowledge_home is not None:
-        lessons_tail_block = format_lessons_tail(read_lessons_tail(
-            Path(knowledge_home) / "logs" / "lessons.jsonl",
-            module_name, gap["format"], tail_kb=lessons_tail_kb,
+        tail_events = read_lessons_tail_events(
+            Path(knowledge_home) / "logs" / "lessons.jsonl", tail_kb=lessons_tail_kb,
+        )
+        lessons_tail_block = format_lessons_tail(select_module_lessons(
+            tail_events, module_name, gap["format"],
+        ))
+        diff_format_block = build_diff_format_remediation(
+            count_diff_format_failures(tail_events, worker_label),
+        )
+        # squad_merge_loop.quarantine_ledger_path's layout, resolved
+        # inline: this module is a reader of that ledger, not a
+        # participant in the merge protocol, and importing the whole
+        # merger to spell one path would drag its git/subprocess surface
+        # into every worker prompt build.
+        quarantine_block = format_own_quarantine(read_own_quarantine(
+            Path(knowledge_home) / "logs" / "quarantine.jsonl",
+            worker_label, gap["format"],
         ))
 
-    # Spec section 6: the learning block (pitfalls excerpt sits in the
-    # static prefix above for cache-prefix reasons -- see the docstring's
-    # "Section order otherwise unchanged" note; only the remaining three
+    # Spec section 6: the learning block (the pitfalls excerpt is NOT part
+    # of it -- that sits in the tier-0 "invariants" section for
+    # cache-prefix reasons, see PROMPT_SECTION_ORDER; only the remaining
     # pieces share this reserved, never-emptied budget) is capped flat,
-    # independent of whatever else is squeezing the rest of the prompt.
-    learning_text = _clamp_section_tokens(
-        sweep_review_block + module_block + lessons_tail_block, learning_budget_tokens,
-    )
+    # independent of whatever else is squeezing the rest of the prompt,
+    # and shed from the tail of LEARNING_SECTION_ORDER when it overflows.
+    learning_text = compose_learning_block({
+        "diff_format": diff_format_block,
+        "quarantine": quarantine_block,
+        "sweep_reviews": sweep_review_block,
+        "module_playbook": module_block,
+        "lessons_tail": lessons_tail_block,
+    }, learning_budget_tokens)
 
     attempts_block = format_previous_attempts(previous_attempts)
 
     manifest = build_reply_shape_manifest(max_prompt_tokens)
-    sections = [
-        ("intro", (
+    texts = {
+        # Tier 0 -- byte-identical for every worker, every format, every
+        # tag, forever. Everything downstream of a single varying byte is
+        # re-billed at full input price, so this is the whole prefix's
+        # foundation and nothing interpolated may leak into it.
+        "invariants": (
             f"{RUST_ARCHITECTURE_CONSTRAINTS}\n\n"
-            f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
             f"{pitfalls_text}\n\n"
             f"{manifest}\n\n"
-            f"Missing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
-        )),
-        ("gaps", f"Value differences (both extract it, values disagree):\n{diffs}"),
-        ("overview", f"{overview_block}\n\nLikely relevant source files:\n"),
-        ("parser_files", files),
-        ("samples", samples_block),
-        ("exact_sample", exact_sample_block),
-        ("perl_block", perl_block),
-        ("neighbor", neighbor_precedent_block),
-        ("learning", learning_text),
-        ("attempts", attempts_block),
-        ("tail", (
+            f"{ARCHITECTURE_PRIMER}"
+        ),
+        # Tier 1 -- per FORMAT, identical for every tag in it. No trailing
+        # newline: every section below opens with its own "\n\n", and a
+        # section that renders empty must not leave a ragged blank run.
+        "format_intro": (
+            "\n\nYou are fixing ExifTool tag-coverage gaps in the oxidex Rust "
+            f"codebase, format \"{gap['format']}\"."
+        ),
+        "samples": samples_block,
+        # Tier 2 -- per format, but a tag in an unusual module/subtree can
+        # pull in a different file set or a different Perl table's NOTES.
+        # The "Likely relevant source files:" label rides on parser_files
+        # (not on the NOTES above it) so the two stay adjacent no matter
+        # which is empty, and so a floor-clamped parser_files still keeps
+        # its introduction -- see PROMPT_SECTION_ORDER.
+        "parser_files": f"\n\nLikely relevant source files:\n{files}",
+        "overview": perl_notes_block,
+        # Tier 3 -- per worker: same ledger for every tag this worker
+        # takes, so it is MORE stable than the gap list below it.
+        "learning": learning_text,
+        # Tier 3 -- per sample FILE, which sibling tags share; its lead-in
+        # points forwards at the gap list rather than back at it.
+        "exact_sample": exact_sample_block,
+        # Tier 4 -- the volatile payload: what actually changes every call.
+        "gaps": (
+            f"\n\nMissing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
+            f"Value differences (both extract it, values disagree):\n{diffs}"
+        ),
+        # Tier 5 -- per tag, and referring back to the gap list above
+        # ("these tags", the neighbouring-tag precedent).
+        "perl_block": perl_block,
+        "neighbor": neighbor_precedent_block,
+        # Tier 6 -- append-only, grows with every failed round.
+        "attempts": attempts_block,
+        "tail": (
             "\n\nFor value differences, only fix genuine bugs, not benign formatting differences. "
             "If more gaps exist than are shown above, that's expected -- fix what's shown here; "
             "future rounds will address the rest.\n\n"
             f"{TERMINAL_REMINDER}"
-        )),
-    ]
-    # Section 6 shrink-priority order: attempts, then samples, then
-    # neighbor precedent, then perl_block, then parser files down to
-    # (never below) parser_floor_tokens. "learning" is deliberately
-    # absent -- its own flat cap above already gives it the "reserved,
-    # never dropped entirely" guarantee independent of this squeeze.
-    budgets = {
+        ),
+    }
+    sections = [(name, texts[name]) for name in PROMPT_SECTION_ORDER]
+    # Section 6 shrink-priority order, deliberately NOT the render order
+    # above: attempts, then samples, then neighbor precedent, then
+    # perl_block, then parser files down to (never below)
+    # parser_floor_tokens. "learning" is deliberately absent -- its own
+    # flat cap above already gives it the "reserved, never dropped
+    # entirely" guarantee independent of this squeeze.
+    floors = {
         "attempts": 0,
         "samples": 0,
         "neighbor": 0,
         "perl_block": 0,
         "parser_files": parser_floor_tokens,
     }
+    budgets = {name: floors[name] for name in PROMPT_SHRINK_PRIORITY}
     return assemble_prompt_sections(sections, budgets, max_prompt_tokens)
 
 
@@ -2404,15 +3584,57 @@ def extract_review_verdict_full(response_text):
     we couldn't understand. See extract_review_verdict for the
     preserved, backward-compatible two-tuple shape existing callers use."""
     stripped = response_text.strip()
-    if stripped.upper().startswith("APPROVE"):
-        return "approve", ""
-    if stripped.upper().startswith("UNVERIFIABLE"):
-        _, _, reason = stripped.partition(":")
-        return "unverifiable", reason.strip() or "unverifiable, no checklist id given"
-    if stripped.upper().startswith("REJECT"):
-        _, _, reason = stripped.partition(":")
-        return "reject", reason.strip() or "rejected, no reason given"
+    verdict = _verdict_from_line(stripped)
+    if verdict is not None:
+        return verdict
+
+    # The review prompt itself instructs "answer each checklist item
+    # briefly, THEN give your verdict", so a model that FOLLOWS the
+    # instruction puts its verdict on the LAST line, not the first --
+    # and the first-line-only match above then scored it unparseable,
+    # which fails safe to REJECT. Measured live: 7 of 209 reviewer
+    # replies (3.3%) were APPROVE verdicts inverted to REJECT this way,
+    # destroying ~4 already-built, already-gap-verified fixes against 10
+    # delivered in the same window.
+    #
+    # Scanning bottom-up (not top-down) is deliberate: a checklist body
+    # routinely mentions the words approve/reject while discussing the
+    # criteria, so the LAST such line is the model's actual conclusion.
+    # A response with no verdict line anywhere still falls through to
+    # reject -- the fail-safe posture is preserved, just no longer
+    # triggered by correct answers.
+    for line in reversed(stripped.splitlines()):
+        verdict = _verdict_from_line(line.strip())
+        if verdict is not None:
+            return verdict
     return "reject", f"unparseable review verdict: {stripped[:200]!r}"
+
+
+# Tolerated decoration around a verdict line, e.g. "**Final Verdict:** APPROVE"
+# or "Verdict: REJECT: C3 ..." -- stripped before the keyword match below.
+_VERDICT_PREFIX_RE = re.compile(r"^[*_`\s>#-]*(?:final\s+)?verdict\s*:?\s*", re.IGNORECASE)
+
+
+def _verdict_from_line(line):
+    """(verdict, reason) for one line that states a verdict, else None.
+
+    Shared by the first-line fast path and the bottom-up rescan so both
+    accept exactly the same shapes -- including a "Verdict:" label and
+    light markdown emphasis, which reviewers emit routinely.
+    """
+    if not line:
+        return None
+    candidate = _VERDICT_PREFIX_RE.sub("", line).lstrip("*_`# ").strip()
+    upper = candidate.upper()
+    if upper.startswith("APPROVE"):
+        return "approve", ""
+    if upper.startswith("UNVERIFIABLE"):
+        _, _, reason = candidate.partition(":")
+        return "unverifiable", reason.strip() or "unverifiable, no checklist id given"
+    if upper.startswith("REJECT"):
+        _, _, reason = candidate.partition(":")
+        return "reject", reason.strip() or "rejected, no reason given"
+    return None
 
 
 def extract_review_verdict(response_text):
@@ -2470,6 +3692,10 @@ def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=ra
             config.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),
         )
     except Exception as e:
+        # Includes ModelQuotaExhausted: a reviewer that cannot be reached
+        # must not kill the worker. This is "not approved this round", not
+        # a judgement on the diff -- the tag comes back around and gets
+        # reviewed again once the provider is answering.
         return False, f"review call failed: {e}"
     verdict, reason = extract_review_verdict_full(reply)
     if verdict == "approve":
@@ -2537,6 +3763,54 @@ DEFAULT_MAX_VERIFY_TURNS = 10   # trial-compile turns per attempt_build invocati
 DEFAULT_MAX_CHECK_OUTPUT_CHARS = 3000  # tail-trim: Rust errors summarize at the end
 
 
+def render_request_budget_footer(turns_used, max_turns):
+    """The one-line investigation-budget notice appended to the END of every
+    REQUEST answer. `turns_used` is the count INCLUDING the turn being
+    answered.
+
+    Two rules encoded here, both learned the hard way:
+
+    1. It must be a footer, never a header. Every user message in this
+       conversation sits inside the region the provider's prompt cache
+       reuses (see PROMPT_SECTION_ORDER for the same principle on the
+       prompt side): a counter that changes every turn near the TOP would
+       invalidate the cached prefix for every subsequent call in the
+       attempt. At the very end it only ever invalidates itself.
+
+    2. On the LAST allowed turn it stops being a counter and becomes a
+       pre-emptive instruction. The old `nudged_to_stop_investigating`
+       message only arrived AFTER the budget was already spent -- in the
+       RW2 transcript (2026-07-26T21:23) the model, never told what its
+       budget was, spent turn 24 of 25 on another REQUEST. A model that
+       cannot see the budget cannot ration it.
+    """
+    remaining = max_turns - turns_used
+    if remaining > 0:
+        return f"(investigation turn {turns_used} of {max_turns} -- {remaining} left)"
+    return (
+        f"(investigation turn {turns_used} of {max_turns} -- this was your LAST. "
+        "No investigation turns remain: another REQUEST will be discarded unanswered. "
+        "Your next reply must be your best-effort diff -- a plan plus one ```diff "
+        "block, or VERIFY plus one ```diff block -- based on what you have already "
+        "seen, even if you are not fully certain.)"
+    )
+
+
+#: The one forced retry attempt_build allows itself when a model replies
+#: REQUEST with no investigation turns left. Deliberately absolute: by this
+#: point the model has already been told, on its previous turn, that this
+#: exact thing would happen. Anything softer ("...or a REQUEST if you must")
+#: is how the transcript ended up spending its last turns on investigation.
+FORCED_DIFF_DEMAND = (
+    "Your investigation budget is gone and that REQUEST was DISCARDED unanswered -- "
+    "no file contents are coming. This is your final turn of this attempt: reply with "
+    "a diff and nothing else. Send 2-3 sentences of plan followed by exactly ONE "
+    "```diff fenced block containing your best-effort change, however uncertain. "
+    "Another REQUEST, VERIFY or PATCH reply ends the attempt with no fix at all, so a "
+    "guess that might be wrong is strictly better than another question."
+)
+
+
 def hex_dump(data, max_bytes=DEFAULT_HEXDUMP_BYTES):
     """Render up to max_bytes of data as classic 16-bytes-per-line hex+ASCII,
     the way a human would inspect an unfamiliar binary segment."""
@@ -2551,10 +3825,38 @@ def hex_dump(data, max_bytes=DEFAULT_HEXDUMP_BYTES):
 
 
 REQUEST_RANGE_RE = re.compile(r"^(.*?):(\d+)-(\d+)$")
+#: "path:400-" -- from line 400 to end of file. The RW2 worker transcript
+#: (deepseek-v4-pro, 2026-07-26T21:23) opened with exactly this form:
+#: "REQUEST: src/parsers/xmp/rdf_parser.rs:400-", a perfectly sensible "show
+#: me the rest of the file". The START-END-only regex above didn't match, so
+#: ":400-" was treated as part of the FILENAME and the model got a
+#: could-not-resolve rejection it had no way to diagnose -- it never asked
+#: for a range again that attempt.
+REQUEST_OPEN_END_RANGE_RE = re.compile(r"^(.*?):(\d+)-$")
+#: "path:-120" -- start of file through line 120.
+REQUEST_OPEN_START_RANGE_RE = re.compile(r"^(.*?):-(\d+)$")
+#: "path:400" -- a bare line number, the shape a model produces when it's
+#: quoting a line from a compiler error or a grep hit.
+REQUEST_SINGLE_LINE_RE = re.compile(r"^(.*?):(\d+)$")
+
+#: Window served for a bare "path:N". Weighted forward rather than centered:
+#: a bare line number nearly always comes from an error/grep pointing at the
+#: START of something the model wants to read (a fn, a match arm), so it
+#: needs the body after N more than the code before it. The few lines before
+#: are there for the signature/attribute line above the hit.
+REQUEST_SINGLE_LINE_CONTEXT_BEFORE = 20
+REQUEST_SINGLE_LINE_CONTEXT_AFTER = 100
 
 
 def parse_request_range(path_str):
-    """Split a "path:START-END" request into (path, start, end).
+    """Split a "path:RANGE" request into (path, start, end).
+
+    Accepted range shapes (all 1-indexed, all inclusive):
+      "path:40-120"  -> (path, 40, 120)
+      "path:400-"    -> (path, 400, None)  -- None end means "to EOF"
+      "path:-120"    -> (path, 1, 120)
+      "path:400"     -> a window around/after 400 (see the two
+                        REQUEST_SINGLE_LINE_CONTEXT_* constants)
 
     Returns (path, None, None) when there's no numeric range suffix. A
     range-shaped suffix with start < 1 or start > end strips the suffix
@@ -2564,13 +3866,119 @@ def parse_request_range(path_str):
     and fails resolution with the normal could-not-resolve message.
     """
     stripped = path_str.strip()
+
     m = REQUEST_RANGE_RE.match(stripped)
-    if not m:
-        return stripped, None, None
-    start, end = int(m.group(2)), int(m.group(3))
-    if start < 1 or end < start:
-        return m.group(1), None, None
-    return m.group(1), start, end
+    if m:
+        start, end = int(m.group(2)), int(m.group(3))
+        if start < 1 or end < start:
+            return m.group(1), None, None
+        return m.group(1), start, end
+
+    m = REQUEST_OPEN_END_RANGE_RE.match(stripped)
+    if m:
+        start = int(m.group(2))
+        if start < 1:
+            return m.group(1), None, None
+        return m.group(1), start, None
+
+    m = REQUEST_OPEN_START_RANGE_RE.match(stripped)
+    if m:
+        end = int(m.group(2))
+        if end < 1:
+            return m.group(1), None, None
+        return m.group(1), 1, end
+
+    m = REQUEST_SINGLE_LINE_RE.match(stripped)
+    if m:
+        line = int(m.group(2))
+        if line < 1:
+            return m.group(1), None, None
+        return (
+            m.group(1),
+            max(1, line - REQUEST_SINGLE_LINE_CONTEXT_BEFORE),
+            line + REQUEST_SINGLE_LINE_CONTEXT_AFTER,
+        )
+
+    return stripped, None, None
+
+
+#: How many sibling names a could-not-resolve rejection lists. 40 short Rust
+#: filenames is a few hundred tokens -- cheap next to the turn (~17K tokens
+#: of conversation, one model call) that a blind retry costs.
+REQUEST_DIR_LISTING_LIMIT = 40
+
+
+def describe_missing_path(path_part, repo_root, samples_dir, max_entries=REQUEST_DIR_LISTING_LIMIT):
+    """Build the "here is what's ACTUALLY there" half of a could-not-resolve
+    rejection: the real entries of the nearest existing ancestor directory of
+    the path the model asked for, plus a did-you-mean when one of them is a
+    near miss on the name it invented.
+
+    Why: in the RW2 transcript (2026-07-26T21:23) the model asked for
+    src/parsers/xmp/artwork_parser.rs -- a plausible name that does not
+    exist; the directory really holds history_parser.rs, mod.rs,
+    namespace_mapping.rs, namespace_resolver.rs, namespaces/ and
+    rdf_parser.rs. The old rejection said "try a path from the list shown",
+    but by then the prompt's file list was thousands of tokens back in a
+    ~17K-token conversation, so "the list shown" pointed at nothing the
+    model could still see, and it burned the next turn guessing again.
+
+    Returns "" when nothing useful can be said (no ancestor inside either
+    root), so the caller can fall back to the bare rejection.
+    """
+    requested = Path(path_part)
+    lines = []
+    for root, label in (
+        (repo_root, "repo root"),
+        (Path(samples_dir) if samples_dir is not None else None, "samples dir"),
+    ):
+        if root is None:
+            continue
+        try:
+            root_resolved = Path(root).resolve()
+            target = (root_resolved / requested).resolve()
+        except OSError:
+            continue
+        # Containment is checked on the RESOLVED target, never on the
+        # lexical one: "../../../etc/passwd" under root has root itself in
+        # its lexical .parents chain, so a lexical check would happily list
+        # /etc for an escape attempt. resolve_request's own candidate loop
+        # refuses to SERVE such a path; this must not describe it either.
+        if root_resolved != target and root_resolved not in target.parents:
+            continue
+        # Walk up from the requested path's own parent to the nearest
+        # ancestor that exists -- a typo'd directory ("src/parsr/x.rs") is
+        # just as common as a typo'd filename, and listing the grandparent
+        # is still far better than listing nothing.
+        for ancestor in target.parents:
+            if root_resolved != ancestor and root_resolved not in ancestor.parents:
+                continue  # past the top of this root
+            if not ancestor.is_dir():
+                continue
+            try:
+                entries = sorted(
+                    entry.name + ("/" if entry.is_dir() else "")
+                    for entry in ancestor.iterdir()
+                    if not entry.name.startswith(".")
+                )
+            except OSError:
+                break
+            rel = ancestor.relative_to(root_resolved)
+            shown = entries[:max_entries]
+            suffix = ""
+            if len(entries) > max_entries:
+                suffix = f" ... (+{len(entries) - max_entries} more)"
+            where = f"{rel}/" if str(rel) != "." else f"the {label}"
+            lines.append(f"{where} actually contains: {', '.join(shown)}{suffix}" if shown
+                         else f"{where} is empty.")
+            close = difflib.get_close_matches(
+                requested.name, [entry.rstrip("/") for entry in entries], n=3, cutoff=0.6
+            )
+            if close:
+                prefix = f"{rel}/" if str(rel) != "." else ""
+                lines.append("Did you mean: " + ", ".join(f"{prefix}{name}" for name in close) + "?")
+            break
+    return "\n".join(lines)
 
 
 def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
@@ -2578,9 +3986,15 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
     resolves under samples_dir (real binary sample data), the raw text if
     it resolves under repo_root (more source to read), or a rejection
     message otherwise. Path traversal outside both roots is refused.
-    A "path:START-END" suffix on a source file returns just that 1-indexed
-    inclusive line range, numbered; samples always get the whole-file hex
-    dump.
+    A range suffix on a source file returns just that 1-indexed inclusive
+    line range, numbered -- see parse_request_range for the four accepted
+    shapes ("path:40-120", "path:400-", "path:-120", "path:400"). Samples
+    always get the whole-file hex dump.
+
+    The rejection is deliberately self-correcting rather than a bare "no":
+    it lists the real contents of the nearest existing ancestor directory
+    (see describe_missing_path), because a model that guessed a filename
+    cannot un-guess it from a message that shows it nothing.
     """
     path_part, range_start, range_end = parse_request_range(path_str)
     candidates = []
@@ -2609,11 +4023,14 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
         if range_start is not None:
             lines = content.splitlines()
             if range_start > len(lines):
+                asked = f"{range_start}-{range_end}" if range_end is not None else f"{range_start}-EOF"
                 return (
                     f"{path_part} has only {len(lines)} lines -- the requested range "
-                    f"{range_start}-{range_end} starts past the end. Request a range within the file."
+                    f"{asked} starts past the end. Request a range within the file."
                 )
-            clamped_end = min(range_end, len(lines))
+            # range_end None is the "path:400-" open-ended form: everything
+            # from start to EOF.
+            clamped_end = len(lines) if range_end is None else min(range_end, len(lines))
             numbered = "\n".join(
                 f"{i}: {line}"
                 for i, line in enumerate(lines[range_start - 1:clamped_end], start=range_start)
@@ -2621,7 +4038,11 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
             return f"Lines {range_start}-{clamped_end} of {path_part}:\n{numbered}"
         return f"Contents of {path_part}:\n{content[:max_text_bytes]}"
 
-    return f"Could not resolve {path_part!r} under the samples dir or repo root -- try a path from the list shown."
+    rejection = f"Could not resolve {path_part!r} under the samples dir or repo root."
+    listing = describe_missing_path(path_part, repo_root, samples_dir)
+    if listing:
+        return f"{rejection}\n{listing}"
+    return f"{rejection} Try a path from the list shown earlier in this conversation."
 
 
 def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_fn,
@@ -2631,7 +4052,11 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     config["max_request_turns"] turns where the model can ask to see more
     context (REQUEST: <path> -- see resolve_request) before it must submit
     a diff, then up to 2 diff attempts (initial + one apply/build repair
-    round-trip). Extends the given messages conversation in place. Returns
+    round-trip). Every REQUEST answer ends with the remaining investigation
+    budget (render_request_budget_footer), the last one pre-emptively
+    demanding a diff; a REQUEST sent after the budget is gone buys exactly
+    one forced-diff retry (FORCED_DIFF_DEMAND) and never more. Extends the
+    given messages conversation in place. Returns
     (built, reason, diff, messages) -- reason is None when built is True;
     diff is the successfully-applied diff (None if not built).
 
@@ -2670,7 +4095,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     verify_turns_used = 0
     verify_rejections = 0
     diff_attempts_used = 0
-    nudged_to_stop_investigating = False
+    forced_diff_retry_used = False
     patch_chunks = {}
     patch_turns_used = 0
     current_phase = "explore" if len(messages) == 1 else "patch"
@@ -2693,6 +4118,14 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 config.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),
             )
         except Exception as e:
+            # Deliberately catches ModelQuotaExhausted too (operator
+            # decision 2026-07-25: empty 200s, 429s and everything else in
+            # this class are things the fleet just continues past). It
+            # becomes an INFRA_FAILURE_PREFIX reason, and run_tag_loop's
+            # infra_only branch then charges NOTHING for it: no fail
+            # increment, no attempt history, no blacklist check. Letting
+            # it propagate instead would kill the worker outright, which
+            # is the opposite of continuing on.
             # Network/timeout/HTTP/malformed-response failures are a normal
             # cost of "any model" -- a single bad call must not kill the
             # whole loop. No repair round-trip here: retrying the same
@@ -2713,37 +4146,38 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                     # Dead-end: the same path over and over. Re-serving
                     # identical content burns budget without advancing
                     # anything -- course-correct instead.
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            f"You've now requested {normalized!r} {request_counts[normalized]} times -- "
-                            "it was already provided in full and re-reading it will not change anything. "
-                            "Pivot: request a DIFFERENT file, narrow to a line range "
-                            "(REQUEST: path:START-END), or submit your best diff now."
-                        ),
-                    })
+                    body = (
+                        f"You've now requested {normalized!r} {request_counts[normalized]} times -- "
+                        "it was already provided in full and re-reading it will not change anything. "
+                        "Pivot: request a DIFFERENT file, narrow to a line range "
+                        "(REQUEST: path:START-END), or submit your best diff now."
+                    )
                     current_phase = "patch"
                 else:
-                    answer = resolve_request(request_match.group(1), repo_root, samples_dir)
-                    messages.append({"role": "user", "content": answer})
+                    body = resolve_request(request_match.group(1), repo_root, samples_dir)
                     current_phase = "explore"
+                # Budget footer on BOTH branches, and always LAST in the
+                # message -- see render_request_budget_footer for why it's a
+                # footer and why the final turn's wording is pre-emptive.
+                footer = render_request_budget_footer(request_turns_used, max_request_turns)
+                messages.append({"role": "user", "content": f"{body}\n\n{footer}"})
                 continue
-            if not nudged_to_stop_investigating:
+            if not forced_diff_retry_used:
                 # Previously fell straight through to extract_diff on this
                 # same REQUEST-shaped reply and failed immediately with "no
                 # diff in model response" -- silently wasting the whole
-                # attempt on investigation without ever telling the model
-                # to actually submit something. One explicit nudge first.
-                nudged_to_stop_investigating = True
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "You've used all your allowed investigation turns for this attempt. "
-                        "No more file requests -- submit your best diff now (in a ```diff "
-                        "fenced block) based on what you've already seen, even if you're not "
-                        "fully certain."
-                    ),
-                })
+                # attempt on investigation without ever telling the model to
+                # actually submit something.
+                #
+                # This is now one FORCED retry rather than a suggestion: the
+                # model was already warned, on the turn before, that a
+                # REQUEST here would be discarded, so the only useful thing
+                # left to say is "a diff, nothing else" (FORCED_DIFF_DEMAND).
+                # Strictly one: the flag is never cleared, so a model that
+                # requests yet again falls through to the return below
+                # instead of earning itself unbounded extra calls.
+                forced_diff_retry_used = True
+                messages.append({"role": "user", "content": FORCED_DIFF_DEMAND})
                 current_phase = "patch"
                 continue
             return False, "no diff in model response (exhausted request budget)", None, messages
@@ -2889,9 +4323,58 @@ DEFAULT_MAX_REPAIR_ROUNDS = 5
 # workspace with many test binaries, cutting off before the actual
 # "FAILURES:" section / panic detail cargo prints near the end -- the
 # critique model (and a human debugging alongside it) never saw the real
-# failure reason, just noise. Raised for more headroom; still a blunt
-# tail-keep, not smart extraction around FAILED/error[ markers.
+# failure reason, just noise. Raised for more headroom, then superseded by
+# _extract_test_failure_context below (a blind tail-keep of any fixed size
+# still loses the real failure when OTHER unrelated test binaries print
+# thousands of lines AFTER it in a workspace run).
 DEFAULT_MAX_TEST_OUTPUT_CHARS = 8000
+
+_TEST_FAILURE_MARKER_RE = re.compile(
+    r"panicked at|assertion[^\n]*failed|^failures:|test result: FAILED|"
+    r"^error(\[E\d+\])?:|\bFAILED\b"
+)
+
+
+def _extract_test_failure_context(output, max_chars=DEFAULT_MAX_TEST_OUTPUT_CHARS):
+    """Pull the lines around real failure markers (panics, failed
+    assertions, FAILED test names, the trailing "failures:" summary) out of
+    a full cargo test run, instead of blindly keeping the last N chars.
+
+    A `cargo test --workspace` run with many test binaries keeps executing
+    binaries after the first failure, so the actual panic/assertion detail
+    for the regression can be thousands of lines before the end of the
+    output -- a tail-keep of ANY fixed size loses it and leaves only cargo's
+    generic "error: test failed, to rerun pass `-p ... --test ...`" line,
+    which names no failing assertion. This scans for marker lines instead
+    and keeps a window of context around each one, plus the trailing chunk
+    (where the real final summary usually is). Falls back to a blind tail
+    if no markers are found, so any output shape this doesn't recognize
+    degrades to the old behavior rather than returning nothing useful.
+    """
+    lines = output.splitlines()
+    if not lines:
+        return output[-max_chars:]
+
+    marker_idx = [i for i, line in enumerate(lines) if _TEST_FAILURE_MARKER_RE.search(line)]
+    if not marker_idx:
+        return output[-max_chars:]
+
+    windows = [(max(0, i - 2), min(len(lines), i + 13)) for i in marker_idx]
+    windows.append((max(0, len(lines) - 30), len(lines)))
+    windows.sort()
+
+    merged = []
+    for start, end in windows:
+        if merged and start <= merged[-1][1] + 2:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    extracted = "\n[...]\n".join("\n".join(lines[start:end]) for start, end in merged)
+    if len(extracted) <= max_chars:
+        return extracted
+    half = max_chars // 2
+    return extracted[:half] + "\n[...]\n" + extracted[-half:]
 
 # Spec S3 [table_job] defaults: T3 TABLE-PORT / T4 FOUNDATION-UNLOCK jobs
 # are scoped to a whole %table/module rather than one tag, so they get a
@@ -3330,6 +4813,9 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         learning_budget_tokens=config.get("learning_budget_tokens", DEFAULT_LEARNING_BUDGET_TOKENS),
         parser_floor_tokens=config.get("parser_floor_tokens", DEFAULT_PARSER_FLOOR_TOKENS),
         lessons_tail_kb=config.get("lessons_tail_kb", DEFAULT_LESSONS_TAIL_KB),
+        # Section 6: gates this worker's OWN quarantine verdicts and the
+        # adaptive response-format remediation -- see build_prompt.
+        worker_label=worker_label,
     )}]
 
     rounds = []  # every non-fixed round: {"diff", "reason", "critique"} -- see run_tag_loop
@@ -3394,7 +4880,17 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         )
         if not built:
             log_fn(f"[{fmt}] build failed: {reason}")
-            lesson("build_failed", reason, tag_key=_gap_primary_tag_key(gap))
+            # An infrastructure failure is NOT a build failure -- from in
+            # here a DNS error and a type error look identical, but only
+            # one of them is a lesson. critique_and_continue below writes
+            # the single `infra` row for it; writing a `build_failed` row
+            # too is what put 218 duplicate outage reasons on the live
+            # ledger (2026-07-25), each one a knowledge-file bullet and a
+            # line of some worker's prompt budget spent on a 429.
+            # distill_lessons.classify_event would now relabel the row
+            # anyway; not writing it at all also saves the append.
+            if not reason.startswith(INFRA_FAILURE_PREFIX):
+                lesson("build_failed", reason, tag_key=_gap_primary_tag_key(gap))
             outcome = critique_and_continue("build_failed", reason, round_index)
             if outcome:
                 return outcome
@@ -3452,7 +4948,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         t_ok, t_out = cargo_test_targeted_fn(repo_root, fmt.lower())
         if not t_ok:
             git_checkout_clean_fn(repo_root)
-            reason = f"targeted tests ({fmt.lower()}) regressed:\n{t_out[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            reason = f"targeted tests ({fmt.lower()}) regressed:\n{_extract_test_failure_context(t_out)}"
             log_fn(f"[{fmt}] targeted tests regressed, reverting")
             lesson("test_regressed", reason, tag_key=_gap_primary_tag_key(gap))
             outcome = critique_and_continue("test_regressed", reason, round_index)
@@ -3488,11 +4984,11 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             tests_passed, test_output = cargo_test_workspace_fn(repo_root)
             if not tests_passed:
                 git_checkout_clean_fn(repo_root)
-                # Failure detail (which assertion, panic message) is usually
-                # near the end, right before the "test result: FAILED" summary
-                # -- the full output can run to thousands of lines for a
-                # 2000+-test workspace run, so only the tail is kept.
-                tail = test_output[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]
+                # Failure detail (which assertion, panic message) can land
+                # anywhere in a 2000+-test workspace run -- other binaries
+                # keep executing after the real failure, so a blind tail
+                # keep can lose it. Scan for FAILED/panic markers instead.
+                tail = _extract_test_failure_context(test_output)
                 reason = f"cargo test --workspace regressed:\n{tail}"
                 log_fn(f"[{fmt}] cargo test --workspace regressed, reverting")
                 lesson("test_regressed", reason, tag_key=_gap_primary_tag_key(gap))
@@ -3701,6 +5197,41 @@ def new_oxidex_only_keys(pre_report, post_report):
             f"{e.get('family')}:{e.get('name')}"
             for e in (report or {}).get("extra_in_oxidex") or []
         }
+    return sorted(keys(post_report) - keys(pre_report))
+
+
+def newly_duplicated_emissions(pre_report, post_report):
+    """Spec M3 sibling: duplicate_emissions present in post but NOT in pre.
+
+    The same pure set difference new_oxidex_only_keys performs, for the
+    other half of the same gate -- and the half that was missing it.
+
+    squad_merge_loop's post-merge check read `duplicate_emissions` straight
+    off the POST report while diffing `extra_in_oxidex` properly, in one
+    expression:
+
+        dup = (post or {}).get("duplicate_emissions") or []      # post only
+        introduced = new_oxidex_only_keys(pre, post)             # diffed
+        if dup or introduced: ...quarantine...
+
+    So any PRE-EXISTING duplicate quarantined every commit for that format,
+    permanently, whatever the commit did. Measured 2026-07-27: NEF carries
+    nine on clean main --
+
+        EXIF:BitsPerSample, EXIF:Compression, EXIF:ImageHeight,
+        EXIF:ImageWidth, EXIF:PhotometricInterpretation, EXIF:RowsPerStrip,
+        EXIF:SamplesPerPixel, EXIF:StripOffsets, EXIF:SubfileType
+
+    -- so NEF work could never be consumed, and the commit that tripped it
+    (d8168e7b) had introduced none of them. This surfaced only once #135
+    made duplicate detection work at all; before that the field was always
+    empty and the missing diff could not bite.
+
+    A commit is answerable for the duplicates it INTRODUCES, never for the
+    ones it inherits.
+    """
+    def keys(report):
+        return set((report or {}).get("duplicate_emissions") or [])
     return sorted(keys(post_report) - keys(pre_report))
 
 
@@ -4506,7 +6037,7 @@ def attempt_foundation_job(job, repo_root, config, *, call_model_fn=call_model,
         t_ok, t_out = cargo_test_targeted_fn(repo_root, targeted_filter)
         if not t_ok:
             git_checkout_clean_fn(repo_root)
-            reason = f"targeted tests ({targeted_filter}) regressed:\n{t_out[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            reason = f"targeted tests ({targeted_filter}) regressed:\n{_extract_test_failure_context(t_out)}"
             log_fn(f"[foundation:{job['name']}] targeted tests regressed, reverting")
             outcome = critique_and_continue("test_regressed", reason, round_index)
             if outcome:
@@ -4535,7 +6066,7 @@ def attempt_foundation_job(job, repo_root, config, *, call_model_fn=call_model,
         tests_passed, test_output = cargo_test_workspace_fn(repo_root)
         if not tests_passed:
             git_checkout_clean_fn(repo_root)
-            reason = f"cargo test --workspace regressed:\n{test_output[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            reason = f"cargo test --workspace regressed:\n{_extract_test_failure_context(test_output)}"
             log_fn(f"[foundation:{job['name']}] cargo test --workspace regressed, reverting")
             outcome = critique_and_continue("test_regressed", reason, round_index)
             if outcome:
@@ -4757,7 +6288,7 @@ def attempt_table_port(table_name, module, repo_root, config, *, call_model_fn=c
         t_ok, t_out = cargo_test_targeted_fn(repo_root, targeted_filter)
         if not t_ok:
             git_checkout_clean_fn(repo_root)
-            reason = f"targeted tests ({targeted_filter}) regressed:\n{t_out[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            reason = f"targeted tests ({targeted_filter}) regressed:\n{_extract_test_failure_context(t_out)}"
             log_fn(f"[table-port:{table_name}] targeted tests regressed, reverting")
             outcome = critique_and_continue("test_regressed", reason, round_index)
             if outcome:
@@ -4803,7 +6334,7 @@ def attempt_table_port(table_name, module, repo_root, config, *, call_model_fn=c
         tests_passed, test_output = cargo_test_workspace_fn(repo_root)
         if not tests_passed:
             git_checkout_clean_fn(repo_root)
-            reason = f"cargo test --workspace regressed:\n{test_output[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            reason = f"cargo test --workspace regressed:\n{_extract_test_failure_context(test_output)}"
             log_fn(f"[table-port:{table_name}] cargo test --workspace regressed, reverting")
             outcome = critique_and_continue("test_regressed", reason, round_index)
             if outcome:
@@ -5392,6 +6923,7 @@ def _normalize_model_config(table):
         "thinking": table.get("thinking", True),
         "temperature": table.get("temperature", 0),
         "timeout": table.get("timeout", 120),
+        "deadline_seconds": table.get("deadline_seconds", DEFAULT_DEADLINE_SECONDS),
         "max_request_turns": table.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS),
         "max_repair_rounds": table.get("max_repair_rounds", DEFAULT_MAX_REPAIR_ROUNDS),
         "max_request_repeats": table.get("max_request_repeats", DEFAULT_MAX_REQUEST_REPEATS),
@@ -5651,11 +7183,19 @@ def main(argv=None):
         # the manifest then pointed at a file holding the OTHER worker's
         # diff.
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
-        applied, msg = git_apply(diff_text, repo_root)
+        # git_apply_with_rung, not git_apply: rung is the whole point of the
+        # tolerance ladder being measurable. "rung=exact" vs "rung=context1"
+        # in the manifest is what tells us, over the next few thousand
+        # diffs, whether the looser rungs are earning their keep or quietly
+        # rescuing diffs that should have been rejected.
+        applied, msg, rung = git_apply_with_rung(diff_text, repo_root)
         diff_path = diff_log_dir / f"{ts}-{worker_label}-{'applied' if applied else 'rejected'}.diff"
         diff_path.write_text(diff_text)
         with manifest_path.open("a") as f:
-            f.write(f"{ts} worker={worker_label} applied={applied} file={diff_path.name} apply_msg={msg[:200]!r}\n")
+            f.write(
+                f"{ts} worker={worker_label} applied={applied} rung={rung} "
+                f"file={diff_path.name} apply_msg={msg[:200]!r}\n"
+            )
         return applied, msg
 
     def timestamped_log(msg):
@@ -5716,6 +7256,7 @@ def main(argv=None):
                 "phase": phase, "model": model, "base_url": base_url, "max_tokens": max_tokens,
                 "reasoning_effort": reasoning_effort, "stream": stream,
                 "thinking": thinking, "temperature": temperature, "timeout": timeout,
+                "deadline_seconds": config.get("deadline_seconds", DEFAULT_DEADLINE_SECONDS),
                 "prompt_chars": prompt_chars, "messages": messages,
             }, indent=2))
             t0 = time.time()
@@ -5754,6 +7295,7 @@ def main(argv=None):
                     governor_burst=config["governor_burst"],
                     governor_cooldown_seconds=config["governor_cooldown_seconds"],
                     governor_max_cooldown_seconds=config["governor_max_cooldown_seconds"],
+                    deadline_seconds=config.get("deadline_seconds", DEFAULT_DEADLINE_SECONDS),
                 )
             except Exception as e:
                 elapsed = time.time() - t0
@@ -5930,6 +7472,10 @@ def main(argv=None):
             learning_budget_tokens=cfg.get("learning_budget_tokens", DEFAULT_LEARNING_BUDGET_TOKENS),
             parser_floor_tokens=cfg.get("parser_floor_tokens", DEFAULT_PARSER_FLOOR_TOKENS),
             lessons_tail_kb=cfg.get("lessons_tail_kb", DEFAULT_LESSONS_TAIL_KB),
+            # The preview must mirror fix_gap's real prompt exactly --
+            # the two per-worker learning sections included, or the log
+            # would show a prompt the model never saw.
+            worker_label=worker_label,
         )
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         banner = f"\n{'=' * 20} [{ts}] worker={worker_label} tag={tag_gap['tag_key']} {'=' * 20}\n"

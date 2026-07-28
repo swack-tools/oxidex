@@ -27,10 +27,19 @@ reads directly. Since config.toml is gitignored, `git worktree add` won't
 bring it into a freshly created worktree on its own, so each worker's
 worktree gets its own copy at creation time (see create_worktree).
 
+Auto-publish: with --infinite (and unless --no-auto-publish is passed),
+every round ends by running overlord_sweep.run_sweep IN-PROCESS in its
+own worktree -- sweep branch, cargo fmt, push, PR, squash-merge once all
+checks are green, then a ff-only sync of every worktree to the new
+origin/main. See the "Auto-publish" section below for why the dispatcher
+owns that last mile. A round with nothing newly stamped green is a
+complete no-op.
+
 Usage:
     uv run scripts/parallel_model_fix_loop.py
     uv run scripts/parallel_model_fix_loop.py --max-parallel 8
     uv run scripts/parallel_model_fix_loop.py --formats JPEG,NEF,DNG
+    uv run scripts/parallel_model_fix_loop.py --infinite    # publishes itself
 """
 import argparse
 import concurrent.futures
@@ -45,10 +54,19 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from pathlib import Path
 
 from find_tag_gaps import OXIDEX_HOME, REPO_ROOT, group_gaps_by_format, load_comparison_report, run_full_comparison
 from model_fix_loop import DEFAULT_CONFIG_PATH, DEFAULT_TAG_STATE_PATH, _state_locked
+# The fleet-wide (args, repo, input_text=None) -> (returncode, stdout,
+# stderr) git runner (overlord_sweep.default_run_git and every squad
+# merger use the identical shape) -- imported rather than re-implemented
+# so one injected fake covers the auto-publish path AND the run_sweep it
+# calls. validate_fix_commit imports nothing from this module, so this
+# is not part of the overlord_sweep -> squad_merge_loop -> here import
+# cycle default_sweep_fn works around.
+from validate_fix_commit import run_git as default_run_git
 
 # Each worker runs a full `cargo test --workspace` before committing --
 # running more of those concurrently than there are cores just makes them
@@ -468,6 +486,19 @@ def _branch_has_undiscardable_commits(repo_root, branch, base_ref):
     merge deliberately leaves its worker branch in place; without this
     check the next round's re-anchor silently threw those commits away.
 
+    Ancestry alone isn't enough, though: a squash merge gives previously
+    landed work a brand new SHA with no parent relationship to the
+    original commit, so content that already made it upstream can still
+    look "unreachable" by ancestry forever -- e.g. every config/prompt
+    tuning commit this fleet squash-merges to main is, from that point
+    on, permanently "not reachable from base_ref" on any worker branch
+    that happened to carry it, which would refuse that branch's reset
+    on every single round for good, blocking it from ever picking up a
+    newer base -- for a branch that has nothing left worth protecting.
+    `git cherry` compares by patch-id instead of ancestry, so a commit
+    whose diff already exists upstream (under any SHA) gets filtered out
+    before anything is declared undiscardable.
+
     Errs on the safe side: if git can't answer (bad ref, unreadable
     output), the commits are treated as present and the reset refused.
     """
@@ -475,13 +506,27 @@ def _branch_has_undiscardable_commits(repo_root, branch, base_ref):
     origin_main = _git(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"], repo_root)
     if origin_main.returncode == 0:
         exclude.append("^refs/remotes/origin/main")
-    result = _git(["rev-list", "--count", branch, *exclude], repo_root)
+    result = _git(["rev-list", branch, *exclude], repo_root)
     if result.returncode != 0:
         return True
-    try:
-        return int(result.stdout.strip()) > 0
-    except (TypeError, ValueError):
-        return True
+    candidates = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    if not candidates:
+        return False
+
+    upstream_refs = [base_ref]
+    if origin_main.returncode == 0:
+        upstream_refs.append("refs/remotes/origin/main")
+    for ref in upstream_refs:
+        cherry = _git(["cherry", ref, branch], repo_root)
+        if cherry.returncode != 0:
+            return True
+        merged_by_patch_id = {
+            line[2:] for line in cherry.stdout.splitlines() if line.startswith("- ")
+        }
+        candidates -= merged_by_patch_id
+        if not candidates:
+            return False
+    return bool(candidates)
 
 
 def _branch_head_sha(repo_root, branch):
@@ -721,18 +766,48 @@ def _real_cargo_test(repo_root):
 
 
 def _process_group_alive(pgid):
-    """True if any process in the group is still alive."""
+    """True if any process in OUR group is still alive.
+
+    killpg(pgid, 0) has three outcomes, and only two of them used to be
+    handled:
+      success -> the group exists and we may signal it: alive.
+      ESRCH (ProcessLookupError) -> no such group: exited.
+      EPERM (PermissionError) -> the group exists but is NOT ours.
+
+    EPERM means the pgid was recycled by a process group we do not own, so
+    our worker's own processes are gone -- "exited" is the correct answer
+    for the only question this function is ever asked. Treating it as alive
+    would spin until force_after and then try to SIGKILL a stranger's
+    process group.
+
+    Why this comment exists: on 2026-07-27 an uncaught PermissionError here
+    propagated out of _wait_for_process_group_exit, through process_format,
+    through the ThreadPoolExecutor future, and killed the whole dispatcher
+    mid-round -- 32 workers and the entire publish pipeline taken down by
+    one recycled pgid.
+    """
     try:
         os.killpg(pgid, 0)
         return True
     except ProcessLookupError:
         return False
+    except PermissionError:
+        return False
 
 
 def _kill_process_group(pgid, sig=signal.SIGKILL):
+    """Best-effort kill of a process group we started.
+
+    PermissionError is swallowed for the same reason it is treated as
+    "exited" above, and with more force: a pgid we cannot signal is not
+    ours, and the one thing we must never do is deliver SIGKILL to an
+    unrelated process group that happens to have inherited the number.
+    """
     try:
         os.killpg(pgid, sig)
     except ProcessLookupError:
+        pass
+    except PermissionError:
         pass
 
 
@@ -1186,6 +1261,52 @@ def staging_branch_or_origin(branch, origin_ref=ORIGIN_MAIN_REF):
     return f"squad/{squad}" if squad else origin_ref
 
 
+def parse_worktree_list(porcelain_text):
+    """`git worktree list --porcelain` -> one record per worktree:
+    {"path": Path, "branch": str|None, "detached": bool, "bare": bool,
+    "prunable": bool, "locked": bool}.
+
+    Records are separated by a blank line and always OPEN with the
+    "worktree <path>" line, which is what the split below keys on; every
+    other line is an optional attribute of the record in progress.
+    Branch refs are reported fully qualified ("branch refs/heads/main")
+    and are shortened here, since every caller compares against short
+    names.
+
+    Shared by the janitor's discover_worktree_candidates (which wants
+    only branch-tracked worktrees under one base dir) and the
+    auto-publish worktree sync (which wants every worktree of the repo,
+    detached ones included) -- one parser, so the two can never disagree
+    about what git reported.
+    """
+    entries = []
+    current = None
+    for line in porcelain_text.splitlines():
+        if line.startswith("worktree "):
+            if current:
+                entries.append(current)
+            current = {
+                "path": Path(line[len("worktree "):]), "branch": None,
+                "detached": False, "bare": False, "prunable": False, "locked": False,
+            }
+        elif current is None:
+            continue
+        elif line.startswith("branch "):
+            ref = line[len("branch "):]
+            current["branch"] = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+        elif line == "detached":
+            current["detached"] = True
+        elif line == "bare":
+            current["bare"] = True
+        elif line == "prunable" or line.startswith("prunable "):
+            current["prunable"] = True
+        elif line == "locked" or line.startswith("locked "):
+            current["locked"] = True
+    if current:
+        entries.append(current)
+    return entries
+
+
 def discover_worktree_candidates(worktree_base, repo_root=REPO_ROOT):
     """Every git worktree currently registered (`git worktree list
     --porcelain`, not a directory scan -- so a leftover directory git no
@@ -1205,18 +1326,7 @@ def discover_worktree_candidates(worktree_base, repo_root=REPO_ROOT):
     )
     if result.returncode != 0:
         return []
-    entries = []
-    current = {}
-    for line in result.stdout.splitlines():
-        if line.startswith("worktree "):
-            if current:
-                entries.append(current)
-            current = {"path": Path(line[len("worktree "):])}
-        elif line.startswith("branch "):
-            ref = line[len("branch "):]
-            current["branch"] = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
-    if current:
-        entries.append(current)
+    entries = parse_worktree_list(result.stdout)
 
     worktree_base = Path(worktree_base).resolve()
     out = []
@@ -1560,9 +1670,26 @@ def run_round(args, config_path):
             for fmt in formats
         }
         for future in concurrent.futures.as_completed(futures):
-            fmt, result = future.result()
+            # future.result() re-raises whatever process_format raised, and an
+            # escaping exception here does not merely lose ONE format: it
+            # unwinds out of run_round, out of main(), and takes the whole
+            # dispatcher down mid-round -- every other worker and the entire
+            # publish pipeline with it. That happened on 2026-07-27, when a
+            # recycled pgid made os.killpg raise PermissionError; 32 workers
+            # died for one format's bookkeeping. Same principle as
+            # _run_auto_publish_safely: one tier's hiccup never sinks the fleet.
+            # Every format MUST land in results -- the merge loop below indexes
+            # results[fmt] for each requested format and would KeyError.
+            fmt = futures[future]
+            try:
+                fmt, result = future.result()
+            except Exception as exc:  # noqa: BLE001 -- deliberately broad
+                result = {"status": "crashed", "error": f"{type(exc).__name__}: {exc}"}
+                traceback.print_exc()
             results[fmt] = result
             extra = f" (exit {result['returncode']})" if "returncode" in result else ""
+            if result["status"] == "crashed":
+                extra = f" ({result['error']})"
             print(f"[{fmt}] {result['status']}{extra}")
 
     print("\nMerging completed worker branches...")
@@ -1635,8 +1762,927 @@ def run_round(args, config_path):
     return not failed
 
 
+# ---------------------------------------------------------------------------
+# Auto-publish: sweep -> cargo fmt -> PR -> merge on green -> sync every
+# worktree, run by the dispatcher itself after every round
+# ---------------------------------------------------------------------------
+#
+# WHY this lives in the dispatcher at all: scripts/overlord_sweep.py has
+# been the complete publish machine since it landed (cut a fresh branch,
+# merge every green squad head, semantic recheck, mechanical bisection,
+# cargo test --workspace, evidence-table PR body, push, gh pr create) --
+# and NOTHING has ever called it. `grep -rn overlord_sweep scripts/`
+# finds only its own module, its own tests, and prose: it runs when, and
+# only when, a human types the command. Measured cost of that (2026-07):
+# 4330 open tag gaps, thousands of worker commits validated onto squad
+# branches, 2 tag fixes ever landed on main, and 1 sweep PR (#124) ever
+# opened -- which then sat red anyway, because nothing in the publish
+# path ever formatted it (CI run 30186389305: Build & Test green, Lint &
+# Audit red on `cargo fmt --all -- --check`). A fix pipeline whose last
+# mile is manual is a fix pipeline that does not ship.
+#
+# So: --infinite runs the sweep in-process at the end of every round.
+# Everything side-effectful (the sweep itself, the git runner, the gh
+# runner, the worktree sync, sleep/clock) is injected, exactly like
+# run_round's cargo_test_fn/checkout_fn seams, so each step is testable
+# without a network, a gh binary, or a real remote.
+
+# The sweep runs in its OWN worktree, never the dispatcher's checkout --
+# see ensure_sweep_worktree for why that separation is load-bearing.
+# Same path overlord_sweep.py's own usage line suggests.
+DEFAULT_SWEEP_WORKTREE_DIR = OXIDEX_HOME / "worktrees" / "overlord-sweep"
+
+# CI check polling. 30s matches the granularity GitHub updates check runs
+# at (polling faster just burns API quota against the same answer). 45
+# minutes is ~3.7x the slowest completed CI run measured on this repo
+# (12.2 min, `gh run list --workflow=ci.yml`), leaving room for runner
+# queueing while still bounding how long one wedged workflow can stall
+# an --infinite dispatcher.
+DEFAULT_PR_CHECKS_INTERVAL_SECONDS = 30
+DEFAULT_PR_CHECKS_TIMEOUT_SECONDS = 45 * 60
+
+# `gh pr checks --json bucket` normalizes every check-run/status state
+# into one of these five buckets. "skipping" is green-equivalent and that
+# is load-bearing, not a nicety: measured on PR #124, this repo's own CI
+# reports "Multi-platform Build" and "Benchmarks & Coverage" as SKIPPED
+# on every ordinary PR, so treating skipped as anything but green would
+# leave every sweep PR "pending" forever and nothing would ever merge.
+# Anything not listed in either set (a bucket gh adds later) is treated
+# as still-pending, which can only ever delay a merge, never cause one.
+CHECK_BUCKETS_RED = {"fail", "cancel"}
+CHECK_BUCKETS_GREEN = {"pass", "skipping"}
+
+
+def default_run_gh(args, repo_root):
+    """`gh <args>` in repo_root -> (returncode, stdout, stderr) -- the
+    same tuple shape as the git runners above, so one test fake can
+    stand in for both.
+
+    Cannot RAISE, deliberately. `subprocess.run` itself throws before gh
+    ever starts, and every observed cause is transient on this box:
+    BlockingIOError errno 35 ("Resource temporarily unavailable") when
+    fork exhaustion hits -- reproduced 2026-07-26 by lowering
+    RLIMIT_NPROC, and entirely credible on a machine whose
+    DEFAULT_MAX_PARALLEL is min(20, CPU) workers each running `cargo test
+    --workspace` -- and FileNotFoundError when `gh` is unlinked mid-round
+    (a `brew upgrade gh` during a weeks-long --infinite run).
+
+    The guard belongs HERE because every consumer already copes with a
+    failure tuple and none of them coped with an exception:
+    pr_checks_state's json.loads fails -> ("unknown", detail) -> adoption
+    logs "left_open" and moves to the next PR; wait_for_pr_checks counts
+    it toward max_unknown_polls; merge_pr's pr_state re-ask returns None
+    -> merge_failed with the PR left open. Measured before this guard: a
+    raise on the SECOND of three open sweep PRs' `gh pr checks` aborted
+    the whole adoption pass -- PR #1 merged, #2 raised, #3 never looked
+    at, the adoption record discarded, the post-merge worktree sync
+    skipped for a merge that had landed, and the round's own sweep never
+    run. list_open_sweep_prs's own `except OSError` becomes redundant
+    rather than the only guard, which is the point.
+    """
+    try:
+        result = subprocess.run(  # nosec B603
+            ["gh", *args], cwd=repo_root, capture_output=True, text=True,
+        )
+    except OSError as e:
+        # 127 is the shell's own "command not runnable" code; any non-zero
+        # is enough for every caller, all of which read the payload.
+        return 127, "", f"could not run gh: {e}"
+    return result.returncode, result.stdout, result.stderr
+
+
+def _is_git_worktree(path, run_git):
+    """True only when `path` is the top level of a real git working
+    tree. Deliberately compares `rev-parse --show-toplevel` against the
+    path itself rather than just checking the exit code: a bare `mkdir`
+    made INSIDE some other repo answers rc=0 with that repo's toplevel,
+    and treating it as the sweep worktree would run the sweep's
+    checkouts against a checkout it does not own."""
+    path = Path(path)
+    if not path.is_dir():
+        return False
+    rc, out, _err = run_git(["rev-parse", "--show-toplevel"], path)
+    if rc != 0 or not out.strip():
+        return False
+    try:
+        return Path(out.strip()).resolve() == path.resolve()
+    except OSError:
+        return False
+
+
+# Longer than any single git operation this code runs against the sweep
+# worktree (the longest is a `checkout --force --detach` over the whole
+# tree), so an index.lock still present after this long is a corpse, not
+# a live writer. Deliberately generous: the cost of waiting one more
+# round is one round's publish, and the cost of deleting a HELD lock is a
+# lost index write.
+STALE_INDEX_LOCK_SECONDS = 300
+INDEX_LOCK_RECHECK_SECONDS = 2.0
+
+
+def _stale_index_lock(worktree_path, run_git, now_fn, stale_seconds):
+    """The worktree's own index.lock, but ONLY when it is stale.
+
+    Returns the Path when a lock file exists whose mtime is at least
+    `stale_seconds` old, else None (no lock, unreadable, or fresh enough
+    that a live git may still be holding it). `rev-parse
+    --absolute-git-dir` is what resolves a LINKED worktree's gitdir
+    (<repo>/.git/worktrees/<name>), which is where its index.lock lives --
+    not the worktree directory itself.
+    """
+    rc, out, _err = run_git(["rev-parse", "--absolute-git-dir"], worktree_path)
+    if rc != 0 or not out.strip():
+        return None
+    lock = Path(out.strip()) / "index.lock"
+    try:
+        age = now_fn() - lock.stat().st_mtime
+    except OSError:
+        return None
+    return lock if age >= stale_seconds else None
+
+
+def ensure_sweep_worktree(repo_root, path, run_git=default_run_git, origin_ref=ORIGIN_MAIN_REF,
+                          log_fn=print, sleep_fn=time.sleep, now_fn=time.time,
+                          stale_lock_seconds=STALE_INDEX_LOCK_SECONDS,
+                          lock_recheck_seconds=INDEX_LOCK_RECHECK_SECONDS):
+    """The dedicated worktree every auto-publish sweep runs in.
+    Returns (path, message) or (None, message) when one can't be made.
+
+    A sweep does real checkouts: cut_fresh_sweep_branch checks out the
+    new branch, and the pre/post recheck detaches to origin/main and
+    back. Running that inside the DISPATCHER's own checkout would move
+    HEAD out from under the very next round -- ensure_integration_branch
+    reads `git rev-parse --abbrev-ref HEAD`, which answers the literal
+    string "HEAD" for the detached checkout a sweep leaves behind, and
+    would then merge that round's workers onto a detached HEAD. A
+    separate worktree makes the two completely independent.
+
+    Reused in place across rounds, never torn down: the post-merge
+    recheck and `cargo test --workspace` both build here, so recreating
+    it every round would pay a full cold cargo build every round -- the
+    same reasoning create_worktree spells out for worker worktrees.
+    Reuse resets it to a clean detached origin_ref checkout, because it
+    arrives sitting on the PREVIOUS round's sweep branch, which
+    `git branch <new> origin/main` + checkout would otherwise trip over.
+    Detaching discards nothing: the previous sweep branch ref stays
+    exactly where it was (merged, pushed, or left for inspection).
+
+    Provisioning happens on the first auto-publish round whether or not
+    that round has anything to sweep -- deliberately, so that "is there
+    news?" has exactly one authority (run_sweep's own sweep-state.json
+    cursor) instead of a second, subtly-different pre-check here that
+    could silently decide never to publish. The cost is one checkout,
+    once, and two cheap git calls per round thereafter.
+
+    Reuse is gated on the path actually BEING a git worktree, not merely
+    on the directory existing. `if path.is_dir():` (what this did until
+    2026-07-26) took the reuse branch for a directory git has never
+    heard of -- a half-failed `worktree add`, a `worktree remove` that
+    left the directory behind, a plain `mkdir`, or a human who ran
+    overlord_sweep.py's own `--repo <dir>` usage line by hand. All three
+    git calls in the reuse branch then fail, this returns (None, ...),
+    and auto-publish is silently and permanently disabled for the life
+    of the dispatcher -- indistinguishable, in the log, from a healthy
+    no-news round. The prune + `worktree add` self-heal below is the
+    recovery for exactly that state, and it was unreachable while the
+    directory existed.
+
+    The reuse branch's force-detach has a BOUNDED recovery for the same
+    class of wedge, added 2026-07-26 after reproducing it: a leftover
+    index.lock in the worktree's gitdir makes that checkout fail rc=128
+    forever, _is_git_worktree still answers True, so the prune +
+    `worktree add` path was AGAIN unreachable and auto-publish stayed off
+    across dispatcher RESTARTS until a human deleted one file. The lock is
+    NOT unlinked unconditionally -- a live git (a human running
+    overlord_sweep.py against this same path, which its own usage line
+    suggests) may legitimately hold it, and deleting a held lock risks a
+    lost index write. Measured signal handling: SIGTERM and SIGINT to a
+    git holding the lock both leave NO lock behind, and SIGKILLing git's
+    PARENT leaves the orphaned git running to clean up after itself -- so
+    the only way to get a corpse is a SIGKILL/hard-crash of the git
+    process itself (OOM kill, pkill -9, power loss inside the index-write
+    window). Hence: re-poll once, then clear only a lock that is still
+    there AND older than `stale_lock_seconds`.
+    """
+    path = Path(path)
+    if _is_git_worktree(path, run_git):
+        # Same discard-local-mess pair clean_worktree uses (git clean -fd
+        # never touches gitignored paths, so this worktree's own target/
+        # build cache survives), then detach onto a fresh origin/main.
+        run_git(["checkout", "--", "."], path)
+        run_git(["clean", "-fd"], path)
+        rc, _out, err = run_git(["checkout", "--force", "--detach", origin_ref], path)
+        if rc == 0:
+            return path, f"reused sweep worktree at {path}"
+
+        message = f"could not reset the sweep worktree at {path} to {origin_ref}: {err.strip()}"
+        if "index.lock" in err:
+            # Step 1: give a live git the benefit of the doubt.
+            sleep_fn(lock_recheck_seconds)
+            rc, _out, err = run_git(["checkout", "--force", "--detach", origin_ref], path)
+            if rc == 0:
+                return path, f"reused sweep worktree at {path} (a transient index.lock cleared)"
+            stale = _stale_index_lock(path, run_git, now_fn, stale_lock_seconds)
+            if stale is None:
+                # Still locked, but young enough that something may be
+                # mid-write. Skip this round and try the next one --
+                # deliberately NOT escalating to `worktree remove --force`,
+                # which is every bit as destructive as unlinking the lock.
+                message = (f"the sweep worktree at {path} is held by a live-looking index.lock "
+                           f"(younger than {stale_lock_seconds}s): {err.strip()}")
+                log_fn(f"WARNING: {message} -- skipping auto-publish this round")
+                return None, message
+            try:
+                stale.unlink()
+            except OSError as e:
+                message = f"could not remove the stale index.lock {stale}: {e}"
+                log_fn(f"WARNING: {message} -- skipping auto-publish this round")
+                return None, message
+            log_fn(f"auto-publish: removed a stale index.lock ({stale}, older than "
+                   f"{stale_lock_seconds}s) left behind by a hard-killed git")
+            rc, _out, err = run_git(["checkout", "--force", "--detach", origin_ref], path)
+            if rc == 0:
+                return path, f"reused sweep worktree at {path} (cleared a stale index.lock)"
+            message = f"could not reset the sweep worktree at {path} to {origin_ref}: {err.strip()}"
+
+        # Step 2, for ANY persistent reuse failure (a corrupt index, a
+        # wedged ref, permissions -- not only locks): unregister the
+        # worktree so the prune + `worktree add` recovery below rebuilds
+        # it, instead of returning (None, ...) every round for the life of
+        # the dispatcher. `worktree remove --force` returns 0 and removes
+        # the directory even with an index.lock present (verified
+        # 2026-07-26); it also takes this worktree's target/ build cache
+        # with it, so the next sweep pays one cold cargo build. That is the
+        # price of the wedge, paid once, rather than never publishing again.
+        log_fn(f"WARNING: {message} -- unregistering the sweep worktree and rebuilding it from "
+               f"{origin_ref}")
+        run_git(["worktree", "remove", "--force", str(path)], repo_root)
+        if _is_git_worktree(path, run_git):
+            log_fn(f"WARNING: {message} -- and `git worktree remove --force` did not clear it either; "
+                   "skipping auto-publish this round")
+            return None, message
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # A worktree whose directory was deleted out from under git (a wiped
+    # /tmp, a manual rm -rf) stays REGISTERED, and its stale registration
+    # makes `worktree add` refuse that same path forever. Pruning first
+    # costs nothing when there is nothing stale to prune. This is also
+    # the recovery for a directory that exists but is not a registered
+    # worktree (see the docstring): prune drops the half-written
+    # registration, and `worktree add` accepts an existing EMPTY
+    # directory. A non-empty unregistered directory still fails here,
+    # deliberately and loudly -- nothing in this fleet deletes a
+    # directory it did not create, and git's own error message ("... is
+    # not an empty directory") says exactly what a human has to do.
+    run_git(["worktree", "prune"], repo_root)
+    rc, _out, err = run_git(["worktree", "add", "--detach", str(path), origin_ref], repo_root)
+    if rc != 0:
+        message = f"could not create the sweep worktree at {path}: {err.strip()}"
+        log_fn(f"WARNING: {message} -- skipping auto-publish this round")
+        return None, message
+    return path, f"created sweep worktree at {path}"
+
+
+def default_sweep_fn(**kwargs):
+    """overlord_sweep.run_sweep with its two real side-effect runners
+    (the per-format comparison and the recheck's checkout) filled in --
+    the same pair overlord_sweep.main() wires up for the human-driven
+    CLI, so the automated and manual paths run identical code.
+
+    The imports are deliberately INSIDE the function: overlord_sweep
+    imports squad_merge_loop, which imports branch_name/novel_commits
+    from THIS module at its own module level. A top-level
+    `import overlord_sweep` here would therefore be a genuine circular
+    import that blows up whenever this module is imported first -- which
+    is every dispatcher run.
+    """
+    import overlord_sweep
+    import squad_merge_loop
+
+    def comparison_fn(repo, cache_dir, fmt, suffix):
+        return squad_merge_loop.real_format_match(repo, cache_dir, fmt, suffix)
+
+    return overlord_sweep.run_sweep(
+        comparison_fn=comparison_fn, checkout_fn=overlord_sweep.real_checkout, **kwargs,
+    )
+
+
+def pr_ref_from_result(pr_result, branch):
+    """What to hand `gh pr checks` / `gh pr merge` for the PR run_sweep
+    just created. overlord_sweep.real_create_pr returns gh's own stdout
+    (the PR URL) under "stdout"; other create_pr_fn implementations
+    return it under "url". The branch name is the fallback rather than
+    an error, because `gh pr <cmd> <branch>` resolves a PR by head
+    branch and the branch is always pushed before the PR is created."""
+    if isinstance(pr_result, dict):
+        for key in ("url", "stdout"):
+            for line in str(pr_result.get(key) or "").splitlines():
+                line = line.strip()
+                if line.startswith("http"):
+                    return line
+    return branch
+
+
+def pr_checks_state(pr_ref, repo_root, run_gh=default_run_gh):
+    """("green"|"red"|"pending"|"unknown", detail) for one PR's checks.
+
+    The JSON is parsed rather than the exit code interpreted: gh exits 8
+    for "pending" and 1 for "failing", but it also exits 1 for auth
+    failures, an unknown PR, and network errors -- and a merge decision
+    must never rest on a status this code cannot tell apart. gh's own
+    `bucket` field is the normalization of the dozen underlying state
+    strings, so it is what gets classified here.
+
+    An EMPTY check list reads as "pending", never "green": in the first
+    seconds after a push GitHub has not registered the workflows yet,
+    and a repo whose checks never appear must time out with its PR left
+    open rather than merge something nothing ever tested.
+    """
+    rc, out, err = run_gh(["pr", "checks", pr_ref, "--json", "bucket,name,state"], repo_root)
+    try:
+        checks = json.loads(out)
+    except ValueError:
+        detail = (err or out).strip() or f"gh pr checks exited {rc} with no JSON output"
+        return "unknown", detail
+    if not isinstance(checks, list):
+        return "unknown", f"gh pr checks returned {type(checks).__name__}, expected a list"
+    checks = [c for c in checks if isinstance(c, dict)]
+    if not checks:
+        return "pending", "no checks reported yet"
+    detail = ", ".join(f"{c.get('name')}={c.get('bucket')}" for c in checks)
+    buckets = [str(c.get("bucket") or "").lower() for c in checks]
+    if any(b in CHECK_BUCKETS_RED for b in buckets):
+        return "red", detail
+    if any(b not in CHECK_BUCKETS_GREEN for b in buckets):
+        return "pending", detail
+    return "green", detail
+
+
+def wait_for_pr_checks(pr_ref, repo_root, run_gh=default_run_gh, sleep_fn=time.sleep,
+                       now_fn=time.monotonic, timeout_seconds=DEFAULT_PR_CHECKS_TIMEOUT_SECONDS,
+                       interval_seconds=DEFAULT_PR_CHECKS_INTERVAL_SECONDS, max_unknown_polls=3,
+                       log_fn=print):
+    """Poll a PR's checks until they settle. Returns (state, detail)
+    with state in "green"/"red"/"timeout"/"unknown".
+
+    Bounded on purpose. An --infinite dispatcher runs for weeks and must
+    not park forever on one wedged workflow (a stuck runner, a queue
+    backlog, a PR whose checks are never created); on timeout the PR is
+    left OPEN and the loop moves on, since the next round's sweep cuts
+    an independent branch. Repeated `unknown` answers (auth expired, gh
+    not installed, network down) give up after max_unknown_polls rather
+    than burning the full timeout on a question that is not going to get
+    a different answer -- one-off blips still just retry.
+
+    now_fn defaults to time.monotonic, never time.time: a wall-clock
+    step (NTP correction, DST) must not silently extend or truncate a CI
+    wait.
+    """
+    deadline = now_fn() + timeout_seconds
+    unknowns = 0
+    while True:
+        state, detail = pr_checks_state(pr_ref, repo_root, run_gh)
+        if state in ("green", "red"):
+            return state, detail
+        if state == "unknown":
+            unknowns += 1
+            if unknowns >= max_unknown_polls:
+                return "unknown", detail
+        else:
+            unknowns = 0
+        if now_fn() >= deadline:
+            return "timeout", detail
+        log_fn(f"auto-publish: checks for {pr_ref} are {state} ({detail}) -- "
+               f"re-polling in {interval_seconds}s")
+        sleep_fn(interval_seconds)
+
+
+def pr_state(pr_ref, repo_root, run_gh=default_run_gh):
+    """GitHub's own view of a PR: "OPEN"/"MERGED"/"CLOSED", or None when
+    that can't be determined."""
+    rc, out, _err = run_gh(["pr", "view", pr_ref, "--json", "state"], repo_root)
+    if rc != 0:
+        return None
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return None
+    state = data.get("state") if isinstance(data, dict) else None
+    return str(state).upper() if state else None
+
+
+def merge_pr(pr_ref, repo_root, run_gh=default_run_gh):
+    """Squash-merge a PR whose checks are already green. Returns
+    (ok, message).
+
+    `gh pr merge --auto` is deliberately NOT used: repository-level
+    auto-merge is DISABLED on this repo, so --auto is rejected outright
+    ("Auto merge is not allowed for this repository") and the poll-then-
+    merge path above is the only one that works here. --delete-branch
+    keeps origin clean, which costs nothing: next_sweep_branch_name
+    never reuses a branch name anyway.
+
+    A non-zero exit is NOT taken as proof the PR is unmerged. gh does
+    its branch cleanup AFTER the API merge call -- deleting the local
+    branch, moving the checkout to the default branch -- and in a
+    multi-worktree repo like this fleet's that cleanup can legitimately
+    fail on its own (`git checkout main` refuses while main is checked
+    out in another worktree). Believing it would report merge_failed for
+    a main that really did advance, and skip the worktree sync that
+    should follow. So a failure re-asks GitHub what actually happened.
+    """
+    rc, out, err = run_gh(["pr", "merge", pr_ref, "--squash", "--delete-branch"], repo_root)
+    message = (out + err).strip()
+    if rc == 0:
+        return True, message
+    if pr_state(pr_ref, repo_root, run_gh) == "MERGED":
+        return True, f"gh exited {rc} during post-merge cleanup, but the PR reports MERGED: {message}"
+    return False, message
+
+
+# Sweep branches are cut by overlord_sweep.next_sweep_branch_name as
+# "sweep/tags-<date>-<n>"; adoption only ever touches this automation's
+# own namespace.
+#
+# A bare "sweep/" prefix is NOT that namespace, and this repo proves it:
+# the human/skill-driven /sweep-oxidex-tags path has produced
+# sweep/parallel-fix-tags-2026-07-23 and sweep/parallel-fix-tags-2026-07-24,
+# both with live registered worktrees. A prefix test adopts those, so an
+# unattended dispatcher would squash-merge sweep PRs it did not create and
+# whose provenance it cannot vouch for. Match the shape this automation
+# actually generates, exactly.
+#
+# The digit classes are `[0-9]`, not `\d`, deliberately. `\d` in a pattern
+# compiled without re.ASCII is Unicode-wide (category Nd), so
+# sweep/tags-٢٠٢٦-٠٧-٢٦-١ (Arabic-Indic), a FULLWIDTH DIGIT ONE counter, a
+# Devanagari year and even MATHEMATICAL MONOSPACE DIGITs all matched --
+# each of them a legal ref (`git check-ref-format --branch` accepts them)
+# that this automation provably never generated: next_sweep_branch_name is
+# `strftime('%Y-%m-%d')` plus an int, verified ASCII under LC_ALL/LC_TIME
+# of C, ar_SA, ar_AE, fa_IR, ja_JP, hi_IN and th_TH. `[0-9]` rather than
+# an `(?a)` flag so the intent stays scoped to the digits: `(?a)` would
+# also silently change \w/\s/\b semantics if this pattern is ever extended.
+SWEEP_BRANCH_RE = re.compile(r"sweep/tags-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]+\Z")
+
+
+def is_own_sweep_branch(head):
+    """True only for a branch THIS automation cut. See SWEEP_BRANCH_RE."""
+    return bool(SWEEP_BRANCH_RE.match(str(head or "")))
+
+
+def list_open_sweep_prs(repo_root, run_gh=default_run_gh, base_ref="main"):
+    """Open PRs whose head branch is a sweep branch AND which this
+    automation could actually have opened, oldest (lowest PR number)
+    first. [] on any failure -- an expired token or a missing `gh` must
+    cost one skipped adoption pass, never an exception inside an
+    --infinite dispatcher.
+
+    Three gates beyond the branch shape, each needing a field `gh` only
+    returns when asked (which is why the field list below is part of the
+    fix, not cosmetic -- with `number,url,headRefName` alone the draft
+    flag was not merely unchecked, it was *unobtainable*):
+
+      * isCrossRepository -- the load-bearing one. swack-tools/oxidex is
+        PUBLIC and has forks, and for a cross-repo PR headRefName is the
+        BARE branch name, so a fork branch named exactly
+        sweep/tags-2026-07-26-9 satisfies SWEEP_BRANCH_RE. A branch name
+        is not provenance.
+      * isDraft -- GitHub refuses to merge a draft server-side, so
+        adopting one buys two wasted gh calls plus one ERROR-shaped
+        "could not merge adopted PR" line every round, forever
+        (reproduced 2026-07-26: action='merge_failed' after issuing
+        `pr merge --squash --delete-branch`). overlord_sweep.real_create_pr
+        passes no --draft and GitHub has no create-as-draft repo setting,
+        so a draft sweep PR is always a human's doing.
+      * baseRefName -- real_create_pr always passes `--base main`; a PR
+        whose base a human retargeted is no longer what was opened here.
+
+    An ABSENT field reads as acceptable rather than as a rejection: this
+    runner is injectable, several test/tooling fakes answer with the older
+    field set, and inventing a rejection for them would strand real PRs.
+    Production always has the fields, because production asks for them.
+    """
+    try:
+        # --search filters SERVER-side. With a bare --limit, `gh pr list`
+        # returns the NEWEST N open PRs, so once the repo carries more than
+        # N the OLDEST stranded sweep PRs -- precisely what adoption exists
+        # to rescue -- fall outside the window and are never adopted,
+        # silently. The limit is also raised well past any plausible count
+        # of concurrently-open sweep PRs.
+        _rc, out, _err = run_gh(
+            ["pr", "list", "--state", "open", "--json",
+             "number,url,headRefName,isDraft,baseRefName,isCrossRepository",
+             "--search", "head:sweep/tags-", "--limit", "200"],
+            repo_root,
+        )
+    except OSError:
+        # `gh` not installed, or repo_root gone. This is the FIRST gh
+        # call of every round now -- including rounds that have no news
+        # and previously made none at all -- so it must not be the thing
+        # that turns a quiet round into a raised exception.
+        return []
+    try:
+        prs = json.loads(out)
+    except ValueError:
+        return []
+    if not isinstance(prs, list):
+        return []
+    # --search narrows server-side but is a substring match, so the exact
+    # shape is still enforced here: never trust the server filter to be
+    # the security boundary.
+    sweeps = [
+        pr for pr in prs
+        if isinstance(pr, dict) and is_own_sweep_branch(pr.get("headRefName"))
+        and not pr.get("isDraft") and not pr.get("isCrossRepository")
+        and (pr.get("baseRefName") or base_ref) == base_ref
+    ]
+    return sorted(sweeps, key=lambda pr: pr.get("number") or 0)
+
+
+def adopt_open_sweep_prs(*, repo_root, run_gh=default_run_gh, log_fn=print):
+    """Merge any ALREADY-OPEN sweep PR whose checks are green right now.
+    Returns one dict per open sweep PR:
+    {"pr", "branch", "checks", "action": "merged"|"left_open"|"merge_failed",
+     "message"}.
+
+    Without this, an abandoned sweep PR was abandoned forever. Nothing
+    ever revisited a PR after the round that created it moved on, and
+    overlord_sweep.run_sweep persists its sweep-state cursor BEFORE the
+    push and before PR creation -- so the stamps that fed that PR are
+    already consumed and no later sweep re-cuts those commits. A run
+    whose checks went green 46 minutes after the 45-minute
+    wait_for_pr_checks timeout (or that was red and then fixed by hand,
+    or whose `gh pr create` needed a manual retry) stranded every fix in
+    it on origin permanently.
+
+    Deliberately NOT a wait: one `gh pr checks` read per open sweep PR,
+    then move on. The round's own sweep still has to run, and a PR that
+    is genuinely mid-CI gets picked up by the next round -- blocking
+    here would just move the 45-minute stall to the front of the round.
+
+    Deliberately scoped to sweep/* head branches. This dispatcher runs
+    unattended for weeks; squash-merging a human's PR because its checks
+    happened to be green is not a mistake it gets to make.
+
+    Cursor advancement is left exactly as run_sweep has it (durable once
+    the branch is cut, semantically rechecked and workspace-tested,
+    regardless of push/PR outcome). Adopting the PR is strictly better
+    than un-advancing the cursor would be: the commits are already
+    pushed on their sweep branch, so re-sweeping the same stamps would
+    open a SECOND PR carrying the same fixes and leave two branches
+    racing to merge the same content.
+    """
+    adopted = []
+    for pr in list_open_sweep_prs(repo_root, run_gh):
+        ref = pr.get("url") or str(pr.get("number"))
+        branch = pr.get("headRefName")
+        try:
+            state, detail = pr_checks_state(ref, repo_root, run_gh)
+        except OSError as e:
+            # Belt-and-braces behind default_run_gh's own guard, for the
+            # INJECTED runners (tests, tooling, a future wrapper) that can
+            # still raise. One PR's unrunnable gh must cost that PR and
+            # nothing else: the measured failure was PR #1 merged, #2
+            # raised, #3 never examined, and the sync that has to follow
+            # #1's landed merge skipped because the record was discarded
+            # with the exception.
+            log_fn(f"auto-publish: could not read checks for {ref} ({branch}): {e!r} -- leaving it "
+                   "open and moving on to the next PR")
+            adopted.append({"pr": ref, "branch": branch, "checks": "unknown",
+                            "action": "check_failed", "message": repr(e)})
+            continue
+        if state != "green":
+            log_fn(f"auto-publish: adopting {ref} ({branch}) -- checks are {state} ({detail}); "
+                   "leaving it open for a later round")
+            adopted.append({"pr": ref, "branch": branch, "checks": state, "action": "left_open",
+                            "message": detail})
+            continue
+        log_fn(f"auto-publish: adopting {ref} ({branch}) from an earlier round -- checks are green, "
+               "merging it now")
+        try:
+            merged, message = merge_pr(ref, repo_root, run_gh=run_gh)
+        except OSError as e:
+            log_fn(f"auto-publish: could not run the merge for {ref} ({branch}): {e!r} -- leaving it "
+                   "open and moving on to the next PR")
+            adopted.append({"pr": ref, "branch": branch, "checks": state,
+                            "action": "merge_failed", "message": repr(e)})
+            continue
+        adopted.append({"pr": ref, "branch": branch, "checks": state,
+                        "action": "merged" if merged else "merge_failed", "message": message})
+        if not merged:
+            log_fn(f"AUTO-PUBLISH: could not merge adopted PR {ref}: {message} -- left open")
+    return adopted
+
+
+def sync_worktrees_to_origin_main(*, repo_root=REPO_ROOT, run_git=default_run_git,
+                                  origin_ref=ORIGIN_MAIN_REF, fetch=True, log_fn=print):
+    """Fast-forward every worktree of this repo onto the just-merged
+    origin/main. Returns {"updated": [...], "current": [...],
+    "skipped": [(path, reason)], "failed": [(path, reason)]}.
+
+    `git worktree list --porcelain` enumerates them (~100 live ones
+    across ~/.oxidex/worktrees and ~/.claude/worktrees), and two rules
+    are absolute:
+
+      * ff-only, and never touch a worktree with anything to lose. A
+        worktree whose HEAD is not an ancestor of origin/main carries
+        commits origin/main doesn't have -- an unswept worker commit, a
+        squad branch ahead of main, the dispatcher's own
+        model-fix-sweep-local -- and is SKIPPED with a logged reason.
+        This is fast_forward_local_main's no-discard invariant applied
+        worktree by worktree.
+      * A worktree with modified tracked files is skipped: that is a
+        worker's in-progress edit, and discarding one to save a
+        fast-forward is never the right trade.
+
+    Untracked-but-unignored files deliberately do NOT count as dirty
+    here (`--untracked-files=no`). Long-lived worktrees accumulate stray
+    artifacts -- comparison reports written next to the source, editor
+    droppings, *.orig files from a resolved conflict -- and treating
+    those as "in progress" would make a large share of the fleet
+    permanently un-syncable. Nothing is risked by ignoring them: git
+    itself refuses to overwrite an untracked file during a merge or
+    checkout, so a genuine collision surfaces as a recorded failure
+    below, never as a silent loss.
+
+    A detached worktree fast-forwards via `git checkout --detach`, which
+    is the only way a detached HEAD can express a fast-forward; the
+    ancestor check above has already proven it discards nothing.
+    """
+    summary = {"updated": [], "current": [], "skipped": [], "failed": []}
+    if fetch:
+        rc, _out, err = run_git(["fetch", "origin", "main"], repo_root)
+        if rc != 0:
+            log_fn(f"worktree sync: `git fetch origin main` failed ({err.strip()}) -- syncing "
+                   f"against the last-known {origin_ref} instead")
+    rc, target, err = run_git(["rev-parse", "--verify", "--quiet", origin_ref], repo_root)
+    target = target.strip()
+    if rc != 0 or not target:
+        log_fn(f"worktree sync: cannot resolve {origin_ref} ({err.strip()}) -- nothing synced")
+        return summary
+    rc, listing, err = run_git(["worktree", "list", "--porcelain"], repo_root)
+    if rc != 0:
+        log_fn(f"worktree sync: `git worktree list` failed ({err.strip()}) -- nothing synced")
+        return summary
+
+    for entry in parse_worktree_list(listing):
+        path = entry["path"]
+        if entry["bare"]:
+            summary["skipped"].append((path, "bare worktree (no working copy to fast-forward)"))
+            continue
+        if not path.is_dir():
+            summary["skipped"].append((path, "directory is gone (registration is prunable)"))
+            continue
+        # --untracked-files=no: see the docstring -- untracked droppings
+        # are not in-progress work, and git protects them on its own.
+        rc, status_out, err = run_git(["status", "--porcelain", "--untracked-files=no"], path)
+        if rc != 0:
+            summary["failed"].append((path, f"git status failed: {err.strip()}"))
+            continue
+        if status_out.strip():
+            summary["skipped"].append((path, "dirty (modified tracked files -- work in progress)"))
+            continue
+        rc, head, err = run_git(["rev-parse", "HEAD"], path)
+        if rc != 0:
+            summary["failed"].append((path, f"could not resolve HEAD: {err.strip()}"))
+            continue
+        if head.strip() == target:
+            summary["current"].append(path)
+            continue
+        rc, _out, _err = run_git(["merge-base", "--is-ancestor", "HEAD", origin_ref], path)
+        if rc != 0:
+            summary["skipped"].append(
+                (path, f"has commits not on {origin_ref} (unpushed/unswept work -- no-discard)"),
+            )
+            continue
+        if entry["branch"]:
+            rc, _out, err = run_git(["merge", "--ff-only", origin_ref], path)
+        else:
+            rc, _out, err = run_git(["checkout", "--detach", origin_ref], path)
+        if rc != 0:
+            summary["failed"].append((path, f"fast-forward failed: {err.strip()}"))
+            continue
+        summary["updated"].append(path)
+
+    log_fn(
+        f"worktree sync: {len(summary['updated'])} fast-forwarded, "
+        f"{len(summary['current'])} already current, {len(summary['skipped'])} skipped, "
+        f"{len(summary['failed'])} failed"
+    )
+    for path, reason in summary["skipped"] + summary["failed"]:
+        log_fn(f"  {path}: {reason}")
+    return summary
+
+
+def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, squads_toml_path=None,
+                       sweep_worktree_dir=None, sweep_fn=None, ensure_worktree_fn=None,
+                       sync_fn=None, fmt_fn=None, run_git=default_run_git, run_gh=default_run_gh,
+                       sleep_fn=time.sleep, now_fn=time.monotonic,
+                       checks_timeout_seconds=DEFAULT_PR_CHECKS_TIMEOUT_SECONDS,
+                       checks_interval_seconds=DEFAULT_PR_CHECKS_INTERVAL_SECONDS,
+                       origin_ref=ORIGIN_MAIN_REF, log_fn=print):
+    """One end-to-end publish pass: adopt any stale sweep PR -> sweep ->
+    cargo fmt -> push -> PR -> merge on green -> fast-forward every
+    worktree.
+
+    Returns a summary dict whose "status" is either one of run_sweep's
+    own statuses passed straight through ("no_news",
+    "branch_cut_failed", "nothing_merged", "sweep_aborted",
+    "reattach_failed", "zero_delta", "workspace_tests_failed",
+    "push_failed", "pr_create_failed"), or one of this function's own:
+    "no_worktree", "bisection_unverified", "zero_delta", "checks_red",
+    "checks_timeout", "checks_unknown", "merge_failed", "merged". Every
+    status also carries "adopted": what the round-start adoption pass did
+    with each already-open sweep PR.
+
+    A round that produced nothing new writes nothing: run_sweep's
+    sweep-state.json cursor reports "no_news" and returns before cutting
+    a branch, before touching a single ref -- so nothing is committed,
+    nothing is pushed, and no PR of this round's is touched. The one
+    thing such a round still does is the read-only `gh pr list` adoption
+    pass below, which can merge an ALREADY-OPEN sweep PR that has since
+    gone green; that is the point of it, and it is the only way a
+    stranded PR ever lands (see adopt_open_sweep_prs).
+
+    Red or timed-out checks leave the PR OPEN and return normally: the
+    dispatcher loop must never block forever on CI, and must never merge
+    a PR whose checks are failing or still pending.
+    """
+    home = Path(home) if home else OXIDEX_HOME
+    sweep_worktree_dir = Path(sweep_worktree_dir) if sweep_worktree_dir else DEFAULT_SWEEP_WORKTREE_DIR
+    sweep_fn = sweep_fn or default_sweep_fn
+    ensure_worktree_fn = ensure_worktree_fn or ensure_sweep_worktree
+    sync_fn = sync_fn or sync_worktrees_to_origin_main
+
+    def sync():
+        return sync_fn(repo_root=repo_root, run_git=run_git, origin_ref=origin_ref, log_fn=log_fn)
+
+    # Round start, BEFORE the sweep cuts anything: a sweep PR left open
+    # by an earlier round may have gone green since, and nothing else in
+    # this system will ever look at it again. Runs against the
+    # dispatcher's own repo_root rather than the sweep worktree so that
+    # a worktree this round cannot provision (below) does not also
+    # strand every previously-open PR.
+    adopted = adopt_open_sweep_prs(repo_root=repo_root, run_gh=run_gh, log_fn=log_fn)
+    adopted_merges = [a for a in adopted if a["action"] == "merged"]
+    adopted_sync = sync() if adopted_merges else None
+
+    sweep_repo, message = ensure_worktree_fn(
+        repo_root, sweep_worktree_dir, run_git=run_git, origin_ref=origin_ref, log_fn=log_fn,
+    )
+    if sweep_repo is None:
+        return {"status": "no_worktree", "message": message, "adopted": adopted,
+                "adopted_sync": adopted_sync}
+
+    sweep_kwargs = {
+        "repo_root": sweep_repo, "home": home, "cache_dir": cache_dir,
+        "fmt_fn": fmt_fn, "run_git": run_git, "log_fn": log_fn,
+        # run_sweep derives quarantine.jsonl and the sweep-review log from
+        # `home`, but its sweep-state.json default is the bare
+        # OXIDEX_HOME constant -- passing it explicitly keeps the whole
+        # publish state under whatever --home the dispatcher was given
+        # (identical to the default when that is OXIDEX_HOME) instead of
+        # reading one operator's cursor while writing another's stamps.
+        "sweep_state_path": home / "logs" / "sweep-state.json",
+    }
+    if squads_toml_path:
+        sweep_kwargs["squads_toml_path"] = squads_toml_path
+    result = sweep_fn(**sweep_kwargs)
+    common = {"sweep": result, "adopted": adopted, "adopted_sync": adopted_sync}
+    status = result.get("status")
+    if status != "ok":
+        log_fn(f"auto-publish: sweep finished with status {status!r} -- no PR to merge this round")
+        return {"status": status, **common}
+
+    branch = result.get("branch")
+
+    # status == "ok" is NOT sufficient once a bisection happened. run_sweep
+    # has its own hard stop for this (see bisect_sweep_failure's
+    # `unrevertable` / `recheck_passed`), and until 2026-07-26 it had
+    # neither: both of its revert-failure paths carried on, `offenders` /
+    # `surviving_squads` still looked tidy, and the round returned "ok"
+    # with content its own recheck had rejected still on the branch --
+    # which this function then squash-merged into main on green CI, with
+    # no human anywhere in the loop. Re-checking the invariant here means
+    # no future run_sweep status regression can hand this function a
+    # branch bisection did not clear.
+    bisection = result.get("bisection")
+    if bisection is not None and not bisection.get("recheck_passed"):
+        log_fn(f"AUTO-PUBLISH: {branch} went through bisection without a passing recheck "
+               f"(unrevertable={bisection.get('unrevertable')}, "
+               f"surviving={bisection.get('surviving_squads')}) -- refusing to merge it; "
+               "leaving everything for a human")
+        return {"status": "bisection_unverified", "branch": branch, "bisection": bisection, **common}
+
+    # The repo's DURABLE idempotency rule at the consumer: compare the
+    # TREE, not the SHA. A cherry-pick or squash gives identical content a
+    # fresh sha, so a branch can be several commits "ahead" of origin/main
+    # and still change nothing -- squash-merging that spends a full CI
+    # cycle to put an empty commit on main. run_sweep short-circuits this
+    # itself ("zero_delta"); this second check exists so a sweep_fn that
+    # skips that gate still cannot get an empty-diff PR merged. Two dots,
+    # and `--quiet` implies --exit-code, so rc 0 means "no differences".
+    rc, _out, _err = run_git(["diff", "--quiet", f"{origin_ref}..{branch}"], sweep_repo)
+    if rc == 0:
+        log_fn(f"auto-publish: {branch} is tree-identical to {origin_ref} -- nothing to publish, "
+               "not polling checks and not merging")
+        return {"status": "zero_delta", "branch": branch, **common}
+
+    pr_ref = pr_ref_from_result(result.get("pr"), branch)
+    log_fn(f"auto-publish: PR open for {branch} ({pr_ref}) -- waiting for checks")
+    state, detail = wait_for_pr_checks(
+        pr_ref, sweep_repo, run_gh=run_gh, sleep_fn=sleep_fn, now_fn=now_fn,
+        timeout_seconds=checks_timeout_seconds, interval_seconds=checks_interval_seconds,
+        log_fn=log_fn,
+    )
+    if state == "green":
+        # One re-read immediately before the merge. .github/workflows/
+        # ci.yml:11-13 sets `concurrency: cancel-in-progress: true`, so a
+        # push to the same ref or a workflow re-run moves an in-flight
+        # job into the "cancel" bucket -- which pr_checks_state classifies
+        # as RED -- in the window between the poll that returned green
+        # and `gh pr merge`. Without this, that window merges a PR whose
+        # checks are no longer green. Costs one gh call per publish.
+        state, detail = pr_checks_state(pr_ref, sweep_repo, run_gh=run_gh)
+        if state != "green":
+            log_fn(f"auto-publish: checks for {pr_ref} changed to {state.upper()} ({detail}) between "
+                   "the green poll and the merge -- not merging")
+    if state != "green":
+        log_fn(f"AUTO-PUBLISH: checks for {pr_ref} are {state.upper()} ({detail}) -- leaving the PR "
+               "OPEN for a human and continuing the loop; nothing is merged on anything but green")
+        return {"status": f"checks_{state}", "pr_ref": pr_ref, "checks": detail, **common}
+
+    merged, merge_message = merge_pr(pr_ref, sweep_repo, run_gh=run_gh)
+    if not merged:
+        log_fn(f"AUTO-PUBLISH: `gh pr merge --squash` failed for {pr_ref}: {merge_message} -- "
+               "PR left open")
+        return {"status": "merge_failed", "pr_ref": pr_ref, "message": merge_message, **common}
+
+    log_fn(f"auto-publish: squash-merged {pr_ref} into main -- fast-forwarding worktrees")
+    return {"status": "merged", "pr_ref": pr_ref, "sync": sync(), **common}
+
+
+# A publish that either landed something or had nothing to land. Every
+# other status is a round that did NOT publish, which is what the one-shot
+# exit code and the --infinite stall counter both key off.
+PUBLISH_OK_STATUSES = frozenset({"merged", "no_news", "zero_delta"})
+
+# How many consecutive non-publishing rounds before the loop says so out
+# loud. Small enough to notice a wedge within one cadence, large enough
+# that an ordinary red-CI round followed by a fix does not shout.
+PUBLISH_STALL_ROUNDS = 3
+
+
+def _publish_landed_something(publish_result):
+    """True when this round published, by either route: its own sweep
+    reached a terminal success, or the round-start adoption pass merged a
+    PR stranded by an earlier round. The second route matters -- a round
+    can report a pass-through failure status for its OWN sweep while
+    having just squash-merged someone else's stranded sweep PR, and
+    counting that as a stall would be a false alarm."""
+    if not isinstance(publish_result, dict):
+        return False
+    if publish_result.get("status") in PUBLISH_OK_STATUSES:
+        return True
+    adopted = publish_result.get("adopted") or []
+    return any(isinstance(a, dict) and a.get("action") == "merged" for a in adopted)
+
+
+def _run_auto_publish_safely(publish_fn=auto_publish_round, publish_kwargs=None, log_fn=print):
+    """auto_publish_round, wrapped so a publish hiccup NEVER sinks the
+    dispatcher -- same discipline as _run_janitor_safely. The round's
+    own work (dispatch + merge onto squad/integration branches) is
+    already durable by the time this runs, and an --infinite dispatcher
+    lives for weeks: a transient gh outage or a git error must cost one
+    round's publish, not the whole loop.
+
+    The caller must not DISCARD the return value (main() did until
+    2026-07-26): a one-shot `--auto-publish` round then exited 0 for all
+    of no_worktree/push_failed/pr_create_failed/checks_red/checks_timeout/
+    checks_unknown/merge_failed/branch_cut_failed/sweep_aborted/
+    reattach_failed/workspace_tests_failed, which is the one genuinely
+    machine-invisible case here -- an --infinite round announces every
+    failure on stdout and adoption retries it next round, but an operator
+    or CI step invoking a single round has nothing else to read.
+    """
+    try:
+        return publish_fn(**(publish_kwargs or {}))
+    except Exception as e:  # noqa: BLE001 -- deliberately broad, see docstring
+        # Deliberately does NOT claim "the next round's sweep retries
+        # them": that is false for anything raised AFTER run_sweep's
+        # persist_cursor (i.e. inside log_sweep_review.append_from_commits,
+        # build_evidence_rows, build_pr_body or format_sweep_branch, all of
+        # which run between the cursor write and the push), and false for
+        # any sweep PR the adoption pass already merged this round.
+        log_fn(f"auto-publish: publish step raised {e!r} -- continuing the loop. Anything already "
+               "merged this round STAYS merged, and any sweep whose cursor had advanced before the "
+               "raise will not be re-collected; check the log above for what got as far as a push.")
+        return {"status": "raised", "error": repr(e)}
+
+
 def main(argv=None, run_round_fn=run_round, run_squad_round_fn=run_squad_round, sleep_fn=time.sleep,
-         lock_path=None, pgids_path=None, reap_fn=reap_orphan_worker_pgids):
+         lock_path=None, pgids_path=None, reap_fn=reap_orphan_worker_pgids,
+         auto_publish_fn=auto_publish_round):
     # The same buffering issue fixed for workers (PYTHONUNBUFFERED in
     # run_worker's env) also applies to this wrapper process itself when its
     # own stdout is redirected to a file (e.g. `nohup ... > out.log &`)
@@ -1717,12 +2763,43 @@ def main(argv=None, run_round_fn=run_round, run_squad_round_fn=run_squad_round, 
     )
     parser.add_argument(
         "--squads-toml", default=str(DEFAULT_SQUADS_TOML),
-        help="Squad manifest (spec S2); only consulted in --squad-mode.",
+        help="Squad manifest (spec S2); consulted in --squad-mode and by the auto-publish sweep "
+             "(which walks every squad's status file looking for green stamps).",
     )
     parser.add_argument(
         "--home", default=str(OXIDEX_HOME),
-        help="OXIDEX_HOME override for squad-status/staging-worktree paths; only consulted in "
-             "--squad-mode (legacy per-format mode is unaffected by this flag).",
+        help="OXIDEX_HOME override for squad-status/staging-worktree paths; consulted in "
+             "--squad-mode and by the auto-publish sweep (squad-status, sweep-state.json, "
+             "quarantine.jsonl all hang off it).",
+    )
+    parser.add_argument(
+        "--auto-publish", action=argparse.BooleanOptionalAction, default=None,
+        help="After every round, run the overlord sweep IN-PROCESS (overlord_sweep.run_sweep): "
+             "cut a fresh sweep branch from origin/main, merge every squad head stamped green "
+             "since the last sweep, semantically recheck it, cargo fmt it, push, open a PR, wait "
+             "for CI, squash-merge on all-green, then fast-forward every worktree to the new "
+             "origin/main. DEFAULT: ON with --infinite (the whole point of --infinite is an "
+             "unattended pipeline), off for a single round; --no-auto-publish opts out either "
+             "way. A round with no new green stamps is a complete no-op -- no commits, no "
+             "pushes, no PR touched. NOTE: the green stamps come from the per-squad mergers "
+             "(scripts/squad_merge_loop.py); with no merger running there is nothing to sweep "
+             "and this reports no_news every round.",
+    )
+    parser.add_argument(
+        "--sweep-worktree-dir", default=str(DEFAULT_SWEEP_WORKTREE_DIR),
+        help=f"Where the auto-publish sweep runs (default: {DEFAULT_SWEEP_WORKTREE_DIR}). "
+             "Deliberately NOT the dispatcher's own checkout -- a sweep detaches HEAD, which "
+             "would break the next round's integration-branch resolution.",
+    )
+    parser.add_argument(
+        "--pr-checks-timeout", type=float, default=DEFAULT_PR_CHECKS_TIMEOUT_SECONDS,
+        help=f"Seconds to wait for a sweep PR's checks before giving up (default: "
+             f"{DEFAULT_PR_CHECKS_TIMEOUT_SECONDS}). On timeout the PR is left OPEN and the loop "
+             "continues -- a wedged workflow must not stall an --infinite dispatcher forever.",
+    )
+    parser.add_argument(
+        "--pr-checks-interval", type=float, default=DEFAULT_PR_CHECKS_INTERVAL_SECONDS,
+        help=f"Seconds between `gh pr checks` polls (default: {DEFAULT_PR_CHECKS_INTERVAL_SECONDS}).",
     )
     parser.add_argument(
         "--gap-attribution-path", default=str(DEFAULT_GAP_ATTRIBUTION_PATH),
@@ -1760,16 +2837,66 @@ def main(argv=None, run_round_fn=run_round, run_squad_round_fn=run_squad_round, 
 
     dispatch_fn = run_squad_round_fn if args.squad_mode else run_round_fn
 
+    # --auto-publish is tri-state on purpose (BooleanOptionalAction with
+    # default=None): unset means "on for --infinite, off otherwise", so
+    # `uv run scripts/parallel_model_fix_loop.py --infinite` publishes
+    # with no extra flag, while a one-shot debugging round still stays
+    # local unless an operator asks for a publish explicitly.
+    auto_publish = args.infinite if args.auto_publish is None else args.auto_publish
+    publish_kwargs = {
+        "repo_root": REPO_ROOT,
+        "cache_dir": args.cache_dir,
+        "home": Path(args.home),
+        "squads_toml_path": Path(args.squads_toml),
+        "sweep_worktree_dir": Path(args.sweep_worktree_dir),
+        "checks_timeout_seconds": args.pr_checks_timeout,
+        "checks_interval_seconds": args.pr_checks_interval,
+    }
+
     try:
         round_num = 0
         last_round_ok = True
+        publish_result = None
+        stalled_rounds = 0
         while True:
             round_num += 1
             if args.infinite:
                 print(f"\n{'=' * 20} round {round_num} {'=' * 20}")
             last_round_ok = dispatch_fn(args, config_path)
+            if auto_publish:
+                # After dispatch, never before: the sweep only ever sees
+                # squad heads the mergers have already stamped green, so
+                # running it here gives this round's fixes their first
+                # chance to ship while costing a no-op when there are none.
+                publish_result = _run_auto_publish_safely(
+                    publish_fn=auto_publish_fn, publish_kwargs=publish_kwargs,
+                )
+                if _publish_landed_something(publish_result):
+                    stalled_rounds = 0
+                else:
+                    stalled_rounds += 1
+                    if args.infinite and stalled_rounds >= PUBLISH_STALL_ROUNDS:
+                        # One escalating banner, not a per-round WARNING.
+                        # The per-round lines already exist; what a human
+                        # scanning weeks of log cannot see in them is that
+                        # the SAME failure has now repeated -- a wedged
+                        # sweep worktree looks exactly like a run of quiet
+                        # rounds. Deliberately not an exit or an abort: the
+                        # "leave the PR open and keep looping" behaviour
+                        # plus the adoption pass genuinely does recover
+                        # checks_red/checks_timeout/checks_unknown/
+                        # merge_failed/raised on a later round.
+                        print(f"AUTO-PUBLISH STALLED: {stalled_rounds} consecutive rounds published "
+                              f"nothing, most recently with status "
+                              f"{(publish_result or {}).get('status')!r} -- the loop keeps running, "
+                              "but nothing has reached origin/main since it started")
             if not args.infinite:
-                return 0 if last_round_ok else 1
+                # A one-shot round's exit code has to reflect the publish
+                # too: nothing else observes it (with --infinite main()
+                # never returns normally anyway, and every failure is
+                # already on stdout each round).
+                publish_ok = publish_result is None or _publish_landed_something(publish_result)
+                return 0 if (last_round_ok and publish_ok) else 1
             if args.round_delay:
                 sleep_fn(args.round_delay)
     finally:

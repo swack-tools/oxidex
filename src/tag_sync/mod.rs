@@ -4,7 +4,7 @@
 use anyhow::{Context, Result};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A single ExifTool tag as reported by `exiftool -f -listx`.
 #[derive(Debug, Clone, PartialEq)]
@@ -110,6 +110,138 @@ pub fn parse_listx(xml: &str) -> Result<Vec<TagRecord>> {
     }
 
     Ok(tags)
+}
+
+/// Per table, the set of PrintConv *display values* its tags map to.
+///
+/// `-listx` nests a tag's PrintConv table inside the tag itself:
+///
+/// ```xml
+/// <tag id='41986' name='ExposureMode'>
+///   <values><key id='1'><val lang='en'>Manual</val></key></values>
+/// </tag>
+/// ```
+///
+/// Those `<key>` elements are value rows, not tags. Reading them as tags is
+/// what produced 16,005 bogus entries in the YAML registry (a tag literally
+/// named `Higher resolution image exists`), so
+/// `tests/tag_registry_invariants.rs` uses this to assert the registry never
+/// lists a display value as a tag again.
+pub fn parse_listx_print_conv_values(xml: &str) -> Result<HashMap<String, HashSet<String>>> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut out: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut current_table = String::new();
+    let mut capturing_en_val = false;
+    let mut buf = Vec::new();
+
+    loop {
+        match reader
+            .read_event_into(&mut buf)
+            .context("failed to read XML event from exiftool -listx output")?
+        {
+            Event::Start(e) | Event::Empty(e) if e.name().as_ref() == b"table" => {
+                current_table = attr_value(&e, "name").unwrap_or_default();
+            }
+            Event::Start(e) if e.name().as_ref() == b"val" => {
+                capturing_en_val = attr_value(&e, "lang").as_deref() == Some("en");
+            }
+            Event::Text(t) if capturing_en_val => {
+                let decoded = t
+                    .decode()
+                    .context("invalid text content in <val> element")?;
+                let text = quick_xml::escape::unescape(&decoded)
+                    .unwrap_or_else(|_| decoded.clone())
+                    .into_owned();
+                out.entry(current_table.clone())
+                    .or_default()
+                    .insert(text.trim().to_string());
+                capturing_en_val = false;
+            }
+            Event::End(e) if e.name().as_ref() == b"val" => {
+                capturing_en_val = false;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(out)
+}
+
+/// Parses a `-listx` id, which is decimal (`41986`) for numeric tables and
+/// hex (`0x829a`) elsewhere. Returns `None` for the shapes that are neither —
+/// FlashPix's `0016,0042` and NikonCustom's bit-positions like `1.1`.
+pub fn parse_tag_id(text: &str) -> Option<i64> {
+    let text = text.trim();
+    match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        Some(hex) => i64::from_str_radix(hex, 16).ok(),
+        None => text.parse::<i64>().ok(),
+    }
+}
+
+/// Per table, which PrintConv *key* maps to which display values.
+///
+/// The keyed form of [`parse_listx_print_conv_values`]. It exists to catch the
+/// case that the unkeyed form cannot: a display value whose name collides with
+/// a real tag of the same table, so the only evidence it is a value row is that
+/// its id is that value's PrintConv key. See
+/// `tests/tag_registry_invariants.rs::registry_tag_ids_are_not_print_conv_keys_in_disguise`.
+pub fn parse_listx_print_conv_keys(
+    xml: &str,
+) -> Result<HashMap<String, HashMap<i64, HashSet<String>>>> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut out: HashMap<String, HashMap<i64, HashSet<String>>> = HashMap::new();
+    let mut current_table = String::new();
+    let mut current_key: Option<i64> = None;
+    let mut capturing_en_val = false;
+    let mut buf = Vec::new();
+
+    loop {
+        match reader
+            .read_event_into(&mut buf)
+            .context("failed to read XML event from exiftool -listx output")?
+        {
+            Event::Start(e) | Event::Empty(e) if e.name().as_ref() == b"table" => {
+                current_table = attr_value(&e, "name").unwrap_or_default();
+            }
+            Event::Start(e) if e.name().as_ref() == b"key" => {
+                current_key = attr_value(&e, "id").as_deref().and_then(parse_tag_id);
+            }
+            Event::End(e) if e.name().as_ref() == b"key" => {
+                current_key = None;
+            }
+            Event::Start(e) if e.name().as_ref() == b"val" => {
+                capturing_en_val = attr_value(&e, "lang").as_deref() == Some("en");
+            }
+            Event::Text(t) if capturing_en_val => {
+                if let Some(key) = current_key {
+                    let decoded = t.decode().context("invalid text content in <val>")?;
+                    let text = quick_xml::escape::unescape(&decoded)
+                        .unwrap_or_else(|_| decoded.clone())
+                        .into_owned();
+                    out.entry(current_table.clone())
+                        .or_default()
+                        .entry(key)
+                        .or_default()
+                        .insert(text.trim().to_string());
+                }
+                capturing_en_val = false;
+            }
+            Event::End(e) if e.name().as_ref() == b"val" => {
+                capturing_en_val = false;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(out)
 }
 
 /// Routes an ExifTool table name (e.g. `Canon::AFConfig`, `Exif::Main`) to

@@ -101,7 +101,7 @@ from parallel_model_fix_loop import branch_name as worker_branch_name
 from parallel_model_fix_loop import novel_commits
 from find_tag_gaps import DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS, DEFAULT_BUILD_SEMAPHORE_PATH
 from model_fix_loop import cargo_test_targeted as _real_cargo_test_targeted
-from model_fix_loop import new_oxidex_only_keys
+from model_fix_loop import new_oxidex_only_keys, newly_duplicated_emissions
 import validate_fix_commit
 from validate_fix_commit import validate_commit as _real_validate_commit
 from distill_lessons import (
@@ -128,6 +128,23 @@ DEFAULT_BATCH_SECONDS = 900
 # reused here for the squad branch re-cut trigger absent a more specific
 # number in the spec.
 DEFAULT_RECUT_STALENESS_SECONDS = 3 * 24 * 3600
+
+#: Re-cut once origin/main has moved this far past the squad branch's base,
+#: regardless of how RECENT that base is.
+#:
+#: The time threshold above assumes main moves slowly. It does not: with the
+#: fleet publishing, main advanced 13 commits in about four hours on
+#: 2026-07-27, and every squad branch sat on a base that was hours old and
+#: therefore "fresh" by the time rule -- while being far enough behind that
+#: ALL THIRTEEN failed to merge. Simulated against current main that day:
+#: merged cleanly 0, conflicted 13.
+#:
+#: The conflict is not incidental. The blocking commit was b9d0245d, the
+#: sweep's own PR #154: main now holds the merged-and-formatted form of work
+#: the squad branches still carry in pre-merge form. A branch is stale the
+#: moment its content lands upstream by another route, which is a DISTANCE
+#: question, not an age one.
+DEFAULT_RECUT_BEHIND_COMMITS = 8
 
 ORIGIN_MAIN = "origin/main"
 
@@ -163,6 +180,22 @@ def default_staging_dir(home, squad):
 # ---------------------------------------------------------------------------
 # squads.toml
 # ---------------------------------------------------------------------------
+
+def all_squad_names(squads_toml_path):
+    """Every squad name in squads.toml, or [] if it cannot be read.
+
+    Used to find which OTHER squad is already staging a file -- see
+    squad_holding_any_file. Unreadable config must never BLOCK a merger, so
+    a failure here degrades to "no other squads known", i.e. today's
+    behaviour.
+    """
+    try:
+        with open(squads_toml_path, "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, ValueError):
+        return []
+    return sorted((data.get("squads") or {}).keys())
+
 
 def squad_formats(squads_toml_path, squad):
     """squads.toml's advisory ``formats`` list for `squad` (spec S2) --
@@ -397,13 +430,43 @@ def commit_format_trailer(repo_root, sha):
     return values[0] if values else None
 
 
-def candidate_commits(repo_root, worker_branch, squad_branch, status):
+def stale_policy(entry, policy_version=None):
+    """True when `entry` is a quarantine recorded under a DIFFERENT
+    validator policy than the one running now, so the rejection was
+    reached by rules we no longer apply and deserves one fresh attempt.
+
+    Entries written before policy stamping existed have no
+    "policy_version" key at all; those are treated as stale too, which is
+    exactly right -- they predate every fix that made them stale.
+
+    A "consumed" entry is never stale: it is already published.
+    """
+    if not isinstance(entry, dict) or entry.get("status") != "quarantined":
+        return False
+    current = (
+        validate_fix_commit.POLICY_VERSION if policy_version is None
+        else policy_version
+    )
+    return entry.get("policy_version") != current
+
+
+def candidate_commits(repo_root, worker_branch, squad_branch, status,
+                       policy_version=None):
     """Oldest-first commits on `worker_branch` not yet reachable from
     `squad_branch` and not already recorded consumed/quarantined in
-    `status` (spec M2 step (b))."""
+    `status` (spec M2 step (b)).
+
+    A head quarantined under a superseded validator policy IS a candidate
+    again -- see stale_policy. Otherwise a validator bugfix can never
+    take effect retroactively, which is how 20 valid fixes stayed
+    rejected across the whole of 2026-07-25 even after the rules that
+    rejected them were repaired."""
     shas = new_commits_since(repo_root, squad_branch, worker_branch)
-    seen = set((status or {}).get("heads") or {})
-    return [s for s in shas if s not in seen]
+    heads = (status or {}).get("heads") or {}
+    return [
+        s for s in shas
+        if s not in heads or stale_policy(heads[s], policy_version)
+    ]
 
 
 def union_novel_shas(repo_root, worker_branch, origin_ref, squad_branch):
@@ -466,12 +529,19 @@ def load_quarantine(path):
 
 
 def append_quarantine(path, *, patch_id, sha, format_name, squad, reason, flags,
-                       quarantine_entries=None, now_fn=time.time):
+                       quarantine_entries=None, now_fn=time.time,
+                       policy_version=None):
     """Append one rejection entry (K1-style: O_APPEND|O_CREAT|O_WRONLY,
     exactly one os.write of one line). A quarantined patch-id is skipped
     without retry by every later poll (spec M2) -- the attempt/backoff
     fields exist for operator visibility, not because this daemon ever
-    automatically retries a quarantined patch-id."""
+    automatically retries a quarantined patch-id.
+
+    The ONE exception is a change to the acceptance rules themselves:
+    `policy_version` stamps which validator policy did the rejecting, so
+    a later poll running a DIFFERENT policy can give the head one fresh
+    attempt (see quarantine_blocks and candidate_commits). A rejection is
+    only permanent with respect to the rules that produced it."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     prior_attempt = 0
@@ -479,8 +549,15 @@ def append_quarantine(path, *, patch_id, sha, format_name, squad, reason, flags,
         prior_attempt = quarantine_entries[patch_id].get("attempt", 0)
     attempt = prior_attempt + 1
     backoff_seconds = min(3600, 60 * (2 ** (attempt - 1)))
+    stamped_at = now_fn()
     entry = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now_fn())),
+        # Same pair, same reasoning as record_head's: a human-readable
+        # local `ts` plus an unambiguous instant, from ONE clock read.
+        # Nothing orders the quarantine ledger by time today, which is
+        # exactly why the offset-free string is worth pairing before
+        # something does.
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(stamped_at)),
+        "ts_epoch": float(stamped_at),
         "patch_id": patch_id,
         "sha": sha,
         "format": format_name,
@@ -489,6 +566,10 @@ def append_quarantine(path, *, patch_id, sha, format_name, squad, reason, flags,
         "flags": list(flags or []),
         "attempt": attempt,
         "backoff_seconds": backoff_seconds,
+        "policy_version": (
+            validate_fix_commit.POLICY_VERSION if policy_version is None
+            else policy_version
+        ),
     }
     line = (json.dumps(entry, separators=(",", ":")) + "\n").encode("utf-8")
     fd = os.open(str(path), os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
@@ -519,6 +600,25 @@ def load_squad_status(path):
     return data
 
 
+def stamp_order_key(sha_entry):
+    """Sort key for a (sha, squad-status entry) pair, newest last.
+
+    Orders by the entry's `ts_epoch` INSTANT when it has one and falls
+    back to the legacy naive-local-time `ts` string when it does not, so
+    a ledger written before 2026-07-26 keeps exactly the order it always
+    had. Legacy entries sort ahead of every epoch-stamped one (the
+    leading `is not None`), which is the truth of the matter: they can
+    only have been written earlier than the fix that added the field.
+
+    Shared by overlord_sweep.collect_green_stamps (which head is "the
+    newest news") and recut_squad_branch (which order to replay
+    cherry-picks in) so the two can never disagree about "newer".
+    """
+    entry = sha_entry[1]
+    epoch = entry.get("ts_epoch")
+    return (epoch is not None, float(epoch) if epoch is not None else 0.0, entry.get("ts") or "")
+
+
 def _write_squad_status(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -533,7 +633,8 @@ def _write_squad_status(path, data):
 
 
 def record_head(path, sha, *, status, patch_id, format_name, work_done=True,
-                 squad_sha=None, reason=None, now_fn=time.time):
+                 squad_sha=None, reason=None, now_fn=time.time,
+                 policy_version=None):
     """Record one worker-branch head's outcome (spec M2 step 5 / M5
     consume handshake): status is "consumed" or "quarantined". Written
     via tempfile + os.replace so a concurrent reader (create_worktree's
@@ -541,17 +642,49 @@ def record_head(path, sha, *, status, patch_id, format_name, work_done=True,
     if status not in ("consumed", "quarantined"):
         raise ValueError(f"status must be 'consumed' or 'quarantined', got {status!r}")
     data = load_squad_status(path)
+    # ONE clock read for both spellings of the same moment: `ts` and
+    # `ts_epoch` must describe the same instant, and now_fn is injectable
+    # (an advancing test clock would otherwise silently disagree).
+    stamped_at = now_fn()
     entry = {
         "status": status,
         "patch_id": patch_id,
         "format": format_name,
         "work_done": work_done,
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now_fn())),
+        # `ts` stays offset-free LOCAL time, for humans reading the
+        # ledger and for every consumer written before 2026-07-26.
+        # `ts_epoch` is the unambiguous INSTANT, and it is what
+        # overlord_sweep.collect_green_stamps orders by: inside the DST
+        # fall-back's repeated hour two different instants produce local
+        # strings that sort the WRONG WAY ROUND. Measured with
+        # TZ=America/Los_Angeles: 1793521800 -> "2026-11-01T01:30:00"
+        # (PDT) and 1793524500 -> "2026-11-01T01:15:00" (PST, 2700s
+        # LATER), and "01:15:00" < "01:30:00", so the later head was
+        # filtered out as "not news" and its already-validated commits
+        # waited for that squad's next stamp.
+        #
+        # Added ALONGSIDE `ts` rather than replacing it, deliberately.
+        # Swapping `ts` to UTC breaks the migration: cursors and stamps
+        # already on disk hold naive local strings, and in a
+        # positive-offset zone a fresh UTC string sorts BELOW the stored
+        # local cursor -- every squad would read "no news" for up to the
+        # length of the offset (9h in Asia/Tokyo), a real stall, worse
+        # than the once-a-year fold.
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(stamped_at)),
+        "ts_epoch": float(stamped_at),
     }
     if squad_sha is not None:
         entry["squad_sha"] = squad_sha
     if reason is not None:
         entry["reason"] = reason
+    if status == "quarantined":
+        # Only rejections carry a policy stamp -- a "consumed" head is
+        # already published and must never be reconsidered, no matter how
+        # the acceptance rules move.
+        entry["policy_version"] = (
+            validate_fix_commit.POLICY_VERSION if policy_version is None
+            else policy_version
+        )
     data["heads"][sha] = entry
     _write_squad_status(path, data)
     return data
@@ -604,14 +737,137 @@ def real_validate_commit(sha, repo, **kwargs):
 # Per-commit processing (spec M2 step (c)/(d))
 # ---------------------------------------------------------------------------
 
+def squad_that_already_staged(home, squad, patch_id):
+    """The OTHER squad that already green-stamped this exact patch, or None.
+
+    squads.toml deliberately lets several squads claim one format -- JPEG
+    carries every brand's makernotes, so canon/nikon/sony all care about it --
+    and squad_slot_branches discovers work by ref pattern with no ownership
+    filter at all. The result is that every squad consumes the same worker
+    commit and each pays a full cherry-pick + cargo test + corpus comparison
+    to reach the identical verdict.
+
+    Measured 2026-07-27 with the fleet up: 35 staged commits were only 7
+    distinct patches. fix(rar) had been consumed by 13 squads and fix(jpeg) by
+    12 -- about 80% of all merger work was redundant. It is also how the sweep
+    ended up with 12 no-op merges of one patch, which is the empty-revert case
+    #149 had to handle.
+
+    Deliberately keyed on PATCH-ID, not sha: the same fix reaches different
+    squads under different shas via cherry-pick.
+
+    This only ever SKIPS duplicate effort -- the first squad to see a patch
+    still consumes it normally, so nothing can be starved. A race between two
+    mergers checking at once degrades to exactly today's behaviour (both
+    consume), never to neither.
+    """
+    directory = squad_status_file(home, squad).parent
+    if not directory.is_dir():
+        return None
+    for path in sorted(directory.glob("*.json")):
+        other = path.stem
+        if other == squad:
+            continue
+        for entry in (load_squad_status(path).get("heads") or {}).values():
+            if (entry.get("patch_id") == patch_id
+                    and entry.get("status") == "consumed"
+                    and entry.get("work_done")):
+                return other
+    return None
+
+
+def commit_files(repo_root, sha, run_git=None):
+    """Paths one commit changes. Empty on any git failure."""
+    runner = run_git or make_git_runner(repo_root)
+    try:
+        out = runner(["show", "--name-only", "--format=", sha])
+    except Exception:  # noqa: BLE001 -- must never block a merger
+        return set()
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
+def files_touched(repo_root, base, tip, run_git=None):
+    """Paths changed between `base` and `tip`. Empty on any git failure.
+
+    make_git_runner's contract is run_git(args, input_text=None) -> stdout,
+    with check=True, so a failure raises rather than returning a code.
+    """
+    runner = run_git or make_git_runner(repo_root)
+    try:
+        out = runner(["diff", "--name-only", f"{base}..{tip}"])
+    except Exception:  # noqa: BLE001 -- an unreadable range must never block
+        return set()
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
+def squad_holding_any_file(repo_root, squad, files, squads, origin_ref=ORIGIN_MAIN,
+                           run_git=None):
+    """The OTHER squad already staging work that touches one of `files`.
+
+    Enforces the invariant merge_squad_into_sweep is written against and
+    states in its own docstring -- "one squad per shared emitter file" --
+    which nothing was actually maintaining.
+
+    squads.toml deliberately lets several squads claim a format (JPEG carries
+    every brand's makernotes), and squad_slot_branches discovers work by ref
+    pattern with no ownership filter at all. So two squads routinely fix the
+    SAME tags in the SAME file with DIFFERENT code. Different code means
+    different patch-ids, so the cross-squad patch dedup (#150) correctly lets
+    both through -- and then they conflict textually when the sweep merges
+    them.
+
+    Measured 2026-07-27, and this is now the binding constraint on publishing:
+
+      * PR #154 shipped duplicate match arms (0xA405/0xA407/0xA411/0xA412/
+        0xA413 listed twice in src/parsers/raw/metadata.rs) -- six clippy
+        errors, born red.
+      * The very next sweep collected four squads' stamps and every single
+        merge failed:
+            HARD ERROR: cross-squad conflict merging squad/exif-core
+            HARD ERROR: cross-squad conflict merging squad/ps-docs
+            HARD ERROR: cross-squad conflict merging squad/sigma-c2pa
+            HARD ERROR: cross-squad conflict merging squad/xmp
+        -> nothing_merged, in one second, with real work available.
+
+    #154 published only because that round happened to hold two COMPATIBLE
+    squads. That was luck, not robustness.
+
+    Deferring is deliberately NOT consuming: the commit is left for a later
+    poll, so it lands once the holding squad's work reaches origin/main and
+    the file is free again. Nothing is dropped and nothing is starved.
+    """
+    if not files:
+        return None, []
+    runner = run_git or make_git_runner(repo_root)
+    for other in sorted(squads):
+        if other == squad:
+            continue
+        branch = f"squad/{other}"
+        if not branch_exists(repo_root, branch):
+            continue
+        try:
+            base = runner(["merge-base", branch, origin_ref]).strip()
+        except Exception:  # noqa: BLE001
+            continue
+        if not base:
+            continue
+        staged = files_touched(repo_root, base, branch, run_git=runner)
+        overlap = files & staged
+        if overlap:
+            return other, sorted(overlap)[:3]
+    return None, []
+
+
 def process_commit(*, repo_root, staging_path, squad, squad_branch, sha, fmt, is_novel,
                     quarantine_entries, cache_dir, home, validate_fn, cargo_test_targeted_fn,
+                    all_squads=None, origin_ref=ORIGIN_MAIN,
                     comparison_fn, sweep_review_log_path=None, validate_kwargs=None,
                     now_fn=time.time, log_fn=print):
     """Process exactly one candidate commit through the full merger
     pipeline. Returns a result dict with at least {"sha", "outcome",
     "patch_id"}; outcome is one of "consumed_no_work" (patch-id already
-    present upstream), "skipped_quarantined" (already in the ledger,
+    present upstream), "consumed_elsewhere" (another squad already
+    green-stamped this exact patch-id), "skipped_quarantined" (already in the ledger,
     zero work done), "quarantined" (freshly rejected this call), or
     "consumed" (green-stamped and fast-forwarded).
 
@@ -630,9 +886,50 @@ def process_commit(*, repo_root, staging_path, squad, squad_branch, sha, fmt, is
                "marked consumed, no work done")
         return {"sha": sha, "outcome": "consumed_no_work", "patch_id": patch_id}
 
-    if patch_id in quarantine_entries:
+    # Before paying for a cherry-pick, a build and a corpus comparison, check
+    # whether another squad already did exactly this. See
+    # squad_that_already_staged -- 80% of merger work was this.
+    # The invariant merge_squad_into_sweep assumes and nothing enforced:
+    # one squad per shared emitter file. See squad_holding_any_file -- four
+    # squads' merges all failed with cross-squad conflicts on 2026-07-27,
+    # which is nothing_merged with real work sitting available.
+    #
+    # DEFER, never consume: no head is recorded, so this exact commit is
+    # re-offered on a later poll once the holding squad's work reaches
+    # origin/main and the file is free.
+    if all_squads:
+        # The commit's OWN changed files, not a diff against a ref. Using
+        # ORIGIN_MAIN here silently returned nothing wherever that ref does
+        # not exist -- which made the whole check inert instead of loud.
+        changed = commit_files(repo_root, sha, run_git=run_git)
+        holder, overlap = squad_holding_any_file(
+            repo_root, squad, changed, all_squads, origin_ref=origin_ref,
+            run_git=run_git)
+        if holder:
+            log_fn(f"[{squad}] {sha[:12]} ({fmt}): squad/{holder} is already staging "
+                   f"{', '.join(overlap)} -- deferring rather than racing it into a "
+                   "cross-squad conflict")
+            return {"sha": sha, "outcome": "deferred_file_held", "patch_id": patch_id,
+                    "held_by": holder, "files": overlap}
+
+    staged_by = squad_that_already_staged(home, squad, patch_id)
+    if staged_by:
+        record_head(status_path, sha, status="consumed", patch_id=patch_id,
+                    format_name=fmt, work_done=False, now_fn=now_fn)
+        log_fn(f"[{squad}] {sha[:12]} ({fmt}): identical patch already staged by "
+               f"squad/{staged_by} -- skipped without duplicating the work")
+        return {"sha": sha, "outcome": "consumed_elsewhere", "patch_id": patch_id,
+                "staged_by": staged_by}
+
+    if patch_id in quarantine_entries and not stale_policy(
+        {**quarantine_entries[patch_id], "status": "quarantined"}
+    ):
         log_fn(f"[{squad}] {sha[:12]} ({fmt}): patch-id already quarantined -- skipped without retry")
         return {"sha": sha, "outcome": "skipped_quarantined", "patch_id": patch_id}
+    if patch_id in quarantine_entries:
+        log_fn(f"[{squad}] {sha[:12]} ({fmt}): quarantined under validator policy "
+               f"{quarantine_entries[patch_id].get('policy_version')!r}, now on "
+               f"{validate_fix_commit.POLICY_VERSION} -- retrying once under the new rules")
 
     def quarantine(reason, flags):
         entry = append_quarantine(
@@ -674,7 +971,10 @@ def process_commit(*, repo_root, staging_path, squad, squad_branch, sha, fmt, is
         return quarantine(f"cargo test --lib {fmt.lower()} failed", ["targeted-test-failed"])
 
     post = comparison_fn(staging_path, cache_dir, fmt, "squad-staging")
-    dup = (post or {}).get("duplicate_emissions") or []
+    # Both halves of this gate are now diffed against PRE. Reading
+    # duplicate_emissions straight off POST held every format with a
+    # pre-existing duplicate hostage -- see newly_duplicated_emissions.
+    dup = newly_duplicated_emissions(pre, post) if pre is not None or post is not None else []
     introduced = new_oxidex_only_keys(pre, post) if pre is not None or post is not None else []
     if dup or introduced:
         checkout_branch(staging_path, squad_branch)
@@ -757,11 +1057,41 @@ def run_batch_check(*, staging_path, squad, formats, cache_dir, comparison_fn,
     problems = []
     new_baselines = {}
     for fmt in formats:
-        report = comparison_fn(staging_path, cache_dir, fmt, "squad-staging-batch")
+        # This function's contract (above) is "never raises -- log loudly and
+        # report via `ok`". comparison_fn bottoms out in
+        # find_tag_gaps.run_format_comparison, which shells out with
+        # check=True, so ANY non-zero exit (a SIGTERM from an operator's
+        # pkill, an OOM kill, a diff that compiles under `--bin oxidex` but
+        # breaks the tag-comparison-binary feature path) raised straight
+        # through this loop and killed the whole daemon -- and nothing
+        # respawns a merger. Observed live 2026-07-25: 7 of 14 mergers died
+        # on this exact line within seconds of each other, stranding 68% of
+        # worker slots with no publish path for over an hour.
+        #
+        # Deliberately does NOT fall through to whatever report may already
+        # be on disk: /tmp accumulates tagcmp-*.json for days, so reusing a
+        # stale one would silently hand a previous round's verdicts to the
+        # publication gate -- turning a loud crash into a false "clean".
+        # Treated as a check FAILURE (hold publication), which is the
+        # existing, already-safe behavior for an unhealthy batch check.
+        try:
+            report = comparison_fn(staging_path, cache_dir, fmt, "squad-staging-batch")
+        except subprocess.CalledProcessError as exc:
+            ok = False
+            problems.append(f"{fmt}: comparison run failed ({exc})")
+            new_baselines[fmt] = None
+            continue
         new_baselines[fmt] = report
         if report is None:
             continue
-        dup = report.get("duplicate_emissions") or []
+        # Diffed against the squad's own prior baseline, exactly like the
+        # new_oxidex_only check five lines below. #147 fixed this asymmetry in
+        # the PER-COMMIT gate and missed this BATCH one, so publication stayed
+        # blocked for every squad holding a format with pre-existing
+        # duplicates -- NEF carries nine on clean main. Measured 2026-07-27:
+        # the judgment daemon queued 57 of 58 entries, and the dominant reason
+        # was "squad '<x>' publication is blocked by a failed batch check".
+        dup = newly_duplicated_emissions(baselines.get(fmt), report)
         if dup:
             ok = False
             problems.append(f"{fmt}: duplicate_emissions {dup}")
@@ -784,16 +1114,29 @@ def run_batch_check(*, staging_path, squad, formats, cache_dir, comparison_fn,
 # ---------------------------------------------------------------------------
 
 def should_recut(repo_root, squad_branch, origin_ref=ORIGIN_MAIN,
-                  staleness_seconds=DEFAULT_RECUT_STALENESS_SECONDS, now_fn=time.time):
-    """True when squad/<squad>'s merge-base with origin_ref is older than
-    `staleness_seconds` (spec M5 re-cut trigger). False when either ref
-    is missing (nothing to recut yet) or the merge-base can't be dated."""
+                  staleness_seconds=DEFAULT_RECUT_STALENESS_SECONDS, now_fn=time.time,
+                  behind_commits=DEFAULT_RECUT_BEHIND_COMMITS):
+    """True when squad/<squad> is stale by EITHER measure (spec M5 re-cut
+    trigger): its merge-base with origin_ref is older than
+    `staleness_seconds`, OR origin_ref has moved more than `behind_commits`
+    past that base.
+
+    The distance clause exists because the age clause alone cannot see the
+    failure it is meant to prevent -- see DEFAULT_RECUT_BEHIND_COMMITS. False
+    when either ref is missing (nothing to recut yet) or the merge-base
+    cannot be resolved.
+    """
     if not branch_exists(repo_root, squad_branch):
         return False
     merge_base = _git(["merge-base", squad_branch, origin_ref], repo_root, check=False)
     if merge_base.returncode != 0:
         return False
     sha = merge_base.stdout.strip()
+    if behind_commits:
+        behind = _git(["rev-list", "--count", f"{sha}..{origin_ref}"], repo_root, check=False)
+        if behind.returncode == 0 and behind.stdout.strip().isdigit():
+            if int(behind.stdout.strip()) > behind_commits:
+                return True
     committed = _git(["log", "-1", "--format=%ct", sha], repo_root, check=False)
     if committed.returncode != 0 or not committed.stdout.strip():
         return False
@@ -881,7 +1224,13 @@ def recut_squad_branch(*, repo_root, staging_path, squad, squad_branch, home,
         (sha, e) for sha, e in (status.get("heads") or {}).items()
         if e.get("status") == "consumed" and e.get("work_done", True) and e.get("squad_sha")
     ]
-    entries.sort(key=lambda kv: kv[1].get("ts") or "")
+    # Ordered by INSTANT where the stamp carries one (see record_head's
+    # `ts_epoch`): a recut replays cherry-picks in the order the mergers
+    # accepted them, and inside the DST fall-back the naive local strings
+    # sort two of them backwards. Legacy stamps (no ts_epoch) keep the
+    # string order they have always had, and sort ahead of epoch-stamped
+    # ones -- correct, since they were necessarily recorded earlier.
+    entries.sort(key=stamp_order_key)
 
     checkout_detached(staging_path, origin_ref)
     kept, dropped = [], []
@@ -962,6 +1311,9 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
 
     status_path = squad_status_file(home, squad)
     quarantine_entries = load_quarantine(quarantine_ledger_path(home))
+    # Every squad that could be racing this one for a file. Read once per
+    # poll: squads.toml is small and this is the only consumer.
+    known_squads = all_squad_names(squads_toml_path) or None
     branches = candidate_worker_branches(repo_root, squads_toml_path, squad)
     slot_branches = squad_slot_branches(repo_root, squad)
     # Union with squads.toml's own advisory list (not just formats seen on
@@ -1015,6 +1367,7 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
                 validate_fn=validate_fn, cargo_test_targeted_fn=cargo_test_targeted_fn,
                 comparison_fn=comparison_fn, sweep_review_log_path=sweep_review_log_path,
                 validate_kwargs=validate_kwargs, now_fn=now_fn, log_fn=log_fn,
+                all_squads=known_squads, origin_ref=origin_ref,
             )
             processed.append(result)
             heartbeat_fn()
@@ -1037,6 +1390,7 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
                 validate_fn=validate_fn, cargo_test_targeted_fn=cargo_test_targeted_fn,
                 comparison_fn=comparison_fn, sweep_review_log_path=sweep_review_log_path,
                 validate_kwargs=validate_kwargs, now_fn=now_fn, log_fn=log_fn,
+                all_squads=known_squads, origin_ref=origin_ref,
             )
             processed.append(result)
             heartbeat_fn()

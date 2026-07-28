@@ -41,6 +41,13 @@ struct DiskCacheEntry {
     result: ExtractionResult,
 }
 
+/// Per displayed `family:name` key, the sorted DISTINCT values that two
+/// or more raw metadata keys produced for it within ONE source file.
+/// More than one entry in the `Vec` is a duplicate emission; exactly one
+/// is the benign IFD0/ExifIFD redundancy real cameras write. See
+/// `OxiDexExtractor::flatten_metadata`.
+type CollisionMap = HashMap<String, Vec<String>>;
+
 /// Extract tags from OxiDex by processing test fixtures
 pub struct OxiDexExtractor {
     fixture_path: PathBuf,
@@ -75,6 +82,7 @@ impl OxiDexExtractor {
             return Ok(ExtractionResult {
                 tags: Vec::new(),
                 files_processed: 0,
+                duplicate_emissions: Vec::new(),
             });
         }
 
@@ -96,31 +104,55 @@ impl OxiDexExtractor {
         // matching the pre-existing cross-file reduction other report
         // fields -- matched/missing/extra_in_oxidex/value_differences --
         // depend on), now additionally stamped with `source_file` (spec
-        // M3). `duplicate_evidence` is a small side channel: whenever
+        // M3). `duplicate_emissions` is collected alongside it: whenever
         // `flatten_metadata` reports that a SINGLE file emitted the same
-        // displayed key more than once (a registry/dynamic-name emitter
-        // collision -- the exact bug class M3 targets, and one the
-        // literal-string diff backstop can't see), two clones tagged with
-        // that file's source_file are appended here so
-        // `ComparisonEngine::compare`'s per-(source_file, key) count > 1
-        // check actually has something to find. Without this, every
-        // format-wide key collapses to at most one TagInfo before
-        // `compare()` runs and `duplicate_emissions` is always `[]`.
+        // displayed key more than once with more than one DISTINCT value
+        // (a registry/dynamic-name emitter collision -- the exact bug
+        // class M3 targets, and one the literal-string diff backstop
+        // can't see), that key is recorded here.
+        //
+        // Until 2026-07-26 this was smuggled through `tags` instead, as
+        // two `tag_info.clone()`s per duplicate key, so that
+        // `ComparisonEngine::compare`'s per-(source_file, key) distinct-
+        // value count could find something. That could never work:
+        // `tag_info` had already been through `flatten_metadata`'s
+        // last-write-wins `tag_map.insert`, so the losing value was
+        // destroyed before the evidence was built, both clones carried
+        // the SAME surviving value, and compare()'s `values.len() > 1`
+        // test saw a one-element set every single time. The gate written
+        // specifically to catch double-emission was structurally
+        // incapable of catching double-emission.
+        //
+        // Measured against the live shared cache that day:
+        // /tmp/oxidex-exiftool-cache/oxidex-tag-cache/gif.json held
+        // exactly 3 `GIF:BackgroundColor` TagInfo entries (1 canonical +
+        // the 2 clones) whose value set was the singleton {'0'} or
+        // {'#00'} -- never both -- while GIF.gif genuinely emits
+        // BackgroundColor twice with two different values. Ten formats in
+        // that cache carried duplicate evidence (jpeg 15 keys, mp4 13,
+        // raf 5, bmp 4, psd 3, gif 2, mrw 2, mp3/nef/ttf 1) and every one
+        // of them reported duplicate_emissions=0.
         let mut all_tags: HashMap<String, TagInfo> = HashMap::new();
-        let mut duplicate_evidence: Vec<TagInfo> = Vec::new();
+        let mut duplicate_emissions: HashSet<String> = HashSet::new();
 
         for file_path in &files {
             match self.extract_tags_from_file(file_path) {
-                Ok((file_tags, duplicate_keys)) => {
+                Ok((file_tags, collisions)) => {
                     let source_file = file_path.display().to_string();
+                    // More than one DISTINCT value only. Two raw keys
+                    // colliding on one displayed key with an IDENTICAL
+                    // value is the ordinary IFD0/ExifIFD redundancy real
+                    // cameras write, and stays unreported -- the same
+                    // exemption compare()'s `values.len() > 1` encodes,
+                    // and the reason every squad's batch check stopped
+                    // false-failing.
+                    for (key, values) in &collisions {
+                        if values.len() > 1 {
+                            duplicate_emissions.insert(key.clone());
+                        }
+                    }
                     for tag_info in file_tags {
                         let key = format!("{}:{}", tag_info.family, tag_info.name);
-                        if duplicate_keys.contains(&key) {
-                            duplicate_evidence
-                                .push(tag_info.clone().with_source_file(source_file.clone()));
-                            duplicate_evidence
-                                .push(tag_info.clone().with_source_file(source_file.clone()));
-                        }
                         all_tags
                             .entry(key)
                             .or_insert_with(|| tag_info.with_source_file(source_file.clone()));
@@ -137,13 +169,15 @@ impl OxiDexExtractor {
         }
 
         let mut tags: Vec<TagInfo> = all_tags.into_values().collect();
-        tags.extend(duplicate_evidence);
-
         tags.sort_by_key(|a| a.key());
+
+        let mut duplicate_emissions: Vec<String> = duplicate_emissions.into_iter().collect();
+        duplicate_emissions.sort();
 
         let result = ExtractionResult {
             tags: tags.clone(),
             files_processed,
+            duplicate_emissions,
         };
 
         self.cache.insert(format.to_string(), result.clone());
@@ -251,13 +285,14 @@ impl OxiDexExtractor {
     /// that GPS references, binary values, enums, and numeric precision match
     /// ExifTool's output format for accurate comparison.
     ///
-    /// Returns the flattened tags plus the set of displayed `family:name`
-    /// keys that `flatten_metadata` found more than one raw source for
-    /// within this single file (spec M3 duplicate-emission evidence).
+    /// Returns the flattened tags plus, per displayed `family:name` key
+    /// that `flatten_metadata` found more than one raw source for within
+    /// this single file, every DISTINCT value those sources produced
+    /// (spec M3 duplicate-emission evidence).
     fn extract_tags_from_file(
         &self,
         file_path: &Path,
-    ) -> Result<(Vec<TagInfo>, HashSet<String>), Box<dyn std::error::Error>> {
+    ) -> Result<(Vec<TagInfo>, CollisionMap), Box<dyn std::error::Error>> {
         // Step 1: Read raw metadata from the file
         let raw_metadata = oxidex::core::operations::read_metadata(file_path)?;
 
@@ -273,8 +308,8 @@ impl OxiDexExtractor {
             .map(|e| e.to_uppercase());
 
         // Step 4: Flatten the formatted metadata into TagInfo structures
-        let (tags, duplicate_keys) = self.flatten_metadata(&formatted_metadata, format.as_deref());
-        Ok((tags, duplicate_keys))
+        let (tags, collisions) = self.flatten_metadata(&formatted_metadata, format.as_deref());
+        Ok((tags, collisions))
     }
 
     /// Format a tag value to match ExifTool's output format
@@ -820,27 +855,81 @@ impl OxiDexExtractor {
         }
     }
 
+    /// Record one write into `tag_map`, remembering the clobbered value.
+    ///
+    /// `tag_map` stays last-write-wins (every downstream report field
+    /// depends on exactly one displayed value per key), but when a write
+    /// lands on a key that already has one, BOTH values are appended to
+    /// `collisions` so the losing value survives long enough for
+    /// `ComparisonEngine::compare` to see it. See `flatten_metadata`.
+    fn record_write(
+        tag_map: &mut HashMap<String, String>,
+        collisions: &mut CollisionMap,
+        normalized_key: String,
+        value: String,
+    ) {
+        if let Some(previous) = tag_map.get(&normalized_key) {
+            collisions
+                .entry(normalized_key.clone())
+                .or_insert_with(|| vec![previous.clone()])
+                .push(value.clone());
+        }
+        tag_map.insert(normalized_key, value);
+    }
+
     /// Flatten MetadataMap into TagInfo vector
     ///
-    /// Returns the flattened tags plus the set of displayed `family:name`
-    /// keys that had more than one DIFFERENT raw `metadata` key normalize
-    /// down to them (spec M3: a registry/dynamic-name emitter computing
-    /// the same conceptual tag twice via two different raw paths, where
-    /// the second write silently clobbers the first in `tag_map` below).
-    /// `metadata` itself is already a `HashMap`, so a literal repeated raw
-    /// key is structurally impossible here -- this only catches
+    /// Returns the flattened tags plus, for every displayed `family:name`
+    /// key that had more than one DIFFERENT raw `metadata` key normalize
+    /// down to it, the sorted DISTINCT values those raw keys produced
+    /// (spec M3: a registry/dynamic-name emitter computing the same
+    /// conceptual tag twice via two different raw paths, where the second
+    /// write silently clobbers the first in `tag_map` below). `metadata`
+    /// itself is already a `HashMap`, so a literal repeated raw key is
+    /// structurally impossible here -- this only catches
     /// post-normalization collisions between genuinely distinct raw keys,
     /// which is exactly the class the literal-string diff backstop
     /// (`detect_duplicate_tag_insertion`) is blind to.
+    ///
+    /// DETERMINISM (2026-07-26): the raw keys are visited in sorted
+    /// order, NOT `MetadataMap::iter()` order. `MetadataMap` wraps a
+    /// `std::collections::HashMap` with the default `RandomState`, whose
+    /// hasher is seeded per process, so its iteration order differs from
+    /// run to run. Combined with `record_write`'s last-write-wins, that
+    /// made the surviving value of any post-normalization collision a
+    /// per-process coin flip, and every report field derived from it
+    /// (matched_tags, value_differences, the whole gap list)
+    /// non-reproducible on an unchanged source tree.
+    ///
+    /// Measured before this fix, 12 runs of one binary built from
+    /// 21293fb2 over one file (GIF.gif), extraction cache cleared each
+    /// time: 7 runs reported matched=34 value_differences=1
+    /// (`GIF:BackgroundColor` exiftool="0" oxidex="#00"), 5 runs reported
+    /// matched=35 value_differences=0. Identical binary, identical file,
+    /// identical argv. Minolta.mrw flipped the same way across 15 runs
+    /// (matched 35/36/37, value_differences 5/6/7, on
+    /// `EXIF:ImageWidth` "3264" vs "12337"). That is what let a fleet
+    /// worker record "Verified: recheck-pass gaps=1->0" against a
+    /// measurement artifact rather than a real defect: the 22:17 gap and
+    /// the 22:37 clean run came from the SAME source tree.
+    ///
+    /// A collision still collapses to one value here -- resolving it is
+    /// the parser's job, not this harness's -- but it now collapses the
+    /// same way every time, and the collision itself is reported through
+    /// `collisions` -> `duplicate_evidence` -> `duplicate_emissions`
+    /// instead of being silently swallowed.
     fn flatten_metadata(
         &self,
         metadata: &oxidex::core::MetadataMap,
         format: Option<&str>,
-    ) -> (Vec<TagInfo>, HashSet<String>) {
+    ) -> (Vec<TagInfo>, CollisionMap) {
         let mut tag_map: HashMap<String, String> = HashMap::new();
-        let mut duplicate_keys: HashSet<String> = HashSet::new();
+        let mut collisions: CollisionMap = CollisionMap::new();
 
-        for (key, value) in metadata.iter() {
+        let mut raw_entries: Vec<(&String, &TagValue)> = metadata.iter().collect();
+        raw_entries.sort_by_key(|(key, _)| *key);
+
+        for (key, value) in raw_entries {
             // Check if original family should be skipped (pseudo-tags)
             if let Some((original_family, _)) = key.split_once(':')
                 && Self::should_skip_family(original_family)
@@ -883,19 +972,13 @@ impl OxiDexExtractor {
                     }
                     _ => continue,
                 };
-                if tag_map.contains_key(&normalized_key) {
-                    duplicate_keys.insert(normalized_key.clone());
-                }
-                tag_map.insert(normalized_key, formatted);
+                Self::record_write(&mut tag_map, &mut collisions, normalized_key, formatted);
                 continue;
             }
 
             // Format the value
             let value_str = self.format_value(&normalized_key, &name, value);
-            if tag_map.contains_key(&normalized_key) {
-                duplicate_keys.insert(normalized_key.clone());
-            }
-            tag_map.insert(normalized_key, value_str);
+            Self::record_write(&mut tag_map, &mut collisions, normalized_key, value_str);
         }
 
         // Add composite tags
@@ -919,7 +1002,21 @@ impl OxiDexExtractor {
             .collect();
 
         tags.sort_by_key(|a| a.key());
-        (tags, duplicate_keys)
+
+        // Distinct values only, in a stable order. Two raw keys that
+        // collide but produce the SAME displayed value collapse to a
+        // one-element list here, which keeps compare()'s deliberate
+        // `values.len() > 1` exemption intact: real cameras writing an
+        // identical value into both IFD0 and the ExifIFD stay unreported
+        // (that exemption is why every squad's batch check stopped
+        // false-failing), while two DIFFERENT values colliding on one key
+        // now reaches compare() as the two-element set it always was.
+        for values in collisions.values_mut() {
+            values.sort();
+            values.dedup();
+        }
+
+        (tags, collisions)
     }
 
     /// Find files by extension recursively throughout the samples directory
@@ -1053,9 +1150,9 @@ mod tests {
     fn test_flatten_metadata_empty() {
         let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
         let metadata = oxidex::core::MetadataMap::new();
-        let (tags, duplicate_keys) = extractor.flatten_metadata(&metadata, None);
+        let (tags, collisions) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 0);
-        assert!(duplicate_keys.is_empty());
+        assert!(collisions.is_empty());
     }
 
     #[test]
@@ -1063,10 +1160,10 @@ mod tests {
         let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
         let mut metadata = oxidex::core::MetadataMap::new();
         metadata.insert("Canon:FileNumber".to_string(), TagValue::Integer(7669483));
-        let (tags, duplicate_keys) = extractor.flatten_metadata(&metadata, None);
+        let (tags, collisions) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].value, "117-1771");
-        assert!(duplicate_keys.is_empty());
+        assert!(collisions.is_empty());
     }
 
     /// Spec M3: two DIFFERENT raw keys that normalize to the same
@@ -1087,9 +1184,9 @@ mod tests {
             "Nikon:Sharpness".to_string(),
             TagValue::String("Hard".to_string()),
         );
-        let (tags, duplicate_keys) = extractor.flatten_metadata(&metadata, None);
+        let (tags, collisions) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 1);
-        assert!(duplicate_keys.contains("MakerNotes:Sharpness"));
+        assert!(collisions.contains_key("MakerNotes:Sharpness"));
     }
 
     /// Two unrelated tags that don't collide must never be flagged.
@@ -1105,8 +1202,106 @@ mod tests {
             "EXIF:Model".to_string(),
             TagValue::String("EOS 5D".to_string()),
         );
-        let (tags, duplicate_keys) = extractor.flatten_metadata(&metadata, None);
+        let (tags, collisions) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 2);
-        assert!(duplicate_keys.is_empty());
+        assert!(collisions.is_empty());
+    }
+
+    /// The GIF.gif collision that produced the 2026-07-26 phantom gap,
+    /// reduced to its two raw keys: `BackgroundColor` (bare, so
+    /// `normalize_for_comparison` prepends the format family) and
+    /// `GIF:BackgroundColor` (already prefixed, family left alone). Both
+    /// normalize to `GIF:BackgroundColor`, so one clobbers the other.
+    fn gif_background_color_collision() -> oxidex::core::MetadataMap {
+        let mut metadata = oxidex::core::MetadataMap::new();
+        metadata.insert("BackgroundColor".to_string(), TagValue::Integer(0));
+        metadata.insert(
+            "GIF:BackgroundColor".to_string(),
+            TagValue::String("#00".to_string()),
+        );
+        metadata
+    }
+
+    /// A post-normalization collision must resolve the SAME WAY on every
+    /// call. `MetadataMap` wraps a `std::collections::HashMap`, and each
+    /// freshly-constructed `HashMap` gets its own `RandomState` instance,
+    /// so iteration order varies between maps even inside one process
+    /// (measured 2026-07-26: 200 fresh two-key `HashMap`s yielded both
+    /// possible orders). Before `flatten_metadata` sorted its raw keys,
+    /// that order decided which value survived last-write-wins, and the
+    /// whole gap list rode on it -- 12 runs of one binary over GIF.gif
+    /// split 7x "matched=34 value_differences=1" / 5x "matched=35
+    /// value_differences=0" from an unchanged source tree.
+    ///
+    /// 200 iterations, not a handful: a single iteration would pass ~50%
+    /// of the time even with the bug present.
+    #[test]
+    fn test_flatten_metadata_collision_resolves_identically_every_call() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        let mut survivors: HashSet<String> = HashSet::new();
+        for _ in 0..200 {
+            let metadata = gif_background_color_collision();
+            let (tags, _) = extractor.flatten_metadata(&metadata, Some("GIF"));
+            assert_eq!(tags.len(), 1, "both raw keys must collapse to one");
+            survivors.insert(tags[0].value.clone());
+        }
+        assert_eq!(
+            survivors.len(),
+            1,
+            "collision resolved inconsistently across 200 calls: {:?} -- \
+             the surviving value must not depend on HashMap iteration order",
+            survivors
+        );
+    }
+
+    /// The losing value must survive as far as the caller, or
+    /// `duplicate_emissions` can never fire. This is the assertion the
+    /// pre-2026-07-26 code could not satisfy: it reported the colliding
+    /// KEY but had already destroyed one of the two VALUES, so
+    /// `ComparisonEngine::compare`'s `values.len() > 1` gate saw a
+    /// one-element set and stayed silent on every duplicate emission in
+    /// the corpus.
+    #[test]
+    fn test_flatten_metadata_reports_both_colliding_values() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        let metadata = gif_background_color_collision();
+        let (_tags, collisions) = extractor.flatten_metadata(&metadata, Some("GIF"));
+        let values = collisions
+            .get("GIF:BackgroundColor")
+            .expect("collision on GIF:BackgroundColor must be recorded");
+        assert_eq!(
+            values,
+            &vec!["#00".to_string(), "0".to_string()],
+            "both the surviving and the clobbered value must be reported"
+        );
+    }
+
+    /// The deliberate exemption must hold: two raw keys colliding on one
+    /// displayed key with an IDENTICAL value is the ordinary
+    /// IFD0/ExifIFD redundancy real cameras write (confirmed across
+    /// Samsung/Canon/Nikon/Olympus/Panasonic/FujiFilm/Leica samples), and
+    /// flagging it false-failed every squad's batch full-corpus check.
+    /// gif.rs emits FrameCount twice this way. One distinct value means
+    /// `extract_format_tags`'s `values.len() > 1` test does not fire.
+    #[test]
+    fn test_identical_value_collision_is_not_a_duplicate_emission() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        let mut metadata = oxidex::core::MetadataMap::new();
+        metadata.insert("FrameCount".to_string(), TagValue::Integer(1));
+        metadata.insert("GIF:FrameCount".to_string(), TagValue::Integer(1));
+        let (_tags, collisions) = extractor.flatten_metadata(&metadata, Some("GIF"));
+        let values = collisions
+            .get("GIF:FrameCount")
+            .expect("the collision itself is still recorded");
+        assert_eq!(
+            values,
+            &vec!["1".to_string()],
+            "identical colliding values must collapse to one, keeping the \
+             IFD0/ExifIFD redundancy exemption intact"
+        );
+        assert!(
+            values.len() <= 1,
+            "must not be reported as a duplicate emission"
+        );
     }
 }

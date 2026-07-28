@@ -106,12 +106,15 @@ fn test_parse_minimal_pe_structure() {
     let metadata = parse_pe_metadata(&reader).expect("Failed to parse minimal PE");
 
     // Verify metadata
-    assert_eq!(metadata.get_string("EXE:MachineType").unwrap(), "Intel 386");
+    assert_eq!(
+        metadata.get_string("EXE:MachineType").unwrap(),
+        "Intel 386 or later, and compatibles"
+    );
     assert_eq!(metadata.get_integer("EXE:NumberOfSections").unwrap(), 3);
     assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
     assert_eq!(
         metadata.get_string("EXE:Subsystem").unwrap(),
-        "Windows Console"
+        "Windows command line"
     );
     assert_eq!(metadata.get_string("EXE:ImageFormat").unwrap(), "PE32");
 }

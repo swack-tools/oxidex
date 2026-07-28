@@ -3,20 +3,20 @@
 This document details OxiDex's coverage of ExifTool's tag database and analyzes parser implementation status.
 
 ::: info Auto-Generated
-This document is automatically updated on each push to `main`. Last updated: **2026-07-24**
+This document is automatically updated on each push to `main`. Last updated: **2026-07-28**
 :::
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
-| Total Tags | 32,690 |
-| Tag Tables | 980 |
+| Total Tags | 16,676 |
+| Tag Tables | 931 |
 | Domains | 6 |
 | Format Parsers | 38 |
-| ExifTool Parity | 113%* |
+| ExifTool Parity | 58%* |
 
-*ExifTool officially documents ~28,853 unique tags. OxiDex defines 32,690 tags (including variant definitions).
+*ExifTool officially documents ~28,853 unique tags. OxiDex defines 16,676 tags (including variant definitions).
 
 ::: tip Empirical JPEG comparison
 The counts on this page are derived statically from the tag database. For JPEG
@@ -32,13 +32,13 @@ round-trips, regression-gated in CI) is available:
 
 | Domain | Tables | Tags | Description |
 |--------|--------|------|-------------|
-| Camera | 599 | 17,432 | MakerNotes from 40+ manufacturers |
-| Core | 119 | 4,173 | EXIF, GPS, XMP, IPTC standards |
-| Document | 55 | 746 | PDF, Office, HTML metadata |
-| Image | 64 | 1,083 | PNG, GIF, BMP, WebP, etc. |
-| Media | 125 | 5,537 | Audio/video containers |
-| Specialty | 18 | 3,719 | FLIR, DICOM, DJI, etc. |
-| **Total** | **980** | **32,690** | |
+| Camera | 580 | 8,246 | MakerNotes from 40+ manufacturers |
+| Core | 108 | 1,447 | EXIF, GPS, XMP, IPTC standards |
+| Document | 50 | 434 | PDF, Office, HTML metadata |
+| Image | 63 | 576 | PNG, GIF, BMP, WebP, etc. |
+| Media | 113 | 2,496 | Audio/video containers |
+| Specialty | 17 | 3,477 | FLIR, DICOM, DJI, etc. |
+| **Total** | **931** | **16,676** | |
 
 ---
 
@@ -66,7 +66,7 @@ MakerNote parsers for 39+ camera manufacturers are **fully implemented and conne
 | Use Case | Coverage | Formats |
 |----------|----------|---------|
 | JPEG photos | ⚠️ 67% | EXIF, XMP, IPTC, MakerNotes |
-| RAW photos | ✅ 78% | DNG, CR2, NEF, ARW, etc. |
+| RAW photos | ✅ 90% | DNG, CR2, NEF, ARW, etc. |
 | Video files | ✅ 90% | QuickTime, Matroska, RIFF |
 | Audio files | ✅ 100% | ID3, FLAC, Vorbis, AAC |
 | PDF documents | ✅ 75% | Info dict, XMP |
@@ -97,6 +97,9 @@ MakerNote parsers for 39+ camera manufacturers are **fully implemented and conne
 | MKV | 90% | ✅ Good |
 | AVI | 90% | ✅ Good |
 | RIFF | 90% | ✅ Good |
+| DNG | 90% | ✅ Good |
+| CR2 | 90% | ✅ Good |
+| NEF | 90% | ✅ Good |
 | PE | 90% | ✅ Good |
 | QuickTime | 90% | ✅ Good |
 | MP4 | 90% | ✅ Good |
@@ -107,9 +110,6 @@ MakerNote parsers for 39+ camera manufacturers are **fully implemented and conne
 | WebP | 90% | ✅ Good |
 | Mach-O | 75% | ✅ Good |
 | TEXT | 75% | ✅ Good |
-| DNG | 75% | ✅ Good |
-| CR2 | 75% | ✅ Good |
-| NEF | 75% | ✅ Good |
 | ELF | 75% | ✅ Good |
 | PDF | 75% | ✅ Good |
 | DOCX | 75% | ✅ Good |
