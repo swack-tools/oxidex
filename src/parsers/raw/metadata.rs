@@ -1788,6 +1788,24 @@ fn format_exif_display_value(
             255 => Some("Other".to_string()),
             _ => None,
         },
+        // MaxApertureValue: RATIONAL[1]. Exif.pm 0x9205 has no PrintConv;
+        // ExifTool prints the evaluated rational as a decimal.
+        0x9205 if field_type == 5 && value_count >= 1 => {
+            format_rational_as_string(bytes, byte_order)
+        }
+        // MeteringMode: SHORT[1]. Exif.pm 0x9207 PrintConv => \%meteringMode,
+        // verbatim from Exif.pm lines 205-215.
+        0x9207 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Unknown".to_string()),
+            1 => Some("Average".to_string()),
+            2 => Some("Center-weighted average".to_string()),
+            3 => Some("Spot".to_string()),
+            4 => Some("Multi-spot".to_string()),
+            5 => Some("Multi-segment".to_string()),
+            6 => Some("Partial".to_string()),
+            255 => Some("Other".to_string()),
+            _ => None,
+        },
         // Flash: SHORT[1]. Exif.pm 0x9209 PrintConv => \%flash, whose full
         // table (Exif.pm lines 172-199) is reproduced verbatim.
         0x9209 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
@@ -3336,6 +3354,9 @@ fn map_x3f_property_name(name: &str) -> String {
         "FLENGTH" => "SigmaRaw:FocalLength".to_string(),
         "FLEQ35MM" => "SigmaRaw:FocalLengthIn35mmFormat".to_string(),
         "ISO" => "SigmaRaw:ISO".to_string(),
+        // ExifTool reports ISO under the EXIF group for X3F, so rename
+        // the property to match. (ExifTool 13.55 X3F.pm -> EXIF:ISO)
+        "ISO" => "EXIF:ISO".to_string(),
         "WB" | "WBAL" => "SigmaRaw:WhiteBalance".to_string(),
         "EXPCOMP" => "SigmaRaw:ExposureCompensation".to_string(),
         "EXPMODE" => "SigmaRaw:ExposureProgram".to_string(),
@@ -3431,6 +3452,9 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                             0x829A // ExposureTime
                                                 | 0x829D // FNumber
                                                 | 0x8822 // ExposureProgram
+                                                | 0x9205 // MaxApertureValue
+                                                | 0x9207 // MeteringMode
+                                                | 0x9208 // LightSource
                                                 | 0x9000 // ExifVersion
                                                 | 0x9003 // DateTimeOriginal
                                                 | 0x9004 // CreateDate
@@ -3471,6 +3495,51 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                             )
                                         };
                                         metadata.insert(tag_name, tag_value);
+                                    }
+                                    // Parse Interoperability IFD (ExifIFD tag 0xA005)
+                                    if let Some(interop_offset) =
+                                        exif_tags.iter().find_map(|(tag_id, _field_type, _value_count, raw_bytes)| {
+                                            if *tag_id == 0xA005 && raw_bytes.as_ref().len() >= 4 {
+                                                Some(read_u32(raw_bytes.as_ref(), byte_order) as u64)
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                    {
+                                        if let Ok(interop_tags) = parse_ifd(&reader, interop_offset, byte_order) {
+                                            for (tag_id, _field_type, _value_count, raw_bytes) in &interop_tags {
+                                                let bytes = raw_bytes.as_ref();
+                                                match *tag_id {
+                                                    0x0001 => {
+                                                        // InteropIndex: PrintConv from Exif.pm
+                                                        let raw = String::from_utf8_lossy(bytes)
+                                                            .trim_end_matches('\0')
+                                                            .to_string();
+                                                        let printed = match raw.as_str() {
+                                                            "R98" => "R98 - DCF basic file (sRGB)".to_string(),
+                                                            "R03" => "R03 - DCF option file (Adobe RGB)".to_string(),
+                                                            "THM" => "THM - DCF thumbnail file".to_string(),
+                                                            _ => raw,
+                                                        };
+                                                        metadata.insert(
+                                                            "EXIF:InteropIndex".to_string(),
+                                                            TagValue::new_string(printed),
+                                                        );
+                                                    }
+                                                    0x0002 => {
+                                                        // InteropVersion: UNDEFINED[4], printed as e.g. "0100"
+                                                        let version = String::from_utf8_lossy(bytes)
+                                                            .trim_end_matches('\0')
+                                                            .to_string();
+                                                        metadata.insert(
+                                                            "EXIF:InteropVersion".to_string(),
+                                                            TagValue::new_string(version),
+                                                        );
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
