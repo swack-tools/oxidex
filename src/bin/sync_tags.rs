@@ -8,7 +8,10 @@
 //! explicitly by a developer or by CI.
 
 use anyhow::{Context, Result, bail};
-use oxidex::tag_sync::{DOMAINS, count_ids_in_yaml, generate_domain_yaml, parse_listx};
+use oxidex::tag_sync::{
+    DOMAINS, TagRecord, count_ids_in_yaml, generate_domain_yaml, parse_domain_yaml, parse_listx,
+};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -63,16 +66,61 @@ fn main() -> Result<()> {
         let path_str = format!("oxidex-tags-{domain}/src/{domain}_tags.yaml");
         let path = Path::new(&path_str);
 
-        let previous_count = if path.exists() {
-            let existing = fs::read_to_string(path)
-                .with_context(|| format!("failed to read existing {path_str}"))?;
-            count_ids_in_yaml(&existing)
+        let existing = if path.exists() {
+            fs::read_to_string(path)
+                .with_context(|| format!("failed to read existing {path_str}"))?
         } else {
-            0
+            String::new()
         };
+        let previous_count = count_ids_in_yaml(&existing);
 
-        let new_yaml = generate_domain_yaml(domain, &tags);
+        // `-listx` omits every tag with no printable value, so regenerating
+        // from it alone DELETES them. That includes the SubDirectory pointers
+        // oxidex needs to find anything at all -- ExifOffset (0x8769),
+        // GPSInfo (0x8825), InteropOffset (0xA005) -- and tags ExifTool names
+        // at runtime. Carry forward anything the fresh parse does not cover,
+        // keyed by (table, name), so a sync adds without destroying.
+        let previous = parse_domain_yaml(&existing);
+        let covered: HashSet<(&str, &str)> = tags
+            .iter()
+            .map(|t| (t.table.as_str(), t.name.as_str()))
+            .collect();
+        let preserved: Vec<TagRecord> = previous
+            .iter()
+            .filter(|r| !covered.contains(&(r.table.as_str(), r.name.as_str())))
+            .cloned()
+            .collect();
+
+        let mut merged = tags.clone();
+        merged.extend(preserved.iter().cloned());
+        let new_yaml = generate_domain_yaml(domain, &merged);
         let new_count = count_ids_in_yaml(&new_yaml);
+
+        // A count check cannot see this: regeneration RAISES the total while
+        // dropping the few structural tags that matter most. Name the losses.
+        let now: HashSet<(&str, &str)> = merged
+            .iter()
+            .map(|t| (t.table.as_str(), t.name.as_str()))
+            .collect();
+        let lost: Vec<String> = previous
+            .iter()
+            .filter(|r| !now.contains(&(r.table.as_str(), r.name.as_str())))
+            .map(|r| format!("{}:{}", r.table, r.name))
+            .collect();
+        if !lost.is_empty() {
+            bail!(
+                "domain '{domain}' would drop {} existing tag(s) that the new parse does not \
+                 cover, e.g. {:?} — refusing to write",
+                lost.len(),
+                &lost[..lost.len().min(8)]
+            );
+        }
+        if !preserved.is_empty() {
+            println!(
+                "  {domain:12} carrying forward {} tag(s) exiftool -listx does not report",
+                preserved.len()
+            );
+        }
 
         if previous_count > 0 {
             let retention = new_count as f64 / previous_count as f64;
