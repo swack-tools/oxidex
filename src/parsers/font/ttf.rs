@@ -71,6 +71,14 @@ const MAC_ENCODING_KOREAN: u16 = 3;
 const MAC_ENCODING_CHINESE_CN: u16 = 4;
 const MAC_ENCODING_HEBREW: u16 = 5;
 
+/// Macintosh encoding 25: Chinese (Simplified) per the TrueType spec
+/// and ExifTool's `%ttCharset{Macintosh}` table (Font.pm).  This is the
+/// encoding used by the sample's zh-CN name record; encoding 4 in the
+/// table is MacArabic, not Chinese Simplified.  (The constant above
+/// `MAC_ENCODING_CHINESE_CN` is misnamed; that pre-existing bug is
+/// documented but not yet corrected.)
+const MAC_ENCODING_CHINESE_CN_25: u16 = 25;
+
 /// Name IDs for name table records. Names match ExifTool's
 /// `%Image::ExifTool::Font::Name` table (Font.pm), which is what determines
 /// the emitted tag name.
@@ -369,6 +377,10 @@ impl TTFParser {
             PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_CHINESE_CN => {
                 // GBK is the closest standard codec; MacChineseCN differs in a
                 // handful of mappings but is the only pragmatic choice for now.
+                Some(encoding_rs::GBK.decode(str_data).0.into_owned())
+            }
+            PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_CHINESE_CN_25 => {
+                // Same approximation as encoding 4 (see constant note above).
                 Some(encoding_rs::GBK.decode(str_data).0.into_owned())
             }
             PLATFORM_MACINTOSH => {
