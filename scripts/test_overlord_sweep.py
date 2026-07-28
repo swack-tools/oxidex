@@ -1896,3 +1896,135 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LintFailureMustNotStallForeverTests(unittest.TestCase):
+    """A deterministic lint failure has to be isolated, not retried.
+
+    Measured 2026-07-28 on live production: one candidate adding a duplicate
+    `0xA405` match arm produced `error: unreachable pattern`, the sweep
+    refused to push and deliberately left the cursor unadvanced so "a later
+    sweep retries these stamps whole" -- and it retried that identical branch
+    for 36 consecutive rounds, publishing nothing for hours. Semantic
+    failures had bisection since spec M4 step 5; the lint gate had none.
+    """
+
+    def test_the_offending_squad_is_isolated_and_the_rest_survive(self):
+        import overlord_sweep
+
+        merge_infos = {"canon": {"shas": ["aaa"]}, "xmp": {"shas": ["bbb"]}}
+        reverted = []
+
+        # Lint fails while 'xmp' is present and passes once it is reverted.
+        def lint_fn(repo_root):
+            return ("xmp" in reverted, "error: unreachable pattern")
+
+        def fake_revert(repo_root, info, run_git):
+            reverted.append("canon" if info["shas"] == ["aaa"] else "xmp")
+            return True, "reverted"
+
+        def fake_undo(repo_root, run_git):
+            reverted.pop()
+            return True, "restored"
+
+        with patch.object(overlord_sweep, "revert_squad_contribution", fake_revert), \
+             patch.object(overlord_sweep, "undo_last_revert", fake_undo), \
+             patch.object(overlord_sweep, "commits_contributed",
+                          lambda repo, info, run_git: info["shas"]), \
+             patch.object(overlord_sweep.squad_merge_loop, "load_quarantine", lambda p: {}), \
+             patch.object(overlord_sweep.squad_merge_loop, "compute_patch_id_for_sha",
+                          lambda repo, sha: f"pid-{sha}"), \
+             patch.object(overlord_sweep.squad_merge_loop, "append_quarantine",
+                          lambda *a, **kw: {"patch_id": kw.get("patch_id")}):
+            result = overlord_sweep.bisect_lint_failure(
+                repo_root=Path("/fake"), merge_infos=merge_infos, lint_fn=lint_fn,
+                quarantine_path=Path("/fake/q.jsonl"), run_git=lambda *a, **kw: None,
+                log_fn=lambda *a: None,
+            )
+
+        self.assertTrue(result["lint_passed"])
+        self.assertEqual(result["offenders"], ["xmp"])
+        self.assertEqual(result["surviving_squads"], ["canon"])
+
+    def test_when_no_single_squad_clears_it_nothing_is_claimed_fixed(self):
+        import overlord_sweep
+
+        with patch.object(overlord_sweep, "revert_squad_contribution",
+                          lambda repo, info, run_git: (True, "reverted")), \
+             patch.object(overlord_sweep, "undo_last_revert",
+                          lambda repo, run_git: (True, "restored")), \
+             patch.object(overlord_sweep, "commits_contributed",
+                          lambda repo, info, run_git: info["shas"]), \
+             patch.object(overlord_sweep.squad_merge_loop, "load_quarantine", lambda p: {}):
+            result = overlord_sweep.bisect_lint_failure(
+                repo_root=Path("/fake"),
+                merge_infos={"canon": {"shas": ["aaa"]}, "xmp": {"shas": ["bbb"]}},
+                lint_fn=lambda repo_root: (False, "error: still broken"),
+                quarantine_path=Path("/fake/q.jsonl"), run_git=lambda *a, **kw: None,
+                log_fn=lambda *a: None,
+            )
+
+        self.assertFalse(result["lint_passed"])
+        self.assertEqual(result["offenders"], [])
+        self.assertEqual(sorted(result["surviving_squads"]), ["canon", "xmp"])
+
+
+class StaleStampsMustNotBeMergedTests(unittest.TestCase):
+    """A green stamp records the squad tip AT STAMP TIME, and nothing keeps
+    that sha reachable afterwards.
+
+    Squad branches are recut routinely -- should_recut fires whenever one
+    drifts DEFAULT_RECUT_BEHIND_COMMITS behind origin/main -- so every stamp
+    taken before a recut points at a commit built on the OLD base. Merging it
+    into a freshly cut sweep branch is a guaranteed conflict. Measured
+    2026-07-28: the sweep logged "cross-squad conflict merging
+    squad/exif-core @ a2290721f7d1" round after round while squad/exif-core
+    had long since been recut.
+    """
+
+    def _home_with_stamp(self, tmp, squad, squad_sha):
+        import overlord_sweep, squad_merge_loop
+        home = Path(tmp)
+        path = squad_merge_loop.squad_status_file(home, squad)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"heads": {"h1": {
+            "status": "consumed", "work_done": True, "squad_sha": squad_sha,
+            "ts": "2026-07-28T00:00:00", "ts_epoch": 1785000000.0, "format": "CR2",
+        }}}))
+        return home
+
+    def test_a_stamp_whose_sha_left_the_branch_is_skipped(self):
+        import overlord_sweep
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home_with_stamp(tmp, "exif-core", "a2290721f7d1")
+            logged = []
+            # is-ancestor fails: the sha is no longer contained in the branch.
+            stamps, cursor = overlord_sweep.collect_green_stamps(
+                home, ["exif-core"], {}, repo_root=Path("/fake"),
+                run_git=lambda argv, repo: (1, "", "not an ancestor"),
+                log_fn=logged.append,
+            )
+            self.assertEqual(stamps, {}, "a stale stamp must not be handed to the merger")
+            self.assertIn("skipping stale stamp", " ".join(logged))
+            # The cursor must still advance, or the dead stamp is re-read every poll.
+            self.assertEqual(
+                cursor["squads"]["exif-core"]["last_squad_sha"], "a2290721f7d1")
+
+    def test_a_stamp_still_on_the_branch_is_kept(self):
+        import overlord_sweep
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home_with_stamp(tmp, "canon", "4a9db27bcafe")
+            stamps, _cursor = overlord_sweep.collect_green_stamps(
+                home, ["canon"], {}, repo_root=Path("/fake"),
+                run_git=lambda argv, repo: (0, "", ""), log_fn=lambda *a: None,
+            )
+            self.assertEqual(stamps["canon"]["squad_sha"], "4a9db27bcafe")
+
+    def test_without_a_run_git_the_check_is_skipped_not_guessed(self):
+        # Conservative in the same direction as the rest of the module: no
+        # git access means no evidence, so nothing is accused of staleness.
+        import overlord_sweep
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home_with_stamp(tmp, "xmp", "deadbeef1234")
+            stamps, _cursor = overlord_sweep.collect_green_stamps(home, ["xmp"], {})
+            self.assertEqual(stamps["xmp"]["squad_sha"], "deadbeef1234")

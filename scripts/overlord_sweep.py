@@ -246,7 +246,7 @@ def save_sweep_state(path, data):
     write_json_atomic(path, data)
 
 
-def collect_green_stamps(home, squads, cursor):
+def collect_green_stamps(home, squads, cursor, repo_root=None, run_git=None, log_fn=print):
     """spec M4 step 2: for every squad, the newest squad-status head
     entry (status="consumed", work_done, carrying a squad_sha) whose ts
     is newer than that squad's cursor entry. Reuses
@@ -310,8 +310,36 @@ def collect_green_stamps(home, squads, cursor):
         consumed.sort(key=squad_merge_loop.stamp_order_key)
         _newest_sha, newest_entry = consumed[-1]
         formats = sorted({entry.get("format") for _sha, entry in consumed if entry.get("format")})
+        squad_sha = newest_entry["squad_sha"]
+        # A stamp records the squad tip AT STAMP TIME. Nothing kept that sha
+        # reachable afterwards, and squad branches get recut routinely --
+        # should_recut does it whenever a branch drifts
+        # DEFAULT_RECUT_BEHIND_COMMITS behind origin/main. Every stamp taken
+        # before a recut then points at a commit built on the OLD base, which
+        # merges into the fresh sweep branch as a guaranteed conflict.
+        # Measured 2026-07-28: the sweep logged "cross-squad conflict merging
+        # squad/exif-core @ a2290721f7d1" round after round while
+        # squad/exif-core had long since been recut to 4a9db27b. Skip a stamp
+        # whose sha is no longer contained in its own branch; the merger will
+        # re-stamp the work against the current tip.
+        if repo_root is not None and run_git is not None:
+            rc, _out, _err = run_git(
+                ["merge-base", "--is-ancestor", squad_sha, f"squad/{squad}"], repo_root)
+            if rc != 0:
+                log_fn(
+                    f"skipping stale stamp for squad/{squad} @ {squad_sha[:12]}: no longer "
+                    f"contained in squad/{squad} (recut since it was stamped)"
+                )
+                # The cursor still advances below, so the dead stamp does not
+                # resurface as news on every subsequent poll.
+                new_cursor["squads"][squad] = {
+                    "last_ts": newest_entry.get("ts"), "last_squad_sha": squad_sha,
+                    **({"last_ts_epoch": float(newest_entry["ts_epoch"])}
+                       if newest_entry.get("ts_epoch") is not None else {}),
+                }
+                continue
         stamps[squad] = {
-            "squad_sha": newest_entry["squad_sha"], "ts": newest_entry.get("ts"), "formats": formats,
+            "squad_sha": squad_sha, "ts": newest_entry.get("ts"), "formats": formats,
         }
         cursor_entry = {
             "last_ts": newest_entry.get("ts"), "last_squad_sha": newest_entry["squad_sha"],
@@ -726,6 +754,66 @@ def undo_last_revert(repo_root, run_git):
     return True, "restored"
 
 
+def bisect_lint_failure(*, repo_root, merge_infos, lint_fn, quarantine_path, run_git,
+                        log_fn=print, now_fn=time.time):
+    """Find and quarantine the squad whose contribution breaks the lint gate.
+
+    The semantic recheck has had mechanical bisection since spec M4 step 5;
+    the lint gate never did. It simply refused to push and left the cursor
+    unadvanced so "a later sweep retries these stamps whole" -- which is right
+    for a FLAKY failure and catastrophic for a deterministic one. Measured
+    2026-07-28: one candidate adding a duplicate `0xA405` match arm produced
+    `error: unreachable pattern`, and the sweep retried that identical branch
+    for 36 consecutive rounds, publishing nothing for hours. A candidate that
+    does not compile is more certainly the candidate's fault than any semantic
+    difference, so it should be the easiest to attribute, not the only one
+    with no recovery path.
+
+    Same shape as bisect_sweep_failure: revert ONE squad at a time in
+    deterministic order, re-run the gate, and the first revert that makes it
+    pass names the offender. Returns
+    {"offenders": [...], "surviving_squads": [...], "lint_passed": bool}.
+    """
+    quarantine_entries = squad_merge_loop.load_quarantine(quarantine_path)
+    offenders = []
+    surviving = set(merge_infos)
+
+    def quarantine_squad(squad, reason):
+        info = merge_infos[squad]
+        for sha in commits_contributed(repo_root, info, run_git):
+            patch_id = squad_merge_loop.compute_patch_id_for_sha(repo_root, sha)
+            entry = squad_merge_loop.append_quarantine(
+                quarantine_path, patch_id=patch_id, sha=sha, format_name=None,
+                squad=squad, reason=reason, flags=["sweep-lint-bisection"],
+                quarantine_entries=quarantine_entries, now_fn=now_fn,
+            )
+            quarantine_entries[patch_id] = entry
+
+    for squad in sorted(merge_infos):
+        info = merge_infos[squad]
+        reverted, message = revert_squad_contribution(repo_root, info, run_git)
+        if not reverted:
+            log_fn(f"lint bisection: could not revert {squad} ({message}) -- leaving it in place")
+            continue
+        ok, _ = lint_fn(repo_root)
+        if ok:
+            log_fn(f"lint bisection: {squad} is the offender -- quarantined, staying reverted")
+            quarantine_squad(squad, "overlord sweep lint bisection: breaks cargo clippy")
+            offenders.append(squad)
+            surviving.discard(squad)
+            return {"offenders": offenders, "surviving_squads": sorted(surviving),
+                    "lint_passed": True}
+        restored, r_message = undo_last_revert(repo_root, run_git)
+        if not restored:
+            log_fn(f"lint bisection: could not restore {squad} ({r_message}) -- quarantining it")
+            quarantine_squad(squad, "overlord sweep lint bisection: could not restore after probe")
+            offenders.append(squad)
+            surviving.discard(squad)
+
+    log_fn("lint bisection: no single squad's removal clears the lint gate")
+    return {"offenders": offenders, "surviving_squads": sorted(surviving), "lint_passed": False}
+
+
 def bisect_sweep_failure(*, repo_root, merge_infos, formats, cache_dir, comparison_fn, checkout_fn,
                          base_ref, verified_deltas, quarantine_path, run_git, log_fn=print,
                          now_fn=time.time):
@@ -1129,7 +1217,8 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
         log_fn(f"preflight: stale lock(s) {health['stale']} -- informational, not a hard stop")
 
     cursor = load_sweep_state(sweep_state_path)
-    stamps, new_cursor = collect_green_stamps(home, squads, cursor)
+    stamps, new_cursor = collect_green_stamps(
+        home, squads, cursor, repo_root=repo_root, run_git=run_git, log_fn=log_fn)
     if not stamps:
         log_fn("no news since last sweep -- nothing to do")
         return {"status": "no_news", "preflight": health}
@@ -1363,6 +1452,32 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
     # stamps must NOT be consumed.
     lint_fn = lint_fn or real_cargo_lint
     lint_ok, lint_output = lint_fn(repo_root)
+    if not lint_ok:
+        # Leaving the cursor unadvanced is right for a FLAKY lint failure and
+        # catastrophic for a deterministic one: the identical branch is rebuilt
+        # and re-rejected every round forever. Measured 2026-07-28 -- one
+        # candidate adding a duplicate 0xA405 arm ("error: unreachable
+        # pattern") stalled publication for 36 consecutive rounds. So isolate
+        # the offender the same way the semantic recheck does, quarantine it,
+        # and let the surviving squads through on this very round.
+        lint_bisection = bisect_lint_failure(
+            repo_root=repo_root, merge_infos=merge_infos, lint_fn=lint_fn,
+            quarantine_path=quarantine_path, run_git=run_git, log_fn=log_fn, now_fn=now_fn,
+        )
+        if lint_bisection["lint_passed"]:
+            durable_squads.update(lint_bisection["offenders"])
+            merge_infos = {
+                squad: info for squad, info in merge_infos.items()
+                if squad in lint_bisection["surviving_squads"]
+            }
+            if merge_infos:
+                log_fn(
+                    f"lint gate: quarantined {lint_bisection['offenders']} and continuing "
+                    f"with {sorted(merge_infos)}"
+                )
+                lint_ok, lint_output = True, ""
+            else:
+                log_fn("lint gate: every squad was the offender -- nothing left to push")
     if not lint_ok:
         tail = lint_output[-2000:]
         log_fn(f"REFUSING to push {branch}: it does not pass the lint gate CI applies "
