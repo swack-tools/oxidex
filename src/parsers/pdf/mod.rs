@@ -336,6 +336,10 @@ const TAG_COPYRIGHT: u16 = 0x8298;
 const TAG_CREATE_DATE: u16 = 0x9004;
 const TAG_DATE_TIME_ORIGINAL: u16 = 0x9003;
 const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
+const TAG_EXIF_IMAGE_WIDTH: u16 = 0xA002;
+const TAG_FILE_SOURCE: u16 = 0xA300;
+const TAG_FLASH: u16 = 0x9209;
+const TAG_FLASHPIX_VERSION: u16 = 0xA000;
 
 /// Known compression values (IFD0 Compression tag)
 const COMPRESSION_LABELS: &[(u16, &str)] = &[
@@ -364,6 +368,44 @@ const EXPOSURE_PROGRAM_LABELS: &[(u16, &str)] = &[
     (7, "Portrait"),
     (8, "Landscape"),
     (9, "Bulb"),
+];
+
+/// FileSource (0xA300) PrintConv, transcribed from ExifTool 13.55 Exif.pm.
+const FILE_SOURCE_LABELS: &[(u8, &str)] = &[
+    (0, "Other"),
+    (1, "Film Scanner"),
+    (2, "Reflection Print Scanner"),
+    (3, "Digital Camera"),
+];
+
+/// Flash (0x9209) PrintConv, transcribed verbatim from ExifTool 13.55 Exif.pm.
+const FLASH_LABELS: &[(u16, &str)] = &[
+    (0x0, "No Flash"),
+    (0x1, "Fired"),
+    (0x5, "Fired, Return light not detected"),
+    (0x7, "Fired, Return light detected"),
+    (0x8, "On, Did not fire"),
+    (0x9, "On, Fired"),
+    (0xd, "On, Fired, Return light not detected"),
+    (0xf, "On, Fired, Return light detected"),
+    (0x10, "Off, Did not fire"),
+    (0x14, "Off, Did not fire, Return light not detected"),
+    (0x18, "Auto, Did not fire"),
+    (0x19, "Auto, Fired"),
+    (0x1d, "Auto, Fired, Return light not detected"),
+    (0x1f, "Auto, Fired, Return light detected"),
+    (0x20, "No flash function"),
+    (0x30, "Off, No flash function"),
+    (0x41, "Fired, Red-eye reduction"),
+    (0x45, "Fired, Red-eye reduction, Return light not detected"),
+    (0x47, "Fired, Red-eye reduction, Return light detected"),
+    (0x49, "On, Red-eye reduction"),
+    (0x4d, "On, Red-eye reduction, Return light not detected"),
+    (0x4f, "On, Red-eye reduction, Return light detected"),
+    (0x58, "Auto, Did not fire, Red-eye reduction"),
+    (0x59, "Auto, Fired, Red-eye reduction"),
+    (0x5d, "Auto, Fired, Red-eye reduction, Return light not detected"),
+    (0x5f, "Auto, Fired, Red-eye reduction, Return light detected"),
 ];
 
 #[derive(Clone, Copy)]
@@ -470,16 +512,25 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
                     }
                 }
             }
-            TAG_COMPRESSION if field_type == 3 => {
-                if let Some(raw) = read_short_value(data, base, byte_order) {
-                    if let Some(label) = COMPRESSION_LABELS
-                        .iter()
-                        .find(|&&(id, _)| id == raw)
-                        .map(|&(_, s)| s)
-                    {
-                        let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "IFD0");
-                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+            TAG_COMPRESSION => {
+                match field_type {
+                    3 => {
+                        if let Some(raw) = read_short_value(data, base, byte_order) {
+                            if let Some(label) = COMPRESSION_LABELS.iter().find(|&&(id, _)| id == raw).map(|&(_, s)| s) {
+                                let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "IFD0");
+                                metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                            }
+                        }
                     }
+                    4 => {
+                        if let Some(raw) = read_long_value(data, base, byte_order) {
+                            if let Some(label) = COMPRESSION_LABELS.iter().find(|&&(id, _)| id == (raw as u16)).map(|&(_, s)| s) {
+                                let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "IFD0");
+                                metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             TAG_EXIF_IFD if field_type == 4 || field_type == 13 => {
@@ -700,6 +751,60 @@ fn parse_exif_ifd(
                     crate::core::TagValue::new_integer(i64::from(raw)),
                 );
             }
+            TAG_EXIF_IMAGE_WIDTH if field_type == 3 || field_type == 4 => {
+                let raw: u32 = if field_type == 3 {
+                    u32::from(read_short_value(data, base, byte_order)?)
+                } else {
+                    let val_off = get_entry_value_offset(data, base, 4, 1, byte_order)?;
+                    read_embedded_tiff_u32(data, val_off, byte_order)?
+                };
+                let key = crate::tag_db::lookup_tag_name(TAG_EXIF_IMAGE_WIDTH, "ExifIFD");
+                metadata.insert(
+                    key,
+                    crate::core::TagValue::new_integer(i64::from(raw)),
+                );
+            }
+            TAG_FILE_SOURCE if field_type == 7 => {
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
+                    if let Some(&first_byte) = bytes.first() {
+                        if let Some(label) = FILE_SOURCE_LABELS
+                            .iter()
+                            .find(|&&(id, _)| id == first_byte)
+                            .map(|&(_, s)| s)
+                        {
+                            let key = crate::tag_db::lookup_tag_name(TAG_FILE_SOURCE, "ExifIFD");
+                            metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                        }
+                    }
+                }
+            }
+            TAG_FLASH if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    if let Some(label) = FLASH_LABELS
+                        .iter()
+                        .find(|&&(id, _)| id == raw)
+                        .map(|&(_, s)| s)
+                    {
+                        let key = crate::tag_db::lookup_tag_name(TAG_FLASH, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                    }
+                }
+            }
+            TAG_FLASHPIX_VERSION if field_type == 7 && count == 4 => {
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
+                    // FlashpixVersion is stored as 4 bytes representing the version
+                    // (e.g., 0x01, 0x00, 0x00, 0x00 -> "0100")
+                    let text_end = bytes
+                        .iter()
+                        .rposition(|&b| b != 0)
+                        .map_or(0, |last| last.saturating_add(1));
+                    let s = String::from_utf8_lossy(&bytes[..text_end]).into_owned();
+                    if !s.is_empty() {
+                        let key = crate::tag_db::lookup_tag_name(TAG_FLASHPIX_VERSION, "ExifIFD");
+                        metadata.insert(key, crate::core::TagValue::new_string(s));
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -756,6 +861,15 @@ fn read_short_value(
 ) -> Option<u16> {
     let val_off = get_entry_value_offset(data, entry_offset, 2, 1, byte_order)?;
     read_embedded_tiff_u16(data, val_off, byte_order)
+}
+
+fn read_long_value(
+    data: &[u8],
+    entry_offset: usize,
+    byte_order: EmbeddedTiffByteOrder,
+) -> Option<u32> {
+    let val_off = get_entry_value_offset(data, entry_offset, 4, 1, byte_order)?;
+    read_embedded_tiff_u32(data, val_off, byte_order)
 }
 
 fn read_unsigned_rational_value(
