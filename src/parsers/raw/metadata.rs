@@ -925,6 +925,30 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     let reader = SliceReader::new(tiff_data);
     let ifd0_tags = parse_ifd(&reader, first_ifd_offset, byte_order)?;
 
+    // Extract IFD0 tags from the preview that ExifTool reports as EXIF group
+    // but are not part of the EXIF sub-IFD (ModifyDate and ResolutionUnit).
+    for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
+        match *tag_id {
+            0x0132 => {
+                // ModifyDate: ASCII string
+                metadata.insert(
+                    "EXIF:ModifyDate".to_string(),
+                    TagValue::new_string(
+                        String::from_utf8_lossy(raw_bytes.as_ref())
+                            .trim_end_matches('\0')
+                            .to_string(),
+                    ),
+                );
+            }
+            0x0128 => {
+                // ResolutionUnit: SHORT with PrintConv (inches, cm, etc.)
+                let val = read_tiff_u16(raw_bytes.as_ref(), byte_order).unwrap_or(0) as i64;
+                metadata.insert("EXIF:ResolutionUnit".to_string(),
+                    TagValue::new_string(format_resolution_unit(val)));
+            }
+            _ => {}
+        }
+    }
     let exif_ifd_offset =
         ifd0_tags
             .iter()
@@ -1627,7 +1651,10 @@ fn format_noise_reduction_params(
     value_count: u32,
     byte_order: ByteOrder,
 ) -> Option<String> {
-    if field_type != 3 {
+    // PanasonicRaw.pm declares 0x001b as int16u (type 3), but some RW2 files
+    // use UNDEFINED (type 7). Accept either as long as the byte count matches
+    // an even number of SHORT values.
+    if field_type != 3 && field_type != 7 {
         return None;
     }
     let count = usize::try_from(value_count).ok()?;
