@@ -1177,6 +1177,55 @@ class EnsureIntegrationBranchTests(unittest.TestCase):
         self.assertIn(["git", "checkout", "model-fix-sweep-local"], argvs)
 
     @patch("parallel_model_fix_loop.subprocess.run")
+    def test_branch_held_by_another_worktree_is_diagnosed_as_such(self, mock_run):
+        # Git says exactly why. Guessing over the top of it sends the reader
+        # to the wrong remedy: on 2026-07-28 every round logged "likely
+        # uncommitted changes" while the dispatcher checkout was clean and
+        # the real cause was a second worktree holding the branch. Stashing
+        # cannot fix that; detaching the other worktree can.
+        held = ("fatal: 'model-fix-sweep-local' is already used by worktree "
+                "at '/Users/allen/.oxidex/worktrees/fleet-main'")
+
+        def fake_run(argv, **kwargs):
+            if argv == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+                return MagicMock(returncode=0, stdout="main\n", stderr="")
+            if argv[:4] == ["git", "rev-parse", "--verify", "--quiet"]:
+                return MagicMock(returncode=0, stdout="", stderr="")  # exists
+            if argv[:2] == ["git", "checkout"]:
+                return MagicMock(returncode=1, stdout="", stderr=held)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = fake_run
+        logged = []
+        branch = ensure_integration_branch(Path("/fake/repo"), log_fn=logged.append)
+        self.assertIsNone(branch)
+        message = " ".join(logged)
+        self.assertIn("/Users/allen/.oxidex/worktrees/fleet-main", message)
+        self.assertIn("checkout --detach", message)
+        self.assertNotIn("uncommitted changes", message)
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_a_genuinely_dirty_checkout_still_says_so(self, mock_run):
+        # The other side of the same branch: when git does NOT report a
+        # worktree conflict, the stash advice is the right advice.
+        def fake_run(argv, **kwargs):
+            if argv == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+                return MagicMock(returncode=0, stdout="main\n", stderr="")
+            if argv[:4] == ["git", "rev-parse", "--verify", "--quiet"]:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            if argv[:2] == ["git", "checkout"]:
+                return MagicMock(
+                    returncode=1, stdout="",
+                    stderr="error: Your local changes would be overwritten")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = fake_run
+        logged = []
+        self.assertIsNone(
+            ensure_integration_branch(Path("/fake/repo"), log_fn=logged.append))
+        self.assertIn("uncommitted changes", " ".join(logged))
+
+    @patch("parallel_model_fix_loop.subprocess.run")
     def test_existing_sweep_local_branch_is_reused_never_reset(self, mock_run):
         # The branch already exists (carrying prior rounds' unswept
         # merges): plain checkout only -- no `branch -f`, no `checkout
@@ -3310,6 +3359,14 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
             # dedicated-worktree provisioning has its own tests above.
             ensure_worktree_fn=lambda repo_root, path, **kw: (repo, "reused"),
             fmt_fn=fake_fmt,
+            # The lint gate defaults to real_cargo_lint, which shells out to
+            # `cargo clippy --all-features -- -D warnings`. Against this
+            # test's synthetic repo that can only fail, and it did: this
+            # asserted 'merged' and got 'lint_failed' on every run. The gate
+            # itself is exercised in test_overlord_sweep.py, both passing and
+            # failing (see the lint_fn returning (False, "error: unreachable
+            # pattern")); what THIS test is for is the publish path.
+            lint_fn=lambda repo_root: (True, ""),
             run_gh=fake_gh, sleep_fn=lambda s: None, log_fn=lambda *a: None,
         )
 

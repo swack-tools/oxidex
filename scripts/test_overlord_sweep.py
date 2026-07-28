@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1767,7 +1768,13 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
             )
         # It must NOT abort on a duplicate it inherited.
         self.assertNotEqual(result["status"], "sweep_aborted")
-        self.assertEqual(pushed, ["sweep/tags-2026-07-27-1"][:len(pushed)] or [])
+        # Derive the date rather than hardcoding it. `cut_fresh_sweep_branch`
+        # builds `sweep/tags-<utc-date>-<n>`, so a literal "2026-07-27" passed
+        # only on the day this was written and failed every day after --
+        # measured failing on 2026-07-28 with the sole difference being the
+        # date in the branch name.
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        self.assertEqual(pushed, [f"sweep/tags-{today}-1"][:len(pushed)] or [])
         self.assertTrue(pushed, "an inherited duplicate must not stop the sweep from pushing")
 
     def test_an_unrevertable_offender_refuses_to_push_instead_of_shipping(self):
