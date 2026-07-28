@@ -171,6 +171,53 @@ pub fn parse_listx_print_conv_values(xml: &str) -> Result<HashMap<String, HashSe
     Ok(out)
 }
 
+/// Reads a domain YAML back into `TagRecord`s.
+///
+/// The inverse of [`generate_domain_yaml`], and the reason regeneration is
+/// non-destructive: `-listx` omits every tag that has no printable value, so a
+/// straight regenerate silently deletes them. That includes the SubDirectory
+/// pointers oxidex needs in order to *find* anything — `ExifOffset` (0x8769),
+/// `GPSInfo` (0x8825), `InteropOffset` (0xA005) — plus tags ExifTool names at
+/// runtime. 1,029 entries are in that position today, 47 of which feed
+/// `lookup_tag_name`.
+pub fn parse_domain_yaml(yaml: &str) -> Vec<TagRecord> {
+    fn unquote(rest: &str) -> String {
+        rest.trim()
+            .trim_matches('"')
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+    }
+
+    let mut out: Vec<TagRecord> = Vec::new();
+    let mut table = String::new();
+    for line in yaml.lines() {
+        if let Some(rest) = line.strip_prefix("  - name: ") {
+            table = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("      - id: ") {
+            out.push(TagRecord {
+                table: table.clone(),
+                id: unquote(rest),
+                name: String::new(),
+                writable: false,
+                type_name: None,
+                description: None,
+            });
+        } else if let Some(last) = out.last_mut() {
+            if let Some(rest) = line.strip_prefix("        name: ") {
+                last.name = unquote(rest);
+            } else if let Some(rest) = line.strip_prefix("        writable: ") {
+                last.writable = rest.trim() == "true";
+            } else if let Some(rest) = line.strip_prefix("        type: ") {
+                last.type_name = Some(unquote(rest));
+            } else if let Some(rest) = line.strip_prefix("        description: ") {
+                last.description = Some(unquote(rest));
+            }
+        }
+    }
+    out.retain(|r| !r.table.is_empty() && !r.name.is_empty());
+    out
+}
+
 /// Parses a `-listx` id, which is decimal (`41986`) for numeric tables and
 /// hex (`0x829a`) elsewhere. Returns `None` for the shapes that are neither —
 /// FlashPix's `0016,0042` and NikonCustom's bit-positions like `1.1`.
@@ -610,5 +657,59 @@ mod tests {
         let yaml_camera_reversed = generate_domain_yaml("camera", &tags_reversed);
         assert_eq!(yaml_camera, yaml_camera_reversed);
         assert!(yaml_camera.contains("CanonImageType"));
+    }
+
+    /// A regenerate must not delete what `-listx` does not report.
+    ///
+    /// ExifTool omits every tag with no printable value, which is most of the
+    /// SubDirectory pointers oxidex needs in order to find anything at all --
+    /// `ExifOffset` (0x8769) is how the EXIF sub-IFD gets located. Reading the
+    /// shipped registry back must recover them, because that is the set
+    /// sync_tags carries forward.
+    #[test]
+    fn parse_domain_yaml_recovers_subdirectory_tags_listx_omits() {
+        let yaml = include_str!("../../oxidex-tags-core/src/core_tags.yaml");
+        let records = parse_domain_yaml(yaml);
+        assert!(records.len() > 1000, "parsed only {} records", records.len());
+
+        for needed in ["ExifOffset", "GPSInfo", "InteropOffset"] {
+            let found = records
+                .iter()
+                .find(|r| r.name == needed && r.table == "Exif::Main");
+            assert!(found.is_some(), "{needed} was not recovered from the registry");
+        }
+    }
+
+    /// Round-trip: whatever `generate_domain_yaml` writes, `parse_domain_yaml`
+    /// must read back, or the carry-forward set would be silently short.
+    #[test]
+    fn generate_and_parse_domain_yaml_round_trip() {
+        let tags = vec![
+            TagRecord {
+                table: "Exif::Main".into(),
+                id: "0x8769".into(),
+                name: "ExifOffset".into(),
+                writable: false,
+                type_name: Some("int32u".into()),
+                description: Some("Exif IFD Pointer".into()),
+            },
+            TagRecord {
+                table: "Exif::Main".into(),
+                id: "0x010e".into(),
+                name: "ImageDescription".into(),
+                writable: true,
+                type_name: None,
+                description: Some(r#"a "quoted" description"#.into()),
+            },
+        ];
+        let back = parse_domain_yaml(&generate_domain_yaml("core", &tags));
+        assert_eq!(back.len(), 2);
+        let exif = back.iter().find(|r| r.name == "ExifOffset").unwrap();
+        assert_eq!(exif.id, "0x8769");
+        assert_eq!(exif.table, "Exif::Main");
+        assert_eq!(exif.type_name.as_deref(), Some("int32u"));
+        let desc = back.iter().find(|r| r.name == "ImageDescription").unwrap();
+        assert!(desc.writable);
+        assert_eq!(desc.description.as_deref(), Some(r#"a "quoted" description"#));
     }
 }
