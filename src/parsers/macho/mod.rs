@@ -352,7 +352,7 @@ mod tests {
         let metadata = result.unwrap();
 
         // Check basic fields
-        assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM64");
+        assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM 64-bit");
         assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
         assert_eq!(
             metadata.get_string("EXE:CPUArchitecture").unwrap(),
