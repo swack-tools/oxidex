@@ -43,7 +43,13 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0xC619 // BlackLevelRepeatDim
+            0x0143 // TileLength
+                | 0x0144 // TileOffsets
+                | 0x0145 // TileByteCounts
+                | 0x014C // ThumbnailTIFF
+                | 0x0214 // ReferenceBlackWhite
+                | 0xC68E // MaskedAreas
+                | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
                 | 0xC62D // BayerGreenSplit
                 | 0xC632 // AntiAliasStrength
@@ -1084,6 +1090,60 @@ fn format_dng_integer_array(
     value_count: u32,
     byte_order: ByteOrder,
 ) -> Option<String> {
+    // MaskedAreas (0xC68E): LONG[4] -> space-separated
+    if tag_id == 0xC68E && field_type == 4 && value_count >= 4 {
+        let count = usize::try_from(value_count).ok()?;
+        let values = bytes.get(..count * 4)?;
+        let formatted: Option<Vec<String>> = values
+            .chunks_exact(4)
+            .map(|chunk| {
+                let val = read_tiff_u32(chunk, byte_order)?;
+                Some(val.to_string())
+            })
+            .collect();
+        return Some(formatted?.join(" "));
+    }
+    // ReferenceBlackWhite (0x0214): RATIONAL[6] -> space-separated
+    if tag_id == 0x0214 && field_type == 5 && value_count >= 6 {
+        let count = usize::try_from(value_count).ok()?;
+        let values = bytes.get(..count * 8)?;
+        let formatted: Option<Vec<String>> = values
+            .chunks_exact(8)
+            .map(|chunk| {
+                let num = read_tiff_u32(chunk.get(..4)?, byte_order)?;
+                let den = read_tiff_u32(chunk.get(4..8)?, byte_order)?;
+                if den == 0 {
+                    None
+                } else if num % den == 0 {
+                    Some((num / den).to_string())
+                } else {
+                    Some(format!("{}", num as f64 / den as f64))
+                }
+            })
+            .collect();
+        return Some(formatted?.join(" "));
+    }
+    // ThumbnailTIFF (0x014C): binary placeholder
+    if tag_id == 0x014C {
+        let size = bytes.len();
+        return Some(format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            size
+        ));
+    }
+    // TileOffsets (0x0144) and TileByteCounts (0x0145): LONG array -> space-separated
+    if (tag_id == 0x0144 || tag_id == 0x0145) && field_type == 4 && value_count >= 1 {
+        let count = usize::try_from(value_count).ok()?;
+        let values = bytes.get(..count * 4)?;
+        let formatted: Vec<String> = values
+            .chunks_exact(4)
+            .map(|chunk| {
+                let val = read_tiff_u32(chunk, byte_order).unwrap_or(0);
+                val.to_string()
+            })
+            .collect();
+        return Some(formatted.join(" "));
+    }
     // CFAPlaneColor (0xC616): BYTE array, each byte maps to a color name.
     if tag_id == 0xC616 && field_type == 1 {
         let count = usize::try_from(value_count).ok()?;
