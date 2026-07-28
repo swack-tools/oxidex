@@ -518,6 +518,17 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         continue; // Don't add raw MakerNote to metadata, will be parsed separately
                     }
 
+                    // IPTC-NAA (tag 0x83BB) – parse embedded IPTC records
+                    if *tag_id == 0x83BB {
+                        if let Ok(iptc_tags) = parse_iptc_naa(bytes) {
+                            for (tag_name, tag_value) in iptc_tags {
+                                metadata.insert(tag_name, tag_value);
+                            }
+                        }
+                        // Don't add the raw IPTC blob to metadata
+                        continue;
+                    }
+
                     // Check for Make tag (0x010F) - needed for MakerNote dispatcher
                     if *tag_id == 0x010F && *field_type == 2 {
                         // Extract camera make for MakerNote parsing (ASCII type)
@@ -4663,6 +4674,85 @@ fn raw_bytes_to_simple_tag_value(
 
     // Fallback: binary data
     TagValue::new_binary(bytes.to_vec())
+}
+
+/// Parse IPTC-NAA record data (TIFF tag 0x83BB).
+///
+/// The IPTC record structure: each record consists of a 1-byte marker
+/// (always 0x1c), record number, dataset number, 2-byte big-endian
+/// data length, followed by the data. We only extract Application Record
+/// (record 2) tags for now.
+fn parse_iptc_naa(data: &[u8]) -> Result<Vec<(String, TagValue)>> {
+    let mut tags = Vec::new();
+    let mut offset = 0usize;
+
+    while offset + 5 <= data.len() {
+        if data[offset] != 0x1c {
+            // Not a valid record marker; stop.
+            break;
+        }
+
+        let record_num = data[offset + 1];
+        let dataset_num = data[offset + 2];
+        let data_length = u16::from_be_bytes([data[offset + 3], data[offset + 4]]) as usize;
+        let data_start = offset + 5;
+        let data_end = match data_start.checked_add(data_length) {
+            Some(end) if end <= data.len() => end,
+            _ => break, // malformed record, stop parsing
+        };
+
+        let record_data = &data[data_start..data_end];
+
+        // We only extract tags from Application Record (record 2).
+        if record_num == 2 {
+            let dataset_key = u16::from_be_bytes([record_num, dataset_num]);
+            match dataset_key {
+                0x0200 => {
+                    // ApplicationRecordVersion: 2-byte unsigned integer
+                    if record_data.len() >= 2 {
+                        let version =
+                            u16::from_be_bytes([record_data[0], record_data[1]]) as i64;
+                        tags.push((
+                            "IPTC:ApplicationRecordVersion".to_string(),
+                            TagValue::new_integer(version),
+                        ));
+                    }
+                }
+                0x0278 => {
+                    let text = String::from_utf8_lossy(record_data).into_owned();
+                    tags.push(("IPTC:Caption-Abstract".to_string(), TagValue::new_string(text)));
+                }
+                0x025A => {
+                    let text = String::from_utf8_lossy(record_data).into_owned();
+                    tags.push(("IPTC:City".to_string(), TagValue::new_string(text)));
+                }
+                0x0265 => {
+                    let text = String::from_utf8_lossy(record_data).into_owned();
+                    tags.push((
+                        "IPTC:Country-PrimaryLocationName".to_string(),
+                        TagValue::new_string(text),
+                    ));
+                }
+                0x025F => {
+                    let text = String::from_utf8_lossy(record_data).into_owned();
+                    tags.push((
+                        "IPTC:Province-State".to_string(),
+                        TagValue::new_string(text),
+                    ));
+                }
+                0x0228 => {
+                    let text = String::from_utf8_lossy(record_data).into_owned();
+                    tags.push((
+                        "IPTC:SpecialInstructions".to_string(),
+                        TagValue::new_string(text),
+                    ));
+                }
+                _ => {} // ignore other datasets
+            }
+        }
+        offset = data_end;
+    }
+    Ok(tags)
 }
 
 // ===== FileReader Adapter for Byte Slices =====
