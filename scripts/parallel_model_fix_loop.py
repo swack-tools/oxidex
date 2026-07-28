@@ -2655,6 +2655,13 @@ def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, squads_toml
 # exit code and the --infinite stall counter both key off.
 PUBLISH_OK_STATUSES = frozenset({"merged", "no_news", "zero_delta"})
 
+# Sweep statuses meaning "there was nothing to publish", as opposed to
+# "publishing was attempted and failed". Only these earn the idle backoff:
+# a failing round should keep its configured cadence so a transient fault
+# is retried promptly.
+IDLE_STATUSES = frozenset({"no_news", "nothing_merged", "zero_delta"})
+IDLE_ROUND_DELAY_SECONDS = 60.0
+
 # How many consecutive non-publishing rounds before the loop says so out
 # loud. Small enough to notice a wedge within one cadence, large enough
 # that an ordinary red-CI round followed by a fix does not shout.
@@ -2925,8 +2932,23 @@ def main(argv=None, run_round_fn=run_round, run_squad_round_fn=run_squad_round, 
                 # already on stdout each round).
                 publish_ok = publish_result is None or _publish_landed_something(publish_result)
                 return 0 if (last_round_ok and publish_ok) else 1
-            if args.round_delay:
-                sleep_fn(args.round_delay)
+            # A round that found nothing to do must still pause. With
+            # --round-delay 0 (what fleet_up.sh passes, so a productive round
+            # starts the next one immediately) a barren round returns in
+            # milliseconds and the loop spins. Measured 2026-07-28: once every
+            # green stamp was correctly skipped as stale, the dispatcher ran
+            # ~10 rounds a SECOND, each logging 'no_news', flooding the
+            # consolidated log and burning CPU to accomplish nothing. Work
+            # arrives from workers on a scale of minutes, so there is nothing
+            # to gain by asking again instantly.
+            # Only when NO cadence was configured. An operator who asked for
+            # --round-delay 5 gets 5; silently promoting that to 60 would
+            # override an explicit choice, which is never this loop's call.
+            delay = args.round_delay
+            if not delay and (publish_result or {}).get("status") in IDLE_STATUSES:
+                delay = IDLE_ROUND_DELAY_SECONDS
+            if delay:
+                sleep_fn(delay)
     finally:
         # Dispatching is over either way (single round done, or the
         # infinite loop is unwinding on an exception/interrupt) --
