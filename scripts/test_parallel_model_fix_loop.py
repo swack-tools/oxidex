@@ -260,10 +260,21 @@ class MainInfiniteLoopTests(unittest.TestCase):
             # its own sleep call.
             self.assertEqual(sleep_calls, [5.0])
 
-    def test_infinite_does_not_sleep_when_round_delay_is_zero(self):
+    def test_an_idle_round_backs_off_even_when_round_delay_is_zero(self):
+        # This test used to assert that --round-delay 0 NEVER sleeps. That is
+        # no longer true and the old assertion was the bug: a round that finds
+        # nothing to publish returns in milliseconds, so at delay 0 the loop
+        # spun. Measured 2026-07-28 -- with every green stamp correctly
+        # skipped as stale, the dispatcher ran ~10 rounds a SECOND, each
+        # logging 'no_news'. A round that publishes nothing now waits
+        # IDLE_ROUND_DELAY_SECONDS; work arrives from workers on a scale of
+        # minutes, so there is nothing to gain by asking again instantly.
+        import parallel_model_fix_loop as p
+
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = self._config_path(tmpdir)
             round_calls = []
+            slept = []
 
             def fake_run_round(args, cfg):
                 round_calls.append(1)
@@ -275,8 +286,9 @@ class MainInfiniteLoopTests(unittest.TestCase):
                 self._main(
                     ["--config", str(config_path), "--infinite"],
                     run_round_fn=fake_run_round,
-                    sleep_fn=lambda s: self.fail("should not sleep when round-delay is 0"),
+                    sleep_fn=slept.append,
                 )
+            self.assertEqual(slept, [p.IDLE_ROUND_DELAY_SECONDS])
 
     def test_missing_config_returns_1_without_running_a_round(self):
         exit_code = self._main(
@@ -3628,3 +3640,43 @@ class RunAutoPublishSafelyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IdleRoundMustBackOffTests(unittest.TestCase):
+    """A round that found nothing to do still has to pause.
+
+    fleet_up.sh passes --round-delay 0 so a productive round starts the next
+    one immediately. That is right for productive rounds and wrong for barren
+    ones: a round with no news returns in milliseconds. Measured 2026-07-28 --
+    once every green stamp was correctly skipped as stale, the dispatcher ran
+    ~10 rounds a SECOND, each logging 'no_news', flooding the log and burning
+    CPU to accomplish nothing.
+    """
+
+    def test_idle_statuses_get_the_backoff_even_at_zero_delay(self):
+        import parallel_model_fix_loop as p
+        for status in ("no_news", "nothing_merged", "zero_delta"):
+            self.assertIn(status, p.IDLE_STATUSES, f"{status} should be idle")
+        self.assertGreaterEqual(p.IDLE_ROUND_DELAY_SECONDS, 1.0)
+
+    def test_an_explicit_round_delay_is_never_overridden(self):
+        # The floor exists for --round-delay 0 only. Promoting an operator's
+        # explicit 5s to 60s would override a deliberate choice; the first
+        # draft of this fix did exactly that and broke
+        # test_infinite_sleeps_between_rounds_using_injected_sleep_fn.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._config_path(tmpdir) if hasattr(self, "_config_path") else None
+        # Behavioural assertion lives in the existing infinite-loop tests;
+        # this pins the rule the code encodes.
+        import parallel_model_fix_loop as p
+        import inspect
+        src = inspect.getsource(p.main)
+        self.assertIn("if not delay and", src,
+                      "the idle floor must be gated on an unset round_delay")
+
+    def test_a_failing_status_is_not_treated_as_idle(self):
+        # A failure should keep the configured cadence so a transient fault is
+        # retried promptly -- backing off on failure would slow recovery.
+        import parallel_model_fix_loop as p
+        for status in ("lint_failed", "sweep_aborted", "merged"):
+            self.assertNotIn(status, p.IDLE_STATUSES)
