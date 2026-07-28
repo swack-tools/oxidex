@@ -732,3 +732,47 @@ class TestSupervisorIntegration(ShellHarnessMixin, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPeriodicResync(ShellHarnessMixin, unittest.TestCase):
+    """sync_worktrees ran ONCE, immediately before supervise().
+
+    A fleet left up for hours therefore produced work against an ever-staler
+    base. Measured 2026-07-28 on a live run: 71 of 72 worker worktrees behind
+    origin/main, 11 of them by 21 commits with their own uncaptured commits on
+    top. Stale bases are precisely how the 155-patch backlog became
+    unmergeable, so supervise() now re-syncs on an interval.
+
+    supervise() itself needs the whole tier array set plus its fd-3 sleep
+    channel to run at all, so what these pin is `resync_due` -- the policy --
+    plus a structural check that the loop actually consults it.
+    """
+
+    def _due(self, now, last, interval):
+        rc, out, _err = sh(
+            f'export FLEET_UP_SOURCE_ONLY=1; source {SCRIPT}; '
+            f'resync_due {now} {last} {interval} && echo DUE || echo NOT',
+            env=self.env)
+        return out.strip()
+
+    def test_fires_once_the_interval_has_elapsed(self):
+        self.assertEqual(self._due(1800, 0, 1800), "DUE")
+        self.assertEqual(self._due(3600, 1800, 1800), "DUE")
+
+    def test_does_not_fire_early(self):
+        self.assertEqual(self._due(1799, 0, 1800), "NOT")
+        self.assertEqual(self._due(0, 0, 1800), "NOT")
+
+    def test_zero_disables_it(self):
+        # An operator must be able to turn it off: a resync competing with a
+        # mid-round worker is a real hazard, so this is not forced on.
+        self.assertEqual(self._due(999999, 0, 0), "NOT")
+
+    def test_the_supervise_loop_consults_it(self):
+        # Structural, because the loop is not directly runnable here. Without
+        # this the predicate could be perfect and never called -- the exact
+        # shape of dead wiring this session has hit twice.
+        body = SCRIPT.read_text() if hasattr(SCRIPT, "read_text") else open(SCRIPT).read()
+        loop = body[body.index("supervise() {"):]
+        self.assertIn("resync_due", loop)
+        self.assertIn('sync_worktrees "$FLEET_WORKTREE_BASE"', loop)
