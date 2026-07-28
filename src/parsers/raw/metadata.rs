@@ -1667,6 +1667,18 @@ fn format_exif_display_value(
             }
         }
         // ColorSpace: SHORT[1].
+        // CalibrationIlluminant1/2: int16u, and ExifTool prints them through
+        // the SAME %lightSource hash that LightSource (0x9208) uses --
+        // Exif.pm:3639 is `PrintConv => \%lightSource`. Delegating keeps one
+        // table instead of a third copy of it; without this the DNG pair
+        // reported raw `17` and `21` where ExifTool prints `Standard Light A`
+        // and `D65`.
+        0xC65A | 0xC65B if field_type == 3 && value_count >= 1 => {
+            crate::parsers::tiff::tiff_enums::tiff_enum_to_string(
+                tag_id,
+                i64::from(read_tiff_u16(bytes, byte_order)?),
+            )
+        }
         0xA001 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
             1 => Some("sRGB".to_string()),
             0xffff => Some("Uncalibrated".to_string()),
@@ -5716,5 +5728,24 @@ mod rational_array_tests {
         let one = le_rationals(&[(592408, 1000000)]);
         let value = raw_bytes_to_simple_tag_value(&one, 5, 1, ByteOrder::LittleEndian);
         assert!(value.is_rational(), "single rational must stay a Rational");
+    }
+
+    /// ExifTool prints CalibrationIlluminant1/2 through the same %lightSource
+    /// hash LightSource (0x9208) uses -- Exif.pm:3639. Only 0x9208 was routed
+    /// to that table, so the DNG pair reported raw 17 and 21.
+    #[test]
+    fn dng_calibration_illuminants_print_through_the_light_source_table() {
+        for (tag, raw, expected) in [
+            (0xC65Au16, 17u16, "Standard Light A"),
+            (0xC65B, 21, "D65"),
+            (0xC65A, 23, "D50"),
+            (0xC65B, 255, "Other"),
+        ] {
+            assert_eq!(
+                format_exif_display_value(tag, &raw.to_le_bytes(), 3, 1, ByteOrder::LittleEndian),
+                Some(expected.to_string()),
+                "tag {tag:#06X} value {raw}"
+            );
+        }
     }
 }
