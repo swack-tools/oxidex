@@ -1851,6 +1851,35 @@ fn format_exif_display_value(
             let value = read_tiff_u16(bytes, byte_order)?;
             Some(format!("{} mm", value))
         }
+        // FocalLength: RATIONAL[1]. Exif.pm 0x920a PrintConv => sprintf("%.1f mm",$val)
+        0x920A if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                None
+            } else {
+                let val = f64::from(numerator) / f64::from(denominator);
+                Some(format!("{:.1} mm", val))
+            }
+        }
+        // Gamma: RATIONAL[1]. Exif.pm 0xa500 has no PrintConv; invalid (0/0) yields "undef".
+        0xA500 if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                Some("undef".to_string())
+            } else {
+                let val = f64::from(numerator) / f64::from(denominator);
+                // ExifTool prints the raw number without suffix.
+                // Use a compact representation: integer if possible, else decimal.
+                if (val - val.round()).abs() < 1e-9 {
+                    Some(format!("{}", val as i64))
+                } else {
+                    let s = format!("{}", val);
+                    Some(s.trim_end_matches('0').trim_end_matches('.').to_string())
+                }
+            }
+        }
         // GainControl: SHORT[1] with PrintConv table.
         // Exif.pm: 0=>'None', 1=>'Low gain up', 2=>'High gain up',
         //          3=>'Low gain down', 4=>'High gain down'
@@ -3304,8 +3333,8 @@ fn map_x3f_property_name(name: &str) -> String {
         "EXPTIME" => "SigmaRaw:IntegrationTime".to_string(),
         "SHUTTER" => "SigmaRaw:ExposureTime".to_string(),
         "APERTURE" => "SigmaRaw:FNumber".to_string(),
-        "FLENGTH" => "SigmaRaw:FocalLength".to_string(),
-        "FLEQ35MM" => "SigmaRaw:FocalLengthIn35mmFormat".to_string(),
+        "FLENGTH" => "EXIF:FocalLength".to_string(),
+        "FLEQ35MM" => "EXIF:FocalLengthIn35mmFormat".to_string(),
         "ISO" => "SigmaRaw:ISO".to_string(),
         "WB" | "WBAL" => "SigmaRaw:WhiteBalance".to_string(),
         "EXPCOMP" => "SigmaRaw:ExposureCompensation".to_string(),
@@ -3319,6 +3348,9 @@ fn map_x3f_property_name(name: &str) -> String {
         "TIME" => "SigmaRaw:DateTimeOriginal".to_string(),
         "LENSARANGE" => "MakerNotes:LensApertureRange".to_string(),
         "LENSFRANGE" => "MakerNotes:LensFocalRange".to_string(),
+        "GAMMA" => "EXIF:Gamma".to_string(),
+        "FLASHPIXVERSION" => "EXIF:FlashpixVersion".to_string(),
+        "IMAGEUNIQUEID" => "EXIF:ImageUniqueID".to_string(),
         _ => format!("SigmaRaw:{}", name),
     }
 }
@@ -3405,6 +3437,11 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                                 | 0x9101 // ComponentsConfiguration
                                                 | 0x9204 // ExposureCompensation
                                                 | 0x9209 // Flash
+                                                | 0x920A // FocalLength
+                                                | 0xA000 // FlashpixVersion
+                                                | 0xA405 // FocalLengthIn35mmFormat
+                                                | 0xA420 // ImageUniqueID
+                                                | 0xA500 // Gamma
                                                 | 0xA001 // ColorSpace
                                                 | 0xA002 // ExifImageWidth
                                                 | 0xA003 // ExifImageHeight
