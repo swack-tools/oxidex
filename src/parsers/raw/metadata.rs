@@ -26,6 +26,7 @@ use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 use crate::parsers::raw::{RawFormat, raf_parser};
+use crate::core::formatters::format_resolution_unit;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use crate::tag_db::lookup_tag_name;
 
@@ -396,6 +397,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         //   0x18 => { Name => 'HighISOMultiplierRed',   ValueConv => '$val / 256' },
                         //   0x19 => { Name => 'HighISOMultiplierGreen', ValueConv => '$val / 256' },
                         //   0x1a => { Name => 'HighISOMultiplierBlue',  ValueConv => '$val / 256' },
+                    // Missing tags that ExifTool reports as EXIF group:
+                    //   0x0001 => PanasonicRawVersion
+                    //   0x0002 => RawDataOffset
+                    //   0x0003 => RawFormat
+                    //   0x001b => NoiseReductionParams
+                    //   0x0128 => ResolutionUnit
+                    //   0x0132 => ModifyDate
                         // Before this, oxidex emitted them under their raw hex
                         // ids (measured 2026-07-27: "EXIF:0x000E" ... "EXIF:0x001A").
                         (RawFormat::PanasonicRW2, 0, 0x000E) => {
@@ -417,6 +425,27 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         (RawFormat::PanasonicRW2, 0, 0x001A) => {
                             format!("{}:HighISOMultiplierBlue", ifd_name)
                         }
+                    (RawFormat::PanasonicRW2, 0, 0x0001) => {
+                        "EXIF:PanasonicRawVersion".to_string()
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x0002) => {
+                        "EXIF:RawDataOffset".to_string()
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x0003) => {
+                        "EXIF:RawFormat".to_string()
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x001B) => {
+                        "EXIF:NoiseReductionParams".to_string()
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x0132) => {
+                        // DateTime (0x0132) -> EXIF:ModifyDate
+                        "EXIF:ModifyDate".to_string()
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x0128) => {
+                        // ResolutionUnit needs PrintConv; name set here,
+                        // value formatting in tag_value chain below.
+                        "EXIF:ResolutionUnit".to_string()
+                    }
                         // TIFF/EP tag 0x9216 (TIFF-EPStandardID) lives in NEF
                         // IFD0. lookup_tag_name has no entry for it under the
                         // IFD0 group, so oxidex emitted "IFD0:0x9216" with a
@@ -478,6 +507,41 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 byte_order,
                             )
                         })
+                    } else if format == RawFormat::PanasonicRW2
+                        && ifd_index == 0
+                        && *tag_id == 0x0001
+                    {
+                        // PanasonicRawVersion (ASCII string)
+                        TagValue::new_string(
+                            String::from_utf8_lossy(bytes)
+                                .trim_end_matches('\0')
+                                .to_string(),
+                        )
+                    } else if format == RawFormat::PanasonicRW2
+                        && ifd_index == 0
+                        && *tag_id == 0x001B
+                    {
+                        format_noise_reduction_params(
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        )
+                        .map(TagValue::new_string)
+                        .unwrap_or_else(|| {
+                            raw_bytes_to_simple_tag_value(
+                                bytes,
+                                *field_type,
+                                *value_count,
+                                byte_order,
+                            )
+                        })
+                    } else if format == RawFormat::PanasonicRW2
+                        && ifd_index == 0
+                        && *tag_id == 0x0128
+                    {
+                        let val = read_tiff_u16(bytes, byte_order).unwrap_or(0) as i64;
+                        TagValue::new_string(format_resolution_unit(val))
                     } else if matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW)
                         && ifd_index == 0
                         && *tag_id == 0x9216
@@ -1554,6 +1618,31 @@ fn format_panasonic_high_iso_multiplier(
     } else {
         Some(format!("{}", f64::from(value) / 256.0))
     }
+}
+
+/// Format NoiseReductionParams (0x001b) as space-separated SHORT values.
+fn format_noise_reduction_params(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    if field_type != 3 {
+        return None;
+    }
+    let count = usize::try_from(value_count).ok()?;
+    if bytes.len() < count * 2 {
+        return None;
+    }
+    let values: Vec<String> = bytes
+        .chunks_exact(2)
+        .take(count)
+        .filter_map(|chunk| {
+            let v = read_tiff_u16(chunk, byte_order);
+            v.map(|x| x.to_string())
+        })
+        .collect();
+    Some(values.join(" "))
 }
 
 /// Decode EXIF tag 0xA302 (CFAPattern).
