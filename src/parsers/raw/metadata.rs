@@ -3219,7 +3219,7 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
             }
             b"SECi" | b"IMA0" | b"IMA1" | b"IMA2" => {
                 // Image section - may contain embedded EXIF data
-                parse_x3f_image_section(entry_data, &mut metadata, format);
+                parse_x3f_image_section(entry_data, entry_offset, &mut metadata, format);
             }
             b"CAMF" => {
                 // Camera settings - complex format, skip for now
@@ -3399,9 +3399,7 @@ fn map_x3f_property_name(name: &str) -> String {
         "FLENGTH" => "SigmaRaw:FocalLength".to_string(),
         "FLEQ35MM" => "SigmaRaw:FocalLengthIn35mmFormat".to_string(),
         "ISO" => "SigmaRaw:ISO".to_string(),
-        // ExifTool reports ISO under the EXIF group for X3F, so rename
-        // the property to match. (ExifTool 13.55 X3F.pm -> EXIF:ISO)
-        "ISO" => "EXIF:ISO".to_string(),
+        // ISO is already mapped to SigmaRaw:ISO above; no duplicate needed.
         "WB" | "WBAL" => "SigmaRaw:WhiteBalance".to_string(),
         "EXPCOMP" => "SigmaRaw:ExposureCompensation".to_string(),
         "EXPMODE" => "SigmaRaw:ExposureProgram".to_string(),
@@ -3426,7 +3424,7 @@ fn map_x3f_property_name(name: &str) -> String {
 /// X3F image sections (SECi) can contain embedded TIFF/EXIF data. This function
 /// searches for TIFF headers throughout the image section data to locate and parse
 /// any embedded metadata.
-fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawFormat) {
+fn parse_x3f_image_section(data: &[u8], entry_offset: usize, metadata: &mut MetadataMap, format: RawFormat) {
     if data.len() < 28 {
         return;
     }
@@ -3489,7 +3487,7 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                 if matches!(*tag_id, 0x8769 | 0x8825 | 0x014A | 0x927C) {
                                     continue;
                                 }
-                                if !matches!(*tag_id, 0x0112 | 0x0128 | 0x0132) {
+                                if !matches!(*tag_id, 0x0112 | 0x0128 | 0x0131 | 0x0132) {
                                     continue;
                                 }
                                 let tag_name = lookup_tag_name(*tag_id, "EXIF");
@@ -3548,6 +3546,7 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                                 | 0xA402 // ExposureMode
                                                 | 0xA406 // SceneCaptureType
                                                 | 0xA217 // SensingMethod
+                                                | 0x9286 // UserComment
                                         ) {
                                             continue;
                                         }
@@ -3647,18 +3646,65 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                         for (tag_id, field_type, value_count, raw_bytes) in
                                             &ifd1_tags
                                         {
-                                            if *tag_id == 0x0103 {
-                                                let bytes = raw_bytes.as_ref();
-                                                let tag_value = format_x3f_compression(
-                                                    bytes,
-                                                    *field_type,
-                                                    *value_count,
-                                                    byte_order,
-                                                );
-                                                metadata.insert(
-                                                    "ExifIFD:Compression".to_string(),
-                                                    tag_value,
-                                                );
+                                            let bytes = raw_bytes.as_ref();
+                                            match *tag_id {
+                                                0x0103 => {
+                                                    let tag_value = format_x3f_compression(
+                                                        bytes,
+                                                        *field_type,
+                                                        *value_count,
+                                                        byte_order,
+                                                    );
+                                                    metadata.insert(
+                                                        "ExifIFD:Compression".to_string(),
+                                                        tag_value,
+                                                    );
+                                                }
+                                                0x0201 if bytes.len() >= 4 => {
+                                                    // ThumbnailOffset: stored relative to TIFF
+                                                    // header; compute absolute file offset.
+                                                    let rel_offset =
+                                                        read_u32(bytes, byte_order) as u64;
+                                                    // Find APP1 offset within JPEG to compute
+                                                    // the TIFF base in the file.
+                                                    let tiff_base = entry_offset as u64
+                                                        + 28  // SECi header
+                                                        + find_app1_exif_offset(jpeg_data)
+                                                            .unwrap_or(0) as u64
+                                                        + 4   // APP1 marker + length
+                                                        + 6;  // "Exif\0\0"
+                                                    let abs_offset = rel_offset + tiff_base;
+                                                    metadata.insert(
+                                                        "EXIF:ThumbnailOffset".to_string(),
+                                                        TagValue::new_integer(abs_offset as i64),
+                                                    );
+                                                }
+                                                0x0202 if bytes.len() >= 4 => {
+                                                    let length = read_u32(bytes, byte_order);
+                                                    metadata.insert(
+                                                        "EXIF:ThumbnailLength".to_string(),
+                                                        TagValue::new_integer(length as i64),
+                                                    );
+                                                    metadata.insert(
+                                                        "EXIF:ThumbnailImage".to_string(),
+                                                        TagValue::new_string(format!(
+                                                            "(Binary data {} bytes, use -b option to extract)",
+                                                            length
+                                                        )),
+                                                    );
+                                                }
+                                                _ => {
+                                                    let tag_name =
+                                                        lookup_tag_name(*tag_id, "IFD1");
+                                                    let tag_value =
+                                                        raw_bytes_to_simple_tag_value(
+                                                            bytes,
+                                                            *field_type,
+                                                            *value_count,
+                                                            byte_order,
+                                                        );
+                                                    metadata.insert(tag_name, tag_value);
+                                                }
                                             }
                                         }
                                     }
@@ -4007,6 +4053,45 @@ fn format_x3f_compression(
     }
     // Fall back to the standard simple tag value for other values.
     raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order)
+}
+
+/// Find the offset of the APP1 EXIF segment within a JPEG buffer.
+///
+/// Returns the offset of the 0xFF 0xE1 marker, or None if not found.
+fn find_app1_exif_offset(jpeg: &[u8]) -> Option<usize> {
+    if jpeg.get(..2) != Some(&[0xff, 0xd8]) {
+        return None;
+    }
+    let mut offset = 2usize;
+    while offset < jpeg.len() {
+        if jpeg.get(offset) != Some(&0xff) {
+            return None;
+        }
+        while jpeg.get(offset) == Some(&0xff) {
+            offset = offset.checked_add(1)?;
+        }
+        let Some(&marker) = jpeg.get(offset) else {
+            return None;
+        };
+        offset = offset.checked_add(1)?;
+        if marker == 0xd9 || marker == 0xda {
+            return None;
+        }
+        if marker == 0x01 || (0xd0..=0xd8).contains(&marker) {
+            continue;
+        }
+        if marker == 0xe1 {
+            return Some(offset - 2); // back to the 0xFF marker
+        }
+        // Skip segment: read length and advance
+        let length_bytes: [u8; 2] = jpeg.get(offset..offset.saturating_add(2))?.try_into().ok()?;
+        let segment_length = usize::from(u16::from_be_bytes(length_bytes));
+        if segment_length < 2 {
+            return None;
+        }
+        offset = offset.checked_add(segment_length)?;
+    }
+    None
 }
 
 // ===== Fujifilm RAF Format Parsing =====
