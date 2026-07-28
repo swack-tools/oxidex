@@ -435,6 +435,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     (RawFormat::PanasonicRW2, 0, 0x0001) => {
                         "EXIF:PanasonicRawVersion".to_string()
                     }
+                    (RawFormat::PanasonicRW2, 0, 0x0004) => {
+                        "EXIF:SensorTopBorder".to_string()
+                    }
                     (RawFormat::PanasonicRW2, 0, 0x0005) => {
                         "EXIF:SensorLeftBorder".to_string()
                     }
@@ -444,8 +447,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     (RawFormat::PanasonicRW2, 0, 0x0008) => {
                         "EXIF:SensorBottomBorder".to_string()
                     }
+                    (RawFormat::PanasonicRW2, 0, 0x0007) => {
+                        "EXIF:SensorRightBorder".to_string()
+                    }
                     (RawFormat::PanasonicRW2, 0, 0x0002) => {
-                        "EXIF:RawDataOffset".to_string()
+                        "EXIF:SensorWidth".to_string()
                     }
                     (RawFormat::PanasonicRW2, 0, 0x0003) => {
                         "EXIF:RawFormat".to_string()
@@ -1028,6 +1034,12 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
         }
 
         let tag_name = lookup_tag_name(tag_id, "ExifIFD");
+        // ExifTool reports SamplesPerPixel, Saturation, and SensingMethod
+        // under the EXIF group, not ExifIFD.
+        let tag_name = match tag_id {
+            0x0115 | 0x9217 | 0x9293 => tag_name.replace("ExifIFD:", "EXIF:"),
+            _ => tag_name,
+        };
         let tag_value = if let Some(value) = format_exif_display_value(
             tag_id,
             raw_bytes.as_ref(),
