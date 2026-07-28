@@ -4451,6 +4451,40 @@ fn read_u32(bytes: &[u8], byte_order: ByteOrder) -> u32 {
 /// what `{}` on an f64 gives: 592408/1000000 -> `0.592408`, 1/1 -> `1`,
 /// -945/10000 -> `-0.0945`. A zero denominator degrades to the bare numerator
 /// rather than emitting `inf`.
+/// The SHORT/LONG counterpart of [`join_rational_array`].
+///
+/// These two branches dropped `value_count` the same way the rational ones
+/// did, so `BitsPerSample` (SHORT[3]) reported `8` where ExifTool reports
+/// `8 8 8`. Returns `None` for a single component so scalar values keep their
+/// integer representation untouched.
+fn join_integer_array(
+    bytes: &[u8],
+    value_count: u32,
+    byte_order: ByteOrder,
+    width: usize,
+) -> Option<String> {
+    let count = usize::try_from(value_count).ok()?;
+    if count < 2 || bytes.len() < count * width {
+        return None;
+    }
+    let mut parts = Vec::with_capacity(count);
+    for i in 0..count {
+        let at = i * width;
+        let value = match width {
+            2 => {
+                let chunk = bytes.get(at..at + 2)?;
+                match byte_order {
+                    ByteOrder::LittleEndian => u16::from_le_bytes([chunk[0], chunk[1]]) as u32,
+                    ByteOrder::BigEndian => u16::from_be_bytes([chunk[0], chunk[1]]) as u32,
+                }
+            }
+            _ => read_u32(bytes.get(at..at + 4)?, byte_order),
+        };
+        parts.push(value.to_string());
+    }
+    Some(parts.join(" "))
+}
+
 fn join_rational_array(
     bytes: &[u8],
     value_count: u32,
@@ -4508,6 +4542,9 @@ fn raw_bytes_to_simple_tag_value(
 
             // SHORT (16-bit unsigned)
             ExifType::Short if bytes.len() >= 2 => {
+                if let Some(joined) = join_integer_array(bytes, value_count, byte_order, 2) {
+                    return TagValue::new_string(joined);
+                }
                 let reader = match byte_order {
                     ByteOrder::LittleEndian => EndianReader::little_endian(bytes),
                     ByteOrder::BigEndian => EndianReader::big_endian(bytes),
@@ -4518,6 +4555,9 @@ fn raw_bytes_to_simple_tag_value(
 
             // LONG (32-bit unsigned)
             ExifType::Long if bytes.len() >= 4 => {
+                if let Some(joined) = join_integer_array(bytes, value_count, byte_order, 4) {
+                    return TagValue::new_string(joined);
+                }
                 let value = read_u32(bytes, byte_order) as i64;
                 return TagValue::new_integer(value);
             }
@@ -5747,5 +5787,43 @@ mod rational_array_tests {
                 "tag {tag:#06X} value {raw}"
             );
         }
+    }
+
+    /// SHORT and LONG dropped `value_count` exactly as the rational branches
+    /// did. BitsPerSample is SHORT[3]: ExifTool prints "8 8 8", oxidex printed
+    /// "8". This reaches past DNG -- it also closed CR2:BitsPerSample,
+    /// CR2:RawImageSegmentation and MRW:SubjectArea.
+    #[test]
+    fn short_and_long_arrays_keep_every_component() {
+        let three_shorts: Vec<u8> = [8u16, 8, 8].iter().flat_map(|v| v.to_le_bytes()).collect();
+        assert_eq!(
+            raw_bytes_to_simple_tag_value(&three_shorts, 3, 3, ByteOrder::LittleEndian).as_string(),
+            Some("8 8 8")
+        );
+
+        let two_longs: Vec<u8> = [3040u32, 2014]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        assert_eq!(
+            raw_bytes_to_simple_tag_value(&two_longs, 4, 2, ByteOrder::LittleEndian).as_string(),
+            Some("3040 2014")
+        );
+
+        // Big-endian must agree -- TIFF is either order.
+        let be_shorts: Vec<u8> = [1u16, 2, 3].iter().flat_map(|v| v.to_be_bytes()).collect();
+        assert_eq!(
+            raw_bytes_to_simple_tag_value(&be_shorts, 3, 3, ByteOrder::BigEndian).as_string(),
+            Some("1 2 3")
+        );
+
+        // A single SHORT stays an integer, not a one-element string.
+        let one = 8u16.to_le_bytes();
+        assert!(
+            raw_bytes_to_simple_tag_value(&one, 3, 1, ByteOrder::LittleEndian)
+                .as_string()
+                .is_none(),
+            "scalar SHORT must keep its integer representation"
+        );
     }
 }
