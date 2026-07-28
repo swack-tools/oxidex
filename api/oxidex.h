@@ -1554,11 +1554,6 @@
 #define FRAME_RATE 1124
 
 /*
- Byte order indicator (u16)
- */
-#define BYTE_ORDER 0
-
-/*
  Raw thermal image width (u16)
  */
 #define WIDTH 2
@@ -1569,9 +1564,10 @@
 #define HEIGHT 4
 
 /*
- Raw thermal image type (u16)
+ Start of the embedded raw thermal image (ExifTool tag index 16 with
+ `FORMAT => 'int16u'`, i.e. byte offset 0x20)
  */
-#define IMAGE_TYPE 16
+#define IMAGE_DATA 32
 
 /*
  Number of palette colors (u8)
