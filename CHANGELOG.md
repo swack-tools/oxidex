@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Optional Magika AI-Powered File Detection** - Google's deep learning model for enhanced file type identification
+  - **Feature**: `--features magika` cargo flag enables AI detection at build time
+  - **CLI**: `--detector=magika` flag activates AI detection at runtime
+  - **Accuracy**: ~99% detection accuracy across 200+ file formats
+  - **Integration**: Seamlessly integrated with existing signature-based detection
+  - **Zero Breaking Changes**: Fully opt-in, default behavior unchanged
+  - **Performance**: Benchmarks included for signature vs Magika comparison
+  - **Testing**: Comprehensive feature-gated integration tests (8 test cases)
+  - **Documentation**: Complete README and CLI help text coverage
 - **Specific Tag Extraction**: CLI now supports `-TAG` syntax to display only specific tags (e.g., `oxidex -Make -Model photo.jpg`)
 - **Tag Deletion**: CLI supports `-TAG=` syntax to delete individual tags (e.g., `oxidex -EXIF:Artist= photo.jpg`)
 - **Clear All Metadata**: New `-all=` command to remove all metadata from a file for privacy
@@ -38,7 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Changed Windows target from `x86_64-pc-windows-msvc` to `x86_64-pc-windows-gnu`
   - Configured cross-compilation linker for Windows builds from Linux
   - All release artifacts now built on self-hosted infrastructure except macOS (warp-macos-15-arm64-6x)
-
 ## [1.1.0] - 2025-11-17
 
 ### Added

@@ -17,6 +17,7 @@ OxiDex is a memory-safe, drop-in replacement for the Perl-based ExifTool. It pro
 - **Drop-in compatible** - Same CLI arguments as original ExifTool
 - **Cross-platform** - Static binaries for Linux, macOS, and Windows
 - **Library + CLI** - Use as a Rust crate or standalone binary
+- **AI-powered detection (optional)** - Magika deep learning model for enhanced file type detection (`--features magika`)
 
 ## Quick Start
 
@@ -41,6 +42,17 @@ oxidex -r /path/to/photos/
 
 # JSON output
 oxidex -json photo.jpg
+```
+
+### Optional: Magika AI-Powered Detection
+
+Build with the `magika` feature to enable Google's deep learning model for
+enhanced file type identification (~99% accuracy across 200+ formats),
+selectable at runtime with `--detector=magika`:
+
+```bash
+cargo build --release --features magika
+oxidex --detector=magika unknown_file
 ```
 
 ## Documentation

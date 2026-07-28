@@ -134,6 +134,10 @@ regex = "1.13"
 # Error handling
 anyhow = "1.0"
 
+# Optional AI-powered file detection (feature: magika)
+magika = { version = "1.0", optional = true }
+ort = { version = "2.0.0-rc.10", optional = true }
+
 [build-dependencies]
 # HTTP client for downloading ExifTool source
 ureq = { version = "3.3", default-features = false, features = ["rustls"] }
@@ -219,12 +223,14 @@ incremental = false
 debug = true  # Enable debug symbols for profiling
 
 [features]
+default = []
 exiftool-comparison = []
 # Feature to enable the tag-comparison binary (used by deploy-docs workflow)
 # This binary has special linking requirements and is excluded from default builds
 tag-comparison-binary = []
 # Feature to enable the jpeg-tag-matrix binary (JPEG tag comparison pipeline)
 jpeg-tag-matrix-binary = []
+magika = ["dep:magika", "dep:ort"]
 
 # Debian Package Configuration (cargo-deb)
 # Install cargo-deb: cargo install cargo-deb

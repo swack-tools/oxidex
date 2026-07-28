@@ -97,6 +97,11 @@ mod production_wiring_tests;
 #[path = "integration/pe_tests.rs"]
 mod pe_tests;
 
+// Magika AI-powered detection tests (feature-gated)
+#[cfg(feature = "magika")]
+#[path = "integration/magika_detection_tests.rs"]
+mod magika_detection_tests;
+
 #[path = "integration/pe_import_test.rs"]
 mod pe_import_test;
 
