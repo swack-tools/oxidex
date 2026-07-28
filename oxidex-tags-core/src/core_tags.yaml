@@ -519,10 +519,6 @@ tables:
         name: "T4Options"
         writable: false
         description: "T4Options tag"
-      - id: "0x0001"
-        name: "Uncompressed"
-        writable: false
-        description: "Uncompressed tag"
       - id: "0x0125"
         name: "T6Options"
         writable: false
@@ -691,10 +687,6 @@ tables:
         name: "RenderingIntent"
         writable: false
         description: "RenderingIntent tag"
-      - id: "0x0002"
-        name: "Saturation"
-        writable: false
-        description: "Saturation tag"
       - id: "0x1001"
         name: "RelatedImageWidth"
         writable: false

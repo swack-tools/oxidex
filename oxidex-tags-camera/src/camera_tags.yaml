@@ -10483,10 +10483,6 @@ tables:
         name: "SceneRecognition"
         writable: false
         description: "SceneRecognition tag"
-      - id: "0x0400"
-        name: "Macro"
-        writable: false
-        description: "Macro tag"
       - id: "0x1431"
         name: "Rating"
         writable: false
@@ -12849,14 +12845,6 @@ tables:
         name: "DECPosition"
         writable: false
         description: "DECPosition tag"
-      - id: "0x0001"
-        name: "Contrast"
-        writable: false
-        description: "Contrast tag"
-      - id: "0x0002"
-        name: "Saturation"
-        writable: false
-        description: "Saturation tag"
       - id: "0x0033"
         name: "ColorProfile"
         writable: false
@@ -12887,10 +12875,6 @@ tables:
         name: "WhiteBalance"
         writable: false
         description: "WhiteBalance tag"
-      - id: "0x0006"
-        name: "Flash"
-        writable: false
-        description: "Flash tag"
       - id: "0x001F"
         name: "Flash"
         writable: false
@@ -23756,10 +23740,6 @@ tables:
         name: "FocusRange"
         writable: false
         description: "FocusRange tag"
-      - id: "0x0001"
-        name: "Macro"
-        writable: false
-        description: "Macro tag"
       - id: "0x100B"
         name: "FocusMode"
         writable: false
@@ -29435,10 +29415,6 @@ tables:
         writable: false
         description: "SanyoQuality tag"
       - id: "0x0202"
-        name: "Macro"
-        writable: false
-        description: "Macro tag"
-      - id: "0x0001"
         name: "Macro"
         writable: false
         description: "Macro tag"

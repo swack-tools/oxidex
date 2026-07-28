@@ -1350,10 +1350,6 @@ tables:
         name: "AttachMethod"
         writable: false
         description: "AttachMethod tag"
-      - id: "0x0004"
-        name: "AttachLongPathName"
-        writable: false
-        description: "AttachLongPathName tag"
       - id: "0x3707"
         name: "AttachLongFileName"
         writable: false

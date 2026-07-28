@@ -24,12 +24,25 @@ sibling *tag* entry:
         name: "Auto bracket"      # <- PrintConv KEY 2
 
 That is why fabricated ids restart at 0x0001 in the middle of a table:
-they are PrintConv keys, not tag ids. The registry then emits them as
-real tags, which is how `EXIF:Higher resolution image exists` (OPIProxy's
-PrintConv value 1) reached output and aborted a CR2 sweep.
+they are PrintConv keys, not tag ids.
+
+They did not reach output, but only because `src/tag_db/mod.rs` grew a
+hand-maintained blocklist (`is_valid_tag_name`) that filters names like
+"Manual" and "Portrait" back out when the id->name index is built. This
+fixes the data instead, so that list can stop growing.
 
 The correct home for these strings is the enum decoders that already own
 them -- `1 => "Reduced-resolution image"` in src/parsers/tiff/tiff_enums.rs.
+
+A third, subtler shape is caught too: a display value whose name collides
+with a real tag of the same table. `Exif::Main` has a genuine `Saturation`
+tag at 0xA409 *and* carries `RenderingIntent`'s PrintConv value 2, also
+spelled "Saturation" -- which landed as `id: "0x0002"`. Those are convicted
+only on proof: the id matches no real id for that name, yet read as a
+PrintConv key of that table it maps to that very name. Nine exist, and two
+of them (`Uncompressed` at 0x0001, `Saturation` at 0x0002) sit in
+`Exif::Main`, where a wrong id directly misnames a tag via
+`lookup_tag_name`.
 
 ## Why a script rather than an edit
 
@@ -55,6 +68,7 @@ import subprocess  # nosec B404 -- list-argv only, no shell=True
 import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+from typing import NamedTuple
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -69,8 +83,23 @@ ENTRY_RE = re.compile(r'^      - id:\s*"([^"]*)"\s*$')
 NAME_RE = re.compile(r'^        name:\s*"([^"]*)"\s*$')
 
 
-def exiftool_ground_truth(listx_path: str | None):
-    """Per table: the real tag names, and the PrintConv display values."""
+class GroundTruth(NamedTuple):
+    """What ExifTool itself says, per table."""
+
+    tags: dict[str, set[str]]  # table -> {tag name}
+    values: dict[str, set[str]]  # table -> {PrintConv display value}
+    ids: dict[str, dict[str, set[int]]]  # table -> tag name -> {tag id}
+    keys: dict[str, dict[int, set[str]]]  # table -> PrintConv key -> {display value}
+
+
+def _as_int(text: str) -> int | None:
+    try:
+        return int(text, 0) if text.startswith("0x") else int(text)
+    except ValueError:
+        return None  # composite/odd ids such as '0016,0042' or '1.1'
+
+
+def exiftool_ground_truth(listx_path: str | None) -> GroundTruth:
     if listx_path:
         source = Path(listx_path).read_bytes()
     else:
@@ -80,15 +109,26 @@ def exiftool_ground_truth(listx_path: str | None):
 
     tags: dict[str, set[str]] = defaultdict(set)
     values: dict[str, set[str]] = defaultdict(set)
+    ids: dict[str, dict[str, set[int]]] = defaultdict(lambda: defaultdict(set))
+    keys: dict[str, dict[int, set[str]]] = defaultdict(lambda: defaultdict(set))
+
     root = ET.fromstring(source)  # nosec B314 -- output of a local trusted binary
     for table in root.iter("table"):
-        name = table.get("name", "")
+        tname = table.get("name", "")
         for tag in table.findall("tag"):
-            tags[name].add(tag.get("name", ""))
-            for val in tag.findall("./values/key/val"):
-                if val.get("lang") == "en" and val.text:
-                    values[name].add(val.text.strip())
-    return tags, values
+            name = tag.get("name", "")
+            tags[tname].add(name)
+            if (tid := _as_int(tag.get("id", ""))) is not None:
+                ids[tname][name].add(tid)
+            for key in tag.findall("./values/key"):
+                val = key.find("./val[@lang='en']")
+                if val is None or not val.text:
+                    continue
+                display = val.text.strip()
+                values[tname].add(display)
+                if (kid := _as_int(key.get("id", ""))) is not None:
+                    keys[tname][kid].add(display)
+    return GroundTruth(tags, values, ids, keys)
 
 
 def split_entries(lines):
@@ -137,18 +177,29 @@ def split_entries(lines):
         yield ("other", None, pending)
 
 
-def classify(table: str, name: str, real, values) -> str | None:
+def classify(table: str, tag_id: str, name: str, gt: GroundTruth) -> str | None:
     """Why this entry must go, or None to keep it."""
-    if name in real.get(table, ()):
-        return None  # a genuine tag of this table
+    if name in gt.tags.get(table, ()):
+        # The name is a genuine tag of this table -- but a display value can
+        # collide with one (Exif::Main has a real `Saturation` tag at 0xA409
+        # *and* `RenderingIntent`'s PrintConv value 2 named "Saturation").
+        # Convict only on proof: the id matches no real id for this name, yet
+        # read as a PrintConv key of this table it maps to this very name.
+        wanted = gt.ids.get(table, {}).get(name, set())
+        here = _as_int(tag_id or "")
+        if not wanted or here is None or here in wanted:
+            return None
+        if name in gt.keys.get(table, {}).get(here, ()):
+            return "printconv-value-shadowing-a-real-tag-name"
+        return None  # an id disagreement, but not provably a value row
     if not TAG_NAME_RE.fullmatch(name):
         return "impossible-tag-name"
-    if name in values.get(table, ()):
+    if name in gt.values.get(table, ()):
         return "printconv-value-as-tag"
     return None
 
 
-def prune_file(path: Path, real, values, write: bool):
+def prune_file(path: Path, gt: GroundTruth, write: bool):
     lines = path.read_text().splitlines()
     out: list[str] = []
     dropped = defaultdict(int)
@@ -171,7 +222,8 @@ def prune_file(path: Path, real, values, write: bool):
             j += 1
         survivors = []
         for _, ename, ebody in entries:
-            reason = classify(table_name, ename, real, values)
+            m = ENTRY_RE.match(ebody[0])
+            reason = classify(table_name, m.group(1) if m else "", ename, gt)
             if reason:
                 dropped[reason] += 1
             else:
@@ -198,10 +250,10 @@ def main() -> int:
     ap.add_argument("--listx", help="cached `exiftool -f -listx` XML (else runs exiftool)")
     args = ap.parse_args()
 
-    real, values = exiftool_ground_truth(args.listx)
-    print(f"ground truth: {len(real)} tables, "
-          f"{sum(len(v) for v in real.values())} tags, "
-          f"{sum(len(v) for v in values.values())} printconv values\n")
+    gt = exiftool_ground_truth(args.listx)
+    print(f"ground truth: {len(gt.tags)} tables, "
+          f"{sum(len(v) for v in gt.tags.values())} tags, "
+          f"{sum(len(v) for v in gt.values.values())} printconv values\n")
 
     grand = defaultdict(int)
     for domain in DOMAINS:
@@ -209,7 +261,7 @@ def main() -> int:
         if not path.is_file():
             print(f"  {domain:10s} MISSING {path}")
             continue
-        dropped, kept = prune_file(path, real, values, write=not args.check)
+        dropped, kept = prune_file(path, gt, write=not args.check)
         total = sum(v for k, v in dropped.items() if k != "table-emptied")
         for k, v in dropped.items():
             grand[k] += v

@@ -26,8 +26,11 @@
 //! `1 => "Reduced-resolution image"` in src/parsers/tiff/tiff_enums.rs), not
 //! in the tag registry.
 
-use oxidex::tag_sync::{DOMAINS, parse_listx, parse_listx_print_conv_values};
-use std::collections::HashSet;
+use oxidex::tag_sync::{
+    DOMAINS, parse_listx, parse_listx_print_conv_keys, parse_listx_print_conv_values,
+    parse_tag_id as parse_id,
+};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -160,6 +163,77 @@ fn registry_lists_no_print_conv_display_value_as_a_tag() {
     assert!(
         violations.is_empty(),
         "{} registry entr(ies) are PrintConv display values:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+/// The subtlest shape of the same bug, and the one that actually misnames tags.
+///
+/// A display value can collide with a real tag of its own table, so the name
+/// check above waves it through. `Exif::Main` has a genuine `Saturation` tag at
+/// 0xA409 *and* carries `RenderingIntent`'s PrintConv value 2, also spelled
+/// "Saturation" — which landed in the registry as `id: "0x0002"`. Since
+/// `src/tag_db/mod.rs` builds its id→name index straight from these ids, such
+/// an entry can claim a tag id that belongs to something else entirely.
+///
+/// Conviction requires proof, because a plain id disagreement is usually a
+/// benign encoding difference: ExifTool packs a property-set index into the
+/// high word for FlashPix (`0x10000`) and LNK (`0x30004`) where the registry
+/// stores the low word, and there are 260 of those. So an entry is only
+/// reported when its id matches no real id for that name, *and* that same id,
+/// read as a PrintConv key of that table, maps to that very name.
+#[test]
+fn registry_tag_ids_are_not_print_conv_keys_in_disguise() {
+    let Some(xml) = exiftool_listx() else {
+        eprintln!("skipping: exiftool not found on PATH");
+        return;
+    };
+
+    let mut real_ids: HashMap<(String, String), HashSet<i64>> = HashMap::new();
+    for t in parse_listx(&xml).expect("parse_listx") {
+        if let Some(id) = parse_id(&t.id) {
+            real_ids.entry((t.table, t.name)).or_default().insert(id);
+        }
+    }
+    let keys = parse_listx_print_conv_keys(&xml).expect("parse_listx_print_conv_keys");
+
+    let mut violations = Vec::new();
+    for domain in DOMAINS {
+        for e in entries(domain) {
+            let (Some(here), Some(wanted)) = (
+                parse_id(&e.id),
+                real_ids.get(&(e.table.clone(), e.name.clone())),
+            ) else {
+                continue;
+            };
+            if wanted.contains(&here) {
+                continue;
+            }
+            let shadows = keys
+                .get(&e.table)
+                .and_then(|m| m.get(&here))
+                .is_some_and(|v| v.contains(&e.name));
+            if shadows {
+                violations.push(format!(
+                    "  {domain}_tags.yaml:{} {} name={:?} claims id={}, but that is a \
+                     PrintConv key mapping to {:?}; the real tag is at {:?}",
+                    e.line,
+                    e.table,
+                    e.name,
+                    e.id,
+                    e.name,
+                    wanted
+                        .iter()
+                        .map(|i| format!("0x{i:X}"))
+                        .collect::<Vec<_>>()
+                ));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "{} registry entr(ies) carry a PrintConv key as their tag id:\n{}",
         violations.len(),
         violations.join("\n")
     );
