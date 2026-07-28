@@ -103,6 +103,25 @@ pub mod file_type {
     pub const MH_FILESET: u32 = 0xC;
 }
 
+/// Returns ExifTool-compatible ObjectFileType name (ExifTool's PrintConv table)
+pub fn object_file_type_name(filetype: u32) -> &'static str {
+    match filetype {
+        file_type::MH_OBJECT => "Relocatable object",
+        file_type::MH_EXECUTE => "Demand paged executable",
+        file_type::MH_FVMLIB => "Fixed VM shared library",
+        file_type::MH_CORE => "Core",
+        file_type::MH_PRELOAD => "Preloaded executable",
+        file_type::MH_DYLIB => "Dynamically bound shared library",
+        file_type::MH_DYLINKER => "Dynamic link editor",
+        file_type::MH_BUNDLE => "Dynamically bound bundle",
+        file_type::MH_DYLIB_STUB => "Shared library stub for static linking",
+        file_type::MH_DSYM => "Debug information",
+        file_type::MH_KEXT_BUNDLE => "x86_64 kexts",
+        file_type::MH_FILESET => "Fileset",
+        _ => "Unknown",
+    }
+}
+
 /// Returns human-readable file type name
 pub fn file_type_name(filetype: u32) -> &'static str {
     match filetype {
@@ -269,6 +288,90 @@ pub fn decode_flags(flag_value: u32) -> Vec<&'static str> {
     }
     if flag_value & flags::MH_SIM_SUPPORT != 0 {
         result.push("SIM_SUPPORT");
+    }
+    result
+}
+
+/// Returns ExifTool-compatible ObjectFlags phrases for a given flags value
+pub fn object_flags_names(flag_value: u32) -> Vec<&'static str> {
+    let mut result = Vec::new();
+    if flag_value & flags::MH_NOUNDEFS != 0 {
+        result.push("No undefs");
+    }
+    if flag_value & flags::MH_INCRLINK != 0 {
+        result.push("Incremental link");
+    }
+    if flag_value & flags::MH_DYLDLINK != 0 {
+        result.push("Dyld link");
+    }
+    if flag_value & flags::MH_BINDATLOAD != 0 {
+        result.push("Bind at load");
+    }
+    if flag_value & flags::MH_PREBOUND != 0 {
+        result.push("Prebound");
+    }
+    if flag_value & flags::MH_SPLIT_SEGS != 0 {
+        result.push("Split segs");
+    }
+    if flag_value & flags::MH_LAZY_INIT != 0 {
+        result.push("Lazy init");
+    }
+    if flag_value & flags::MH_TWOLEVEL != 0 {
+        result.push("Two level");
+    }
+    if flag_value & flags::MH_FORCE_FLAT != 0 {
+        result.push("Force flat");
+    }
+    if flag_value & flags::MH_NOMULTIDEFS != 0 {
+        result.push("No multi defs");
+    }
+    if flag_value & flags::MH_NOFIXPREBINDING != 0 {
+        result.push("No fix prebinding");
+    }
+    if flag_value & flags::MH_PREBINDABLE != 0 {
+        result.push("Prebindable");
+    }
+    if flag_value & flags::MH_ALLMODSBOUND != 0 {
+        result.push("All mods bound");
+    }
+    if flag_value & flags::MH_SUBSECTIONS_VIA_SYMBOLS != 0 {
+        result.push("Subsections via symbols");
+    }
+    if flag_value & flags::MH_CANONICAL != 0 {
+        result.push("Canonical");
+    }
+    if flag_value & flags::MH_WEAK_DEFINES != 0 {
+        result.push("Weak defines");
+    }
+    if flag_value & flags::MH_BINDS_TO_WEAK != 0 {
+        result.push("Binds to weak");
+    }
+    if flag_value & flags::MH_ALLOW_STACK_EXECUTION != 0 {
+        result.push("Allow stack execution");
+    }
+    if flag_value & flags::MH_ROOT_SAFE != 0 {
+        result.push("Root safe");
+    }
+    if flag_value & flags::MH_NO_REEXPORTED_DYLIBS != 0 {
+        result.push("No reexported dylibs");
+    }
+    if flag_value & flags::MH_PIE != 0 {
+        result.push("PIE");
+    }
+    if flag_value & flags::MH_DEAD_STRIPPABLE_DYLIB != 0 {
+        result.push("Dead strippable dylib");
+    }
+    if flag_value & flags::MH_HAS_TLV_DESCRIPTORS != 0 {
+        result.push("Has TLV descriptors");
+    }
+    if flag_value & flags::MH_NO_HEAP_EXECUTION != 0 {
+        result.push("No heap execution");
+    }
+    if flag_value & flags::MH_APP_EXTENSION_SAFE != 0 {
+        result.push("App extension safe");
+    }
+    if flag_value & flags::MH_SIM_SUPPORT != 0 {
+        result.push("Sim support");
     }
     result
 }
@@ -598,6 +701,44 @@ impl MachHeader {
     /// Returns human-readable file type name
     pub fn file_type_name(&self) -> &'static str {
         file_type_name(self.filetype)
+    }
+
+    /// Returns ExifTool-compatible CPU type name (e.g. "x86 64-bit" not "x86_64")
+    pub fn exiftool_cpu_type_name(&self) -> &'static str {
+        match self.cputype {
+            cpu_type::CPU_TYPE_I386 => "i386 32-bit",
+            cpu_type::CPU_TYPE_X86_64 => "x86 64-bit",
+            cpu_type::CPU_TYPE_ARM => "ARM 32-bit",
+            cpu_type::CPU_TYPE_ARM64 => "ARM 64-bit",
+            cpu_type::CPU_TYPE_ARM64_32 => "ARM64_32",
+            cpu_type::CPU_TYPE_POWERPC => "PowerPC",
+            cpu_type::CPU_TYPE_POWERPC64 => "PowerPC64",
+            _ => "Unknown",
+        }
+    }
+
+    /// Returns ExifTool-compatible CPU subtype name
+    pub fn exiftool_cpu_subtype_name(&self) -> String {
+        match self.cputype {
+            cpu_type::CPU_TYPE_ARM64 => match self.cpusubtype & 0xFF {
+                cpu_subtype_arm64::CPU_SUBTYPE_ARM64_ALL => "ARM64 (all)".to_string(),
+                cpu_subtype_arm64::CPU_SUBTYPE_ARM64E => "ARM64E".to_string(),
+                cpu_subtype_arm64::CPU_SUBTYPE_ARM64_V8 => "V8".to_string(),
+                _ => format!("Unknown ({})", self.cpusubtype),
+            },
+            cpu_type::CPU_TYPE_X86_64 => match self.cpusubtype & 0xFF {
+                cpu_subtype_x86_64::CPU_SUBTYPE_X86_64_ALL => "i386 (all) 64-bit".to_string(),
+                cpu_subtype_x86_64::CPU_SUBTYPE_X86_64_H => "i386 (Haswell) 64-bit".to_string(),
+                _ => format!("Unknown ({})", self.cpusubtype),
+            },
+            cpu_type::CPU_TYPE_I386 => match self.cpusubtype {
+                3 => "i386 (all)".to_string(),
+                4 => "i486".to_string(),
+                132 => "i486SX".to_string(),
+                _ => format!("{}", self.cpusubtype),
+            },
+            _ => format!("{}", self.cpusubtype),
+        }
     }
 
     /// Returns list of flag names

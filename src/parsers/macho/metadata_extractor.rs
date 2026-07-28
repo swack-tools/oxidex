@@ -91,7 +91,7 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
     // CPU type
     metadata.insert(
         "EXE:CPUType".to_string(),
-        TagValue::String(header.cpu_type_name().to_string()),
+        TagValue::String(header.exiftool_cpu_type_name().to_string()),
     );
 
     // CPU type raw value
@@ -100,10 +100,10 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
         TagValue::Integer(header.cputype as i64),
     );
 
-    // CPU subtype
+    // CPU subtype (ExifTool-compatible)
     metadata.insert(
         "EXE:CPUSubtype".to_string(),
-        TagValue::String(header.cpu_subtype_name()),
+        TagValue::String(header.exiftool_cpu_subtype_name()),
     );
 
     // CPU subtype raw value
@@ -116,6 +116,12 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
     metadata.insert(
         "EXE:FileType".to_string(),
         TagValue::String(header.file_type_name().to_string()),
+    );
+
+    // Object file type (ExifTool-compatible PrintConv)
+    metadata.insert(
+        "EXE:ObjectFileType".to_string(),
+        TagValue::String(super::structures::object_file_type_name(header.filetype).to_string()),
     );
 
     // File type raw value
@@ -173,6 +179,15 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
         metadata.insert(
             "EXE:FlagsDecoded".to_string(),
             TagValue::String(flag_names.join(", ")),
+        );
+    }
+
+    // Object flags (ExifTool-compatible phrasing)
+    let object_flags = super::structures::object_flags_names(header.flags);
+    if !object_flags.is_empty() {
+        metadata.insert(
+            "EXE:ObjectFlags".to_string(),
+            TagValue::String(object_flags.join(", ")),
         );
     }
 
@@ -722,7 +737,7 @@ mod tests {
 
         extract_header_metadata(&header, &mut metadata);
 
-        assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM64");
+        assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM 64-bit");
         assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
         assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
         assert_eq!(metadata.get_integer("EXE:IsPIE").unwrap(), 1);
