@@ -1896,3 +1896,74 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LintFailureMustNotStallForeverTests(unittest.TestCase):
+    """A deterministic lint failure has to be isolated, not retried.
+
+    Measured 2026-07-28 on live production: one candidate adding a duplicate
+    `0xA405` match arm produced `error: unreachable pattern`, the sweep
+    refused to push and deliberately left the cursor unadvanced so "a later
+    sweep retries these stamps whole" -- and it retried that identical branch
+    for 36 consecutive rounds, publishing nothing for hours. Semantic
+    failures had bisection since spec M4 step 5; the lint gate had none.
+    """
+
+    def test_the_offending_squad_is_isolated_and_the_rest_survive(self):
+        import overlord_sweep
+
+        merge_infos = {"canon": {"shas": ["aaa"]}, "xmp": {"shas": ["bbb"]}}
+        reverted = []
+
+        # Lint fails while 'xmp' is present and passes once it is reverted.
+        def lint_fn(repo_root):
+            return ("xmp" in reverted, "error: unreachable pattern")
+
+        def fake_revert(repo_root, info, run_git):
+            reverted.append("canon" if info["shas"] == ["aaa"] else "xmp")
+            return True, "reverted"
+
+        def fake_undo(repo_root, run_git):
+            reverted.pop()
+            return True, "restored"
+
+        with patch.object(overlord_sweep, "revert_squad_contribution", fake_revert), \
+             patch.object(overlord_sweep, "undo_last_revert", fake_undo), \
+             patch.object(overlord_sweep, "commits_contributed",
+                          lambda repo, info, run_git: info["shas"]), \
+             patch.object(overlord_sweep.squad_merge_loop, "load_quarantine", lambda p: {}), \
+             patch.object(overlord_sweep.squad_merge_loop, "compute_patch_id_for_sha",
+                          lambda repo, sha: f"pid-{sha}"), \
+             patch.object(overlord_sweep.squad_merge_loop, "append_quarantine",
+                          lambda *a, **kw: {"patch_id": kw.get("patch_id")}):
+            result = overlord_sweep.bisect_lint_failure(
+                repo_root=Path("/fake"), merge_infos=merge_infos, lint_fn=lint_fn,
+                quarantine_path=Path("/fake/q.jsonl"), run_git=lambda *a, **kw: None,
+                log_fn=lambda *a: None,
+            )
+
+        self.assertTrue(result["lint_passed"])
+        self.assertEqual(result["offenders"], ["xmp"])
+        self.assertEqual(result["surviving_squads"], ["canon"])
+
+    def test_when_no_single_squad_clears_it_nothing_is_claimed_fixed(self):
+        import overlord_sweep
+
+        with patch.object(overlord_sweep, "revert_squad_contribution",
+                          lambda repo, info, run_git: (True, "reverted")), \
+             patch.object(overlord_sweep, "undo_last_revert",
+                          lambda repo, run_git: (True, "restored")), \
+             patch.object(overlord_sweep, "commits_contributed",
+                          lambda repo, info, run_git: info["shas"]), \
+             patch.object(overlord_sweep.squad_merge_loop, "load_quarantine", lambda p: {}):
+            result = overlord_sweep.bisect_lint_failure(
+                repo_root=Path("/fake"),
+                merge_infos={"canon": {"shas": ["aaa"]}, "xmp": {"shas": ["bbb"]}},
+                lint_fn=lambda repo_root: (False, "error: still broken"),
+                quarantine_path=Path("/fake/q.jsonl"), run_git=lambda *a, **kw: None,
+                log_fn=lambda *a: None,
+            )
+
+        self.assertFalse(result["lint_passed"])
+        self.assertEqual(result["offenders"], [])
+        self.assertEqual(sorted(result["surviving_squads"]), ["canon", "xmp"])
