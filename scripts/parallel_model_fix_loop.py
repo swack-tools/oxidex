@@ -457,12 +457,31 @@ def ensure_integration_branch(repo_root, log_fn=print):
             return None
     checkout = _git(["checkout", SWEEP_LOCAL_BRANCH], repo_root)
     if checkout.returncode != 0:
+        stderr = checkout.stderr.strip()
+        # git already said WHY. Guessing over the top of it sends the reader
+        # somewhere else entirely: on 2026-07-28 this printed "likely
+        # uncommitted changes" for every round while git was plainly saying
+        # the branch was checked out in ANOTHER worktree, and the dispatcher
+        # checkout was spotlessly clean. The remedy differs completely, so
+        # name the case git reported.
+        if "already used by worktree" in stderr:
+            holder = re.search(r"worktree at '([^']+)'", stderr)
+            where = holder.group(1) if holder else "another worktree"
+            remedy = (
+                f"{SWEEP_LOCAL_BRANCH!r} is checked out at {where}. Git allows a "
+                "branch in only one worktree, so no amount of stashing here helps "
+                f"-- detach that worktree (git -C {where} checkout --detach HEAD) "
+                "or remove it."
+            )
+        else:
+            remedy = (
+                "likely uncommitted changes in the dispatcher checkout conflicting "
+                "with it. Commit/stash those changes to unblock the next round."
+            )
         log_fn(
-            f"WARNING: could not check out {SWEEP_LOCAL_BRANCH!r} "
-            f"({checkout.stderr.strip()}) -- likely uncommitted changes in the "
-            "dispatcher checkout conflicting with it. Refusing to integrate on "
-            "main (M5); this round will be skipped. Commit/stash those changes "
-            "to unblock the next round."
+            f"WARNING: could not check out {SWEEP_LOCAL_BRANCH!r} ({stderr}) -- "
+            f"{remedy} Refusing to integrate on main (M5); this round will be "
+            "skipped."
         )
         return None
     log_fn(
@@ -2476,7 +2495,8 @@ def sync_worktrees_to_origin_main(*, repo_root=REPO_ROOT, run_git=default_run_gi
 
 def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, squads_toml_path=None,
                        sweep_worktree_dir=None, sweep_fn=None, ensure_worktree_fn=None,
-                       sync_fn=None, fmt_fn=None, run_git=default_run_git, run_gh=default_run_gh,
+                       sync_fn=None, fmt_fn=None, lint_fn=None,
+                       run_git=default_run_git, run_gh=default_run_gh,
                        sleep_fn=time.sleep, now_fn=time.monotonic,
                        checks_timeout_seconds=DEFAULT_PR_CHECKS_TIMEOUT_SECONDS,
                        checks_interval_seconds=DEFAULT_PR_CHECKS_INTERVAL_SECONDS,
@@ -2545,6 +2565,14 @@ def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, squads_toml
         # reading one operator's cursor while writing another's stamps.
         "sweep_state_path": home / "logs" / "sweep-state.json",
     }
+    # run_sweep takes an injectable lint gate but this wrapper had no way to
+    # pass one, so any caller wanting to exercise the publish path got the
+    # real `cargo clippy --all-features -- -D warnings` against whatever repo
+    # it was handed. The end-to-end publish test could therefore only ever
+    # report lint_failed. Thread it through; None keeps run_sweep's own
+    # default (real_cargo_lint), so production behaviour is unchanged.
+    if lint_fn is not None:
+        sweep_kwargs["lint_fn"] = lint_fn
     if squads_toml_path:
         sweep_kwargs["squads_toml_path"] = squads_toml_path
     result = sweep_fn(**sweep_kwargs)
