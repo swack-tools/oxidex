@@ -4424,10 +4424,62 @@ fn read_u32(bytes: &[u8], byte_order: ByteOrder) -> u32 {
 /// # Returns
 ///
 /// TagValue representing the data
+/// Renders a multi-component RATIONAL/SRATIONAL run the way ExifTool prints it.
+///
+/// Returns `None` for a single component, leaving the caller's existing
+/// scalar handling untouched.
+///
+/// This converter took `_value_count` and threw it away, so every array-valued
+/// rational in a RAW IFD collapsed to its first component: `AsShotNeutral`
+/// reported `0.592408` where ExifTool reports `0.592408 1 0.501692`, and the
+/// 9-element `ColorMatrix1`/`ColorMatrix2` and `CameraCalibration1`/`2` each
+/// reported one number out of nine. Six DNG tags, one cause.
+///
+/// ExifTool prints these as space-separated shortest-form decimals, which is
+/// what `{}` on an f64 gives: 592408/1000000 -> `0.592408`, 1/1 -> `1`,
+/// -945/10000 -> `-0.0945`. A zero denominator degrades to the bare numerator
+/// rather than emitting `inf`.
+fn join_rational_array(
+    bytes: &[u8],
+    value_count: u32,
+    byte_order: ByteOrder,
+    signed: bool,
+) -> Option<String> {
+    let count = usize::try_from(value_count).ok()?;
+    if count < 2 || bytes.len() < count * 8 {
+        return None;
+    }
+
+    let reader = match byte_order {
+        ByteOrder::LittleEndian => EndianReader::little_endian(bytes),
+        ByteOrder::BigEndian => EndianReader::big_endian(bytes),
+    };
+
+    let mut parts = Vec::with_capacity(count);
+    for i in 0..count {
+        let at = i * 8;
+        let (numerator, denominator) = if signed {
+            (reader.i32_at(at)? as f64, reader.i32_at(at + 4)? as f64)
+        } else {
+            (
+                read_u32(bytes.get(at..at + 4)?, byte_order) as f64,
+                read_u32(bytes.get(at + 4..at + 8)?, byte_order) as f64,
+            )
+        };
+        let value = if denominator == 0.0 {
+            numerator
+        } else {
+            numerator / denominator
+        };
+        parts.push(format!("{value}"));
+    }
+    Some(parts.join(" "))
+}
+
 fn raw_bytes_to_simple_tag_value(
     bytes: &[u8],
     field_type: u16,
-    _value_count: u32,
+    value_count: u32,
     byte_order: ByteOrder,
 ) -> TagValue {
     use crate::parsers::common::exif_types::ExifType;
@@ -4460,6 +4512,9 @@ fn raw_bytes_to_simple_tag_value(
 
             // RATIONAL (two 32-bit unsigned)
             ExifType::Rational if bytes.len() >= 8 => {
+                if let Some(joined) = join_rational_array(bytes, value_count, byte_order, false) {
+                    return TagValue::new_string(joined);
+                }
                 let numerator = read_u32(&bytes[0..4], byte_order);
                 let denominator = read_u32(&bytes[4..8], byte_order);
                 return TagValue::new_rational(numerator as i32, denominator as i32);
@@ -4467,6 +4522,9 @@ fn raw_bytes_to_simple_tag_value(
 
             // SRATIONAL (two 32-bit signed)
             ExifType::SRational if bytes.len() >= 8 => {
+                if let Some(joined) = join_rational_array(bytes, value_count, byte_order, true) {
+                    return TagValue::new_string(joined);
+                }
                 let reader = match byte_order {
                     ByteOrder::LittleEndian => EndianReader::little_endian(bytes),
                     ByteOrder::BigEndian => EndianReader::big_endian(bytes),
@@ -5583,5 +5641,80 @@ mod backlog_group_1_printconv_tests {
             Some(&TagValue::new_integer(12))
         );
         assert!(metadata.get("EXIF:JpgFromRaw").is_none());
+    }
+}
+
+#[cfg(test)]
+mod rational_array_tests {
+    use super::*;
+
+    fn le_rationals(pairs: &[(u32, u32)]) -> Vec<u8> {
+        pairs
+            .iter()
+            .flat_map(|(n, d)| {
+                let mut v = n.to_le_bytes().to_vec();
+                v.extend_from_slice(&d.to_le_bytes());
+                v
+            })
+            .collect()
+    }
+
+    /// `raw_bytes_to_simple_tag_value` took `_value_count` and discarded it, so
+    /// every array-valued rational in a RAW IFD collapsed to its first
+    /// component. Values are ExifTool's own output for
+    /// tests/../combined-samples/DNG.dng.
+    #[test]
+    fn dng_rational_arrays_keep_every_component() {
+        // 0xC628 AsShotNeutral, RATIONAL[3] -> "0.592408 1 0.501692"
+        let as_shot = le_rationals(&[(592408, 1000000), (1, 1), (501692, 1000000)]);
+        assert_eq!(
+            raw_bytes_to_simple_tag_value(&as_shot, 5, 3, ByteOrder::LittleEndian).as_string(),
+            Some("0.592408 1 0.501692")
+        );
+
+        // 0xC627 AnalogBalance, RATIONAL[3] -> "1 1 1", not "1/1"
+        let analog = le_rationals(&[(1, 1), (1, 1), (1, 1)]);
+        assert_eq!(
+            raw_bytes_to_simple_tag_value(&analog, 5, 3, ByteOrder::LittleEndian).as_string(),
+            Some("1 1 1")
+        );
+    }
+
+    /// ColorMatrix1/2 are SRATIONAL[9] and carry negatives, which is why the
+    /// signed path needs the same treatment as the unsigned one.
+    #[test]
+    fn signed_rational_arrays_keep_sign_and_every_component() {
+        let pairs: [(i32, i32); 9] = [
+            (6159, 10000),
+            (-945, 10000),
+            (-745, 10000),
+            (-6846, 10000),
+            (13563, 10000),
+            (3684, 10000),
+            (-802, 10000),
+            (1086, 10000),
+            (7555, 10000),
+        ];
+        let bytes: Vec<u8> = pairs
+            .iter()
+            .flat_map(|(n, d)| {
+                let mut v = n.to_le_bytes().to_vec();
+                v.extend_from_slice(&d.to_le_bytes());
+                v
+            })
+            .collect();
+        assert_eq!(
+            raw_bytes_to_simple_tag_value(&bytes, 10, 9, ByteOrder::LittleEndian).as_string(),
+            Some("0.6159 -0.0945 -0.0745 -0.6846 1.3563 0.3684 -0.0802 0.1086 0.7555")
+        );
+    }
+
+    /// A single rational must keep its existing representation -- the fix is
+    /// additive, and nothing that reads scalar rationals should shift.
+    #[test]
+    fn single_rationals_are_untouched() {
+        let one = le_rationals(&[(592408, 1000000)]);
+        let value = raw_bytes_to_simple_tag_value(&one, 5, 1, ByteOrder::LittleEndian);
+        assert!(value.is_rational(), "single rational must stay a Rational");
     }
 }
