@@ -1934,6 +1934,51 @@ fn format_exif_display_value(
             2 => Some("Hard".to_string()),
             _ => None,
         },
+        // Orientation: SHORT[1]. Exif.pm 0x0112 PrintConv => \%orientation, verbatim:
+        0x0112 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("Horizontal (normal)".to_string()),
+            2 => Some("Mirror horizontal".to_string()),
+            3 => Some("Rotate 180".to_string()),
+            4 => Some("Mirror vertical".to_string()),
+            5 => Some("Mirror horizontal and rotate 270 CW".to_string()),
+            6 => Some("Rotate 90 CW".to_string()),
+            7 => Some("Mirror horizontal and rotate 90 CW".to_string()),
+            8 => Some("Rotate 270 CW".to_string()),
+            _ => None,
+        },
+        // ResolutionUnit: SHORT[1]. Exif.pm 0x0128 PrintConv:
+        //   1 => 'None', 2 => 'inches', 3 => 'cm'
+        0x0128 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("None".to_string()),
+            2 => Some("inches".to_string()),
+            3 => Some("cm".to_string()),
+            _ => None,
+        },
+        // ModifyDate: ASCII string. Exif.pm 0x0132 Writable 'string', PrintConv => ConvertDateTime.
+        0x0132 if field_type == 2 => {
+            let s = String::from_utf8_lossy(bytes).trim_end_matches('\0').to_string();
+            if s.is_empty() { None } else { Some(s) }
+        },
+        // SceneCaptureType: SHORT[1]. Exif.pm 0xA406 PrintConv:
+        //   0 => 'Standard', 1 => 'Landscape', 2 => 'Portrait', 3 => 'Night scene'
+        0xA406 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Standard".to_string()),
+            1 => Some("Landscape".to_string()),
+            2 => Some("Portrait".to_string()),
+            3 => Some("Night scene".to_string()),
+            _ => None,
+        },
+        // SensingMethod: SHORT[1]. Exif.pm 0xA217 PrintConv, verbatim:
+        0xA217 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("Not defined".to_string()),
+            2 => Some("One-chip color area".to_string()),
+            3 => Some("Two-chip color area".to_string()),
+            4 => Some("Three-chip color area".to_string()),
+            5 => Some("Color sequential area".to_string()),
+            7 => Some("Trilinear".to_string()),
+            8 => Some("Color sequential linear".to_string()),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -3438,6 +3483,35 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                 }
                             }
 
+                            // Extract IFD0 tags ExifTool reports for X3F (Orientation, ResolutionUnit, ModifyDate).
+                            for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
+                                let bytes = raw_bytes.as_ref();
+                                if matches!(*tag_id, 0x8769 | 0x8825 | 0x014A | 0x927C) {
+                                    continue;
+                                }
+                                if !matches!(*tag_id, 0x0112 | 0x0128 | 0x0132) {
+                                    continue;
+                                }
+                                let tag_name = lookup_tag_name(*tag_id, "EXIF");
+                                let tag_value = if let Some(value) = format_exif_display_value(
+                                    *tag_id,
+                                    bytes,
+                                    *field_type,
+                                    *value_count,
+                                    byte_order,
+                                ) {
+                                    TagValue::new_string(value)
+                                } else {
+                                    raw_bytes_to_simple_tag_value(
+                                        bytes,
+                                        *field_type,
+                                        *value_count,
+                                        byte_order,
+                                    )
+                                };
+                                metadata.insert(tag_name, tag_value);
+                            }
+
                             // Parse ExifIFD: only the tags ExifTool reports
                             // for X3F files.  Extracting MarkerNote or
                             // InteropOffset here adds oxidex-only tags and
@@ -3472,6 +3546,8 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                                 | 0xA300 // FileSource
                                                 | 0xA401 // CustomRendered
                                                 | 0xA402 // ExposureMode
+                                                | 0xA406 // SceneCaptureType
+                                                | 0xA217 // SensingMethod
                                         ) {
                                             continue;
                                         }
