@@ -27,6 +27,7 @@ use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 use crate::parsers::raw::{RawFormat, raf_parser};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
+use crate::parsers::icc::parse_icc_profile_data as parse_icc;
 use crate::tag_db::lookup_tag_name;
 
 /// Resolve RAW-specific tags using the names and groups assigned by ExifTool.
@@ -282,6 +283,17 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         let offset = read_u32(bytes, byte_order);
                         exif_ifd_offset = Some(offset as u64);
                         continue; // Don't add pointer tag to metadata
+                    }
+
+                    // Check for GPS Sub-IFD pointer (tag 0x8825)
+                    // Check for ICC Profile tag (0x8773) – parse embedded ICC profile
+                    if *tag_id == 0x8773 {
+                        if let Ok(icc_tags) = parse_icc(bytes) {
+                            for (key, value) in icc_tags {
+                                metadata.insert(format!("ICC_Profile:{}", key), value);
+                            }
+                        }
+                        continue; // Don't add the raw ICC blob to metadata
                     }
 
                     // Check for GPS Sub-IFD pointer (tag 0x8825)
