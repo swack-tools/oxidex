@@ -25,9 +25,9 @@
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
+use crate::parsers::icc::parse_icc_profile_data as parse_icc;
 use crate::parsers::raw::{RawFormat, raf_parser};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
-use crate::parsers::icc::parse_icc_profile_data as parse_icc;
 use crate::tag_db::lookup_tag_name;
 
 /// Resolve RAW-specific tags using the names and groups assigned by ExifTool.
@@ -4710,8 +4710,7 @@ fn parse_iptc_naa(data: &[u8]) -> Result<Vec<(String, TagValue)>> {
                 0x0200 => {
                     // ApplicationRecordVersion: 2-byte unsigned integer
                     if record_data.len() >= 2 {
-                        let version =
-                            u16::from_be_bytes([record_data[0], record_data[1]]) as i64;
+                        let version = u16::from_be_bytes([record_data[0], record_data[1]]) as i64;
                         tags.push((
                             "IPTC:ApplicationRecordVersion".to_string(),
                             TagValue::new_integer(version),
@@ -4720,7 +4719,10 @@ fn parse_iptc_naa(data: &[u8]) -> Result<Vec<(String, TagValue)>> {
                 }
                 0x0278 => {
                     let text = String::from_utf8_lossy(record_data).into_owned();
-                    tags.push(("IPTC:Caption-Abstract".to_string(), TagValue::new_string(text)));
+                    tags.push((
+                        "IPTC:Caption-Abstract".to_string(),
+                        TagValue::new_string(text),
+                    ));
                 }
                 0x025A => {
                     let text = String::from_utf8_lossy(record_data).into_owned();
