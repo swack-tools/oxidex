@@ -58,6 +58,9 @@ use crate::core::FileFormat;
 /// ```no_run
 /// # #[cfg(feature = "magika")]
 /// # {
+/// use oxidex::core::FileFormat;
+/// use oxidex::parsers::magika_detector::detect_with_magika;
+///
 /// let jpeg_data = std::fs::read("photo.jpg")?;
 /// let format = detect_with_magika(&jpeg_data)?;
 /// assert_eq!(format, FileFormat::JPEG);
