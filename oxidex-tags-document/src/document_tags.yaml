@@ -53,334 +53,18 @@ tables:
         name: "CPUArchitecture"
         writable: false
         description: "CPUArchitecture tag"
-      - id: "0x0002"
-        name: "64 bit"
-        writable: false
-        description: "64 bit tag"
       - id: "0x0005"
         name: "CPUByteOrder"
         writable: false
         description: "CPUByteOrder tag"
-      - id: "0x0002"
-        name: "Big endian"
-        writable: false
-        description: "Big endian tag"
       - id: "0x0010"
         name: "ObjectFileType"
         writable: false
         description: "ObjectFileType tag"
-      - id: "0x0001"
-        name: "Relocatable file"
-        writable: false
-        description: "Relocatable file tag"
-      - id: "0x0002"
-        name: "Executable file"
-        writable: false
-        description: "Executable file tag"
-      - id: "0x0003"
-        name: "Shared object file"
-        writable: false
-        description: "Shared object file tag"
-      - id: "0x0004"
-        name: "Core file"
-        writable: false
-        description: "Core file tag"
       - id: "0x0012"
         name: "CPUType"
         writable: false
         description: "CPUType tag"
-      - id: "0x0001"
-        name: "AT&T WE 32100"
-        writable: false
-        description: "AT&T WE 32100 tag"
-      - id: "0x0002"
-        name: "SPARC"
-        writable: false
-        description: "SPARC tag"
-      - id: "0x0003"
-        name: "i386"
-        writable: false
-        description: "i386 tag"
-      - id: "0x0004"
-        name: "Motorola 68000"
-        writable: false
-        description: "Motorola 68000 tag"
-      - id: "0x0005"
-        name: "Motorola 88000"
-        writable: false
-        description: "Motorola 88000 tag"
-      - id: "0x0006"
-        name: "i486"
-        writable: false
-        description: "i486 tag"
-      - id: "0x0007"
-        name: "i860"
-        writable: false
-        description: "i860 tag"
-      - id: "0x0008"
-        name: "MIPS R3000"
-        writable: false
-        description: "MIPS R3000 tag"
-      - id: "0x0009"
-        name: "IBM System/370"
-        writable: false
-        description: "IBM System/370 tag"
-      - id: "0x000A"
-        name: "MIPS R4000"
-        writable: false
-        description: "MIPS R4000 tag"
-      - id: "0x000F"
-        name: "HP PA-RISC"
-        writable: false
-        description: "HP PA-RISC tag"
-      - id: "0x0012"
-        name: "Sun v8plus"
-        writable: false
-        description: "Sun v8plus tag"
-      - id: "0x0013"
-        name: "Intel 80960"
-        writable: false
-        description: "Intel 80960 tag"
-      - id: "0x0014"
-        name: "PowerPC"
-        writable: false
-        description: "PowerPC tag"
-      - id: "0x0015"
-        name: "PowerPC 64-bit"
-        writable: false
-        description: "PowerPC 64-bit tag"
-      - id: "0x0016"
-        name: "IBM S/390"
-        writable: false
-        description: "IBM S/390 tag"
-      - id: "0x0017"
-        name: "Cell BE SPU"
-        writable: false
-        description: "Cell BE SPU tag"
-      - id: "0x0024"
-        name: "NEC V800"
-        writable: false
-        description: "NEC V800 tag"
-      - id: "0x0025"
-        name: "Fujitsu FR20"
-        writable: false
-        description: "Fujitsu FR20 tag"
-      - id: "0x0026"
-        name: "TRW RH-32"
-        writable: false
-        description: "TRW RH-32 tag"
-      - id: "0x0027"
-        name: "Motorola RCE"
-        writable: false
-        description: "Motorola RCE tag"
-      - id: "0x0028"
-        name: "Arm (up to Armv7/AArch32)"
-        writable: false
-        description: "Arm (up to Armv7/AArch32) tag"
-      - id: "0x0029"
-        name: "Digital Alpha"
-        writable: false
-        description: "Digital Alpha tag"
-      - id: "0x002A"
-        name: "SuperH"
-        writable: false
-        description: "SuperH tag"
-      - id: "0x002B"
-        name: "SPARC v9 64-bit"
-        writable: false
-        description: "SPARC v9 64-bit tag"
-      - id: "0x002C"
-        name: "Siemens TriCore"
-        writable: false
-        description: "Siemens TriCore tag"
-      - id: "0x002D"
-        name: "Argonaut RISC Core"
-        writable: false
-        description: "Argonaut RISC Core tag"
-      - id: "0x002E"
-        name: "Renesas H8/300,300H,H8S"
-        writable: false
-        description: "Renesas H8/300,300H,H8S tag"
-      - id: "0x002F"
-        name: "Hitachi H8/300H"
-        writable: false
-        description: "Hitachi H8/300H tag"
-      - id: "0x0030"
-        name: "Hitachi H8S"
-        writable: false
-        description: "Hitachi H8S tag"
-      - id: "0x0031"
-        name: "Hitachi H8/500"
-        writable: false
-        description: "Hitachi H8/500 tag"
-      - id: "0x0032"
-        name: "HP/Intel IA-64"
-        writable: false
-        description: "HP/Intel IA-64 tag"
-      - id: "0x0033"
-        name: "Stanford MIPS-X"
-        writable: false
-        description: "Stanford MIPS-X tag"
-      - id: "0x0034"
-        name: "Motorola ColdFire"
-        writable: false
-        description: "Motorola ColdFire tag"
-      - id: "0x0035"
-        name: "Motorola M68HC12"
-        writable: false
-        description: "Motorola M68HC12 tag"
-      - id: "0x0036"
-        name: "Fujitsu MMA Multimedia Accelerator"
-        writable: false
-        description: "Fujitsu MMA Multimedia Accelerator tag"
-      - id: "0x0037"
-        name: "Siemens PCP"
-        writable: false
-        description: "Siemens PCP tag"
-      - id: "0x0038"
-        name: "Sony nCPU embedded RISC processor"
-        writable: false
-        description: "Sony nCPU embedded RISC processor tag"
-      - id: "0x0039"
-        name: "Denso NDR1 microprocessor"
-        writable: false
-        description: "Denso NDR1 microprocessor tag"
-      - id: "0x003A"
-        name: "Motorola Star*Core processor"
-        writable: false
-        description: "Motorola Star*Core processor tag"
-      - id: "0x003B"
-        name: "Toyota ME16 processor"
-        writable: false
-        description: "Toyota ME16 processor tag"
-      - id: "0x003C"
-        name: "STMicroelectronics ST100 processor"
-        writable: false
-        description: "STMicroelectronics ST100 processor tag"
-      - id: "0x003D"
-        name: "Advanced Logic Corp. TinyJ embedded processor family"
-        writable: false
-        description: "Advanced Logic Corp. TinyJ embedded processor family tag"
-      - id: "0x003E"
-        name: "AMD x86-64"
-        writable: false
-        description: "AMD x86-64 tag"
-      - id: "0x003F"
-        name: "Sony DSP Processor"
-        writable: false
-        description: "Sony DSP Processor tag"
-      - id: "0x0040"
-        name: "Digital Equipment Corp. PDP-10"
-        writable: false
-        description: "Digital Equipment Corp. PDP-10 tag"
-      - id: "0x0041"
-        name: "Digital Equipment Corp. PDP-11"
-        writable: false
-        description: "Digital Equipment Corp. PDP-11 tag"
-      - id: "0x0042"
-        name: "Siemens FX66 microcontroller"
-        writable: false
-        description: "Siemens FX66 microcontroller tag"
-      - id: "0x0043"
-        name: "STMicroelectronics ST9+ 8/16 bit microcontroller"
-        writable: false
-        description: "STMicroelectronics ST9+ 8/16 bit microcontroller tag"
-      - id: "0x0044"
-        name: "STMicroelectronics ST7 8-bit microcontroller"
-        writable: false
-        description: "STMicroelectronics ST7 8-bit microcontroller tag"
-      - id: "0x0045"
-        name: "Motorola MC68HC16 Microcontroller"
-        writable: false
-        description: "Motorola MC68HC16 Microcontroller tag"
-      - id: "0x0046"
-        name: "Motorola MC68HC11 Microcontroller"
-        writable: false
-        description: "Motorola MC68HC11 Microcontroller tag"
-      - id: "0x0047"
-        name: "Motorola MC68HC08 Microcontroller"
-        writable: false
-        description: "Motorola MC68HC08 Microcontroller tag"
-      - id: "0x0048"
-        name: "Motorola MC68HC05 Microcontroller"
-        writable: false
-        description: "Motorola MC68HC05 Microcontroller tag"
-      - id: "0x0049"
-        name: "Silicon Graphics SVx"
-        writable: false
-        description: "Silicon Graphics SVx tag"
-      - id: "0x004A"
-        name: "STMicroelectronics ST19 8-bit microcontroller"
-        writable: false
-        description: "STMicroelectronics ST19 8-bit microcontroller tag"
-      - id: "0x004B"
-        name: "Digital VAX"
-        writable: false
-        description: "Digital VAX tag"
-      - id: "0x004C"
-        name: "Axis Communications 32-bit embedded processor"
-        writable: false
-        description: "Axis Communications 32-bit embedded processor tag"
-      - id: "0x004D"
-        name: "Infineon Technologies 32-bit embedded processor"
-        writable: false
-        description: "Infineon Technologies 32-bit embedded processor tag"
-      - id: "0x004E"
-        name: "Element 14 64-bit DSP Processor"
-        writable: false
-        description: "Element 14 64-bit DSP Processor tag"
-      - id: "0x004F"
-        name: "LSI Logic 16-bit DSP Processor"
-        writable: false
-        description: "LSI Logic 16-bit DSP Processor tag"
-      - id: "0x0057"
-        name: "NEC v850"
-        writable: false
-        description: "NEC v850 tag"
-      - id: "0x0058"
-        name: "Renesas M32R"
-        writable: false
-        description: "Renesas M32R tag"
-      - id: "0x008C"
-        name: "TMS320C6000 Family"
-        writable: false
-        description: "TMS320C6000 Family tag"
-      - id: "0x00AF"
-        name: "MCST Elbrus e2k"
-        writable: false
-        description: "MCST Elbrus e2k tag"
-      - id: "0x00B7"
-        name: "Arm 64-bits (Armv8/AArch64)"
-        writable: false
-        description: "Arm 64-bits (Armv8/AArch64) tag"
-      - id: "0x00DC"
-        name: "Zilog Z80"
-        writable: false
-        description: "Zilog Z80 tag"
-      - id: "0x00F3"
-        name: "RISC-V"
-        writable: false
-        description: "RISC-V tag"
-      - id: "0x00F7"
-        name: "Berkeley Packet Filter"
-        writable: false
-        description: "Berkeley Packet Filter tag"
-      - id: "0x0101"
-        name: "WDC 65C816"
-        writable: false
-        description: "WDC 65C816 tag"
-      - id: "0x5441"
-        name: "Fujitsu FR-V"
-        writable: false
-        description: "Fujitsu FR-V tag"
-      - id: "0x9080"
-        name: "v850 (old)"
-        writable: false
-        description: "v850 (old) tag"
-      - id: "0xA390"
-        name: "S/390 (old)"
-        writable: false
-        description: "S/390 (old) tag"
   - name: EXE::MachO
     tags:
       - id: "0x0000"
@@ -399,78 +83,6 @@ tables:
         name: "CPUType"
         writable: false
         description: "CPUType tag"
-      - id: "0x0001"
-        name: "VAX"
-        writable: false
-        description: "VAX tag"
-      - id: "0x0002"
-        name: "ROMP"
-        writable: false
-        description: "ROMP tag"
-      - id: "0x0004"
-        name: "NS32032"
-        writable: false
-        description: "NS32032 tag"
-      - id: "0x0005"
-        name: "NS32332"
-        writable: false
-        description: "NS32332 tag"
-      - id: "0x0006"
-        name: "MC680x0"
-        writable: false
-        description: "MC680x0 tag"
-      - id: "0x0007"
-        name: "x86"
-        writable: false
-        description: "x86 tag"
-      - id: "0x0008"
-        name: "MIPS"
-        writable: false
-        description: "MIPS tag"
-      - id: "0x0009"
-        name: "NS32532"
-        writable: false
-        description: "NS32532 tag"
-      - id: "0x000A"
-        name: "MC98000"
-        writable: false
-        description: "MC98000 tag"
-      - id: "0x000B"
-        name: "HPPA"
-        writable: false
-        description: "HPPA tag"
-      - id: "0x000C"
-        name: "ARM"
-        writable: false
-        description: "ARM tag"
-      - id: "0x000D"
-        name: "MC88000"
-        writable: false
-        description: "MC88000 tag"
-      - id: "0x000E"
-        name: "SPARC"
-        writable: false
-        description: "SPARC tag"
-      - id: "0x000F"
-        name: "i860 big endian"
-        writable: false
-        description: "i860 big endian tag"
-      - id: "0x0010"
-        name: "i860 little endian"
-        writable: false
-        description: "i860 little endian tag"
-      - id: "0x0011"
-        name: "RS6000"
-        writable: false
-        description: "RS6000 tag"
-      - id: "0x0012"
-        name: "PowerPC"
-        writable: false
-        description: "PowerPC tag"
-      - id: "0x00FF"
-        name: "VEO"
-        writable: false
-        description: "VEO tag"
       - id: "0x0004"
         name: "CPUSubtype"
         writable: false
@@ -479,284 +91,16 @@ tables:
         name: "ObjectFileType"
         writable: false
         description: "ObjectFileType tag"
-      - id: "0x0002"
-        name: "Demand paged executable"
-        writable: false
-        description: "Demand paged executable tag"
-      - id: "0x0003"
-        name: "Fixed VM shared library"
-        writable: false
-        description: "Fixed VM shared library tag"
-      - id: "0x0004"
-        name: "Core"
-        writable: false
-        description: "Core tag"
-      - id: "0x0005"
-        name: "Preloaded executable"
-        writable: false
-        description: "Preloaded executable tag"
-      - id: "0x0006"
-        name: "Dynamically bound shared library"
-        writable: false
-        description: "Dynamically bound shared library tag"
-      - id: "0x0007"
-        name: "Dynamic link editor"
-        writable: false
-        description: "Dynamic link editor tag"
-      - id: "0x0008"
-        name: "Dynamically bound bundle"
-        writable: false
-        description: "Dynamically bound bundle tag"
-      - id: "0x0009"
-        name: "Shared library stub for static linking"
-        writable: false
-        description: "Shared library stub for static linking tag"
-      - id: "0x000A"
-        name: "Debug information"
-        writable: false
-        description: "Debug information tag"
-      - id: "0x000B"
-        name: "x86_64 kexts"
-        writable: false
-        description: "x86_64 kexts tag"
       - id: "0x0006"
         name: "ObjectFlags"
         writable: false
         description: "ObjectFlags tag"
-      - id: "0x0001"
-        name: "Incrementa link"
-        writable: false
-        description: "Incrementa link tag"
-      - id: "0x0002"
-        name: "Dyld link"
-        writable: false
-        description: "Dyld link tag"
-      - id: "0x0003"
-        name: "Bind at load"
-        writable: false
-        description: "Bind at load tag"
-      - id: "0x0004"
-        name: "Prebound"
-        writable: false
-        description: "Prebound tag"
-      - id: "0x0005"
-        name: "Split segs"
-        writable: false
-        description: "Split segs tag"
-      - id: "0x0006"
-        name: "Lazy init"
-        writable: false
-        description: "Lazy init tag"
-      - id: "0x0007"
-        name: "Two level"
-        writable: false
-        description: "Two level tag"
-      - id: "0x0008"
-        name: "Force flat"
-        writable: false
-        description: "Force flat tag"
-      - id: "0x0009"
-        name: "No multi defs"
-        writable: false
-        description: "No multi defs tag"
-      - id: "0x000A"
-        name: "No fix prebinding"
-        writable: false
-        description: "No fix prebinding tag"
-      - id: "0x000B"
-        name: "Prebindable"
-        writable: false
-        description: "Prebindable tag"
-      - id: "0x000C"
-        name: "All mods bound"
-        writable: false
-        description: "All mods bound tag"
-      - id: "0x000D"
-        name: "Subsections via symbols"
-        writable: false
-        description: "Subsections via symbols tag"
-      - id: "0x000E"
-        name: "Canonical"
-        writable: false
-        description: "Canonical tag"
-      - id: "0x000F"
-        name: "Weak defines"
-        writable: false
-        description: "Weak defines tag"
-      - id: "0x0010"
-        name: "Binds to weak"
-        writable: false
-        description: "Binds to weak tag"
-      - id: "0x0011"
-        name: "Allow stack execution"
-        writable: false
-        description: "Allow stack execution tag"
-      - id: "0x0012"
-        name: "Dead strippable dylib"
-        writable: false
-        description: "Dead strippable dylib tag"
-      - id: "0x0013"
-        name: "Root safe"
-        writable: false
-        description: "Root safe tag"
-      - id: "0x0014"
-        name: "No reexported dylibs"
-        writable: false
-        description: "No reexported dylibs tag"
-      - id: "0x0015"
-        name: "Random address"
-        writable: false
-        description: "Random address tag"
   - name: EXE::Main
     tags:
       - id: "0x0000"
         name: "MachineType"
         writable: false
         description: "MachineType tag"
-      - id: "0x0001"
-        name: "Target host"
-        writable: false
-        description: "Target host tag"
-      - id: "0x014C"
-        name: "Intel 386 or later, and compatibles"
-        writable: false
-        description: "Intel 386 or later, and compatibles tag"
-      - id: "0x0166"
-        name: "MIPS little endian (R4000)"
-        writable: false
-        description: "MIPS little endian (R4000) tag"
-      - id: "0x0168"
-        name: "MIPS R10000"
-        writable: false
-        description: "MIPS R10000 tag"
-      - id: "0x0169"
-        name: "MIPS little endian WCI v2"
-        writable: false
-        description: "MIPS little endian WCI v2 tag"
-      - id: "0x01A2"
-        name: "Hitachi SH3"
-        writable: false
-        description: "Hitachi SH3 tag"
-      - id: "0x01A3"
-        name: "Hitachi SH3 DSP"
-        writable: false
-        description: "Hitachi SH3 DSP tag"
-      - id: "0x01A4"
-        name: "Hitachi SH3E"
-        writable: false
-        description: "Hitachi SH3E tag"
-      - id: "0x01A6"
-        name: "Hitachi SH4"
-        writable: false
-        description: "Hitachi SH4 tag"
-      - id: "0x01A8"
-        name: "Hitachi SH5"
-        writable: false
-        description: "Hitachi SH5 tag"
-      - id: "0x01C0"
-        name: "ARM little endian"
-        writable: false
-        description: "ARM little endian tag"
-      - id: "0x01C2"
-        name: "Thumb"
-        writable: false
-        description: "Thumb tag"
-      - id: "0x01C4"
-        name: "Thumb 2 little endian"
-        writable: false
-        description: "Thumb 2 little endian tag"
-      - id: "0x01D3"
-        name: "Matsushita AM33"
-        writable: false
-        description: "Matsushita AM33 tag"
-      - id: "0x01F0"
-        name: "PowerPC little endian"
-        writable: false
-        description: "PowerPC little endian tag"
-      - id: "0x01F1"
-        name: "PowerPC with floating point support"
-        writable: false
-        description: "PowerPC with floating point support tag"
-      - id: "0x0200"
-        name: "Intel IA64"
-        writable: false
-        description: "Intel IA64 tag"
-      - id: "0x0266"
-        name: "MIPS16"
-        writable: false
-        description: "MIPS16 tag"
-      - id: "0x0268"
-        name: "Motorola 68000 series"
-        writable: false
-        description: "Motorola 68000 series tag"
-      - id: "0x0284"
-        name: "Alpha AXP 64-bit"
-        writable: false
-        description: "Alpha AXP 64-bit tag"
-      - id: "0x0366"
-        name: "MIPS with FPU"
-        writable: false
-        description: "MIPS with FPU tag"
-      - id: "0x0466"
-        name: "MIPS16 with FPU"
-        writable: false
-        description: "MIPS16 with FPU tag"
-      - id: "0x0520"
-        name: "Infineon Tricore"
-        writable: false
-        description: "Infineon Tricore tag"
-      - id: "0x0EBC"
-        name: "EFI Byte Code"
-        writable: false
-        description: "EFI Byte Code tag"
-      - id: "0x3A64"
-        name: "Compiled Hybrid PE"
-        writable: false
-        description: "Compiled Hybrid PE tag"
-      - id: "0x5032"
-        name: "RISC-V 32-bit"
-        writable: false
-        description: "RISC-V 32-bit tag"
-      - id: "0x5064"
-        name: "RISC-V 64-bit"
-        writable: false
-        description: "RISC-V 64-bit tag"
-      - id: "0x5128"
-        name: "RISC-V 128-bit"
-        writable: false
-        description: "RISC-V 128-bit tag"
-      - id: "0x6232"
-        name: "LoongArch 32-bit"
-        writable: false
-        description: "LoongArch 32-bit tag"
-      - id: "0x6264"
-        name: "LoongArch 64-bit"
-        writable: false
-        description: "LoongArch 64-bit tag"
-      - id: "0x8664"
-        name: "AMD AMD64"
-        writable: false
-        description: "AMD AMD64 tag"
-      - id: "0x9041"
-        name: "Mitsubishi M32R little endian"
-        writable: false
-        description: "Mitsubishi M32R little endian tag"
-      - id: "0xAA64"
-        name: "ARM64 little endian"
-        writable: false
-        description: "ARM64 little endian tag"
-      - id: "0xC0EE"
-        name: "clr pure MSIL"
-        writable: false
-        description: "clr pure MSIL tag"
-      - id: "0x0CEF"
-        name: "CEF"
-        writable: false
-        description: "CEF tag"
-      - id: "0xEC20"
-        name: "Dotnet 0xEC20"
-        writable: false
-        description: "Dotnet 0xEC20 tag"
       - id: "0x0002"
         name: "TimeStamp"
         writable: false
@@ -765,74 +109,10 @@ tables:
         name: "ImageFileCharacteristics"
         writable: false
         description: "ImageFileCharacteristics tag"
-      - id: "0x0001"
-        name: "Executable"
-        writable: false
-        description: "Executable tag"
-      - id: "0x0002"
-        name: "No line numbers"
-        writable: false
-        description: "No line numbers tag"
-      - id: "0x0003"
-        name: "No symbols"
-        writable: false
-        description: "No symbols tag"
-      - id: "0x0004"
-        name: "Aggressive working-set trim"
-        writable: false
-        description: "Aggressive working-set trim tag"
-      - id: "0x0005"
-        name: "Large address aware"
-        writable: false
-        description: "Large address aware tag"
-      - id: "0x0007"
-        name: "Bytes reversed lo"
-        writable: false
-        description: "Bytes reversed lo tag"
-      - id: "0x0008"
-        name: "32-bit"
-        writable: false
-        description: "32-bit tag"
-      - id: "0x0009"
-        name: "No debug"
-        writable: false
-        description: "No debug tag"
-      - id: "0x000A"
-        name: "Removable run from swap"
-        writable: false
-        description: "Removable run from swap tag"
-      - id: "0x000B"
-        name: "Net run from swap"
-        writable: false
-        description: "Net run from swap tag"
-      - id: "0x000C"
-        name: "System file"
-        writable: false
-        description: "System file tag"
-      - id: "0x000D"
-        name: "DLL"
-        writable: false
-        description: "DLL tag"
-      - id: "0x000E"
-        name: "Uniprocessor only"
-        writable: false
-        description: "Uniprocessor only tag"
-      - id: "0x000F"
-        name: "Bytes reversed hi"
-        writable: false
-        description: "Bytes reversed hi tag"
       - id: "0x000A"
         name: "PEType"
         writable: false
         description: "PEType tag"
-      - id: "0x010B"
-        name: "PE32"
-        writable: false
-        description: "PE32 tag"
-      - id: "0x020B"
-        name: "PE32+"
-        writable: false
-        description: "PE32+ tag"
       - id: "0x000B"
         name: "LinkerVersion"
         writable: false
@@ -869,34 +149,6 @@ tables:
         name: "Subsystem"
         writable: false
         description: "Subsystem tag"
-      - id: "0x0001"
-        name: "Native"
-        writable: false
-        description: "Native tag"
-      - id: "0x0002"
-        name: "Windows GUI"
-        writable: false
-        description: "Windows GUI tag"
-      - id: "0x0003"
-        name: "Windows command line"
-        writable: false
-        description: "Windows command line tag"
-      - id: "0x0009"
-        name: "Windows CE GUI"
-        writable: false
-        description: "Windows CE GUI tag"
-      - id: "0x000A"
-        name: "EFI application"
-        writable: false
-        description: "EFI application tag"
-      - id: "0x000B"
-        name: "EFI boot service"
-        writable: false
-        description: "EFI boot service tag"
-      - id: "0x000C"
-        name: "EFI runtime driver"
-        writable: false
-        description: "EFI runtime driver tag"
   - name: EXE::Misc
     tags:
       - id: "0x000C"
@@ -935,106 +187,14 @@ tables:
         name: "FileFlags"
         writable: false
         description: "FileFlags tag"
-      - id: "0x0001"
-        name: "Pre-release"
-        writable: false
-        description: "Pre-release tag"
-      - id: "0x0002"
-        name: "Patched"
-        writable: false
-        description: "Patched tag"
-      - id: "0x0003"
-        name: "Private build"
-        writable: false
-        description: "Private build tag"
-      - id: "0x0004"
-        name: "Info inferred"
-        writable: false
-        description: "Info inferred tag"
-      - id: "0x0005"
-        name: "Special build"
-        writable: false
-        description: "Special build tag"
       - id: "0x0008"
         name: "FileOS"
         writable: false
         description: "FileOS tag"
-      - id: "0x0002"
-        name: "PM-16"
-        writable: false
-        description: "PM-16 tag"
-      - id: "0x0003"
-        name: "PM-32"
-        writable: false
-        description: "PM-32 tag"
-      - id: "0x0004"
-        name: "Win32"
-        writable: false
-        description: "Win32 tag"
-      - id: "0x0000"
-        name: "DOS"
-        writable: false
-        description: "DOS tag"
-      - id: "0x0000"
-        name: "OS/2 16-bit"
-        writable: false
-        description: "OS/2 16-bit tag"
-      - id: "0x0000"
-        name: "OS/2 32-bit"
-        writable: false
-        description: "OS/2 32-bit tag"
-      - id: "0x0000"
-        name: "Windows NT"
-        writable: false
-        description: "Windows NT tag"
-      - id: "0x0001"
-        name: "Windows 16-bit"
-        writable: false
-        description: "Windows 16-bit tag"
-      - id: "0x0004"
-        name: "Windows 32-bit"
-        writable: false
-        description: "Windows 32-bit tag"
-      - id: "0x0002"
-        name: "OS/2 16-bit PM-16"
-        writable: false
-        description: "OS/2 16-bit PM-16 tag"
-      - id: "0x0003"
-        name: "OS/2 32-bit PM-32"
-        writable: false
-        description: "OS/2 32-bit PM-32 tag"
-      - id: "0x0004"
-        name: "Windows NT 32-bit"
-        writable: false
-        description: "Windows NT 32-bit tag"
       - id: "0x0009"
         name: "ObjectFileType"
         writable: false
         description: "ObjectFileType tag"
-      - id: "0x0001"
-        name: "Executable application"
-        writable: false
-        description: "Executable application tag"
-      - id: "0x0002"
-        name: "Dynamic link library"
-        writable: false
-        description: "Dynamic link library tag"
-      - id: "0x0003"
-        name: "Driver"
-        writable: false
-        description: "Driver tag"
-      - id: "0x0004"
-        name: "Font"
-        writable: false
-        description: "Font tag"
-      - id: "0x0005"
-        name: "VxD"
-        writable: false
-        description: "VxD tag"
-      - id: "0x0007"
-        name: "Static library"
-        writable: false
-        description: "Static library tag"
       - id: "0x000A"
         name: "FileSubtype"
         writable: false
@@ -1303,32 +463,12 @@ tables:
         name: "ColorMode"
         writable: false
         description: "ColorMode tag"
-      - id: "0x0001"
-        name: "Grayscale"
-        writable: false
-        description: "Grayscale tag"
-      - id: "0x0002"
-        name: "Indexed Color"
-        writable: false
-        description: "Indexed Color tag"
   - name: GIMP::Main
     tags:
       - id: "0x0011"
         name: "Compression"
         writable: false
         description: "Compression tag"
-      - id: "0x0001"
-        name: "RLE Encoding"
-        writable: false
-        description: "RLE Encoding tag"
-      - id: "0x0002"
-        name: "Zlib"
-        writable: false
-        description: "Zlib tag"
-      - id: "0x0003"
-        name: "Fractal"
-        writable: false
-        description: "Fractal tag"
       - id: "0x0013"
         name: "Resolution"
         writable: false
@@ -1345,18 +485,6 @@ tables:
         name: "Units"
         writable: false
         description: "Units tag"
-      - id: "0x0002"
-        name: "mm"
-        writable: false
-        description: "mm tag"
-      - id: "0x0003"
-        name: "Points"
-        writable: false
-        description: "Points tag"
-      - id: "0x0004"
-        name: "Picas"
-        writable: false
-        description: "Picas tag"
   - name: GIMP::Parasite
     tags:
       - id: "0x6697"
@@ -1687,36 +815,6 @@ tables:
         name: "ImageHeight"
         writable: false
         description: "ImageHeight tag"
-  - name: MacOS::MDItem
-    tags:
-      - id: "0x0001"
-        name: "1 (Gray)"
-        writable: false
-        description: "1 (Gray) tag"
-      - id: "0x0002"
-        name: "2 (Green)"
-        writable: false
-        description: "2 (Green) tag"
-      - id: "0x0003"
-        name: "3 (Purple)"
-        writable: false
-        description: "3 (Purple) tag"
-      - id: "0x0004"
-        name: "4 (Blue)"
-        writable: false
-        description: "4 (Blue) tag"
-      - id: "0x0005"
-        name: "5 (Yellow)"
-        writable: false
-        description: "5 (Yellow) tag"
-      - id: "0x0006"
-        name: "6 (Red)"
-        writable: false
-        description: "6 (Red) tag"
-      - id: "0x0007"
-        name: "7 (Orange)"
-        writable: false
-        description: "7 (Orange) tag"
   - name: MacOS::Main
     tags:
       - id: "0x0002"
@@ -1835,38 +933,10 @@ tables:
         name: "PanoramicStitchCameraMotion"
         writable: false
         description: "PanoramicStitchCameraMotion tag"
-      - id: "0x0003"
-        name: "Affine"
-        writable: false
-        description: "Affine tag"
-      - id: "0x0004"
-        name: "3D Rotation"
-        writable: false
-        description: "3D Rotation tag"
-      - id: "0x0005"
-        name: "Homography"
-        writable: false
-        description: "Homography tag"
       - id: "0x0002"
         name: "PanoramicStitchMapType"
         writable: false
         description: "PanoramicStitchMapType tag"
-      - id: "0x0001"
-        name: "Horizontal Cylindrical"
-        writable: false
-        description: "Horizontal Cylindrical tag"
-      - id: "0x0002"
-        name: "Horizontal Spherical"
-        writable: false
-        description: "Horizontal Spherical tag"
-      - id: "0x0101"
-        name: "Vertical Cylindrical"
-        writable: false
-        description: "Vertical Cylindrical tag"
-      - id: "0x0102"
-        name: "Vertical Spherical"
-        writable: false
-        description: "Vertical Spherical tag"
       - id: "0x0003"
         name: "PanoramicStitchTheta0"
         writable: false
@@ -2092,52 +1162,12 @@ tables:
         name: "DateSent"
         writable: false
         description: "DateSent tag"
-  - name: PDF::Encrypt
-    tags:
-      - id: "0x0003"
-        name: "Modify"
-        writable: false
-        description: "Modify tag"
-      - id: "0x0004"
-        name: "Copy"
-        writable: false
-        description: "Copy tag"
-      - id: "0x0005"
-        name: "Annotate"
-        writable: false
-        description: "Annotate tag"
-      - id: "0x0008"
-        name: "Fill forms"
-        writable: false
-        description: "Fill forms tag"
-      - id: "0x0009"
-        name: "Extract"
-        writable: false
-        description: "Extract tag"
-      - id: "0x000A"
-        name: "Assemble"
-        writable: false
-        description: "Assemble tag"
-      - id: "0x000B"
-        name: "Print high-res"
-        writable: false
-        description: "Print high-res tag"
   - name: PDF::Info
     tags:
       - id: "0x3F68"
         name: "AppleKeywords"
         writable: false
         description: "AppleKeywords tag"
-  - name: PDF::TransformParams
-    tags:
-      - id: "0x0002"
-        name: "Fill forms, Create page templates, Sign"
-        writable: false
-        description: "Fill forms, Create page templates, Sign tag"
-      - id: "0x0003"
-        name: "Fill forms, Create page templates, Sign, Create/Delete/Edit annotations"
-        writable: false
-        description: "Fill forms, Create page templates, Sign, Create/Delete/Edit annotations tag"
   - name: PLIST::Main
     tags:
       - id: "0x606A"
@@ -2188,42 +1218,10 @@ tables:
         name: "SlowMotionRegionsStartTimeFlags"
         writable: false
         description: "SlowMotionRegionsStartTimeFlags tag"
-      - id: "0x0001"
-        name: "Has been rounded"
-        writable: false
-        description: "Has been rounded tag"
-      - id: "0x0002"
-        name: "Positive infinity"
-        writable: false
-        description: "Positive infinity tag"
-      - id: "0x0003"
-        name: "Negative infinity"
-        writable: false
-        description: "Negative infinity tag"
-      - id: "0x0004"
-        name: "Indefinite"
-        writable: false
-        description: "Indefinite tag"
       - id: "0xB1D3"
         name: "SlowMotionRegionsDurationFlags"
         writable: false
         description: "SlowMotionRegionsDurationFlags tag"
-      - id: "0x0001"
-        name: "Has been rounded"
-        writable: false
-        description: "Has been rounded tag"
-      - id: "0x0002"
-        name: "Positive infinity"
-        writable: false
-        description: "Positive infinity tag"
-      - id: "0x0003"
-        name: "Negative infinity"
-        writable: false
-        description: "Negative infinity tag"
-      - id: "0x0004"
-        name: "Indefinite"
-        writable: false
-        description: "Indefinite tag"
   - name: PhotoMechanic::Main
     tags:
       - id: "0x0002"
@@ -2264,18 +1262,6 @@ tables:
         name: "Rotation"
         writable: false
         description: "Rotation tag"
-      - id: "0x0001"
-        name: "90"
-        writable: false
-        description: "90 tag"
-      - id: "0x0002"
-        name: "180"
-        writable: false
-        description: "180 tag"
-      - id: "0x0003"
-        name: "270"
-        writable: false
-        description: "270 tag"
       - id: "0x00D9"
         name: "CropLeft"
         writable: false
@@ -2320,42 +1306,6 @@ tables:
         name: "PreviewCropBottom"
         writable: false
         description: "PreviewCropBottom tag"
-  - name: PostScript::Composite
-    tags:
-      - id: "0x0001"
-        name: "PostScript:BoundingBox"
-        writable: false
-        description: "PostScript:BoundingBox tag"
-      - id: "0x0001"
-        name: "PostScript:BoundingBox"
-        writable: false
-        description: "PostScript:BoundingBox tag"
-  - name: PostScript::Main
-    tags:
-      - id: "0x0002"
-        name: "CMYK"
-        writable: false
-        description: "CMYK tag"
-      - id: "0x0001"
-        name: "Millimeters"
-        writable: false
-        description: "Millimeters tag"
-      - id: "0x0002"
-        name: "Points"
-        writable: false
-        description: "Points tag"
-      - id: "0x0003"
-        name: "Picas"
-        writable: false
-        description: "Picas tag"
-      - id: "0x0004"
-        name: "Centimeters"
-        writable: false
-        description: "Centimeters tag"
-      - id: "0x0006"
-        name: "Pixels"
-        writable: false
-        description: "Pixels tag"
   - name: RSRC::Main
     tags:
       - id: "0x75AE"
@@ -2400,22 +1350,6 @@ tables:
         name: "AttachMethod"
         writable: false
         description: "AttachMethod tag"
-      - id: "0x0004"
-        name: "AttachLongPathName"
-        writable: false
-        description: "AttachLongPathName tag"
-      - id: "0x0005"
-        name: "Embedded Message"
-        writable: false
-        description: "Embedded Message tag"
-      - id: "0x0006"
-        name: "AttachBinary (object)"
-        writable: false
-        description: "AttachBinary (object) tag"
-      - id: "0x0007"
-        name: "AttachLongPathName (using AttachmentProviderType)"
-        writable: false
-        description: "AttachLongPathName (using AttachmentProviderType) tag"
       - id: "0x3707"
         name: "AttachLongFileName"
         writable: false
@@ -2486,14 +1420,6 @@ tables:
         name: "Priority"
         writable: false
         description: "Priority tag"
-      - id: "0x0001"
-        name: "Normal"
-        writable: false
-        description: "Normal tag"
-      - id: "0x0002"
-        name: "High"
-        writable: false
-        description: "High tag"
       - id: "0x8020"
         name: "MessageModifyDate"
         writable: false
@@ -2812,30 +1738,10 @@ tables:
         name: "Importance"
         writable: false
         description: "Importance tag"
-      - id: "0x0001"
-        name: "Normal"
-        writable: false
-        description: "Normal tag"
-      - id: "0x0002"
-        name: "High"
-        writable: false
-        description: "High tag"
       - id: "0x2CD3"
         name: "InstanceType"
         writable: false
         description: "InstanceType tag"
-      - id: "0x0001"
-        name: "Recurring Appointment"
-        writable: false
-        description: "Recurring Appointment tag"
-      - id: "0x0002"
-        name: "Single Instance of Recurring Appointment"
-        writable: false
-        description: "Single Instance of Recurring Appointment tag"
-      - id: "0x0003"
-        name: "Exception to Recurring Appointment"
-        writable: false
-        description: "Exception to Recurring Appointment tag"
       - id: "0xAC4A"
         name: "MeetingLocations"
         writable: false
@@ -2860,18 +1766,6 @@ tables:
         name: "Flags"
         writable: false
         description: "Flags tag"
-      - id: "0x0001"
-        name: "CRC16"
-        writable: false
-        description: "CRC16 tag"
-      - id: "0x0002"
-        name: "ExtraFields"
-        writable: false
-        description: "ExtraFields tag"
-      - id: "0x0003"
-        name: "FileName"
-        writable: false
-        description: "FileName tag"
       - id: "0x0004"
         name: "Comment"
         writable: false
@@ -2884,74 +1778,10 @@ tables:
         name: "ExtraFlags"
         writable: false
         description: "ExtraFlags tag"
-      - id: "0x0002"
-        name: "Maximum Compression"
-        writable: false
-        description: "Maximum Compression tag"
-      - id: "0x0004"
-        name: "Fastest Algorithm"
-        writable: false
-        description: "Fastest Algorithm tag"
       - id: "0x0009"
         name: "OperatingSystem"
         writable: false
         description: "OperatingSystem tag"
-      - id: "0x0001"
-        name: "Amiga"
-        writable: false
-        description: "Amiga tag"
-      - id: "0x0002"
-        name: "VMS (or OpenVMS)"
-        writable: false
-        description: "VMS (or OpenVMS) tag"
-      - id: "0x0003"
-        name: "Unix"
-        writable: false
-        description: "Unix tag"
-      - id: "0x0004"
-        name: "VM/CMS"
-        writable: false
-        description: "VM/CMS tag"
-      - id: "0x0005"
-        name: "Atari TOS"
-        writable: false
-        description: "Atari TOS tag"
-      - id: "0x0006"
-        name: "HPFS filesystem (OS/2, NT)"
-        writable: false
-        description: "HPFS filesystem (OS/2, NT) tag"
-      - id: "0x0007"
-        name: "Macintosh"
-        writable: false
-        description: "Macintosh tag"
-      - id: "0x0008"
-        name: "Z-System"
-        writable: false
-        description: "Z-System tag"
-      - id: "0x0009"
-        name: "CP/M"
-        writable: false
-        description: "CP/M tag"
-      - id: "0x000A"
-        name: "TOPS-20"
-        writable: false
-        description: "TOPS-20 tag"
-      - id: "0x000B"
-        name: "NTFS filesystem (NT)"
-        writable: false
-        description: "NTFS filesystem (NT) tag"
-      - id: "0x000C"
-        name: "QDOS"
-        writable: false
-        description: "QDOS tag"
-      - id: "0x000D"
-        name: "Acorn RISCOS"
-        writable: false
-        description: "Acorn RISCOS tag"
-      - id: "0x00FF"
-        name: "unknown"
-        writable: false
-        description: "unknown tag"
       - id: "0x000A"
         name: "ArchivedFileName"
         writable: false
@@ -2974,62 +1804,6 @@ tables:
         name: "ZipCompression"
         writable: false
         description: "ZipCompression tag"
-      - id: "0x0001"
-        name: "Shrunk"
-        writable: false
-        description: "Shrunk tag"
-      - id: "0x0002"
-        name: "Reduced with compression factor 1"
-        writable: false
-        description: "Reduced with compression factor 1 tag"
-      - id: "0x0003"
-        name: "Reduced with compression factor 2"
-        writable: false
-        description: "Reduced with compression factor 2 tag"
-      - id: "0x0004"
-        name: "Reduced with compression factor 3"
-        writable: false
-        description: "Reduced with compression factor 3 tag"
-      - id: "0x0005"
-        name: "Reduced with compression factor 4"
-        writable: false
-        description: "Reduced with compression factor 4 tag"
-      - id: "0x0006"
-        name: "Imploded"
-        writable: false
-        description: "Imploded tag"
-      - id: "0x0007"
-        name: "Tokenized"
-        writable: false
-        description: "Tokenized tag"
-      - id: "0x0008"
-        name: "Deflated"
-        writable: false
-        description: "Deflated tag"
-      - id: "0x0009"
-        name: "Enhanced Deflate using Deflate64(tm)"
-        writable: false
-        description: "Enhanced Deflate using Deflate64(tm) tag"
-      - id: "0x000A"
-        name: "Imploded (old IBM TERSE)"
-        writable: false
-        description: "Imploded (old IBM TERSE) tag"
-      - id: "0x000C"
-        name: "BZIP2"
-        writable: false
-        description: "BZIP2 tag"
-      - id: "0x000E"
-        name: "LZMA (EFS)"
-        writable: false
-        description: "LZMA (EFS) tag"
-      - id: "0x0012"
-        name: "IBM TERSE (new)"
-        writable: false
-        description: "IBM TERSE (new) tag"
-      - id: "0x0013"
-        name: "IBM LZ77 z Architecture (PFS)"
-        writable: false
-        description: "IBM LZ77 z Architecture (PFS) tag"
       - id: "0x0005"
         name: "ZipModifyDate"
         writable: false
@@ -3068,18 +1842,6 @@ tables:
         name: "OperatingSystem"
         writable: false
         description: "OperatingSystem tag"
-      - id: "0x0001"
-        name: "OS/2"
-        writable: false
-        description: "OS/2 tag"
-      - id: "0x0002"
-        name: "Win32"
-        writable: false
-        description: "Win32 tag"
-      - id: "0x0003"
-        name: "Unix"
-        writable: false
-        description: "Unix tag"
       - id: "0x000D"
         name: "ModifyDate"
         writable: false
@@ -3088,26 +1850,6 @@ tables:
         name: "PackingMethod"
         writable: false
         description: "PackingMethod tag"
-      - id: "0x0031"
-        name: "Fastest"
-        writable: false
-        description: "Fastest tag"
-      - id: "0x0032"
-        name: "Fast"
-        writable: false
-        description: "Fast tag"
-      - id: "0x0033"
-        name: "Normal"
-        writable: false
-        description: "Normal tag"
-      - id: "0x0034"
-        name: "Good Compression"
-        writable: false
-        description: "Good Compression tag"
-      - id: "0x0035"
-        name: "Best Compression"
-        writable: false
-        description: "Best Compression tag"
       - id: "0x0013"
         name: "FileNameLength"
         writable: false

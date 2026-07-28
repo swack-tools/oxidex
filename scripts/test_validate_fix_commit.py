@@ -218,6 +218,52 @@ class TrailerTruthTests(unittest.TestCase):
             [],
         )
 
+    def test_a_display_string_claimed_as_a_tag_is_rejected(self):
+        # The unguarded axis. `Higher resolution image exists` is OPIProxy's
+        # PrintConv value for 1 and is a tag nowhere -- yet it reached emitted
+        # metadata, because every other check compared a numeric key to its
+        # display string and none asked whether the NAME was a tag.
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = self._lib(
+                tmp,
+                Exif=(
+                    "%Image::ExifTool::Exif::Main = (\n"
+                    "    0x015f => {\n"
+                    "        Name => 'OPIProxy',\n"
+                    "        PrintConv => {\n"
+                    "            0 => 'Higher resolution image does not exist',\n"
+                    "            1 => 'Higher resolution image exists',\n"
+                    "        },\n"
+                    "    },\n"
+                    ");\n"
+                ),
+            )
+            self.assertEqual(
+                check_trailer_truth(
+                    {
+                        "Tag": ["EXIF:Higher resolution image exists"],
+                        "Perl-Ref": ["Exif.pm"],
+                    },
+                    perl_lib=lib,
+                ),
+                ["tag-name-is-a-printconv-value:EXIF:Higher_resolution_image_exists"],
+            )
+
+    def test_a_runtime_named_tag_is_still_accepted(self):
+        # The class the corpus check deliberately protects, and which this
+        # rule must not disturb. ExifTool's ProcessAPP12 names unknown fields
+        # at runtime via `ucfirst $tag`, so STB1 is a real emitted tag that
+        # appears in no table -- and, crucially, as no display value either.
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = self._lib(tmp, APP12="%Table = (\n    Protect => { },\n);\n")
+            self.assertEqual(
+                check_trailer_truth(
+                    {"Tag": ["APP12:STB1"], "Perl-Ref": ["APP12.pm"]},
+                    perl_lib=lib,
+                ),
+                [],
+            )
+
 
 class TrailerTests(unittest.TestCase):
     def test_round_trip_through_real_git_repo(self):

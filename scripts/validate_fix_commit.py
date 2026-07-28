@@ -189,7 +189,14 @@ CONDITIONAL_TRAILERS = tuple(k for k in REQUIRED_TRAILERS if k != "Perl-Ref")
 # human reading quarantine.jsonl months from now knows which ruleset
 # produced a verdict, and a stricter rule still changes what a re-offered
 # head is measured against.
-POLICY_VERSION = 7
+#
+# v8 adds `tag-name-is-a-printconv-value`: a Tag: trailer naming something
+#      ExifTool prints as a display string for some numeric key, and defines
+#      as a tag nowhere. Three such names shipped -- `Higher resolution image
+#      exists`, `Trilinear`, `Creative (Slow speed)` -- because every check
+#      here compared a numeric key to its display string, and none asked
+#      whether the NAME was a tag at all. That axis was unguarded end to end.
+POLICY_VERSION = 8
 
 # Flags that are recorded for the human record but do NOT block
 # admission. `ownership:` says the fix landed outside the worker's squad
@@ -806,6 +813,31 @@ def check_trailer_truth(trailers, perl_lib=None, samples_cache=None):
             if any(_defines_tag(corpus, _tag_local_name(t)) for t in tags):
                 flags.append(f"perl-ref-documents-none:{Path(ref).name}")
 
+    # --- Tag: names a tag, not a PrintConv display string -----------------
+    # The block above deliberately stays silent when a name appears nowhere
+    # in any table, because ExifTool names some tags at runtime and those are
+    # real. But that silence also covered the opposite case: a name that is
+    # not a tag anywhere AND is a display value ExifTool prints for some
+    # numeric key. That is a display string harvested as a tag, and it is how
+    # `EXIF:Higher resolution image exists` (OPIProxy's PrintConv value 1),
+    # `Trilinear` (SensingMethod 7) and `Creative (Slow speed)`
+    # (ExposureProgram 5) all reached emitted metadata.
+    #
+    # This shape cannot collide with the runtime-named tags the block above
+    # protects: REV/S0/STB1 appear in no table AND as no display value, so
+    # they still draw no flag. Only names ExifTool prints as values, and
+    # never defines as tags, are reported.
+    if perl_lib is not None:
+        corpus = _perl_lib_corpus(Path(perl_lib))
+        if isinstance(corpus, bytes):
+            corpus = corpus.decode("utf-8", errors="replace")
+        for tag in tags:
+            local = _tag_local_name(tag)
+            if _defines_tag(corpus, local):
+                continue
+            if _is_print_conv_display_value(corpus, local):
+                flags.append(f"tag-name-is-a-printconv-value:{_flag_token(tag)}")
+
     # --- Sample names a file that actually carries these tags -------------
     samples = [s for s in trailers.get("Sample", []) if s]
     if samples_cache is not None and samples:
@@ -834,6 +866,24 @@ def _defines_tag(perl_text, name):
     key_form = rf"(?m)^\s*{re.escape(name)}\s*=>"
     name_form = rf"(?m)^\s*Name\s*=>\s*'{re.escape(name)}'"
     return bool(re.search(key_form, perl_text) or re.search(name_form, perl_text))
+
+
+def _is_print_conv_display_value(perl_text, name):
+    """True if `name` sits on the VALUE side of a numeric-keyed mapping.
+
+    The mirror image of `_defines_tag`. A PrintConv row spells the display
+    string to the right of a numeric key:
+
+        1 => 'Uncompressed',
+        7 => 'Trilinear',
+        5 => 'Creative (Slow speed)',
+
+    whereas a tag definition puts the name on the left (`Protect => {...}`)
+    or on a `Name =>` line. Keys may be decimal, hex, dotted bit-positions
+    (`1.1`) or quoted, so all four are matched.
+    """
+    key = r"(?:0x[0-9a-fA-F]+|'?\d+(?:\.\d+)?'?)"
+    return bool(re.search(rf"(?m)^\s*{key}\s*=>\s*'{re.escape(name)}'", perl_text))
 
 
 def _tag_local_name(tag):
