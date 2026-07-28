@@ -28,6 +28,7 @@ use crate::io::EndianReader;
 use crate::parsers::icc::parse_icc_profile_data as parse_icc;
 use crate::parsers::raw::{RawFormat, raf_parser};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
+use crate::parsers::icc::parse_icc_profile_data as parse_icc;
 use crate::tag_db::lookup_tag_name;
 
 /// Resolve RAW-specific tags using the names and groups assigned by ExifTool.
