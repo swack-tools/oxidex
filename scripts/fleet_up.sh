@@ -105,6 +105,13 @@ FLEET_POLL_SECONDS="${FLEET_POLL_SECONDS:-20}"       # supervisor tick
 FLEET_MAX_RESTARTS="${FLEET_MAX_RESTARTS:-5}"        # per tier, per window
 FLEET_RESTART_WINDOW="${FLEET_RESTART_WINDOW:-1800}" # sec of uptime that forgives past crashes
 FLEET_BACKOFF_BASE="${FLEET_BACKOFF_BASE:-10}"       # sec, doubled per consecutive crash
+# How often to re-sync worker worktrees onto origin/main while the fleet runs.
+# sync_worktrees was called ONCE, immediately before supervise(), so a fleet
+# left up for hours produced work against an ever-staler base -- measured
+# 2026-07-28: 71 of 72 worker worktrees behind, 11 of them by 21 commits with
+# their own uncaptured commits on top. That is exactly how the 155-patch
+# backlog became unmergeable. Salvage runs first, so nothing is discarded.
+FLEET_RESYNC_SECONDS="${FLEET_RESYNC_SECONDS:-1800}"  # 0 disables
 FLEET_BACKOFF_MAX="${FLEET_BACKOFF_MAX:-300}"
 FLEET_GRACE_SECONDS="${FLEET_GRACE_SECONDS:-20}"     # SIGTERM -> SIGKILL escalation
 FLEET_MIN_FREE_GB="${FLEET_MIN_FREE_GB:-40}"         # disk floor; see preflight_disk
@@ -837,10 +844,29 @@ write_state() {
     printf '%s\n' "$$" >"$FLEET_PIDFILE"
 }
 
+resync_due() {
+    # Should supervise() re-sync worker worktrees now? Split out from the loop
+    # because supervise() cannot be exercised without the entire tier array
+    # set plus its fd-3 sleep channel, and the POLICY is the part worth
+    # pinning: fire once the interval has elapsed, never when disabled.
+    local now=$1 last=$2 interval=$3
+    [ "$interval" -gt 0 ] || return 1
+    [ $((now - last)) -ge "$interval" ]
+}
+
 supervise() {
-    local i now uptime delay
+    local i now uptime delay last_resync
+    last_resync=$(now_epoch)
     while [ "$SHUTTING_DOWN" -eq 0 ]; do
         now=$(now_epoch)
+
+        # Keep the bases fresh. Work written against a stale base conflicts
+        # with everything that landed since, and the fleet has no other path
+        # that refreshes worker worktrees mid-run.
+        if resync_due "$now" "$last_resync" "$FLEET_RESYNC_SECONDS"; then
+            sync_worktrees "$FLEET_WORKTREE_BASE"
+            last_resync=$now
+        fi
         local live=0 failed=0
         for i in "${!TIER_TAG[@]}"; do
             [ "${TIER_STATE[i]}" = failed ] && { failed=$((failed + 1)); continue; }
